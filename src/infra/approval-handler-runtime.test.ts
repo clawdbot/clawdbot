@@ -9,7 +9,9 @@ import {
   createApprovalNativeRuntimeAdapterStubs,
   type ApprovalNativeRuntimeAdapterStubParams,
 } from "./approval-handler.test-helpers.js";
+import type { NormalizedApprovalRequest } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
+import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
 type ApprovalCapability = NonNullable<
   Parameters<typeof createChannelApprovalHandlerFromCapability>[0]["capability"]
@@ -38,8 +40,9 @@ function makeSequentialPendingBindingMock() {
     .mockResolvedValueOnce({ bindingId: "bound-2" });
 }
 
-function makeExecApprovalRequest(id: string): ExecApprovalRequest {
+function makeExecApprovalRequest(id: string): NormalizedApprovalRequest<ExecApprovalRequest> {
   return {
+    approvalKind: "exec",
     id,
     expiresAtMs: Date.now() + 60_000,
     request: {
@@ -137,7 +140,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     expectApprovalRuntime(runtime);
   });
 
-  it("derives kind from the original typed request when stop-time cleanup unbinds", async () => {
+  it("derives kind once before stop-time cleanup unbinds", async () => {
     const unbindPending = vi.fn();
     const shouldHandle = vi.fn().mockReturnValue(true);
     const runtime = await createTestApprovalHandler(
@@ -149,8 +152,9 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     );
 
     const approvalRuntime = expectApprovalRuntime(runtime);
-    const request = {
+    const request: PluginApprovalRequest = {
       id: "custom:1",
+      createdAtMs: Date.now(),
       expiresAtMs: Date.now() + 60_000,
       request: {
         title: "Plugin approval",
@@ -158,11 +162,12 @@ describe("createChannelApprovalHandlerFromCapability", () => {
         turnSourceChannel: "test",
         turnSourceTo: "origin-chat",
       },
-    } as never;
+    };
+    const normalizedRequest = { ...request, approvalKind: "plugin" as const };
 
     await approvalRuntime.handleRequested(request);
     expect(shouldHandle).toHaveBeenCalledWith(
-      expect.objectContaining({ request, approvalKind: "plugin" }),
+      expect.objectContaining({ request: normalizedRequest, approvalKind: "plugin" }),
     );
     await approvalRuntime.stop();
 
@@ -170,7 +175,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     const stopUnbind = firstCallArg(unbindPending) as
       | { request?: unknown; approvalKind?: string }
       | undefined;
-    expect(stopUnbind?.request).toBe(request);
+    expect(stopUnbind?.request).toEqual(normalizedRequest);
     expect(stopUnbind?.approvalKind).toBe("plugin");
   });
 
@@ -185,20 +190,22 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       }),
     );
     const approvalRuntime = expectApprovalRuntime(runtime);
-    const request = {
+    const request: PluginApprovalRequest = {
       id: "plugin:legacy-owned-id",
+      createdAtMs: Date.now(),
       expiresAtMs: Date.now() + 60_000,
       request: {
         title: "Plugin approval",
         description: "Allow the plugin action",
       },
-    } as never;
+    };
+    const normalizedRequest = { ...request, approvalKind: "plugin" as const };
 
     await approvalRuntime.handleRequested(request);
 
-    expect(resolveApprovalKind).toHaveBeenCalledWith(request);
+    expect(resolveApprovalKind).toHaveBeenCalledWith(normalizedRequest);
     expect(shouldHandle).toHaveBeenCalledWith(
-      expect.objectContaining({ request, approvalKind: "plugin" }),
+      expect.objectContaining({ request: normalizedRequest, approvalKind: "plugin" }),
     );
     await approvalRuntime.stop();
   });

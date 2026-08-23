@@ -139,4 +139,82 @@ describe("loadModels", () => {
 
     expect(request).toHaveBeenCalledTimes(2);
   });
+
+  it("joins an active picker refresh instead of returning the cooldown cache", async () => {
+    const initial = [{ id: "initial", name: "Initial", provider: "openai" }];
+    const refreshed = [{ id: "refreshed", name: "Refreshed", provider: "openai" }];
+    let releaseRefresh: (() => void) | undefined;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: initial })
+      .mockImplementationOnce(async () => {
+        await refreshGate;
+        return { models: refreshed };
+      });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    expect(await loadModels(client, { agentId: "main" })).toEqual(initial);
+    const first = loadModels(client, { agentId: "main", refreshIfDue: true });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    const concurrent = loadModels(client, { agentId: "main", refreshIfDue: true });
+    releaseRefresh?.();
+
+    expect(await concurrent).toBe(await first);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes an account catalog once per picker cooldown", async () => {
+    const initial = [{ id: "initial", name: "Initial", provider: "openai" }];
+    const refreshed = [{ id: "refreshed", name: "Refreshed", provider: "openai" }];
+    const later = [{ id: "later", name: "Later", provider: "openai" }];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: initial })
+      .mockResolvedValueOnce({ models: refreshed })
+      .mockResolvedValueOnce({ models: later });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+
+    try {
+      expect(await loadModels(client, { agentId: "main" })).toEqual(initial);
+      expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(refreshed);
+      expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(refreshed);
+      expect(request).toHaveBeenCalledTimes(2);
+
+      now.mockReturnValue(1_000 + 60_000 + 1);
+      expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(refreshed);
+      expect(request).toHaveBeenCalledTimes(2);
+
+      now.mockReturnValue(1_000 + 5 * 60_000 + 1);
+      expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(later);
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(request.mock.calls.slice(1).map((call) => call[1])).toEqual([
+        { view: "configured", agentId: "main", refresh: true },
+        { view: "configured", agentId: "main", refresh: true },
+      ]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("keeps a failed account catalog refresh retryable", async () => {
+    const initial = [{ id: "initial", name: "Initial", provider: "openai" }];
+    const recovered = [{ id: "recovered", name: "Recovered", provider: "openai" }];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: initial })
+      .mockRejectedValueOnce(new Error("probe timed out"))
+      .mockResolvedValueOnce({ models: recovered });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    expect(await loadModels(client, { agentId: "main" })).toEqual(initial);
+    await expect(
+      loadModels(client, { agentId: "main", refreshIfDue: true, rejectOnFailure: true }),
+    ).rejects.toThrow("probe timed out");
+    expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(recovered);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
 });

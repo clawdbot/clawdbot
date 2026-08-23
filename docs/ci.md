@@ -37,11 +37,12 @@ dispatch.
 | `pnpm-store-warmup`                | Warm the lockfile-pinned Actions cache for fork PRs, manual runs, and same-repo docs-only PRs                                                                                                                                                                                                            | Node or docs-check lanes without an exact-cache writer |
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, startup memory, and embedded built-artifact checks                                                                                                                                                                                                    | Node-relevant changes                                  |
 | `control-ui-i18n`                  | Verify generated Control UI locale bundles, metadata, and translation memory; advisory on automatic runs, blocking on manual release CI                                                                                                                                                                  | Control UI i18n-relevant changes and manual CI         |
-| `checks-fast-core`                 | Fast Linux correctness lanes: max-lines and assertion-safety baseline ratchets, bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                                                                                           | Node-relevant changes                                  |
+| `checks-fast-core`                 | Fast Linux correctness lanes: environment-variable, max-lines, and assertion-safety baseline ratchets, bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                                                                    | Node-relevant changes                                  |
 | `qa-smoke-ci-profile`              | Self-contained balanced parts of the automatic QA Smoke coverage set; one private-overlay build per part (the smoke set has no docker-lane or Control UI scenarios; the run step fails closed if one returns)                                                                                            | Pushes and manual runs; PRs only on QA-owned surfaces  |
 | `checks-fast-contracts-plugins-*`  | Two weighted plugin contract shards                                                                                                                                                                                                                                                                      | Node-relevant changes                                  |
 | `checks-fast-contracts-channels-*` | Two weighted channel contract shards                                                                                                                                                                                                                                                                     | Node-relevant changes                                  |
 | `checks-node-*`                    | Changed-target Node tests on pull requests; compact integration shards on `main`; metadata-complete compact fallback on broad PRs; full named shards on manual and release runs                                                                                                                          | Node-relevant changes                                  |
+| `docker-seed-e2e`                  | One Docker scheduler job for the executable `mcp-channels`, `cron-mcp-cleanup`, and `mcp-code-mode-gateway` owner lanes                                                                                                                                                                                  | PR changes to their seed helpers or CI gate owners     |
 | `check-*`                          | Sharded main local gate equivalent: guards, transient npm-lock validation, bundled-channel config metadata, prod types, lint, dependencies, test types                                                                                                                                                   | Node-relevant changes                                  |
 | `check-additional-*`               | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture; the pure-reporting plugin SDK API diff runs on manual and release dispatches only | Node-relevant changes                                  |
 | `checks-node-compat-node22`        | Node 22 compatibility build and smoke lane                                                                                                                                                                                                                                                               | Full Release Validation and manual dispatches only     |
@@ -54,8 +55,15 @@ dispatch.
 | `ios-build`                        | Swift lint, Debug and Release builds, focused simulator lifecycle tests, and the full release screenshot matrix when screenshot-pipeline owners changed                                                                                                                                                  | iOS/capture changes                                    |
 | `android`                          | Android unit tests for both flavors plus one debug APK build                                                                                                                                                                                                                                             | Android-relevant changes                               |
 | `openclaw/ci-gate`                 | Final aggregate: requires preflight and security; accepts skips only for manifest-disabled downstream lanes                                                                                                                                                                                              | Every non-draft CI run                                 |
-| `test-performance-agent`           | Separate workflow: daily Codex slow-test optimization after trusted activity                                                                                                                                                                                                                             | Main CI success or manual dispatch                     |
 | `openclaw-performance`             | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                          |
+
+The rare path-triggered `docker-seed-e2e` job selects only the executable
+owners of changed seed helpers and runs them through one scheduler invocation.
+Trusted same-repository pull requests use one 16-vCPU Blacksmith runner with
+main and tail parallelism set to 3; GitHub-hosted, fork, and retry paths run the
+same selected lanes serially. The job is part of `openclaw/ci-gate`. It adds at
+most one runner registration during an affected pull-request window and adds no
+registrations for unrelated pull requests.
 
 Standalone Periphery workflows enforce zero dead-code findings for the iOS and macOS apps. The shared OpenClawKit workflow scans both consumers in parallel and reports a declaration only when Periphery emits the same Swift USR from both builds. Its generated `OpenClawProtocol/GatewayModels.swift` schema contract is retained as generator-owned code rather than treated as app-local dead code.
 
@@ -173,7 +181,7 @@ Barnacle treats bug-labeled issues as verification candidates rather than inacti
 
 Ordinary manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI/native app i18n. Node 22 compatibility runs in Full Release Validation and manual dispatches only; push and pull request CI skip it. The exact-head `release_gate` fallback instead keeps the pull request's macOS and iOS scope, including conservative release screenshot capture for screenshot-pipeline owners. Automatic source PRs verify native extraction inventory and Android/Apple localization safety without requiring translated or platform-generated output in the same PR. The serialized Native App Locale Refresh workflow rebuilds those artifacts in one isolated PR and enables exact-head auto-merge after required checks pass. Full native parity remains blocking for generated-artifact PRs, manual CI, Full Release Validation, and release prep. Control UI locale parity remains advisory on automatic PR and `main` runs and blocking on manual/release CI. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
 
-PR baseline ratchets derive their comparison state from the checked-out synthetic merge tree and verify its head parent against the event head. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; ratchet baselines are compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated.
+PR baseline ratchets derive their comparison state from the checked-out synthetic merge tree and verify its head parent against the event head. The max-lines entry chains the environment-variable budget with the same fork-point ref before the assertion-safety check, so production source growth cannot first surface on `main`. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; ratchet baselines are compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated.
 
 ```bash
 gh workflow run ci.yml --ref release/YYYY.M.PATCH
@@ -229,9 +237,9 @@ Hybrid is the normal degraded-capacity mode. If Blacksmith is down: rerun the fa
 gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
 ```
 
-Hosted paths use the same setup exercised by manual dispatches and fork pull requests. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Hybrid attempt-1 Node and plateau lanes deliberately keep this backend-neutral Actions-cache profile when they run on Blacksmith because preflight remains hosted. The exact workspace dependency cache intentionally stays off when preflight is hosted: GitHub can roll the runner image and Node patch between preflight and fanout in one workflow, while the safe exact key then misses; the ordinary store archive is only slightly smaller and pnpm's measured relink is already single-digit seconds. Vitest transform and Node compile caches still use the upstream Actions cache API, which Blacksmith proxies; their Linux-only `runner.os != 'Windows'` conditions do not exclude Blacksmith labels, and the planner still elects one semantic transform-cache writer. Core oxlint splits into five deterministic hosted stripes, with extension/scripts lint and optional UI and format checks in the existing `check-lint` row. The 14 serial core test-type graphs likewise split into five `check-test-types-core-*` stripes (two overlapped graphs per stripe), leaving the extensions/root/scripts type tail in the `check-test-types` row; targets without stripe support keep the whole lane in that row.
+Hosted paths use the same setup exercised by manual dispatches and fork pull requests. Fork PRs are forced into the logical `github` planner profile even when repository variables are unavailable, so core lint and test types retain their hosted stripes instead of falling back to the oversized all-in-one jobs. Blacksmith-only Docker and sticky-disk steps are skipped, dependency setup uses the ordinary Actions pnpm-store cache, and low-memory Android builds use separate Gradle processes. Hybrid attempt-1 Node and plateau lanes deliberately keep this backend-neutral Actions-cache profile when they run on Blacksmith because preflight remains hosted. The exact workspace dependency cache intentionally stays off when preflight is hosted: GitHub can roll the runner image and Node patch between preflight and fanout in one workflow, while the safe exact key then misses; the ordinary store archive is only slightly smaller and pnpm's measured relink is already single-digit seconds. The Node toolchain itself is also cached through that API: Blacksmith's image tracks an older runner-images snapshot whose toolcache Node patches (measured 2026-08-16: 20.20.0, 22.22.0, 24.13.0) sit just under this repo's `engines` floor, so every job otherwise re-downloads Node from nodejs.org. Restores are prefix-keyed and saves carry the resolved patch, because an exact-key hit suppresses the post-job save and would pin the first payload forever once the floor advanced past it. A restored payload below the floor is rejected, pruned, and replaced. Vitest transform and Node compile caches still use the upstream Actions cache API, which Blacksmith proxies; their Linux-only `runner.os != 'Windows'` conditions do not exclude Blacksmith labels, and the planner still elects one semantic transform-cache writer. Core oxlint splits into five deterministic hosted stripes, with extension/scripts lint and optional UI and format checks in the existing `check-lint` row. The 14 serial core test-type graphs likewise split into five `check-test-types-core-*` stripes (two overlapped graphs per stripe), leaving the extensions/root/scripts type tail in the `check-test-types` row; targets without stripe support keep the whole lane in that row.
 
-The compact Node planner keeps separate Blacksmith and standard 4-core hosted timing ownership. The `github` profile targets 90/95 seconds of serial group work for the hosted large/small source runner classes and applies a 1.6x median scaling fallback only to unmeasured groups. Hybrid keeps the expanded topology and hosted-derived splitting for groups above the unchanged 150-second ceiling, so hosted retries do not inherit an indivisible hosted wall pole. Its attempt-1 packing scales the Blacksmith hints by 0.87: the unscaled all-Blacksmith push plan totals 4,723 predicted seconds, while complete Blacksmith runs `31945998653` and `31949756966` measured 3,742.046 and 3,756.674 seconds of shard work (79.230% and 79.540%). The 0.87 factor is 9.379% above the higher observed ratio. With the direct outlier hints below, 0.85 yields 45 nondist jobs and 0.86 is the first two-decimal factor yielding 46; 0.87 stays one point above that rounding cliff while preserving the 46-job plan. Direct sampled hints cover the doctor and cron-service outliers, while a 140-second floor and singleton bin protect the observed `agentic-gateway-core-3` tail. During rebalance, native hybrid groups use scaled Blacksmith stripe hints; only synthesized hosted stripes retain their divided parent weight. Failed and timeout-and-retry samples are excluded from refreshes. Whole-config groups with registered file listers (agent support, gateway methods, runtime config, isolated unit fast) split into file-weighted hosted stripes. The subprocess-heavy tooling family uses seven balanced stripes projecting to roughly 115 hosted seconds per stripe.
+The compact Node planner keeps separate Blacksmith and standard 4-core hosted timing ownership. The `github` profile targets 90/95 seconds of serial group work for the hosted large/small source runner classes and applies a 1.6x median scaling fallback only to unmeasured groups. Hybrid keeps the expanded topology and hosted-derived splitting for groups above the unchanged 150-second ceiling, so hosted retries do not inherit an indivisible hosted wall pole. Its attempt-1 packing scales the Blacksmith hints by 0.87: the unscaled all-Blacksmith push plan totals 4,723 predicted seconds, while complete Blacksmith runs `31945998653` and `31949756966` measured 3,742.046 and 3,756.674 seconds of shard work (79.230% and 79.540%). The 0.87 factor is 9.379% above the higher observed ratio. With the direct outlier hints below, 0.85 yields 45 nondist jobs and 0.86 is the first two-decimal factor yielding 46; 0.87 stays one point above that rounding cliff while preserving the 46-job plan. Direct sampled hints cover the doctor and cron-service outliers, while a 140-second floor and singleton bin protect the observed `agentic-gateway-core-3` tail. During rebalance, native hybrid groups use scaled Blacksmith stripe hints; only synthesized hosted stripes retain their divided parent weight. Failed and timeout-and-retry samples are excluded from refreshes. Whole-config groups with registered file listers (agent support, gateway methods, runtime config, isolated unit fast) split into file-weighted hosted stripes. The hosted agent-chat split also carries direct successful-run hints for its two longest files so they cannot land in the same stripe. The subprocess-heavy tooling family uses seven balanced stripes projecting to roughly 115 hosted seconds per stripe.
 
 The `github` profile contains 70 push descriptors and 79 pull-request fallback descriptors, with every nondist lane at or below 149 predicted test seconds; the serial TUI PTY dist descriptor keeps its indivisible measured wall. Hybrid contains 47 push descriptors (46 nondist jobs) and 55 pull-request fallback descriptors (53 nondist jobs), with a 140-second predicted maximum. In `github` mode compact jobs run hosted; hybrid attempt 1 uses each row's 4-vCPU or 8-vCPU Blacksmith label, while hybrid retries use hosted runners. The corresponding all-Blacksmith plans contain 25 and 34 total descriptors. Control UI E2E expands from the unchanged all-Blacksmith shape of three Vitest shards plus one browser-extension shard to eleven Vitest shards plus one browser-extension shard for the `github` and `hybrid` planner profiles. QA Smoke similarly expands from four parts to six. Hybrid attempt 1 runs those expanded matrices on Blacksmith; `github` mode and hybrid retries use hosted runners. QA's planner reserves the final part's observed roughly two-minute Matrix rider before greedily assigning primary scenarios, keeping that separate run from becoming the tail. Windows runs two jobs with disjoint, project-aligned explicit test lists on every backend. This partitions the complete Windows-specific inventory without applying Vitest `--shard` to project-local single-file selections, which Vitest rejects. The split width is pinned to two because `blacksmith-8vcpu-windows-2025` admits exactly two concurrent jobs (measured on run 31865243804): a third part queues behind a finished one, while a single lane serialized the whole 226-second body onto the wall and made Windows the slowest job in every run that scheduled it. The two parts are balanced by measured per-project wall time at roughly 108 and 112 seconds. A hybrid retry reruns both parts on hosted `windows-2025`, slower but bounded. Expect slower individual builds on standard 4-core hosted runners. Blacksmith's runner-registration budget is irrelevant for hosted jobs, but GitHub-hosted concurrency limits apply.
 
@@ -392,14 +400,22 @@ For pinned commit proof on a fast-moving branch, use the helper instead of
 `gh workflow run ... --ref main -f ref=<sha>`:
 
 ```bash
-pnpm ci:full-release --sha <full-sha>
+TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+VALIDATION_SHA="<full-release-candidate-sha>"
+pnpm ci:full-release \
+  --sha "$VALIDATION_SHA" \
+  --target-ref release/YYYY.M.PATCH \
+  --workflow-sha "$TOOLING_SHA"
 ```
 
 GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
 helper pushes a temporary `release-ci/<sha>-...` branch at a trusted Tooling
 SHA, passes the requested Validation SHA through `ref` and `expected_sha`, reuses
 strict exact-target evidence when available, and verifies every child workflow
-`headSha` matches the Tooling SHA.
+`headSha` matches the Tooling SHA. Record that Tooling SHA once and never refresh
+it from moving `main`. Regular release branches accept only their final package
+version or a matching beta prerelease; Tideclaw alpha validation uses its exact
+alpha tag and matching alpha branch.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you
@@ -466,9 +482,10 @@ Use `Package Acceptance` when the question is "does this installable OpenClaw pa
 
 1. `resolve_package` checks out `workflow_ref`, resolves one package candidate, writes `.artifacts/docker-e2e-package/openclaw-current.tgz`, writes `.artifacts/docker-e2e-package/package-candidate.json`, uploads both as the `package-under-test` artifact, and prints the source, workflow ref, package ref, version, SHA-256, and profile in the GitHub step summary.
 2. `package_integrity` downloads the `package-under-test` artifact and enforces the public package tarball contract with `scripts/check-openclaw-package-tarball.mjs`.
-3. `docker_acceptance` calls `openclaw-live-and-e2e-checks-reusable.yml` with the resolved package source SHA (falling back to `workflow_ref`) and `package_artifact_name=package-under-test`. The reusable workflow downloads that artifact, validates the tarball inventory, prepares package-digest Docker images when needed, and runs the selected Docker lanes against that package instead of packing the workflow checkout. When a profile selects multiple targeted `docker_lanes`, the reusable workflow prepares the package and shared images once, then fans those lanes out as parallel targeted Docker jobs with unique artifacts.
-4. `package_telegram` optionally calls `NPM Telegram Beta E2E`. It runs when `telegram_mode` is not `none` and installs the same `package-under-test` artifact when Package Acceptance resolved one; standalone Telegram dispatch can still install a published npm spec.
-5. `summary` fails the workflow if package resolution, integrity, Docker acceptance, or the optional Telegram lane failed. The `advisory` input downgrades acceptance failures to warnings for advisory callers.
+3. `npm_12_install_sh` installs that exact artifact through the public Linux installer under npm 12 in an isolated home/prefix, then verifies the CLI version and lifecycle-completion guard.
+4. `docker_acceptance` calls `openclaw-live-and-e2e-checks-reusable.yml` with the resolved package source SHA (falling back to `workflow_ref`) and `package_artifact_name=package-under-test`. The reusable workflow downloads that artifact, validates the tarball inventory, prepares package-digest Docker images when needed, and runs the selected Docker lanes against that package instead of packing the workflow checkout. When a profile selects multiple targeted `docker_lanes`, the reusable workflow prepares the package and shared images once, then fans those lanes out as parallel targeted Docker jobs with unique artifacts.
+5. `package_telegram` optionally calls `NPM Telegram Beta E2E`. It runs when `telegram_mode` is not `none` and installs the same `package-under-test` artifact when Package Acceptance resolved one; standalone Telegram dispatch can still install a published npm spec.
+6. `summary` fails the workflow if package resolution, integrity, npm 12 installer acceptance, Docker acceptance, or the optional Telegram lane failed. The `advisory` input downgrades acceptance failures to warnings for advisory callers.
 
 ### Candidate sources
 
@@ -708,10 +725,6 @@ Quality stays separate from security so quality findings can be scheduled, measu
 
 The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping existing docs aligned with recently landed changes. It has no pure schedule: a successful non-bot push CI run on `main` can trigger it, and manual dispatch can run it directly. Workflow-run invocations skip when `main` has moved on or when another non-skipped Docs Agent run was created in the last hour. When it runs, it reviews the commit range from the previous non-skipped Docs Agent source SHA to current `main`, so one hourly run can cover all main changes accumulated since the last docs pass.
 
-### Test Performance Agent
-
-The `Test Performance Agent` workflow is an event-driven Codex maintenance lane for slow tests. It has no pure schedule: a successful non-bot push CI run on `main` can trigger it, but it skips if another workflow-run invocation already ran or is running that UTC day. Manual dispatch bypasses that daily activity gate. The lane builds a full-suite grouped Vitest performance report, lets Codex make only small coverage-preserving test performance fixes instead of broad refactors, then reruns the full-suite report and rejects changes that reduce the passing baseline test count. The grouped report records per-config wall time and max RSS on Linux and macOS, so the before/after comparison surfaces test memory deltas beside duration deltas. If the baseline has failing tests, Codex may fix only obvious failures and the after-agent full-suite report must pass before anything is committed. When `main` advances before the bot push lands, the lane rebases the validated patch, reruns `pnpm check:changed`, and retries the push; conflicting stale patches are skipped. It uses GitHub-hosted Ubuntu so the Codex action can keep the same drop-sudo safety posture as the docs agent.
-
 ### Duplicate PRs After Merge
 
 The `Duplicate PRs After Merge` workflow is a manual maintainer workflow for post-land duplicate cleanup. It defaults to dry-run and only closes explicitly listed PRs when `apply=true`. Before mutating GitHub, it verifies that the landed PR is merged and that each duplicate has either a shared referenced issue or overlapping changed hunks.
@@ -752,13 +765,14 @@ Local changed-test routing lives in `scripts/test-projects.test-support.mts` and
 ## Testbox validation
 
 Crabbox is the repo-owned remote-box wrapper for maintainer Linux proof. Agent
-sessions keep one/few focused tests and cheap static checks local only for
-trusted source when the existing dependency install is ready. They use Crabbox for larger suites and
-computationally intensive work, including builds, typechecks, lint fan-out,
-Docker, package lanes, E2E, live proof, and CI parity. Trusted maintainer heavy
-proof defaults to `blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
-workflow hydrates provider and agent credentials, so untrusted contributor or
-fork code must use secretless fork CI or sanitized direct AWS Crabbox instead.
+sessions run trusted development tests, changed gates, typecheck/lint, and
+builds locally by default. They use Crabbox when the environment is part of the
+proof: clean-machine, install/package, Docker, E2E, live, desktop, cross-OS, or
+CI-parity work, or when the operator explicitly requests remote proof. Crabbox
+is not generic compute offload. `.crabbox.yaml` defaults remote proof to
+`blacksmith-testbox`. Its configured workflow hydrates provider and agent
+credentials, so untrusted contributor or fork code must use secretless fork CI
+or sanitized direct AWS Crabbox instead.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
@@ -784,8 +798,9 @@ Owned AWS/Hetzner capacity also remains the fallback for Blacksmith outages,
 quota issues, or explicit owned-capacity testing.
 
 Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
-first heavy command is ready, reuse the returned `tbx_...` id for later heavy
-commands, sync the current checkout on every run, and stop it before handoff.
+first environment-sensitive command is ready, reuse the returned `tbx_...` id
+for later remote commands, sync the current checkout on every run, and stop it
+before handoff.
 
 Crabbox-backed Blacksmith runs warm, claim, sync, run, report, and clean up
 one-shot Testboxes. The built-in sync sanity check fails fast when
@@ -801,7 +816,7 @@ millisecond value for unusually large local diffs.
 Before a first run, check the wrapper from the repo root:
 
 ```bash
-pnpm crabbox:run -- --help | sed -n '1,120p'
+node scripts/crabbox-wrapper.mjs run --help | sed -n '1,120p'
 ```
 
 The repo wrapper refuses a stale Crabbox binary that does not advertise the selected provider, and Blacksmith-backed runs require Crabbox 0.22.0 or newer so the wrapper gets the current Testbox sync, queue, and cleanup behavior. In Codex worktrees or linked/sparse checkouts, avoid the local `pnpm crabbox:run` script because pnpm may reconcile dependencies before Crabbox starts; invoke the node wrapper directly instead:
@@ -817,7 +832,7 @@ version="$(git -C ../crabbox describe --tags --always --dirty | sed 's/^v//')" \
   && go build -C ../crabbox -trimpath -ldflags "-s -w -X github.com/openclaw/crabbox/internal/cli.version=${version}" -o bin/crabbox ./cmd/crabbox
 ```
 
-The `blacksmith:` block in `.crabbox.yaml` already pins the org, workflow, job, and ref defaults, so the explicit flags below are optional. Changed gate:
+The `blacksmith:` block in `.crabbox.yaml` already pins the org, workflow, job, and ref defaults, so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \
@@ -832,8 +847,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   "corepack pnpm check:changed"
 ```
 
-Focused test rerun on Testbox when local dependencies are unavailable or the
-target fans out:
+Focused test rerun when clean-machine behavior is part of the proof:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \
@@ -844,7 +858,7 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   "corepack pnpm test <path-or-filter>"
 ```
 
-Full suite:
+Full suite on an explicitly requested clean machine:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \

@@ -1034,6 +1034,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../prepared-model-runtime.js", () => ({
     activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
     acquireAgentRunPreparedModelRuntime: mockedAcquireAgentRunPreparedModelRuntime,
+    acquireReadOnlyPreparedModelRuntime: mockedAcquireAgentRunPreparedModelRuntime,
     prepareModelRuntimeSnapshot: vi.fn(async () => ({
       createStores: () => ({ authStorage: {}, modelRegistry: {} }),
     })),

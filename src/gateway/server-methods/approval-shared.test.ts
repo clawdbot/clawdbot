@@ -861,6 +861,57 @@ describe("handlePendingApprovalRequest", () => {
     );
   });
 
+  it("expires suppressed requests instead of retaining a hidden turn-source route", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo cron",
+        turnSourceChannel: "discord",
+        turnSourceAccountId: "default",
+      },
+      60_000,
+      "approval-suppressed-turn-source",
+    );
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const deliverRequest = vi.fn(() => true);
+
+    await handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast,
+        hasExecApprovalClients: () => true,
+      } as unknown as GatewayRequestContext,
+      requestEventName: "exec.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      suppressDelivery: true,
+      deliverRequest,
+    });
+
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(deliverRequest).not.toHaveBeenCalled();
+    expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
+    expect(manager.getSnapshot(record.id)).toMatchObject({
+      resolvedBy: "no-approval-route",
+      terminalReason: "no-route",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: record.id, decision: null }),
+      undefined,
+    );
+  });
+
   it("does not target no-device browser UI approvals to unrelated approval-scoped clients", async () => {
     hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
     const manager = new ExecApprovalManager();

@@ -8,6 +8,7 @@ import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { CronJob } from "../../cron/types.js";
+import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
@@ -95,7 +96,7 @@ export function registerCronAddCommand(cron: Command) {
       .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
       .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
       .option("--agent <id>", "Agent id for this job")
-      .option("--session <target>", "Session target (main|isolated)")
+      .option("--session <target>", "Session target (main|isolated|current|session:<id>)")
       .option("--session-key <key>", "Session key for job routing (e.g. agent:my-agent:my-session)")
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "now")
       .option(
@@ -203,8 +204,12 @@ export function registerCronAddCommand(cron: Command) {
 
             const hasAnnounce = Boolean(opts.announce) || opts.deliver === true;
             const hasNoDeliver = opts.deliver === false;
-            const webhookUrl = normalizeOptionalString(opts.webhook);
-            const hasWebhook = typeof opts.webhook === "string";
+            const webhookUrl =
+              typeof opts.webhook === "string" ? normalizeHttpWebhookUrl(opts.webhook) : null;
+            if (typeof opts.webhook === "string" && !webhookUrl) {
+              throw new Error("--webhook must be a valid http(s) URL");
+            }
+            const hasWebhook = Boolean(webhookUrl);
             const deliveryFlagCount = [hasAnnounce, hasNoDeliver, hasWebhook].filter(
               Boolean,
             ).length;

@@ -200,6 +200,60 @@ describe("harness context engine lifecycle", () => {
     expect(assembleParams?.messages).toEqual([visibleUser, visibleAssistant]);
   });
 
+  it("isolates the authoritative history array while preserving in-place assembly", async () => {
+    const first = textMessage("user", "first", 1);
+    const second = textMessage("assistant", "second", 2);
+    const messages = [first, second];
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => {
+      expect(params.messages).not.toBe(messages);
+      expect(params.messages).toEqual(messages);
+      expect(params.messages[0]).toBe(first);
+      expect(params.messages[1]).toBe(second);
+      params.messages.reverse();
+      return { messages: params.messages, estimatedTokens: 0 };
+    });
+
+    const assembled = await assembleHarnessContextEngine({
+      contextEngine: createContextEngine({ assemble }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      messages,
+      modelId: "gpt-test",
+    });
+
+    expect(messages).toEqual([first, second]);
+    expect(assembled?.messages).toEqual([second, first]);
+    expect(assembled?.messages[0]).toBe(second);
+    expect(assembled?.messages[1]).toBe(first);
+  });
+
+  it("preserves the authoritative history when assembly mutates then throws", async () => {
+    const first = textMessage("user", "first", 1);
+    const second = textMessage("assistant", "second", 2);
+    const messages = [first, second];
+    const contextEngine = createContextEngine({
+      assemble: vi.fn(async ({ messages: workingMessages }) => {
+        workingMessages.reverse();
+        workingMessages.pop();
+        throw new Error("assembly failed after windowing");
+      }),
+    });
+
+    await expect(
+      assembleHarnessContextEngine({
+        contextEngine,
+        sessionId: sessionParams.sessionId,
+        sessionKey: sessionParams.sessionKey,
+        messages,
+        modelId: "gpt-test",
+      }),
+    ).rejects.toThrow("assembly failed after windowing");
+
+    expect(messages).toEqual([first, second]);
+    expect(messages[0]).toBe(first);
+    expect(messages[1]).toBe(second);
+  });
+
   it("passes declared runtime settings into assemble hooks", async () => {
     const visibleUser = textMessage("user", "visible ask", 1);
     const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({

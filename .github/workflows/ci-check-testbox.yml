@@ -52,11 +52,11 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
           install-trufflehog: "true"
           # Testbox hydration uses the ordinary pnpm store cache. Canonical CI
           # owns the exact dependency archive and never delegates here.
-          use-actions-cache: "true"
       - name: Ensure Testbox base commit
         if: github.event_name == 'pull_request'
         uses: ./.github/actions/ensure-base-commit

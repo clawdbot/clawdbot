@@ -104,6 +104,22 @@ export function commandComposerFallbackRetainsAttachments(
   );
 }
 
+function composerRetainsSubmittedAnnotations(
+  host: ChatHost,
+  submittedAttachments?: readonly ChatAttachment[],
+): boolean {
+  const retained = submittedAttachments?.filter((attachment) => attachment.browserAnnotation);
+  return Boolean(
+    retained?.length &&
+    retained.length === host.chatAttachments.length &&
+    retained.every(
+      (attachment, index) =>
+        attachment.id === host.chatAttachments[index]?.id &&
+        attachment.browserAnnotation === host.chatAttachments[index]?.browserAnnotation,
+    ),
+  );
+}
+
 export function restoreFailedCommandComposer(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
@@ -129,7 +145,10 @@ export function restoreFailedCommandComposer(
     composer.fallbackOwnership = ownership;
     return composer.attachments.length === 0 || ownership !== undefined;
   }
-  if (host.chatAttachments.length > 0) {
+  if (
+    host.chatAttachments.length > 0 &&
+    !composerRetainsSubmittedAnnotations(host, composer.attachments)
+  ) {
     clearOwnedCommandComposerFallback(host, recovery);
     return composer.attachments.length === 0;
   }
@@ -157,11 +176,12 @@ type PendingComposerSnapshot = {
 
 function strictComposerRestore(host: ChatHost, snapshot: PendingComposerSnapshot) {
   // An attachment-only edit is still a newer draft. Restoring old text beside it
-  // would combine two independently authored sends.
-  const composerBlank = !host.chatMessage.trim() && host.chatAttachments.length === 0;
-  const attachments = Boolean(
-    snapshot.previousAttachments?.length && host.chatAttachments.length === 0 && composerBlank,
-  );
+  // would combine sends; annotations retained by this exact command are not edits.
+  const composerBlank =
+    !host.chatMessage.trim() &&
+    (host.chatAttachments.length === 0 ||
+      composerRetainsSubmittedAnnotations(host, snapshot.previousAttachments));
+  const attachments = Boolean(snapshot.previousAttachments?.length && composerBlank);
   return { attachments, draft: snapshot.previousDraft != null && composerBlank };
 }
 
@@ -169,7 +189,11 @@ export function restoreComposer(host: ChatHost, snapshot: PendingComposerSnapsho
   if (snapshot.previousDraft != null && !host.chatMessage.trim()) {
     host.chatMessage = snapshot.previousDraft;
   }
-  if (snapshot.previousAttachments?.length && host.chatAttachments.length === 0) {
+  if (
+    snapshot.previousAttachments?.length &&
+    (host.chatAttachments.length === 0 ||
+      composerRetainsSubmittedAnnotations(host, snapshot.previousAttachments))
+  ) {
     host.chatAttachments = snapshot.previousAttachments;
   }
 }
@@ -209,7 +233,8 @@ function pendingComposerRestorePlan(host: ChatHost, snapshot: PendingComposerSna
   const willRestoreDraft = snapshot.previousDraft != null && !host.chatMessage.trim();
   const willRestoreAttachments = Boolean(
     snapshot.previousAttachments?.length &&
-    host.chatAttachments.length === 0 &&
+    (host.chatAttachments.length === 0 ||
+      composerRetainsSubmittedAnnotations(host, snapshot.previousAttachments)) &&
     (willRestoreDraft || !host.chatMessage.trim()),
   );
   return {

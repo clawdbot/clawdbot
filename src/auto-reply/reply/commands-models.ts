@@ -28,10 +28,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import {
-  RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-  createModelVisibilityPolicy,
-} from "../../agents/model-visibility-policy.js";
+import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
@@ -43,6 +40,7 @@ import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveRuntimeNormalization } from "./model-runtime-normalization.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
@@ -155,9 +153,11 @@ export async function buildModelsProviderData(
   agentId?: string,
   options: { view?: "default" | "all"; workspaceDir?: string } = {},
 ): Promise<ModelsProviderData> {
+  const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
     agentId,
+    ...runtimeNormalization,
   });
   const catalogWorkspaceDir = options.workspaceDir;
   const workspaceDir =
@@ -187,7 +187,7 @@ export async function buildModelsProviderData(
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
     agentId,
-    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    ...runtimeNormalization,
   });
   const authChecker = createProviderAuthChecker({
     cfg,
@@ -211,6 +211,7 @@ export async function buildModelsProviderData(
     agentId,
     workspaceDir,
     view: options.view,
+    policy: visibilityPolicy,
     routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants: snapshot.routeVariants,
     evaluateEntry: async (entry, routeVariants) => {
@@ -238,6 +239,7 @@ export async function buildModelsProviderData(
     cfg,
     defaultProvider: resolvedDefault.provider,
     agentId,
+    ...runtimeNormalization,
   });
   const restrictToProviderWildcards =
     options.view !== "all" && visibilityPolicy.hasProviderWildcards;
@@ -271,12 +273,17 @@ export async function buildModelsProviderData(
           catalog,
           model: trimmed,
           defaultProvider: resolvedDefault.provider,
+          agentId,
+          manifestPlugins: runtimeNormalization.manifestPlugins,
         })
       : resolvedDefault.provider;
     const resolved = resolveModelRefFromString({
+      cfg,
+      agentId,
       raw: trimmed,
       defaultProvider,
       aliasIndex,
+      ...runtimeNormalization,
     });
     if (!resolved) {
       return;

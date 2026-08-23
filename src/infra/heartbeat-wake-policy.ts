@@ -51,7 +51,7 @@ export function resolveHeartbeatWakePayloadFlags(params: {
   };
 }
 
-type TargetedImmediateWakeParams = {
+type TargetedUnscheduledWakeParams = {
   source?: HeartbeatWakeSource;
   intent?: HeartbeatWakeIntent;
   reason?: string;
@@ -59,10 +59,7 @@ type TargetedImmediateWakeParams = {
   sessionKey?: string;
 };
 
-export function isTargetedImmediateUnscheduledWake(params: TargetedImmediateWakeParams): boolean {
-  if (params.intent !== "immediate") {
-    return false;
-  }
+export function isTargetedUnscheduledWake(params: TargetedUnscheduledWakeParams): boolean {
   const hasSessionTarget = normalizeOptionalString(params.sessionKey) !== undefined;
   const hasTarget = hasSessionTarget || normalizeOptionalString(params.agentId) !== undefined;
   if (!hasTarget) {
@@ -70,15 +67,20 @@ export function isTargetedImmediateUnscheduledWake(params: TargetedImmediateWake
   }
 
   // These sources queue targeted events that would otherwise sit unread for a
-  // configured agent without a recurring heartbeat schedule.
+  // configured agent without a recurring heartbeat schedule. Each case admits
+  // exactly its producer's shape; exec completions keep their event intent so
+  // they cannot broaden the immediate-wake exception.
+  const reason = params.reason?.trim();
   switch (params.source) {
     case "notifications-event":
-      return hasSessionTarget && params.reason?.trim() === "wake";
+      return params.intent === "immediate" && hasSessionTarget && reason === "wake";
     case "hook":
-      return params.reason?.trim().startsWith("hook:") ?? false;
+      return params.intent === "immediate" && (reason?.startsWith("hook:") ?? false);
+    case "exec-event":
+      return params.intent === "event" && reason === "exec-event";
     case "background-task":
     case "background-task-blocked":
-      return true;
+      return params.intent === "immediate";
     default:
       return false;
   }

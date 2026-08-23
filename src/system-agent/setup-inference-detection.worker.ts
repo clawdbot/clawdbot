@@ -1,10 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
-import {
-  detectSetupInference,
-  listManualSetupInferenceOptions,
-  type SetupInferenceDetection,
-} from "./setup-inference.js";
+import type { SetupInferenceDetection } from "./setup-inference-core.js";
+import { detectSetupInference, listManualSetupInferenceOptions } from "./setup-inference-detect.js";
 
 if (!parentPort) {
   throw new Error("setup inference detection worker requires a parent port");

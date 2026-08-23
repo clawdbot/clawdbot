@@ -351,6 +351,7 @@ describe("delivery-queue recovery", () => {
           agentId: "main",
           operationId,
           storePath,
+          routeFingerprint: "route-recovery",
         },
       },
       operationId,
@@ -391,6 +392,7 @@ describe("delivery-queue recovery", () => {
         channel: "demo-channel-a",
         to: "+1",
         queuePolicy: "required",
+        maxRetries: 1,
         payloads: [{ text: "recovered delivery identity may have been lost" }],
         deliveryCompletion: completion,
       },
@@ -420,7 +422,14 @@ describe("delivery-queue recovery", () => {
   it("finalizes a persisted conversation operation during queue recovery", async () => {
     const scope = await createConversationRecoveryFixture("operation-recovery");
     const deliveryResult = { channel: "reef" as const, messageId: "reef-platform" };
-    const deliver = vi.fn(async (params: { onDeliveryResult?: (result: unknown) => unknown }) => {
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      expect(params.deliveryCompletion).toBeUndefined();
+      expect(params.conversationDeliveryAttemptAuthority).toEqual({
+        agentId: "main",
+        operationId: "operation-recovery",
+        storePath: scope.storePath,
+        routeFingerprint: "route-recovery",
+      });
       await params.onDeliveryResult?.(deliveryResult);
       return [deliveryResult];
     });
@@ -440,6 +449,7 @@ describe("delivery-queue recovery", () => {
   it("keeps an uncertainty notice owed when recovery returns no delivery identity", async () => {
     const deliveryId = "pending-final-unknown-recovery";
     const { completion, context } = await createPendingFinalRecoveryFixture(deliveryId);
+    const { auditEvents, unsubscribe } = captureAuditEvents();
     const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
       expect(params.deliveryCompletion).toBeUndefined();
       await markDeliveryPlatformSendAttemptStarted(deliveryId, tmpDir());
@@ -467,6 +477,27 @@ describe("delivery-queue recovery", () => {
       recoveryState: "unknown_after_send",
       retryCount: 1,
     });
+    expect(auditEvents).not.toContainEqual(
+      expect.objectContaining({ action: "message.outbound.finished" }),
+    );
+
+    setQueuedEntryState(tmpDir(), deliveryId, {
+      retryCount: 1,
+      enqueuedAt: 0,
+      lastAttemptAt: 0,
+      availableAt: 0,
+    });
+    const second = await runRecovery({ deliver });
+    unsubscribe();
+
+    expect(second.result).toEqual(RECOVERY_SUMMARY.failed);
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(auditEvents.filter((event) => event.action === "message.outbound.finished")).toEqual([
+      expect.objectContaining({
+        sourceId: `message:outbound:queue:${deliveryId}:payload:0`,
+        outcome: "unknown",
+      }),
+    ]);
   });
   it.each([
     "acks a persisted suppressed conversation operation without replaying it",
@@ -1064,7 +1095,7 @@ describe("delivery-queue recovery", () => {
     const id = await enqueueRecoveryDelivery({
       accountId: "acct-1",
       payloads: [{ text: "maybe sent" }],
-      replyToId: "root-message",
+      reply: { source: "implicit", replyToId: "root-message", mode: "all" },
       threadId: "thread-1",
       silent: true,
       maxRetries: 1,
@@ -1438,8 +1469,7 @@ describe("delivery-queue recovery", () => {
   });
   it("replays stored delivery options during recovery", async () => {
     const storedOptions = {
-      replyToId: "root-message",
-      replyToMode: "first",
+      reply: { replyToId: "root-message", source: "implicit", mode: "first" } as const,
       formatting: {
         textLimit: 1234,
         maxLinesPerMessage: 7,

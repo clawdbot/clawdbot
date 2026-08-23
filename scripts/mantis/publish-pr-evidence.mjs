@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
-/** @typedef {Record<string, unknown> & { expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
+/** @typedef {Record<string, unknown> & { detail?: string, digest?: string, expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
 /**
  * @typedef {{
  *   alt?: string,
@@ -27,7 +27,7 @@ import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 /**
  * @typedef {{
  *   artifacts: EvidenceArtifact[],
- *   comparison: { baseline?: EvidenceLane, candidate: EvidenceLane, pass?: boolean },
+ *   comparison: { baseline?: EvidenceLane, candidate: EvidenceLane, differential?: string, outcome?: "blocked" | "fail" | "pass", pass?: boolean },
  *   id: string,
  *   manifestDir: string,
  *   scenario: string,
@@ -70,6 +70,31 @@ import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 const MANTIS_ARTIFACT_UPLOAD_TIMEOUT_MS = 300_000;
 // Untrusted storage error bodies are for diagnostics only; keep them small.
 const MANTIS_UPLOAD_ERROR_BODY_MAX_BYTES = 64 * 1024;
+const COMMENT_GRAPHEME_SEGMENTER = new Intl.Segmenter("en", { granularity: "grapheme" });
+
+/**
+ * @param {string | undefined} value
+ * @param {number} maxLength
+ * @returns {string | undefined}
+ */
+export function sanitizeCommentText(value, maxLength) {
+  const escaped = value
+    ?.trim()
+    .replace(/\s+/gu, " ")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("`", "&#96;");
+  if (!escaped) {
+    return undefined;
+  }
+  const graphemes = Array.from(
+    COMMENT_GRAPHEME_SEGMENTER.segment(escaped),
+    ({ segment }) => segment,
+  );
+  return graphemes.length > maxLength ? `${graphemes.slice(0, maxLength - 1).join("")}…` : escaped;
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -366,7 +391,15 @@ function laneLine(label, lane) {
   } else if (lane.ref) {
     pieces.push(` at \`${lane.ref}\``);
   }
-  if (lane.expected) {
+  if (lane.digest) {
+    const judgment = lane.detail ?? sanitizeCommentText(lane.expected, 1_000);
+    if (judgment) {
+      pieces.push(` — ${judgment}`);
+    }
+    pieces.push(` · facts: ${lane.digest}`);
+  } else if (lane.detail) {
+    pieces.push(` — ${lane.detail}`);
+  } else if (lane.expected) {
     pieces.push(`, expected ${lane.expected}`);
   }
   return pieces.join("");
@@ -385,6 +418,10 @@ function publicSummary(manifest) {
   return manifest.summary ?? "Mantis captured QA evidence for this scenario.";
 }
 function overallStatus(manifest) {
+  const outcome = manifest.comparison?.outcome;
+  if (outcome === "blocked" || outcome === "fail" || outcome === "pass") {
+    return outcome;
+  }
   const pass = manifest.comparison?.pass;
   return typeof pass === "boolean" ? String(pass) : "";
 }
@@ -394,6 +431,9 @@ function overallStatus(manifest) {
  */
 export function shouldPublishPrComment(manifest, { requestSource } = {}) {
   if (!isTelegramDesktopProof(manifest) || hasVisibleProofArtifacts(manifest)) {
+    return true;
+  }
+  if (manifest.comparison?.outcome === "blocked") {
     return true;
   }
   if (requestSource === "pull_request_target") {
@@ -444,9 +484,12 @@ export function renderEvidenceComment({
   if (baselineLine) {
     lines.push(baselineLine);
   }
-  const candidateLine = laneLine("Candidate", candidate);
+  const candidateLine = laneLine("Candidate (PR merged onto main)", candidate);
   if (candidateLine) {
     lines.push(candidateLine);
+  }
+  if (comparison.differential) {
+    lines.push(`- Differential (trusted facts): ${comparison.differential}`);
   }
   const overall = overallStatus(manifest);
   if (overall) {
@@ -592,14 +635,14 @@ export async function publishArtifactFiles({
     treeUrl: artifactUrl(publicRoot, indexArtifact),
   };
 }
-function upsertPrComment({ body, marker, prNumber, repo }) {
+function upsertPrComment({ body, createMissing, marker, prNumber, repo }) {
   run("gh", ["api", `repos/${repo}/pulls/${prNumber}`, "--jq", ".number"]);
   const commentId = run("gh", [
     "api",
     "--paginate",
     `repos/${repo}/issues/${prNumber}/comments`,
     "--jq",
-    `.[] | select(.body | contains("${marker}")) | .id`,
+    `.[] | select(.user.login == "openclaw-mantis[bot]" and (.body | contains("${marker}"))) | .id`,
   ])
     .trim()
     .split("\n")
@@ -622,10 +665,20 @@ function upsertPrComment({ body, marker, prNumber, repo }) {
         console.log(`Updated Mantis QA evidence comment on PR #${prNumber}.`);
         return;
       } catch {
+        if (!createMissing) {
+          console.log(
+            `Could not update existing Mantis QA evidence comment ${commentId}; create-missing is false.`,
+          );
+          return;
+        }
         console.warn(
           `Could not update existing Mantis QA evidence comment ${commentId}; creating a new one.`,
         );
       }
+    }
+    if (!createMissing) {
+      console.log("No existing Mantis QA evidence comment found and create-missing is false.");
+      return;
     }
     run("gh", ["pr", "comment", prNumber, "--body-file", bodyFile], { stdio: "inherit" });
     console.log(`Created Mantis QA evidence comment on PR #${prNumber}.`);
@@ -671,6 +724,7 @@ export async function publishEvidence(rawArgs = process.argv.slice(2)) {
   }
   upsertPrComment({
     body,
+    createMissing: args.create_missing !== "false",
     marker,
     prNumber: targetPr,
     repo,

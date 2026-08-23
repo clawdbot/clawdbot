@@ -66,12 +66,13 @@ import {
   runWithModelFallback,
 } from "./run-execution.runtime.js";
 import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
-import type {
-  CronLiveSelection,
-  MutableCronSession,
-  PersistCronSessionEntry,
+import {
+  type CronLiveSelection,
+  type MutableCronSession,
+  type PersistCronSessionEntry,
+  setCronSessionRuntimeModel,
+  syncCronSessionLiveSelection,
 } from "./run-session-state.js";
-import { syncCronSessionLiveSelection } from "./run-session-state.js";
 import { resolveEffectiveAgentRuntime, resolveThinkingDefault } from "./run.runtime.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
@@ -95,6 +96,12 @@ function assertCronRuntimeAuthorityCandidate(params: {
 type CronPromptRunResult = Awaited<ReturnType<typeof runCliAgent>>;
 type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 type CronSubagentRegistryRuntime = typeof import("./run-subagent-registry.runtime.js");
+type CronRunnerStartedInfo = {
+  lifecycleGeneration?: string;
+  isFallback?: boolean;
+  provider?: string;
+  model?: string;
+};
 
 const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
   () => import("./run-embedded.runtime.js"),
@@ -275,7 +282,7 @@ function createCronPromptExecutor(params: {
   setRunContinuationCliExecutionProvider?: (provider?: string) => Promise<void>;
   abortSignal?: AbortSignal;
   abortReason: () => string;
-  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
+  onExecutionStarted?: (info?: CronRunnerStartedInfo) => void;
   onExecutionPhase?: (
     info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
       Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
@@ -363,6 +370,7 @@ function createCronPromptExecutor(params: {
     hasNewGeneratedMediaTaskForSessionKey(params.runSessionKey, attemptMediaTaskIds);
 
   const runPrompt = async (promptText: string) => {
+    let candidateStarted = false;
     const userTurnTranscriptRecorder =
       pendingUserTurn?.promptText === promptText
         ? pendingUserTurn.recorder
@@ -443,6 +451,24 @@ function createCronPromptExecutor(params: {
       canFallbackAfterError: () => !currentAttemptCommittedMedia(),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
+        const isFallback = candidateStarted;
+        candidateStarted = true;
+        const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) =>
+          params.onExecutionStarted?.({
+            ...info,
+            ...(isFallback ? { isFallback: true } : {}),
+            provider: providerOverride,
+            model: modelOverride,
+          });
+        const notifyExecutionPhase = (
+          info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
+            Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
+        ) =>
+          params.onExecutionPhase?.({
+            ...info,
+            provider: providerOverride,
+            model: modelOverride,
+          });
         let contextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
         attemptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(params.runSessionKey);
         if (params.abortSignal?.aborted) {
@@ -524,8 +550,11 @@ function createCronPromptExecutor(params: {
         });
         // The validated candidate that admits detached work owns its continuation
         // even if the provider throws before returning result metadata.
-        params.cronSession.sessionEntry.modelProvider = providerOverride;
-        params.cronSession.sessionEntry.model = modelOverride;
+        setCronSessionRuntimeModel({
+          entry: params.cronSession.sessionEntry,
+          provider: providerOverride,
+          model: modelOverride,
+        });
         await params.persistRunContinuationSession?.();
         await params.setRunContinuationCliExecutionProvider?.(
           cliExecution ? executionProvider : undefined,
@@ -558,6 +587,7 @@ function createCronPromptExecutor(params: {
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
                 sessionEntry: params.cronSession.sessionEntry,
+                contextWindow: params.cronSession.sessionEntry.contextWindow,
                 agentId: params.agentId,
                 trigger: "cron",
                 jobId: params.job.id,
@@ -585,6 +615,7 @@ function createCronPromptExecutor(params: {
                 cliSessionBinding: guardedCliSessionBinding,
                 skillsSnapshot: params.skillsSnapshot,
                 messageChannel,
+                agentAccountId: params.resolvedDelivery.accountId,
                 sourceReplyDeliveryMode,
                 requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
                 cliSessionBindingFacts: {
@@ -597,8 +628,8 @@ function createCronPromptExecutor(params: {
                 ),
                 scheduledToolPolicy,
                 abortSignal: params.abortSignal,
-                onExecutionStarted: params.onExecutionStarted,
-                onExecutionPhase: params.onExecutionPhase,
+                onExecutionStarted: notifyExecutionStarted,
+                onExecutionPhase: notifyExecutionPhase,
                 bootstrapContextMode,
                 bootstrapContextRunKind: "cron",
                 bootstrapPromptWarningSignaturesSeen,
@@ -729,8 +760,8 @@ function createCronPromptExecutor(params: {
             contextEngineTurnCandidate = facts;
           },
           abortSignal: params.abortSignal,
-          onExecutionStarted: params.onExecutionStarted,
-          onExecutionPhase: params.onExecutionPhase,
+          onExecutionStarted: notifyExecutionStarted,
+          onExecutionPhase: notifyExecutionPhase,
           onLaneWait: params.onLaneWait,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,
@@ -771,8 +802,11 @@ function createCronPromptExecutor(params: {
     fallbackModel = fallbackResult.model;
     params.liveSelection.provider = fallbackResult.provider;
     params.liveSelection.model = fallbackResult.model;
-    params.cronSession.sessionEntry.modelProvider = fallbackResult.provider;
-    params.cronSession.sessionEntry.model = fallbackResult.model;
+    setCronSessionRuntimeModel({
+      entry: params.cronSession.sessionEntry,
+      provider: fallbackResult.provider,
+      model: fallbackResult.model,
+    });
     await params.persistRunContinuationSession?.();
     runEndedAt = Date.now();
     pendingUserTurn = undefined;
@@ -827,7 +861,7 @@ export async function executeCronRun(params: {
   abortSignal?: AbortSignal;
   abortReason: () => string;
   isAborted: () => boolean;
-  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
+  onExecutionStarted?: (info?: CronRunnerStartedInfo) => void;
   onExecutionPhase?: (
     info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
       Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,

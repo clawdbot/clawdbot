@@ -74,6 +74,33 @@ describe("formatExecApprovalContinuationSourceOutput", () => {
     expect(formatted.endsWith("b")).toBe(true);
   });
 
+  it.each([
+    { name: "stderr", label: "stderr", stdoutUnits: 200_000, streamUnits: 100_000 },
+    { name: "error", label: "error", stdoutUnits: 200_000, streamUnits: 100_000 },
+    { name: "head header cut", label: "stderr", stdoutUnits: 191_907, streamUnits: 100_000 },
+    { name: "tail header cut", label: "stderr", stdoutUnits: 200_000, streamUnits: 63_970 },
+    { name: "already retained header", label: "stderr", stdoutUnits: 200_000, streamUnits: 63_960 },
+  ])("preserves the retained stream label across $name", ({ label, stdoutUnits, streamUnits }) => {
+    const formatted = formatExecApprovalContinuationSourceOutput([
+      { label: "stdout", value: "a".repeat(stdoutUnits) },
+      { label, value: "b".repeat(streamUnits) },
+    ]);
+
+    expect(formatted.length).toBeLessThanOrEqual(MAX_SOURCE_UTF16_UNITS);
+    expect(formatted).toContain("[stdout]\n");
+    expect(formatted).toContain(`${MARKER}\n[${label}]\n`);
+    expect(formatted.split(`[${label}]\n`)).toHaveLength(2);
+    expect(formatted.endsWith("b")).toBe(true);
+  });
+
+  it("does not mistake stream-like text in single-stream output for a stream boundary", () => {
+    const formatted = formatExecApprovalContinuationSourceOutput([
+      { label: "stdout", value: `${"a".repeat(200_000)}\n[stderr]\n${"b".repeat(100_000)}` },
+    ]);
+
+    expect(formatted).not.toContain(`${MARKER}\n[stderr]\n`);
+  });
+
   it("uses an honest marker because capture may already have dropped output", () => {
     const formatted = formatExecApprovalContinuationSourceOutput([
       { label: "stdout", value: "z".repeat(MAX_SOURCE_UTF16_UNITS + 1) },
@@ -192,6 +219,25 @@ describe("resizeExecApprovalContinuationPrompt", () => {
     expectNoSplitSurrogates(resizedOutput);
     expect(resized.split(OUTPUT_BEGIN)).toHaveLength(2);
     expect(resized.split(OUTPUT_END)).toHaveLength(2);
+  });
+
+  it("preserves the retained stream label when the resumed model applies its output budget", () => {
+    const output = formatExecApprovalContinuationSourceOutput([
+      { label: "stdout", value: "a".repeat(12_000) },
+      { label: "stderr", value: "b".repeat(10_000) },
+    ]);
+    const built = buildExecApprovalContinuationPrompt(
+      `Exec finished (node=node-1 id=approval-1, code 0)\n${output}`,
+    );
+    const resized = resizeExecApprovalContinuationPrompt({
+      prompt: built.message,
+      range: built.resultRange,
+      maxOutputUtf16Units: 16_000,
+    });
+
+    expect(resized).toContain(`${MARKER}\n[stderr]\n`);
+    expect(resized).toContain(OUTPUT_BEGIN);
+    expect(resized).toContain(OUTPUT_END);
   });
 });
 

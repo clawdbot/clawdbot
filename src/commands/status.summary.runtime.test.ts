@@ -4,10 +4,10 @@ import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { statusSummaryRuntime } from "../status/summary.runtime.js";
 
-function resolveSessionRuntimeLabel(
-  params: Parameters<typeof statusSummaryRuntime.resolveSessionRuntimeLabel>[0],
+function resolveSessionRuntime(
+  params: Parameters<typeof statusSummaryRuntime.resolveSessionRuntime>[0],
 ) {
-  return statusSummaryRuntime.resolveSessionRuntimeLabel({
+  return statusSummaryRuntime.resolveSessionRuntime({
     ...params,
     cfg: migratePersistedImplicitMainRoster(params.cfg).config as never,
   });
@@ -181,10 +181,10 @@ describe("statusSummaryRuntime.classifySessionKey", () => {
   });
 });
 
-describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
+describe("statusSummaryRuntime.resolveSessionRuntime", () => {
   it("uses the shared /status runtime label for the implicit OpenAI Codex route", () => {
     expect(
-      resolveSessionRuntimeLabel({
+      resolveSessionRuntime({
         cfg: {} as never,
         entry: {
           sessionId: "session-1",
@@ -194,12 +194,12 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
         model: "gpt-5.5",
         sessionKey: "agent:main:main",
       }),
-    ).toBe("OpenAI Codex");
+    ).toEqual({ id: "codex", label: "OpenAI Codex" });
   });
 
   it("preserves configured default model CLI runtimes", () => {
     expect(
-      resolveSessionRuntimeLabel({
+      resolveSessionRuntime({
         cfg: {
           agents: {
             defaults: {
@@ -217,12 +217,12 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
         model: "claude-sonnet-4-6",
         sessionKey: "agent:main:main",
       }),
-    ).toBe("Claude CLI");
+    ).toEqual({ id: "claude-cli", label: "Claude CLI" });
   });
 
   it("preserves configured agent model runtimes before harness selection", () => {
     expect(
-      resolveSessionRuntimeLabel({
+      resolveSessionRuntime({
         cfg: {
           agents: {
             defaults: {
@@ -249,12 +249,36 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
         agentId: "research",
         sessionKey: "agent:research:main",
       }),
-    ).toBe("OpenAI Codex");
+    ).toEqual({ id: "codex", label: "OpenAI Codex" });
+  });
+
+  it("does not treat an unlocked producing harness as the current runtime", () => {
+    expect(
+      resolveSessionRuntime({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              },
+            },
+          },
+        } as never,
+        entry: {
+          sessionId: "openclaw-produced-session",
+          updatedAt: 0,
+          agentHarnessId: "openclaw",
+        },
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionKey: "agent:main:main",
+      }),
+    ).toEqual({ id: "codex", label: "OpenAI Codex" });
   });
 
   it("reports the owning Codex harness for a locked session with stale OpenClaw metadata", () => {
     expect(
-      resolveSessionRuntimeLabel({
+      resolveSessionRuntime({
         cfg: {
           agents: {
             defaults: {
@@ -275,7 +299,7 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
         model: "gpt-5.5",
         sessionKey: "agent:main:main",
       }),
-    ).toBe("OpenAI Codex");
+    ).toEqual({ id: "codex", label: "OpenAI Codex" });
   });
 });
 

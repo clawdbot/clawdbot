@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   getMemoryCapabilityRegistration,
   listActiveMemoryPublicArtifacts,
@@ -114,7 +115,7 @@ async function collectBridgeArtifacts(
       continue;
     }
     const syncKey = await resolveArtifactKey(artifact.absolutePath);
-    if (isPathInsideOrEqual(vaultRootKey, syncKey)) {
+    if (isPathInside(vaultRootKey, syncKey)) {
       continue;
     }
     collected.push({
@@ -130,14 +131,6 @@ async function collectBridgeArtifacts(
     deduped.set(artifact.syncKey, artifact);
   }
   return [...deduped.values()];
-}
-
-function isPathInsideOrEqual(parentPath: string, candidatePath: string): boolean {
-  const relative = path.relative(parentPath, candidatePath);
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-  );
 }
 
 function resolveBridgeTitle(artifact: BridgeArtifact, agentIds: string[]): string {

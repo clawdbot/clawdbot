@@ -1,4 +1,6 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 // Tracks heartbeat wake requests, busy skips, and retry timing.
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
@@ -111,6 +113,7 @@ export const HEARTBEAT_IDLE_RETRY_GRACE_MS = 60_000;
 // Heartbeat turns can start model/provider work; bound cross-target fan-out so
 // one aligned monitor tick cannot exhaust gateway or provider capacity.
 const MAX_CONCURRENT_HEARTBEAT_WAKE_TARGETS = 4;
+const wakeLog = createSubsystemLogger("heartbeat/wake");
 const REASON_PRIORITY = {
   RETRY: 0,
   INTERVAL: 1,
@@ -508,6 +511,10 @@ async function dispatchPendingWakeGroup(params: {
         result = await runWithGatewayIndependentRootWorkAdmission(async () =>
           runAbortableHeartbeatWake(active, wakeOpts, abortSignal),
         );
+        wakeLog.debug(
+          `completed: source=${pendingWake.source} intent=${pendingWake.intent} ` +
+            `status=${result.status} reason=${"reason" in result ? result.reason : "ran"}`,
+        );
       } catch {
         if (handlerGeneration !== generation) {
           handOffPendingWakeBatch(wakes, wakeIndex);
@@ -758,19 +765,17 @@ export function requestHeartbeat(opts: {
   tasks?: readonly HeartbeatScheduledTask[];
 }) {
   const requestedAt = Date.now();
-  const coalesceMs = opts.coalesceMs ?? DEFAULT_COALESCE_MS;
-  queuePendingWakeReason({
-    source: opts.source,
-    intent: opts.intent,
-    reason: opts.reason,
-    agentId: opts.agentId,
-    sessionKey: opts.sessionKey,
-    heartbeat: opts.heartbeat,
-    scheduledEveryMs: opts.scheduledEveryMs,
-    scheduledAnchorMs: opts.scheduledAnchorMs,
-    tasks: opts.tasks,
-    requestedAt,
-    readyAtMs: requestedAt + resolveTimerTimeoutMs(coalesceMs, DEFAULT_COALESCE_MS, 0),
+  const { coalesceMs: requestedCoalesceMs, ...wake } = opts;
+  const coalesceMs = requestedCoalesceMs ?? DEFAULT_COALESCE_MS;
+  // Wake timers outlive the attempt that requested them. Do not let their
+  // callback chain inherit that attempt's transcript writer: a later wake for
+  // the same session must acquire its own writer lifecycle.
+  runWithoutOwnedSessionTranscriptWrites(() => {
+    queuePendingWakeReason({
+      ...wake,
+      requestedAt,
+      readyAtMs: requestedAt + resolveTimerTimeoutMs(coalesceMs, DEFAULT_COALESCE_MS, 0),
+    });
+    schedule(coalesceMs);
   });
-  schedule(coalesceMs);
 }

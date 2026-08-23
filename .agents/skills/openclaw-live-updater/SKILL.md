@@ -59,19 +59,17 @@ Load `$release-openclaw-ci` and `$openclaw-testing`. This is validation only, ne
 
    ```bash
    MAIN_SHA="<exact-main-sha>"
-   gh workflow run full-release-validation.yml \
-     --repo openclaw/openclaw \
-     --ref main \
-     -f ref="$MAIN_SHA" \
-     -f expected_sha="$MAIN_SHA" \
+   pnpm ci:full-release \
+     --sha "$MAIN_SHA" \
+     --workflow-sha "$MAIN_SHA" \
      -f provider=openai \
      -f mode=both \
      -f release_profile=full \
      -f rerun_group=all
    ```
 
-3. Watch the parent with `release-ci-summary.mjs`; require its recorded target SHA and children to match the dispatch snapshot. Fetch logs only for failed or blocking jobs. Do not cancel unrelated release checks.
-4. For a code or harness failure, repair and land from the Codex worktree as above. Then target new exact `main` with the narrowest supported `rerun_group` that covers the failed child; use `live_suite_filter` for one live/E2E shard. A targeted recovery run does not create a second full/all cadence dispatch.
+3. Let the helper watch the parent to terminal and verify its release evidence. Retain its parent URL and require the recorded target SHA and children to match the dispatch snapshot. Fetch logs only for failed or blocking jobs. Do not cancel unrelated release checks.
+4. For a code or harness failure, repair and land from the Codex worktree as above. Then invoke the same helper with a new frozen exact-main tuple and the narrowest supported `rerun_group` that covers the failed child; use `live_suite_filter` for one live/E2E shard. A targeted recovery run does not create a second full/all cadence dispatch.
 5. Report exact SHA, parent and child run URLs/IDs, conclusions, repairs and landed PRs, targeted reruns, and any genuine proof gap. Do not write release evidence or publish artifacts unless separately authorized.
 
 ## Failure Discipline

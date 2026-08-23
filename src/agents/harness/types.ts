@@ -206,6 +206,8 @@ export type AgentHarnessSideQuestionParams = {
   hostCapabilities?: AgentHarnessHostCapabilities;
   /** Host-resolved sandbox snapshot for this side execution. */
   sandbox?: import("../sandbox/types.js").SandboxContext | null;
+  /** Prepared plugin/model generation that owns this side execution. */
+  preparedModelRuntime?: import("../prepared-model-runtime.types.js").PreparedModelRuntimeSnapshot;
   cfg: import("../../config/types.openclaw.js").OpenClawConfig;
   agentDir: string;
   provider: string;
@@ -341,6 +343,12 @@ export type AgentHarnessDeliveryDefaults = {
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
 
+/** Exact node authority and worker capacity required by one paired-device runtime. */
+export type DevicePlacementRequirement = {
+  requiredNodeCommands: readonly string[];
+  consumesWorkerSlot: boolean;
+};
+
 type AgentHarnessRunCapability<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
 > = {
@@ -352,6 +360,8 @@ type AgentHarnessRunCapability<
    * dynamic probing; an empty list marks an explicit-only harness.
    */
   autoSelection?: { providerIds: readonly string[] };
+  /** Declares host-owned remote execution and its exact paired-device requirements. */
+  cloudPlacement?: { mode: "remote-exec"; devicePlacement?: DevicePlacementRequirement };
   /**
    * Plugin ids this harness owner permits to execute its locked sessions.
    * Delegates receive work admission and execution only; session mutation stays owner-only.
@@ -472,6 +482,20 @@ type AgentHarnessMcpCatalogCapability = {
   loadMcpToolCatalog?(params: AgentHarnessMcpCatalogParams): Promise<McpToolCatalog | undefined>;
 };
 
+export type AgentHarnessModelCatalogParams = {
+  config: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+};
+
+type AgentHarnessModelCatalogCapability = {
+  /** Lists account-scoped models owned by this native runtime. */
+  loadModelCatalog?(
+    params: AgentHarnessModelCatalogParams,
+  ): Promise<readonly import("../model-catalog.types.js").ModelCatalogEntry[]>;
+};
+
 /**
  * @deprecated Implement AgentHarnessV2. This registration contract remains
  * source-compatible for existing plugins through 2026-10-12.
@@ -483,6 +507,7 @@ export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
   AgentHarnessProviderUsageCapability &
+  AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
   AgentHarnessSessionLifecycleCapability;
@@ -495,6 +520,7 @@ export type AgentHarnessV2 = AgentHarnessRunCapability<AgentHarnessAttemptParams
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
   AgentHarnessProviderUsageCapability &
+  AgentHarnessModelCatalogCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
   AgentHarnessSessionLifecycleCapability;

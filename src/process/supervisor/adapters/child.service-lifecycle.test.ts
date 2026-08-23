@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,9 +13,18 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+  if (process.platform !== "linux") {
+    return true;
+  }
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    // kill(pid, 0) also succeeds for a terminated process awaiting reaping.
+    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
+  } catch {
+    return false;
   }
 }
 
@@ -125,6 +135,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
 
     expect(elapsed).toBeLessThan(300);
     expect(isAlive(descendantPid)).toBe(true);
+    await adapter.waitForExtinction?.();
     await waitFor(() => !isAlive(descendantPid));
   });
 

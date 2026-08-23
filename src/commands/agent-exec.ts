@@ -635,7 +635,8 @@ export async function agentExecCommand(
     const pluginInstallRoots = pluginInstallContext?.resolvePluginInstallRoots();
     const timeout = normalizeTimeoutSeconds(opts.timeout);
     const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
-    const { resolveDefaultAgentDir } = await import("../agents/agent-scope-config.js");
+    const { resolveAgentDir, resolveAmbientOwnerAgentId } =
+      await import("../agents/agent-scope-config.js");
     // Resolve from the inherited config, not `{}`: the default agent may declare
     // its own `agentDir`, and that is where its stored auth profiles live. This
     // reads `baseConfig` rather than `runConfig` because the run config
@@ -643,7 +644,13 @@ export async function agentExecCommand(
     // credential ownership must still follow the operator's configuration.
     // Computed before the environment repoints the state dir so the unconfigured
     // case still resolves against the real one.
-    const storedAuthAgentDir = resolveDefaultAgentDir(baseConfig);
+    const execAgentId = resolveAmbientOwnerAgentId(baseConfig, undefined, {
+      surface: "agent exec",
+      hint: "Set agents.defaults.systemAgent.agentId.",
+    });
+    // Auth, session keys, and SQLite ownership must share one resolved owner.
+    // Splitting these paths can select an agent's store but emit a `main` key.
+    const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);
     restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
     runtimePaths = await import("../config/paths.js");
     runtimePaths.pinRuntimePaths();
@@ -698,6 +705,7 @@ export async function agentExecCommand(
         {
           message: prompt,
           sessionId,
+          agentId: execAgentId,
           workspaceDir: cwd,
           cwd,
           model: opts.model,

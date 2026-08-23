@@ -187,6 +187,14 @@ describe("Control UI build admission over WebSocket", () => {
       attachGatewayWsMessageHandler({
         socket,
         upgradeReq: request as IncomingMessage,
+        ingressAttribution: {
+          kind: "direct-local",
+          clientIp: "127.0.0.1",
+          rateLimit: {
+            subject: { key: "127.0.0.1" },
+            resetOnSuccess: true,
+          },
+        },
         connId: "legacy-build-connection",
         remoteAddr: "127.0.0.1",
         localAddr: "127.0.0.1",

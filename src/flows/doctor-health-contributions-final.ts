@@ -184,6 +184,12 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: runHooksModelHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:model-references",
+      label: "Model references",
+      healthCheckIds: ["core/doctor/model-references"],
+      run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/model-references"),
+    }),
+    createDoctorHealthContribution({
       id: "doctor:provider-catalog-projection",
       label: "Provider catalog projection",
       healthCheckIds: ["core/doctor/provider-catalog-projection"],

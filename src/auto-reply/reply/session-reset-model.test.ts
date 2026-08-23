@@ -92,13 +92,15 @@ describe("applyResetModelOverride", () => {
     });
   });
 
-  it("selects a model hint and strips it from the body", async () => {
+  it("selects a model hint while preserving the stored thinking level for validation", async () => {
     const { sessionEntry, sessionCtx } = await applyResetFixture({
       resetTriggered: true,
+      sessionEntry: { thinkingLevel: "ultra" },
     });
 
     expect(sessionEntry.providerOverride).toBe("minimax");
     expect(sessionEntry.modelOverride).toBe("m2.7");
+    expect(sessionEntry.thinkingLevel).toBe("ultra");
     expect(sessionCtx.BodyStripped).toBe("summarize");
   });
 

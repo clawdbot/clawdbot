@@ -1,5 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
+import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -120,19 +122,25 @@ describe("pending-final durable delivery completion", () => {
       },
     );
     const sendMatrix = vi.fn().mockResolvedValue({});
+    const auditEvents: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
 
-    await expect(
-      deliverOutboundPayloads({
-        cfg: {} as OpenClawConfig,
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "delivery identity may have been lost" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-        deliveryIntentId: deliveryId,
-        deliveryCompletion: completion,
-      }),
-    ).resolves.toEqual([]);
+    try {
+      await expect(
+        deliverOutboundPayloads({
+          cfg: {} as OpenClawConfig,
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text: "delivery identity may have been lost" }],
+          deps: { matrix: sendMatrix },
+          queuePolicy: "required",
+          deliveryIntentId: deliveryId,
+          deliveryCompletion: completion,
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      unsubscribe();
+    }
 
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
       id: deliveryId,
@@ -148,5 +156,9 @@ describe("pending-final durable delivery completion", () => {
         context,
       },
     });
+    expect(auditEvents.map((event) => event.outcome)).toEqual(["queued", "platform_started"]);
+    expect(auditEvents).not.toContainEqual(
+      expect.objectContaining({ action: "message.outbound.finished" }),
+    );
   });
 });

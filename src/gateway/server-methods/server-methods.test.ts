@@ -888,7 +888,12 @@ describe("sanitizeChatHistoryMessages", () => {
     );
 
     expect(result).toEqual([
-      assistantHistoryMessage(`${prefix}\n...(truncated)...`, { timestamp: 1 }),
+      assistantHistoryMessage(`${prefix}\n...(truncated)...`, {
+        timestamp: 1,
+        // The display cap is recorded structurally so consumers need not sniff
+        // the in-band sentinel to know the row is a bounded preview.
+        __openclaw: { truncated: true, reason: "display-cap" },
+      }),
     ]);
   });
 
@@ -1318,7 +1323,7 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
-  it.each(["[[reply_to_current]]", "NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
+  it.each(["NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
     "projects display-hidden assistant error text %j as a generic safe failure",
     (text) => {
       const result = projectRecentChatDisplayMessages([
@@ -2058,27 +2063,13 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
-  it("merges delayed TTS supplements when directive tags are stripped for display", () => {
-    const rawVisibleText = "[[reply_to_current]]Visible answer.";
-    const projectedVisibleText = "Visible answer.";
-    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
-
-    const result = projectRecentChatDisplayMessages([
-      assistantHistoryMessage(rawVisibleText, { timestamp: 1 }),
-      ttsSupplementHistoryMessage({ textSha256 }, 2),
-    ]);
-
-    expect(result).toEqual([assistantAudioAttachmentHistoryMessage(projectedVisibleText, 1)]);
-  });
-
   it("merges delayed TTS supplements before display truncation", () => {
     const projectedVisibleText = "Visible answer ".repeat(8).trim();
-    const rawVisibleText = `[[reply_to_current]]${projectedVisibleText}`;
     const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
 
     const result = projectRecentChatDisplayMessages(
       [
-        assistantHistoryMessage(rawVisibleText, { timestamp: 1 }),
+        assistantHistoryMessage(projectedVisibleText, { timestamp: 1 }),
         ttsSupplementHistoryMessage({ textSha256 }, 2),
       ],
       { maxChars: 24 },
@@ -2088,6 +2079,7 @@ describe("projectRecentChatDisplayMessages", () => {
       assistantAudioAttachmentHistoryMessage(
         `${projectedVisibleText.slice(0, 24)}\n...(truncated)...`,
         1,
+        { __openclaw: { truncated: true, reason: "display-cap" } },
       ),
     ]);
   });
@@ -2609,16 +2601,24 @@ describe("exec approval handlers", () => {
 
   function getRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
-  ): { id: string; request: Record<string, unknown> } {
+  ): { approvalKind: "exec"; id: string; request: Record<string, unknown> } {
     const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
     if (!requested) {
       throw new Error("exec approval requested broadcast missing");
     }
-    const payload = requested.payload as { id?: unknown; request?: Record<string, unknown> };
+    const payload = requested.payload as {
+      approvalKind?: unknown;
+      id?: unknown;
+      request?: Record<string, unknown>;
+    };
+    if (payload.approvalKind !== "exec") {
+      throw new Error("exec approval requested kind missing");
+    }
     if (typeof payload.id !== "string" || payload.id.length === 0) {
       throw new Error("exec approval requested id missing");
     }
     return {
+      approvalKind: payload.approvalKind,
       id: payload.id,
       request: payload.request ?? {},
     };
@@ -2626,7 +2626,7 @@ describe("exec approval handlers", () => {
 
   async function waitForRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
-  ): Promise<{ id: string; request: Record<string, unknown> }> {
+  ): Promise<{ approvalKind: "exec"; id: string; request: Record<string, unknown> }> {
     await waitForFast(
       () => {
         expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
@@ -3055,7 +3055,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(listRespond)).toBe(true);
     const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
     const approval = approvals.find((entry) => entry.id === "approval-list-1");
-    expectRecordFields(approval, { id: "approval-list-1" });
+    expectRecordFields(approval, { approvalKind: "exec", id: "approval-list-1" });
     expectRecordFields((approval as Record<string, unknown>).request, { command: "echo ok" });
     expect(mockCallArg(listRespond, 0, 2)).toBeUndefined();
 
@@ -4381,7 +4381,7 @@ describe("gateway healthHandlers.status scope handling", () => {
         includeSensitive,
         includeChannelSummary: true,
       });
-      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     },
   );
 
@@ -4404,7 +4404,7 @@ describe("gateway healthHandlers.status scope handling", () => {
       includeSensitive: false,
       includeChannelSummary: false,
     });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
   });
 });
 
@@ -4579,6 +4579,53 @@ describe("gateway healthHandlers.health cache freshness", () => {
       code: "UNAVAILABLE",
       message: "Error: collector failed",
     });
+  });
+
+  it("rejects cached health when runtime inspection and refresh both fail", async () => {
+    const cached = createHealthSnapshot({});
+    const refreshHealthSnapshot = vi.fn().mockRejectedValue(new Error("collector failed"));
+    const { respond } = await requestHealthSnapshot({
+      cached,
+      refreshHealthSnapshot,
+      context: {
+        getRuntimeSnapshot: () => {
+          throw new Error("runtime inspection failed");
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: "Error: collector failed",
+      }),
+    );
+  });
+
+  it("refreshes cached health when runtime inspection fails", async () => {
+    const cached = createHealthSnapshot({});
+    const fresh = createHealthSnapshot({ ts: cached.ts + 1 });
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh,
+      context: {
+        getRuntimeSnapshot: () => {
+          throw new Error("runtime inspection failed");
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {

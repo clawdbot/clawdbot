@@ -6,6 +6,16 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const metadataBoundaries = [
+  "configured stat",
+  "rolling readdir",
+  "candidate stat",
+  "final stat",
+] as const;
+const operationalErrorCodes = ["EACCES", "EIO", "EMFILE"] as const;
+const operationalMetadataFailures = metadataBoundaries.flatMap((boundary) =>
+  operationalErrorCodes.map((code) => ({ boundary, code })),
+);
 
 const resolvedRedaction = { mode: "tools" as const, patterns: [/custom-secret-[a-z]+/g] };
 type PositionalRead = (
@@ -85,6 +95,30 @@ describe("readConfiguredLogTail", () => {
     expect(result.lines).toEqual(["old line", "recent one", "recent two"]);
   });
 
+  it("holds an unterminated record until a later read completes it", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const completePrefix = "complete-before ✅\n";
+
+    await fs.writeFile(file, `${completePrefix}partial`);
+    setLoggerOverride({ file });
+
+    const initial = await readConfiguredLogTail();
+    expect(initial).toMatchObject({
+      lines: ["complete-before ✅"],
+      cursor: Buffer.byteLength(completePrefix),
+    });
+
+    await fs.appendFile(file, "-completed\n");
+    const continuation = await readConfiguredLogTail({ cursor: initial.cursor });
+
+    expect(continuation).toMatchObject({
+      lines: ["partial-completed"],
+      cursor: Buffer.byteLength(`${completePrefix}partial-completed\n`),
+    });
+  });
+
   it("reports truncation when the line limit omits complete records", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");
@@ -105,19 +139,78 @@ describe("readConfiguredLogTail", () => {
     });
   });
 
+  it("keeps the first line when the byte window starts exactly after a newline", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+    const line = (message: string) => `${message}${" ".repeat(199 - message.length)}\n`;
+    const content = Array.from({ length: 10_000 }, (_, index) =>
+      line(index === 5000 ? "first-line-in-window" : "filler"),
+    ).join("");
+
+    await fs.writeFile(file, content);
+    setLoggerOverride({ file });
+
+    const result = await readConfiguredLogTail({ limit: 5000, maxBytes: 1_000_000 });
+
+    expect(result.lines).toHaveLength(5000);
+    expect(result.lines[0]?.trimEnd()).toBe("first-line-in-window");
+  });
+
+  it.each(operationalMetadataFailures)(
+    "rethrows $code from the $boundary boundary",
+    async ({ boundary, code }) => {
+      const tempDir = tempDirs.make("openclaw-log-tail-");
+      const configured = path.join(tempDir, "openclaw-2026-01-22.log");
+      const candidate = path.join(tempDir, "openclaw-2026-01-21.log");
+      const error = Object.assign(new Error(`${code} injected`), { code });
+      const realStat = fs.stat.bind(fs);
+
+      if (boundary === "candidate stat") {
+        await fs.writeFile(candidate, "candidate\n");
+      } else if (boundary !== "rolling readdir") {
+        await fs.writeFile(configured, "configured\n");
+      }
+      setLoggerOverride({ file: configured });
+
+      if (boundary === "configured stat") {
+        vi.spyOn(fs, "stat").mockRejectedValueOnce(error);
+      } else if (boundary === "rolling readdir") {
+        vi.spyOn(fs, "readdir").mockRejectedValueOnce(error);
+      } else if (boundary === "candidate stat") {
+        vi.spyOn(fs, "stat").mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
+          if (String(args[0]) === candidate) {
+            throw error;
+          }
+          return realStat(...args);
+        });
+      } else {
+        vi.spyOn(fs, "stat")
+          .mockImplementationOnce((...args: Parameters<typeof fs.stat>) => realStat(...args))
+          .mockRejectedValueOnce(error);
+      }
+
+      const { readConfiguredLogTail } = await import("./log-tail.js");
+      await expect(readConfiguredLogTail()).rejects.toBe(error);
+    },
+  );
+
   it("falls back only within the active profile's rolling log family", async () => {
     const tempDir = tempDirs.make("openclaw-log-tail-");
-    const missing = path.join(tempDir, "openclaw-dev-2026-01-22.log");
-    const devLog = path.join(tempDir, "openclaw-dev-2026-01-21.log");
+    const missing = path.join(tempDir, "openclaw-2026-01-22.log");
     const defaultLog = path.join(tempDir, "openclaw-2026-01-21.log");
-    await fs.writeFile(devLog, "dev profile\n");
+    const devLog = path.join(tempDir, "openclaw-dev-2026-01-21.log");
     await fs.writeFile(defaultLog, "default profile\n");
-    await fs.utimes(devLog, new Date(0), new Date(0));
-    await fs.utimes(defaultLog, new Date(), new Date());
-    const { resolveLogFile } = await import("./log-tail.js");
-    const result = await resolveLogFile(missing, { rolling: true });
+    await fs.writeFile(devLog, "dev profile\n");
+    await fs.utimes(defaultLog, new Date(0), new Date(0));
+    await fs.utimes(devLog, new Date(), new Date());
+    setLoggerOverride({ file: missing });
 
-    expect(result).toBe(devLog);
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const result = await readConfiguredLogTail();
+
+    expect(result.file).toBe(defaultLog);
+    expect(result.lines).toEqual(["default profile"]);
   });
 
   it("does not reinterpret an explicit profile-shaped logging.file as rolling", async () => {

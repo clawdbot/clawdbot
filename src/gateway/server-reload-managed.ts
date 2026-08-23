@@ -1,4 +1,6 @@
+import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { applyLoggingConfig } from "../logging/logger.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
 import { resetSkillSnapshotConfigFingerprintCache } from "../skills/runtime/snapshot-config-fingerprint.js";
@@ -54,11 +56,17 @@ export function startManagedGatewayConfigReloader(
     ownership?: GatewayConfigReloadTransactionOwnership,
   ): OpenClawConfig => {
     const canonicalConfig = restoreCanonicalSecretRefs(runtimeConfig, sourceConfig);
+    copyConfigResolutionFacts(sourceConfig, canonicalConfig);
     const candidateConfig = ownership?.reapplyRuntimeOverlays(canonicalConfig) ?? canonicalConfig;
-    return params.applyRuntimeConfigOverrides?.(candidateConfig) ?? candidateConfig;
+    const prepared = params.applyRuntimeConfigOverrides?.(candidateConfig) ?? candidateConfig;
+    copyConfigResolutionFacts(candidateConfig, prepared);
+    return prepared;
   };
-  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig =>
-    params.applyRuntimeConfigOverrides?.(config) ?? config;
+  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig => {
+    const applied = params.applyRuntimeConfigOverrides?.(config) ?? config;
+    copyConfigResolutionFacts(config, applied);
+    return applied;
+  };
   const restartRecoveryAvailable =
     params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
 
@@ -126,10 +134,15 @@ export function startManagedGatewayConfigReloader(
   } = createGatewayReloadHandlers({
     deps: params.deps,
     broadcast: params.broadcast,
+    ...(params.resolveGatewayContext
+      ? { resolveGatewayContext: params.resolveGatewayContext }
+      : {}),
     getState: params.getState,
     setState: params.setState,
+    getPluginMetadataSnapshot: params.getPluginMetadataSnapshot,
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
+    pruneInactiveChannelAccountState: params.channelManager.pruneInactiveChannelAccountState,
     getChannelAutostartSuppression: params.getChannelAutostartSuppression,
     stopPostReadySidecars: params.stopPostReadySidecars,
     reloadPlugins: params.reloadPlugins,
@@ -329,7 +342,13 @@ export function startManagedGatewayConfigReloader(
       invalidateConfigGetResponseCache();
       params.broadcast(
         "config.changed",
-        { path: info.path, hash: info.persistedHash, ts: Date.now() },
+        {
+          path: info.path,
+          hash: info.persistedHash
+            ? params.configRevisionProjector.projectRawHash(info.persistedHash)
+            : null,
+          ts: Date.now(),
+        },
         { dropIfSlow: true },
       );
     },
@@ -443,9 +462,12 @@ export function startManagedGatewayConfigReloader(
         throw error;
       }
     },
-    onConfigApplied: (_plan, nextConfig) => {
+    onConfigApplied: (plan, nextConfig) => {
       // Applied runtime identity owns config-derived process memos; accepted
       // source-only changes must not evict caches for the still-active config.
+      if (plan.changedPaths.some((path) => path === "logging" || path.startsWith("logging."))) {
+        applyLoggingConfig(nextConfig.logging);
+      }
       resetSkillSnapshotConfigFingerprintCache();
       params.commitTerminalConfig(nextConfig);
     },

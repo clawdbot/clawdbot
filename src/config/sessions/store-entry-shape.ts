@@ -12,13 +12,13 @@ function isSafeSessionId(value: unknown): value is string {
     return false;
   }
   const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 255) {
+  if (!trimmed || trimmed.length > 255 || trimmed !== trimmed.normalize("NFC")) {
     return false;
   }
   if (trimmed.includes("/") || trimmed.includes("\\") || trimmed === "." || trimmed === "..") {
     return false;
   }
-  return /^[A-Za-z0-9][A-Za-z0-9._:@-]*$/.test(trimmed);
+  return /^[\p{L}\p{N}][\p{L}\p{N}\p{M}._:@-]*$/u.test(trimmed);
 }
 
 function normalizeTranscriptSessionId(value: string): string | undefined {
@@ -58,6 +58,9 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     memoryFlushFailureCount,
     memoryFlushLastFailedAt: _memoryFlushLastFailedAt,
     memoryFlushLastFailureError: _memoryFlushLastFailureError,
+    owner: _projectedOwner,
+    participants: _projectedParticipants,
+    participantCount: _projectedParticipantCount,
     ...canonicalValue
   } = value;
   const icon =
@@ -146,6 +149,16 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     delete canonicalValue.memoryFlush;
   }
   return canonicalValue as unknown as SessionEntry;
+}
+
+/** Removes the runtime-only skill catalog without mutating the live session snapshot. */
+export function stripRuntimeOnlySessionSkillsFields(entry: SessionEntry): SessionEntry {
+  const snapshot = entry.skillsSnapshot;
+  if (snapshot?.resolvedSkills === undefined) {
+    return entry;
+  }
+  const { resolvedSkills: _drop, ...skillsSnapshot } = snapshot;
+  return { ...entry, skillsSnapshot };
 }
 
 function normalizePendingFinalDelivery(

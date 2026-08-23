@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   includeContributionOwnsAgentRoster,
   includeContributionOwnsBindings,
@@ -70,7 +71,13 @@ export async function readConfigFileSnapshotInternal(
         parsed: {},
         sourceConfig: config,
         valid: true,
-        runtimeConfig: config,
+        // Missing config is the fresh-install default path: materialize the
+        // same runtime defaults an existing empty {} config gets, so snapshot
+        // consumers see identical out-of-box behavior either way.
+        runtimeConfig: materializeRuntimeConfig(config, "snapshot", {
+          manifestRegistry:
+            context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined,
+        }),
         hash: hashConfigRaw(null),
         issues: [],
         warnings: [],
@@ -230,6 +237,7 @@ export async function readConfigFileSnapshotInternal(
           hash: snapshotHash,
           issues: validated.issues,
           warnings: [...validated.warnings, ...envVarWarnings],
+          resolutionFacts: readResolution.resolutionFacts,
           legacyIssues,
         }),
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -313,6 +321,7 @@ export async function readConfigFileSnapshotInternal(
             hash: snapshotHash,
             issues: [],
             warnings: [...validated.warnings, ...envVarWarnings],
+            resolutionFacts: readResolution.resolutionFacts,
             legacyIssues: [],
           }),
           envSnapshotForRestore: readResolution.envSnapshotForRestore,
@@ -434,7 +443,14 @@ export async function readBestEffortConfigSnapshotFromContext(
 ): Promise<BestEffortConfigSnapshot> {
   const result = await readConfigFileSnapshotInternal(context);
   if (!result.snapshot.valid) {
-    return { config: result.snapshot.config, sourceConfig: result.snapshot.sourceConfig };
+    return {
+      config: result.snapshot.config,
+      sourceConfig: result.snapshot.sourceConfig,
+      configDiagnostics: {
+        path: result.snapshot.path,
+        issues: result.snapshot.issues,
+      },
+    };
   }
   return {
     config: context.finalizeLoadedRuntimeConfig(
@@ -443,6 +459,7 @@ export async function readBestEffortConfigSnapshotFromContext(
       }),
     ),
     sourceConfig: result.snapshot.sourceConfig,
+    configDiagnostics: null,
   };
 }
 
@@ -454,21 +471,31 @@ export async function readSourceConfigBestEffortFromContext(
   if (!deps.fs.existsSync(configPath)) {
     return {};
   }
+  // Best-effort legitimizes the fallback value, not the silence: consumers
+  // (update-channel selection, doctor lint) act on the result, so each
+  // degradation records why the real config was not used.
   try {
     const raw = deps.fs.readFileSync(configPath, "utf-8");
     const parsed = parseConfigJson5(raw, deps.json5);
     if (!parsed.ok) {
+      deps.logger.warn(
+        `Config (${configPath}): best-effort read ignored unparseable config: ${parsed.error}`,
+      );
       return {};
     }
     let resolved: unknown;
     try {
       resolved = resolveConfigIncludesForRead(parsed.parsed, configPath, deps);
-    } catch {
+    } catch (err) {
+      deps.logger.warn(
+        `Config (${configPath}): best-effort read skipped $include resolution: ${formatErrorMessage(err)}`,
+      );
       return coerceConfig(parsed.parsed);
     }
     const resolution = resolveConfigForRead(resolved, deps.env, deps.lowerPrecedenceEnv);
     return coerceConfig(resolution.resolvedConfigRaw);
-  } catch {
+  } catch (err) {
+    deps.logger.warn(`Config (${configPath}): best-effort read failed: ${formatErrorMessage(err)}`);
     return {};
   }
 }

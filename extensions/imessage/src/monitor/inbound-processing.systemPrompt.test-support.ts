@@ -193,6 +193,7 @@ describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
   }): Parameters<typeof buildIMessageInboundContext>[0] {
     return {
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision: {
         kind: "dispatch",
         isGroup: decision.isGroup,
@@ -212,6 +213,7 @@ describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
           lastRoutePolicy: "main",
           matchedBy: "default",
         },
+        bindingResolution: null,
         bodyText: "hi",
         createdAt: undefined,
         replyContext: null,

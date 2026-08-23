@@ -619,6 +619,42 @@ describe("channels controller DM pairing", () => {
 });
 
 describe("channel refresh sequencing", () => {
+  it("clears a failed request generation on reconnect so status can recover", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("status unavailable"))
+      .mockResolvedValueOnce(createChannelsSnapshot("recovered"));
+    const client = { request };
+    let snapshot = { client, phase: "connected" };
+    const listeners = new Set<(next: typeof snapshot) => void>();
+    const channels = createChannelCapability({
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never);
+
+    await channels.refresh();
+    expect(channels.state.channelsError).toBe("status unavailable");
+
+    snapshot = { client, phase: "reconnecting" };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+    snapshot = { client, phase: "connected" };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+
+    expect(channels.state.channelsError).toBeNull();
+    await channels.refresh();
+    expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("recovered");
+    channels.dispose();
+  });
+
   it("rejects an in-flight channel snapshot after read access is revoked", async () => {
     const pending = createDeferred<ChannelsStatusSnapshot | null>();
     const request = vi.fn(() => pending.promise);

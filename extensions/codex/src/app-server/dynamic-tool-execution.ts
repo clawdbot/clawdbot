@@ -340,17 +340,23 @@ export function toCodexDynamicToolProgressResponse(
 ): CodexDynamicToolCallResponse & {
   details?: { async: true; status: "started" } | { mcpAppPreview: unknown };
 } {
-  const transcriptDetails = response.transcriptDetails;
-  if (response.asyncStarted !== true && transcriptDetails === undefined) {
+  const transcriptDetails = isJsonObject(response.transcriptDetails)
+    ? response.transcriptDetails
+    : undefined;
+  const mcpAppPreview = isJsonObject(transcriptDetails?.mcpAppPreview)
+    ? transcriptDetails.mcpAppPreview
+    : undefined;
+  const progressDetails = mcpAppPreview ? { mcpAppPreview } : undefined;
+  if (response.asyncStarted !== true && progressDetails === undefined) {
     return protocolResponse;
   }
   return {
     ...protocolResponse,
-    ...(transcriptDetails ? { details: transcriptDetails } : {}),
+    ...(progressDetails ? { details: progressDetails } : {}),
     ...(response.asyncStarted === true
       ? {
           details: {
-            ...transcriptDetails,
+            ...progressDetails,
             async: true as const,
             status: "started" as const,
           },
@@ -579,7 +585,7 @@ function readConfiguredDynamicToolTimeoutMs(
     );
   }
 
-  if (toolName === "image") {
+  if (toolName === "view_image") {
     const candidates = (config?.tools?.media?.models ?? []).filter(
       (entry) => !entry.capabilities || entry.capabilities.includes("image"),
     );

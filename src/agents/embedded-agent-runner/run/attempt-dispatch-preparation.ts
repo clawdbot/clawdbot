@@ -54,10 +54,13 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     provider,
     modelId,
   } = input;
-  const params = runInput.runParams;
+  const params = input.terminalRetryState.forceCodeModeReconciliationTools
+    ? { ...runInput.runParams, forceCodeModeReconciliationTools: true }
+    : runInput.runParams;
   const {
     workspaceResolution,
     workspaceDir,
+    bootstrapWorkspaceDir,
     isCanonicalWorkspace,
     agentDir,
     resolvedSessionKey,
@@ -212,6 +215,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       sessionKey: resolvedSessionKey,
       trajectoryRecorder: trajectoryRecorder ?? undefined,
       workspaceDir,
+      bootstrapWorkspaceDir,
       isCanonicalWorkspace,
       agentDir,
       preparedModelRuntime: runInput.preparedModelRuntime,

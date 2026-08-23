@@ -377,23 +377,24 @@ describe("lookupContextTokens", () => {
     await flushAsyncWarmup();
 
     expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledOnce();
-    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        agentDir: expect.any(String),
-        readOnly: true,
-      }),
-    );
-    expect(contextTestState.loadModelCatalogOwnerSnapshot.mock.calls[0]?.[0]).not.toHaveProperty(
-      "workspaceDir",
-    );
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
+      config,
+      readOnly: true,
+    });
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(
       ANTHROPIC_CONTEXT_1M_TOKENS,
     );
   });
 
   it("keeps ordinary cache loading on the exact owner path", async () => {
-    const config = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
+    const config = {
+      ...createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000),
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: { alpha: {}, beta: {} },
+      },
+    } satisfies OpenClawConfig;
     mockDiscoveryDeps([
       {
         id: "anthropic/claude-opus-4.7-20260219",
@@ -405,9 +406,10 @@ describe("lookupContextTokens", () => {
     const { ensureContextWindowCacheLoaded, lookupContextTokens } = await importContextModule();
     await ensureContextWindowCacheLoaded(config);
 
-    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ config, readOnly: true }),
-    );
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
+      config,
+      readOnly: true,
+    });
     expect(contextTestState.getPublishedModelCatalogOwnerSnapshot).not.toHaveBeenCalled();
     expect(
       lookupContextTokens("anthropic/claude-opus-4.7-20260219", { allowAsyncLoad: false }),
@@ -415,7 +417,14 @@ describe("lookupContextTokens", () => {
   });
 
   it("warms from the current Gateway-published owner without hashing a fallback owner key", async () => {
-    const requestedConfig = createContextOverrideConfig("synthetic", "stale-model", 111_000);
+    const requestedConfig = {
+      ...createContextOverrideConfig("synthetic", "stale-model", 111_000),
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: { alpha: {}, beta: {} },
+      },
+    } satisfies OpenClawConfig;
     const publishedConfig = createContextOverrideConfig("synthetic", "current-model", 222_000);
     contextTestState.getPublishedModelCatalogOwnerSnapshot.mockReturnValueOnce({
       config: publishedConfig,
@@ -430,15 +439,10 @@ describe("lookupContextTokens", () => {
       await importContextModule();
     await prewarmContextWindowCacheAfterReady({ config: requestedConfig });
 
-    expect(contextTestState.getPublishedModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: requestedConfig,
-        allowGatewaySubagentBinding: true,
-      }),
-    );
-    expect(
-      contextTestState.getPublishedModelCatalogOwnerSnapshot.mock.calls[0]?.[0],
-    ).not.toHaveProperty("readOnly");
+    expect(contextTestState.getPublishedModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
+      config: requestedConfig,
+      allowGatewaySubagentBinding: true,
+    });
     expect(contextTestState.loadModelCatalogOwnerSnapshot).not.toHaveBeenCalled();
     expect(
       lookupContextTokens("current-model", {
@@ -656,6 +660,33 @@ describe("lookupContextTokens", () => {
         model: "claude-sonnet-4-6",
       }),
     ).toBe(1_000_000);
+  });
+
+  it("bounds an authored effective cap by a smaller authored context window", async () => {
+    mockDiscoveryDeps([]);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+
+    expect(
+      resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                models: [
+                  {
+                    id: "gpt-5.6-sol",
+                    contextWindow: 128_000,
+                    contextTokens: 1_000_000,
+                  },
+                ],
+              },
+            },
+          },
+        } as never,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+      }),
+    ).toBe(128_000);
   });
 
   it("resolveContextTokensForModel honors configured overrides when provider keys use mixed case", async () => {

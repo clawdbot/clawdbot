@@ -1750,7 +1750,11 @@ describe("slackPlugin outbound new targets", () => {
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("user:U99NEW");
     expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("hello new user");
     expect(requireMockCallArg(sendSlack, 0, 2).cfg).toBe(cfg);
-    expect(result).toEqual({ channel: "slack", messageId: "m-new-user", channelId: "D999" });
+    expect(result).toEqual({
+      channel: "slack",
+      messageId: "m-new-user",
+      target: { kind: "channel", id: "D999" },
+    });
   });
 
   it("sends to a new channel target without erroring", async () => {
@@ -1768,7 +1772,11 @@ describe("slackPlugin outbound new targets", () => {
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("channel:C555NEW");
     expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("hello channel");
     expect(requireMockCallArg(sendSlack, 0, 2).cfg).toBe(cfg);
-    expect(result).toEqual({ channel: "slack", messageId: "m-new-chan", channelId: "C555" });
+    expect(result).toEqual({
+      channel: "slack",
+      messageId: "m-new-chan",
+      target: { kind: "channel", id: "C555" },
+    });
   });
 
   it("sends media to a new user target without erroring", async () => {
@@ -1790,7 +1798,11 @@ describe("slackPlugin outbound new targets", () => {
       cfg,
       mediaUrl: "https://example.com/file.png",
     });
-    expect(result).toEqual({ channel: "slack", messageId: "m-new-media", channelId: "D888" });
+    expect(result).toEqual({
+      channel: "slack",
+      messageId: "m-new-media",
+      target: { kind: "channel", id: "D888" },
+    });
   });
 });
 

@@ -4,7 +4,10 @@ import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
-import type { CurrentInboundPromptContext } from "../../../agents/embedded-agent-runner/run/params.js";
+import type {
+  CurrentInboundPromptContext,
+  RunEmbeddedAgentParams,
+} from "../../../agents/embedded-agent-runner/run/params.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import type { ScheduledToolPolicyContext } from "../../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../../agents/subagents/announce/subagent-announce-handoff.js";
@@ -23,6 +26,7 @@ import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { ExplicitSkillSelection, SkillSnapshot } from "../../../skills/types.js";
+import type { SkillWorkshopProposalRevisionConstraint } from "../../../skills/workshop/types.js";
 import type {
   QueuedReplyDeliveryCorrelation,
   SourceReplyDeliveryMode,
@@ -178,6 +182,8 @@ export type FollowupRun = {
     workspaceDir: string;
     /** Task working directory for runtime execution. Defaults to workspaceDir. */
     cwd?: string;
+    permissionMode?: SessionEntry["permissionMode"];
+    sessionRoot?: string;
     config: OpenClawConfig;
     toolOverrides?: SessionToolOverrides;
     skillsSnapshot?: SkillSnapshot;
@@ -227,8 +233,11 @@ export type FollowupRun = {
     skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
     allowEmptyAssistantReplyAsSilent?: boolean;
+    terminalReplyExpectation?: RunEmbeddedAgentParams["terminalReplyExpectation"];
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
+    /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
+    skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   };
 };
 

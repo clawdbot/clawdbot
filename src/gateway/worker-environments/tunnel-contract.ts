@@ -3,6 +3,7 @@ import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-comm
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerWorkspaceApplyResult,
   WorkerWorkspaceReconciliationJournalAdapter,
@@ -11,8 +12,8 @@ import type {
 export type { WorkerTunnelStatus };
 
 export class WorkerTunnelOwnerDisconnectedError extends Error {
-  constructor() {
-    super("Worker tunnel owner is no longer connected");
+  constructor(message = "Worker tunnel owner is no longer connected") {
+    super(message);
     this.name = "WorkerTunnelOwnerDisconnectedError";
   }
 }
@@ -56,6 +57,7 @@ export type WorkerWorkspaceSyncRequest = {
   localPath: string;
   sessionId: string;
   generation: number;
+  gitAuthor?: { name?: string; email?: string };
 };
 
 export type WorkerWorkspaceSyncResult = {
@@ -98,18 +100,18 @@ export type WorkerWorkspaceQuiescence = {
   resume(): Promise<void>;
 };
 
-type WorkerTurnLaunchRequest = {
+export type WorkerTurnLaunchRequest = {
   plan: WorkerLaunchPlan;
-  placementGeneration: number;
+  turnClaim: WorkerSessionTurnClaim;
   timeoutMs?: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
 };
 
-export type WorkerTunnelHandle = {
+export type WorkerWorkspaceTunnelHandle = {
   environmentId: string;
   ownerEpoch: number;
-  launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
+  launchTurn?: never;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
   quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;
@@ -118,3 +120,9 @@ export type WorkerTunnelHandle = {
   ): Promise<WorkerWorkspaceReconcileResult>;
   stop(): Promise<void>;
 };
+
+export type WorkerTurnTunnelHandle = Omit<WorkerWorkspaceTunnelHandle, "launchTurn"> & {
+  launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
+};
+
+export type WorkerTunnelHandle = WorkerWorkspaceTunnelHandle | WorkerTurnTunnelHandle;

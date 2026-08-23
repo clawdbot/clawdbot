@@ -19,6 +19,7 @@ import { googleFlashSupportsMinimalThinking } from "../transports/google-thinkin
 import {
   assignTransportErrorDetails,
   coerceTransportToolCallArguments,
+  notifyProviderStreamOpened,
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
 import type {
@@ -436,8 +437,15 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       requestParams = nextParams as GenerateContentParameters;
     }
     const googleStream = await client.models.generateContentStream(requestParams);
+    const googleIterator = googleStream[Symbol.asyncIterator]();
+    await notifyProviderStreamOpened({
+      options,
+      cancelStream: async () => {
+        await googleIterator.return?.();
+      },
+    });
     await consumeGoogleGenerateContentStream({
-      chunks: googleStream,
+      chunks: { [Symbol.asyncIterator]: () => googleIterator },
       model,
       output,
       stream,

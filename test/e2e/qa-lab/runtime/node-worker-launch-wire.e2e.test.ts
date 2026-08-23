@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
@@ -16,6 +17,8 @@ import {
   BASELINE_PROMPT,
   BASELINE_REPLY,
   PROOF_TIMEOUT_MS,
+  WORKER_PERMISSION_PROMPT,
+  WORKER_PERMISSION_REPLY,
   startMidturnProvider,
 } from "./cloud-worker-midturn-loss-fixture.js";
 import {
@@ -54,6 +57,20 @@ function nearestRankPercentile(values: readonly number[], percentile: number): n
   return sorted[index] ?? 0;
 }
 
+function requireSafeGenericDecisionDisplay(result: AuditRunInspectResult) {
+  const receipt = result.decisionDisplays.find(
+    (candidate) => candidate.provenance.state === "unverified",
+  );
+  expect(receipt).toMatchObject({
+    action: { family: "decision", operation: "record" },
+    decision: { outcome: "unknown", reasonCode: "decision_fact_display_unverified" },
+    enforcement: { coverageState: "unknown" },
+    provenance: { state: "unverified" },
+    missingEvidence: ["decision.display_provenance"],
+  });
+  return receipt!;
+}
+
 describe("node worker launch wire", () => {
   it(
     "transfers and reconciles a gateway-push workspace through a device runner",
@@ -73,9 +90,13 @@ describe("node worker launch wire", () => {
       let observeFinalizationLoad = false;
       let finalizationStartedAt: number | undefined;
       let resolveWaveFinalizationStarted: ((startedAt: number) => void) | undefined;
+      let workerAuditBeforeRestart: string | undefined;
 
       try {
-        gateway = await startPairedNodeWorkerGateway({ providerBaseUrl: provider.baseUrl });
+        gateway = await startPairedNodeWorkerGateway({
+          providerBaseUrl: provider.baseUrl,
+          executionIdentity: true,
+        });
         operator = await connectWireClient({ gateway, role: "operator", identity: null });
         workerNode = await createPairedNodeWorkerHost({
           gateway,
@@ -186,6 +207,20 @@ describe("node worker launch wire", () => {
           state: "completed",
         });
 
+        workerAuditBeforeRestart = await gateway.runCli([
+          "audit",
+          "--run",
+          runId,
+          "--explain",
+          "--json",
+        ]);
+        requireSafeGenericDecisionDisplay(
+          JSON.parse(workerAuditBeforeRestart) as AuditRunInspectResult,
+        );
+        expect(workerAuditBeforeRestart).not.toContain(workerNode.identity.deviceId);
+        expect(workerAuditBeforeRestart).not.toContain(String(placement?.workerBundleHash));
+        expect(workerAuditBeforeRestart).not.toContain(SESSION_KEY);
+
         const history = await operator.request<{ messages?: unknown[] }>("chat.history", {
           sessionKey: SESSION_KEY,
           limit: 20,
@@ -214,6 +249,60 @@ describe("node worker launch wire", () => {
         expect(await fs.readFile(path.join(remoteWorkspaceDir, "node-result.txt"), "utf8")).toBe(
           "device result\n",
         );
+
+        const permissionRunId = `node-worker-permission-${Date.now()}`;
+        await expect(
+          operator.request<{ runId?: string; status?: string }>("chat.send", {
+            sessionKey: SESSION_KEY,
+            message: WORKER_PERMISSION_PROMPT,
+            deliver: false,
+            idempotencyKey: permissionRunId,
+          }),
+        ).resolves.toMatchObject({ runId: permissionRunId, status: "started" });
+        await expect(
+          operator.request<{ status?: string }>(
+            "agent.wait",
+            { runId: permissionRunId, timeoutMs: PROOF_TIMEOUT_MS },
+            { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
+          ),
+        ).resolves.toMatchObject({ status: "ok" });
+        await workerNode.waitForInvokes();
+        expect(workerNode.invokeErrors).toEqual([]);
+
+        await expect(
+          fs.readFile(path.join(remoteWorkspaceDir, "worker-permission-in-root.txt"), "utf8"),
+        ).resolves.toBe("worker permission proof\n");
+        await expect(
+          fs.access(path.resolve(remoteWorkspaceDir, "..", "worker-permission-outside.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(
+          fs.access(path.join(remoteWorkspaceDir, "worker-exec-escaped.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(provider.outsideWriteOutput).toMatch(/escape|outside|containment|workspace/iu);
+        expect(provider.execOutput).toMatch(
+          /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+        );
+
+        const permissionHistory = await operator.request<{ messages?: unknown[] }>("chat.history", {
+          sessionKey: SESSION_KEY,
+          limit: 30,
+        });
+        const permissionReplies = permissionHistory.messages?.filter(
+          (message) =>
+            (message as { role?: unknown }).role === "assistant" &&
+            wireMessageText(message).includes(WORKER_PERMISSION_REPLY),
+        );
+        expect(permissionReplies).toHaveLength(1);
+        expect(wireMessageText(permissionReplies?.[0])).toContain(provider.execOutput);
+        const permissionDescribed = (await gateway.call("sessions.describe", {
+          key: SESSION_KEY,
+        })) as { session?: { execCwd?: string; spawnedCwd?: string } };
+        const permissionLocalDir =
+          permissionDescribed.session?.execCwd ?? permissionDescribed.session?.spawnedCwd;
+        expect(permissionLocalDir).toBeTruthy();
+        await expect(
+          fs.readFile(path.join(permissionLocalDir!, "worker-permission-in-root.txt"), "utf8"),
+        ).resolves.toBe("worker permission proof\n");
 
         legacyWorkerNode = await createPairedNodeWorkerHost({
           gateway,
@@ -362,6 +451,25 @@ describe("node worker launch wire", () => {
         expect(Math.max(...readyzLatencies)).toBeLessThan(CONTROL_PROBE_MAX_MS);
         expect(Math.max(...freshConnectionSamples)).toBeLessThan(CONTROL_PROBE_MAX_MS);
         expect(freshConnectionSamples).toHaveLength(FINALIZATION_LOAD_WAVES);
+
+        await workerNode.stop();
+        workerNode = undefined;
+        await legacyWorkerNode.stop();
+        legacyWorkerNode = undefined;
+        await operator.stopAndWait({ timeoutMs: 2_000 });
+        operator = undefined;
+        await gateway.restartAfterStateMutation(async () => {});
+        const workerAuditAfterRestart = await gateway.runCli([
+          "audit",
+          "--run",
+          runId,
+          "--explain",
+          "--json",
+        ]);
+        requireSafeGenericDecisionDisplay(
+          JSON.parse(workerAuditAfterRestart) as AuditRunInspectResult,
+        );
+        expect(workerAuditAfterRestart).toBe(workerAuditBeforeRestart);
       } finally {
         const cleanup = await Promise.allSettled([
           workerNode?.stop() ?? Promise.resolve(),

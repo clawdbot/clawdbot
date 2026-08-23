@@ -31,8 +31,13 @@ import {
 import { withActiveDeliveryClaim } from "./delivery-queue-recovery.js";
 import { findDeliveryIntentOwner, loadPendingDelivery } from "./delivery-queue-storage.js";
 import { createMessageSentEmitter } from "./message-sent-hook.js";
-import { emitOutboundAuditTerminals, uniformOutboundAuditTerminals } from "./outbound-audit.js";
+import {
+  emitOutboundAuditLifecycle,
+  emitOutboundAuditTerminals,
+  uniformOutboundAuditTerminals,
+} from "./outbound-audit.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 
@@ -43,8 +48,11 @@ export async function runOutboundDelivery(
 }
 
 export async function runOutboundDeliveryInternal(
-  params: DeliverOutboundPayloadsParams,
+  input: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
+  const { replyToId, replyToMode, ...currentParams } = input;
+  const reply = normalizeOutboundReplyFacts({ reply: input.reply, replyToId, replyToMode });
+  const params = { ...currentParams, ...(reply ? { reply } : {}) };
   const stableIntentId = params.deliveryIntentId?.trim();
   if (stableIntentId) {
     const stableParams =
@@ -226,7 +234,7 @@ async function runOutboundDeliveryWithQueue(
   if (params.requireUnknownSendReconciliation !== false && preparedPayloads.length === 1) {
     const requirements = deriveDurableFinalDeliveryRequirementsForBatch({
       payloads: preparedPayloads,
-      replyToId: params.replyToId,
+      replyToId: params.reply?.replyToId,
       threadId: params.threadId,
       silent: params.silent,
       reconcileUnknownSend: true,
@@ -302,6 +310,14 @@ async function runOutboundDeliveryWithQueue(
       }).ack({ suppressCompletionReceipt: true });
       return [];
     }
+  }
+  if (queueId) {
+    emitOutboundAuditLifecycle({
+      context: deliveryParams,
+      outcome: "queued",
+      queueId,
+      startedAt: auditStartedAt,
+    });
   }
   if (queueId) {
     params.onDeliveryIntent?.({

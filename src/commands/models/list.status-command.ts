@@ -7,11 +7,9 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
-  resolveAgentDir,
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -99,7 +97,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
-  resolveKnownAgentId,
+  resolveModelsTargetAgent,
 } from "./shared.js";
 
 type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
@@ -367,35 +365,20 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
-  const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
-  const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
-  const agentDir = agentId
-    ? resolveAgentDir(cfg, agentId)
-    : (resolveEnvAgentDirOverride() ?? resolveAgentDir(cfg, workspaceAgentId));
+  const explicitAgentId = opts.agent?.trim();
+  const { agentId: workspaceAgentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, {
+    agentDirOverride: explicitAgentId ? undefined : resolveEnvAgentDirOverride(),
+    kind: "read",
+  });
+  // Only an explicit --agent narrows the reported model/fallback overrides; an inferred
+  // system-agent target still reports unscoped defaults, matching this command's shipped output.
+  const agentId = explicitAgentId ? workspaceAgentId : undefined;
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
   const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
     : undefined;
-  const resolvedConfig =
-    agentModelPrimary && agentModelPrimary.length > 0
-      ? {
-          ...cfg,
-          agents: {
-            ...cfg.agents,
-            defaults: {
-              ...cfg.agents?.defaults,
-              model: {
-                ...(typeof cfg.agents?.defaults?.model === "object"
-                  ? cfg.agents.defaults.model
-                  : {}),
-                primary: agentModelPrimary,
-              },
-            },
-          },
-        }
-      : cfg;
   const metadataSnapshot = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir,
@@ -451,8 +434,13 @@ export async function modelsStatusCommand(
     env: process.env,
   });
   try {
+    // agentId, not a synthetic config carrying the agent's primary into global
+    // defaults: the canonical resolvers merge per-agent model rows themselves, so
+    // the synthetic route resolved a bare per-agent alias against global defaults
+    // and reported a different provider than runtime selects.
     const resolved = resolveConfiguredModelRef({
-      cfg: resolvedConfig,
+      cfg,
+      agentId,
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
       ...DISPLAY_MODEL_PARSE_OPTIONS,
@@ -483,15 +471,6 @@ export async function modelsStatusCommand(
           : utilityModelRef
             ? "provider-default"
             : "none";
-    const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<
-      Record<string, string>
-    >((acc, [key, entry]) => {
-      const alias = normalizeOptionalString(entry?.alias);
-      if (alias) {
-        acc[alias] = key;
-      }
-      return acc;
-    }, {});
     const configuredAllowRefs = [
       ...resolveConfiguredModelPolicyAllow({ cfg, agentId: workspaceAgentId }).refs,
     ];
@@ -499,9 +478,19 @@ export async function modelsStatusCommand(
     const modelsPath = path.join(agentDir, "models.json");
     const aliasIndex = buildModelAliasIndex({
       cfg,
+      agentId,
       defaultProvider: DEFAULT_PROVIDER,
       ...DISPLAY_MODEL_PARSE_OPTIONS,
     });
+    // The index is the same effective alias set the resolvers use, so per-agent
+    // rows that replace or empty-disable a default alias are reflected here
+    // instead of being read straight off `agents.defaults.models`.
+    const aliases = Object.fromEntries(
+      [...aliasIndex.byAlias.values()].map((match) => [
+        match.alias,
+        modelKey(match.ref.provider, match.ref.model),
+      ]),
+    );
     const resolveStatusModelRef = (raw: string | undefined) => {
       const modelRef = raw?.trim();
       if (!modelRef) {
@@ -509,6 +498,7 @@ export async function modelsStatusCommand(
       }
       return resolveModelRefFromString({
         cfg,
+        agentId,
         raw: modelRef,
         defaultProvider: DEFAULT_PROVIDER,
         aliasIndex,
@@ -650,7 +640,7 @@ export async function modelsStatusCommand(
     ].toSorted((left, right) => left.localeCompare(right));
     const catalog = await loadPreparedModelCatalogSnapshot({
       config: cfg,
-      ...(agentId ? { agentId } : {}),
+      agentId: workspaceAgentId,
       providerDiscoveryProviderIds,
       readOnly: true,
     });
@@ -1194,6 +1184,8 @@ export async function modelsStatusCommand(
       .map(
         (raw) =>
           resolveModelRefFromString({
+            cfg,
+            agentId,
             raw: raw ?? "",
             defaultProvider: DEFAULT_PROVIDER,
             aliasIndex,
@@ -1261,6 +1253,7 @@ export async function modelsStatusCommand(
         provider?: string;
         kind: "cooldown" | "disabled";
         reason?: string;
+        classification?: string;
         recoveryHint: string;
         until: number;
         remainingMs: number;
@@ -1276,12 +1269,14 @@ export async function modelsStatusCommand(
             ? "disabled"
             : "cooldown";
         const reason = kind === "disabled" ? stats?.disabledReason : stats?.cooldownReason;
+        const classification = kind === "cooldown" ? stats?.cooldownClassification : undefined;
         const provider = store.profiles[profileId]?.provider;
         out.push({
           profileId,
           provider,
           kind,
           reason,
+          ...(classification ? { classification } : {}),
           recoveryHint: buildAuthProfileUnusableHint({
             kind,
             reason,
@@ -1637,7 +1632,8 @@ export async function modelsStatusCommand(
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Unavailable auth profiles"));
       for (const profile of unusableProfiles) {
-        const reason = profile.reason ? `:${profile.reason}` : "";
+        const diagnostic = profile.classification ?? profile.reason;
+        const reason = diagnostic ? `:${diagnostic}` : "";
         const provider = profile.provider ? ` (${profile.provider})` : "";
         runtime.log(
           `- ${theme.heading(profile.profileId)}${provider} ${profile.kind}${reason} (${formatRemainingShort(profile.remainingMs)}) — ${profile.recoveryHint}`,

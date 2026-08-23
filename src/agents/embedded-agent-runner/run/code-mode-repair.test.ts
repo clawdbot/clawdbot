@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { registerRepairableCodeModeFailure } from "../../code-mode-repair-provenance.js";
 import type { AfterToolOutcomeContext, Agent, AgentToolResult } from "../../runtime/index.js";
 import { installCodeModeRepairHook } from "./code-mode-repair.js";
 
@@ -38,6 +39,7 @@ function failedResult(params?: {
   failurePhase?: "input" | "guest" | "bridge" | "host";
   bridgeDispatchStarted?: boolean;
   output?: unknown[];
+  repairable?: boolean;
 }): AgentToolResult<unknown> {
   const details = {
     status: "failed",
@@ -47,10 +49,14 @@ function failedResult(params?: {
     bridgeDispatchStarted: params?.bridgeDispatchStarted ?? false,
     ...(params?.output ? { output: params.output } : {}),
   };
-  return {
+  const result: AgentToolResult<unknown> = {
     content: [{ type: "text", text: JSON.stringify(details) }],
     details,
   };
+  if (params?.repairable) {
+    registerRepairableCodeModeFailure(details);
+  }
+  return result;
 }
 
 function completedResult(): AgentToolResult<unknown> {
@@ -60,9 +66,12 @@ function completedResult(): AgentToolResult<unknown> {
   };
 }
 
-function createAgent(previous?: Agent["afterToolOutcome"]): Agent {
+function createAgent(
+  previous?: Agent["afterToolOutcome"],
+  onReconciliationCandidate?: () => void,
+): Agent {
   const agent = { afterToolOutcome: previous } as Agent;
-  installCodeModeRepairHook({ agent });
+  installCodeModeRepairHook({ agent, onReconciliationCandidate });
   return agent;
 }
 
@@ -165,7 +174,7 @@ describe("installCodeModeRepairHook", () => {
     });
   });
 
-  it("does not consume the repair on sibling execs from the originating turn", async () => {
+  it("consumes the repair when a sibling exec follows in the originating turn", async () => {
     const agent = createAgent();
     const assistantMessage = {
       role: "assistant",
@@ -183,8 +192,8 @@ describe("installCodeModeRepairHook", () => {
     const correctionFailure = await agent.afterToolOutcome?.(outcome({ result: failedResult() }));
 
     expect(siblingFailure).toMatchObject({
-      terminate: false,
-      details: { repair: { allowed: true, remainingAttempts: 1 } },
+      terminate: true,
+      details: { repair: { allowed: false, remainingAttempts: 0 } },
     });
     expect(correctionFailure).toMatchObject({
       terminate: true,
@@ -193,15 +202,24 @@ describe("installCodeModeRepairHook", () => {
   });
 
   it("never offers a retry after bridge dispatch", async () => {
-    const agent = createAgent();
+    const onReconciliationCandidate = vi.fn();
+    const agent = createAgent(undefined, onReconciliationCandidate);
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+      timestamp: 1,
+    } as unknown as AfterToolOutcomeContext["assistantMessage"];
+    const failure = failedResult({
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+      output: [{ type: "text", text: "before dispatch failure" }],
+    });
+    (failure.details as Record<string, unknown>).repairableNoStart = true;
 
     const result = await agent.afterToolOutcome?.(
       outcome({
-        result: failedResult({
-          failurePhase: "bridge",
-          bridgeDispatchStarted: true,
-          output: [{ type: "text", text: "before dispatch failure" }],
-        }),
+        assistantMessage,
+        result: failure,
       }),
     );
     const payload = JSON.parse(
@@ -217,6 +235,30 @@ describe("installCodeModeRepairHook", () => {
       },
     });
     expect(payload.output).toEqual([{ type: "text", text: "before dispatch failure" }]);
+    expect(onReconciliationCandidate).toHaveBeenCalledOnce();
+  });
+
+  it("offers one repair for an authenticated nested no-start bridge failure", async () => {
+    const agent = createAgent();
+
+    const result = await agent.afterToolOutcome?.(
+      outcome({
+        result: failedResult({
+          failurePhase: "bridge",
+          bridgeDispatchStarted: true,
+          repairable: true,
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      isError: true,
+      terminate: false,
+      details: {
+        bridgeDispatchStarted: true,
+        repair: { allowed: true, remainingAttempts: 1 },
+      },
+    });
   });
 
   it("preserves dispatch evidence replaced by an earlier outcome hook", async () => {

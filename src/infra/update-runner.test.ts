@@ -772,6 +772,9 @@ describe("runGatewayUpdate", () => {
       if (key === "pnpm root -g") {
         return { stdout: "", stderr: "", code: 1 };
       }
+      if (key === "npm --version") {
+        return { stdout: "12.0.0", stderr: "", code: 0 };
+      }
       if (key === baseInstallKey) {
         return (await params.onBaseInstall?.()) ?? { stdout: "ok", stderr: "", code: 0 };
       }
@@ -897,6 +900,45 @@ describe("runGatewayUpdate", () => {
     expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
       calls.indexOf(`git -C ${tempDir} rebase ${upstreamSha}`),
     );
+  });
+
+  it("rejects target-incompatible live config before allowing git mutation", async () => {
+    await setupGitPackageManagerFixture();
+    const beforeGitMutation = vi.fn<() => Promise<void>>();
+    const invalidConfig = "target rejected the active config";
+    const { calls, runCommand, targetSha } = await createDevGitRunner({
+      targetRef: "main",
+      onCommand: (key, options) => {
+        if (
+          options?.cwd &&
+          preflightPrefixPattern.test(options.cwd) &&
+          key === "pnpm openclaw config validate --json"
+        ) {
+          return { code: 1, stderr: invalidConfig };
+        }
+        return undefined;
+      },
+    });
+
+    const result = await runWithCommand(runCommand, {
+      channel: "dev",
+      devTarget: { mode: "detached", ref: "main" },
+      beforeGitMutation,
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "preflight-no-good-commit",
+    });
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        name: `preflight config validate (${targetSha.slice(0, 8)})`,
+        exitCode: 1,
+        stderrTail: invalidConfig,
+      }),
+    );
+    expect(beforeGitMutation).not.toHaveBeenCalled();
+    expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${targetSha}`);
   });
 
   it("hands beforeGitMutation an unreadable marker when target metadata cannot be read", async () => {
@@ -2217,7 +2259,6 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "dev" });
 
     expect(result.status).toBe("ok");
-    expect(buildNodeOptions).toHaveLength(2);
     expect(buildNodeOptions).toEqual(["--max-old-space-size=8192", "--max-old-space-size=8192"]);
     expect(buildCacheRoots).toEqual([
       path.join(tempDir, ".artifacts", "build-all-cache"),
@@ -2732,6 +2773,7 @@ describe("runGatewayUpdate", () => {
   const createGlobalInstallHarness = (params: {
     pkgRoot: string;
     npmRootOutput?: string;
+    npmVersion?: string;
     pnpmRootOutput?: string;
     installCommand: InstallCommandExpectation;
     gitRootMode?: "not-git" | "missing";
@@ -2756,6 +2798,9 @@ describe("runGatewayUpdate", () => {
           return { stdout: params.npmRootOutput, stderr: "", code: 0 };
         }
         return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === "npm --version") {
+        return { stdout: params.npmVersion ?? "12.0.0", stderr: "", code: 0 };
       }
       if (key === "pnpm root -g") {
         if (params.pnpmRootOutput) {

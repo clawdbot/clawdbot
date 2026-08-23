@@ -16,11 +16,16 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
+import { acquireExtensionPackageBoundaryArtifactLockSync } from "./lib/extension-package-boundary-artifact-lock.mts";
 import {
   ensureRepoToolNodeModulesLink,
   isLocalCheckEnabled,
   resolveRepoToolBinPath,
-} from "./lib/local-heavy-check-runtime.mts";
+} from "./lib/local-check-runtime.mts";
+import {
+  createManagedCommandInvocation,
+  terminateManagedChild,
+} from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   listPluginSdkDeclarationOutputs,
@@ -28,7 +33,6 @@ import {
   productionPluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([
@@ -92,11 +96,6 @@ type NodeStepParams = {
   env?: NodeJS.ProcessEnv;
   spawnImpl?: SpawnNodeStep;
 };
-type RunTaskkill = (
-  command: string,
-  args: string[],
-  options: { stdio: "ignore" },
-) => { error?: Error; status: number | null };
 const ACTIVE_NODE_STEP_KILLERS = new Map<(signal: NodeStepSignal) => void, number>();
 let nodeStepParentSignalForwardersInstalled = false;
 let exitingAfterParentSignal = false;
@@ -235,11 +234,17 @@ export function resolvePluginSdkTypeInputs(rootDir = repoRoot) {
   }
   const tsgoPath = resolveRepoToolBinPath("tsgo");
   ensureRepoToolNodeModulesLink(tsgoPath);
-  const result = spawnSync(
-    tsgoPath,
-    ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
-    { cwd: rootDir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-  );
+  const tsgo = createManagedCommandInvocation({
+    args: ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
+    bin: tsgoPath,
+  });
+  const result = spawnSync(tsgo.command, tsgo.args, {
+    cwd: rootDir,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    shell: tsgo.shell,
+    windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
+  });
   if (result.status !== 0 || result.error) {
     throw new Error(`Failed to derive plugin SDK type inputs: ${result.stderr || result.error}`);
   }
@@ -731,47 +736,6 @@ function abortSiblingSteps(abortController: AbortController | undefined) {
   }
 }
 
-export function signalNodeStep(
-  child: Pick<NodeStepChild, "kill" | "pid">,
-  signal: NodeStepSignal,
-  {
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    platform?: NodeJS.Platform;
-    runTaskkill?: RunTaskkill;
-    useProcessGroup?: boolean;
-  } = {},
-) {
-  if (useProcessGroup && typeof child.pid === "number") {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // The child process group can already be gone by the time cleanup runs.
-    }
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    const args = ["/PID", String(child.pid), "/T"];
-    if (signal === "SIGKILL") {
-      args.push("/F");
-    }
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return;
-    }
-    if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return;
-      }
-    }
-  }
-  child.kill(signal);
-}
-
 function signalActiveNodeSteps(signal: NodeStepSignal) {
   for (const killNodeStep of ACTIVE_NODE_STEP_KILLERS.keys()) {
     killNodeStep(signal);
@@ -843,7 +807,7 @@ export function runNodeStep(
     const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
     const useProcessGroup = process.platform !== "win32";
     const killNodeStep = (signal: NodeStepSignal) =>
-      signalNodeStep(child, signal, { useProcessGroup });
+      terminateManagedChild(child, signal, { useProcessGroup });
     const processGroupAlive = () => {
       if (!useProcessGroup || !child.pid) {
         return false;
@@ -989,7 +953,7 @@ export async function runNodeStepsInParallel(steps: NodeStep[]) {
 }
 
 /**
- * Chooses serial or parallel artifact execution based on local heavy-check policy.
+ * Chooses serial or parallel artifact execution based on local check policy.
  */
 export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = process.env) {
   if (!isLocalCheckEnabled(env)) {
@@ -1108,7 +1072,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
         prerequisiteSteps.push({
           label: "plugin-sdk boundary dts",
           args: [runTsgoScript, "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: ROOT_BOUNDARY_TIMEOUT_MS,
           stamp: {
             path: ROOT_DTS_STAMP,
@@ -1127,7 +1090,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
       prerequisiteSteps.push({
         label: "plugin-sdk package boundary dts",
         args: [runTsgoScript, "-p", "packages/plugin-sdk/tsconfig.json", "--declaration", "true"],
-        env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
         timeoutMs: ROOT_BOUNDARY_TIMEOUT_MS,
         stamp: {
           path: PACKAGE_DTS_STAMP,
@@ -1162,7 +1124,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/qa-channel/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: QA_CHANNEL_DTS_STAMP,
@@ -1196,7 +1157,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/memory-core/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: MEMORY_CORE_DTS_STAMP,
@@ -1230,7 +1190,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/matrix/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: MATRIX_DTS_STAMP,
@@ -1264,7 +1223,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/discord/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: DISCORD_DTS_STAMP,
@@ -1298,7 +1256,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/slack/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: SLACK_DTS_STAMP,
@@ -1332,7 +1289,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/whatsapp/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: WHATSAPP_DTS_STAMP,
@@ -1366,7 +1322,6 @@ async function main(argv: string[] = process.argv.slice(2)) {
             "--tsBuildInfoFile",
             "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
           ],
-          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
           timeoutMs: 300_000,
           stamp: {
             path: TELEGRAM_DTS_STAMP,
@@ -1421,10 +1376,15 @@ async function main(argv: string[] = process.argv.slice(2)) {
     }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 
 if (import.meta.main) {
-  await main();
+  const releaseArtifactLock = acquireExtensionPackageBoundaryArtifactLockSync(repoRoot);
+  try {
+    await main();
+  } finally {
+    releaseArtifactLock();
+  }
 }

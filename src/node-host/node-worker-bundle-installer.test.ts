@@ -92,7 +92,7 @@ describe("node worker bundle installer", () => {
   async function serve(archive: Buffer, token: string, declaredBytes = archive.byteLength) {
     const requests = vi.fn();
     server = http.createServer((req, res) => {
-      requests(req.url, req.headers.authorization);
+      requests(req.url, req.headers);
       if (req.headers.authorization !== `Bearer ${token}`) {
         res.writeHead(404).end();
         return;
@@ -149,6 +149,25 @@ describe("node worker bundle installer", () => {
         "utf8",
       ),
     ).resolves.toContain(fixture.input.build.bundleHash);
+  });
+
+  it("rejects the Cloudflare Access pair before a plaintext bundle transfer", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        gatewayCloudflareAccess: {
+          clientId: "cf-bundle-id",
+          clientSecret: "cf-bundle-secret",
+        },
+      }),
+    ).rejects.toThrow("worker-bundle-install-failed: Cloudflare Access credentials require HTTPS");
+
+    expect(served.requests).not.toHaveBeenCalled();
   });
 
   it("reports installed only after full bundle validation", async () => {

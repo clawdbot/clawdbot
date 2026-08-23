@@ -100,6 +100,22 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
+  it("keeps remote catalog refresh networking behind the overlay boundary", () => {
+    const startupGraph = collectStaticValueImportGraph(
+      "src/plugins/gateway-startup-plugin-providers.ts",
+    );
+    const startupPaths = [...startupGraph.keys()].map((filePath) =>
+      path.relative(repoRoot, filePath),
+    );
+    const overlayGraph = collectStaticValueImportGraph("src/model-catalog/remote-overlay.ts");
+    const overlayPaths = [...overlayGraph.keys()].map((filePath) =>
+      path.relative(repoRoot, filePath),
+    );
+
+    expect(startupPaths).not.toContain("src/model-catalog/remote-refresh.ts");
+    expect(overlayPaths).not.toContain("src/infra/net/fetch-guard.ts");
+  });
+
   it("keeps ordinary session lifecycle code out of the prepared shutdown graph", () => {
     const graph = collectStaticValueImportGraph("src/gateway/server-close.runtime.ts");
 
@@ -147,9 +163,6 @@ describe("gateway startup import boundaries", () => {
     );
     expect(readSource("src/gateway/server-aux-handlers.ts")).not.toContain(
       'from "./config-reload.js"',
-    );
-    expect(readSource("src/gateway/server-runtime-state.ts")).not.toContain(
-      'createCanvasHostHandler } from "../../extensions/canvas/runtime-api.js"',
     );
     expect(serverImpl).not.toContain('from "../plugins/hook-runner-global.js"');
     expect(serverImpl).not.toContain('from "../tasks/task-registry.js"');
@@ -252,6 +265,9 @@ describe("gateway startup import boundaries", () => {
     const hookStart = serverImpl.indexOf('name: "gateway_stop plugin hooks"', closeStart);
     const reloadStopStart = serverImpl.indexOf('name: "close prelude fence"', closeStart);
     const terminalStopStart = serverImpl.indexOf('name: "terminal sessions"', closeStart);
+    const closePreludeStart = serverImpl.indexOf('name: "gateway close prelude"', closeStart);
+    const lateSidecarJoinStart = serverImpl.indexOf('name: "late sidecar cleanup"', closeStart);
+    const gatewayCloseStart = serverImpl.indexOf('name: "gateway close"', lateSidecarJoinStart);
     const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
     const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
     const beginHelperStart = serverImpl.indexOf("const beginClosePrelude = async () => {");
@@ -264,6 +280,8 @@ describe("gateway startup import boundaries", () => {
     expect(reloadStopStart).toBeGreaterThan(closeStart);
     expect(reloadStopStart).toBeLessThan(terminalStopStart);
     expect(reloadStopStart).toBeLessThan(hookStart);
+    expect(lateSidecarJoinStart).toBeGreaterThan(closePreludeStart);
+    expect(lateSidecarJoinStart).toBeLessThan(gatewayCloseStart);
     expect(serverImpl.slice(closeStart, hookStart)).not.toContain("await import(");
     expect(markHelperStart).toBeGreaterThan(-1);
     expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(

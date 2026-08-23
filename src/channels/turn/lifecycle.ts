@@ -1,8 +1,7 @@
+import type { ExecutionIdentityAdmissionToken as ExecutionToken } from "../../audit/execution-identity-admission.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../../auto-reply/dispatch.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { suppressPendingFinalDelivery } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
-import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
-import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
 import { withReplySystemEventSessionKey } from "../../auto-reply/reply/system-event-session-key.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -362,22 +361,6 @@ async function applyRoutedDirectMessageSending(params: {
   return { payload: copyReplyPayloadMetadata(params.payload, payload) };
 }
 
-function reconcileNonVisibleChannelDeliveries(
-  result: DispatchFromConfigResult,
-  nonVisibleCounts: Readonly<Record<ReplyDispatchKind, number>>,
-): DispatchFromConfigResult {
-  const counts = {
-    tool: Math.max(0, result.counts.tool - nonVisibleCounts.tool),
-    block: Math.max(0, result.counts.block - nonVisibleCounts.block),
-    final: Math.max(0, result.counts.final - nonVisibleCounts.final),
-  };
-  return {
-    ...result,
-    queuedFinal: result.queuedFinal && counts.final > 0,
-    counts,
-  };
-}
-
 function createObserveOnlyDeliveryAdapter(): ChannelEventDeliveryAdapter {
   // Observe-only turns still run the agent, but transport delivery must remain impossible for
   // every assembled-turn entry point, including direct SDK dispatch.
@@ -398,30 +381,15 @@ async function dispatchChannelTurnWithDeliveryOwner(
     params.admission?.kind === "observeOnly" ? createObserveOnlyDeliveryAdapter() : params.delivery;
   const pendingDeliveryAttempts: PendingChannelDeliveryAttempt[] = [];
   const normalizationSuppressionAttempts: PendingChannelDeliveryAttempt[] = [];
-  const nonVisibleDeliveryCounts: Record<ReplyDispatchKind, number> = {
-    tool: 0,
-    block: 0,
-    final: 0,
-  };
-  const recordSettledDelivery = (
-    info: ChannelDeliveryInfo,
-    result: ChannelDeliveryResult | undefined,
-  ) => {
-    if (isExplicitlyNonVisibleChannelDelivery(result)) {
-      nonVisibleDeliveryCounts[info.kind] += 1;
-    }
-  };
-  let agentRunId: string | undefined;
+  let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];
   const onAgentRunStart = replyPipeline.replyOptions?.onAgentRunStart;
-  const replyOptions = delivery.observeMessageSent
-    ? {
-        ...replyPipeline.replyOptions,
-        onAgentRunStart: (runId: string) => {
-          agentRunId = runId;
-          onAgentRunStart?.(runId);
-        },
-      }
-    : replyPipeline.replyOptions;
+  const replyOptions = {
+    ...replyPipeline.replyOptions,
+    onAgentRunStart: (runId: string, executionIdentityToken?: ExecutionToken) => {
+      agentRun = [runId, executionIdentityToken];
+      onAgentRunStart?.(runId, executionIdentityToken);
+    },
+  };
   const hookCtx = delivery.observeMessageSent
     ? deriveInboundMessageHookContext(params.ctxPayload)
     : undefined;
@@ -436,7 +404,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
       to: resolveInboundReplyHookTarget(params.ctxPayload, hookCtx),
       accountId: params.accountId,
       sessionKeyForInternalHooks: params.routeSessionKey,
-      runId: agentRunId,
+      runId: agentRun[0],
       isGroup: hookCtx.isGroup,
       groupId: hookCtx.groupId,
       logPrefix: "dispatchAssembledChannelTurn",
@@ -536,7 +504,6 @@ async function dispatchChannelTurnWithDeliveryOwner(
                         info,
                         result: suppression,
                       });
-                      recordSettledDelivery(info, suppression);
                       return suppression;
                     }
                     const declaredDurable = "durable" in delivery ? delivery.durable : undefined;
@@ -553,6 +520,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                         ctxPayload: params.ctxPayload,
                         payload: preparedPayload,
                         info,
+                        executionIdentityToken: agentRun[1],
                         ...durableOptions,
                       });
                       throwIfDurableInboundReplyDeliveryFailed(durable);
@@ -564,7 +532,6 @@ async function dispatchChannelTurnWithDeliveryOwner(
                           info,
                           result: durable.delivery,
                         });
-                        recordSettledDelivery(info, durable.delivery);
                         return durable.delivery;
                       }
                     }
@@ -641,7 +608,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                         result,
                       });
                     } else {
-                      const finalized = await settleChannelDeliveryAttempt({
+                      await settleChannelDeliveryAttempt({
                         attempt: {
                           state: "fulfilled",
                           payload: effectivePayload,
@@ -653,12 +620,12 @@ async function dispatchChannelTurnWithDeliveryOwner(
                           ? getMessageSentEmitter()?.emitMessageSent
                           : undefined,
                       });
-                      recordSettledDelivery(info, finalized);
                     }
                     return result;
                   },
                   onError: delivery.onError,
                 },
+                dispatchReplyFromConfig: params.dispatchReplyFromConfig,
                 toolsAllow: params.toolsAllow,
                 replyOptions,
                 replyResolver: params.replyResolver,
@@ -685,7 +652,6 @@ async function dispatchChannelTurnWithDeliveryOwner(
             attempts: pendingDeliveryAttempts,
             delivery,
             emitMessageSent: getMessageSentEmitter()?.emitMessageSent,
-            onSettled: recordSettledDelivery,
           });
         } catch (error: unknown) {
           settlementError = error;
@@ -703,9 +669,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
         if (settlementError !== undefined) {
           throw toErrorObject(settlementError, "channel delivery settlement failed");
         }
-        return ownership === "routed-delivery"
-          ? reconcileNonVisibleChannelDeliveries(dispatchResult!, nonVisibleDeliveryCounts)
-          : dispatchResult!;
+        return dispatchResult!;
       },
     },
     { suppressObserveOnlyDispatch: false },

@@ -165,7 +165,7 @@ describe("renderChatComposer controls", () => {
       onQueueSteer,
       queue: [
         { id: "queued-1", text: "tighten the plan", createdAt: 1 },
-        { id: "steered-1", text: "already sent", createdAt: 2, kind: "steered" },
+        { id: "pending-1", text: "already sent", createdAt: 2, pendingRunId: "run-1" },
         { id: "local-1", text: "/status", createdAt: 3, localCommandName: "status" },
         {
           id: "waiting-idle-1",
@@ -175,7 +175,7 @@ describe("renderChatComposer controls", () => {
         },
       ],
     });
-    const steer = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer")];
+    const steer = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__action")];
     expect(steer).toHaveLength(2);
     steer[0]?.click();
     steer[1]?.click();
@@ -254,24 +254,52 @@ describe("renderChatComposer controls", () => {
   });
 
   it.each([
-    ["Meta", { metaKey: true }],
-    ["Control", { ctrlKey: true }],
-  ] as const)("uses %s+Enter to steer an active queued follow-up", (_name, modifiers) => {
-    const onSend = vi.fn();
-    const { container } = renderComposer({
-      canAbort: true,
-      draft: "Steer this now",
-      followUpMode: "queue",
-      onAbort: vi.fn(),
-      onSend,
-      sendShortcut: "enter",
-    });
+    ["Meta+Enter with a rendered draft", { metaKey: true }, "Steer this now", undefined, undefined],
+    [
+      "Control+Enter with a rendered draft",
+      { ctrlKey: true },
+      "Steer this now",
+      undefined,
+      undefined,
+    ],
+    [
+      "Control+Enter with attachment-only content",
+      { ctrlKey: true },
+      "",
+      () => [{ id: "image-1", mimeType: "image/png", fileName: "proof.png" }],
+      undefined,
+    ],
+    [
+      "Control+Enter with live textarea content before the draft prop rerenders",
+      { ctrlKey: true },
+      "",
+      undefined,
+      "Steer the live textarea value",
+    ],
+  ] as const)(
+    "uses %s to steer an active queued follow-up",
+    (_name, modifiers, draft, getAttachments, liveDraft) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({
+        canAbort: true,
+        draft,
+        followUpMode: "queue",
+        getAttachments,
+        onAbort: vi.fn(),
+        onSend,
+        sendShortcut: "enter",
+      });
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+      if (textarea && liveDraft !== undefined) {
+        textarea.value = liveDraft;
+      }
 
-    pressComposerEnter(container, modifiers);
+      const action = pressComposerEnter(container, modifiers);
 
-    expect(onSend).toHaveBeenCalledOnce();
-    expect(onSend).toHaveBeenCalledWith({ followUpMode: "steer" });
-  });
+      expect(onSend).toHaveBeenCalledOnce();
+      expect(onSend).toHaveBeenCalledWith("steer", action);
+    },
+  );
 
   it.each([
     ["modifier-enter", true, "queue", false],
@@ -291,9 +319,27 @@ describe("renderChatComposer controls", () => {
         sendShortcut,
       });
 
-      pressComposerEnter(container, { altKey, ctrlKey: true });
+      const action = pressComposerEnter(container, { altKey, ctrlKey: true });
 
-      expect(onSend.mock.calls).toEqual([[]]);
+      expect(onSend.mock.calls).toEqual([[undefined, action]]);
+    },
+  );
+
+  it.each(["keyboard", "pointer"] as const)(
+    "passes the original %s submission event through the composer",
+    (kind) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({ draft: "Repeat this message", onSend });
+      const action =
+        kind === "keyboard"
+          ? pressComposerEnter(container)
+          : new MouseEvent("click", { bubbles: true, cancelable: true });
+
+      if (kind === "pointer") {
+        primaryButton(container).dispatchEvent(action);
+      }
+
+      expect(onSend).toHaveBeenCalledWith(undefined, action);
     },
   );
 
@@ -373,6 +419,17 @@ describe("renderChatComposer controls", () => {
           sendShortcut: "enter" as const,
         },
         tooltip: t("chat.queue.steer"),
+      },
+      {
+        overrides: {
+          canAbort: true,
+          connected: false,
+          draft: "Queue until the gateway reconnects",
+          followUpMode: "queue" as const,
+          onAbort: vi.fn(),
+          sendShortcut: "enter" as const,
+        },
+        tooltip: t("chat.runControls.queue"),
       },
     ];
     for (const testCase of unavailable) {

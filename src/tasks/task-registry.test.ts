@@ -11,6 +11,7 @@ import {
   setHeartbeatWakeHandler,
   type HeartbeatWakeRequest,
 } from "../infra/heartbeat-wake.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import {
@@ -18,6 +19,7 @@ import {
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "../plugin-state/plugin-state-store.js";
+import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
@@ -26,6 +28,8 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CRON_TASK_KIND } from "./cron-task-contract.js";
@@ -560,7 +564,7 @@ describe("task-registry", () => {
     hoisted.killSubagentRunAdminMock.mockReset();
   });
 
-  it("sweeps expired plugin state after restart before a plugin namespace reopens", async () => {
+  it("sweeps one expired plugin-state batch per maintenance pass after restart", async () => {
     await withTaskRegistryTempDir(async () => {
       try {
         vi.useFakeTimers();
@@ -570,12 +574,39 @@ describe("task-registry", () => {
           maxEntries: 10,
         });
         await store.register("expired", { value: "stale" }, { ttlMs: 100 });
+        seedPluginStateEntriesForTests(
+          Array.from({ length: 2_049 }, (_, index) => ({
+            pluginId: "fixture-plugin",
+            namespace: "maintenance-restart",
+            key: `expired-${index}`,
+            value: { index },
+            expiresAt: 1_100,
+          })),
+        );
 
         // Close plugin-state's process-local handle while preserving the shared SQLite file.
         resetPluginStateStoreForTests();
         vi.setSystemTime(1_200);
+        const countExpiredRows = () => {
+          const database = openOpenClawStateDatabase();
+          const row = executeSqliteQueryTakeFirstSync(
+            database.db,
+            getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">>(
+              database.db,
+            )
+              .selectFrom("plugin_state_entries")
+              .select((expression) => expression.fn.countAll<number>().as("count"))
+              .where("expires_at", "is not", null)
+              .where("expires_at", "<=", Date.now()),
+          );
+          return row?.count;
+        };
         await runTaskRegistryMaintenance();
+        expect(countExpiredRows()).toBe(1_026);
+        await runTaskRegistryMaintenance();
+        expect(countExpiredRows()).toBe(2);
 
+        expect(sweepExpiredPluginStateEntries()).toBe(2);
         expect(sweepExpiredPluginStateEntries()).toBe(0);
       } finally {
         resetPluginStateStoreForTests();
@@ -683,6 +714,48 @@ describe("task-registry", () => {
         data: { phase: "end", endedAt: 200 },
       });
       expect(upsert).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("fills terminal lastEventAt from endedAt when a finalize omits the progress timestamp", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:terminal-timestamp",
+        runId: "run-terminal-timestamp",
+        task: "Finalize without a progress timestamp",
+        lastEventAt: 1_000,
+      });
+      finalizeSubagentTask(requireTaskByRunId("run-terminal-timestamp"), {
+        status: "succeeded",
+        endedAt: 2_000,
+      });
+      expectRecordFields(requireTaskByRunId("run-terminal-timestamp"), {
+        status: "succeeded",
+        endedAt: 2_000,
+        lastEventAt: 2_000,
+      });
+    });
+  });
+
+  it("keeps a newer terminal progress timestamp when endedAt trails it", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:monotonic-timestamp",
+        runId: "run-monotonic-timestamp",
+        task: "Preserve the newest activity timestamp",
+        lastEventAt: 3_000,
+      });
+      finalizeSubagentTask(requireTaskByRunId("run-monotonic-timestamp"), {
+        status: "failed",
+        endedAt: 2_000,
+      });
+      expectRecordFields(requireTaskByRunId("run-monotonic-timestamp"), {
+        status: "failed",
+        endedAt: 2_000,
+        lastEventAt: 3_000,
+      });
     });
   });
 

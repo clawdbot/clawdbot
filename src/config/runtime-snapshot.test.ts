@@ -1,6 +1,12 @@
 // Verifies runtime config snapshots preserve normalized public settings.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createConfigResolutionFacts,
+  getAuthoredConfigSecretRef,
+  getConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "./resolution-facts.js";
+import {
   finalizeRuntimeSnapshotWrite,
   getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
@@ -18,6 +24,7 @@ import {
   selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,
   setRuntimeConfigAppliedHash,
+  setRuntimeConfigSourceSnapshotIfCurrent,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
@@ -78,6 +85,38 @@ describe("runtime snapshot state", () => {
 
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
+  });
+
+  it("publishes and replaces same-byte resolution facts with the source snapshot", () => {
+    const runtimeConfig: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },
+    };
+    const unresolvedSource = structuredClone(runtimeConfig);
+    setConfigResolutionFacts(
+      unresolvedSource,
+      createConfigResolutionFacts(
+        [{ configPath: "gateway.auth.token", varName: "GATEWAY_TOKEN" }],
+        new Map([["gateway.auth.token", "GATEWAY_TOKEN"]]),
+      ),
+    );
+    setRuntimeConfigSnapshot(runtimeConfig, unresolvedSource);
+    expect([...(getConfigResolutionFacts(getRuntimeConfigSnapshot()) ?? [])]).toEqual([
+      "gateway.auth.token",
+    ]);
+    expect(getAuthoredConfigSecretRef(getRuntimeConfigSnapshot(), "gateway.auth.token")?.id).toBe(
+      "GATEWAY_TOKEN",
+    );
+
+    const literalSource = structuredClone(runtimeConfig);
+    setConfigResolutionFacts(literalSource, createConfigResolutionFacts([]));
+    expect(
+      setRuntimeConfigSourceSnapshotIfCurrent({
+        expectedRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? -1,
+        sourceConfig: literalSource,
+      }),
+    ).toBe(true);
+    expect(getConfigResolutionFacts(getRuntimeConfigSnapshot())?.size).toBe(0);
+    expect(getAuthoredConfigSecretRef(getRuntimeConfigSnapshot(), "gateway.auth.token")).toBeNull();
   });
 
   it("tracks snapshot metadata and cache keys across runtime refreshes", () => {

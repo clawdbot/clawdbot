@@ -202,7 +202,6 @@ async function loadChannels(
   state.channelsRefreshSeq = refreshSeq;
   state.channelsLoading = true;
   state.channelsLoadingProbe = probe;
-  state.channelsError = null;
   const refresh = (async () => {
     try {
       const res = await client.request<ChannelsStatusSnapshot | null>("channels.status", {
@@ -213,6 +212,7 @@ async function loadChannels(
         return;
       }
       state.channelsSnapshot = res;
+      state.channelsError = null;
       state.channelsLastSuccess = Date.now();
     } catch (err) {
       if (!isCurrentChannelRefresh(state, client, refreshSeq)) {
@@ -654,11 +654,9 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       state.channelsLoading = false;
       state.channelsLoadingProbe = null;
       state.channelsRefreshSeq = (state.channelsRefreshSeq ?? 0) + 1;
-      if (!nextChannelReadAccess) {
-        state.channelsSnapshot = null;
-        state.channelsError = null;
-        state.channelsLastSuccess = null;
-      }
+      state.channelsError = connected || !nextChannelReadAccess ? null : state.channelsError;
+      state.channelsSnapshot = null;
+      state.channelsLastSuccess = null;
     }
     if (clientChanged || connectionChanged || whatsappAdminAccessChanged) {
       lifecycle.whatsappEpoch += 1;

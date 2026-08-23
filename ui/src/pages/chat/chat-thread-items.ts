@@ -557,6 +557,7 @@ export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unk
   if (content.length === 0) {
     return null;
   }
+  const runId = item.sendRunId ?? item.pendingRunId;
   return {
     role: "user",
     content,
@@ -565,6 +566,7 @@ export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unk
       kind: "pending-send",
       id: item.id,
       state: item.sendState,
+      ...(runId ? { idempotencyKey: `${runId}:user` } : {}),
       ...(item.replyToId ? { replyToId: item.replyToId } : {}),
       ...(item.sender?.id ? { senderId: item.sender.id } : {}),
       ...(item.sender?.name ? { senderName: item.sender.name } : {}),
@@ -592,7 +594,6 @@ function chatItemTimestamp(item: ChatItem): number | null {
     case "question":
       return item.startedAt;
     case "reading-indicator":
-    case "plan":
       return null;
   }
   return null;

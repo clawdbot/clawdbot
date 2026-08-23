@@ -5,6 +5,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { resolveTerminalAssistantTranscriptRunId } from "../../sessions/transcript-events.js";
 import { getRuntimeConfig } from "../io.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -204,6 +205,7 @@ export async function persistSessionTranscriptTurn(
     updateMode: options.updateMode ?? "inline",
     publishWhen: options.publishWhen ?? "when-appended",
     appendedMessages,
+    runId: options.runId,
   });
 
   return {
@@ -374,6 +376,7 @@ async function persistExpectedSessionTranscriptTurn(
     updateMode: options.updateMode ?? "inline",
     publishWhen: options.publishWhen ?? "when-appended",
     appendedMessages: turn.appendedMessages,
+    runId: options.runId,
   });
 
   if (turn.sessionEntry && scope.sessionStore) {
@@ -493,6 +496,7 @@ async function publishTranscriptTurnUpdate(params: {
   updateMode: SessionTranscriptTurnUpdateMode;
   publishWhen: "always" | "when-appended";
   appendedMessages: TranscriptMessageAppendResult<unknown>[];
+  runId?: string;
 }): Promise<void> {
   if (params.updateMode === "none") {
     return;
@@ -536,11 +540,13 @@ async function publishTranscriptTurnUpdate(params: {
     return;
   }
   for (const { message, messageSeq } of sequencedMessages) {
+    const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
     emitTranscriptUpdate({
       ...update,
       message: message.message,
       messageId: message.messageId,
       ...(messageSeq !== undefined ? { messageSeq } : {}),
+      ...(runId ? { runId } : {}),
     });
   }
 }

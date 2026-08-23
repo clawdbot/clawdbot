@@ -21,7 +21,6 @@ import {
   formatNoChangedTestTargetLines,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
-  shouldAcquireLocalHeavyCheckLock,
   resolveChangedTestTargetPlanForArgs,
   resolveChangedTestTargetPlan,
   resolveChangedTargetArgs,
@@ -40,7 +39,7 @@ import {
 } from "../vitest/vitest.contracts-shared.ts";
 
 const normalizeRepoPath = toRepoPath;
-const CODEX_TEST_PROCESS_FILE_LIMIT = 40;
+const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 1;
 
@@ -1259,18 +1258,14 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
       "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
       "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
-      "scripts/e2e/mcp-channels-seed.ts",
-      "scripts/e2e/docker-openai-seed.ts",
       "scripts/e2e/mcp-code-mode-gateway-docker.sh",
       "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
-      "scripts/e2e/mcp-code-mode-gateway-seed.ts",
       "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
       "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
       "scripts/mcp-code-mode-gateway-e2e.ts",
       "scripts/e2e/cron-cli-docker.sh",
       "scripts/e2e/cron-mcp-cleanup-docker.sh",
       "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
-      "scripts/e2e/cron-mcp-cleanup-seed.ts",
     ];
 
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
@@ -1281,7 +1276,6 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/scripts/plugin-prerelease-test-plan.test.ts",
       "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
       "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
-      "test/scripts/docker-e2e-seeds.test.ts",
       "test/scripts/mcp-code-mode-gateway-client.test.ts",
       "test/scripts/session-log-mentions.test.ts",
       "src/agents/agent-bundle-mcp-runtime.test.ts",
@@ -1679,7 +1673,10 @@ describe("scripts/test-projects changed-target routing", () => {
       buildVitestRunPlans(["src/commands/onboard-non-interactive.test-helpers.ts"]),
       {
         config: "test/vitest/vitest.commands.config.ts",
-        includePatterns: ["src/commands/onboard-non-interactive.gateway.test.ts"],
+        includePatterns: [
+          "src/commands/onboard-non-interactive.gateway-auth-token.test.ts",
+          "src/commands/onboard-non-interactive.gateway.test.ts",
+        ],
       },
     );
   });
@@ -2388,6 +2385,19 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("keeps mixed Control UI root and source changes in the UI lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "ui/index.html",
+      "ui/src/components/markdown.test.ts",
+      "ui/src/pages/agents/memory/dreaming.test.ts",
+    ]);
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-isolated.config.ts",
+    ]);
+  });
+
   it.each([
     ["ui/config/control-ui-chunking.ts", "ui/src/app/control-ui-chunking.test.ts"],
     ["ui/config/control-ui-locales.ts", "ui/src/app/vite-config.node.test.ts"],
@@ -2836,6 +2846,22 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it("routes package fixture assets to their owner test", () => {
+    const owner = "packages/ai/src/provider-transport-parity.test.ts";
+    const fixturePaths = [
+      "packages/ai/test/fixtures/provider-transport-parity/anthropic-success.snap.txt",
+      "packages/ai/test/fixtures/provider-transport-parity/anthropic-error.snap.txt",
+    ];
+    for (const fixturePath of fixturePaths) {
+      expectChangedTargets([fixturePath], [owner]);
+    }
+    expectChangedTargets(fixturePaths, [owner]);
+    expectSingleVitestRunPlan(
+      buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => fixturePaths),
+      { config: "test/vitest/vitest.unit.config.ts", forwardedArgs: [owner] },
+    );
+  });
+
   it.each([
     "test/vitest/vitest.agents-core.config.ts",
     "test/vitest/vitest.agents-embedded-agent.config.ts",
@@ -2874,94 +2900,23 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it.each(["src/tui/tui-pty-harness.e2e.test.ts", "src/tui/tui-pty-local.e2e.test.ts"])(
-    "routes TUI PTY integration target %s to the PTY lane",
-    (target) => {
-      const plans = buildVitestRunPlans([target], process.cwd());
+  it.each([
+    "src/tui/tui-auth-child-pty.e2e.test.ts",
+    "src/tui/tui-pty-harness.e2e.test.ts",
+    "src/tui/tui-session-identity-pty.e2e.test.ts",
+    "src/tui/tui-reset-transition-pty.e2e.test.ts",
+    "src/tui/tui-pty-local.e2e.test.ts",
+  ])("routes TUI PTY integration target %s to the PTY lane", (target) => {
+    const plans = buildVitestRunPlans([target], process.cwd());
 
-      expect(plans).toEqual([
-        {
-          config: "test/vitest/vitest.tui-pty.config.ts",
-          forwardedArgs: [],
-          includePatterns: [target],
-          watchMode: false,
-        },
-      ]);
-    },
-  );
-});
-
-describe("scripts/test-projects local heavy-check lock", () => {
-  const localCheckEnv = () => ({
-    ...process.env,
-    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: undefined,
-    OPENCLAW_TEST_PROJECTS_FORCE_LOCK: undefined,
-  });
-
-  it("skips the lock for a single scoped tooling run", () => {
-    expect(
-      shouldAcquireLocalHeavyCheckLock(
-        [
-          {
-            config: "test/vitest/vitest.tooling.config.ts",
-            includePatterns: ["test/scripts/gh-read.test.ts"],
-            watchMode: false,
-          },
-        ],
-        localCheckEnv(),
-      ),
-    ).toBe(false);
-  });
-
-  it("keeps the lock for non-tooling runs", () => {
-    expect(
-      shouldAcquireLocalHeavyCheckLock(
-        [
-          {
-            config: "test/vitest/vitest.unit.config.ts",
-            includePatterns: ["src/infra/vitest-config.test.ts"],
-            watchMode: false,
-          },
-        ],
-        localCheckEnv(),
-      ),
-    ).toBe(true);
-  });
-
-  it("skips the lock when a parent changed gate already holds it", () => {
-    expect(
-      shouldAcquireLocalHeavyCheckLock(
-        [
-          {
-            config: "test/vitest/vitest.unit.config.ts",
-            includePatterns: ["src/infra/vitest-config.test.ts"],
-            watchMode: false,
-          },
-        ],
-        {
-          ...localCheckEnv(),
-          OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-        },
-      ),
-    ).toBe(false);
-  });
-
-  it("allows forcing the lock back on", () => {
-    expect(
-      shouldAcquireLocalHeavyCheckLock(
-        [
-          {
-            config: "test/vitest/vitest.tooling.config.ts",
-            includePatterns: ["test/scripts/gh-read.test.ts"],
-            watchMode: false,
-          },
-        ],
-        {
-          ...localCheckEnv(),
-          OPENCLAW_TEST_PROJECTS_FORCE_LOCK: "1",
-        },
-      ),
-    ).toBe(true);
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.tui-pty.config.ts",
+        forwardedArgs: [],
+        includePatterns: [target],
+        watchMode: false,
+      },
+    ]);
   });
 });
 

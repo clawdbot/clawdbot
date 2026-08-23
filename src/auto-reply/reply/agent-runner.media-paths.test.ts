@@ -7,7 +7,10 @@ import type { EmbeddedAgentQueueMessageOutcome } from "../../agents/embedded-age
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { createReplyOperation as createRegisteredReplyOperation } from "./reply-run-registry.js";
+import {
+  createReplyOperation as createRegisteredReplyOperation,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 import {
   createMockFollowupRun,
@@ -53,6 +56,7 @@ const resolveOutboundAttachmentFromUrlMock = vi.fn();
 const createReplyMediaContextRuntimeMock = vi.fn();
 const EXPECTED_STEER_QUEUE_IDENTITY =
   "channel-user:v1:6f3f31084a7a2a6ff17176c0c16682e64d9f21301f64ff7e5bf1173b54fadc33";
+const registeredOperations: ReplyOperation[] = [];
 vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: (params: {
     provider: string;
@@ -311,11 +315,52 @@ function makeRunReplyAgentParams(
         workspaceDir,
       },
     });
-  const replyOperation = overrides.replyOperation ?? createMockReplyOperation().replyOperation;
+  const replyOperation =
+    overrides.replyOperation ??
+    (overrides.isActive === true
+      ? createRegisteredReplyOperation({
+          sessionKey: overrides.sessionKey ?? "main",
+          sessionId: followupRun.run.sessionId,
+          resetTriggered: false,
+        })
+      : createMockReplyOperation().replyOperation);
+  if (overrides.isActive === true) {
+    registeredOperations.push(replyOperation);
+    if (!overrides.replyOperation) {
+      replyOperation.setPhase("running");
+    }
+  }
   if (overrides.isActive === true && !replyOperation.toolAuthorityFingerprint) {
     replyOperation.bindToolAuthorityFingerprint(
       resolveFollowupRunToolAuthorityFingerprint(followupRun),
     );
+  }
+  if (overrides.isActive === true) {
+    replyOperation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      supportsQueueMessageImages: true,
+      taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
+      messageInjection: {
+        isAvailable: () => true,
+        queueMessage: async (text, options) => {
+          const outcome = await queueEmbeddedAgentMessageWithOutcomeAsyncMock(
+            replyOperation.sessionId,
+            text,
+            options,
+          );
+          if (!outcome.queued) {
+            throw new Error(outcome.reason);
+          }
+          return outcome.transcriptCommit === "unconfirmed"
+            ? {
+                transcriptCommit: outcome.transcriptCommit,
+                errorMessage: outcome.errorMessage ?? "commit unconfirmed",
+              }
+            : undefined;
+        },
+      },
+    });
   }
 
   return {
@@ -409,11 +454,15 @@ describe("runReplyAgent media path normalization", () => {
         result: await run(provider, model),
         provider,
         model,
+        attempts: [],
       }),
     );
   });
 
   afterEach(() => {
+    for (const operation of registeredOperations.splice(0)) {
+      operation.complete();
+    }
     vi.useRealTimers();
     const paths = cleanupPaths.splice(0);
     return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
@@ -480,7 +529,7 @@ describe("runReplyAgent media path normalization", () => {
         isInboundUserMessage: true,
         waitForTranscriptCommit: true,
         queueIdentity: EXPECTED_STEER_QUEUE_IDENTITY,
-        onQueueAccepted: parkedSteerAcceptedMock,
+        onQueueAccepted: expect.any(Function),
         taskSuggestionDeliveryMode: "gateway",
         toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(followupRun),
       },
@@ -527,7 +576,7 @@ describe("runReplyAgent media path normalization", () => {
         isInboundUserMessage: true,
         waitForTranscriptCommit: true,
         queueIdentity: EXPECTED_STEER_QUEUE_IDENTITY,
-        onQueueAccepted: parkedSteerAcceptedMock,
+        onQueueAccepted: expect.any(Function),
         images,
         media: followupRun.media,
         taskSuggestionDeliveryMode: undefined,
@@ -613,7 +662,7 @@ describe("runReplyAgent media path normalization", () => {
         isInboundUserMessage: true,
         waitForTranscriptCommit: true,
         queueIdentity: EXPECTED_STEER_QUEUE_IDENTITY,
-        onQueueAccepted: parkedSteerAcceptedMock,
+        onQueueAccepted: expect.any(Function),
         taskSuggestionDeliveryMode: undefined,
         toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
       },

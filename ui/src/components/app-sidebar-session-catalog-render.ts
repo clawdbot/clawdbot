@@ -11,6 +11,7 @@ import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
@@ -22,6 +23,7 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import {
   formatSidebarTimestamp,
+  normalizeCatalogTimestamp,
   type CatalogBackingSessionDisplay,
   type CatalogSessionMenuRequest,
   visibleCatalogHosts,
@@ -43,7 +45,7 @@ type SessionCatalogGroupsParams = {
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
-  creatorId?: string | null;
+  ownerId?: string | null;
   renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
   onToggleSection: (sectionId: string) => void;
   draggingSectionId: string | null;
@@ -54,7 +56,7 @@ type SessionCatalogGroupsParams = {
   onStartSectionDrag: (sectionId: string) => void;
   onFinishSectionDrag: () => void;
   viewMenuOpenCatalogId: string | null;
-  creatorFilterActive: boolean;
+  ownerFilterActive: boolean;
   onOpenViewMenu: (
     catalogId: string,
     trigger: HTMLElement,
@@ -74,6 +76,7 @@ type SessionCatalogGroupsParams = {
     y: number,
     trigger?: HTMLElement,
   ) => void;
+  isMenuOpen: (key: CatalogSessionKey) => boolean;
 };
 
 function renderSessionRunSpinner(showTitle = true) {
@@ -120,9 +123,11 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
   // Adopted rows reuse the live session row so activity, unread state, and
   // the session menu behave exactly like the regular list.
   const liveRowsByKey = new Map<string, GatewaySessionRow>();
+  const liveOwnerIdBySessionKey = new Map<string, string | undefined>();
   for (const row of params.liveRows) {
     if (!liveRowsByKey.has(row.key)) {
       liveRowsByKey.set(row.key, row);
+      liveOwnerIdBySessionKey.set(row.key, row.owner?.actor.id);
     }
   }
   return params.catalogs.map((catalog) => {
@@ -130,7 +135,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const collapsed = params.collapsedSections.has(sectionId);
     const hosts = catalog.hosts;
     // Catalog providers own host identity; the sidebar only removes hosts with no visible rows.
-    const visibleHosts = visibleCatalogHosts(hosts, params.creatorId);
+    const visibleHosts = visibleCatalogHosts(hosts, params.ownerId, liveOwnerIdBySessionKey);
     const rows = visibleHosts.flatMap((host) =>
       host.sessions.map((session) => ({ host, session })),
     );
@@ -138,7 +143,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
       return row ? [row] : [];
     });
-    const hasActiveRun = liveRows.some((row) => row.hasActiveRun === true);
+    const hasActiveRun = liveRows.some(isSessionRunActive);
     const hasUnread = liveRows.some((row) => row.unread === true);
     const hasBrandIcon = hasProviderBrandIcon(catalog.id);
     const loadingMore = params.loadingMoreCatalogIds.has(catalog.id);
@@ -232,7 +237,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
             </button>
             <button
               type="button"
-              class="sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.creatorFilterActive
+              class="sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping ${params.ownerFilterActive
                 ? "sidebar-session-sort--filtered"
                 : ""}"
               data-session-catalog-view-menu=${catalog.id}
@@ -392,18 +397,14 @@ function renderCatalogSessionRow(
   params: SessionCatalogGroupsParams,
   projectChild = false,
 ) {
-  const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
-  const timestamp =
-    typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
-      ? rawTimestamp * 1000
-      : rawTimestamp;
+  const timestamp = normalizeCatalogTimestamp(
+    session.recencyAt ?? session.updatedAt ?? session.createdAt,
+  );
   const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
   if (adoptedRow) {
     const label = session.name || session.threadId;
     return params.renderLiveRow(adoptedRow, {
       label,
-      meta: formatSidebarTimestamp(timestamp),
-      title: `${label} · ${host.label}`,
       ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
     });
   }
@@ -454,7 +455,7 @@ function renderCatalogSessionRow(
     );
   return html`
     <div
-      class="sidebar-recent-session session-row-host ${active
+      class="sidebar-recent-session session-row-host sidebar-recent-session--single-line ${active
         ? "sidebar-recent-session--active"
         : ""} ${projectChild ? "sidebar-recent-session--catalog-project-child" : ""} ${running
         ? "session-row-host--running"
@@ -467,7 +468,6 @@ function renderCatalogSessionRow(
       <a
         href=${href}
         class="sidebar-recent-session__link"
-        title=${[`${label} · ${host.label}`, stateDescription].filter(Boolean).join(" · ")}
         aria-current=${active ? "page" : nothing}
         aria-describedby=${stateId ?? nothing}
         @click=${(event: MouseEvent) => {
@@ -515,6 +515,7 @@ function renderCatalogSessionRow(
             title=${t("chat.sidebar.openSessionMenu")}
             aria-label=${t("chat.sidebar.openSessionMenu")}
             aria-haspopup="menu"
+            aria-expanded=${String(params.isMenuOpen(catalogKey))}
             @click=${(event: MouseEvent) => {
               event.stopPropagation();
               const trigger = event.currentTarget as HTMLElement;

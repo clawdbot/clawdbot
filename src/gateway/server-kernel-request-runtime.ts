@@ -4,7 +4,6 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
-import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
 import {
   getHealthCache,
@@ -68,6 +67,8 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     workerEnvironmentStartup,
     workerPlacementRuntime,
     workerPlacementControlAvailable,
+    githubPublicationRuntime,
+    githubPublicationService,
     terminalSessions,
     agentRunSeq,
     chatAbortControllers,
@@ -99,7 +100,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     gatewayTls,
     lifecycle,
     startupState,
-    clearFallbackGatewayContextForServer,
     kernel,
     shutdownRuntime,
   } = runtime;
@@ -108,13 +108,22 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     minimalTestGateway,
     log,
   });
+  const configRevisionProjector = await startupTrace.measure(
+    "gateway.config-revision-key",
+    async () => {
+      const { loadGatewayConfigRevisionProjector } = await import("./config-revision-token.js");
+      return loadGatewayConfigRevisionProjector({ env: process.env });
+    },
+  );
   const gatewayRequestContext = await startupTrace.measure("gateway.request-context", async () => {
     const { createGatewayRequestContext } = await import("./server-request-context.js");
     return createGatewayRequestContext({
       deps,
+      configRevisionProjector,
       runtimeState,
       sessionCompanion,
       getRuntimeConfig,
+      getGatewayMethodRegistry: getAttachedGatewayMethodRegistry,
       gatewayTlsFingerprint: gatewayTls.enabled ? gatewayTls.fingerprintSha256 : undefined,
       sessionObserver,
       getMcpAppSandboxPort,
@@ -168,11 +177,15 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
         : {}),
       ...(workerPlacementRuntime
-        ? { workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace }
+        ? {
+            workerPlacementDiskSpaceReader: workerPlacementRuntime.diskSpace,
+            workerPlacementRunnerAvailabilityReader: workerPlacementRuntime.runnerAvailability,
+          }
         : {}),
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }
         : {}),
+      ...(githubPublicationService ? { githubPublicationService } : {}),
       validateAgentRuntimeApprovalAuthority,
       terminalSessions,
       agentRunSeq,
@@ -216,6 +229,11 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     chatMetadataLifecycle,
     gatewayRequestContext,
     flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,
+    minimalTestGateway,
+    logWarning: (message) => log.warn(message),
+    ...(!workerPlacementRuntime && githubPublicationRuntime
+      ? { reconcileGitHubPublications: githubPublicationRuntime.reconcilePublications }
+      : {}),
     sidecars: runtimeState.gatewayLifetimeSidecars,
   });
   pluginGatewayContext.current = gatewayRequestContext;
@@ -227,14 +245,10 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     logError: (message) => log.error(message),
   });
   gatewayInstanceRuntimeRef.current = gatewayInstanceRuntime;
+  gatewayRequestContext.resolveGatewayContext = () =>
+    gatewayInstanceRuntime.isAvailable() ? gatewayRequestContext : undefined;
   gatewayRequestContext.approvalEvents = gatewayInstanceRuntime.approvalEvents;
   gatewayRequestContext.recoveryRuntime = gatewayInstanceRuntime.recovery;
-  const clearFallbackContext: unknown = setFallbackGatewayContextResolver(
-    () => gatewayRequestContext,
-  );
-  clearFallbackGatewayContextForServer.set(
-    typeof clearFallbackContext === "function" ? () => clearFallbackContext() : () => {},
-  );
   return { ...runtime, chatMetadataLifecycle, gatewayRequestContext, gatewayInstanceRuntime };
 }
 

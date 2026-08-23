@@ -145,8 +145,8 @@ describe("renderAgents", () => {
     const job = createCronJob("implicit-default-job", {
       name: "Implicit default-agent reminder",
     });
-    const globalNextWakeAtMs = Date.now() + 60_000;
-    const scopedNextWakeAtMs = globalNextWakeAtMs + 3_600_000;
+    const nextWakeAtMs = Date.now() + 60_000;
+    const scopedNextWakeAtMs = nextWakeAtMs + 3_600_000;
     const container = document.createElement("div");
     render(
       renderAgents(
@@ -154,7 +154,7 @@ describe("renderAgents", () => {
           activePanel: "cron",
           selectedAgentId: "alpha",
           cron: {
-            status: { enabled: true, jobs: 51, nextWakeAtMs: globalNextWakeAtMs },
+            status: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
             jobs: [job],
             jobsTotal: 1,
             jobsHasMore: false,
@@ -188,7 +188,7 @@ describe("renderAgents", () => {
     expect(nextWakeRow?.querySelector(".settings-row__control")?.textContent?.trim()).toBe(
       formatNextRun(scopedNextWakeAtMs),
     );
-    expect(nextWakeRow?.textContent).not.toContain(formatNextRun(globalNextWakeAtMs));
+    expect(nextWakeRow?.textContent).not.toContain(formatNextRun(nextWakeAtMs));
   });
 
   it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
@@ -227,7 +227,7 @@ describe("renderAgents", () => {
             activePanel: "cron",
             selectedAgentId: "alpha",
             cron: {
-              status: { enabled: true, jobs: 80, nextWakeAtMs: null },
+              status: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
               jobs: cronState.cronJobs,
               jobsTotal: cronState.cronJobsTotal,
               jobsHasMore: cronState.cronJobsHasMore,
@@ -375,7 +375,15 @@ describe("renderAgents", () => {
             "local/unlisted-model": { alias: "My local model" },
           },
         },
-        entries: { alpha: {}, beta: {} },
+        entries: {
+          alpha: {
+            models: {
+              "local/unlisted-model": { alias: "Alpha local model" },
+              "google/gemini-3-flash-preview": { alias: "Alpha Flash" },
+            },
+          },
+          beta: {},
+        },
       },
     };
 
@@ -429,7 +437,10 @@ describe("renderAgents", () => {
     expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8 · opus");
     expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5 · sonnet");
     expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
-    expect(options.get("local/unlisted-model")).toBe("My local model (local/unlisted-model)");
+    expect(options.get("local/unlisted-model")).toBe("Alpha local model (local/unlisted-model)");
+    expect(options.get("google/gemini-3-flash-preview")).toBe(
+      "Alpha Flash (google/gemini-3-flash-preview)",
+    );
   });
 
   it.each([

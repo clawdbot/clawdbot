@@ -102,9 +102,8 @@ describe("Discord durable ingress", () => {
       monitor.start();
       try {
         const accepted = monitor.accept(createRawMessage("1001"));
-        await Promise.resolve();
+        await vi.waitFor(() => expect(enqueue).toHaveBeenCalledTimes(1));
 
-        expect(enqueue).toHaveBeenCalledTimes(1);
         expect(dispatch).not.toHaveBeenCalled();
 
         appendGate.resolve();

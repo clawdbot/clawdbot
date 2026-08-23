@@ -6,6 +6,7 @@ import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 
 // Keep in sync with the identical literal in chat widget-card.ts: a shared
@@ -16,6 +17,8 @@ const TICKET_REFRESH_LEAD_MS = 15_000;
 const TICKET_REFRESH_MIN_DELAY_MS = 1_000;
 const TICKET_REFRESH_RETRY_MS = 1_000;
 const TICKET_REFRESH_MAX_RETRY_MS = 30_000;
+const WIDGET_SANDBOX =
+  "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox";
 
 function documentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
@@ -159,6 +162,7 @@ export class BoardWidgetFrameLifecycle {
       document.addEventListener("visibilitychange", this.handleVisibilityChange);
       this.visibilityListening = true;
     }
+    installWidgetThemeObserver();
   }
 
   disconnect(): void {
@@ -238,7 +242,7 @@ export class BoardWidgetFrameLifecycle {
       return html`
         <iframe
           class="board-widget__frame"
-          sandbox="allow-scripts allow-same-origin allow-forms"
+          sandbox=${WIDGET_SANDBOX}
           referrerpolicy="origin"
           loading="eager"
           title=${widget.title || widget.name}
@@ -250,6 +254,7 @@ export class BoardWidgetFrameLifecycle {
               this.refreshFailedFrame(widget);
             }
           }}
+          @load=${(event: Event) => this.postTheme(event)}
         ></iframe>
       `;
     }
@@ -354,6 +359,13 @@ export class BoardWidgetFrameLifecycle {
       });
   }
 
+  private postTheme(event: Event): void {
+    const frame = event.currentTarget;
+    if (frame instanceof HTMLIFrameElement) {
+      postWidgetTheme(frame, this.sandboxOrigin || "*");
+    }
+  }
+
   private resolveSandboxFrameUrl(widget: BoardWidget): string | undefined {
     const gatewayUrl = this.host.context()?.gateway.connection.gatewayUrl;
     if (
@@ -392,6 +404,7 @@ export class BoardWidgetFrameLifecycle {
         this.host.context()?.gateway.connection.gatewayUrl ?? "",
         window.location.origin,
       ),
+      controlUiBaseUrl: `${window.location.origin}${this.host.context()?.basePath ?? ""}`,
       client: this.host.context()?.gateway.snapshot.client ?? undefined,
       resolveFrameUrl,
       confirmPrompt: (prompt) => window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
@@ -489,5 +502,8 @@ export class BoardWidgetFrameLifecycle {
       this.sandboxHost.update(options);
     }
     this.sandboxHost.handleMessage(event);
+    if (event.data?.type === "openclaw:widget-bridge-ready") {
+      postWidgetTheme(frame, this.sandboxOrigin);
+    }
   };
 }

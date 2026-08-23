@@ -2,6 +2,7 @@
 import { readCliStartupMetadata } from "./startup-metadata.js";
 
 export type PrecomputedSubcommandHelpName =
+  | "config"
   | "doctor"
   | "gateway"
   | "models"
@@ -142,6 +143,7 @@ function isPrecomputedSubcommandHelpName(
   commandName: string,
 ): commandName is PrecomputedSubcommandHelpName {
   return (
+    commandName === "config" ||
     commandName === "doctor" ||
     commandName === "gateway" ||
     commandName === "models" ||

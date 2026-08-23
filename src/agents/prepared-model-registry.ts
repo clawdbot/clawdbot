@@ -6,8 +6,7 @@ import { normalizeDiscoveredAgentModel } from "./agent-model-discovery.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
+  resolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
@@ -121,10 +120,7 @@ function resolveInput(
   config: OpenClawConfig,
   options: LoadPreparedAgentModelRegistryOptions = {},
 ): PreparedModelRuntimeInput {
-  const agentId =
-    options.agentId ??
-    tryResolveLegacyCompatibilityAgentId(config) ??
-    resolveDefaultAgentId(config);
+  const agentId = options.agentId ?? resolveAmbientOwnerAgentId(config);
   const agentDir = options.agentDir ?? resolveAgentDir(config, agentId);
   const workspaceDir = options.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
   return {

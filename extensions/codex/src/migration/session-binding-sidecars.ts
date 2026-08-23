@@ -6,18 +6,19 @@ import {
   resolveAgentDir,
   resolveSessionAgentIds,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
+import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { withFileLock, type FileLockOptions } from "openclaw/plugin-sdk/file-lock";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   archiveLegacyStateSource,
   legacyStateFileExists,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import {
-  canonicalPathFromExistingAncestor,
-  isPathInside,
-  pathExists,
-} from "openclaw/plugin-sdk/security-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -423,11 +424,11 @@ async function resolveLegacySessionFileLocator(
   return candidate;
 }
 
-function resolveLegacyBindingOwnerAgentId(params: {
+function tryResolveLegacyBindingOwnerAgentId(params: {
   sessionKey: string;
   config: MigrationEnvironment["config"];
   storeAgentIds?: Set<string>;
-}): string {
+}): string | undefined {
   if (params.sessionKey.trim().toLowerCase().startsWith("agent:")) {
     return resolveSessionAgentIds({
       sessionKey: params.sessionKey,
@@ -435,24 +436,27 @@ function resolveLegacyBindingOwnerAgentId(params: {
     }).sessionAgentId;
   }
   const storeAgentId = params.storeAgentIds?.size === 1 ? [...params.storeAgentIds][0] : undefined;
-  return resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    ...(storeAgentId ? { agentId: storeAgentId } : {}),
-  }).sessionAgentId;
-}
-
-function tryResolveLegacyBindingOwnerAgentId(
-  params: Parameters<typeof resolveLegacyBindingOwnerAgentId>[0],
-): string | undefined {
-  try {
-    return resolveLegacyBindingOwnerAgentId(params);
-  } catch (error) {
-    if ((error as { code?: unknown }).code === "AGENT_SELECTION_REQUIRED") {
-      return undefined;
+  const configuredAgentId = params.config.agents?.defaults?.systemAgent?.agentId?.trim();
+  const systemAgentId =
+    !storeAgentId && configuredAgentId ? normalizeAgentId(configuredAgentId) : undefined;
+  const fallbackAgentIds =
+    systemAgentId && listAgentIds(params.config).includes(systemAgentId)
+      ? [undefined, systemAgentId]
+      : [undefined];
+  for (const fallbackAgentId of fallbackAgentIds) {
+    try {
+      return resolveSessionAgentIds({
+        sessionKey: params.sessionKey,
+        config: params.config,
+        ...(storeAgentId ? { agentId: storeAgentId } : fallbackAgentId ? { fallbackAgentId } : {}),
+      }).sessionAgentId;
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== "AGENT_SELECTION_REQUIRED") {
+        throw error;
+      }
     }
-    throw error;
   }
+  return undefined;
 }
 
 function copyBindingForSession(stored: MigratedBindingRow, sessionId: string): MigratedBindingRow {

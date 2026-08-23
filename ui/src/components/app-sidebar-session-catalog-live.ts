@@ -351,9 +351,11 @@ export class SessionCatalogLiveState {
     }
     const currentCatalog = params.catalogs.find((catalog) => catalog.id === event.catalog.id);
     let catalogs: SessionCatalog[];
+    let nextCatalog: SessionCatalog;
     if (!currentCatalog) {
-      catalogs = [...params.catalogs, { ...event.catalog, hosts: [freshHost] }].toSorted(
-        (left, right) => left.id.localeCompare(right.id),
+      nextCatalog = { ...event.catalog, hosts: [freshHost] };
+      catalogs = [...params.catalogs, nextCatalog].toSorted((left, right) =>
+        left.id.localeCompare(right.id),
       );
     } else {
       const currentHost = currentCatalog.hosts.find((host) => host.hostId === freshHost.hostId);
@@ -364,20 +366,30 @@ export class SessionCatalogLiveState {
       const hosts = currentHost
         ? currentCatalog.hosts.map((host) => (host.hostId === freshHost.hostId ? mergedHost : host))
         : [...currentCatalog.hosts, mergedHost];
+      nextCatalog = {
+        ...event.catalog,
+        hosts: hosts.toSorted((left, right) => left.label.localeCompare(right.label)),
+      };
       catalogs = params.catalogs.map((catalog) =>
-        catalog.id === event.catalog.id
-          ? {
-              ...event.catalog,
-              hosts: hosts.toSorted((left, right) => left.label.localeCompare(right.label)),
-            }
-          : catalog,
+        catalog.id === event.catalog.id ? nextCatalog : catalog,
       );
     }
-    if (JSON.stringify(catalogs) === JSON.stringify(params.catalogs)) {
+    const currentHost = currentCatalog?.hosts.find((host) => host.hostId === freshHost.hostId);
+    const nextHost = nextCatalog.hosts.find((host) => host.hostId === freshHost.hostId);
+    const sameCatalogMetadata =
+      currentCatalog !== undefined &&
+      currentCatalog.label === nextCatalog.label &&
+      JSON.stringify(currentCatalog.capabilities) === JSON.stringify(nextCatalog.capabilities) &&
+      JSON.stringify(currentCatalog.error) === JSON.stringify(nextCatalog.error);
+    if (sameCatalogMetadata && JSON.stringify(currentHost) === JSON.stringify(nextHost)) {
       return null;
     }
     const materialChange =
-      sessionCatalogMaterialSnapshot(catalogs) !== sessionCatalogMaterialSnapshot(params.catalogs);
+      !currentCatalog ||
+      !currentHost ||
+      !nextHost ||
+      sessionCatalogMaterialSnapshot([{ ...nextCatalog, hosts: [nextHost] }]) !==
+        sessionCatalogMaterialSnapshot([{ ...currentCatalog, hosts: [currentHost] }]);
     this.sawChange ||= materialChange;
     return { catalogs, catalogId: event.catalog.id, materialChange };
   }

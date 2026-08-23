@@ -56,6 +56,20 @@ const explicitFleetDiscordConfig = {
   },
 } satisfies OpenClawConfig;
 
+const systemOwnedFleetDiscordConfig = {
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "ops" } },
+    entries: {
+      ops: { workspace: "/tmp/openclaw-ops" },
+      research: { workspace: "/tmp/openclaw-research" },
+    },
+  },
+  channels: {
+    discord: {},
+  },
+} satisfies OpenClawConfig;
+
 function installDiscordSetupShell(): void {
   const registry = createEmptyPluginRegistry();
   registry.channels = [
@@ -161,15 +175,36 @@ describe("bootstrapOutboundChannelPlugin", () => {
     );
   });
 
-  it("still rejects ownerless bootstrap in an explicit multi-agent fleet", () => {
+  it("routes agent-less bootstrap through the configured system-agent owner", () => {
     installDiscordSetupShell();
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
+
+    bootstrapOutboundChannelPlugin({
+      channel: "discord",
+      cfg: systemOwnedFleetDiscordConfig,
+    });
+
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-ops" }),
+    );
+  });
+
+  it("bootstraps ownerless fleets with global discovery instead of throwing", () => {
+    installDiscordSetupShell();
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
 
     expect(() =>
       bootstrapOutboundChannelPlugin({
         channel: "discord",
         cfg: explicitFleetDiscordConfig,
       }),
-    ).toThrow(AgentSelectionRequiredError);
+    ).not.toThrow(AgentSelectionRequiredError);
+
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: undefined }),
+    );
   });
 
   it("caches bootstrap outcomes per admitted agent", () => {

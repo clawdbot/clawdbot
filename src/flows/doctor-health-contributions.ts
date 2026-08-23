@@ -165,7 +165,6 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
       cfg: ctx.cfg,
       env: ctx.env ?? process.env,
       unresolvedReasonStyle: "detailed",
-      envFallback: gatewayTokenRef ? "never" : "always",
     });
     if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
       return;
@@ -282,17 +281,12 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   ) {
     return;
   }
-  const { resolveGatewayService } = await import("../daemon/service.js");
+  const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
   const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
   const { note } = await loadNoteModule();
   const service = resolveGatewayService();
-  let loaded;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
-  }
-  if (!loaded) {
+  const state = await readGatewayServiceState(service, { env: process.env });
+  if (state.loadState.status !== "loaded") {
     return;
   }
   await ensureSystemdUserLingerInteractive({
@@ -313,15 +307,10 @@ async function detectSystemdLingerFindings(
   if (process.platform !== "linux" || resolveDoctorMode(ctx.cfg) !== "local") {
     return [];
   }
-  const { resolveGatewayService } = await import("../daemon/service.js");
+  const { readGatewayServiceState, resolveGatewayService } = await import("../daemon/service.js");
   const service = resolveGatewayService();
-  let loaded;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch {
-    loaded = false;
-  }
-  if (!loaded) {
+  const state = await readGatewayServiceState(service, { env: process.env });
+  if (state.loadState.status !== "loaded") {
     return [];
   }
   const {
@@ -449,14 +438,9 @@ async function runDoctorHealthContributionList(
           contribution.run(ctx),
         );
       }
-      if (ctx.configWriteDeferredByCronOwnership === true) {
-        // Later repairs consume the candidate config. Stop before they persist state under an
-        // ownership topology that the config writer deliberately left non-durable.
-        return;
-      }
-      if (ctx.configWriteBlockedByValidation === true) {
-        // Same invariant for a validation-refused write: the candidate never reached
-        // disk, so later repairs must not persist state derived from it.
+      if (ctx.configWriteRefusal) {
+        // Later repairs consume the candidate. Stop before they persist state
+        // derived from config that the writer deliberately left non-durable.
         return;
       }
     } catch (error) {

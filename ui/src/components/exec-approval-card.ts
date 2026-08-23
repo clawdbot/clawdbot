@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { property } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import type {
   ExecApprovalDecision,
@@ -7,6 +8,8 @@ import type {
 } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
 import { formatCountdown } from "../lib/format.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { PollController } from "../lit/poll-controller.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
@@ -17,8 +20,8 @@ const DEFAULT_EXEC_APPROVAL_DECISIONS = [
 type ExecApprovalCardProps = {
   approval: ExecApprovalRequest;
   busy: boolean;
+  canGrant: boolean;
   error: string | null;
-  nowMs: number;
   variant: "inline" | "modal";
   queueCount?: number;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
@@ -28,6 +31,42 @@ export function approvalRemainingLabel(expiresAtMs: number, nowMs: number): stri
   return expiresAtMs > nowMs
     ? t("execApproval.expiresIn", { time: formatCountdown(expiresAtMs, nowMs, true) })
     : t("execApproval.expired");
+}
+
+class ApprovalCountdown extends OpenClawLightDomContentsElement {
+  @property({ type: Number }) expiresAtMs = 0;
+  @property({ type: Boolean }) compact = false;
+
+  private readonly polling = new PollController(
+    this,
+    1_000,
+    () => {
+      this.requestUpdate();
+      if (!this.compact) {
+        this.closest("openclaw-modal-dialog")?.setAttribute(
+          "description",
+          approvalRemainingLabel(this.expiresAtMs, Date.now()),
+        );
+      }
+    },
+    false,
+  );
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.polling.start();
+  }
+
+  override render() {
+    const nowMs = Date.now();
+    return html`${this.compact
+      ? formatCountdown(this.expiresAtMs, nowMs, true)
+      : approvalRemainingLabel(this.expiresAtMs, nowMs)}`;
+  }
+}
+
+if (!customElements.get("openclaw-approval-countdown")) {
+  customElements.define("openclaw-approval-countdown", ApprovalCountdown);
 }
 
 function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {
@@ -165,6 +204,8 @@ export function approvalTitle(active: ExecApprovalRequest): string {
 export function renderExecApprovalCard(props: ExecApprovalCardProps) {
   const active = props.approval;
   const decisions = resolveApprovalDecisions(active);
+  const reviewOnlyMessage = t("execApproval.reviewOnly");
+  const grantError = !props.canGrant && props.error === reviewOnlyMessage;
   const rawSeverity = active.pluginSeverity?.trim().toLowerCase();
   const severity =
     active.kind === "exec" || rawSeverity === "warning" || rawSeverity === "warn"
@@ -186,9 +227,11 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
               ${renderChip("plugin", pluginId)} ${renderChip("agent", agentId)}
             </div>`
           : nothing}
-        <div class="exec-approval-sub exec-approval-countdown" role="timer">
-          ${approvalRemainingLabel(active.expiresAtMs, props.nowMs)}
-        </div>
+        <openclaw-approval-countdown
+          class="exec-approval-sub exec-approval-countdown"
+          role="timer"
+          .expiresAtMs=${active.expiresAtMs}
+        ></openclaw-approval-countdown>
       </div>
       ${(props.queueCount ?? 0) > 1
         ? html`<div class="exec-approval-queue">
@@ -202,7 +245,17 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
     ${active.kind === "exec" && !decisions.includes("allow-always")
       ? html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`
       : nothing}
-    ${props.error ? html`<div class="exec-approval-error">${props.error}</div>` : nothing}
+    ${!props.canGrant
+      ? html`<div
+          class=${grantError ? "exec-approval-error" : "exec-approval-warning"}
+          role=${grantError ? "alert" : "note"}
+        >
+          ${reviewOnlyMessage}
+        </div>`
+      : nothing}
+    ${props.error && !grantError
+      ? html`<div class="exec-approval-error" role="alert">${props.error}</div>`
+      : nothing}
     <div class="exec-approval-actions">
       ${decisions.map((decision) => {
         const label = decisionLabel(decision);
@@ -210,8 +263,10 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
           class=${decisionClass(decision)}
           type="button"
           aria-label=${label}
-          ?disabled=${props.busy}
-          title=${props.variant === "modal" ? `${label} (${decisionShortcut(decision)})` : label}
+          ?disabled=${props.busy || !props.canGrant}
+          title=${props.variant === "modal" && props.canGrant
+            ? `${label} (${decisionShortcut(decision)})`
+            : label}
           @click=${() => props.onDecision(active.id, decision)}
         >
           <span>${label}</span>

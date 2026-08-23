@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -22,21 +21,15 @@ import type { AgentCredentialMap } from "./agent-auth-credentials.js";
 import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
 import {
   discoverAuthStorageFacts,
-  discoverModels,
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
-import { getPreparedRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import {
-  buildInlineProviderModels,
-  type InlineModelEntry,
-} from "./embedded-agent-runner/model.inline-provider.js";
+import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
 import {
   createBundledStaticCatalogModelResolver,
   loadBundledProviderStaticCatalogContextModels,
 } from "./embedded-agent-runner/model.static-catalog.js";
 import { createStaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
@@ -45,6 +38,13 @@ import {
   resolvePluginModelCatalogOwnerPluginId,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
+import { loadPreparedModelRuntimeAuthStore } from "./prepared-model-runtime.auth-store.js";
+import type {
+  PreparedModelRuntimeAgentBaseFacts,
+  PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogFacts,
+  PreparedModelRuntimeCatalogSource,
+} from "./prepared-model-runtime.catalog-contract.js";
 import {
   modelCatalogEntryKey,
   prepareConfiguredRuntimeFacts,
@@ -55,8 +55,8 @@ import {
   collectConfiguredProviderIdsNeedingStaticCatalog,
   collectPreparedModelRuntimeProviderIds,
   prepareConfiguredRuntimeModels,
+  prepareRuntimeCapabilityModels,
   toStaticCatalogEntry,
-  type PreparedConfiguredRuntimeModel,
 } from "./prepared-model-runtime.configured.js";
 import {
   prepareWorkspacePluginRegistries,
@@ -64,7 +64,6 @@ import {
 } from "./prepared-model-runtime.inbound-registry.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
-  buildPreparedPluginModelCatalog,
   createPreparedPluginGeneration,
   withPreparedPluginGenerationScope,
 } from "./prepared-model-runtime.plugin-generation.js";
@@ -79,40 +78,9 @@ import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
-import { AuthStorage, type AuthStorageData } from "./sessions/auth-storage.js";
-import type { ModelRegistry } from "./sessions/model-registry.js";
+import { AuthStorage } from "./sessions/auth-storage.js";
 
 const MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
-const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
-
-type PreparedModelRuntimeAgentBaseFacts = {
-  input: PreparedModelRuntimeInput;
-  env: NodeJS.ProcessEnv;
-  authStore: AuthProfileStore;
-  templateAuthStorage: AuthStorage;
-  credentials: Readonly<AuthStorageData>;
-  providerIds: string[];
-  configuredModelRefs: readonly ConfiguredModelRef[];
-};
-
-export type PreparedModelRuntimeAgentFacts = PreparedModelRuntimeAgentBaseFacts & {
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-  configuredGeneratedCatalogPluginIds: readonly string[];
-};
-
-export type PreparedModelRuntimeCatalogFacts = {
-  templateModelRegistry: ModelRegistry;
-  modelCatalog: ModelCatalogSnapshot;
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-  inlineProviderModels: readonly InlineModelEntry[];
-};
-
-export type PreparedModelRuntimeCatalogSource = Readonly<{
-  modelsJsonContents: string | null;
-  pluginCatalogs: readonly PersistedPluginModelCatalog[];
-  providerOutcomes?: readonly ProviderCatalogOutcome[];
-}>;
-
 type PreparedConfiguredRegistryGroup = {
   agentFacts: PreparedModelRuntimeAgentFacts[];
   modelsJsonContents: string | null;
@@ -127,18 +95,7 @@ function prepareAgentFacts(
   additionalProviderIds: readonly string[] = [],
 ): PreparedModelRuntimeAgentBaseFacts {
   const env = input.env ?? process.env;
-  const publishedStore = getPreparedRuntimeAuthProfileStoreSnapshot(
-    input.agentDir,
-    input.inheritedAuthDir,
-  );
-  // Runtime-only external profiles exist only in the published auth generation. Re-reading the
-  // durable store here would erase startup hydration before this owner can carry it forward.
-  const preparedStore =
-    publishedStore &&
-    (publishedStore.runtimeExternalProfileIds !== undefined ||
-      publishedStore.runtimeExternalProfileIdsAuthoritative === true)
-      ? publishedStore
-      : undefined;
+  const preparedStore = loadPreparedModelRuntimeAuthStore(input);
   const authFacts = discoverAuthStorageFacts(input.agentDir, {
     config: input.config,
     // Prepared owners consume only the already-published runtime auth generation. External CLI
@@ -183,9 +140,13 @@ function prepareAgentFacts(
 export async function prepareWorkspaceBuildGroup(
   inputs: readonly PreparedModelRuntimeInput[],
   catalogMode: PreparedModelRuntimeCatalogMode,
-  options: { providerDiscoveryProviderIds?: readonly string[] } = {},
+  options: {
+    providerDiscoveryProviderIds?: readonly string[];
+    preferBuiltPluginArtifacts?: boolean;
+  } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
+  preparedPluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
 ): Promise<{
   agentFacts: PreparedModelRuntimeAgentFacts[];
   pluginGeneration: PreparedModelRuntimePluginGeneration;
@@ -204,23 +165,38 @@ export async function prepareWorkspaceBuildGroup(
     throw new Error("prepared model runtime workspace group is empty");
   }
   const env = input.env ?? process.env;
+  const pluginMetadataStartedAt = performance.now();
+  const pluginMetadataSnapshot =
+    preparedPluginMetadataSnapshot ??
+    reusablePluginGeneration?.pluginMetadataSnapshot ??
+    prepareOwnedPluginLoadContext(input, env, undefined);
+  const pluginMetadataMs = reusablePluginGeneration
+    ? 0
+    : performance.now() - pluginMetadataStartedAt;
   const runtimePluginStartedAt = performance.now();
   const { inboundPluginRegistry, runtimePluginRegistry } = reusablePluginGeneration
     ? {
         inboundPluginRegistry: reusablePluginGeneration.inboundPluginRegistry,
         runtimePluginRegistry: reusablePluginGeneration.pluginRegistry,
       }
-    : prepareWorkspacePluginRegistries(input, loadInboundPluginRegistry);
+    : prepareWorkspacePluginRegistries(
+        input,
+        pluginMetadataSnapshot,
+        loadInboundPluginRegistry,
+        options.preferBuiltPluginArtifacts === true,
+      );
   const runtimePluginMs = reusablePluginGeneration ? 0 : performance.now() - runtimePluginStartedAt;
-  const prepare = async (
-    preparedMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
-  ) => {
-    const pluginMetadataStartedAt = performance.now();
-    const pluginMetadataSnapshot =
-      preparedMetadataSnapshot ?? prepareOwnedPluginLoadContext(input, env, runtimePluginRegistry);
-    const pluginMetadataMs = reusablePluginGeneration
-      ? 0
-      : performance.now() - pluginMetadataStartedAt;
+  const preferBuiltPluginArtifacts =
+    reusablePluginGeneration?.preferBuiltPluginArtifacts ??
+    options.preferBuiltPluginArtifacts === true;
+  prepareOwnedPluginLoadContext(
+    input,
+    env,
+    runtimePluginRegistry,
+    pluginMetadataSnapshot,
+    preferBuiltPluginArtifacts,
+  );
+  const prepare = async () => {
     const matchesStaticModelId = createStaticModelIdMatcher({
       manifestPlugins: pluginMetadataSnapshot.plugins,
     });
@@ -366,6 +342,19 @@ export async function prepareWorkspaceBuildGroup(
         matchesStaticModelId,
         resolveStaticCatalogModel: resolveConfiguredManifestModel,
       });
+      const runtimeCapabilityModels = prepareRuntimeCapabilityModels({
+        config: facts.input.config,
+        agentId: facts.input.agentId,
+        candidates: [
+          ...configuredCatalogEntries,
+          ...configuredRuntimeModels.map(({ model, modelId, provider }) => ({
+            ...toStaticCatalogEntry(model),
+            id: modelId,
+            provider,
+          })),
+        ],
+        resolveRuntimeModel: resolveConfiguredManifestModel,
+      });
       const configuredEntryKeys = new Set(configuredCatalogEntries.map(modelCatalogEntryKey));
       for (const configured of configuredRuntimeModels) {
         configuredEntryKeys.add(
@@ -399,6 +388,7 @@ export async function prepareWorkspaceBuildGroup(
       agentFacts.push({
         ...facts,
         configuredRuntimeModels,
+        runtimeCapabilityModels,
         configuredGeneratedCatalogPluginIds,
       });
     }
@@ -413,6 +403,7 @@ export async function prepareWorkspaceBuildGroup(
       pluginMetadataSnapshot,
       preparedStaticProviderCatalog,
       providerStaticModels,
+      preferBuiltPluginArtifacts,
       reusablePluginGeneration,
       runtimePluginRegistry,
     });
@@ -432,84 +423,9 @@ export async function prepareWorkspaceBuildGroup(
   return reusablePluginGeneration
     ? await withPreparedPluginGenerationScope(
         { input, pluginGeneration: reusablePluginGeneration },
-        prepare,
+        () => prepare(),
       )
     : await withPluginRuntimeRegistryScope(runtimePluginRegistry, prepare);
-}
-
-export async function prepareFullCatalogFacts(
-  agentFacts: PreparedModelRuntimeAgentFacts,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
-  catalogMode: PreparedModelRuntimeCatalogMode,
-  catalogSource?: PreparedModelRuntimeCatalogSource,
-): Promise<PreparedModelRuntimeCatalogFacts> {
-  const { env, input, templateAuthStorage } = agentFacts;
-  const { pluginMetadataSnapshot, preparedStaticProviderCatalog } = pluginGeneration;
-  const templateModelRegistry = discoverModels(templateAuthStorage, input.agentDir, {
-    config: input.config,
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    pluginMetadataSnapshot,
-    ...(catalogMode === "static" ? { normalizeModels: false } : {}),
-    ...(catalogSource
-      ? {
-          includePluginCatalogs: true,
-          modelsJsonContents: catalogSource.modelsJsonContents,
-          pluginCatalogs: catalogSource.pluginCatalogs,
-        }
-      : {}),
-  });
-  const modelCatalog = await buildPreparedPluginModelCatalog({
-    agentFacts,
-    catalogMode,
-    modelRegistry: templateModelRegistry,
-    pluginGeneration,
-  });
-  const providerStaticModels =
-    pluginGeneration.providerStaticModels ??
-    (await loadBundledProviderStaticCatalogContextModels({
-      cfg: input.config,
-      env,
-      metadataSnapshot: pluginMetadataSnapshot,
-      ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    }));
-  const staticModels = new Map<string, ProviderRuntimeModel>();
-  for (const model of [
-    ...agentFacts.configuredRuntimeModels.map((configured) => configured.model),
-    ...providerStaticModels,
-  ]) {
-    const modelKey = `${normalizeProviderId(model.provider)}\0${model.id.trim().toLowerCase()}`;
-    if (!staticModels.has(modelKey)) {
-      staticModels.set(modelKey, model);
-    }
-  }
-  const staticEntries = [...staticModels.values()].map(toStaticCatalogEntry);
-  const providerOutcomes = catalogSource?.providerOutcomes ?? [];
-  const completeModelCatalog = {
-    ...modelCatalog,
-    staticEntries,
-    ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
-  };
-  if (catalogMode === "live") {
-    fullModelCatalogSnapshots.add(completeModelCatalog);
-  }
-  return {
-    templateModelRegistry,
-    modelCatalog: completeModelCatalog,
-    configuredRuntimeModels: agentFacts.configuredRuntimeModels,
-    inlineProviderModels: pluginGeneration.inlineProviderModels,
-  };
-}
-
-/** Reports whether a catalog came from the complete prepared-catalog build path. */
-export function isPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): boolean {
-  return fullModelCatalogSnapshots.has(snapshot);
-}
-
-/** Restores process-local provenance after a complete catalog crosses a worker boundary. */
-export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): ModelCatalogSnapshot {
-  fullModelCatalogSnapshots.add(snapshot);
-  return snapshot;
 }
 
 function captureModelsJsonContents(agentDir: string): string | null {
@@ -522,17 +438,13 @@ function captureModelsJsonContents(agentDir: string): string | null {
     throw error;
   }
 }
-
-export function fingerprintPreparedRuntimeFacts(value: unknown): string {
-  return sha256Base64Url(stableStringify(value));
-}
-
+export const fingerprintPreparedRuntimeFacts = (value: unknown): string =>
+  sha256Base64Url(stableStringify(value));
 function hasSameOAuthProviderGeneration(
   left: ReturnType<AuthStorage["getOAuthProviders"]>,
   right: ReturnType<AuthStorage["getOAuthProviders"]>,
 ): boolean {
-  // OAuth descriptors carry executable hooks. Match those hooks by identity so equivalent
-  // AuthStorage instances share built-ins without merging distinct closure generations.
+  // Match executable hooks by identity so distinct AuthStorage closure generations never merge.
   return (
     left.length === right.length &&
     left.every((provider, index) => {
@@ -558,8 +470,7 @@ function groupConfiguredRegistrySources(
   for (const facts of agentFacts) {
     const modelsJsonContents = captureModelsJsonContents(facts.input.agentDir);
     const oauthProviders = facts.templateAuthStorage.getOAuthProviders();
-    // Generated catalogs are agent-owned. Capture only plugins needed by unresolved configured
-    // refs, then group exact bytes and OAuth behavior so publication never mixes generations.
+    // Capture only unresolved configured catalogs, then group exact bytes and OAuth behavior.
     const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(
       facts.input.agentDir,
       facts.configuredGeneratedCatalogPluginIds,

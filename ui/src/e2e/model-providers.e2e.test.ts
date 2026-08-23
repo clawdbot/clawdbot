@@ -199,6 +199,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 1200, width: 1280 },
+      ...(recordVisuals
+        ? { recordVideo: { dir: artifactDir, size: { height: 1200, width: 1280 } } }
+        : {}),
     });
     const page = await context.newPage();
     await installMockGateway(page, {
@@ -220,7 +223,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               provider: "claude-cli",
               displayName: "Claude",
               status: "ok",
-              profiles: [{ profileId: "anthropic:default", type: "oauth", status: "ok" }],
+              profiles: [{ profileId: "anthropic:default", type: "oauth", status: "expired" }],
               usage: {
                 providerId: "anthropic",
                 plan: "Max 20x",
@@ -301,8 +304,20 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         .toContain("anthropic");
       await expect.poll(async () => claudeCard.textContent()).toContain("Max 20x");
       await expect.poll(async () => claudeCard.textContent()).toContain("Credentials configured");
+      await expect.poll(async () => claudeCard.textContent()).not.toContain("Expired");
+      await expect.poll(async () => claudeCard.textContent()).not.toContain("Expiring");
+      await expect.poll(async () => claudeCard.textContent()).not.toContain("Not signed in");
       await expect.poll(async () => claudeCard.textContent()).toContain("$4.20");
       await claudeCard.locator(".provider-usage-progress").first().waitFor();
+      await expect.poll(() => page.getByText("Model auth expired: Claude").count()).toBe(0);
+
+      if (recordVisuals) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "claude-cli-oauth-alias.png"),
+        });
+      }
 
       const openrouterCard = page.locator(".model-providers__row", { hasText: "OpenRouter" });
       await openrouterCard.waitFor();
@@ -712,12 +727,15 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
 
       await openaiCard.getByRole("button", { name: "Replace key" }).click();
       await openaiCard.getByLabel("API key").fill(openaiInputValue);
+      // The { after } cursor waits for and returns the save-triggered patch,
+      // so a slow runner can't hand back an earlier config.patch stale.
       const patchCount = (await gateway.getRequests("config.patch")).length;
       await openaiCard.getByRole("button", { name: "Save" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.patch")).length)
-        .toBe(patchCount + 1);
-      const keyPatch = requestRaw(await gateway.waitForRequest("config.patch"));
+      const keyPatch = requestRaw(
+        await gateway.waitForRequest("config.patch", {
+          after: patchCount,
+        }),
+      );
       expect(keyPatch).toEqual({
         models: { providers: { openai: providerConfig(openaiInputValue) } },
       });
@@ -755,10 +773,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         })
         .getByRole("button", { name: "Save" })
         .click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.patch")).length)
-        .toBe(defaultPatchCount + 1);
-      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toEqual({
+      expect(
+        requestRaw(await gateway.waitForRequest("config.patch", { after: defaultPatchCount })),
+      ).toEqual({
         agents: {
           defaults: {
             model: "anthropic/claude-sonnet-4-5",
@@ -822,10 +839,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       });
       const addPatchCount = (await gateway.getRequests("config.patch")).length;
       await addSection.getByRole("button", { name: "Save provider" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("config.patch")).length)
-        .toBe(addPatchCount + 1);
-      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toEqual({
+      expect(
+        requestRaw(await gateway.waitForRequest("config.patch", { after: addPatchCount })),
+      ).toEqual({
         models: { providers: { google: providerConfig(googleInputValue) } },
       });
       await page.locator('[data-provider-id="google"]').waitFor();

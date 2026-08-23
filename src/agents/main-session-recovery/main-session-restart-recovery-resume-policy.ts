@@ -338,15 +338,17 @@ function isRestartAbortedWaitResultArtifact(message: unknown, waitMessage: unkno
   return Boolean(toolCallId && waitCall?.toolCallId === toolCallId);
 }
 
-function isApprovalPendingToolResult(message: unknown): boolean {
+function requiresRestartSafeToolResult(message: unknown): boolean {
   if (!message || typeof message !== "object" || getMessageRole(message) !== "toolResult") {
     return false;
   }
-  const details = (message as { details?: unknown }).details;
+  const record = message as Record<string, unknown>;
+  const details = record.details;
   if (!details || typeof details !== "object") {
     return false;
   }
-  return (details as { status?: unknown }).status === "approval-pending";
+  const status = details as { reason?: unknown; status?: unknown };
+  return status.reason === "missing_tool_result" || status.status === "approval-pending";
 }
 
 type MainSessionResumePolicy =
@@ -435,11 +437,7 @@ export function resolveMainSessionResumePolicy(
     return { action: "resume", forceRestartSafeTools: true };
   }
   if (isRestartAbortedWaitFailure(lastMeaningful)) {
-    const waitCall = readCodeModeWaitCall(meaningfulMessages[1]);
-    const checkpoint = readCodeModeCheckpoint(meaningfulMessages[2]);
-    return waitCall && checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
-      ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
-      : { action: "resume", forceRestartSafeTools: true };
+    return { action: "resume", forceRestartSafeTools: true };
   }
   const waitCall = readCodeModeWaitCall(lastMeaningful);
   if (waitCall) {
@@ -474,7 +472,7 @@ export function resolveMainSessionResumePolicy(
   if (!lastMeaningful || !isResumableTailMessage(lastMeaningful)) {
     return { action: "resume", forceRestartSafeTools: false };
   }
-  if (isApprovalPendingToolResult(lastMeaningful)) {
+  if (requiresRestartSafeToolResult(lastMeaningful)) {
     return { action: "resume", forceRestartSafeTools: true };
   }
   // A later tool result can hide the checkpoint at the transcript tail; keep

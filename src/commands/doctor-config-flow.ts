@@ -266,8 +266,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const migratedRoster = readAgentRosterProperty(migrated);
     const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
     const { list: _legacyList, ...candidateAgents } = migrated.agents ?? {};
-    const stampsExplicitOwnership =
-      legacyDefaultAgentId !== undefined && Object.keys(migratedEntries ?? {}).length > 1;
+    const stampsExplicitOwnership = Object.keys(migratedEntries ?? {}).length > 1;
     const rosterRepair = {
       config: {
         ...migrated,
@@ -385,6 +384,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
     emitWarnings: true,
   });
+
+  const { prepareTailscaleConfigMigration } = await import("./doctor-tailscale.js");
+  applyConfigMutation(
+    await prepareTailscaleConfigMigration({
+      cfg: state.candidate,
+      env: process.env,
+    }),
+    {
+      fixHint: `Run "${doctorFixCommand}" to apply safe Tailscale configuration migrations.`,
+      emitWarnings: true,
+    },
+  );
 
   const { prepareRetiredPhoneControlCleanup } = await import("./doctor-retired-phone-control.js");
   const retiredPhoneControlCleanup = await prepareRetiredPhoneControlCleanup({

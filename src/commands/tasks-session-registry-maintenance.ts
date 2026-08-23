@@ -5,7 +5,6 @@ import {
   resolveAllAgentSessionStoreTargetsSync,
   runSessionRegistryMaintenanceForStore,
 } from "../config/sessions.js";
-import { normalizeCronLaneSegment } from "../cron/service/task-runs.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 
@@ -44,22 +43,22 @@ function readRunningCronJobIds(): RunningCronJobIds {
     const runningJobs = loadCronJobsStoreSync(cronStorePath).jobs.filter(
       (job) => typeof job.state?.runningAtMs === "number",
     );
+    // A running detached job may have been retargeted after its session was created. Keep its
+    // explicit session segment because the registry has no producer metadata for the transcript.
+    const ids = new Set<string>();
+    for (const job of runningJobs) {
+      ids.add(job.id.toLowerCase());
+      if (job.sessionTarget === "main") {
+        continue;
+      }
+      const explicitSessionSegment = resolveExplicitCronSessionSegment(job.sessionKey);
+      if (explicitSessionSegment) {
+        ids.add(explicitSessionSegment);
+      }
+    }
     return {
       ok: true,
-      // A running job may have been retargeted after its session was created. Keep both historical
-      // shapes; the registry has no producer metadata, so retaining an ambiguous alias is safer
-      // than pruning a live transcript.
-      ids: new Set(
-        runningJobs.flatMap((job) => [
-          job.id.toLowerCase(),
-          normalizeCronLaneSegment(job.id, "job"),
-          ...(job.sessionTarget !== "main" && job.sessionKey
-            ? [resolveExplicitCronSessionSegment(job.sessionKey)].filter(
-                (segment): segment is string => segment !== undefined,
-              )
-            : []),
-        ]),
-      ),
+      ids,
       count: runningJobs.length,
     };
   } catch (err) {

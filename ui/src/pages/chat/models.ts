@@ -3,9 +3,12 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 
 const MODEL_CATALOG_CACHE_TTL_MS = 60_000;
+// A picker open is an operator signal to revalidate, but full provider discovery can be slow.
+const MODEL_CATALOG_REFRESH_COOLDOWN_MS = 5 * 60_000;
 
 type ModelCatalogCacheEntry = {
   expiresAt: number;
+  refreshEligibleAt?: number;
   models: ModelCatalogEntry[];
   inFlight?: Promise<ModelCatalogEntry[]>;
   inFlightRefresh?: boolean;
@@ -29,6 +32,7 @@ export async function loadModels(
     agentId: string;
     preparedOnly?: boolean;
     refresh?: boolean;
+    refreshIfDue?: boolean;
     rejectOnFailure?: boolean;
   },
 ): Promise<ModelCatalogEntry[]> {
@@ -39,13 +43,29 @@ export async function loadModels(
   const preparedCacheKey = `${agentId}\0prepared`;
   const cached = cache.get(cacheKey);
   const now = Date.now();
-  if (!opts.refresh && cached?.models && cached.expiresAt > now) {
+  const refresh =
+    opts.refresh === true ||
+    (opts.refreshIfDue === true && (cached?.refreshEligibleAt ?? 0) <= now);
+  const nextRefreshEligibleAt = refresh
+    ? now + MODEL_CATALOG_REFRESH_COOLDOWN_MS
+    : cached?.refreshEligibleAt;
+  const refreshCooldownActive =
+    opts.refreshIfDue === true && (cached?.refreshEligibleAt ?? 0) > now;
+  if (
+    opts.refreshIfDue === true &&
+    cached?.inFlight &&
+    cached.inFlightRefresh === true &&
+    cached.inFlightRejects === rejectOnFailure
+  ) {
+    return cached.inFlight;
+  }
+  if (!refresh && cached?.models && (cached.expiresAt > now || refreshCooldownActive)) {
     return cached.models;
   }
   if (
     cached?.inFlight &&
     cached.inFlightRejects === rejectOnFailure &&
-    (!opts.refresh || cached.inFlightRefresh === true)
+    (!refresh || cached.inFlightRefresh === true)
   ) {
     return cached.inFlight;
   }
@@ -58,13 +78,20 @@ export async function loadModels(
     cached?.models,
     agentId,
     opts.preparedOnly === true,
+    refresh,
     rejectOnFailure,
   )
     .then((result) => {
       const latest = cache.get(cacheKey);
       if (!latest || latest.inFlight === inFlight) {
+        const refreshEligibleAt = refresh
+          ? result.fresh
+            ? Date.now() + MODEL_CATALOG_REFRESH_COOLDOWN_MS
+            : undefined
+          : nextRefreshEligibleAt;
         const entry = {
           expiresAt: result.fresh ? Date.now() + MODEL_CATALOG_CACHE_TTL_MS : 0,
+          ...(refreshEligibleAt ? { refreshEligibleAt } : {}),
           models: result.models,
         };
         cache.set(cacheKey, entry);
@@ -76,6 +103,13 @@ export async function loadModels(
       }
       return result.models;
     })
+    .catch((error: unknown) => {
+      const latest = cache.get(cacheKey);
+      if (refresh && latest?.inFlight === inFlight) {
+        delete latest.refreshEligibleAt;
+      }
+      throw error;
+    })
     .finally(() => {
       const latest = cache.get(cacheKey);
       if (latest?.inFlight === inFlight) {
@@ -84,10 +118,11 @@ export async function loadModels(
     });
   cache.set(cacheKey, {
     expiresAt: cached?.expiresAt ?? 0,
+    ...(nextRefreshEligibleAt ? { refreshEligibleAt: nextRefreshEligibleAt } : {}),
     models: cached?.models ?? [],
     inFlight,
     inFlightRejects: rejectOnFailure,
-    ...(opts.refresh ? { inFlightRefresh: true } : {}),
+    ...(refresh ? { inFlightRefresh: true } : {}),
   });
   return inFlight;
 }
@@ -97,6 +132,7 @@ async function requestModels(
   fallback: ModelCatalogEntry[] | undefined,
   agentId: string,
   preparedOnly: boolean,
+  refresh: boolean,
   rejectOnFailure: boolean,
 ): Promise<{ models: ModelCatalogEntry[]; fresh: boolean }> {
   try {
@@ -104,6 +140,7 @@ async function requestModels(
       view: "configured",
       agentId,
       ...(preparedOnly ? { preparedOnly: true } : {}),
+      ...(refresh ? { refresh: true } : {}),
     });
     return { models: result?.models ?? [], fresh: true };
   } catch (error) {

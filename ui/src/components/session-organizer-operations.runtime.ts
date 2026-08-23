@@ -8,6 +8,10 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
+import {
+  formatPreservedWorktreeConfirmation,
+  formatPreservedWorktreesNotice,
+} from "../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../lib/toast.ts";
 import type {
   SidebarRecentSession,
@@ -27,6 +31,7 @@ import {
 import type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
 import { rememberSessionGroup } from "./session-organizer-catalog.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 export type { SessionActionHost, SessionActionRow } from "./session-organizer-batch-mutations.ts";
 // The controller loads this module as a single namespace, so the catalog
@@ -315,12 +320,7 @@ export async function deleteSessionsBatch(
       }
     }
     if (result.preservedWorktrees.length > 0) {
-      window.alert(
-        t("sessionsView.deletePreservedWorktrees", {
-          count: String(result.preservedWorktrees.length),
-          branches: result.preservedWorktrees.map((worktree) => worktree.branch).join(", "),
-        }),
-      );
+      window.alert(formatPreservedWorktreesNotice(result.preservedWorktrees));
       if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
         return;
       }
@@ -392,6 +392,33 @@ export async function renameSession(
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
   await patchSession(host, session, { label: normalizeOptionalString(label) ?? null }, scope);
+}
+
+export async function assignSessionOwner(
+  host: SessionActionHost,
+  session: Pick<SidebarRecentSession, "key">,
+  owner: Pick<SessionOwnerOption, "type" | "id">,
+  scope: SidebarSessionMutationScope,
+): Promise<void> {
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.assignOwner",
+      params: { key: session.key, owner },
+      requiredScope: "operator.write",
+    })
+  ) {
+    return;
+  }
+  const assigned = await scope.sessions.assignOwner(session.key, owner, {
+    agentId: parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId,
+  });
+  if (
+    host.sessionData.isSessionMutationScopeCurrent(scope) &&
+    !assigned &&
+    scope.sessions.state.error
+  ) {
+    host.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
+  }
 }
 
 export async function createSessionGroup(
@@ -506,7 +533,7 @@ export async function stopCloudWorker(
   // Reclaim during an active run is never offered, so decide that before the
   // await; a run starting while the modal is open is left to the gateway, whose
   // rejection is a recorded reason instead of a silently dropped confirmation.
-  if (!stopAction || (stopAction.method === "sessions.reclaim" && session.hasActiveRun)) {
+  if (!stopAction || (stopAction.blocksActiveRun && session.hasActiveRun)) {
     return;
   }
   const confirmed = await showConfirmDialog({
@@ -530,18 +557,10 @@ export async function stopCloudWorker(
   }
   try {
     const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
-    const result = await requestCloudWorkerStop(scope.client, stopAction, {
+    await requestCloudWorkerStop(scope.client, {
       key: session.key,
       agentId,
     });
-    if (result && host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      showToast({
-        message: t("sessionsView.cloudWorkerStopResult", {
-          session: session.label,
-          state: result.worker?.state ?? result.status,
-        }),
-      });
-    }
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
@@ -602,7 +621,6 @@ export async function deleteSession(
         return;
       }
     }
-    // Dirty/unpushed checkouts survive deletion; offer explicit removal.
     if (outcome.worktreePreserved) {
       const preserved = outcome.worktreePreserved;
       const removeAccess = readSessionMethodAccess(scope.gateway.snapshot, {
@@ -610,18 +628,13 @@ export async function deleteSession(
         requiredScope: "operator.admin",
       });
       if (!removeAccess.allowed) {
-        window.alert(
-          t("sessionsView.deletePreservedWorktrees", {
-            count: "1",
-            branches: preserved.branch,
-          }),
-        );
+        window.alert(formatPreservedWorktreesNotice([preserved]));
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }
       } else {
         const removeWorktree = await showConfirmDialog({
-          message: t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
+          message: formatPreservedWorktreeConfirmation(preserved),
           confirmLabel: t("common.remove"),
           danger: true,
           signal: scope.signal,
@@ -632,10 +645,7 @@ export async function deleteSession(
         // above, so it earns the same visible outcome instead of vanishing quietly.
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           showToast({
-            message: t("sessionsView.deletePreservedWorktrees", {
-              count: "1",
-              branches: preserved.branch,
-            }),
+            message: formatPreservedWorktreesNotice([preserved]),
           });
           return;
         }

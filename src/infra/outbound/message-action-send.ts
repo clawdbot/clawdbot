@@ -425,8 +425,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
 
-  const replyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
-  resolveAndApplyOutboundReplyToId(params, {
+  const initialReply = resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
     matchesToolContextTarget: channelPlugin?.threading?.matchesToolContextTarget,
@@ -444,9 +443,14 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     resolvedTarget,
     resolveAutoThreadId: channelPlugin?.threading?.resolveAutoThreadId,
     resolveReplyTransport: channelPlugin?.threading?.resolveReplyTransport,
-    replyToIsExplicit,
+    replyToIsExplicit: initialReply?.source === "explicit",
     resolveOutboundSessionRoute,
   });
+  const canonicalReplyToId = readToolStringParam(params, "replyTo");
+  const reply =
+    initialReply && canonicalReplyToId && canonicalReplyToId !== initialReply.replyToId
+      ? { ...initialReply, replyToId: canonicalReplyToId }
+      : initialReply;
   // Durable route/session persistence commits only on send success. A failed
   // probe (missing channel credentials above all) must not rebind the folded
   // main session's delivery route or mint a conversation identity. Once-only:
@@ -459,7 +463,6 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     outboundRoutePersisted = true;
     await ensureOutboundSessionEntry({ cfg, channel, accountId, route: outboundRoute });
   };
-  const resolvedReplyToId = readToolStringParam(params, "replyTo");
   throwIfAborted(abortSignal);
 
   const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
@@ -480,20 +483,22 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   delete params.voiceProvider;
   delete params.voiceId;
   throwIfAborted(abortSignal);
-  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
-    cfg,
-    agentId,
-    mediaSources: collectActionMediaSourceHints(params, ctx.extraActionMediaSourceParamKeys, {
-      structuredAttachments: "all",
-    }),
-    sessionKey: input.sessionKey,
-    messageProvider: input.sessionKey ? undefined : channel,
-    accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
-    requesterSenderId: input.requesterSenderId,
-    requesterSenderName: input.requesterSenderName,
-    requesterSenderUsername: input.requesterSenderUsername,
-    requesterSenderE164: input.requesterSenderE164,
-  });
+  const mediaAccess =
+    input.mediaAccess ??
+    resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId,
+      mediaSources: collectActionMediaSourceHints(params, ctx.extraActionMediaSourceParamKeys, {
+        structuredAttachments: "all",
+      }),
+      sessionKey: input.sessionKey,
+      messageProvider: input.sessionKey ? undefined : channel,
+      accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+      requesterSenderId: input.requesterSenderId,
+      requesterSenderName: input.requesterSenderName,
+      requesterSenderUsername: input.requesterSenderUsername,
+      requesterSenderE164: input.requesterSenderE164,
+    });
 
   // Required queue persistence is itself an ownership decision: neither the
   // remote gateway action nor a provider-native action may bypass core queueing.
@@ -510,6 +515,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         channel,
         channelPlugin,
         action,
+        reply,
         accountId,
         dryRun,
         gateway,
@@ -536,7 +542,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         accountId,
         input,
         agentId,
-        replyToIsExplicit,
+        replyToIsExplicit: reply?.source === "explicit",
       },
     );
   }
@@ -579,6 +585,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       accountId: accountId ?? undefined,
       conversationType: outboundRoute?.chatType,
       sessionId: input.sessionId,
+      runId: input.runId,
+      executionIdentityToken: input.executionIdentityToken,
       inboundEventKind: input.inboundEventKind,
       gateway,
       toolContext: input.toolContext,
@@ -591,6 +599,9 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       deliveryIntentId: input.deliveryIntentId,
       deliveryCompletion: input.deliveryCompletion,
       onDeliveryIntent: input.onDeliveryIntent,
+      onPlatformSendDispatch: input.onPlatformSendDispatch,
+      skipQueue: input.skipQueue,
+      onDeliveryAttempt: input.onDeliveryAttempt,
       // Identified platform evidence is the first success proof on the core
       // path; commit the route here so the transcript mirror (which runs later
       // in the same delivery) can resolve a just-created session entry.
@@ -630,8 +641,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     gifPlayback: sendPayload.gifPlayback,
     forceDocument: sendPayload.forceDocument,
     bestEffort: sendPayload.bestEffort,
-    replyToId: resolvedReplyToId ?? undefined,
-    replyToIdSource: resolvedReplyToId ? (replyToIsExplicit ? "explicit" : "implicit") : undefined,
+    reply,
     threadId: resolvedThreadId ?? undefined,
   });
 
@@ -662,6 +672,6 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     accountId,
     input,
     agentId,
-    replyToIsExplicit,
+    replyToIsExplicit: reply?.source === "explicit",
   });
 }

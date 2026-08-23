@@ -8,6 +8,7 @@ import {
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import type { CliOutput, CliToolUseStartDelta } from "../cli-output-contracts.js";
+import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -21,6 +22,7 @@ import {
   isMessagingTool,
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
+  isPluginNativeMessagingTool,
 } from "../embedded-agent-messaging.js";
 import type {
   MessagingToolSend,
@@ -30,6 +32,7 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../embedded-agent-tool-media.js";
+import { readToolResultDetails } from "../tool-result-error.js";
 import { closeClaudeSession } from "./claude-live-registry.js";
 import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
@@ -70,6 +73,7 @@ type ActiveCliTool = {
 export function createCliToolTracking(context: PreparedCliRunContext) {
   let gatewayCaptureKey: string | undefined;
   let yielded = false;
+  let yieldAcknowledgment: string | undefined;
   let didSendViaMessagingTool = false;
   let didDeliverSourceReplyViaMessageTool = false;
   let inFlightUnclassifiedMcpRequests = 0;
@@ -228,7 +232,14 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     result?: unknown;
     isError?: boolean;
   }) => {
-    if (!isDeliveredMessagingToolResult(params)) {
+    const deliveryFact = readEmbeddedMessageDeliveryFact(
+      readToolResultDetails(params.result)?.messageDelivery,
+    );
+    const delivered = deliveryFact
+      ? deliveryFact.status === "settled" &&
+        (params.isError !== true || deliveryFact.partialDelivery)
+      : isPluginNativeMessagingTool(params.toolName) && isDeliveredMessagingToolResult(params);
+    if (!delivered) {
       return;
     }
     didSendViaMessagingTool = true;
@@ -243,6 +254,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         args: params.args,
         result: params.result,
         isError: params.isError,
+        deliveryConfirmed: true,
       });
     const sourceReplyFinal = deliveredCurrentSourceReply
       ? resolveMessageToolSourceReplyFinal(toolArgs)
@@ -315,6 +327,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           currentChannelId: context.params.currentChannelId,
           currentThreadTs: context.params.currentThreadTs,
           currentMessageId: context.params.currentMessageId,
+          replyToMode: context.params.replyToMode,
         },
       },
       call.args,
@@ -336,8 +349,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       isMessagingToolDeliveryAction(normalizeCliMessagingToolName(toolName), toolArgs);
     beginMcpLoopbackToolCallCapture({
       captureKey,
-      onYield: () => {
+      onYield: (_message, acknowledgment) => {
         yielded = true;
+        yieldAcknowledgment = acknowledgment;
       },
       onRequestStart: () => {
         inFlightUnclassifiedMcpRequests += 1;
@@ -559,6 +573,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         return;
       }
       if (params.useManagedClaudeLiveSession) {
+        // The child still holds the process-env capture key. If drain cannot
+        // prove idle, kill it so a stale key cannot admit later sends.
         await closeClaudeSession(context, "mcp-capture-rotation");
       }
       const internalStates = await Promise.all(
@@ -585,7 +601,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   };
 
   const finalizeCapture = (finalizeParsedTools: () => void) => {
-    // Captured MCP calls may settle after the CLI process exits. Drain first so
+    // Captured MCP calls may settle after the attempt returns. Drain first so
     // finalization can use their trusted terminal outcomes.
     try {
       finalizeParsedTools();
@@ -625,6 +641,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       return {
         ...output,
         ...(yielded ? { yielded: true as const } : {}),
+        ...(yieldAcknowledgment ? { yieldAcknowledgment } : {}),
         ...(current.didSendViaMessagingTool ? { didSendViaMessagingTool: true } : {}),
         ...(current.didDeliverSourceReplyViaMessageTool
           ? { didDeliverSourceReplyViaMessageTool: true }

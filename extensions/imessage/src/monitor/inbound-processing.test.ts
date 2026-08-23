@@ -749,6 +749,7 @@ describe("buildIMessageInboundContext", () => {
 
     const { ctxPayload } = await buildIMessageInboundContext({
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision,
       message,
       historyLimit: 0,
@@ -777,6 +778,7 @@ describe("buildIMessageInboundContext", () => {
 
     const { ctxPayload } = await buildIMessageInboundContext({
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision: {
         ...decision,
         agentBodyText: "/reset\n\n[imessage attachment unavailable]",
@@ -809,6 +811,7 @@ describe("buildIMessageInboundContext", () => {
 
     const { ctxPayload, inboundHistory } = await buildIMessageInboundContext({
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision,
       message,
       historyLimit: 0,
@@ -823,6 +826,41 @@ describe("buildIMessageInboundContext", () => {
     expect(ctxPayload.Body).toContain("current");
     expect(ctxPayload.InboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
     expect(inboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
+  });
+
+  it("uses the monitor's prepared account service without re-reading channel config", async () => {
+    const message = {
+      id: 12348,
+      sender: "+15555550123",
+      text: "current",
+      is_from_me: false,
+      is_group: false,
+    };
+    const decision = await resolveDecision({ message });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    let channelConfigReads = 0;
+    const projectionCfg = Object.defineProperty({}, "channels", {
+      enumerable: true,
+      get: () => {
+        channelConfigReads += 1;
+        return { imessage: { service: "imessage" } };
+      },
+    }) as OpenClawConfig;
+    const { imessageTo } = await buildIMessageInboundContext({
+      cfg: projectionCfg,
+      accountService: "sms",
+      decision,
+      message,
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(imessageTo).toBe("sms:+15555550123");
+    expect(channelConfigReads).toBe(0);
   });
 });
 
@@ -886,6 +924,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
 
     const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
+      accountService: undefined,
       decision,
       message: {
         id: 102,
@@ -900,6 +939,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
     });
 
     expect(ctxPayload.CommandAuthorized).toBe(true);
+    expect(ctxPayload.ConversationRoutePeerId).toBe("+15555550123");
     expect(ctxPayload.CommandSource).toBe("text");
     expect(ctxPayload.CommandTurn).toMatchObject({
       kind: "text-slash",
@@ -926,6 +966,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
 
     const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
+      accountService: undefined,
       decision,
       message: {
         id: 103,
@@ -954,6 +995,7 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     const decision = {
       kind: "dispatch" as const,
       route: { accountId: "default", agentId: "lobster", sessionKey: "k", mainSessionKey: "mk" },
+      bindingResolution: null,
       isGroup: false,
       sender: "+15555550123",
       senderId: "+15555550123",
@@ -969,6 +1011,7 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     };
     return {
       cfg: {} as OpenClawConfig,
+      accountService: undefined,
       decision: decision as unknown as Parameters<
         typeof buildIMessageInboundContext
       >[0]["decision"],

@@ -131,9 +131,9 @@ persists the start or invokes the provider. Provider aliases are lookup names
 only and must not be used for this declaration.
 
 Worker providers must also declare their id in `contracts.workerProviders`.
-Core persists durable intent before `provision(profile, operationId, options?)`. Providers validate settings and any optional `options.machineClass` before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats. Providers may expose process-stable picker metadata with `listMachineOptions(profile)`; omit the hook when the profile has no meaningful machine choice. Machine options contain only `id`, `label`, optional `description`, and optional `default` because the host has no authoritative cross-provider CPU, memory, or price source. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound.
+Core persists durable intent before `provision(profile, operationId, options?)`. Providers validate settings and any optional `options.machineClass` before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats. If provider-owned setup fails after allocation and cleanup is indeterminate, throw `WorkerProviderError.cleanupIndeterminate(leaseId, provisionError, cleanupError)` so core persists the known lease and reconciles teardown instead of replaying provision. Providers may expose process-stable picker metadata with asynchronous `listMachineOptions(profile)`; omit the hook when the profile has no meaningful machine choice. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Session-placement providers declare exactly one `supportedExecutionModes` value: `worker-turn` providers return node leases, while `remote-exec` providers return SSH leases. Omission advertises no placement modes while preserving direct environment lifecycle calls. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound.
 Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. Providers may also return up to 10 ordered, unique `fallbackPorts` (integer ports from 1 through 65535, excluding the primary `port`); core validates and persists those advertised candidates for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
-`WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be absolute. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The Gateway reads the password file over the provider's SSH endpoint when needed and never persists the password. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; cdpPort: number }` or `{ id: "terminal"; executablePath: string }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields.
+`WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be absolute. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The owning SSH or node carrier reads the password on the worker when needed and never persists it in the Gateway store. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; cdpPort: number }` or `{ id: "terminal"; executablePath: string }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields.
 Providers with renewable leases can also implement `renew(leaseId)`.
 `inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core marks an active local record orphaned, or treats the absence as teardown completion after a persisted destroy request.
 
@@ -159,11 +159,16 @@ Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
 with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
 or fully dynamic tool registration.
 
-| Method                                 | What it registers                                                                                                                        |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerTool(tool, opts?)`        | Agent tool (required or `{ optional: true }`)                                                                                            |
-| `api.registerCommand(def)`             | Custom command (bypasses the LLM)                                                                                                        |
-| `api.registerNodeHostCommand(command)` | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
+| Method                                   | What it registers                                                                                                                        |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerTool(tool, opts?)`          | Agent tool (required or `{ optional: true }`)                                                                                            |
+| `api.registerCommand(def)`               | Custom command (bypasses the LLM)                                                                                                        |
+| `api.registerNodeHostCommand(command)`   | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
+| `api.registerWidgetPresenter(presenter)` | Explicit or current-channel destination behind the core `show_widget` tool                                                               |
+
+Explicit widget presenters declare a unique model-visible target such as `node_panel`. Current-channel presenters use `target: "current_channel"`, provide a synchronous `match(context)` predicate over trusted delivery facts, and declare supported source kinds and delivery limits. Multiple transport presenters may coexist, but core selects an implicit route only when exactly one matches.
+
+Core validates the canonical `show_widget` schema, composes the bounded HTML document, and passes immutable HTML plus an optional hosted URL to `present(...)`. Presenters return either a generic message receipt or a node receipt. Expected availability and presentation failures use the closed error result instead of throwing; core falls back inline only for an actual `inline-widgets` client and otherwise surfaces the failure.
 
 Computer Use providers use `registerComputerUseProvider(api, provider)` from
 `openclaw/plugin-sdk/computer-use`. It registers the shared
@@ -226,30 +231,32 @@ advertised node command.
 
 ### Infrastructure
 
-| Method                                          | What it registers                                                      |
-| ----------------------------------------------- | ---------------------------------------------------------------------- |
-| `api.registerHook(events, handler, opts?)`      | Event hook                                                             |
-| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                                                  |
-| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                                                     |
-| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser                                     |
-| `api.registerCli(registrar, opts?)`             | CLI subcommand                                                         |
-| `api.registerNodeCliFeature(registrar, opts?)`  | Node feature CLI under `openclaw nodes`                                |
-| `api.registerService(service)`                  | Background service                                                     |
-| `api.registerInteractiveHandler(registration)`  | Interactive handler                                                    |
-| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                                         |
-| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                                |
-| `api.registerMemoryPromptPreparation(prepare)`  | Async preparation for a memory-adjacent prompt section                 |
-| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                                     |
-| `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                           |
-| `api.registerMcpServerConnectionResolver(...)`  | Per-requester MCP transport (`url`/`headers`) for a static server name |
-| `api.registerTextTransforms(transforms)`        | Plugin-owned prompt/message compatibility text rewrites                |
-| `api.registerConfigMigration(migrate)`          | Lightweight config migration run before plugin runtime loads           |
-| `api.registerMigrationProvider(provider)`       | Importer for `openclaw migrate`                                        |
-| `api.registerAutoEnableProbe(probe)`            | Config probe that can auto-enable this plugin                          |
-| `api.registerReload(registration)`              | Restart/hot/noop config-prefix policy for reload handling              |
-| `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                                |
-| `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands                    |
-| `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`                       |
+| Method                                            | What it registers                                                      |
+| ------------------------------------------------- | ---------------------------------------------------------------------- |
+| `api.registerHook(events, handler, opts?)`        | Event hook                                                             |
+| `api.registerHttpRoute(params)`                   | Gateway HTTP endpoint                                                  |
+| `api.registerGatewayMethod(name, handler, opts?)` | Gateway RPC method                                                     |
+| `api.registerGatewayDiscoveryService(service)`    | Local Gateway discovery advertiser                                     |
+| `api.registerCli(registrar, opts?)`               | CLI subcommand                                                         |
+| `api.registerNodeCliFeature(registrar, opts?)`    | Node feature CLI under `openclaw nodes`                                |
+| `api.registerService(service)`                    | Background service                                                     |
+| `api.registerInteractiveHandler(registration)`    | Interactive handler                                                    |
+| `api.registerAgentToolResultMiddleware(...)`      | Runtime tool-result middleware                                         |
+| `api.registerMemoryPromptSupplement(builder)`     | Additive memory-adjacent prompt section                                |
+| `api.registerMemoryPromptPreparation(prepare)`    | Async preparation for a memory-adjacent prompt section                 |
+| `api.registerMemoryCorpusSupplement(adapter)`     | Additive memory search/read corpus                                     |
+| `api.registerHostedMediaResolver(resolver)`       | Resolver for browser-style hosted media URLs                           |
+| `api.registerMcpServerConnectionResolver(...)`    | Per-requester MCP transport (`url`/`headers`) for a static server name |
+| `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
+| `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
+| `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
+| `api.registerAutoEnableProbe(probe)`              | Config probe that can auto-enable this plugin                          |
+| `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
+| `api.registerNodeHostCommand(command)`            | Command handler exposed to paired nodes                                |
+| `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
+| `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
+
+Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 
 #### Post-ack webhook work
 
@@ -388,6 +395,17 @@ plugins.
 | `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
 | `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
 | `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
+| `api.registerBoardWidgetContentKind(...)`                                            | Sandboxed board widget source validation, renderer resources, and document composition                                                                     |
+
+`registerBoardWidgetContentKind(...)` is for plugins that own a declarative
+widget source format. The registration supplies a globally unique lowercase
+`kind`, a short label, one capability-scoped plugin surface plus its renderer
+resource paths, a synchronous `validateSource(source)` callback, and a
+synchronous `composeDocument(...)` callback. Core adds the document shell,
+sandbox, theme, and ticket-bound action bridge. Registrations exist only while
+their plugin is active; invalid, reserved, or duplicate kinds fail plugin load.
+Use `dashboard.dataBindings` and `dashboard.actionVerbs` for host capabilities,
+not for renderer registration.
 
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
 plugins' tab descriptors are advertised to dashboard clients in the gateway
@@ -398,6 +416,12 @@ plugins can set `path` to a plugin HTTP route (see
 `icon` is a dashboard icon name hint, `group` picks the sidebar section
 (`control` or `agent`), `order` sorts among plugin tabs, and `requiredScopes`
 hides the tab from connections lacking those operator scopes:
+
+Bundled plugins whose page already has a matching native Control UI route can set
+`placement: "route:<pluginId>"`. The host rejects native-route claims from external
+plugins or from bundled plugins whose ID does not own that route. The sidebar opens
+the native route while the descriptor is present instead of mounting the generic
+plugin-tab page.
 
 For a gateway-protected external tab, register the descriptor `path` under a
 same-plugin `auth: "gateway"` HTTP route. After authenticated bootstrap, the browser gets a
@@ -601,7 +625,7 @@ api.registerCli(
     descriptors: [
       {
         name: "canvas",
-        description: "Capture or render canvas content from a paired node",
+        description: "Present hosted widgets on a paired Mac",
         hasSubcommands: true,
       },
     ],
@@ -634,8 +658,11 @@ AI CLI backend such as `claude-cli` or `my-cli`.
 - Use `prepareExecution` for backend-owned launch environment or temporary
   auth/config bridges. Its `ctx.contextTokenBudget` is the effective token
   limit selected for the run, so native-compaction backends can align their
-  own threshold without provider-specific core branches. It also receives the
-  core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
+  own threshold without provider-specific core branches. Its optional
+  `ctx.thinkingLevel` is the effective `off`, `minimal`, `low`, `medium`,
+  `high`, `xhigh`, `adaptive`, or `max` selection for backends that apply the
+  level through launch environment or staged configuration. It also receives
+  the core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
 - Backends that can disable all native tools for a specific run may declare
   `nativeToolMode: "selectable"`. Restricted calls pass an exact
   `ctx.toolAvailability.native` list plus canonical

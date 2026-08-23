@@ -166,8 +166,9 @@ describe("lazy protocol validators", () => {
       { archived: false },
       { archived: true },
       { archived: "all" },
+      { involvingMe: true },
     ]);
-    expectRejected(validateSessionsListParams, [{ archived: "archived" }]);
+    expectRejected(validateSessionsListParams, [{ archived: "archived" }, { involvingMe: "yes" }]);
   });
 
   it("validates session board face list and patch values", () => {
@@ -212,6 +213,7 @@ describe("lazy protocol validators", () => {
       archived: false,
       pinned: true,
       unread: true,
+      contextWindow: "1m",
       thinkingLevel: "high",
       fastMode: "auto",
       toolOverrides: null,
@@ -569,6 +571,7 @@ describe("lazy protocol validators", () => {
         idempotencyKey: "revision-run-1",
       }),
       proposalRequest({
+        expectedRevisionHash: "a".repeat(64),
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
         idempotencyKey: "revision-run-1",

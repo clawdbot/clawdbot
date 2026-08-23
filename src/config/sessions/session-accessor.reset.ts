@@ -4,6 +4,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import type { ConversationRouteContext } from "./conversation-route-context.js";
 import {
   cloneSessionEntries,
   mergeConcurrentReplySessionMetadata,
@@ -13,9 +14,13 @@ import {
 import {
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
+  loadSessionEntry,
   resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
-import type { SessionEntryLifecycleUpsert } from "./session-accessor.lifecycle-types.js";
+import {
+  SessionEntryLifecycleUpsertConflictError,
+  type SessionEntryLifecycleUpsert,
+} from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import type {
   SessionLifecycleTranscriptInfo,
@@ -119,6 +124,18 @@ export function loadReplySessionInitializationSnapshot(params: {
   };
 }
 
+function createStaleReplySessionInitializationResult(
+  currentEntry: SessionEntry | undefined,
+  storePath: string,
+): ReplySessionInitializationCommitResult {
+  return {
+    ok: false,
+    ...(currentEntry ? { currentEntry } : {}),
+    reason: "stale-snapshot",
+    revision: createReplySessionInitializationRevision({ entry: currentEntry, storePath }),
+  };
+}
+
 /**
  * Persists one reply-session initialization result and archives the previous
  * transcript after metadata commits. SQLite adapters map the guarded write to a
@@ -140,6 +157,8 @@ export async function commitReplySessionInitialization(params: {
     context: ReplySessionInitializationCommitContext,
   ) => Promise<SessionEntry> | SessionEntry;
   resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
+  /** Authoritative contextual route facts observed by the admitted inbound turn. */
+  routeContext?: ConversationRouteContext | null;
   previousEntry?: SessionEntry;
   retiredEntry?: SessionEntryRetirement;
   sessionEntry: SessionEntry;
@@ -165,12 +184,7 @@ export async function commitReplySessionInitialization(params: {
     storePath,
   });
   if (revision !== params.expectedRevision) {
-    return {
-      ok: false,
-      ...(currentEntry ? { currentEntry } : {}),
-      reason: "stale-snapshot",
-      revision,
-    };
+    return createStaleReplySessionInitializationResult(currentEntry, storePath);
   }
 
   const readEntry = (sessionKey: string) => {
@@ -190,17 +204,13 @@ export async function commitReplySessionInitialization(params: {
     sessionEntry: preparedSessionEntry,
     storePath,
   });
-  let staleCommit:
-    | {
-        currentEntry?: SessionEntry;
-        revision: string;
-      }
-    | undefined;
+  let staleCommit: SessionEntry | null | undefined;
   let committedSessionEntry = sessionEntry;
   let beforeEntryMutationDone = false;
   const upserts: SessionEntryLifecycleUpsert[] = [
     {
       sessionKey: resolved.normalizedKey,
+      ...(params.routeContext !== undefined ? { routeContext: params.routeContext } : {}),
       ...(params.resetBoundaryReason ? { resetBoundaryReason: params.resetBoundaryReason } : {}),
       buildEntry: async ({ store: currentStore }) => {
         const commitResolved = resolveSessionEntryFromStore({
@@ -213,10 +223,7 @@ export async function commitReplySessionInitialization(params: {
           storePath,
         });
         if (commitRevision !== params.expectedRevision) {
-          staleCommit = {
-            ...(commitEntry ? { currentEntry: { ...commitEntry } } : {}),
-            revision: commitRevision,
-          };
+          staleCommit = commitEntry ? { ...commitEntry } : null;
           return null;
         }
         // The identity-only guard allows commits when background activity
@@ -245,23 +252,36 @@ export async function commitReplySessionInitialization(params: {
     const retiredEntry = params.retiredEntry;
     upserts.push({
       sessionKey: retiredEntry.key,
-      buildEntry: () => (staleCommit ? null : retiredEntry.entry),
+      buildEntry: () => (staleCommit === undefined ? retiredEntry.entry : null),
     });
   }
-  await applySessionEntryLifecycleMutation({
-    activeSessionKey: params.activeSessionKey,
-    agentId: params.agentId,
-    maintenanceOverride: params.maintenanceConfig,
-    storePath,
-    upserts,
-  });
-  if (staleCommit) {
-    return {
-      ok: false,
-      ...(staleCommit.currentEntry ? { currentEntry: staleCommit.currentEntry } : {}),
-      reason: "stale-snapshot",
-      revision: staleCommit.revision,
-    };
+  try {
+    await applySessionEntryLifecycleMutation({
+      activeSessionKey: params.activeSessionKey,
+      agentId: params.agentId,
+      maintenanceOverride: params.maintenanceConfig,
+      storePath,
+      upserts,
+    });
+  } catch (error) {
+    if (
+      !(error instanceof SessionEntryLifecycleUpsertConflictError) ||
+      error.sessionKey !== resolved.normalizedKey
+    ) {
+      throw error;
+    }
+    return createStaleReplySessionInitializationResult(
+      loadSessionEntry({
+        agentId: params.agentId,
+        readConsistency: "latest",
+        sessionKey: error.sessionKey,
+        storePath,
+      }),
+      storePath,
+    );
+  }
+  if (staleCommit !== undefined) {
+    return createStaleReplySessionInitializationResult(staleCommit ?? undefined, storePath);
   }
   store[resolved.normalizedKey] = committedSessionEntry;
   if (params.retiredEntry) {

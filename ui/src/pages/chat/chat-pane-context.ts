@@ -23,7 +23,6 @@ import {
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
-import { reclaimChatPanePlacement } from "./chat-pane-placement.ts";
 import {
   applySelectedSessionProjection,
   resolveAssistantAttachmentAuthToken,
@@ -39,6 +38,7 @@ import {
 } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
+import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
 import {
   reconcileStaleChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
@@ -59,6 +59,32 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     super.disconnectedCallback();
   }
 
+  protected async moveHeaderPlacement(row: GatewaySessionRow): Promise<void> {
+    const scope = this.captureConnectionScope();
+    if (!scope) {
+      return;
+    }
+    const onMovingChange = (movingKey: string | null) => {
+      if (movingKey !== null || this.headerPlacementMovingKey === row.key) {
+        this.headerPlacementMovingKey = movingKey;
+      }
+    };
+    const params = {
+      client: scope.client,
+      connectionGeneration: scope.generation,
+      gatewaySnapshot: scope.context.gateway.snapshot,
+      movingKey: this.headerPlacementMovingKey,
+      row,
+      isCurrent: () => this.ownsHeaderOutcomeScope(scope),
+      onMovingChange,
+      publishError: (error: unknown) => this.publishHeaderError(error, scope.headerOutcomeOwner),
+      refreshReplacement: (agentId?: string | null) => scope.sessions.refreshReplacement(agentId),
+      requestUpdate: () => this.requestUpdate(),
+    };
+    const { moveChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
+    await moveChatPanePlacement(params);
+  }
+
   protected async reclaimHeaderPlacement(row: GatewaySessionRow): Promise<void> {
     const scope = this.captureConnectionScope();
     if (!scope) {
@@ -71,7 +97,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         this.headerPlacementReclaimingKey = reclaimingKey;
       }
     };
-    await reclaimChatPanePlacement({
+    const params = {
       client: scope.client,
       connectionGeneration: scope.generation,
       gatewaySnapshot: scope.context.gateway.snapshot,
@@ -79,10 +105,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       row,
       isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       onReclaimingChange,
-      publishError: (error) => this.publishHeaderError(error, scope.headerOutcomeOwner),
-      refreshReplacement: (agentId) => scope.sessions.refreshReplacement(agentId),
+      publishError: (error: unknown) => this.publishHeaderError(error, scope.headerOutcomeOwner),
+      refreshReplacement: (agentId?: string | null) => scope.sessions.refreshReplacement(agentId),
       requestUpdate: () => this.requestUpdate(),
-    });
+    };
+    const { reclaimChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
+    await reclaimChatPanePlacement(params);
   }
 
   protected applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {
@@ -101,8 +129,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         agentId,
       ),
     );
-    for (const { key } of stateValue.deletedSessions) {
-      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key });
+    for (const { key, agentId } of stateValue.deletedSessions) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
     }
     state.sessionsResult = stateValue.result;
     state.sessionsResultAgentId = stateValue.agentId;
@@ -177,7 +205,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       !rootsChanged &&
       state.terminalAvailable === previousTerminalAvailable &&
       state.embedSandboxMode === config.embedSandboxMode &&
-      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls
+      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls &&
+      state.automaticallyFetchFavicons === config.automaticallyFetchFavicons
     ) {
       return;
     }
@@ -187,6 +216,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.localMediaPreviewRoots = config.localMediaPreviewRoots;
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
+    state.automaticallyFetchFavicons = config.automaticallyFetchFavicons;
     state.requestUpdate?.();
   }
 
@@ -238,7 +268,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.swarmHydrator?.dispose();
       this.swarmHydrator = null;
       this.taskSuggestionsRequestVersion += 1;
-      this.taskSuggestions = [];
+      this.setTaskSuggestions([]);
       this.taskSuggestionBusyIds.clear();
       this.taskSuggestionOperations.clear();
       this.resetTaskSuggestionCloudProfiles();
@@ -270,6 +300,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.connected = snapshot.phase === "connected";
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
+    if (sourceChanged) {
+      retireSessionWorkspaceCheckout(state, this.presented);
+    }
     if (!sourceChanged && previousMediaAuthToken !== resolveAssistantAttachmentAuthToken(state)) {
       releaseChatMediaResourceSubscriber(state.requestUpdate);
     }
@@ -400,9 +433,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
           applyChatAgentsList(state, agentsList, startupClient);
         }
         state.requestUpdate?.();
-        if (state.sessionKey === startupSessionKey) {
-          this.sendPendingSkillWorkshopRevision(startupSessionKey);
-        }
       };
       this.connectedClient = startupClient;
       setQuestionPromptClient(this.questionPromptState, startupClient);
