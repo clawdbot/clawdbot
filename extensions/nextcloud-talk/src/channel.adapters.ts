@@ -11,6 +11,7 @@ import {
   inspectNextcloudTalkAccount,
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
+  resolveNextcloudTalkAccount,
   type ResolvedNextcloudTalkAccount,
 } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
@@ -22,7 +23,8 @@ export const nextcloudTalkConfigAdapter = createScopedChannelConfigAdapter<
 >({
   sectionKey: "nextcloud-talk",
   listAccountIds: listNextcloudTalkAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(inspectNextcloudTalkAccount),
+  resolveAccount: adaptScopedAccountAccessor(resolveNextcloudTalkAccount),
+  inspectAccount: adaptScopedAccountAccessor(inspectNextcloudTalkAccount),
   defaultAccountId: resolveDefaultNextcloudTalkAccountId,
   clearBaseFields: ["botSecret", "botSecretFile", "baseUrl", "name"],
   resolveAllowFrom: (account) => account.config.allowFrom,

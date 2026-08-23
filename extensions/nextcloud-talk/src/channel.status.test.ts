@@ -1,4 +1,7 @@
 // Nextcloud Talk tests cover channel.status plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { nextcloudTalkPlugin } from "./channel.js";
 import type { CoreConfig } from "./types.js";
@@ -34,23 +37,36 @@ describe("nextcloud-talk channel status", () => {
     ]);
   });
 
-  it("preserves API credential availability on the account status surface", () => {
+  it("keeps API credential inspection off runtime resolution", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nextcloud-talk-status-"));
+    const apiPasswordFile = path.join(directory, "api-password");
     const cfg = {
       channels: {
         "nextcloud-talk": {
           baseUrl: "https://cloud.example.com",
           botSecret: "bot-secret",
           apiUser: "bot",
-          apiPassword: "api-password",
+          apiPasswordFile,
         },
       },
     } satisfies CoreConfig;
 
-    const account = nextcloudTalkPlugin.config.resolveAccount(cfg, "default");
+    try {
+      const account = nextcloudTalkPlugin.config.resolveAccount(cfg, "default");
+      expect(account.apiCredentialStatus).toBeUndefined();
+      expect(account.credentialDiagnostics).toBeUndefined();
 
-    expect(nextcloudTalkPlugin.config.describeAccount?.(account, cfg)).toMatchObject({
-      configured: true,
-      apiCredentialStatus: "available",
-    });
+      fs.writeFileSync(apiPasswordFile, "api-password\n", "utf8");
+      const inspected = (await nextcloudTalkPlugin.config.inspectAccount?.(
+        cfg,
+        "default",
+      )) as typeof account;
+      expect(nextcloudTalkPlugin.config.describeAccount?.(inspected, cfg)).toMatchObject({
+        configured: true,
+        apiCredentialStatus: "available",
+      });
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
