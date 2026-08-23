@@ -2,7 +2,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -30,15 +29,10 @@ import {
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
-const TEST_PHYSICAL_MEMORY_BYTES = 16 * 1024 * 1024 * 1024;
-// Memory detection is a process-global input. Freeze it for this suite so fake cgroup
-// fixtures prove only their declared hierarchy instead of inheriting the runner's RAM.
-vi.spyOn(os, "totalmem").mockReturnValue(TEST_PHYSICAL_MEMORY_BYTES);
+const TEST_HOST_MEMORY_BYTES = 16 * 1024 * 1024 * 1024;
 const NO_MEMORY_LIMIT = {
   cgroupMemoryLimitPaths: [],
-  constrainedMemoryBytes: 0,
-  physicalMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
-  procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+  procMemTotalBytes: TEST_HOST_MEMORY_BYTES,
 };
 
 async function expectPathMissing(targetPath: string) {
@@ -605,38 +599,31 @@ describe("resolveTsdownBuildInvocation", () => {
     },
   );
 
-  it("uses Node's constrained-memory result as a canonical cgroup candidate", () => {
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      constrainedMemoryBytes: 5 * 1024 * 1024 * 1024,
-      cgroupMemoryLimitPaths: [],
-    });
+  it("does not let Node's advisory cgroup-v1 result override the hard-limit policy", () => {
+    const constrainedMemory = vi
+      .spyOn(process, "constrainedMemory")
+      .mockReturnValue(5 * 1024 * 1024 * 1024);
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    try {
+      const result = resolveTsdownBuildInvocation({
+        nodeExecPath: "/usr/bin/node",
+        npmExecPath: "/tmp/pnpm.cjs",
+        env: {},
+        cgroupMemoryLimitPaths: [],
+        procMemTotalBytes: TEST_HOST_MEMORY_BYTES,
+      });
+
+      expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=12288");
+    } finally {
+      constrainedMemory.mockRestore();
+    }
   });
 
-  it("uses physical memory when cgroups and procfs are unavailable", () => {
-    const result = resolveTsdownBuildPlan({
-      platform: "darwin",
-      env: {},
-      constrainedMemoryBytes: 0,
-      cgroupMemoryLimitPaths: [],
-      procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
-      physicalMemoryBytes: 4 * 1024 * 1024 * 1024,
-    });
-
-    expect(result.maxOldSpaceMb).toBe(3328);
-    expect(result.heapShortfall?.fatal).toBe(true);
-  });
-
-  it("caps an oversized cgroup limit by physical memory", () => {
+  it("caps an oversized cgroup limit by host memory", () => {
     const result = resolveTsdownBuildPlan({
       env: {},
       cgroupMemoryLimitBytes: 64 * 1024 * 1024 * 1024,
-      procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
-      physicalMemoryBytes: 4 * 1024 * 1024 * 1024,
+      procMemTotalBytes: 4 * 1024 * 1024 * 1024,
     });
 
     expect(result.maxOldSpaceMb).toBe(3328);

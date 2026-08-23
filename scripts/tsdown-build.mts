@@ -10,7 +10,6 @@ import {
   type SpawnSyncReturns,
 } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
@@ -84,10 +83,8 @@ type OutputRootParams = {
 export type MemoryLimitParams = {
   cgroupMemoryLimitBytes?: number;
   cgroupMemoryLimitPaths?: string[];
-  constrainedMemoryBytes?: number;
   env?: NodeJS.ProcessEnv;
   fs?: { readFileSync(filePath: string, encoding: "utf8"): string };
-  physicalMemoryBytes?: number;
   platform?: string;
   procMeminfoPath?: string;
   procMemTotalBytes?: number;
@@ -678,15 +675,8 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
 
   const fsImpl = params.fs ?? fs;
   const paths = params.cgroupMemoryLimitPaths ?? resolveCgroupMemoryLimitPaths(params);
-  // Supported Node versions expose libuv's canonical cgroup v1/v2 result. Keep it as an
-  // authoritative candidate while the custom walk adds nonstandard mounts and ancestor caps.
-  const constrainedMemoryBytes =
-    params.constrainedMemoryBytes ?? (params.fs === undefined ? process.constrainedMemory() : 0);
   // An ancestor may bound the leaf, so the tightest limit in the chain wins.
-  let tightestLimitBytes =
-    Number.isFinite(constrainedMemoryBytes) && constrainedMemoryBytes > 0
-      ? Math.trunc(constrainedMemoryBytes)
-      : null;
+  let tightestLimitBytes: number | null = null;
   for (const limitPath of paths) {
     try {
       const limitBytes = parseCgroupMemoryLimitBytes(fsImpl.readFileSync(limitPath, "utf8"));
@@ -730,11 +720,6 @@ function readProcMemTotalBytes(params: MemoryLimitParams = {}) {
   }
 }
 
-function readPhysicalMemoryTotalBytes(params: MemoryLimitParams = {}) {
-  const totalBytes = params.physicalMemoryBytes ?? os.totalmem();
-  return Number.isFinite(totalBytes) && totalBytes > 0 ? Math.trunc(totalBytes) : null;
-}
-
 function resolveTsdownMaxOldSpaceMb(params: MemoryLimitParams = {}) {
   if (params.resolvedMaxOldSpaceMb !== undefined) {
     return params.resolvedMaxOldSpaceMb;
@@ -752,7 +737,7 @@ function resolveTsdownMaxOldSpaceMb(params: MemoryLimitParams = {}) {
   }
 
   const cgroupLimitBytes = readCgroupMemoryLimitBytes(params);
-  const physicalLimitBytes = readProcMemTotalBytes(params) ?? readPhysicalMemoryTotalBytes(params);
+  const physicalLimitBytes = readProcMemTotalBytes(params);
   const limitBytes =
     cgroupLimitBytes === null || physicalLimitBytes === null
       ? (cgroupLimitBytes ?? physicalLimitBytes)

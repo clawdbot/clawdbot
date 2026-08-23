@@ -85,7 +85,6 @@ const TSDOWN_SOURCE_EXTENSIONS = [
   ".yml",
 ];
 const TSDOWN_AI_OUTPUT_ROOT = tsdownPackageOutputRoot("ai");
-const FULL_PROFILE_TSDOWN_LABELS = new Set(["tsdown-ai", "tsdown-packages", "tsdown-unified"]);
 const TSDOWN_MAIN_PACKAGE_OUTPUT_ROOTS = TSDOWN_PACKAGE_OUTPUT_ROOTS.filter(
   (root) => root !== TSDOWN_AI_OUTPUT_ROOT,
 );
@@ -542,11 +541,11 @@ export function resolveBuildAllEnvironment(
 }
 
 export function resolveBuildAllTsdownPlan(
-  requiresAdmission: boolean,
+  profile: string,
   env: NodeJS.ProcessEnv,
   params: Omit<MemoryLimitParams, "env"> = {},
 ) {
-  if (!requiresAdmission) {
+  if (profile !== "full") {
     return { env, heapShortfall: null };
   }
   const plan = resolveTsdownBuildPlan({ ...params, env });
@@ -837,10 +836,6 @@ export function resolveBuildAllStepCacheState(
 
 type BuildAllCacheState = ReturnType<typeof resolveBuildAllStepCacheState>;
 
-export function requiresFullBuildTsdownAdmission(cacheStates: Array<{ label: string }>) {
-  return cacheStates.some((cacheState) => cacheState.label === "tsdown-unified");
-}
-
 export function writeBuildAllStepCacheStamp(
   step: BuildCacheStep,
   cacheState: BuildAllCacheState,
@@ -999,57 +994,30 @@ if (isMainModule()) {
   if (args?.help) {
     console.log(buildAllUsage());
   } else {
-    let buildEnv = resolveBuildAllEnvironment();
-    const steps = resolveBuildAllSteps(args.profile);
+    const buildPlan = resolveBuildAllTsdownPlan(args.profile, resolveBuildAllEnvironment());
+    const heapShortfall = buildPlan.heapShortfall;
+    if (heapShortfall) {
+      if (heapShortfall.fatal) {
+        console.error(heapShortfall.message);
+        process.exit(1);
+      }
+      console.warn(heapShortfall.message);
+    }
+    const buildEnv = buildPlan.env;
+    const steps = resolveBuildAllSteps(args.profile, buildEnv);
     const cacheEnabled = process.env.OPENCLAW_BUILD_CACHE !== "0";
-    const fullTsdownSteps = steps.filter((step) => FULL_PROFILE_TSDOWN_LABELS.has(step.label));
-    let plannedTsdownCaches:
-      | Map<string, { cacheState: BuildAllCacheState; durationMs: number }>
-      | undefined;
     const timings: BuildAllTiming[] = [];
     let exitCode = 0;
     for (const step of steps) {
-      if (
-        args.profile === "full" &&
-        FULL_PROFILE_TSDOWN_LABELS.has(step.label) &&
-        !plannedTsdownCaches
-      ) {
-        // Cache hits convert declaration steps into runtime-only runs. Reuse these snapshots
-        // below so admission and execution cannot disagree about whether declarations run.
-        plannedTsdownCaches = new Map(
-          fullTsdownSteps.map((tsdownStep) => {
-            const startedAt = performance.now();
-            const cacheState = resolveBuildAllStepCacheState(tsdownStep, { env: buildEnv });
-            return [tsdownStep.label, { cacheState, durationMs: performance.now() - startedAt }];
-          }),
-        );
-        const buildPlan = resolveBuildAllTsdownPlan(
-          requiresFullBuildTsdownAdmission([...plannedTsdownCaches].map(([label]) => ({ label }))),
-          buildEnv,
-        );
-        const heapShortfall = buildPlan.heapShortfall;
-        if (heapShortfall) {
-          if (heapShortfall.fatal) {
-            console.error(heapShortfall.message);
-            process.exit(1);
-          }
-          console.warn(heapShortfall.message);
-        }
-        buildEnv = buildPlan.env;
-      }
-      const plannedCache = plannedTsdownCaches?.get(step.label);
-      const cacheStartedAt = performance.now();
-      const cacheState =
-        plannedCache?.cacheState ?? resolveBuildAllStepCacheState(step, { env: buildEnv });
-      const cacheDurationMs = plannedCache?.durationMs ?? performance.now() - cacheStartedAt;
       const startedAt = performance.now();
+      const cacheState = resolveBuildAllStepCacheState(step, { env: buildEnv });
       let stepToRun = step;
       let reusedCache = false;
       if (cacheEnabled && cacheState.fresh) {
         restoreBuildAllStepCacheOutputs(cacheState);
         const cacheHitStep = resolveBuildAllStepOnCacheHit(step);
         if (!cacheHitStep) {
-          const durationMs = cacheDurationMs + performance.now() - startedAt;
+          const durationMs = performance.now() - startedAt;
           timings.push({ label: step.label, status: "cached", durationMs });
           console.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
           continue;
@@ -1060,7 +1028,7 @@ if (isMainModule()) {
       console.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
       const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
       const result = spawnSync(invocation.command, invocation.args, invocation.options);
-      const durationMs = cacheDurationMs + performance.now() - startedAt;
+      const durationMs = performance.now() - startedAt;
       if (typeof result.status === "number") {
         if (result.status !== 0) {
           timings.push({ label: step.label, status: "failed", durationMs });
