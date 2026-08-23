@@ -1939,11 +1939,14 @@ class TalkModeManager internal constructor(
     val completion = pendingRealtimeOutputClear
     invalidateRealtimePlaybackEpoch()
     if (!realtimePlaybackCommands.trySend(RealtimePlaybackCommand.Clear(turnId, completion)).isSuccess) {
-      // The generation is already dead, so nothing new can play; only the device residue
-      // survives. Release the waiter rather than letting cancelOutput hang on it, and release it
-      // with the identity the clear carried so the caller's turn check still decides.
+      // The generation is already dead, so nothing new can play, but the device residue survives
+      // because the owner never got the command. Release the waiter so cancelOutput does not hang
+      // on it -- with a null identity, never the caller's turn. Answering with the matching turn
+      // would tell cancelOutput the boundary was physically reached, lifting the capture fence
+      // over a sink that was never retired. Null fails the turn check closed, and the caller
+      // closes the relay, which is the honest outcome for a clear that never reached the device.
       Log.w(tag, "realtime playback clear could not be queued")
-      completion?.complete(turnId)
+      completion?.complete(null)
     }
     if (_isEnabled.value) {
       setStatus(nativeText("Listening"))
@@ -2147,8 +2150,11 @@ class TalkModeManager internal constructor(
     setRealtimePlaying(false)
     _outputLevel.value = null
     // A Clear still queued when the owner died would otherwise leave cancelOutput waiting out its
-    // whole timeout for a boundary no one is left to reach.
-    pendingRealtimeOutputClear?.complete(Unit)
+    // whole timeout for a boundary no one is left to reach. Released with a null identity, not the
+    // caller's turn: the owner is gone, so no turn was physically retired and nothing here may
+    // claim one. cancelOutput's turn check then fails closed and the caller closes the relay,
+    // which is the correct outcome -- the boundary really was never reached.
+    pendingRealtimeOutputClear?.complete(null)
   }
 
   /** Owner-only cleanup shared by Clear, Stop, and the command loop's failure path. */

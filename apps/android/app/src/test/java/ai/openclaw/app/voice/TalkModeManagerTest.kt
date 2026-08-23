@@ -1642,6 +1642,39 @@ class TalkModeManagerTest {
 
   @Test
   @Config(shadows = [ShadowObservableAudioEffect::class])
+  fun aPendingOutputCancellationSuppressesCaptureEvenWhenFullDuplexIsLive() {
+    // The merged rule. Upstream fences capture while a cancelOutput is in flight; this branch
+    // opens capture during playback whenever the platform is cancelling the echo. Those are
+    // different questions -- which turn owns the uplink, versus whose voice the microphone hears
+    // -- and resolving the rebase by keeping only one of them would be silently wrong in both
+    // directions. The pending fence must win even in the case the full-duplex rule most wants
+    // open: AEC enabled, mode and focus owned, assistant actively speaking.
+    val manager = createManager()
+    val session = openCommunicationCaptureForTest()
+    try {
+      val token = enterCommunicationModeForTest(manager, audioManagerForTest())
+      assertTrue("the mode must actually be owned for this test to mean anything", token != RealtimeCommunicationAudioOwner.NO_OWNER)
+      setRealtimeAecEnabled(manager, true)
+      assertTrue("full duplex must be live for this test to mean anything", realtimeEchoCancellationGranted(manager, session))
+      setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() + 1_000)
+
+      // Full duplex is live and the assistant is speaking: the frame is forwarded.
+      assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+
+      // A cancellation boundary opens. The same frame must now be held back.
+      setPrivateField(manager, "pendingRealtimeOutputClear", CompletableDeferred<String?>())
+      assertFalse(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+
+      // And released again once the boundary closes, without needing playback to end.
+      setPrivateField(manager, "pendingRealtimeOutputClear", null)
+      assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  @Config(shadows = [ShadowObservableAudioEffect::class])
   fun losingAudioFocusDuringPlaybackSuppressesTheNextCapturedFrame() {
     // The end-to-end policy boundary, not owner internals: AEC enabled, mode active, focus held,
     // playback running -> the frame is forwarded. Deliver a real focus-loss callback while the
@@ -2224,9 +2257,12 @@ class TalkModeManagerTest {
     method.invoke(manager, false, true, true, false)
   }
 
-  private fun audioEventPayload(byteCount: Int): String {
+  private fun audioEventPayload(
+    byteCount: Int,
+    turnId: String = "turn-1",
+  ): String {
     val audioBase64 = android.util.Base64.encodeToString(ByteArray(byteCount) { 0x20 }, android.util.Base64.NO_WRAP)
-    return """{"relaySessionId":"relay-1","type":"audio","audioBase64":"$audioBase64"}"""
+    return """{"relaySessionId":"relay-1","type":"audio","talkEvent":{"turnId":"$turnId"},"audioBase64":"$audioBase64"}"""
   }
 
   /** A manager whose output device reports the capture gate the moment it is first written to. */

@@ -5,6 +5,7 @@ import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.testDeviceIdentityStore
 import android.util.Base64
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -20,6 +21,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -94,6 +96,70 @@ class RealtimePlayoutOwnerTest {
 
       assertArrayEquals(audio, sinks.last.acceptedBytes())
       assertEquals(listOf(480, 380, 280, 180, 80), sinks.last.offeredLengths)
+      talk.shutdown()
+    }
+
+  @Test
+  fun aMatchingTurnClearRetiresTheSinkThroughTheOwnerAndCompletesTheWaiterWithThatTurn() =
+    runTest {
+      // The integration point with upstream's turn-bound cancellation. The waiter must be
+      // completed by the OWNER, after the device is actually retired -- not by the receiving
+      // thread the moment the clear arrives -- and it must be completed with the identity the
+      // clear carried, because cancelOutput checks it against the turn it asked to cancel.
+      val sinks = FakeRealtimeAudioSinkFactory()
+      val talk = realtimePlayoutHarness(sinks)
+      val waiter = CompletableDeferred<String?>()
+      talk.setPendingOutputClear(waiter)
+
+      talk.audioEvent(pcm(480))
+      runCurrent()
+      talk.markEvent("audio-1")
+      runCurrent()
+      assertTrue(talk.sinkInstalled())
+      assertFalse("the waiter must not complete before the owner retires the device", waiter.isCompleted)
+
+      talk.clearEvent()
+      runCurrent()
+
+      assertEquals(defaultTurnId, waiter.getCompleted())
+      assertFalse(talk.sinkInstalled())
+      assertEquals(1, sinks.last.closeCalls)
+      assertEquals(0L, talk.writtenFrames())
+      assertEquals(listOf("relay-1" to "audio-1"), talk.acknowledgements)
+      assertNull("an accepted clear releases the output turn", talk.outputTurnId())
+      talk.shutdown()
+    }
+
+  @Test
+  fun aClearNamingAnOlderTurnLeavesTheCurrentResponsePlaying() =
+    runTest {
+      // A stale clear belongs to a response that is already gone. It must not silence the new one,
+      // must not advance the playback generation, and must not complete a waiter that is waiting
+      // for a different turn.
+      val sinks = FakeRealtimeAudioSinkFactory()
+      val talk = realtimePlayoutHarness(sinks)
+      val waiter = CompletableDeferred<String?>()
+      talk.setPendingOutputClear(waiter)
+
+      talk.audioEvent(pcm(480), turnId = "turn-2")
+      runCurrent()
+      val epochBefore = talk.playbackEpoch()
+      assertTrue(talk.sinkInstalled())
+
+      talk.clearEvent(turnId = "turn-1")
+      runCurrent()
+
+      assertFalse("a stale clear must not complete the waiter", waiter.isCompleted)
+      assertEquals("a stale clear must not advance the generation", epochBefore, talk.playbackEpoch())
+      assertTrue("a stale clear must not retire the live device", talk.sinkInstalled())
+      assertEquals(0, sinks.last.closeCalls)
+      assertEquals("turn-2", talk.outputTurnId())
+
+      // The matching clear still works afterwards.
+      talk.clearEvent(turnId = "turn-2")
+      runCurrent()
+      assertEquals("turn-2", waiter.getCompleted())
+      assertFalse(talk.sinkInstalled())
       talk.shutdown()
     }
 
@@ -633,6 +699,9 @@ private fun awaitCondition(
 
 internal const val FAKE_BUFFER_DURATION_MS = 240L
 
+/** The provider output turn these harness events belong to; upstream requires one on audio. */
+private const val defaultTurnId = "turn-1"
+
 // Mirrors of the production bounds. Pinned rather than derived: these numbers are the contract
 // the two overflow tests exist to protect, so a change to either must fail here first.
 private const val REALTIME_PLAYBACK_PROVIDER_QUEUE_CAPACITY = 4_096
@@ -699,11 +768,14 @@ private class RealtimePlayoutHarness(
     setPrivateField(manager, "realtimeSessionId", "relay-1")
   }
 
-  fun audioEvent(bytes: ByteArray) {
+  fun audioEvent(
+    bytes: ByteArray,
+    turnId: String = defaultTurnId,
+  ) {
     val audioBase64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
     manager.handleGatewayEvent(
       "talk.event",
-      """{"relaySessionId":"relay-1","type":"audio","audioBase64":"$audioBase64"}""",
+      """{"relaySessionId":"relay-1","type":"audio","talkEvent":{"turnId":"$turnId"},"audioBase64":"$audioBase64"}""",
     )
   }
 
@@ -711,8 +783,9 @@ private class RealtimePlayoutHarness(
     manager.handleGatewayEvent("talk.event", """{"relaySessionId":"relay-1","type":"mark","markName":"$markName"}""")
   }
 
-  fun clearEvent() {
-    manager.handleGatewayEvent("talk.event", """{"relaySessionId":"relay-1","type":"clear"}""")
+  fun clearEvent(turnId: String? = defaultTurnId) {
+    val talkEvent = if (turnId == null) "" else ""","talkEvent":{"turnId":"$turnId"}"""
+    manager.handleGatewayEvent("talk.event", """{"relaySessionId":"relay-1","type":"clear"$talkEvent}""")
   }
 
   fun assistantFinalTranscriptEvent() {
@@ -747,6 +820,12 @@ private class RealtimePlayoutHarness(
   fun writtenFrames(): Long = readPrivateField(manager, "realtimeWrittenFrames") as Long
 
   fun sinkInstalled(): Boolean = readPrivateField(manager, "realtimeAudioSink") != null
+
+  fun outputTurnId(): String? = readPrivateField(manager, "realtimeOutputTurnId") as String?
+
+  fun playbackEpoch(): Long = (readPrivateField(manager, "realtimePlaybackEpoch") as AtomicLong).get()
+
+  fun setPendingOutputClear(waiter: CompletableDeferred<String?>) = setPrivateField(manager, "pendingRealtimeOutputClear", waiter)
 
   fun queuedProviderCommands(): Int = (readPrivateField(manager, "queuedRealtimeProviderCommands") as AtomicInteger).get()
 
