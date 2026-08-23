@@ -20,6 +20,7 @@ import {
   validateReleaseExecutionPlanArtifact,
   validateReleaseChildRunProvenance,
   validateReleaseStateArtifact,
+  verifyReleaseContinuationSource,
 } from "./full-release-validation-policy.mjs";
 import { execGhRead, plainGhEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 
@@ -1039,6 +1040,21 @@ export function selectManifestParentJob(parentJobs, child, parentManifest, origi
   return currentJob;
 }
 
+function selectContinuationSourceParentJob(parentJobs, child, sourceParentAttempt) {
+  const matches = parentJobs.filter(
+    (job) =>
+      job.name === child.parentJobName && Number(job.run_attempt) === Number(sourceParentAttempt),
+  );
+  if (
+    matches.length !== 1 ||
+    matches[0].status !== "completed" ||
+    !["failure", "success"].includes(String(matches[0].conclusion))
+  ) {
+    throw new Error(`continuation source parent job is missing or ambiguous: ${child.name}`);
+  }
+  return matches[0];
+}
+
 export function validateManifestChildRun(
   run,
   child,
@@ -1048,12 +1064,16 @@ export function validateManifestChildRun(
   selectedParentJobLog,
   repository,
   plannedRunAttempt,
+  candidate,
+  sourceParentAttempt,
 ) {
   const targetRepository = repository ?? DEFAULT_REPO;
   if (String(run.id) !== String(runId)) {
     throw new Error(`manifest child run ID mismatch: ${child.name}`);
   }
-  const originAttempt = resolveManifestChildOriginAttempt(run, child, parentManifest, parentJobs);
+  const originAttempt =
+    sourceParentAttempt ??
+    resolveManifestChildOriginAttempt(run, child, parentManifest, parentJobs);
   if (plannedRunAttempt !== undefined) {
     validateReleaseChildRunProvenance(run, {
       displayTitle: child.displayTitle,
@@ -1084,8 +1104,13 @@ export function validateManifestChildRun(
   if (childWorkflowPath !== `.github/workflows/${child.workflow}`) {
     throw new Error(`manifest child workflow mismatch: ${child.name}`);
   }
-  selectManifestParentJob(parentJobs, child, parentManifest, originAttempt);
+  if (sourceParentAttempt === undefined) {
+    selectManifestParentJob(parentJobs, child, parentManifest, originAttempt);
+  } else {
+    selectContinuationSourceParentJob(parentJobs, child, sourceParentAttempt);
+  }
   validateReleaseChildDispatchBinding({
+    candidate,
     child: {
       key: child.manifestKey,
       runId,
@@ -1641,6 +1666,7 @@ export function resolveVerifierIdentity(
 }
 
 function validateStrictChildRun({
+  candidate,
   child,
   childEvidence,
   client,
@@ -1667,21 +1693,17 @@ function validateStrictChildRun({
       throw new Error(`execution plan child dispatch tuple mismatch: ${child.name}`);
     }
   }
-  const originAttempt = resolveManifestChildOriginAttempt(
-    run,
-    child,
-    parentEvidence.manifest,
-    parentJobs,
-  );
+  const sourceParentAttempt = candidate ? plannedChild?.sourceParentAttempt : undefined;
+  const originAttempt =
+    sourceParentAttempt ??
+    resolveManifestChildOriginAttempt(run, child, parentEvidence.manifest, parentJobs);
   if (originAttempt === undefined) {
     throw new Error(`manifest child dispatch tuple mismatch: ${child.name}`);
   }
-  const parentJob = selectManifestParentJob(
-    parentJobs,
-    child,
-    parentEvidence.manifest,
-    originAttempt,
-  );
+  const parentJob =
+    sourceParentAttempt === undefined
+      ? selectManifestParentJob(parentJobs, child, parentEvidence.manifest, originAttempt)
+      : selectContinuationSourceParentJob(parentJobs, child, sourceParentAttempt);
   validateManifestChildRun(
     run,
     child,
@@ -1691,6 +1713,8 @@ function validateStrictChildRun({
     client.getJobLog(parentJob.id),
     repository,
     plannedChild?.runAttempt,
+    candidate,
+    sourceParentAttempt,
   );
   let jobs;
   let composite;
@@ -1935,9 +1959,7 @@ export function validateReleaseRunEvidence(
   if (executionPlan?.attemptEvidenceVersion === 1) {
     if (
       rootEvidence.manifestJson.executionPlanSha256 !== executionPlan.sha256 ||
-      Number(rootEvidence.manifestJson.sourceParentRunAttempt) !== executionPlan.parentRunAttempt ||
-      JSON.stringify(canonicalJson(rootEvidence.manifest.continuationSource)) !==
-        JSON.stringify(canonicalJson(executionPlan.continuation))
+      Number(rootEvidence.manifestJson.sourceParentRunAttempt) !== executionPlan.parentRunAttempt
     ) {
       throw new Error("release validation manifest differs from its immutable execution plan");
     }
@@ -1976,36 +1998,59 @@ export function validateReleaseRunEvidence(
     throw new Error("release validation manifest composite child set is invalid");
   }
   let dispatchEvidence = rootEvidence;
+  let continuationCandidate;
+  let parentJobs;
   if (executionPlan?.continuation) {
     const source = executionPlan.continuation;
     const sourceRun = evidenceClient.getRun(source.sourceRunId);
-    if (
-      String(sourceRun.id) !== source.sourceRunId ||
-      Number(sourceRun.run_attempt) !== source.sourceRunAttempt ||
-      sourceRun.display_title !== source.sourceDisplayTitle ||
-      sourceRun.event !== source.sourceEvent ||
-      workflowPath(sourceRun) !== source.sourceWorkflowPath ||
-      sourceRun.head_branch !== source.sourceWorkflowRef ||
-      sourceRun.head_sha !== source.sourceWorkflowSha ||
-      sourceRun.repository?.full_name !== normalizedRepository ||
-      source.sourceRepository !== normalizedRepository
-    ) {
-      throw new Error("continuation source parent identity changed");
+    const sourceManifestEvidence = evidenceClient.loadManifest(
+      source.sourceRunId,
+      source.sourceRunAttempt,
+    );
+    if (!sourceManifestEvidence) {
+      throw new Error("continuation source manifest is missing");
     }
+    const sourceManifest = validateParentManifest(sourceManifestEvidence.manifest, {
+      runAttempt: source.sourceRunAttempt,
+      runId: source.sourceRunId,
+      workflowRef: source.sourceWorkflowRef,
+      workflowSha: source.sourceWorkflowSha,
+    });
+    validateManifestArtifactBinding(
+      sourceManifestEvidence.artifact,
+      sourceManifest,
+      sourceRun,
+      source.sourceRunId,
+    );
+    parentJobs = evidenceClient.getParentJobs(source.sourceRunId);
+    const sourceChildLogs = Object.fromEntries(
+      expectedChildren.map((child) => {
+        const sourceParentAttempt = child.plannedChild.sourceParentAttempt;
+        const parentJob = selectContinuationSourceParentJob(parentJobs, child, sourceParentAttempt);
+        return [child.manifestKey, evidenceClient.getJobLog(parentJob.id)];
+      }),
+    );
+    verifyReleaseContinuationSource({
+      children: executionPlan.children.filter((child) => child.selected),
+      continuation: source,
+      recordedContinuation: rootEvidence.manifest.continuationSource,
+      repository: normalizedRepository,
+      sourceChildLogs,
+      sourceManifest,
+      sourceRun,
+      targetSha: executionPlan.targetSha,
+    });
+    continuationCandidate = source.candidate;
     dispatchEvidence = {
-      manifest: {
-        ...rootEvidence.manifest,
-        runAttempt: source.sourceRunAttempt,
-        runId: source.sourceRunId,
-        targetSha: executionPlan.targetSha,
-        workflowRef: source.sourceWorkflowRef,
-        workflowSha: source.sourceWorkflowSha,
-      },
+      artifact: sourceManifestEvidence.artifact,
+      manifest: sourceManifest,
+      manifestJson: canonicalJson(sourceManifestEvidence.manifest),
       parentRun: sourceRun,
       parentView: sourceRun,
     };
+  } else {
+    parentJobs = evidenceClient.getParentJobs(dispatchEvidence.manifest.runId);
   }
-  const parentJobs = evidenceClient.getParentJobs(dispatchEvidence.manifest.runId);
   const childEntries = executionPlan
     ? expectedChildren.map((child) => {
         const manifestRunId = rootEvidence.manifest.childRunIds[child.manifestKey];
@@ -2020,6 +2065,7 @@ export function validateReleaseRunEvidence(
       child,
       childEvidence: rootEvidence.manifest.childEvidence?.[child.manifestKey],
       client: evidenceClient,
+      candidate: continuationCandidate,
       parentEvidence: dispatchEvidence,
       parentJobs,
       plannedChild: child.plannedChild,

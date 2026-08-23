@@ -14,6 +14,7 @@ import {
   buildReleaseExecutionPlanArtifact,
   releaseChildSpec,
   releaseCompositeJobsSha256,
+  verifyReleaseContinuationSource,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { resolveReleaseToolingIdentity } from "../../scripts/release-tooling-identity.mjs";
 import { validateFullReleaseValidationEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
@@ -126,8 +127,9 @@ function job(name: string, conclusion = "success") {
 }
 
 function child(key: string, runId: string) {
+  const spec = releaseChildSpec(key);
   return {
-    displayTitle: key,
+    displayTitle: `${spec.displayName} full-release-validation-77-1${spec.suffix}`,
     key,
     required: true,
     runAttempt: 1,
@@ -135,7 +137,7 @@ function child(key: string, runId: string) {
     selected: true,
     sourceParentAttempt: 1,
     url: `https://example.invalid/runs/${runId}`,
-    workflow: `${key}.yml`,
+    workflow: spec.workflow,
     workflowRef: "release-ci/tooling",
     workflowSha: SHA,
   };
@@ -169,6 +171,51 @@ function plan(children: ReturnType<typeof child>[]) {
     targetSha: TARGET_SHA,
     workflowRef: "release-ci/tooling",
     workflowSha: SHA,
+  };
+}
+
+function continuationPlan(children: ReturnType<typeof child>[], source = continuation()) {
+  return {
+    children: Object.fromEntries(children.map((entry) => [entry.key, entry])),
+    continuation: source,
+    legacy: true,
+    releaseProfile: source.releaseProfile,
+    rerunGroup: "all",
+    targetSha: TARGET_SHA,
+  };
+}
+
+function sourceManifest(children: ReturnType<typeof child>[], source = continuation()) {
+  const childRuns = {
+    normalCi: "",
+    npmTelegram: "",
+    pluginPrerelease: "",
+    productPerformance: { blocking: true, conclusion: "failure", runId: "" },
+    releaseChecks: "",
+  };
+  for (const entry of children) {
+    if (entry.key === "productPerformance") {
+      childRuns.productPerformance.runId = entry.runId;
+    } else {
+      childRuns[entry.key as keyof Omit<typeof childRuns, "productPerformance">] = entry.runId;
+    }
+  }
+  return {
+    childRuns,
+    controls: {
+      performanceBlocking: true,
+      performanceReportPublication: "artifact-only",
+      stableSoakRequired: false,
+    },
+    releaseProfile: source.releaseProfile,
+    rerunGroup: "all",
+    runAttempt: source.sourceRunAttempt,
+    runId: source.sourceRunId,
+    runReleaseSoak: source.runReleaseSoak,
+    targetSha: TARGET_SHA,
+    validationInputs: source.validationInputs,
+    workflowRef: source.sourceWorkflowRef,
+    workflowSha: source.sourceWorkflowSha,
   };
 }
 
@@ -210,6 +257,7 @@ function preflightMethods(
       ].join("\n");
     },
     getParentJobs: async () => jobs,
+    loadSourceManifest: async () => sourceManifest(children),
     getRunAttempt: async (runId: string) => {
       if (runId === "77") {
         return {
@@ -221,6 +269,8 @@ function preflightMethods(
           path: ".github/workflows/full-release-validation.yml",
           repository: { full_name: "openclaw/openclaw" },
           run_attempt: 1,
+          status: "completed",
+          conclusion: "failure",
         };
       }
       return childRun(byRunId.get(runId)!);
@@ -377,7 +427,13 @@ describe("frv continuation controller", () => {
   });
 
   it("dispatches a zero-child legacy parent and requires its final immutable plan", async () => {
-    const selected = child("normalCi", "101");
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const byRunId = new Map(children.map((entry) => [entry.runId, entry]));
     const legacyContinuation = {
       candidate: candidate(),
       publicationEnabled: false,
@@ -397,14 +453,12 @@ describe("frv continuation controller", () => {
     };
     const finalPlan = buildReleaseExecutionPlanArtifact({
       attemptEvidenceVersion: 1,
-      children: [
-        {
-          ...selected,
-          dispatchName: "Dispatch CI",
-          result: "success",
-          source: "continuation",
-        },
-      ],
+      children: children.map((entry) => ({
+        ...entry,
+        dispatchName: releaseChildSpec(entry.key).dispatchName,
+        result: "success",
+        source: "continuation",
+      })),
       continuation: legacyContinuation,
       evidenceReuse: { requested: false },
       expected: {
@@ -424,7 +478,7 @@ describe("frv continuation controller", () => {
     let parentReruns = 0;
     let finalPlanPayload: Record<string, unknown> | undefined = finalPlan;
     const client = {
-      ...preflightMethods([selected], (entry) => runFor(entry, 1, "success"), candidate()),
+      ...preflightMethods(children, (entry) => runFor(entry, 1, "success"), candidate()),
       deleteWorkflowRef: async (branch: string) => {
         deletedBranch = branch;
       },
@@ -436,7 +490,7 @@ describe("frv continuation controller", () => {
       getRun: async (runId: string) =>
         runId === "88"
           ? { conclusion: "success", id: 88, run_attempt: 1, status: "completed" }
-          : runFor(selected, 1, "success"),
+          : runFor(byRunId.get(runId)!, 1, "success"),
       rerunFailed: async () => {},
       rerunParent: async () => {
         parentReruns += 1;
@@ -445,37 +499,17 @@ describe("frv continuation controller", () => {
       verify: async () => "{}",
       repository: "openclaw/openclaw",
     };
-    await continueFailed(
-      {
-        children: { normalCi: selected },
-        continuation: legacyContinuation,
-        legacy: true,
-        releaseProfile: "beta",
-        rerunGroup: "all",
-        targetSha: TARGET_SHA,
-      },
-      "77",
-      client,
-      { loadExecutionPlan: async () => finalPlanPayload },
-    );
+    await continueFailed(continuationPlan(children, legacyContinuation), "77", client, {
+      loadExecutionPlan: async () => finalPlanPayload,
+    });
     expect(dispatched).toBe(1);
     expect(deletedBranch).toBe("release-ci/current");
     expect(parentReruns).toBe(0);
     finalPlanPayload = undefined;
     await expect(
-      continueFailed(
-        {
-          children: { normalCi: selected },
-          continuation: legacyContinuation,
-          legacy: true,
-          releaseProfile: "beta",
-          rerunGroup: "all",
-          targetSha: TARGET_SHA,
-        },
-        "77",
-        client,
-        { loadExecutionPlan: async () => finalPlanPayload },
-      ),
+      continueFailed(continuationPlan(children, legacyContinuation), "77", client, {
+        loadExecutionPlan: async () => finalPlanPayload,
+      }),
     ).rejects.toThrow(
       "exact continuation parent 88 terminated with conclusion success without a valid immutable execution plan",
     );
@@ -779,6 +813,117 @@ describe("frv continuation controller", () => {
     expect(reruns).toBe(2);
   });
 
+  it.each([
+    ["release profile", (manifest: Record<string, any>) => (manifest.releaseProfile = "stable")],
+    ["release soak", (manifest: Record<string, any>) => (manifest.runReleaseSoak = "true")],
+    [
+      "validation input",
+      (manifest: Record<string, any>) => (manifest.validationInputs.provider = "anthropic"),
+    ],
+  ])("rejects source manifest tampering before mutation: %s", async (_label, tamper) => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const methods = preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate());
+    const manifest = structuredClone(sourceManifest(children));
+    tamper(manifest);
+    await expect(
+      preflightContinuation(continuationPlan(children), "77", {
+        ...methods,
+        loadSourceManifest: async () => manifest,
+      }),
+    ).rejects.toThrow("continuation source identity differs from the immutable plan");
+  });
+
+  it("rejects a source candidate artifact tamper before mutation", async () => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const tamperedCandidate = { ...candidate(), packageSha256: "f".repeat(64) };
+    await expect(
+      preflightContinuation(
+        continuationPlan(children),
+        "77",
+        preflightMethods(children, (entry) => runFor(entry, 1, "failure"), tamperedCandidate),
+      ),
+    ).rejects.toThrow("release child candidate identity changed");
+  });
+
+  it("rejects dropped npm Telegram inventory required by package inputs", async () => {
+    const source = continuation();
+    source.validationInputs = {
+      ...source.validationInputs,
+      releasePackageSpec: "openclaw@beta",
+    };
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+      child("npmTelegram", "505"),
+    ];
+    const manifest = sourceManifest(children, source);
+    manifest.childRuns.npmTelegram = "";
+    await expect(
+      preflightContinuation(continuationPlan(children, source), "77", {
+        ...preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate()),
+        loadSourceManifest: async () => manifest,
+      }),
+    ).rejects.toThrow("continuation source child inventory differs from the immutable plan");
+  });
+
+  it("rejects a strict manifest continuation record that differs from the immutable plan", () => {
+    const source = continuation();
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const sourceChildLogs = Object.fromEntries(
+      children.map((entry) => [
+        entry.key,
+        [
+          `TARGET_SHA: ${TARGET_SHA}`,
+          ...(entry.key === "productPerformance" ? ["-f publish_reports=false"] : []),
+          ...(["pluginPrerelease", "releaseChecks"].includes(entry.key)
+            ? [`CANDIDATE_ARTIFACT_JSON: ${JSON.stringify(candidate())}`]
+            : []),
+          `Dispatched ${entry.workflow}: https://github.com/openclaw/openclaw/actions/runs/${entry.runId} (attempt 1)`,
+        ].join("\n"),
+      ]),
+    );
+    expect(() =>
+      verifyReleaseContinuationSource({
+        children,
+        continuation: source,
+        recordedContinuation: { ...source, runReleaseSoak: "true" },
+        repository: "openclaw/openclaw",
+        sourceChildLogs,
+        sourceManifest: sourceManifest(children, source),
+        sourceRun: {
+          conclusion: "failure",
+          display_title: source.sourceDisplayTitle,
+          event: source.sourceEvent,
+          head_branch: source.sourceWorkflowRef,
+          head_sha: source.sourceWorkflowSha,
+          id: Number(source.sourceRunId),
+          path: source.sourceWorkflowPath,
+          repository: { full_name: source.sourceRepository },
+          run_attempt: source.sourceRunAttempt,
+          status: "completed",
+        },
+        targetSha: TARGET_SHA,
+      }),
+    ).toThrow("recorded continuation source differs from the immutable plan");
+  });
+
   it("does not retry when a rejected rerun reread changes the prior run provenance", async () => {
     const selected = child("normalCi", "101");
     let drifted = false;
@@ -1020,6 +1165,101 @@ describe("frv continuation controller", () => {
       }),
     ).rejects.toThrow(`not reachable from protected main in openclaw/openclaw`);
     expect(mutations).toEqual([]);
+  });
+
+  it("fails a deterministic dispatch rejection immediately without adoption polling", async () => {
+    const branch = continuationBranchName("77", SHA);
+    let runLists = 0;
+    const client = createClient("openclaw/openclaw", {
+      apiJson: async (path: string) => {
+        if (path === `compare/${SHA}...main`) {
+          return { status: "ahead" };
+        }
+        if (path.startsWith("contents/")) {
+          return { content: Buffer.from("continuation_plan_json:").toString("base64") };
+        }
+        if (path.startsWith("git/ref/")) {
+          return { object: { sha: SHA } };
+        }
+        if (path.startsWith("actions/workflows/")) {
+          runLists += 1;
+          return { workflow_runs: [] };
+        }
+        throw new Error(`unexpected read: ${path}`);
+      },
+      mutate: async () => {
+        throw new Error("HTTP 422 invalid workflow input");
+      },
+    });
+    await expect(
+      client.dispatchContinuation(continuationPlan([child("normalCi", "101")])),
+    ).rejects.toThrow("continuation parent dispatch was rejected: HTTP 422 invalid workflow input");
+    expect(runLists).toBe(1);
+    expect(branch).toBe(`release-ci/${SHA.slice(0, 12)}-77`);
+  });
+
+  it.each([
+    ["transient", "HTTP 502 after dispatch"],
+    ["ambiguous", "gh exited after sending the request"],
+  ])("reconciles an exact parent after a %s dispatch response", async (_label, message) => {
+    const branch = continuationBranchName("77", SHA);
+    let dispatched = false;
+    let runLists = 0;
+    const reports: string[] = [];
+    const client = createClient("openclaw/openclaw", {
+      apiJson: async (path: string) => {
+        if (path === `compare/${SHA}...main`) {
+          return { status: "ahead" };
+        }
+        if (path.startsWith("contents/")) {
+          return { content: Buffer.from("continuation_plan_json:").toString("base64") };
+        }
+        if (path.startsWith("git/ref/")) {
+          return { object: { sha: SHA } };
+        }
+        if (path.startsWith("actions/workflows/")) {
+          runLists += 1;
+          return {
+            workflow_runs: dispatched
+              ? [
+                  {
+                    event: "workflow_dispatch",
+                    head_branch: branch,
+                    head_sha: SHA,
+                    id: 88,
+                  },
+                ]
+              : [],
+          };
+        }
+        if (path === "actions/runs/88") {
+          return {
+            conclusion: null,
+            event: "workflow_dispatch",
+            head_branch: branch,
+            head_sha: SHA,
+            id: 88,
+            path: ".github/workflows/full-release-validation.yml",
+            repository: { full_name: "openclaw/openclaw" },
+            status: "in_progress",
+          };
+        }
+        throw new Error(`unexpected read: ${path}`);
+      },
+      loadExecutionPlan: async () => undefined,
+      mutate: async () => {
+        dispatched = true;
+        throw new Error(message);
+      },
+      report: (value: string) => reports.push(value),
+    });
+    process.env.OPENCLAW_FRV_POLL_MS = "1";
+    process.env.OPENCLAW_FRV_TIMEOUT_MS = "100";
+    await expect(
+      client.dispatchContinuation(continuationPlan([child("normalCi", "101")])),
+    ).resolves.toMatchObject({ branch, runId: "88" });
+    expect(runLists).toBe(2);
+    expect(reports).toEqual([expect.stringContaining("adopting exact continuation parent 88")]);
   });
 
   it("uses an atomic exact-OID lease to delete the deterministic ref", async () => {

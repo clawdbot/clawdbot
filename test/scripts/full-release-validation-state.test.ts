@@ -161,7 +161,10 @@ describe("full release execution plan", () => {
     ["unexpected EOF", "transient"],
     ["HTTP 401: Bad credentials", "hard"],
     ["HTTP 403: secondary rate limit", "hard"],
+    ["HTTP 404: workflow not found", "hard"],
+    ["HTTP 422: invalid workflow input", "hard"],
     ["unknown flag: --name\nUsage: gh run download", "hard"],
+    ["gh exited after sending the request", "ambiguous"],
   ] as const)("classifies GitHub transport error %s as %s", (message, expected) => {
     expect(
       classifyReleaseGhTransportError(Object.assign(new Error(message), { stderr: message })),

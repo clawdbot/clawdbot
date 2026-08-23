@@ -10,7 +10,7 @@ const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 const HARD_GH_TRANSPORT_PATTERN =
-  /HTTP (?:401|403)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
+  /HTTP (?:400|401|403|404|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
 const TRANSIENT_GH_TRANSPORT_PATTERN =
   /HTTP 429\b|HTTP 5[0-9][0-9]\b|Server Error|secondary rate limit|API rate limit|abuse detection|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i\/o timeout|network is unreachable|unexpected EOF|ETIMEDOUT|ECONNRESET|EAI_AGAIN/iu;
 
@@ -104,6 +104,24 @@ const RELEASE_CANDIDATE_KEYS = Object.freeze(
     "prepublishPluginRegistryManifestSha256",
   ].toSorted(),
 );
+export const RELEASE_VALIDATION_INPUT_KEYS = Object.freeze(
+  [
+    "allowUnreleasedChangelog",
+    "codexPluginSpec",
+    "crossOsSuiteFilter",
+    "liveSuiteFilter",
+    "mode",
+    "npmTelegramPackageSpec",
+    "npmTelegramProviderMode",
+    "npmTelegramScenario",
+    "packageAcceptancePackageSpec",
+    "pluginPrereleaseNodeExcludePatternsJson",
+    "provider",
+    "releasePackageSpec",
+    "skipPackageTelegramE2e",
+    "targetContextRef",
+  ].toSorted(),
+);
 
 function releaseGhTransportErrorText(error) {
   const values = [error];
@@ -138,7 +156,7 @@ export function classifyReleaseGhTransportError(error) {
   if (HARD_GH_TRANSPORT_PATTERN.test(text)) {
     return "hard";
   }
-  return TRANSIENT_GH_TRANSPORT_PATTERN.test(text) ? "transient" : "hard";
+  return TRANSIENT_GH_TRANSPORT_PATTERN.test(text) ? "transient" : "ambiguous";
 }
 
 function stringValue(value, fallback = "") {
@@ -231,6 +249,21 @@ export function normalizeReleaseCandidate(value, expected = {}) {
   return candidate;
 }
 
+export function normalizeReleaseValidationInputs(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("release validation inputs are incomplete");
+  }
+  const inputs = canonicalValue(value);
+  if (
+    JSON.stringify(Object.keys(inputs).toSorted()) !==
+      JSON.stringify(RELEASE_VALIDATION_INPUT_KEYS) ||
+    Object.values(inputs).some((entry) => typeof entry !== "string")
+  ) {
+    throw new Error("release validation inputs are incomplete");
+  }
+  return inputs;
+}
+
 function normalizedContinuation(value) {
   if (value === undefined || value === null) {
     return undefined;
@@ -242,12 +275,7 @@ function normalizedContinuation(value) {
     parentRunAttempt: value.sourceRunAttempt,
     parentRunId: value.sourceRunId,
   });
-  const validationInputs =
-    value.validationInputs &&
-    typeof value.validationInputs === "object" &&
-    !Array.isArray(value.validationInputs)
-      ? canonicalValue(value.validationInputs)
-      : null;
+  const validationInputs = normalizeReleaseValidationInputs(value.validationInputs);
   const continuation = {
     candidate,
     publicationEnabled: value.publicationEnabled === true,
@@ -267,8 +295,6 @@ function normalizedContinuation(value) {
   };
   if (
     continuation.publicationEnabled ||
-    !validationInputs ||
-    Object.keys(validationInputs).length === 0 ||
     candidate.packageSourceSha === "" ||
     !["beta", "stable", "full"].includes(continuation.releaseProfile) ||
     continuation.rerunGroup !== "all" ||
@@ -286,6 +312,180 @@ function normalizedContinuation(value) {
     throw new Error("release execution plan continuation binding is invalid");
   }
   return continuation;
+}
+
+function continuationManifestChildRunIds(manifest) {
+  const children = manifest?.childRunIds ?? manifest?.childRuns;
+  if (!children || typeof children !== "object" || Array.isArray(children)) {
+    throw new Error("continuation source child inventory is invalid");
+  }
+  const keys = CHILD_SPECS.map((spec) => spec.key).toSorted();
+  if (JSON.stringify(Object.keys(children).toSorted()) !== JSON.stringify(keys)) {
+    throw new Error("continuation source child inventory is invalid");
+  }
+  return Object.fromEntries(
+    keys.map((key) => {
+      const value =
+        key === "productPerformance" &&
+        children[key] &&
+        typeof children[key] === "object" &&
+        !Array.isArray(children[key])
+          ? children[key].runId
+          : children[key];
+      const runId = String(value ?? "");
+      if (runId && !/^[1-9][0-9]*$/u.test(runId)) {
+        throw new Error("continuation source child inventory is invalid");
+      }
+      return [key, runId];
+    }),
+  );
+}
+
+function continuationSourceChildren(children, source, validationInputs) {
+  if (!Array.isArray(children)) {
+    throw new Error("continuation source child inventory is invalid");
+  }
+  const requiredKeys = [
+    "normalCi",
+    "pluginPrerelease",
+    "productPerformance",
+    "releaseChecks",
+    ...(validationInputs.npmTelegramPackageSpec || validationInputs.releasePackageSpec
+      ? ["npmTelegram"]
+      : []),
+  ].toSorted();
+  const normalized = children
+    .filter((child) => child?.selected !== false)
+    .map((child) => {
+      const spec = releaseChildSpec(child.key);
+      const entry = {
+        displayTitle: boundedString(child.displayTitle, MAX_LABEL_LENGTH),
+        key: spec.key,
+        runAttempt: positiveInteger(child.runAttempt),
+        runId: boundedString(child.runId, MAX_LABEL_LENGTH),
+        sourceParentAttempt: positiveInteger(child.sourceParentAttempt),
+        workflow: boundedString(child.workflow, MAX_LABEL_LENGTH),
+        workflowRef: boundedString(child.workflowRef, MAX_LABEL_LENGTH),
+        workflowSha: boundedString(child.workflowSha, MAX_LABEL_LENGTH),
+      };
+      if (
+        !/^[1-9][0-9]*$/u.test(entry.runId) ||
+        entry.runAttempt === undefined ||
+        entry.sourceParentAttempt === undefined ||
+        entry.sourceParentAttempt > source.sourceRunAttempt ||
+        entry.workflow !== spec.workflow ||
+        entry.workflowRef !== source.sourceWorkflowRef ||
+        entry.workflowSha !== source.sourceWorkflowSha ||
+        entry.displayTitle !==
+          `${spec.displayName} full-release-validation-${source.sourceRunId}-${entry.sourceParentAttempt}${spec.suffix}`
+      ) {
+        throw new Error(`continuation source child identity is invalid: ${entry.key}`);
+      }
+      return entry;
+    })
+    .toSorted((left, right) => left.key.localeCompare(right.key));
+  if (
+    JSON.stringify(normalized.map((child) => child.key)) !== JSON.stringify(requiredKeys) ||
+    new Set(normalized.map((child) => child.key)).size !== normalized.length
+  ) {
+    throw new Error("continuation source child inventory is invalid");
+  }
+  return normalized;
+}
+
+export function verifyReleaseContinuationSource({
+  children,
+  continuation,
+  recordedContinuation,
+  repository,
+  sourceChildLogs,
+  sourceManifest,
+  sourceRun,
+  targetSha,
+}) {
+  const source = normalizedContinuation(continuation);
+  if (
+    recordedContinuation !== undefined &&
+    JSON.stringify(normalizedContinuation(recordedContinuation)) !== JSON.stringify(source)
+  ) {
+    throw new Error("recorded continuation source differs from the immutable plan");
+  }
+  const normalizedRepository = boundedString(repository, MAX_LABEL_LENGTH);
+  const normalizedTargetSha = boundedString(targetSha, MAX_LABEL_LENGTH);
+  const manifestInputs = normalizeReleaseValidationInputs(sourceManifest?.validationInputs);
+  const manifestControls = sourceManifest?.controls;
+  if (
+    String(sourceRun?.id) !== source.sourceRunId ||
+    Number(sourceRun?.run_attempt) !== source.sourceRunAttempt ||
+    sourceRun?.display_title !== source.sourceDisplayTitle ||
+    sourceRun?.event !== source.sourceEvent ||
+    String(sourceRun?.path ?? "").split("@", 1)[0] !== source.sourceWorkflowPath ||
+    sourceRun?.head_branch !== source.sourceWorkflowRef ||
+    sourceRun?.head_sha !== source.sourceWorkflowSha ||
+    sourceRun?.repository?.full_name !== normalizedRepository ||
+    source.sourceRepository !== normalizedRepository ||
+    sourceRun?.status !== "completed"
+  ) {
+    throw new Error("source full release parent identity changed");
+  }
+  if (
+    source.candidate.packageSourceSha !== normalizedTargetSha ||
+    String(sourceManifest?.runId) !== source.sourceRunId ||
+    Number(sourceManifest?.runAttempt) !== source.sourceRunAttempt ||
+    sourceManifest?.workflowRef !== source.sourceWorkflowRef ||
+    sourceManifest?.workflowSha !== source.sourceWorkflowSha ||
+    sourceManifest?.targetSha !== normalizedTargetSha ||
+    sourceManifest?.releaseProfile !== source.releaseProfile ||
+    sourceManifest?.rerunGroup !== "all" ||
+    sourceManifest?.runReleaseSoak !== source.runReleaseSoak ||
+    manifestControls?.performanceReportPublication !== "artifact-only" ||
+    JSON.stringify(manifestInputs) !== JSON.stringify(source.validationInputs)
+  ) {
+    throw new Error("continuation source identity differs from the immutable plan");
+  }
+
+  const normalizedChildren = continuationSourceChildren(children, source, manifestInputs);
+  const manifestChildRunIds = continuationManifestChildRunIds(sourceManifest);
+  const expectedRunIds = Object.fromEntries(CHILD_SPECS.map((spec) => [spec.key, ""]));
+  for (const child of normalizedChildren) {
+    expectedRunIds[child.key] = child.runId;
+    const evidence = sourceManifest?.childEvidence?.[child.key];
+    if (
+      evidence &&
+      (Number(evidence.plannedRunAttempt) !== child.runAttempt ||
+        String(evidence.runId) !== child.runId)
+    ) {
+      throw new Error(`continuation source child attempt differs: ${child.key}`);
+    }
+    validateReleaseChildDispatchBinding({
+      candidate: source.candidate,
+      child,
+      log: sourceChildLogs?.[child.key],
+      plannedRunAttempt: child.runAttempt,
+      repository: normalizedRepository,
+      targetSha: normalizedTargetSha,
+    });
+  }
+  if (JSON.stringify(manifestChildRunIds) !== JSON.stringify(canonicalValue(expectedRunIds))) {
+    throw new Error("continuation source child inventory differs from the immutable plan");
+  }
+  return {
+    children: normalizedChildren,
+    continuation: source,
+    sourceManifest: {
+      childRunIds: manifestChildRunIds,
+      controls: canonicalValue(manifestControls),
+      releaseProfile: sourceManifest.releaseProfile,
+      rerunGroup: sourceManifest.rerunGroup,
+      runAttempt: Number(sourceManifest.runAttempt),
+      runId: String(sourceManifest.runId),
+      runReleaseSoak: sourceManifest.runReleaseSoak,
+      targetSha: sourceManifest.targetSha,
+      validationInputs: manifestInputs,
+      workflowRef: sourceManifest.workflowRef,
+      workflowSha: sourceManifest.workflowSha,
+    },
+  };
 }
 
 function normalizedAttemptJob(job, runAttempt) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
@@ -10,11 +10,13 @@ import {
   classifyReleaseGhTransportError,
   composeReleaseChildAttemptEvidence,
   normalizeReleaseCandidate,
+  normalizeReleaseValidationInputs,
   releaseChildSpec,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
+  verifyReleaseContinuationSource,
 } from "./full-release-validation-policy.mjs";
 import { verifyTrustedWorkflowRef } from "./full-release-validation-workflow-trust.mjs";
 import { plainGhAuthenticatedEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
@@ -25,23 +27,8 @@ const DEFAULT_POLL_MS = 30_000;
 const DEFAULT_TIMEOUT_MS = 12 * 60 * 60_000;
 const DEFAULT_RECONCILE_TIMEOUT_MS = 60_000;
 const PLAN_FILENAME = "full-release-execution-plan.json";
+const MANIFEST_FILENAME = "full-release-validation-manifest.json";
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
-const LEGACY_VALIDATION_INPUT_KEYS = Object.freeze([
-  "allowUnreleasedChangelog",
-  "codexPluginSpec",
-  "crossOsSuiteFilter",
-  "liveSuiteFilter",
-  "mode",
-  "npmTelegramPackageSpec",
-  "npmTelegramProviderMode",
-  "npmTelegramScenario",
-  "packageAcceptancePackageSpec",
-  "pluginPrereleaseNodeExcludePatternsJson",
-  "provider",
-  "releasePackageSpec",
-  "skipPackageTelegramE2e",
-  "targetContextRef",
-]);
 
 function requiredValue(value, label) {
   const normalized = String(value ?? "").trim();
@@ -229,6 +216,51 @@ async function downloadExecutionPlan(repository, runId) {
   }
 }
 
+async function downloadSourceManifest(repository, runId, runAttempt) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-frv-source-manifest-"));
+  try {
+    const names = [
+      `full-release-validation-${runId}-${runAttempt}`,
+      `full-release-validation-${runId}`,
+    ];
+    for (const [index, name] of names.entries()) {
+      const directory = join(root, String(index));
+      mkdirSync(directory);
+      try {
+        await execGhRead([
+          "run",
+          "download",
+          runId,
+          "--repo",
+          repository,
+          "--name",
+          name,
+          "--dir",
+          directory,
+        ]);
+      } catch (error) {
+        if (
+          /no valid artifacts found|artifact .* not found|could not find any artifacts/iu.test(
+            error instanceof Error ? error.message : String(error),
+          )
+        ) {
+          continue;
+        }
+        throw error;
+      }
+      const path = join(directory, MANIFEST_FILENAME);
+      const size = statSync(path, { throwIfNoEntry: false })?.size ?? 0;
+      if (size < 1 || size > 128 * 1024) {
+        throw new Error("source release manifest artifact is missing or oversized");
+      }
+      return JSON.parse(readFileSync(path, "utf8"));
+    }
+    return undefined;
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 export function validateLegacySource(
   value,
   expectedRunId,
@@ -251,6 +283,12 @@ export function validateLegacySource(
   }
   const sourceRunAttempt = positiveInteger(source.runAttempt, "source run attempt");
   const targetSha = requiredValue(value.targetSha, "legacy target SHA");
+  let validationInputs;
+  try {
+    validationInputs = normalizeReleaseValidationInputs(value.validationInputs);
+  } catch (error) {
+    throw new Error("legacy continuation validation inputs are incomplete", { cause: error });
+  }
   const continuation = {
     candidate: normalizeReleaseCandidate(value.candidate, {
       parentRunAttempt: sourceRunAttempt,
@@ -270,7 +308,7 @@ export function validateLegacySource(
     sourceWorkflowRef: requiredValue(source.workflowRef, "source workflow ref"),
     sourceWorkflowSha: requiredValue(source.workflowSha, "source workflow SHA"),
     toolingSha: requiredValue(value.toolingSha, "continuation tooling SHA"),
-    validationInputs: canonicalJson(value.validationInputs),
+    validationInputs,
   };
   if (
     continuation.sourceRunId !== expectedRunId ||
@@ -284,18 +322,9 @@ export function validateLegacySource(
     continuation.candidate.packageSourceSha !== targetSha ||
     !SHA_PATTERN.test(targetSha) ||
     !SHA_PATTERN.test(continuation.toolingSha) ||
-    !continuation.validationInputs ||
-    typeof continuation.validationInputs !== "object" ||
-    Array.isArray(continuation.validationInputs)
+    !continuation.validationInputs
   ) {
     throw new Error("legacy continuation identity is invalid");
-  }
-  if (
-    JSON.stringify(Object.keys(continuation.validationInputs).toSorted()) !==
-      JSON.stringify(LEGACY_VALIDATION_INPUT_KEYS) ||
-    Object.values(continuation.validationInputs).some((entry) => typeof entry !== "string")
-  ) {
-    throw new Error("legacy continuation validation inputs are incomplete");
   }
   const normalizedChildren = Object.fromEntries(
     Object.entries(children).map(([key, child]) => {
@@ -338,15 +367,17 @@ export function validateLegacySource(
       return [key, normalized];
     }),
   );
+  const npmTelegramRequired =
+    (typeof continuation.validationInputs.npmTelegramPackageSpec === "string" &&
+      continuation.validationInputs.npmTelegramPackageSpec.trim().length > 0) ||
+    (typeof continuation.validationInputs.releasePackageSpec === "string" &&
+      continuation.validationInputs.releasePackageSpec.trim().length > 0);
   const expectedChildKeys = [
     "normalCi",
     "pluginPrerelease",
     "releaseChecks",
     "productPerformance",
-    ...(String(continuation.validationInputs.npmTelegramPackageSpec ?? "").trim() ||
-    String(continuation.validationInputs.releasePackageSpec ?? "").trim()
-      ? ["npmTelegram"]
-      : []),
+    ...(npmTelegramRequired ? ["npmTelegram"] : []),
   ].toSorted();
   if (
     JSON.stringify(Object.keys(normalizedChildren).toSorted()) !== JSON.stringify(expectedChildKeys)
@@ -405,7 +436,7 @@ export async function preflightContinuation(
   if (plan.rerunGroup !== "all") {
     throw new Error("FRV continuation requires an all-group root");
   }
-  const source = plan.legacy
+  const source = plan.continuation
     ? plan.continuation
     : {
         sourceDisplayTitle: "Full Release Validation",
@@ -418,19 +449,6 @@ export async function preflightContinuation(
         sourceWorkflowSha: plan.workflowSha,
       };
   const sourceRun = await client.getRunAttempt(source.sourceRunId, source.sourceRunAttempt);
-  if (
-    String(sourceRun.id) !== source.sourceRunId ||
-    Number(sourceRun.run_attempt) !== source.sourceRunAttempt ||
-    sourceRun.display_title !== source.sourceDisplayTitle ||
-    sourceRun.event !== source.sourceEvent ||
-    String(sourceRun.path ?? "").split("@", 1)[0] !== source.sourceWorkflowPath ||
-    sourceRun.head_branch !== source.sourceWorkflowRef ||
-    sourceRun.head_sha !== source.sourceWorkflowSha ||
-    sourceRun.repository?.full_name !== source.sourceRepository ||
-    source.sourceRepository !== repository
-  ) {
-    throw new Error("source full release parent identity changed");
-  }
   const parentJobs = await client.getParentJobs(source.sourceRunId);
   const resolveJobs = parentJobs.filter(
     (job) =>
@@ -447,7 +465,7 @@ export async function preflightContinuation(
   ) {
     throw new Error("source full release root is not an exact all-group target");
   }
-  await Promise.all(
+  const childObservations = await Promise.all(
     selectedChildren(plan).map(async (child) => {
       const sourceParentAttempt = child.sourceParentAttempt ?? source.sourceRunAttempt;
       const parentJob = exactParentJob(parentJobs, child, sourceParentAttempt);
@@ -455,17 +473,59 @@ export async function preflightContinuation(
         client.getRunAttempt(child.runId, child.runAttempt),
         client.getJobLog(parentJob.id),
       ]);
-      assertChildRunIdentity(child, childRun, repository);
+      return { child, childRun, parentLog };
+    }),
+  );
+  const sourceChildLogs = Object.fromEntries(
+    childObservations.map(({ child, parentLog }) => [child.key, parentLog]),
+  );
+  if (plan.continuation) {
+    if (typeof client.loadSourceManifest !== "function") {
+      throw new Error("FRV continuation client cannot load the exact source manifest");
+    }
+    const sourceManifest = await client.loadSourceManifest(
+      source.sourceRunId,
+      source.sourceRunAttempt,
+    );
+    if (!sourceManifest) {
+      throw new Error("FRV continuation source manifest is missing");
+    }
+    verifyReleaseContinuationSource({
+      children: selectedChildren(plan),
+      continuation: plan.continuation,
+      repository,
+      sourceChildLogs,
+      sourceManifest,
+      sourceRun,
+      targetSha: plan.targetSha,
+    });
+  } else {
+    if (
+      String(sourceRun.id) !== source.sourceRunId ||
+      Number(sourceRun.run_attempt) !== source.sourceRunAttempt ||
+      sourceRun.display_title !== source.sourceDisplayTitle ||
+      sourceRun.event !== source.sourceEvent ||
+      String(sourceRun.path ?? "").split("@", 1)[0] !== source.sourceWorkflowPath ||
+      sourceRun.head_branch !== source.sourceWorkflowRef ||
+      sourceRun.head_sha !== source.sourceWorkflowSha ||
+      sourceRun.repository?.full_name !== source.sourceRepository ||
+      source.sourceRepository !== repository
+    ) {
+      throw new Error("source full release parent identity changed");
+    }
+    for (const { child, parentLog } of childObservations) {
       validateReleaseChildDispatchBinding({
-        candidate: plan.legacy ? plan.continuation.candidate : undefined,
         child,
         log: parentLog,
         plannedRunAttempt: child.runAttempt,
         repository,
         targetSha: plan.targetSha,
       });
-    }),
-  );
+    }
+  }
+  for (const { child, childRun } of childObservations) {
+    assertChildRunIdentity(child, childRun, repository);
+  }
   return sourceRun;
 }
 
@@ -624,11 +684,15 @@ export function createClient(repository, dependencies = {}) {
   const report = dependencies.report ?? ((message) => console.error(message));
   const loadExecutionPlan =
     dependencies.loadExecutionPlan ?? ((runId) => downloadExecutionPlan(repository, runId));
+  const loadSourceManifest =
+    dependencies.loadSourceManifest ??
+    ((runId, runAttempt) => downloadSourceManifest(repository, runId, runAttempt));
   const attemptJobs =
     dependencies.getAttemptJobs ??
     ((runId, runAttempt) => ghAttemptJobs(repository, runId, runAttempt));
   const client = {
     repository,
+    loadSourceManifest,
     async verifyTrustedToolingSha(workflowSha) {
       const comparison = await apiJson(`compare/${workflowSha}...main`);
       try {
@@ -813,6 +877,12 @@ export function createClient(repository, dependencies = {}) {
         try {
           await mutate(args);
         } catch (error) {
+          if (classifyReleaseGhTransportError(error) === "hard") {
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`continuation parent dispatch was rejected: ${message}`, {
+              cause: error,
+            });
+          }
           dispatchError = error;
         }
       }

@@ -42,6 +42,32 @@ const SCRIPT = "scripts/release-ci-summary.mjs";
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const hasUnzip = spawnSync("unzip", ["-v"], { stdio: "ignore" }).status === 0;
 
+function releaseCandidate() {
+  return {
+    imageArchiveSha256: "1".repeat(64),
+    imageArtifactDigest: "2".repeat(64),
+    imageArtifactId: "12",
+    imageArtifactName: "image-77-1",
+    imageArtifactRunAttempt: "1",
+    imageArtifactRunId: "77",
+    packageArtifactDigest: "3".repeat(64),
+    packageArtifactId: "13",
+    packageArtifactName: "package-77-1",
+    packageArtifactRunAttempt: "1",
+    packageArtifactRunId: "77",
+    packageFileName: "openclaw-current.tgz",
+    packageSha256: "4".repeat(64),
+    packageSourceSha: "a".repeat(40),
+    packageVersion: "2026.8.1-beta.3",
+    prepublishPluginRegistryArtifactDigest: "5".repeat(64),
+    prepublishPluginRegistryArtifactId: "14",
+    prepublishPluginRegistryArtifactName: "plugins-77-1",
+    prepublishPluginRegistryArtifactRunAttempt: "1",
+    prepublishPluginRegistryArtifactRunId: "77",
+    prepublishPluginRegistryManifestSha256: "6".repeat(64),
+  };
+}
+
 describe("GitHub API commands", () => {
   it("delegates authentication to gh for REST and artifact requests", () => {
     expect(githubRestArgs("actions/runs/123", "owner/repo")).toEqual([
@@ -695,6 +721,251 @@ function trustedMainPackageFixture({
   };
 }
 
+function strictContinuationFixture() {
+  const sourceRunId = "77";
+  const rootRunId = "88";
+  const targetSha = "a".repeat(40);
+  const workflowSha = "b".repeat(40);
+  const sourceRef = "release/source";
+  const rootRef = `release-ci/${workflowSha.slice(0, 12)}-${sourceRunId}`;
+  const validationInputs = {
+    allowUnreleasedChangelog: "false",
+    codexPluginSpec: "",
+    crossOsSuiteFilter: "",
+    liveSuiteFilter: "",
+    mode: "direct",
+    npmTelegramPackageSpec: "",
+    npmTelegramProviderMode: "mock-openai",
+    npmTelegramScenario: "",
+    packageAcceptancePackageSpec: "",
+    pluginPrereleaseNodeExcludePatternsJson: "[]",
+    provider: "openai",
+    releasePackageSpec: "",
+    skipPackageTelegramE2e: "false",
+    targetContextRef: targetSha,
+  };
+  const candidate = releaseCandidate();
+  const selected = expectedChildDispatches(sourceRunId, 1, sourceRef);
+  const runIds = {
+    normalCi: "101",
+    pluginPrerelease: "202",
+    productPerformance: "303",
+    releaseChecks: "404",
+  };
+  const children = selected
+    .filter((child) => child.manifestKey in runIds)
+    .map((child) => ({
+      dispatchName: `Dispatch ${child.name}`,
+      displayTitle: child.displayTitle,
+      key: child.manifestKey,
+      required: true,
+      result: "success",
+      runAttempt: 1,
+      runId: runIds[child.manifestKey as keyof typeof runIds],
+      selected: true,
+      source: "continuation",
+      sourceParentAttempt: 1,
+      url: `https://github.com/openclaw/openclaw/actions/runs/${runIds[child.manifestKey as keyof typeof runIds]}`,
+      workflow: child.workflow,
+      workflowRef: sourceRef,
+      workflowSha,
+    }));
+  const continuation = {
+    candidate,
+    publicationEnabled: false,
+    releaseProfile: "beta",
+    rerunGroup: "all",
+    runReleaseSoak: "false",
+    sourceDisplayTitle: "Full Release Validation",
+    sourceEvent: "workflow_dispatch",
+    sourceRepository: "openclaw/openclaw",
+    sourceRunAttempt: 1,
+    sourceRunId,
+    sourceWorkflowPath: ".github/workflows/full-release-validation.yml",
+    sourceWorkflowRef: sourceRef,
+    sourceWorkflowSha: workflowSha,
+    toolingSha: workflowSha,
+    validationInputs,
+  };
+  const executionPlan = buildReleaseExecutionPlanArtifact({
+    children,
+    continuation,
+    evidenceReuse: { requested: false },
+    expected: {
+      parentRunAttempt: 1,
+      parentRunId: rootRunId,
+      targetSha,
+      workflowRef: rootRef,
+      workflowSha,
+    },
+    gates: [{ name: "Resolve target ref", required: true, result: "success" }],
+    releaseProfile: "beta",
+    rerunGroup: "all",
+    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: workflowSha },
+  });
+  const childRuns = {
+    normalCi: runIds.normalCi,
+    npmTelegram: "",
+    pluginPrerelease: runIds.pluginPrerelease,
+    productPerformance: {
+      blocking: false,
+      conclusion: "success",
+      runId: runIds.productPerformance,
+    },
+    releaseChecks: runIds.releaseChecks,
+  };
+  const manifest = (runId: string, workflowRef: string, continuationSource?: unknown) => ({
+    childRuns,
+    continuationSource,
+    controls: {
+      performanceBlocking: false,
+      performanceReportPublication: "artifact-only",
+      stableSoakRequired: false,
+    },
+    executionPlanSha256: executionPlan.sha256,
+    releaseProfile: "beta",
+    rerunGroup: "all",
+    runAttempt: "1",
+    runId,
+    runReleaseSoak: "false",
+    sourceParentRunAttempt: 1,
+    targetRef: targetSha,
+    targetSha,
+    validationInputs,
+    version: 3,
+    workflowFullRef: `refs/heads/${workflowRef}`,
+    workflowName: "Full Release Validation",
+    workflowRef,
+    workflowRefType: "branch",
+    workflowSha,
+  });
+  const sourceManifest = manifest(sourceRunId, sourceRef);
+  const rootManifest = manifest(rootRunId, rootRef, continuation);
+  const run = (id: string, ref: string, conclusion: string) => ({
+    conclusion,
+    event: "workflow_dispatch",
+    head_branch: ref,
+    head_sha: workflowSha,
+    html_url: `https://github.com/openclaw/openclaw/actions/runs/${id}`,
+    id: Number(id),
+    path: `.github/workflows/full-release-validation.yml@refs/heads/${ref}`,
+    repository: { full_name: "openclaw/openclaw" },
+    run_attempt: 1,
+    status: "completed",
+  });
+  const sourceRun = {
+    ...run(sourceRunId, sourceRef, "failure"),
+    display_title: continuation.sourceDisplayTitle,
+  };
+  const rootRun = run(rootRunId, rootRef, "success");
+  const childById = new Map(
+    children.map((child) => [
+      child.runId,
+      {
+        actor: { login: "github-actions[bot]" },
+        conclusion: "success",
+        display_title: child.displayTitle,
+        event: "workflow_dispatch",
+        head_branch: child.workflowRef,
+        head_sha: child.workflowSha,
+        html_url: child.url,
+        id: Number(child.runId),
+        path: `.github/workflows/${child.workflow}`,
+        repository: { full_name: "openclaw/openclaw" },
+        run_attempt: 1,
+        status: "completed",
+        triggering_actor: { login: "github-actions[bot]" },
+      },
+    ]),
+  );
+  const sourceJobs = selected
+    .filter((child) => child.manifestKey in runIds)
+    .map((child, index) => ({
+      conclusion: "success",
+      id: 900 + index,
+      name: child.parentJobName,
+      run_attempt: 1,
+      status: "completed",
+    }));
+  const logByJobId = new Map(
+    sourceJobs.map((job) => {
+      const child = selected.find((entry) => entry.parentJobName === job.name)!;
+      const runId = runIds[child.manifestKey as keyof typeof runIds];
+      return [
+        job.id,
+        [
+          `TARGET_SHA: ${targetSha}`,
+          ...(["pluginPrerelease", "releaseChecks"].includes(child.manifestKey)
+            ? [`CANDIDATE_ARTIFACT_JSON: ${JSON.stringify(candidate)}`]
+            : []),
+          ...(child.manifestKey === "productPerformance" ? ["-f publish_reports=false"] : []),
+          `Dispatched ${child.workflow}: https://github.com/openclaw/openclaw/actions/runs/${runId} (attempt 1)`,
+        ].join("\n"),
+      ];
+    }),
+  );
+  const artifact = (runId: string, ref: string, id: number) => ({
+    digest: `sha256:${String(id).padStart(64, "0")}`,
+    expired: false,
+    id,
+    name: `full-release-validation-${runId}-1`,
+    size_in_bytes: 507,
+    workflow_run: { head_branch: ref, head_sha: workflowSha, id: Number(runId) },
+  });
+  const sourceArtifact = artifact(sourceRunId, sourceRef, 701);
+  const rootArtifact = artifact(rootRunId, rootRef, 702);
+  const client = {
+    compareCommitLineage: () => ({
+      merge_base_commit: { sha: workflowSha },
+      status: "ahead",
+    }),
+    compareCommits: () => ({ status: "identical" }),
+    getJobLog: (jobId: number) => logByJobId.get(jobId) ?? "",
+    getParentJobs: (runId: string) =>
+      runId === sourceRunId
+        ? sourceJobs
+        : runId === runIds.productPerformance
+          ? [
+              {
+                conclusion: "success",
+                name: "Verify artifact-only report mode",
+                run_attempt: 1,
+                status: "completed",
+              },
+            ]
+          : [],
+    getRef: () => ({ object: { sha: workflowSha } }),
+    getRun: (runId: string) => {
+      if (runId === rootRunId) {
+        return rootRun;
+      }
+      if (runId === sourceRunId) {
+        return sourceRun;
+      }
+      const childRun = childById.get(runId);
+      if (!childRun) {
+        throw new Error(`unexpected run: ${runId}`);
+      }
+      return childRun;
+    },
+    getRunView: () => ({
+      attempt: 1,
+      conclusion: "success",
+      headBranch: rootRef,
+      headSha: workflowSha,
+      jobs: [],
+      status: "completed",
+      url: rootRun.html_url,
+    }),
+    loadExecutionPlan: () => executionPlan,
+    loadManifest: (runId: string) =>
+      runId === rootRunId
+        ? { artifact: rootArtifact, manifest: rootManifest }
+        : { artifact: sourceArtifact, manifest: sourceManifest },
+  };
+  return { client, rootManifest, rootRunId, targetSha, workflowSha };
+}
+
 type ReleaseCiWatchState = {
   attempt: number;
   conclusion: string;
@@ -1297,6 +1568,31 @@ describe("release CI summary child correlation", () => {
         fixture.client,
       ),
     ).toThrow("execution plan child dispatch tuple mismatch");
+  });
+
+  it("strictly verifies a continuation source and its recorded frozen candidate", () => {
+    const fixture = strictContinuationFixture();
+    const options = {
+      repository: "openclaw/openclaw",
+      runId: fixture.rootRunId,
+      verifierSourceContent: readFileSync(SCRIPT),
+      verifierSourceSha: "c".repeat(40),
+    };
+    const evidence = validateReleaseRunEvidence(options, fixture.client);
+    expect(evidence.children.map((child) => child.role).toSorted()).toEqual([
+      "normalCi",
+      "pluginPrerelease",
+      "productPerformance",
+      "releaseChecks",
+    ]);
+
+    const recorded = fixture.rootManifest.continuationSource as {
+      candidate: Record<string, unknown>;
+    };
+    recorded.candidate = { ...recorded.candidate, packageSha256: "f".repeat(64) };
+    expect(() => validateReleaseRunEvidence(options, fixture.client)).toThrow(
+      "recorded continuation source differs from the immutable plan",
+    );
   });
 
   it("accepts beta advisory release-check failures through canonical policy", () => {
@@ -2499,6 +2795,77 @@ describe("release CI summary child correlation", () => {
     expect(() =>
       validateParentManifest(rawManifest({}), { runAttempt: 3, runId: "29090000000" }),
     ).toThrow("release validation manifest run attempt mismatch");
+  });
+
+  it("enforces the frozen candidate when publication validates candidate-bound children", () => {
+    const child = expectDefined(
+      expectedChildDispatches("77", 1, "main").find(
+        (entry) => entry.manifestKey === "releaseChecks",
+      ),
+      "expected release checks child",
+    );
+    const parentManifest = {
+      runAttempt: 1,
+      runId: "77",
+      targetSha: "a".repeat(40),
+      workflowSha: "b".repeat(40),
+    };
+    const parentJobs = [
+      {
+        conclusion: "failure",
+        id: 901,
+        name: child.parentJobName,
+        run_attempt: 1,
+        status: "completed",
+      },
+    ];
+    const candidate = releaseCandidate();
+    const run = {
+      actor: { login: "github-actions[bot]" },
+      display_title: child.displayTitle,
+      event: "workflow_dispatch",
+      head_branch: child.headBranch,
+      head_sha: parentManifest.workflowSha,
+      id: 303,
+      path: `.github/workflows/${child.workflow}@refs/heads/main`,
+      repository: { full_name: "openclaw/openclaw" },
+      run_attempt: 1,
+      triggering_actor: { login: "github-actions[bot]" },
+    };
+    const parentLog = (observedCandidate: Record<string, unknown>) =>
+      [
+        `TARGET_SHA: ${parentManifest.targetSha}`,
+        `CANDIDATE_ARTIFACT_JSON: ${JSON.stringify(observedCandidate)}`,
+        `Dispatched ${child.workflow}: https://github.com/openclaw/openclaw/actions/runs/303 (attempt 1)`,
+      ].join("\n");
+    expect(
+      validateManifestChildRun(
+        run,
+        child,
+        "303",
+        parentManifest,
+        parentJobs,
+        parentLog(candidate),
+        "openclaw/openclaw",
+        1,
+        candidate,
+        1,
+      ),
+    ).toBe(run);
+    expect(() =>
+      validateManifestChildRun(
+        run,
+        child,
+        "303",
+        parentManifest,
+        parentJobs,
+        parentLog({ ...candidate, packageSha256: "f".repeat(64) }),
+        "openclaw/openclaw",
+        1,
+        candidate,
+        1,
+      ),
+    ).toThrow("release child candidate identity changed");
   });
 
   it("accepts strongly bound legacy and correlated children across parent attempts", () => {

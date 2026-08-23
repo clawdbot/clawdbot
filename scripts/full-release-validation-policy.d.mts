@@ -28,10 +28,13 @@ export interface ReleaseChildSpec {
   suffix: string;
   workflow: string;
 }
-export type ReleaseGhTransportErrorClass = "hard" | "transient";
+export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
+export const RELEASE_VALIDATION_INPUT_KEYS: readonly string[];
 export function releaseChildSpec(key: string): ReleaseChildSpec;
 export function normalizeReleaseCandidate(value: unknown, expected?: ReleaseRecord): ReleaseRecord;
+export function normalizeReleaseValidationInputs(value: unknown): ReleaseRecord;
+export function verifyReleaseContinuationSource(input: ReleaseRecord): ReleaseRecord;
 export function validateReleaseChildRunProvenance(
   run: ReleaseRecord,
   expected?: ReleaseRecord,
