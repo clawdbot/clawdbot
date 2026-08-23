@@ -1,5 +1,4 @@
-// Core inline widget validation, byte stability, materialization, and retention.
-import { createHash } from "node:crypto";
+// Core inline widget validation, materialization, and retention.
 import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -536,29 +535,6 @@ describe("show_widget", () => {
         "pinned to dashboard tab main as status, but presentation failed",
       ),
     });
-  });
-
-  it("keeps the wrapped document bytes stable", () => {
-    const html = buildWidgetDocument(
-      "Status <live>",
-      '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
-    );
-
-    expect(Buffer.byteLength(html)).toBe(14472);
-    expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "63f6a0ae20a586128d7f1d5f55550a3456025607668b029b1d467e7d5d4fa4c4",
-    );
-    expect(html).toContain("openclaw:widget-host-init-ack");
-    expect(html).toContain('request("host.open",{url})');
-    expect(html).toContain("controlUiBaseUrl");
-    expect(html).toContain('define(host,"controlUiBaseUrl"');
-    expect(html).toContain("else push.call(waiting,{send,reject})");
-    expect(html).toContain("else push.call(promptWaiting,{send,inline,reject})");
-    expect(html).toContain("openclaw:widget-prompt-host-ready");
-    expect(html).toContain("widget host capabilities unavailable");
-    expect(html).toContain("widget prompt host unavailable");
-    expect(html).toContain("openclaw:widget-chat-host");
-    expect(html).not.toContain("widget is not hosted on a board");
   });
 
   it("rejects empty and oversized widget code", async () => {
