@@ -11,19 +11,17 @@ import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
-import { normalizeAgentLabel } from "../lib/agents/display.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 import { icons } from "./icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import type { SessionCreatedActor } from "./session-owner-chip.ts";
 import {
   addDismissal,
   dismissalStoreKey,
@@ -62,7 +60,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   @state() private panelOpen = false;
   @state() private panelPosition = { left: 8, bottom: 8 };
   @state() private selectedTab: IssueTab = "all";
-  @state() private expandedApprovalIds = new Set<string>();
   @state() private overflowAbove = false;
   @state() private overflowBelow = false;
 
@@ -590,16 +587,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     ></openclaw-sidebar-update-card>`;
   }
 
-  private toggleApprovalDetails(approvalId: string) {
-    const next = new Set(this.expandedApprovalIds);
-    if (next.has(approvalId)) {
-      next.delete(approvalId);
-    } else {
-      next.add(approvalId);
-    }
-    this.expandedApprovalIds = next;
-  }
-
   private async decideApproval(event: Event, approvalId: string, decision: ExecApprovalDecision) {
     const context = this.context;
     if (!context) {
@@ -631,36 +618,29 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
           areUiSessionKeysEquivalent(candidate.key, sessionKey),
         )
       : undefined;
-    const rawAgentId = approval.request.agentId?.trim();
-    const normalizedAgentId = rawAgentId ? normalizeAgentId(rawAgentId) : null;
-    const agent = normalizedAgentId
-      ? context.agents.state.agentsList?.agents.find(
-          (candidate) => normalizeAgentId(candidate.id) === normalizedAgentId,
-        )
-      : undefined;
-    const identity = normalizedAgentId ? context.agentIdentity.get(normalizedAgentId) : null;
-    const agentAvatarUrl = agent ? resolveAgentAvatarUrl(agent, identity) : null;
-    const agentActor: SessionCreatedActor | null = rawAgentId
-      ? {
-          type: "agent",
-          id: agent?.id ?? rawAgentId,
-          label: agent ? normalizeAgentLabel(agent, identity) : rawAgentId,
-          ...(agentAvatarUrl ? { avatarUrl: agentAvatarUrl } : {}),
-        }
+    const sessionTarget = sessionKey
+      ? sessionNavigationTarget({ context, face: "chat", sessionKey })
       : null;
     return renderSidebarApprovalRow({
       approval,
-      agentActor,
       busy: snapshot.approvalBusy,
       canGrant: snapshot.approvalCanGrant,
-      createdActor: session?.createdActor,
       error: snapshot.approvalErrors.get(approval.id) ?? null,
-      expanded: this.expandedApprovalIds.has(approval.id),
       nowMs: snapshot.approvalNowMs,
+      openSessionHref: sessionTarget?.href,
       sessionTitle: session?.displayName?.trim() || session?.label?.trim(),
       onDecision: (event, approvalId, decision) =>
         void this.decideApproval(event, approvalId, decision),
-      onToggle: (approvalId) => this.toggleApprovalDetails(approvalId),
+      onOpenSession: sessionTarget
+        ? (event) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            this.closePanel(false);
+            context.navigate("chat", sessionTarget.options);
+          }
+        : undefined,
     });
   }
 

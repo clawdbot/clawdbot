@@ -4063,10 +4063,14 @@ openclaw-sidebar-attention {
 
 .sidebar-approval-row {
   min-width: 0;
+  min-height: 104px;
+  padding: 8px 6px;
   border-radius: 0;
+  transition: background var(--duration-fast) ease;
 }
 
-.sidebar-approval-row--expanded {
+.sidebar-approval-row:hover,
+.sidebar-approval-row:focus-within {
   border-radius: var(--radius-md);
   background: var(--bg-hover);
 }
@@ -4075,39 +4079,7 @@ openclaw-sidebar-attention {
   margin-top: 6px;
 }
 
-.sidebar-approval-row__disclosure {
-  width: 100%;
-  min-width: 0;
-  min-height: 52px;
-  display: block;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 7px 6px 3px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--text);
-  cursor: var(--cursor-action);
-  font: inherit;
-  text-align: start;
-}
-
-.sidebar-approval-row__disclosure:hover,
-.sidebar-approval-row__disclosure[aria-expanded="true"] {
-  border-radius: var(--radius-md);
-  background: var(--bg-hover);
-}
-
-.sidebar-approval-row__disclosure:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.sidebar-approval-row .sidebar-issues-panel__content {
-  gap: 4px;
-}
-
-.sidebar-approval-row__topline {
+.sidebar-approval-row__header {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -4115,61 +4087,13 @@ openclaw-sidebar-attention {
   white-space: nowrap;
 }
 
-.sidebar-approval-row__topline .sidebar-issues-panel__entity {
+.sidebar-approval-row__header .sidebar-issues-panel__entity {
   min-width: 0;
   flex: 1 1 auto;
   overflow: hidden;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.sidebar-approval-row__meta {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-  padding-inline-start: 26px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  white-space: nowrap;
-}
-
-.sidebar-approval-row__creator,
-.sidebar-approval-row__agent {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-approval-row__creator {
-  flex: 0 2 auto;
-}
-
-.sidebar-approval-row__agent {
-  display: inline-flex;
-  flex: 0 4 auto;
-  align-items: center;
-  gap: 4px;
-}
-
-.sidebar-approval-row__agent > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sidebar-approval-row__agent-avatar,
-.sidebar-approval-row__agent-avatar .viewer-avatar {
-  width: 16px;
-  height: 16px;
-  flex: none;
-}
-
-.sidebar-approval-row__separator {
-  flex: none;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-approval-row__timer {
@@ -4190,7 +4114,7 @@ openclaw-sidebar-attention {
   max-width: 100%;
   align-self: flex-start;
   overflow: hidden;
-  margin-block-start: 6px;
+  margin-block-start: 7px;
   padding: 6px 10px;
   border-radius: var(--radius-sm);
   background: var(--bg);
@@ -4203,13 +4127,24 @@ openclaw-sidebar-attention {
 
 .sidebar-approval-row__actions {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 5px;
-  margin: 7px 6px 8px;
+  margin-top: 7px;
 }
 
 .sidebar-approval-row__action {
   min-height: 28px;
+}
+
+.sidebar-approval-row__action--allow-once {
+  border-color: color-mix(in srgb, var(--ok) 32%, var(--border));
+  background: color-mix(in srgb, var(--ok) 14%, var(--bg-elevated));
+  color: var(--ok);
+}
+
+.sidebar-approval-row__action--allow-once:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ok) 21%, var(--bg-elevated));
+  color: var(--ok);
 }
 
 .sidebar-approval-row__action--deny {
@@ -4221,6 +4156,40 @@ openclaw-sidebar-attention {
   color: var(--danger);
 }
 
+.sidebar-approval-row__open-session {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  margin-inline-start: auto;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.sidebar-approval-row:hover .sidebar-approval-row__open-session,
+.sidebar-approval-row:focus-within .sidebar-approval-row__open-session {
+  opacity: 1;
+}
+
+.sidebar-approval-row__open-session:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-approval-row__open-session:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-approval-row__open-session svg {
+  width: 15px;
+  height: 15px;
+}
+
 .sidebar-approval-row__message {
   margin: 0 6px 6px;
   color: var(--warn);
@@ -4230,24 +4199,6 @@ openclaw-sidebar-attention {
 
 .sidebar-approval-row__message--error {
   color: var(--danger);
-}
-
-.sidebar-approval-row__details {
-  margin: 0 6px 8px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
-
-.sidebar-approval-row__details .exec-approval-command {
-  max-height: 180px;
-  margin-top: 6px;
-  padding: 8px 9px;
-  font-size: var(--control-ui-text-xs);
-}
-
-.sidebar-approval-row__details .exec-approval-meta {
-  margin-top: 8px;
-  font-size: var(--control-ui-text-xs);
 }
 
 .exec-approval-description {

@@ -28,6 +28,8 @@ export const icons = {
   activity: strokeIcon(svg` <path d="M22 12h-4l-3 9L9 3l-3 9H2" />`),
   clock: strokeIcon(svg` <circle cx="12" cy="12" r="10" />
     <polyline points="12 6 12 12 16 14" />`),
+  arrowUpRight: strokeIcon(svg` <path d="M7 17 17 7" />
+    <path d="M7 7h10v10" />`),
   link: strokeIcon(svg` <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
     <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />`),
   radio: strokeIcon(svg` <circle cx="12" cy="12" r="2" />

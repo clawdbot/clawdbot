@@ -13,11 +13,6 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { icons } from "./icons.ts";
-import {
-  renderSessionOwnerChip,
-  renderSessionOwnerMenuAvatar,
-  type SessionCreatedActor,
-} from "./session-owner-chip.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
@@ -37,16 +32,14 @@ type ExecApprovalCardProps = {
 
 type SidebarApprovalRowProps = {
   approval: ExecApprovalRequest;
-  agentActor?: SessionCreatedActor | null;
   busy: boolean;
   canGrant: boolean;
-  createdActor?: SessionCreatedActor | null;
   error: string | null;
-  expanded: boolean;
   nowMs: number;
+  openSessionHref?: string;
   sessionTitle?: string | null;
   onDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
-  onToggle: (approvalId: string) => void;
+  onOpenSession?: (event: MouseEvent) => void;
 };
 
 export function approvalRemainingLabel(expiresAtMs: number, nowMs: number): string {
@@ -264,81 +257,33 @@ export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
   const sessionTitle =
     props.sessionTitle ??
     (sessionKey ? resolveSessionDisplayName(sessionKey) : approvalTitle(approval));
-  const createdActorLabel = props.createdActor?.label?.trim() || props.createdActor?.id?.trim();
-  const agentActorLabel = props.agentActor?.label?.trim() || props.agentActor?.id?.trim();
   const expiryUrgent = expired || approval.expiresAtMs - props.nowMs < 2 * 60_000;
   const remainingLabel = expired
     ? t("execApproval.expired")
     : formatCountdown(approval.expiresAtMs, props.nowMs, true);
   const expiryLabel = approvalRemainingLabel(approval.expiresAtMs, props.nowMs);
-  const detailId = `sidebar-approval-details-${approval.id}`;
   const reviewOnlyMessage = t("execApproval.reviewOnly");
   const grantError = !props.canGrant && props.error === reviewOnlyMessage;
   return html`<article
-    class="sidebar-approval-row sidebar-issues-panel__details--warning ${props.expanded
-      ? "sidebar-approval-row--expanded"
-      : ""}"
+    class="sidebar-approval-row sidebar-issues-panel__details--warning"
     data-attention-kind="pendingApproval"
     data-approval-id=${approval.id}
   >
-    <button
-      type="button"
-      class="sidebar-approval-row__disclosure"
-      data-issue-row-focus
-      aria-expanded=${String(props.expanded)}
-      aria-controls=${detailId}
-      @click=${() => props.onToggle(approval.id)}
-    >
-      <span class="sidebar-issues-panel__content">
-        <span class="sidebar-approval-row__topline">
-          ${renderSessionOwnerChip(props.createdActor, "row", "created")}
-          <span class="sidebar-issues-panel__entity" title=${sessionTitle}>${sessionTitle}</span>
-          <span
-            class="sidebar-issues-panel__chevron ${props.expanded
-              ? "sidebar-issues-panel__chevron--expanded"
-              : ""}"
-            aria-hidden="true"
-            >${icons.chevronRight}</span
-          >
-        </span>
-        <span class="sidebar-approval-row__meta">
-          ${createdActorLabel
-            ? html`<span class="sidebar-approval-row__creator" title=${createdActorLabel}
-                >${createdActorLabel}</span
-              >`
-            : nothing}
-          ${agentActorLabel
-            ? html`${createdActorLabel
-                  ? html`<span class="sidebar-approval-row__separator" aria-hidden="true">·</span>`
-                  : nothing}
-                <span
-                  class="sidebar-approval-row__agent"
-                  title=${`${t("newSession.agent")}: ${agentActorLabel}`}
-                >
-                  <span class="sidebar-approval-row__agent-avatar" aria-hidden="true"
-                    >${renderSessionOwnerMenuAvatar(props.agentActor!)}</span
-                  >
-                  <span>${t("newSession.agent")}: ${agentActorLabel}</span>
-                </span>`
-            : nothing}
-          ${createdActorLabel || agentActorLabel
-            ? html`<span class="sidebar-approval-row__separator" aria-hidden="true">·</span>`
-            : nothing}
-          <span
-            class="sidebar-approval-row__timer ${expiryUrgent
-              ? "sidebar-approval-row__timer--urgent"
-              : ""}"
-            role="timer"
-            aria-label=${expiryLabel}
-            title=${expiryLabel}
-            >${remainingLabel}</span
-          >
-        </span>
-        <span class="sidebar-approval-row__command mono" title=${approval.request.command}
-          >${command}</span
-        >
-      </span>
-    </button>
+    <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
+      <span class="sidebar-issues-panel__entity" title=${sessionTitle}>${sessionTitle}</span>
+      <span
+        class="sidebar-approval-row__timer ${expiryUrgent
+          ? "sidebar-approval-row__timer--urgent"
+          : ""}"
+        role="timer"
+        aria-label=${expiryLabel}
+        title=${expiryLabel}
+        >${remainingLabel}</span
+      >
+    </div>
+    <div class="sidebar-approval-row__command mono" title=${approval.request.command}>
+      <span aria-hidden="true">$ </span>${command}
+    </div>
     <div
       class="sidebar-approval-row__actions"
       role="group"
@@ -348,11 +293,9 @@ export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
         const label = approvalDecisionLabel(decision);
         return html`<button
           type="button"
-          class="btn btn--xs ${decision === "allow-once"
-            ? "primary"
-            : decision === "deny"
-              ? "btn--ghost"
-              : ""} sidebar-approval-row__action sidebar-approval-row__action--${decision}"
+          class="btn btn--xs ${decision === "deny"
+            ? "btn--ghost"
+            : ""} sidebar-approval-row__action sidebar-approval-row__action--${decision}"
           aria-label=${t("execApproval.decisionRequest", { decision: label, command })}
           ?disabled=${props.busy || !props.canGrant || expired}
           @click=${(event: Event) => props.onDecision(event, approval.id, decision)}
@@ -360,6 +303,17 @@ export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
           ${label}
         </button>`;
       })}
+      ${props.openSessionHref && props.onOpenSession
+        ? html`<a
+            class="sidebar-approval-row__open-session"
+            href=${props.openSessionHref}
+            aria-label=${t("sessionsView.openSession")}
+            title=${t("sessionsView.openSession")}
+            @click=${props.onOpenSession}
+          >
+            ${icons.arrowUpRight}
+          </a>`
+        : nothing}
     </div>
     ${!props.canGrant
       ? html`<div class="sidebar-approval-row__message" role=${grantError ? "alert" : "note"}>
@@ -374,9 +328,6 @@ export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
           ${props.error}
         </div>`
       : nothing}
-    <div id=${detailId} class="sidebar-approval-row__details" ?hidden=${!props.expanded}>
-      ${renderExpandedApprovalDetails(approval)}
-    </div>
   </article>`;
 }
 
