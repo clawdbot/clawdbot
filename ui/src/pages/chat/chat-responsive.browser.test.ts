@@ -289,6 +289,34 @@ function completedWorkSpacingHtml() {
   `;
 }
 
+function runBlockSpacingHtml() {
+  return `
+    <div class="chat-thread chat-thread--direct" role="log">
+      <div class="chat-thread-inner">
+        <div class="chat-group assistant chat-group--with-footer" data-run-turn>
+          <div class="chat-group-messages">
+            <div class="chat-bubble" data-run-block="text"><div class="chat-text">Opening text</div></div>
+            <div class="chat-bubble" data-run-block="detail"><div class="chat-text">Detail text</div></div>
+            <div class="chat-bubble chat-bubble--tool-shell" data-run-block="tool">Tool row</div>
+            <div class="chat-activity-group" data-run-block="list">Tool list</div>
+            <div class="chat-activity-group chat-work-group" data-run-block="work">
+              <button class="chat-inline-disclosure chat-activity-group__summary" type="button">Worked for 10s</button>
+              <div class="chat-work-group__separator"></div>
+            </div>
+          </div>
+          <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
+        </div>
+        <div class="chat-group user chat-group--with-footer" data-next-turn>
+          <div class="chat-group-messages">
+            <div class="chat-bubble"><div class="chat-text">Next turn</div></div>
+          </div>
+          <div class="chat-group-footer"><span class="chat-sender-name">You</span></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function chatFooterActionsHtml() {
   return `
     <div class="chat-group-footer-actions">
@@ -1302,6 +1330,46 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
       expect(gaps.before).toBeCloseTo(expectedGap, 0);
       expect(gaps.after).toBeCloseTo(expectedGap, 0);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it.each([
+    { label: "desktop", width: 1366, hasTouch: false },
+    { label: "mobile", width: 430, hasTouch: true },
+  ])("keeps transcript turn and run block spacing on $label", async ({ width, hasTouch }) => {
+    const page = await openBrowserPage(width, 900, { hasTouch, isolated: true });
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${runBlockSpacingHtml()}</body></html>`,
+      );
+
+      const gaps = await page.evaluate(() => {
+        const rect = (selector: string) =>
+          document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+        const gap = (before: string, after: string) => rect(after).top - rect(before).bottom;
+        return {
+          intraTurn: gap('[data-run-block="text"]', '[data-run-block="detail"]'),
+          textToTool: gap('[data-run-block="detail"]', '[data-run-block="tool"]'),
+          toolToList: gap('[data-run-block="tool"]', '[data-run-block="list"]'),
+          listToWork: gap('[data-run-block="list"]', '[data-run-block="work"]'),
+          workedForSeparator: gap(
+            '[data-run-block="work"] > button',
+            ".chat-work-group__separator",
+          ),
+          turn: gap('[data-run-block="work"]', "[data-next-turn] .chat-bubble"),
+        };
+      });
+
+      expect(gaps).toEqual({
+        intraTurn: 2,
+        textToTool: 4,
+        toolToList: 12,
+        listToWork: 12,
+        workedForSeparator: 0,
+        turn: 50,
+      });
     } finally {
       await closeBrowserPage(page);
     }

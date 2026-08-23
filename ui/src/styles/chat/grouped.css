@@ -7,8 +7,10 @@
    message content and footer into separate rows so each row keeps the avatar
    gutter while only the message row controls avatar alignment. */
 .chat-group {
+  --chat-footer-row-offset: 26px;
   --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
   --chat-run-block-gap: 12px;
+  --chat-touch-row-margin: 14px;
   --chat-turn-gap: 50px;
   display: flex;
   gap: 10px;
@@ -57,7 +59,7 @@
   grid-template-rows: auto auto;
   gap: 2px 10px;
   justify-content: start;
-  padding-bottom: calc(var(--chat-turn-gap) - 26px);
+  padding-bottom: calc(var(--chat-turn-gap) - var(--chat-footer-row-offset));
 }
 
 .chat-group.user.chat-group--with-footer {
@@ -762,11 +764,12 @@ img.chat-avatar.chat-avatar--logo {
   /* Shared message renderers stay touch-readable by default. Transcript rows
      opt into one-at-a-time disclosure through their owning thread. */
   .chat-group {
+    --chat-footer-row-offset: 44px;
     --chat-footer-disclosure-opacity: 1;
     --chat-footer-disclosure-pointer-events: auto;
     --chat-footer-detail-position: static;
-    padding-bottom: 0;
-    margin-bottom: 14px;
+    padding-bottom: calc(var(--chat-turn-gap) - var(--chat-touch-row-margin));
+    margin-bottom: var(--chat-touch-row-margin);
   }
 
   .chat-group-footer {
