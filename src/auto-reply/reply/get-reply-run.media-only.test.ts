@@ -910,7 +910,7 @@ describe("runPreparedReply media-only handling", () => {
         url: "media://staged.png",
       },
     ];
-    Object.assign(params.ctx.media[0], {
+    Object.assign(params.ctx.media[0]!, {
       originalPath: "/tmp/input.png",
       originalUrl: "media://input.png",
       workspaceDir: "/tmp/workspace",

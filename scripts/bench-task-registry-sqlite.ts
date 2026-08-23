@@ -1,9 +1,21 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  emitBenchmarkReport,
+  parseBenchmarkInteger,
+  parseBenchmarkIntegerList,
+  parseBenchmarkOptions,
+  parseBenchmarkWorkerResult,
+  runBenchmarkEntrypoint,
+  runBenchmarkJobs,
+  runBenchmarkWorker,
+  summarizeBenchmarkTimings,
+  type BenchmarkWorkerProcessResult,
+  type BenchmarkWorkerSpawner,
+} from "./lib/benchmark-harness.mts";
 
 const DEFAULT_SIZES = [24, 64, 128];
 const WORKER_TIMEOUT_MS = 300_000;
@@ -71,37 +83,8 @@ type Options = {
   help: boolean;
 };
 
-type TimingSummary = {
-  count: number;
-  min: number;
-  p50: number;
-  max: number;
-  p95?: number;
-  p99?: number;
-};
-
-type WorkerProcessResult = {
-  status: number | null;
-  stdout: string;
-  stderr: string;
-  error?: Error & { code?: string };
-};
-
-type WorkerSpawner = (
-  command: string,
-  args: string[],
-  options: {
-    cwd: string;
-    encoding: "utf8";
-    env: NodeJS.ProcessEnv;
-    timeout: number;
-    killSignal: NodeJS.Signals;
-    maxBuffer: number;
-  },
-) => WorkerProcessResult;
-
 type WorkerLaunchRuntime = {
-  spawnWorker?: WorkerSpawner;
+  spawnWorker?: BenchmarkWorkerSpawner;
 };
 
 type BenchmarkRuntime = {
@@ -126,95 +109,31 @@ Options:
 `;
 }
 
-function parseInteger(raw: string, flag: string, min: number, max: number): number {
-  if (!/^\d+$/u.test(raw)) {
-    throw new Error(`${flag} must be an integer`);
-  }
-  const value = Number(raw);
-  if (value < min) {
-    throw new Error(`${flag} must be at least ${min}`);
-  }
-  if (value > max) {
-    throw new Error(`${flag} must be at most ${max}`);
-  }
-  return value;
-}
-
-function parseList(raw: string, flag: string): number[] {
-  if (!raw || raw.split(",").some((value) => value.length === 0)) {
-    throw new Error(`${flag} requires a comma-separated integer list`);
-  }
-  const values = raw.split(",").map((value) => parseInteger(value, flag, 1, 4096));
-  if (new Set(values).size !== values.length) {
-    throw new Error(`${flag} contains duplicate values`);
-  }
-  return values;
-}
-
 function parseOptions(argv: string[]): Options {
-  const options: Options = {
-    sizes: DEFAULT_SIZES,
-    cycles: 20,
-    warmup: 3,
-    json: false,
-    help: false,
-  };
-  const seen = new Set<string>();
-  const valueFlags = new Set(["--sizes", "--cycles", "--warmup", "--output"]);
-  for (let index = 0; index < argv.length; index += 1) {
-    const flag = argv[index];
-    if (!flag?.startsWith("--")) {
-      throw new Error(`Unknown argument: ${flag}`);
-    }
-    if (seen.has(flag)) {
-      throw new Error(`${flag} was provided more than once`);
-    }
-    seen.add(flag);
-    if (flag === "--json" || flag === "--help") {
-      options[flag === "--json" ? "json" : "help"] = true;
-      continue;
-    }
-    if (!valueFlags.has(flag)) {
-      throw new Error(`Unknown argument: ${flag}`);
-    }
-    const value = argv[index + 1];
-    if (!value || value.startsWith("--")) {
-      throw new Error(`${flag} requires a value`);
-    }
-    index += 1;
-    if (flag === "--sizes") {
-      options.sizes = parseList(value, flag);
-    } else if (flag === "--cycles") {
-      options.cycles = parseInteger(value, flag, 1, 200);
-    } else if (flag === "--warmup") {
-      options.warmup = parseInteger(value, flag, 0, 20);
-    } else {
-      options.output = value;
-    }
-  }
-  return options;
-}
-
-function percentile(sorted: number[], ratio: number): number {
-  return sorted[Math.max(0, Math.ceil(sorted.length * ratio) - 1)] ?? 0;
-}
-
-function summarizeTimings(values: number[]): TimingSummary {
-  if (values.length === 0) {
-    throw new Error("cannot summarize an empty timing set");
-  }
-  const sorted = values.toSorted((left, right) => left - right);
-  const summary: TimingSummary = {
-    count: sorted.length,
-    min: sorted[0] ?? 0,
-    p50: percentile(sorted, 0.5),
-    max: sorted.at(-1) ?? 0,
-  };
-  if (sorted.length >= 20) {
-    summary.p95 = percentile(sorted, 0.95);
-    summary.p99 = percentile(sorted, 0.99);
-  }
-  return summary;
+  return parseBenchmarkOptions<Options>(
+    argv,
+    {
+      sizes: DEFAULT_SIZES,
+      cycles: 20,
+      warmup: 3,
+      json: false,
+      help: false,
+    },
+    {
+      "--sizes": (options, value) => {
+        options.sizes = parseBenchmarkIntegerList(value, "--sizes", 4096);
+      },
+      "--cycles": (options, value) => {
+        options.cycles = parseBenchmarkInteger(value, "--cycles", 1, 200);
+      },
+      "--warmup": (options, value) => {
+        options.warmup = parseBenchmarkInteger(value, "--warmup", 0, 20);
+      },
+      "--output": (options, value) => {
+        options.output = value;
+      },
+    },
+  );
 }
 
 function assertFinite(value: unknown, field: string): asserts value is number {
@@ -399,34 +318,16 @@ function validateWorkerResult(
 }
 
 function parseWorkerProcessResult(
-  result: WorkerProcessResult,
+  result: BenchmarkWorkerProcessResult,
   expected: { size: number; cycles: number; warmup: number },
 ): WorkerResult {
-  if (result.error) {
-    const detail =
-      result.error.code === "ETIMEDOUT"
-        ? `timed out after ${WORKER_TIMEOUT_MS}ms`
-        : result.error.message;
-    throw new Error(`worker size ${expected.size} failed: ${detail}`);
-  }
-  if (result.status !== 0) {
-    throw new Error(
-      `worker size ${expected.size} failed (${result.status ?? "signal"}): ${result.stderr.trim() || result.stdout.trim()}`,
-    );
-  }
-  const payloads = result.stdout
-    .split(/\r?\n/u)
-    .filter((line) => line.startsWith(WORKER_RESULT_SENTINEL));
-  if (payloads.length !== 1) {
-    throw new Error(`worker size ${expected.size} returned ${payloads.length} result payloads`);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(payloads[0]!.slice(WORKER_RESULT_SENTINEL.length));
-  } catch {
-    throw new Error(`worker size ${expected.size} returned invalid JSON`);
-  }
-  return validateWorkerResult(parsed, expected);
+  return parseBenchmarkWorkerResult({
+    result,
+    label: `size ${expected.size}`,
+    sentinel: WORKER_RESULT_SENTINEL,
+    timeoutMs: WORKER_TIMEOUT_MS,
+    validate: (value) => validateWorkerResult(value, expected),
+  });
 }
 
 function buildWorkerArgs(options: Options, size: number, stateDir: string): string[] {
@@ -452,22 +353,19 @@ function runWorker(
   runtime: WorkerLaunchRuntime = {},
 ): WorkerResult {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-task-registry-bench-"));
-  const spawnWorker =
-    runtime.spawnWorker ??
-    ((command, args, spawnOptions) => spawnSync(command, args, spawnOptions));
   try {
-    const result = spawnWorker(process.execPath, buildWorkerArgs(options, size, stateDir), {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, NODE_NO_WARNINGS: "1" },
-      timeout: WORKER_TIMEOUT_MS,
-      killSignal: "SIGTERM",
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    return parseWorkerProcessResult(result, {
-      size,
-      cycles: options.cycles,
-      warmup: options.warmup,
+    return runBenchmarkWorker({
+      args: buildWorkerArgs(options, size, stateDir),
+      label: `size ${size}`,
+      sentinel: WORKER_RESULT_SENTINEL,
+      spawnWorker: runtime.spawnWorker,
+      timeoutMs: WORKER_TIMEOUT_MS,
+      validate: (value) =>
+        validateWorkerResult(value, {
+          size,
+          cycles: options.cycles,
+          warmup: options.warmup,
+        }),
     });
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
@@ -494,9 +392,9 @@ function aggregateWorkerResults(options: Options, workers: WorkerResult[]) {
     return {
       size,
       timingsMs: {
-        registration: summarizeTimings(worker.timingsMs.registration),
-        terminal: summarizeTimings(worker.timingsMs.terminal),
-        teardown: summarizeTimings(worker.timingsMs.teardown),
+        registration: summarizeBenchmarkTimings(worker.timingsMs.registration),
+        terminal: summarizeBenchmarkTimings(worker.timingsMs.terminal),
+        teardown: summarizeBenchmarkTimings(worker.timingsMs.teardown),
       },
       memory: worker.memory,
       invariant: worker.invariant,
@@ -545,27 +443,12 @@ function aggregateWorkerResults(options: Options, workers: WorkerResult[]) {
 
 function benchmark(options: Options, runtime: BenchmarkRuntime = {}) {
   const run = runtime.runWorker ?? runWorker;
-  const writeProgress =
-    runtime.writeProgress ?? ((line: string) => process.stderr.write(`${line}\n`));
-  const now = runtime.now ?? Date.now;
-  const workers = options.sizes.map((size, index) => {
-    const ordinal = index + 1;
-    writeProgress(
-      `[bench-task-registry-sqlite] worker ${ordinal}/${options.sizes.length} start size=${size}`,
-    );
-    const startedAt = now();
-    try {
-      const worker = run(options, size);
-      writeProgress(
-        `[bench-task-registry-sqlite] worker ${ordinal}/${options.sizes.length} complete size=${size} elapsed=${(Math.max(0, now() - startedAt) / 1_000).toFixed(3)}s`,
-      );
-      return worker;
-    } catch (error) {
-      writeProgress(
-        `[bench-task-registry-sqlite] worker ${ordinal}/${options.sizes.length} failed size=${size} elapsed=${(Math.max(0, now() - startedAt) / 1_000).toFixed(3)}s`,
-      );
-      throw error;
-    }
+  const workers = runBenchmarkJobs(options.sizes, {
+    prefix: "bench-task-registry-sqlite",
+    describe: (size) => `size=${size}`,
+    run: (size) => run(options, size),
+    now: runtime.now,
+    writeProgress: runtime.writeProgress,
   });
   return aggregateWorkerResults(options, workers);
 }
@@ -577,24 +460,15 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   const report = benchmark(options);
-  const json = `${JSON.stringify(report, null, 2)}\n`;
-  if (options.output) {
-    fs.mkdirSync(path.dirname(path.resolve(options.output)), { recursive: true });
-    fs.writeFileSync(options.output, json);
-  }
-  if (options.json) {
-    process.stdout.write(json);
-    return;
-  }
-  for (const entry of report.sizes) {
-    const registration = entry.timingsMs.registration;
-    const heapSlope = entry.memory.retainedSlopesBytesPerCycle.heapUsedBytes;
-    console.log(
-      `size=${entry.size} registration-p50=${registration.p50.toFixed(3)}ms registration-max=${registration.max.toFixed(3)}ms post-gc-heap-slope=${heapSlope.toFixed(1)}B/cycle`,
-    );
-  }
-  console.log(report.interpretation.timings);
-  console.log(report.interpretation.memory);
+  emitBenchmarkReport(report, options, (result) => [
+    ...result.sizes.map((entry) => {
+      const registration = entry.timingsMs.registration;
+      const heapSlope = entry.memory.retainedSlopesBytesPerCycle.heapUsedBytes;
+      return `size=${entry.size} registration-p50=${registration.p50.toFixed(3)}ms registration-max=${registration.max.toFixed(3)}ms post-gc-heap-slope=${heapSlope.toFixed(1)}B/cycle`;
+    }),
+    result.interpretation.timings,
+    result.interpretation.memory,
+  ]);
 }
 
 export const testing = {
@@ -604,18 +478,9 @@ export const testing = {
   parseOptions,
   parseWorkerProcessResult,
   runWorker,
-  summarizeTimings,
+  summarizeTimings: summarizeBenchmarkTimings,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  try {
-    await main();
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  } finally {
-    if (process.exitCode && process.exitCode !== 0) {
-      console.error(`[bench-task-registry-sqlite] FAILED (exit ${process.exitCode})`);
-    }
-  }
+  await runBenchmarkEntrypoint("bench-task-registry-sqlite", main);
 }
