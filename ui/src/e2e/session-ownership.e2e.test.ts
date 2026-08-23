@@ -183,6 +183,21 @@ async function replaceGatewayClient(targetPage: Page) {
   });
 }
 
+async function openNewSessionPlusMenu(targetPage: Page) {
+  const composer = targetPage.locator(".new-session-page__composer");
+  const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+  await composer.getByRole("button", { name: "Add attachment" }).click();
+  await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
+  return menu;
+}
+
+async function selectNewSessionDraft(targetPage: Page) {
+  const menu = await openNewSessionPlusMenu(targetPage);
+  await menu.getByRole("menuitem", { name: "Draft" }).click();
+  await targetPage.keyboard.press("Escape");
+  await targetPage.getByRole("button", { name: "Draft", exact: true }).waitFor();
+}
+
 suite.define(() => {
   afterEach(async () => {
     await page
@@ -604,11 +619,12 @@ suite.define(() => {
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
-    // Playwright check()/isChecked() support role="switch" buttons via aria-checked.
-    const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
-    await draftToggle.waitFor();
+    const menu = await openNewSessionPlusMenu(currentPage);
+    await menu.getByRole("menuitem", { name: "Draft" }).waitFor();
     await captureUiProof(currentPage, "02-create-draft-available.png");
-    await draftToggle.check();
+    await menu.getByRole("menuitem", { name: "Draft" }).click();
+    await currentPage.keyboard.press("Escape");
+    await currentPage.getByRole("button", { name: "Draft", exact: true }).waitFor();
     await currentPage.locator(".new-session-page__message").fill("work privately first");
     await captureUiProof(currentPage, "03-create-draft-selected.png");
     await currentPage.getByRole("button", { name: "Start session" }).click();
@@ -1020,22 +1036,24 @@ suite.define(() => {
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
-    const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
-    await draftToggle.check();
+    await selectNewSessionDraft(currentPage);
     await gateway.setSessionSharingPolicy({
       allowedSessionVisibilities: ["shared"],
       hasMultipleSessionSharingIdentities: false,
     });
     await replaceGatewayClient(currentPage);
-    await expect.poll(() => draftToggle.count()).toBe(0);
+    await expect
+      .poll(() => currentPage.getByRole("button", { name: "Draft", exact: true }).count())
+      .toBe(0);
 
     await gateway.setSessionSharingPolicy({
       allowedSessionVisibilities: ["shared", "draft"],
       hasMultipleSessionSharingIdentities: true,
     });
     await replaceGatewayClient(currentPage);
-    await draftToggle.waitFor();
-    expect(await draftToggle.isChecked()).toBe(false);
+    const menu = await openNewSessionPlusMenu(currentPage);
+    await menu.getByRole("menuitem", { name: "Draft" }).waitFor();
+    expect(await currentPage.getByRole("button", { name: "Draft", exact: true }).count()).toBe(0);
   });
 
   it("keeps create-as-draft dormant for one owner", async () => {
@@ -1049,7 +1067,7 @@ suite.define(() => {
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
-    await currentPage.locator(".new-session-page__message").waitFor();
-    expect(await currentPage.getByRole("switch", { name: "Draft", exact: true }).count()).toBe(0);
+    const menu = await openNewSessionPlusMenu(currentPage);
+    expect(await menu.getByRole("menuitem", { name: "Draft" }).count()).toBe(0);
   });
 });
