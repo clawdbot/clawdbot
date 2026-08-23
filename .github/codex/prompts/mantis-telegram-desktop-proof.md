@@ -170,9 +170,9 @@ near the bottom and the recording covers the behavior—not only its final state
 If `start` reports `desktop-unavailable`, record that fact and use `block`; never
 retry that lane. Iterate as needed; all attempts remain recorded.
 
-If you design a novel working scenario worth reusing, optionally write
-`MANTIS_OUTPUT_DIR/recipe-suggestion.md` with its trigger, exact commands, and
-proof facts. The builder publishes it as a non-inline attachment.
+If you change scenario mechanics after a failed attempt that was not a product
+defect, write `MANTIS_OUTPUT_DIR/recipe-suggestion.md` with its trigger, exact
+commands, and proof facts. The builder publishes it as a non-inline attachment.
 
 Build `mantis-evidence.json` with
 `scripts/mantis/build-telegram-desktop-proof-evidence.mts` as before, using each
