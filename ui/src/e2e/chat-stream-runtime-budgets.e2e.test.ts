@@ -61,6 +61,7 @@ const STREAM_SESSION_HEAP_CEILING_BYTES = 96 * 1024 * 1024;
 
 const IDLE_WINDOW_MS = 4_000;
 const IDLE_LONGTASK_TOTAL_CEILING_MS = 600;
+const IDLE_TASK_DURATION_CEILING_MS = 600;
 
 type StreamPerfProbe = {
   mutationBatches: number;
@@ -70,9 +71,9 @@ type StreamPerfProbe = {
 };
 
 type ScopedWindow = Window & {
-  __ocStreamPerf?: StreamPerfProbe;
-  __ocIdleProbe?: { longTasks: number; longTaskMs: number; rafCount: number };
-  __ocBurstDone?: boolean;
+  ocStreamPerf?: StreamPerfProbe;
+  ocIdleProbe?: { longTasks: number; longTaskMs: number };
+  ocBurstDone?: boolean;
   openclawControlUiE2eGateway?: {
     emit: (event: string, payload?: unknown) => void;
   };
@@ -110,7 +111,7 @@ async function installRenderProbe(page: ChatFlowPage) {
     if (!chatPage) {
       throw new Error("openclaw-chat-page is not mounted");
     }
-    scope.__ocStreamPerf = {
+    scope.ocStreamPerf = {
       mutationBatches: 0,
       rafCount: 0,
       hostUpdates: 0,
@@ -118,14 +119,14 @@ async function installRenderProbe(page: ChatFlowPage) {
     };
     new MutationObserver((records) => {
       if (records.length > 0) {
-        scope.__ocStreamPerf!.mutationBatches += 1;
+        scope.ocStreamPerf!.mutationBatches += 1;
       }
     }).observe(document.body, { childList: true, subtree: true, characterData: true });
     let insideFrame = false;
     const originalRequestAnimationFrame = window.requestAnimationFrame.bind(window);
     window.requestAnimationFrame = (callback: FrameRequestCallback): number =>
       originalRequestAnimationFrame((time) => {
-        scope.__ocStreamPerf!.rafCount += 1;
+        scope.ocStreamPerf!.rafCount += 1;
         const previous = insideFrame;
         insideFrame = true;
         try {
@@ -148,7 +149,7 @@ async function installRenderProbe(page: ChatFlowPage) {
     const ownerPrototype = owner as { requestUpdate: (...args: unknown[]) => unknown };
     const originalRequestUpdate = ownerPrototype.requestUpdate;
     ownerPrototype.requestUpdate = function patchedRequestUpdate(this: object, ...args: unknown[]) {
-      const probe = scope.__ocStreamPerf!;
+      const probe = scope.ocStreamPerf!;
       const tag = (this as HTMLElement).localName;
       if (tag === "openclaw-chat-page" || tag === "openclaw-chat-pane") {
         probe.hostUpdates += 1;
@@ -164,7 +165,7 @@ async function installRenderProbe(page: ChatFlowPage) {
 async function resetRenderProbe(page: ChatFlowPage) {
   await page.evaluate(() => {
     const scope = window as ScopedWindow;
-    scope.__ocStreamPerf = {
+    scope.ocStreamPerf = {
       mutationBatches: 0,
       rafCount: 0,
       hostUpdates: 0,
@@ -174,7 +175,7 @@ async function resetRenderProbe(page: ChatFlowPage) {
 }
 
 async function readRenderProbe(page: ChatFlowPage): Promise<StreamPerfProbe> {
-  return page.evaluate(() => (window as ScopedWindow).__ocStreamPerf!);
+  return page.evaluate(() => (window as ScopedWindow).ocStreamPerf!);
 }
 
 // Emits each delta from its own macrotask so render work cannot hide inside
@@ -186,13 +187,13 @@ async function emitDeltaBurstInPage(
   count: number,
 ): Promise<void> {
   await page.evaluate(
-    ({ runId, count }) => {
+    ({ runId: targetRunId, count: targetCount }) => {
       const gateway = (window as ScopedWindow).openclawControlUiE2eGateway;
       if (!gateway) {
         throw new Error("mock gateway handle missing");
       }
       const scope = window as ScopedWindow;
-      scope.__ocBurstDone = false;
+      scope.ocBurstDone = false;
       let emitted = 0;
       const emitNext = () => {
         emitted += 1;
@@ -204,21 +205,21 @@ async function emitDeltaBurstInPage(
             role: "assistant",
             timestamp: Date.now(),
           },
-          runId,
+          runId: targetRunId,
           sessionKey: "main",
           state: "delta",
         });
-        if (emitted < count) {
+        if (emitted < targetCount) {
           setTimeout(emitNext, 0);
         } else {
-          scope.__ocBurstDone = true;
+          scope.ocBurstDone = true;
         }
       };
       setTimeout(emitNext, 0);
     },
     { runId, count },
   );
-  await page.waitForFunction(() => (window as ScopedWindow).__ocBurstDone === true, undefined, {
+  await page.waitForFunction(() => (window as ScopedWindow).ocBurstDone === true, undefined, {
     timeout: 30_000,
     polling: 50,
   });
@@ -261,13 +262,13 @@ async function emitToolResultFlood(
   // frames arrive as separate socket messages; deliver each pair on its own
   // timer tick so the live stream sees production-shaped input.
   await page.evaluate(
-    ({ runId, pairCount, intervalMs, seqSeed }) => {
+    ({ runId: targetRunId, pairCount: targetPairCount, intervalMs, seqSeed }) => {
       const scope = window as ScopedWindow;
       const gateway = scope.openclawControlUiE2eGateway;
       if (!gateway) {
         throw new Error("mock gateway handle missing");
       }
-      scope.__ocBurstDone = false;
+      scope.ocBurstDone = false;
       let emitted = 0;
       const emitPair = () => {
         emitted += 1;
@@ -279,7 +280,7 @@ async function emitToolResultFlood(
             role: "assistant",
             timestamp: Date.now(),
           },
-          runId,
+          runId: targetRunId,
           sessionKey: "main",
           state: "delta",
         });
@@ -290,23 +291,23 @@ async function emitToolResultFlood(
             result: `tool output ${emitted}`,
             toolCallId: `call-${emitted}`,
           },
-          runId,
+          runId: targetRunId,
           seq: seqSeed + emitted,
           sessionKey: "main",
           stream: "tool",
           ts: Date.now(),
         });
-        if (emitted < pairCount) {
+        if (emitted < targetPairCount) {
           setTimeout(emitPair, intervalMs);
         } else {
-          scope.__ocBurstDone = true;
+          scope.ocBurstDone = true;
         }
       };
       setTimeout(emitPair, 0);
     },
     { runId, pairCount, intervalMs: TOOL_FLOOD_PAIR_INTERVAL_MS, seqSeed: TOOL_FLOOD_SEQ_SEED },
   );
-  await page.waitForFunction(() => (window as ScopedWindow).__ocBurstDone === true, undefined, {
+  await page.waitForFunction(() => (window as ScopedWindow).ocBurstDone === true, undefined, {
     timeout: 60_000,
     polling: 200,
   });
@@ -362,7 +363,9 @@ suite.define(() => {
         await expect
           .poll(async () => {
             const before = await readRenderProbe(page);
-            await new Promise((resolve) => setTimeout(resolve, 200));
+            await new Promise((resolve) => {
+              setTimeout(resolve, 200);
+            });
             const after = await readRenderProbe(page);
             return before.mutationBatches === after.mutationBatches ? after : null;
           })
@@ -403,10 +406,16 @@ suite.define(() => {
         await expect
           .poll(() => floodCards.count(), { timeout: 15_000 })
           .toBe(TOOL_STREAM_LIMIT_CONTRACT);
-        expect(await page.locator('[data-message-id^="tool:assistant:call-0"]').count()).toBe(0);
+        const firstRetainedCall = TOOL_FLOOD_PAIR_COUNT - TOOL_STREAM_LIMIT_CONTRACT + 1;
+        expect(await page.locator('[data-message-id^="tool:assistant:call-1:"]').count()).toBe(0);
         expect(
           await page
-            .locator(`[data-message-id^="tool:assistant:call-${TOOL_FLOOD_PAIR_COUNT}"]`)
+            .locator(`[data-message-id^="tool:assistant:call-${firstRetainedCall}:"]`)
+            .count(),
+        ).toBe(1);
+        expect(
+          await page
+            .locator(`[data-message-id^="tool:assistant:call-${TOOL_FLOOD_PAIR_COUNT}:"]`)
             .count(),
         ).toBe(1);
       },
@@ -464,7 +473,7 @@ suite.define(() => {
         serviceWorkers: "block",
         viewport: { height: 900, width: 1280 },
       },
-      async ({ page }) => {
+      async ({ page, context }) => {
         const gateway = await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
@@ -473,36 +482,41 @@ suite.define(() => {
         await gateway.emitChatFinal({ runId, text: "short finalized turn" });
         await page.locator(".chat-thread-inner").getByText("short finalized turn").waitFor();
 
+        const cdpSession = await context.newCDPSession(page);
+        await cdpSession.send("Performance.enable");
+        const beforeMetrics = await cdpSession.send("Performance.getMetrics");
+        const taskDurationBefore = beforeMetrics.metrics.find(
+          (metric) => metric.name === "TaskDuration",
+        )!.value;
         await page.evaluate(() => {
           const scope = window as ScopedWindow;
-          scope.__ocIdleProbe = { longTasks: 0, longTaskMs: 0, rafCount: 0 };
+          scope.ocIdleProbe = { longTasks: 0, longTaskMs: 0 };
           new PerformanceObserver((list) => {
             for (const entry of list.getEntries()) {
-              scope.__ocIdleProbe!.longTasks += 1;
-              scope.__ocIdleProbe!.longTaskMs += entry.duration;
+              scope.ocIdleProbe!.longTasks += 1;
+              scope.ocIdleProbe!.longTaskMs += entry.duration;
             }
           }).observe({ entryTypes: ["longtask"] });
-          const originalRequestAnimationFrame = window.requestAnimationFrame.bind(window);
-          window.requestAnimationFrame = (callback: FrameRequestCallback): number =>
-            originalRequestAnimationFrame((time) => {
-              scope.__ocIdleProbe!.rafCount += 1;
-              callback(time);
-            });
         });
 
-        await new Promise((resolve) => setTimeout(resolve, IDLE_WINDOW_MS));
+        await new Promise((resolve) => {
+          setTimeout(resolve, IDLE_WINDOW_MS);
+        });
 
-        const idle = await page.evaluate(() => (window as ScopedWindow).__ocIdleProbe!);
+        const afterMetrics = await cdpSession.send("Performance.getMetrics");
+        const taskDurationAfter = afterMetrics.metrics.find(
+          (metric) => metric.name === "TaskDuration",
+        )!.value;
+        const taskDurationMs = (taskDurationAfter - taskDurationBefore) * 1_000;
+        const idle = await page.evaluate(() => (window as ScopedWindow).ocIdleProbe!);
         await recordBudgetMetrics("idle-quiescence", {
           longTasks: idle.longTasks,
           longTaskMs: Math.round(idle.longTaskMs),
-          rafCount: idle.rafCount,
+          taskDurationMs: Math.round(taskDurationMs),
         });
 
         expect(idle.longTaskMs).toBeLessThanOrEqual(IDLE_LONGTASK_TOTAL_CEILING_MS);
-        // rAF stays recorded but unasserted: the idle shell animates a
-        // continuous low-cost loop (~20 requests/s measured), so only long-task
-        // time discriminates runaway work from that baseline.
+        expect(taskDurationMs).toBeLessThanOrEqual(IDLE_TASK_DURATION_CEILING_MS);
       },
     );
   });
