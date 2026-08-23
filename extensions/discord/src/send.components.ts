@@ -219,8 +219,8 @@ async function buildDiscordComponentPayload(params: {
     const explicitAttachmentName = extractComponentAttachmentNames(spec)[0];
     resolvedFileName =
       filenameOverride ||
-      media.fileName ||
       explicitAttachmentName ||
+      media.fileName ||
       `upload${extensionForMime(media.contentType) ?? ""}`;
     spec = withImplicitComponentAttachmentBlock(spec, resolvedFileName);
     files = [{ data: media.buffer, name: resolvedFileName, contentType: media.contentType }];
