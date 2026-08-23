@@ -2,13 +2,9 @@ import { spawn } from "node:child_process";
 import { Readable, type Writable } from "node:stream";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
-import {
-  appendUtf8Lines,
-  createUtf8LineAccumulator,
-  DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
-  flushUtf8Line,
-} from "../process/utf8-line-accumulator.js";
+import { onDecodedOutput } from "../process/decoded-output.js";
 import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-energy.js";
+import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
 import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
@@ -53,7 +49,7 @@ type MeetingRealtimeAudioSpawn = (
 ) => BridgeProcess;
 
 const STDERR_LINE_TRUNCATED_PREFIX = "[stderr line truncated] ";
-type AccumulatedUtf8Line = ReturnType<typeof appendUtf8Lines>[number];
+const MAX_STDERR_CHUNK_BYTES = 8 * 1024;
 
 type OutputWriteWaiter = {
   proc: BridgeProcess;
@@ -89,41 +85,15 @@ function attachStderrLineLogger(params: {
     });
     return;
   }
-  const accumulator = createUtf8LineAccumulator();
-  let finalized = false;
-  const logLine = ({ line, truncated }: AccumulatedUtf8Line) => {
-    const trimmed = line.trim();
-    if (!trimmed && !truncated) {
+  onDecodedOutput(params.stderr, (chunk) => {
+    const trimmed = chunk.trim();
+    if (!trimmed) {
       return;
     }
-    debug(`${params.prefix}: ${truncated ? STDERR_LINE_TRUNCATED_PREFIX : ""}${trimmed}`);
-  };
-  const append = (chunk: Buffer | string) => {
-    appendUtf8Lines({
-      accumulator,
-      chunk,
-      maxPendingLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
-      maxLineBytes: DEFAULT_MAX_PENDING_UTF8_LINE_BYTES,
-      splitOnCarriageReturn: true,
-    }).forEach(logLine);
-  };
-  const flush = () => {
-    if (finalized) {
-      return;
-    }
-    finalized = true;
-    const trailing = flushUtf8Line(accumulator, DEFAULT_MAX_PENDING_UTF8_LINE_BYTES);
-    if (trailing) {
-      logLine(trailing);
-    }
-  };
-  params.stderr.on("data", (chunk) => {
-    if (!finalized) {
-      append(chunk);
-    }
+    const truncated = Buffer.byteLength(trimmed, "utf8") > MAX_STDERR_CHUNK_BYTES;
+    const value = truncated ? truncateUtf8Suffix(trimmed, MAX_STDERR_CHUNK_BYTES) : trimmed;
+    debug(`${params.prefix}: ${truncated ? STDERR_LINE_TRUNCATED_PREFIX : ""}${value}`);
   });
-  params.stderr.once("end", flush);
-  params.stderr.once("close", flush);
 }
 
 export function createLocalMeetingRealtimeAudioTransport(params: {

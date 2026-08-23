@@ -112,7 +112,7 @@ describe("local meeting realtime audio transport", () => {
     await transport.stop();
   });
 
-  it("preserves split UTF-8 diagnostics across local audio stderr streams", async () => {
+  it("preserves split UTF-8 diagnostics and logs complete fragments immediately", async () => {
     const processes = new Map<string, ReturnType<typeof createProcess>>();
     const debug = vi.fn();
     const spawn = vi.fn((command: string) => {
@@ -146,15 +146,12 @@ describe("local meeting realtime audio transport", () => {
       const line = Buffer.from(`${diagnostic}\n`, "utf8");
       const before = debug.mock.calls.length;
       process.stderr.write(line.subarray(0, 2));
-      process.stderr.write(line.subarray(2, -1));
       expect(debug).toHaveBeenCalledTimes(before);
-      process.stderr.write(line.subarray(-1));
+      process.stderr.write(line.subarray(2, -1));
       expect(debug).toHaveBeenNthCalledWith(before + 1, `[meeting] ${label}: ${diagnostic}`);
+      process.stderr.write(line.subarray(-1));
 
       process.stderr.write(Buffer.from(`未换行-${command}`, "utf8"));
-      expect(debug).toHaveBeenCalledTimes(before + 1);
-      process.stderr.end();
-      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(debug).toHaveBeenNthCalledWith(before + 2, `[meeting] ${label}: 未换行-${command}`);
     }
 
