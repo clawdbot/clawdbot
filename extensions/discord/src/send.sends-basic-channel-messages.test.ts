@@ -502,6 +502,39 @@ describe("sendMessageDiscord", () => {
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["msg1"]);
   });
 
+  it("rechecks delivery authority before media caption follow-up chunks", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock
+      .mockResolvedValueOnce({ id: "media1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "text2", channel_id: "789" });
+    const authorityRevoked = new Error("delivery authority revoked");
+    let authorityActive = true;
+    const onPlatformSendDispatch = vi.fn(async () => {
+      if (!authorityActive) {
+        throw authorityRevoked;
+      }
+    });
+    const onDeliveryResult = vi.fn(async () => {
+      authorityActive = false;
+    });
+
+    await expect(
+      sendMessageDiscord("channel:789", "a".repeat(2_500), {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        mediaUrl: "file:///tmp/photo.jpg",
+        onDeliveryResult,
+        onPlatformSendDispatch,
+      }),
+    ).rejects.toBe(authorityRevoked);
+
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+    expect(postMock).toHaveBeenCalledTimes(1);
+  });
+
   it("allows Discord link embeds when suppressEmbeds is disabled", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });

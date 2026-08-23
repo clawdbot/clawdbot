@@ -527,6 +527,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       allowedMentions,
       maxChars,
       onResult,
+      onPlatformSendDispatch,
     });
     for (const id of followup.platformMessageIds) {
       if (id) {
