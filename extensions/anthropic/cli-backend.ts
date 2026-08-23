@@ -4,6 +4,7 @@
  */
 import { createHmac, randomBytes } from "node:crypto";
 import type {
+  CliBackendExecuteContext,
   CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
@@ -270,7 +271,19 @@ export function buildAnthropicCliBackend(
           ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
           ...authInput?.env,
         };
-        return Object.keys(env).length > 0 || isolatedCompletion
+        const agentSdkExecution =
+          !credentialContext.authCredential &&
+          !isolatedCompletion &&
+          context.executionMode === "agent" &&
+          (!context.toolAvailability || context.toolAvailability.native.length === 0)
+            ? {
+                execute: async function* (executionContext: CliBackendExecuteContext) {
+                  const { executeClaudeAgentSdk } = await import("./agent-sdk.runtime.js");
+                  yield* executeClaudeAgentSdk(executionContext);
+                },
+              }
+            : undefined;
+        return Object.keys(env).length > 0 || isolatedCompletion || agentSdkExecution
           ? {
               env,
               // The paired side-question argv projection disables settings, memory,
@@ -279,6 +292,7 @@ export function buildAnthropicCliBackend(
               ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
               ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
               ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
+              ...agentSdkExecution,
             }
           : undefined;
       };

@@ -1016,16 +1016,20 @@ describe("normalizeClaudeBackendConfig", () => {
     ).toThrow("Selected Claude CLI OAuth credential is expired or invalid");
   });
 
-  it("keeps native Claude login when no compatible profile is selected", () => {
+  it("runs native Claude login through the official Agent SDK without forwarding credentials", () => {
     const backend = buildAnthropicCliBackend();
 
-    expect(
-      backend.prepareExecution?.({
-        workspaceDir: "/tmp/openclaw-claude-cli",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-7",
-      }),
-    ).toBeUndefined();
+    const prepared = backend.prepareExecution?.({
+      workspaceDir: "/tmp/openclaw-claude-cli",
+      provider: "claude-cli",
+      modelId: "claude-opus-4-7",
+      executionMode: "agent",
+    });
+
+    expect(prepared).toEqual(expect.objectContaining({ execute: expect.any(Function) }));
+    expect(prepared).not.toHaveProperty("secretInput");
+    expect(prepared).not.toHaveProperty("env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR");
+    expect(prepared).not.toHaveProperty("env.CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR");
   });
 
   it("forwards a selected API-key profile through Claude's private descriptor", async () => {

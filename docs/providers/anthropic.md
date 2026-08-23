@@ -9,7 +9,7 @@ title: "Anthropic"
 Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 
 - **API key** - direct Anthropic API access with usage-based billing (`anthropic/*` models)
-- **Claude CLI** - reuse an existing Claude Code login on the same host
+- **Claude CLI** - reuse an existing Claude Code login on the same host through Anthropic's official Agent SDK
 
 ## Usage and cost tracking
 
@@ -22,9 +22,14 @@ OpenClaw detects the available Anthropic credential and selects the matching usa
 Admin API cost history comes from Anthropic's [Usage and Cost API](https://platform.claude.com/docs/en/manage-claude/usage-cost-api). It is actual provider billing, separate from OpenClaw's session-derived estimated cost.
 
 <Warning>
-OpenClaw's Claude CLI backend runs the installed Claude Code CLI in
-non-interactive print mode (`claude -p`). Anthropic's current Claude Code docs
-describe that mode as Agent SDK/programmatic usage. Anthropic's June 15, 2026
+For an existing local Claude Code login, OpenClaw's Claude CLI backend uses
+Anthropic's official Agent SDK to run the installed Claude Code executable.
+Claude Code keeps ownership of its existing login and subscription; OpenClaw
+does not need to extract that login or synthesize Anthropic API requests.
+Explicit non-native API-key and token credentials continue to use the existing
+protected CLI credential-forwarding path for compatibility. Imported native
+OAuth profiles reuse the matching, identity-verified Claude Code login instead.
+Anthropic's June 15, 2026
 support update paused the announced separate Agent SDK billing change: Claude
 Agent SDK, `claude -p`, and third-party app usage still draw from a signed-in
 subscription's usage limits, and the previously announced monthly Agent SDK
@@ -114,7 +119,15 @@ OpenClaw release:
         # choose: Claude CLI
         ```
 
-        OpenClaw detects and reuses the existing Claude CLI credentials.
+        OpenClaw detects the existing Claude CLI login. Normal agent turns use
+        the official Agent SDK with the installed, authenticated Claude Code
+        executable. Imported native OAuth profiles reuse the verified Claude
+        Code login; non-native API-key and token profiles retain protected
+        credential forwarding.
+
+        Agent SDK turns resume the persisted Claude session, but currently
+        start a new Claude Code subprocess for each turn. Existing
+        credential-forwarding CLI sessions retain their warm-process reuse.
       </Step>
       <Step title="Verify the model is available">
         ```bash
@@ -177,8 +190,11 @@ OpenClaw release:
 
     ### Billing and `claude -p`
 
-    OpenClaw uses Claude Code's non-interactive `claude -p` path for Claude CLI
-    runs. Anthropic currently treats that path as Agent SDK/programmatic usage:
+    OpenClaw runs the authenticated Claude Code executable through Anthropic's
+    official Agent SDK when it can reuse the local login. Non-native API-key
+    and token credentials retain the compatible non-interactive CLI path.
+    Anthropic
+    currently treats both as Agent SDK/programmatic usage:
 
     - Anthropic's June 15, 2026 support update paused the previously announced
       separate Agent SDK credit plan.

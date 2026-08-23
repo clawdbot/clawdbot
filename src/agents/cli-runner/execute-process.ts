@@ -20,6 +20,7 @@ import {
   type resolveNodeClaudeTarget,
 } from "./execute-node-claude.js";
 import { appendCliOutputTail } from "./execute-output-buffer.js";
+import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import { createCliExitFailoverError, createCliFailoverError } from "./exit-error.js";
 import { buildCliSupervisorScopeKey } from "./helpers.js";
@@ -74,6 +75,7 @@ export async function executeCliProcess(params: {
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];
   useManagedClaudeLiveSession: boolean;
+  usePluginOwnedExecution: boolean;
   useResume: boolean;
   cliSessionIdToUse?: string;
   resolvedSessionId?: string;
@@ -249,6 +251,19 @@ export async function executeCliProcess(params: {
     result = nodeRun.result;
     nodeRunAbortSignal = nodeRun.nodeRunAbortSignal;
     nodeRunTruncated = nodeRun.nodeRunTruncated;
+  } else if (params.usePluginOwnedExecution && context.preparedBackend.execute) {
+    result = await executePluginOwnedProcess({
+      context,
+      execute: context.preparedBackend.execute,
+      executionCommand: params.executionCommand,
+      executionArgs: params.executionArgs,
+      env: params.env,
+      prompt: params.prompt,
+      useResume: params.useResume,
+      sessionId: params.resolvedSessionId,
+      noOutputTimeoutMs: params.noOutputTimeoutMs,
+      consumeStdout,
+    });
   } else {
     const supervisor = params.deps.getProcessSupervisor();
     const scopeKey = buildCliSupervisorScopeKey({

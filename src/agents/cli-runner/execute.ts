@@ -279,7 +279,16 @@ export async function executePreparedCliRun(
     cliSessionId: useResume ? resolvedSessionId : undefined,
     ownerKey: claudeOwnerKey,
   });
-  const useManagedClaudeLiveSession = acceptsClaudeLive(context) && !params.onSuccessfulAuthBinding;
+  // Plugin-owned transports own their child/session lifecycle; their MCP grant
+  // still needs the per-turn capture key used by other non-live executions.
+  const usePluginOwnedExecution = Boolean(
+    context.preparedBackend.execute &&
+    !nodePlacement &&
+    !context.preparedBackend.secretInput &&
+    params.controlOperation !== "compact",
+  );
+  const useManagedClaudeLiveSession =
+    !usePluginOwnedExecution && acceptsClaudeLive(context) && !params.onSuccessfulAuthBinding;
   // Fresh-session retries invoke this function again. Keep one helper per
   // observable CLI attempt so every started call retains its own terminal event.
   const diagnostics = createClaudeCliModelCallDiagnostics({
@@ -550,6 +559,7 @@ export async function executePreparedCliRun(
         nodeEnv: nodeEnv && Object.keys(nodeEnv).length > 0 ? nodeEnv : undefined,
         nodeClearEnv: nodeClearEnv.length > 0 ? nodeClearEnv : undefined,
         useManagedClaudeLiveSession,
+        usePluginOwnedExecution,
         useResume,
         cliSessionIdToUse,
         resolvedSessionId,

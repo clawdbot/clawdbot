@@ -136,6 +136,8 @@ export type CliBackendPreparedExecution = {
   cleanup?: () => Promise<void>;
   /** Positive acknowledgement for `prepare-execution` tool enforcement. */
   toolAvailabilityEnforced?: true;
+  /** Optional plugin-owned execution transport for this prepared local run. */
+  execute?: CliBackendExecute;
 };
 
 export type CliBackendThinkingLevel =
@@ -161,6 +163,45 @@ export type CliBackendToolAvailability = {
    */
   mcp: readonly string[];
 };
+
+/** Native action a plugin-owned runtime asks the admitted host run to authorize. */
+export type CliBackendToolPermissionRequest = {
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  toolCallId?: string;
+  abortSignal?: AbortSignal;
+};
+
+/** Host-owned native action decision; plugins never acquire approval authority. */
+export type CliBackendToolPermissionResult =
+  | { behavior: "allow"; updatedInput: Record<string, unknown> }
+  | { behavior: "deny"; message: string };
+
+/** Exact prepared local process facts consumed by a plugin-owned execution transport. */
+export type CliBackendExecuteContext = {
+  command: string;
+  args: readonly string[];
+  cwd: string;
+  env: Record<string, string>;
+  prompt: string;
+  modelId: string;
+  systemPrompt: string;
+  sessionId?: string;
+  useResume: boolean;
+  abortSignal?: AbortSignal;
+  timeoutMs: number;
+  executionMode?: CliBackendExecutionMode;
+  toolAvailability?: CliBackendToolAvailability;
+  /** Closure-bound approval capability; retained copies fail after the run closes. */
+  requestToolPermission: (
+    request: CliBackendToolPermissionRequest,
+  ) => Promise<CliBackendToolPermissionResult>;
+};
+
+/** Plugin-owned runtime yielding the backend's existing structured stream records. */
+export type CliBackendExecute = (
+  context: CliBackendExecuteContext,
+) => AsyncIterable<Record<string, unknown>>;
 
 export type CliBackendResolveExecutionArgsContext = {
   config?: OpenClawConfig;

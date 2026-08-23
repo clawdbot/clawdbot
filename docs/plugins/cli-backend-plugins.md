@@ -261,6 +261,16 @@ effective `ctx.thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`,
 applied through launch environment or staged configuration; the same field is
 available to `resolveExecutionArgs(ctx)` for native CLI flags.
 
+`prepareExecution(ctx)` may also return an optional `execute` transport when a
+backend owns a vendor-supported SDK for the installed CLI. The transport
+receives the exact prepared command, arguments, environment, prompt, session,
+and tool availability; it yields the backend's existing structured stream
+records. Native tool actions must use the provided, run-bound
+`requestToolPermission` callback rather than creating independent approval
+authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
+grant ownership. Explicit credential forwarding, paired-node execution, and
+manual compaction continue through the existing host-managed process path.
+
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
 normal CLI runs do not require it. A backend without this declaration cannot
