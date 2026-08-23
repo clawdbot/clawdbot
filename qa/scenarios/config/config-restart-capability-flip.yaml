@@ -50,9 +50,6 @@ flow:
         - set: originalToolsDeny
           value:
             expr: "originalTools ? (Object.prototype.hasOwnProperty.call(originalTools, 'deny') ? structuredClone(originalTools.deny) : undefined) : undefined"
-        - set: originalImageGenerationModelPrimary
-          value:
-            expr: "original.config.agents?.defaults?.mediaModels?.image?.primary ?? null"
         - set: denied
           value:
             expr: "Array.isArray(originalToolsDeny) ? originalToolsDeny.map((entry) => String(entry)) : []"
@@ -95,20 +92,25 @@ flow:
               - set: wakeMarker
                 value:
                   expr: "`QA-CAPABILITY-${randomUUID().slice(0, 8)}`"
-              - call: patchConfig
+              - set: wakeStartIndex
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+              - set: restartOrigin
+                value:
+                  expr: "(() => { const existing = new Set(Array.isArray(original.config.gateway?.controlUi?.allowedOrigins) ? original.config.gateway.controlUi.allowedOrigins : []); const start = Number.parseInt(randomUUID().slice(0, 4), 16) % 16384; for (let offset = 0; offset < 16384; offset += 1) { const port = 49152 + ((start + offset) % 16384); const origin = `http://127.0.0.1:${port}`; if (!existing.has(origin)) return origin; } throw new Error('no unused loopback Control UI origin available'); })()"
+              - set: nextConfig
+                value:
+                  expr: "(() => { const nextConfig = structuredClone(original.config); const gatewayConfig = (nextConfig.gateway ??= {}); const controlUi = (gatewayConfig.controlUi ??= {}); const allowedOrigins = Array.isArray(controlUi.allowedOrigins) ? [...controlUi.allowedOrigins] : []; controlUi.allowedOrigins = [...allowedOrigins, restartOrigin]; return nextConfig; })()"
+              - set: restartRequestedAtMs
+                value:
+                  expr: "Date.now()"
+              - call: applyConfig
+                saveAs: applyResult
                 args:
                   - env:
                       ref: env
-                    patch:
-                      tools:
-                        deny:
-                          expr: "originalToolsDeny === undefined ? null : originalToolsDeny"
-                      agents:
-                        defaults:
-                          mediaModels:
-                            image:
-                              primary:
-                                ref: originalImageGenerationModelPrimary
+                    nextConfig:
+                      ref: nextConfig
                     sessionKey:
                       ref: sessionKey
                     deliveryContext:
@@ -116,8 +118,10 @@ flow:
                       to: dm:qa-operator
                     note:
                       ref: wakeMarker
-                    replacePaths:
-                      - tools.deny
+              - assert:
+                  expr: "applyResult.sentinel?.persisted === true && applyResult.sentinel?.payload?.kind === 'config-apply' && applyResult.sentinel?.payload?.stats?.mode === 'config.apply' && applyResult.sentinel?.payload?.stats?.requiresRestart === true"
+                  message:
+                    expr: "`expected persisted restart-required config.apply sentinel, got ${JSON.stringify(applyResult.sentinel ?? null)}`"
               - call: waitForGatewayHealthy
                 args:
                   - ref: env
@@ -132,6 +136,15 @@ flow:
                   - lambda:
                       params: [candidate]
                       expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(wakeMarker)"
+                  - expr: liveTurnTimeoutMs(env, config.imageTurnTimeoutMs)
+                  - sinceIndex:
+                      ref: wakeStartIndex
+              - call: waitForSessionRunAfter
+                args:
+                  - ref: env
+                  - ref: sessionKey
+                  - qa
+                  - ref: restartRequestedAtMs
                   - expr: liveTurnTimeoutMs(env, config.imageTurnTimeoutMs)
               - call: waitForCondition
                 saveAs: afterTools
@@ -228,16 +241,12 @@ flow:
                   message:
                     expr: "`expected image_generate tool call during capability flip scenario, saw plannedToolNames=${JSON.stringify([...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => String(request.allInputText ?? '').toLowerCase().includes('capability flip image check')).map((request) => request.plannedToolName ?? null))}`"
             finally:
-              - call: patchConfig
+              - call: applyConfig
                 args:
                   - env:
                       ref: env
-                    patch:
-                      tools:
-                        deny:
-                          expr: "originalToolsDeny === undefined ? null : originalToolsDeny"
-                    replacePaths:
-                      - tools.deny
+                    nextConfig:
+                      expr: "structuredClone(original.config)"
               - call: waitForGatewayHealthy
                 args:
                   - ref: env

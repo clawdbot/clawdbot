@@ -48,6 +48,17 @@ type QaAgentWaitResult = {
   terminalReply?: QaAgentTerminalReply;
 };
 
+type QaSessionRunRow = {
+  key?: string;
+  agentId?: string;
+  status?: "queued" | "running" | "done" | "failed" | "killed" | "timeout";
+  lastRunError?: string;
+  hasActiveRun?: boolean;
+  activeRunIds?: string[];
+  startedAt?: number;
+  endedAt?: number;
+};
+
 const MANAGED_DREAMING_CRON_MARKER = "[managed-by=memory-core.short-term-promotion]";
 const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DREAMING_PROMPT = "__openclaw_memory_core_short_term_promotion_dream__";
@@ -157,6 +168,123 @@ function isSuccessfulAgentWaitResult(waited: QaAgentWaitResult) {
     return true;
   }
   return waited.status === "error" && waited.error?.trim().toLowerCase() === "completed";
+}
+
+function assertSuccessfulAgentWaitResult(waited: QaAgentWaitResult) {
+  if (isSuccessfulAgentWaitResult(waited)) {
+    return;
+  }
+  throw new Error(
+    `agent.wait returned ${waited.status ?? "unknown"}: ${waited.error ?? "no error"}`,
+  );
+}
+
+function isTerminalSessionRunStatus(status: QaSessionRunRow["status"]) {
+  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+}
+
+function parseSessionRunRow(value: unknown): QaSessionRunRow | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const status =
+    value.status === "queued" ||
+    value.status === "running" ||
+    value.status === "done" ||
+    value.status === "failed" ||
+    value.status === "killed" ||
+    value.status === "timeout"
+      ? value.status
+      : undefined;
+  const activeRunIds = Array.isArray(value.activeRunIds)
+    ? value.activeRunIds.filter((runId): runId is string => typeof runId === "string")
+    : undefined;
+  return {
+    key: typeof value.key === "string" ? value.key : undefined,
+    agentId: typeof value.agentId === "string" ? value.agentId : undefined,
+    status,
+    lastRunError: typeof value.lastRunError === "string" ? value.lastRunError : undefined,
+    hasActiveRun: typeof value.hasActiveRun === "boolean" ? value.hasActiveRun : undefined,
+    activeRunIds,
+    startedAt: typeof value.startedAt === "number" ? value.startedAt : undefined,
+    endedAt: typeof value.endedAt === "number" ? value.endedAt : undefined,
+  };
+}
+
+function formatSessionRunDiagnostics(row: QaSessionRunRow | undefined) {
+  return JSON.stringify({
+    status: row?.status ?? null,
+    startedAt: row?.startedAt ?? null,
+    endedAt: row?.endedAt ?? null,
+    hasActiveRun: row?.hasActiveRun ?? null,
+    lastRunError: row?.lastRunError ?? null,
+  });
+}
+
+async function waitForSessionRunAfter(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  sessionKey: string,
+  agentId: string,
+  startedAfterMs: number,
+  timeoutMs = 30_000,
+) {
+  const waitTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 30_000);
+  const deadlineMs = Date.now() + waitTimeoutMs;
+  let lastRow: QaSessionRunRow | undefined;
+
+  while (Date.now() < deadlineMs) {
+    const remainingMs = Math.max(1, deadlineMs - Date.now());
+    const result = await env.gateway.call(
+      "sessions.list",
+      {},
+      { timeoutMs: Math.min(30_000, remainingMs) },
+    );
+    const sessions =
+      isRecord(result) && Array.isArray(result.sessions)
+        ? result.sessions.map(parseSessionRunRow).filter((row) => row !== undefined)
+        : [];
+    const row = sessions.find(
+      (candidate) => candidate.key === sessionKey && candidate.agentId === agentId,
+    );
+    lastRow = row;
+
+    if (row && typeof row.startedAt === "number" && row.startedAt >= startedAfterMs) {
+      const correlatedStartedAt = row.startedAt;
+      const activeRunId =
+        row.hasActiveRun === true && row.activeRunIds?.length === 1
+          ? row.activeRunIds[0]
+          : undefined;
+      if (activeRunId) {
+        const waited = await waitForAgentRun(env, activeRunId, remainingMs);
+        assertSuccessfulAgentWaitResult(waited);
+        return { runId: activeRunId, status: waited.status };
+      }
+
+      if (
+        isTerminalSessionRunStatus(row.status) &&
+        typeof row.endedAt === "number" &&
+        row.endedAt >= correlatedStartedAt
+      ) {
+        if (row.status === "done") {
+          return { status: row.status };
+        }
+        throw new Error(
+          row.lastRunError
+            ? `session run ${row.status}: ${row.lastRunError}`
+            : `session run ${row.status}`,
+        );
+      }
+    }
+
+    const delayMs = Math.min(100, deadlineMs - Date.now());
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+  }
+
+  throw new Error(
+    `timed out after ${waitTimeoutMs}ms waiting for correlated session run: ${formatSessionRunDiagnostics(lastRow)}`,
+  );
 }
 
 function readLatestAssistantTextFromHistory(history: QaChatHistoryResponse | undefined) {
@@ -403,11 +531,7 @@ async function runAgentPrompt(
 ) {
   const started = await startAgentRun(env, params);
   const waited = await waitForAgentRun(env, started.runId!, params.timeoutMs ?? 30_000);
-  if (!isSuccessfulAgentWaitResult(waited)) {
-    throw new Error(
-      `agent.wait returned ${waited.status ?? "unknown"}: ${waited.error ?? "no error"}`,
-    );
-  }
+  assertSuccessfulAgentWaitResult(waited);
   if (params.transcriptToolName) {
     await waitForPersistedTranscriptToolEvidence(env, {
       sessionKey: params.sessionKey,
@@ -430,4 +554,5 @@ export {
   startAgentRun,
   waitForAgentHistoryReply,
   waitForAgentRun,
+  waitForSessionRunAfter,
 };

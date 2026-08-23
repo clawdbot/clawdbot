@@ -43,6 +43,7 @@ import {
   startAgentRun,
   waitForAgentRun,
   waitForAgentHistoryReply,
+  waitForSessionRunAfter,
 } from "./suite-runtime-agent-process.js";
 
 type MockEmitter = {
@@ -898,6 +899,195 @@ describe("qa suite runtime agent process helpers", () => {
       { runId: "run-3", timeoutMs: 30_000 },
       { timeoutMs: 35_000 },
     );
+  });
+
+  it("surfaces agent.wait errors after a correlated active run appears", async () => {
+    vi.useFakeTimers();
+    try {
+      let listCalls = 0;
+      const gatewayCall = vi.fn(async (method: string) => {
+        if (method === "agent.wait") {
+          return { status: "error", error: "restart wake failed" };
+        }
+        listCalls += 1;
+        return {
+          sessions: [
+            listCalls === 1
+              ? {
+                  key: "agent:qa:capability-flip",
+                  agentId: "qa",
+                  status: "done",
+                  hasActiveRun: false,
+                  startedAt: 50,
+                  endedAt: 60,
+                }
+              : {
+                  key: "agent:qa:capability-flip",
+                  agentId: "qa",
+                  status: "running",
+                  hasActiveRun: true,
+                  activeRunIds: ["run-wake"],
+                  startedAt: 110,
+                },
+          ],
+        };
+      });
+
+      const pending = waitForSessionRunAfter(
+        { gateway: { call: gatewayCall } } as never,
+        "agent:qa:capability-flip",
+        "qa",
+        100,
+        1_000,
+      );
+      await vi.advanceTimersByTimeAsync(100);
+
+      await expect(pending).rejects.toThrow("agent.wait returned error: restart wake failed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("surfaces the redacted row error when an unidentified active run fails", async () => {
+    vi.useFakeTimers();
+    try {
+      let listCalls = 0;
+      const gatewayCall = vi.fn(async () => {
+        listCalls += 1;
+        const row =
+          listCalls === 1
+            ? {
+                status: "done",
+                hasActiveRun: false,
+                startedAt: 50,
+                endedAt: 60,
+              }
+            : listCalls === 2
+              ? {
+                  status: "running",
+                  hasActiveRun: true,
+                  startedAt: 110,
+                }
+              : {
+                  status: "failed",
+                  hasActiveRun: false,
+                  startedAt: 110,
+                  endedAt: 150,
+                  lastRunError: "provider rejected restart wake",
+                };
+        return {
+          sessions: [{ key: "agent:qa:capability-flip", agentId: "qa", ...row }],
+        };
+      });
+
+      const pending = waitForSessionRunAfter(
+        { gateway: { call: gatewayCall } } as never,
+        "agent:qa:capability-flip",
+        "qa",
+        100,
+        1_000,
+      );
+      await vi.advanceTimersByTimeAsync(200);
+
+      await expect(pending).rejects.toThrow("session run failed: provider rejected restart wake");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("accepts a correlated terminal row after missing the active polling window", async () => {
+    const gatewayCall = vi.fn(async () => ({
+      sessions: [
+        {
+          key: "agent:qa:capability-flip",
+          agentId: "qa",
+          status: "done",
+          hasActiveRun: false,
+          startedAt: 110,
+          endedAt: 150,
+        },
+      ],
+    }));
+
+    await expect(
+      waitForSessionRunAfter(
+        { gateway: { call: gatewayCall } } as never,
+        "agent:qa:capability-flip",
+        "qa",
+        100,
+        1_000,
+      ),
+    ).resolves.toEqual({ status: "done" });
+  });
+
+  it("times out while the session remains permanently idle", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayCall = vi.fn(async () => ({
+        sessions: [
+          {
+            key: "agent:qa:capability-flip",
+            agentId: "qa",
+            status: "done",
+            hasActiveRun: false,
+            startedAt: 50,
+            endedAt: 60,
+          },
+        ],
+      }));
+
+      const pending = waitForSessionRunAfter(
+        { gateway: { call: gatewayCall } } as never,
+        "agent:qa:capability-flip",
+        "qa",
+        100,
+        250,
+      );
+      const errorPromise = pending.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(250);
+      const error = await errorPromise;
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("timed out after 250ms");
+      expect((error as Error).message).toContain('"hasActiveRun":false');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("omits unrelated secret-shaped session fields from timeout diagnostics", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayCall = vi.fn(async () => ({
+        sessions: [
+          {
+            key: "agent:qa:capability-flip",
+            agentId: "qa",
+            status: "running",
+            hasActiveRun: false,
+            startedAt: 50,
+            privateApiToken: "do-not-leak-this-token",
+          },
+        ],
+      }));
+
+      const pending = waitForSessionRunAfter(
+        { gateway: { call: gatewayCall } } as never,
+        "agent:qa:capability-flip",
+        "qa",
+        100,
+        100,
+      );
+      const errorPromise = pending.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(100);
+      const error = await errorPromise;
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).not.toContain("privateApiToken");
+      expect((error as Error).message).not.toContain("do-not-leak-this-token");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(["restart", "aborted"])(
