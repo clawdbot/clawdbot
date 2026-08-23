@@ -3317,6 +3317,42 @@ describe("resolveOllamaBaseUrlForRun", () => {
 });
 
 describe("createConfiguredOllamaStreamFn", () => {
+  it("streams model-specific remote endpoints without acquiring the provider service", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const acquire = vi.fn();
+        const streamFn = createConfiguredOllamaStreamFn({
+          model: { baseUrl: "https://remote-ollama.example.test" },
+          localService: { providerId: "ollama-gpu", acquire },
+        });
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "ollama-gpu",
+              contextWindow: 131072,
+            } as never,
+            { messages: [{ role: "user", content: "hello" }] } as never,
+            {} as never,
+          ),
+        );
+
+        const events = await collectStreamEvents(stream);
+
+        expect(events.at(-1)).toMatchObject({ type: "done" });
+        expect(acquire).not.toHaveBeenCalled();
+        expect(getGuardedFetchCall(fetchMock).url).toBe(
+          "https://remote-ollama.example.test/api/chat",
+        );
+      },
+    );
+  });
+
   it("uses provider-level baseUrl when model baseUrl is absent", async () => {
     await withMockNdjsonFetch(
       [

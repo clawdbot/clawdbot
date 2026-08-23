@@ -1419,12 +1419,17 @@ export function createConfiguredOllamaStreamFn(params: {
   localService?: OllamaLocalService;
   providerBaseUrl?: string;
 }): StreamFn {
+  const modelBaseUrl = readStringValue(params.model.baseUrl);
   const baseUrl = resolveOllamaBaseUrlForRun({
-    modelBaseUrl: readStringValue(params.model.baseUrl),
+    modelBaseUrl,
     providerBaseUrl: params.providerBaseUrl,
   });
   return createPlainTextToolCallCompatWrapper(
-    createRawOllamaStreamFn(baseUrl, resolveOllamaModelHeaders(params.model), params.localService),
+    createRawOllamaStreamFn(
+      baseUrl,
+      resolveOllamaModelHeaders(params.model),
+      params.providerBaseUrl?.trim() || !modelBaseUrl ? params.localService : undefined,
+    ),
   );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
