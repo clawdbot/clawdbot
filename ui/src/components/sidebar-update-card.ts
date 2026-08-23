@@ -142,10 +142,10 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   private hasAvailableUpdate() {
     const update = this.updateAvailable;
     const gitTarget = this.updateSchedule?.target;
-    return Boolean(
-      (update && update.latestVersion !== update.currentVersion) ||
+    return (
+      (update !== null && update.latestVersion !== update.currentVersion) ||
       (update?.commitsBehind !== undefined && update.commitsBehind > 0) ||
-      (gitTarget?.kind === "git" && gitTarget.commitsBehind > 0),
+      (gitTarget?.kind === "git" && gitTarget.commitsBehind > 0)
     );
   }
 

@@ -3,7 +3,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
-import type { UpdateHoldResult, UpdateScheduleState } from "../api/types.ts";
+import type { UpdateHoldResult } from "../api/types.ts";
 import { controlUiBuildDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -54,10 +54,10 @@ import {
   type UpdateRunResponse,
 } from "./update-overlay-helpers.ts";
 import {
-  readUpdateAvailable,
-  readUpdateAvailableValue,
-  readUpdateSchedule,
+  projectConnectedUpdateSnapshot,
+  projectUpdateAvailableEvent,
   readUpdateScheduleValue,
+  resolveHeldUpdateCampaignId,
 } from "./update-schedule-dto.ts";
 import {
   announceRecordedUpdateSuccess,
@@ -66,23 +66,6 @@ import {
 
 function isGatewayEvent(value: unknown): value is GatewayEventFrame {
   return Boolean(value && typeof value === "object" && "event" in value);
-}
-
-// A schedule arrives before its authoritative status poll. A changed campaign
-// must stay unhydrated so consumers never repaint a generic row as a failure.
-function retainCampaignStatusHydration(
-  current: UpdateScheduleState | null,
-  next: UpdateScheduleState | null | undefined,
-  hydrated: boolean,
-): boolean {
-  const currentCampaign = current?.campaign;
-  const nextCampaign = next?.campaign;
-  return (
-    !nextCampaign ||
-    (hydrated &&
-      currentCampaign?.id === nextCampaign.id &&
-      currentCampaign.updatedAtMs === nextCampaign.updatedAtMs)
-  );
 }
 
 export function createApplicationOverlays(
@@ -202,10 +185,6 @@ export function createApplicationOverlays(
     snapshot = { ...snapshot, recordedUpdateAttempt };
     publish();
   };
-  const heldCampaignId = (schedule: UpdateScheduleState | null) =>
-    schedule?.campaign?.holdUntilMs !== undefined
-      ? schedule.campaign.id
-      : snapshot.heldUpdateCampaignId;
   const updateVerification = createUpdateVerificationController({
     getPending: () => pendingUpdate,
     clearPending: () => {
@@ -361,13 +340,6 @@ export function createApplicationOverlays(
       publish();
       return;
     }
-    const updateSchedule =
-      connectedSourceChanged || helloChanged ? readUpdateSchedule(next.hello) : undefined;
-    const campaignStatusHydrated = retainCampaignStatusHydration(
-      snapshot.updateSchedule,
-      updateSchedule,
-      snapshot.updateCampaignStatusHydrated,
-    );
     const serverBuildIdentity = {
       version: next.hello?.server?.version,
       buildId: next.hello?.server?.buildId,
@@ -377,12 +349,7 @@ export function createApplicationOverlays(
     snapshot = {
       ...snapshot,
       ...(connectedSourceChanged || helloChanged
-        ? {
-            updateAvailable: readUpdateAvailable(next.hello),
-            updateSchedule: updateSchedule ?? null,
-            heldUpdateCampaignId: heldCampaignId(updateSchedule ?? null),
-            updateCampaignStatusHydrated: campaignStatusHydrated,
-          }
+        ? projectConnectedUpdateSnapshot(snapshot, next.hello)
         : {}),
       controlUiRefreshRequired: connectedSourceChanged
         ? (exactBuildIdentityAvailable || connectedEpoch > 0) &&
@@ -434,25 +401,9 @@ export function createApplicationOverlays(
     }
     if (event.event === GATEWAY_EVENT_UPDATE_AVAILABLE) {
       const payload = event.payload as GatewayUpdateAvailableEventPayload | undefined;
-      const updateSchedule =
-        payload && Object.hasOwn(payload, "schedule")
-          ? readUpdateScheduleValue(payload.schedule)
-          : undefined;
-      const campaignStatusHydrated = retainCampaignStatusHydration(
-        snapshot.updateSchedule,
-        updateSchedule,
-        snapshot.updateCampaignStatusHydrated,
-      );
       snapshot = {
         ...snapshot,
-        updateAvailable: readUpdateAvailableValue(payload?.updateAvailable),
-        ...(updateSchedule !== undefined
-          ? {
-              updateSchedule,
-              heldUpdateCampaignId: heldCampaignId(updateSchedule),
-              updateCampaignStatusHydrated: campaignStatusHydrated,
-            }
-          : {}),
+        ...projectUpdateAvailableEvent(snapshot, payload),
       };
       publish();
       updateCampaignPoller.sync();
@@ -612,7 +563,10 @@ export function createApplicationOverlays(
             ...(updateSchedule !== undefined ? { updateSchedule } : {}),
             heldUpdateCampaignId: response.ok
               ? campaign.id
-              : heldCampaignId(updateSchedule ?? null),
+              : resolveHeldUpdateCampaignId(
+                  updateSchedule ?? snapshot.updateSchedule,
+                  snapshot.heldUpdateCampaignId,
+                ),
           };
           publish();
         }
