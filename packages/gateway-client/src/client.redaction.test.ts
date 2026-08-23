@@ -370,3 +370,142 @@ describe("GatewayClient escaped-key rejected-upgrade diagnostics", () => {
     );
   }, 30_000);
 });
+
+const UPGRADE_QUOTED_SECRET = "QUOTEDUPGRADESESSIONSECRET";
+// A quote-wrapped form value. A peer is free to quote the value, and an
+// unquoted-only value class stops at the opening quote, so the credential
+// survived into the host-visible error text.
+const UPGRADE_QUOTED_REJECTION_BODY = `sessionSecret="${UPGRADE_QUOTED_SECRET}"&safe=value`;
+
+describe("GatewayClient quoted-value rejected-upgrade diagnostics", () => {
+  const servers: http.Server[] = [];
+  const clients: GatewayClient[] = [];
+
+  afterEach(async () => {
+    for (const client of clients.splice(0)) {
+      client.stop();
+    }
+    await Promise.all(
+      servers.splice(0).map(
+        async (server) =>
+          await new Promise<void>((resolve) => {
+            server.closeAllConnections();
+            server.close(() => resolve());
+          }),
+      ),
+    );
+  });
+
+  it("redacts a quote-wrapped credential value before hosts see the error", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(403, { "Content-Type": "application/x-www-form-urlencoded" });
+      res.end(UPGRADE_QUOTED_REJECTION_BODY);
+    });
+    servers.push(server);
+    const port = await new Promise<number>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        resolve((server.address() as AddressInfo).port);
+      });
+    });
+
+    const loggedLines: string[] = [];
+    const connectErrorMessage = await new Promise<string>((resolve) => {
+      const client = new GatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        onConnectError: (error) => resolve(error.message),
+        hostDeps: {
+          logDebug: (message) => loggedLines.push(message),
+          logError: (message) => loggedLines.push(message),
+        },
+      });
+      clients.push(client);
+      client.start();
+    });
+
+    expect(connectErrorMessage).toContain("gateway rejected websocket upgrade (HTTP 403)");
+    expect(connectErrorMessage).toContain("safe=value");
+
+    const everythingSurfaced = [connectErrorMessage, ...loggedLines].join("\n");
+    expect(everythingSurfaced).not.toContain(UPGRADE_QUOTED_SECRET);
+
+    console.log(
+      `[gateway-client quoted-value redaction proof] head=${resolveHeadSha()} ` +
+        "quoted_credential=redacted non_credential_field=preserved " +
+        `secret-output=${everythingSurfaced.includes(UPGRADE_QUOTED_SECRET)}\n` +
+        `[gateway-client quoted-value redaction proof] server_sent=${UPGRADE_QUOTED_REJECTION_BODY}\n` +
+        `[gateway-client quoted-value redaction proof] host_saw=${connectErrorMessage}\n` +
+        "proof_marker_verified=true",
+    );
+  }, 30_000);
+});
+
+const UPGRADE_NESTED_SECRET = "NESTEDUPGRADESESSIONSECRET";
+// A safe outer field whose string value is itself a serialized JSON document.
+// The escaped inner text matches neither pair pattern, so the credential rode
+// through untouched until the nested pass was added.
+const UPGRADE_NESTED_REJECTION_BODY = JSON.stringify({
+  detail: JSON.stringify({ sessionSecret: UPGRADE_NESTED_SECRET, safe: "keep" }),
+});
+
+describe("GatewayClient nested-json rejected-upgrade diagnostics", () => {
+  const servers: http.Server[] = [];
+  const clients: GatewayClient[] = [];
+
+  afterEach(async () => {
+    for (const client of clients.splice(0)) {
+      client.stop();
+    }
+    await Promise.all(
+      servers.splice(0).map(
+        async (server) =>
+          await new Promise<void>((resolve) => {
+            server.closeAllConnections();
+            server.close(() => resolve());
+          }),
+      ),
+    );
+  });
+
+  it("redacts a credential nested in serialized JSON before hosts see the error", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(UPGRADE_NESTED_REJECTION_BODY);
+    });
+    servers.push(server);
+    const port = await new Promise<number>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        resolve((server.address() as AddressInfo).port);
+      });
+    });
+
+    const loggedLines: string[] = [];
+    const connectErrorMessage = await new Promise<string>((resolve) => {
+      const client = new GatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        onConnectError: (error) => resolve(error.message),
+        hostDeps: {
+          logDebug: (message) => loggedLines.push(message),
+          logError: (message) => loggedLines.push(message),
+        },
+      });
+      clients.push(client);
+      client.start();
+    });
+
+    expect(connectErrorMessage).toContain("gateway rejected websocket upgrade (HTTP 403)");
+    // The non-credential sibling stays readable.
+    expect(connectErrorMessage).toContain("keep");
+
+    const everythingSurfaced = [connectErrorMessage, ...loggedLines].join("\n");
+    expect(everythingSurfaced).not.toContain(UPGRADE_NESTED_SECRET);
+
+    console.log(
+      `[gateway-client nested-json redaction proof] head=${resolveHeadSha()} ` +
+        "nested_credential=redacted non_credential_field=preserved " +
+        `secret-output=${everythingSurfaced.includes(UPGRADE_NESTED_SECRET)}\n` +
+        `[gateway-client nested-json redaction proof] server_sent=${UPGRADE_NESTED_REJECTION_BODY}\n` +
+        `[gateway-client nested-json redaction proof] host_saw=${connectErrorMessage}\n` +
+        "proof_marker_verified=true",
+    );
+  }, 30_000);
+});
