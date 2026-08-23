@@ -443,7 +443,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
             </button>
           </span>`
         : nothing}
-      ${renderAppSidebarAttention(host)}
+      ${host.activeRouteId === "chat" ? renderAppSidebarAttention(host) : nothing}
     </div>
   `;
 }

@@ -583,9 +583,7 @@ describe("settings sidebar search", () => {
     expect(onNavigate).toHaveBeenCalledWith("about");
   });
 
-  it("keeps pending approvals actionable from the settings sidebar", () => {
-    const onNavigate = vi.fn();
-    const onOpenApprovals = vi.fn();
+  it("does not render the Inbox in the settings sidebar", () => {
     render(
       renderSettingsSidebar({
         basePath: "",
@@ -600,8 +598,7 @@ describe("settings sidebar search", () => {
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
-        onNavigate,
-        onOpenApprovals,
+        onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: saveIndicator(),
@@ -609,19 +606,7 @@ describe("settings sidebar search", () => {
       container,
     );
 
-    const attention = container.querySelector<
-      HTMLElement & {
-        onNavigate?: (routeId: string) => void;
-        onOpenApprovals?: () => void;
-      }
-    >("openclaw-sidebar-attention");
-    expect(attention).not.toBeNull();
-    expect(attention?.nextElementSibling?.tagName).toBe("OPENCLAW-SIDEBAR-UPDATE-CARD");
-
-    attention?.onOpenApprovals?.();
-    expect(onOpenApprovals).toHaveBeenCalledOnce();
-    attention?.onNavigate?.("approvals");
-    expect(onNavigate).toHaveBeenCalledWith("approvals");
+    expect(container.querySelector("openclaw-sidebar-attention")).toBeNull();
   });
 
   it("shows the offline retry action without an online status", () => {
