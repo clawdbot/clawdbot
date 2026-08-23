@@ -484,11 +484,16 @@ type CodeModeFailedResult = {
 `exec` returns `waiting` when the guest suspends with resumable state that still
 needs a model-visible continuation — an explicit `yield_control(...)`, or a
 bridge tool call that has not resolved within the exec deadline. The result
-includes a `runId` for `wait`. Bridge requests — `catalog.search`, handle
-`describe()`, callable tool handles, and namespace calls including MCP — are auto-drained
-inside the same `exec`/`wait` call while they resolve within the deadline, so a
-compact code block that awaits several tools runs to completion in one model
-turn instead of forcing one model tool call per await.
+includes a `runId` for `wait`. Native-channel exec approvals are different:
+while the operator decision is pending, OpenClaw suspends both the Code Mode
+execution budget and the owning agent-run budget. The original `exec` remains
+in flight, then resumes with exactly its unused budget after approval resolves;
+it does not return `pending_tools` or require model polling through `wait`.
+Bridge requests — `catalog.search`, handle `describe()`, callable tool handles,
+and namespace calls including MCP — are auto-drained inside the same
+`exec`/`wait` call while they resolve within the deadline, so a compact code
+block that awaits several tools runs to completion in one model turn instead of
+forcing one model tool call per await.
 
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
@@ -507,9 +512,11 @@ type CodeModeWaitInput = {
 
 Output is the same `CodeModeResult` union returned by `exec`.
 
-`wait` exists because nested OpenClaw tools can be slow, interactive, approval
-gated, or stream partial updates; the model should not need to keep one long
-`exec` call open while the host waits for external work.
+`wait` exists because nested OpenClaw tools can be slow, interactive, or stream
+partial updates; the model should not need to keep one long `exec` call open
+while the host waits for ordinary external work. Native-channel exec approvals
+are the exception: they stay inside the original `exec` so approval authority
+remains bound to the admitted run.
 
 QuickJS-WASI snapshot/restore is the resume mechanism:
 
