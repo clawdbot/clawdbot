@@ -76,11 +76,9 @@ export function applyPromptBuildToolsAllow<
   tools: TTool[];
   catalogRef?: ToolSearchCatalogRef;
   codeModeControlsEnabled: boolean;
-  coreReadAuthorized: boolean;
   forceToolNames?: readonly string[];
 }): {
   activeToolNames: string[];
-  coreReadAuthorized: boolean;
   effectiveTools: TEffectiveTool[];
   uncompactedEffectiveTools: TUncompactedTool[];
   tools: TTool[];
@@ -124,9 +122,6 @@ export function applyPromptBuildToolsAllow<
 
   return {
     activeToolNames,
-    coreReadAuthorized:
-      params.coreReadAuthorized &&
-      allowedUncompactedTools.some((tool) => normalizeToolPolicyName(tool.name) === "read"),
     effectiveTools: promptPolicy.tools,
     uncompactedEffectiveTools: allowedUncompactedTools,
     tools: allowedTools,

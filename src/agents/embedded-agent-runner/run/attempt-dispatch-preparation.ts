@@ -54,9 +54,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     provider,
     modelId,
   } = input;
-  const params = input.terminalRetryState.forceCodeModeReconciliationTools
-    ? { ...runInput.runParams, forceCodeModeReconciliationTools: true }
-    : runInput.runParams;
+  const params = runInput.runParams;
   const {
     workspaceResolution,
     workspaceDir,

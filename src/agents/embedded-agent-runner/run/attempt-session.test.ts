@@ -11,7 +11,6 @@ const hoisted = vi.hoisted(() => ({
   createEmbeddedAgentResourceLoader: vi.fn(),
   createPreparedEmbeddedAgentSettingsManager: vi.fn(),
   getGlobalHookRunner: vi.fn(),
-  installCodeModeRepairHook: vi.fn(),
   installMessageToolOnlyTerminalHook: vi.fn(),
   prepareEmbeddedAttemptClientTools: vi.fn(),
   resolveEffectiveCompactionMode: vi.fn(),
@@ -59,9 +58,6 @@ vi.mock("../system-prompt.js", () => ({
 vi.mock("./attempt-client-tools.js", () => ({
   prepareEmbeddedAttemptClientTools: hoisted.prepareEmbeddedAttemptClientTools,
 }));
-vi.mock("./code-mode-repair.js", () => ({
-  installCodeModeRepairHook: hoisted.installCodeModeRepairHook,
-}));
 vi.mock("./message-tool-terminal.js", () => ({
   installMessageToolOnlyTerminalHook: hoisted.installMessageToolOnlyTerminalHook,
 }));
@@ -87,11 +83,7 @@ const attempt = {
   workspaceDir: "/workspace",
 } as unknown as EmbeddedRunAttemptParams;
 
-function createInput(options?: {
-  activationError?: Error;
-  codeModeControlsEnabledForRun?: boolean;
-  coreReadAllowed?: boolean;
-}) {
+function createInput(options?: { activationError?: Error }) {
   const events: string[] = [];
   const settingsManager = { id: "settings" };
   const resourceLoader = {
@@ -118,8 +110,6 @@ function createInput(options?: {
   const allCustomTools = [{ name: "custom" }];
   const clientToolRuntime = {
     builtinToolNames: new Set(["read"]),
-    coreBuiltinToolNames: new Set(options?.coreReadAllowed === false ? [] : ["read"]),
-    coreReadAuthorized: options?.coreReadAllowed !== false,
     clientToolCallSlots: [],
     clientToolDefs: [],
     clientToolLoopDetection: { enabled: true },
@@ -127,7 +117,6 @@ function createInput(options?: {
     replaySafeTools: new Set(allCustomTools),
   };
   let onDeliveredSourceReply: (() => void) | undefined;
-  let onReconciliationCandidate: (() => void) | undefined;
 
   hoisted.createPreparedEmbeddedAgentSettingsManager.mockReturnValue(settingsManager);
   hoisted.resolveEffectiveCompactionMode.mockReturnValue("safeguard");
@@ -153,13 +142,6 @@ function createInput(options?: {
       onDeliveredSourceReply = input.onDeliveredSourceReply;
     },
   );
-  hoisted.installCodeModeRepairHook.mockImplementation(
-    (input: { onReconciliationCandidate?: () => void }) => {
-      onReconciliationCandidate = input.onReconciliationCandidate;
-      events.push("install-code-mode-repair");
-    },
-  );
-
   return {
     activeSession,
     allCustomTools,
@@ -171,7 +153,7 @@ function createInput(options?: {
       agentCoreThinkingLevel: "high" as const,
       agentDir: "/agent",
       clientToolPreparation: {
-        codeModeControlsEnabledForRun: options?.codeModeControlsEnabledForRun ?? true,
+        codeModeControlsEnabledForRun: true,
         deferredDirectoryToolsCallable: false,
       } as never,
       effectiveCwd: "/workspace",
@@ -191,7 +173,6 @@ function createInput(options?: {
       transcriptLifecycle: transcriptLifecycle as never,
       sessionManager: sessionManager as never,
     },
-    markCodeModeReconciliationCandidate: () => onReconciliationCandidate?.(),
     onDeliveredSourceReply: () => onDeliveredSourceReply?.(),
     resourceLoader,
     setActiveToolsByName,
@@ -219,7 +200,6 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "publish-system-prompt",
       "apply-system-prompt",
       "install-terminal-hook",
-      "install-code-mode-repair",
       "stage:agent-session",
     ]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
@@ -247,36 +227,6 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(result.hasDeliveredSourceReply()).toBe(false);
     fixture.onDeliveredSourceReply();
     expect(result.hasDeliveredSourceReply()).toBe(true);
-    expect(result.getCodeModeReconciliationCandidate()).toBe(false);
-    result.setCodeModeReconciliationReadAuthorized(true);
-    fixture.markCodeModeReconciliationCandidate();
-    expect(result.getCodeModeReconciliationCandidate()).toBe(true);
-  });
-
-  it("does not install Code Mode repair when the run kept direct tools", async () => {
-    const fixture = createInput({ codeModeControlsEnabledForRun: false });
-
-    await prepareEmbeddedAttemptAgentSession(fixture.input);
-
-    expect(hoisted.installCodeModeRepairHook).not.toHaveBeenCalled();
-    expect(fixture.events).not.toContain("install-code-mode-repair");
-  });
-
-  it.each([
-    ["the effective core tools exclude read", false, true],
-    ["the final prompt policy removes read", true, false],
-  ])("withholds reconciliation when %s", async (_label, coreReadAllowed, finalReadAllowed) => {
-    const fixture = createInput({ coreReadAllowed });
-
-    const result = await prepareEmbeddedAttemptAgentSession(fixture.input);
-
-    expect(hoisted.installCodeModeRepairHook).toHaveBeenCalledWith({
-      agent: fixture.activeSession.agent,
-      onReconciliationCandidate: expect.any(Function),
-    });
-    result.setCodeModeReconciliationReadAuthorized(finalReadAllowed);
-    fixture.markCodeModeReconciliationCandidate();
-    expect(result.getCodeModeReconciliationCandidate()).toBe(false);
   });
 
   it("leaves overflow recovery with the session when no model budget was resolved", async () => {

@@ -123,8 +123,8 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       case "tool_execution_end":
         void scheduleEvent(
           evt,
-          async () => {
-            await handleToolExecutionEnd(ctx, evt as never);
+          () => {
+            return handleToolExecutionEnd(ctx, evt as never);
           },
           { detach: true },
         );

@@ -108,7 +108,6 @@ function createFixture() {
     prePromptMessageCount = count;
   });
   const setPromptCacheChangesForTurn = vi.fn();
-  const setCodeModeReconciliationReadAuthorized = vi.fn();
   const setFinalPromptText = vi.fn();
   const markBeforeAgentRunBlocked = vi.fn();
   const markYieldAborted = vi.fn(() => {
@@ -246,7 +245,6 @@ function createFixture() {
       uncompactedEffectiveTools: [{ name: "read" }],
       tools: [{ name: "read" }],
       codeModeControlsEnabled: false,
-      coreReadAuthorized: true,
     },
     preflight: {
       contextEngineAssemblySucceeded: false,
@@ -269,7 +267,6 @@ function createFixture() {
       setPrePromptMessageCount,
       setCurrentUserTimestampOverride: vi.fn(),
       setPromptCacheChangesForTurn,
-      setCodeModeReconciliationReadAuthorized,
       setFinalPromptText,
       markBeforeAgentRunBlocked,
       markYieldAborted,
@@ -287,7 +284,6 @@ function createFixture() {
     setFinalPromptText,
     setPrePromptMessageCount,
     setPromptCacheChangesForTurn,
-    setCodeModeReconciliationReadAuthorized,
     state,
     yieldState,
   };
@@ -297,7 +293,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.applyPromptToolsAllow.mockReturnValue({
     activeToolNames: ["read"],
-    coreReadAuthorized: true,
     effectiveTools: [{ name: "read" }],
     uncompactedEffectiveTools: [{ name: "read" }],
     tools: [{ name: "read" }],
@@ -328,7 +323,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     ]);
     expect(fixture.setPrePromptMessageCount).toHaveBeenCalledWith(2);
     expect(fixture.setPromptCacheChangesForTurn).toHaveBeenCalledWith([]);
-    expect(fixture.setCodeModeReconciliationReadAuthorized).toHaveBeenCalledWith(true);
     expect(fixture.setFinalPromptText).toHaveBeenCalledWith("hello");
     expect(mocks.preparePromptExecution).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -354,21 +348,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       }),
     );
     expect(mocks.releasePendingSteering).not.toHaveBeenCalled();
-  });
-
-  it("records a final prompt policy that removes core read", async () => {
-    const fixture = createFixture();
-    mocks.applyPromptToolsAllow.mockReturnValueOnce({
-      activeToolNames: [],
-      coreReadAuthorized: false,
-      effectiveTools: [],
-      uncompactedEffectiveTools: [],
-      tools: [],
-    });
-
-    await runEmbeddedAttemptPromptPhase(fixture.input);
-
-    expect(fixture.setCodeModeReconciliationReadAuthorized).toHaveBeenCalledWith(false);
   });
 
   it("skips before_agent_run for settled-turn finalization", async () => {

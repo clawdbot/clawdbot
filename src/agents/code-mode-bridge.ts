@@ -26,10 +26,6 @@ import {
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "./subagents/swarm/swarm-code-mode.js";
 import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
-import {
-  consumeTrustedToolNoStartError,
-  registerTrustedToolNoStartError,
-} from "./tool-result-error.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
 import {
   waitForCollectorCompletion,
@@ -583,14 +579,10 @@ export async function runBridgeRequest(params: {
       value: boundCodeModeValue(value, params.maxOutputBytes),
     };
   } catch (error) {
-    const settled: SettledBridgeRequest = {
+    return {
       id: params.request.id,
       ok: false,
       error: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
     };
-    if (consumeTrustedToolNoStartError(error)) {
-      registerTrustedToolNoStartError(settled);
-    }
-    return settled;
   }
 }

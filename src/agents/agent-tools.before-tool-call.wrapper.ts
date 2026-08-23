@@ -84,7 +84,6 @@ import {
   formatToolExecutionErrorMessage,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
-  registerTrustedToolNoStartError,
 } from "./tool-result-error.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -175,7 +174,6 @@ class BeforeToolCallFailureError extends Error {
 function tagBeforeToolCallFailure(
   error: unknown,
   signal?: AbortSignal,
-  stage?: "tool_preparation" | "before_tool_call",
 ): BeforeToolCallFailureError {
   try {
     if (error instanceof BeforeToolCallFailureError) {
@@ -186,11 +184,7 @@ function tagBeforeToolCallFailure(
   }
   const message = formatToolExecutionErrorMessage(error, "before_tool_call failed");
   const disposition = resolveToolErrorDiagnostic(error, signal).terminalReason;
-  const tagged = new BeforeToolCallFailureError(message, disposition, error);
-  if (stage === "tool_preparation" && isTrustedToolExecutionPreflightError(error)) {
-    registerTrustedToolNoStartError(tagged);
-  }
-  return tagged;
+  return new BeforeToolCallFailureError(message, disposition, error);
 }
 
 /** Return the closed terminal disposition carried by a before-tool failure. */
@@ -433,7 +427,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, params, "tool_preparation");
-        throw tagBeforeToolCallFailure(error, signal, "tool_preparation");
+        throw tagBeforeToolCallFailure(error, signal);
       }
       const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params: preparedParams });
       const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params: preparedParams });
@@ -450,7 +444,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, hookParams, "before_tool_call");
-        throw tagBeforeToolCallFailure(error, signal, "before_tool_call");
+        throw tagBeforeToolCallFailure(error, signal);
       }
       if (outcome.blocked) {
         if (outcome.kind !== "veto") {
@@ -493,7 +487,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
-        throw tagBeforeToolCallFailure(error, signal, "tool_preparation");
+        throw tagBeforeToolCallFailure(error, signal);
       }
       let onImplementationStart: (() => void) | undefined;
       if (prepareControl) {
