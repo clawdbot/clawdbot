@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { dispatchWidgetPrompt } from "../../components/mcp-app-security.ts";
+import { openExternalUrlSafe } from "../open-external-url.ts";
 
 type BoardWidgetBridgeRequest = {
   type: "openclaw:widget-bridge-request";
@@ -21,7 +22,7 @@ const STATE_RATE_WINDOW_MS = 60_000;
 const STATE_RATE_MAX_ATTEMPTS = 12;
 
 function openWidgetUrl(url: string): boolean {
-  return window.open(url, "_blank", "noopener,noreferrer") !== null;
+  return openExternalUrlSafe(url) !== null;
 }
 
 export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidgetBridgeRequest {
@@ -144,18 +145,14 @@ export class BoardWidgetBridgeController {
     const params = assertWidgetRequestRecord(request.params);
     switch (request.method) {
       // Opening a link the user clicked is navigation, not a granted capability,
-      // so this stays outside the tool-grant checks. The host owns the scheme
-      // filter and always applies noopener/noreferrer, so a widget cannot reach
-      // another scheme or retain a handle by omitting `rel` in its own markup.
+      // so this stays outside the tool-grant checks. Opening goes through the
+      // Control UI's openExternalUrlSafe owner, which applies noopener/noreferrer
+      // regardless of the `rel` a widget wrote. The absolute-http(s) gate here is
+      // deliberately narrower than that shared policy: widget-supplied links must
+      // not reach `blob:`, which the general external-link path allows.
       case "host.open": {
         const url = requiredString(params, "url");
-        let parsed: URL;
-        try {
-          parsed = new URL(url);
-        } catch {
-          throw new Error("widget link url is invalid");
-        }
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        if (!/^https?:\/\//i.test(url)) {
           throw new Error("widget link url is invalid");
         }
         if (!this.openUrl(url)) {
