@@ -38,16 +38,14 @@ function readUiCss(): string {
 
 function sessionsTableHtml() {
   const headers = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
-  const overviewFacts = [
-    ["3", "Sessions"],
+  const headingFacts = [
     ["1", "Live"],
     ["1", "Unread"],
-    ["123k", "Tokens"],
   ]
     .map(
       ([value, label], index) => `
-        ${index > 0 ? '<span class="sessions-fact__separator" aria-hidden="true">·</span>' : ""}
-        <span class="sessions-fact">
+        ${index > 0 ? '<span class="sessions-heading-fact__separator" aria-hidden="true">·</span>' : ""}
+        <span class="sessions-heading-fact">
           <strong>${value}</strong> ${label}
         </span>
       `,
@@ -55,8 +53,14 @@ function sessionsTableHtml() {
     .join("");
   return `
     <div class="settings-page settings-page--wide">
-      <div class="sessions-facts" aria-label="Sessions">${overviewFacts}</div>
-      <div class="settings-group">
+      <section class="settings-section">
+        <div class="settings-section__header">
+          <h2 class="settings-section__heading">
+            Sessions <span class="settings-count">3</span>
+            <span class="sessions-heading-facts">${headingFacts}</span>
+          </h2>
+        </div>
+        <div class="settings-group">
         <div class="data-table-container">
           <table class="data-table sessions-table">
             <thead>
@@ -201,7 +205,8 @@ function sessionsTableHtml() {
             <button>Next</button>
           </div>
         </div>
-      </div>
+        </div>
+      </section>
     </div>
   `;
 }
@@ -260,7 +265,7 @@ describeBrowserLayout("sessions responsive browser layout", () => {
         const kind = document.querySelector(".session-kind");
         const key = document.querySelector(".session-key-cell .session-link");
         const details = document.querySelector(".session-details-panel");
-        const facts = document.querySelector(".sessions-facts");
+        const facts = document.querySelector(".sessions-heading-facts");
         if (
           !(container instanceof HTMLElement) ||
           !(actions instanceof HTMLElement) ||
@@ -297,7 +302,7 @@ describeBrowserLayout("sessions responsive browser layout", () => {
       });
 
       expect(metrics.bodyOverflow).toBeLessThanOrEqual(1);
-      expect(metrics.factsText).toBe("3 Sessions · 1 Live · 1 Unread · 123k Tokens");
+      expect(metrics.factsText).toBe("1 Live · 1 Unread");
       expect(metrics.factsVisible).toBe(true);
       expect(metrics.checkpointCount).toBe("1");
       expect(metrics.statusText).toBe("Live");

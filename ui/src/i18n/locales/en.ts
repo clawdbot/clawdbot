@@ -969,6 +969,7 @@ export const en: TranslationMap = {
     assignToMe: "Assign to me",
     assignTo: "Assign to…",
     filterControls: "Session filters",
+    filters: "Filters",
     sourceFilters: "Session source filters",
     global: "Global",
     unknown: "Unknown",
