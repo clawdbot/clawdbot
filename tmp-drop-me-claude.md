@@ -1218,3 +1218,156 @@ loop, per the work order.
   No repository dependency, lockfile, patch, or store configuration was changed.
 - GitNexus index artifacts and any generated guidance stay untracked and out of
   the candidate diff.
+
+## 2026-08-23T09:04:00Z - Continuation drift-cure restart: Phase 0 through Phase 2
+
+Lane:
+`frond-scribe/20260823/assembly-85651-continuation-drift-cure`.
+This section starts a new append-only cycle in the inherited continuation
+journal. Earlier entries remain unchanged.
+
+### Workorder readback and stop boundary
+
+- Durable workorder:
+  `/home/figs/flesh_beast_best_beast/WORKTREES/frond-scribe-continuation-gates-workorder/dispatch-substrate/20260823/openclaw-85651-continuation-drift-cure/continuation-drift-cure-lane-workorder-v1.md`.
+- SHA-256:
+  `babe8b9d69e26e8be65f1f2104eb00895e288cd61668c8a3681feedbcbadb69b`.
+- Title:
+  `Workorder: Safe continuation drift-cure candidate for openclaw/openclaw#85651`.
+- Version: `v1`.
+- GitHub Copilot CLI `1.0.81-7`, model `gpt-5.6-sol`, quality/maximum
+  effort, seat Ronan, tmux `oc-85651-continuation-cure-20260823`.
+- The presentation ref is read-only in this lane, and this lane stops at the
+  Gate 5 intent boundary.
+- Presentation movement, upstream PR mutation, force-push, rebase, squash,
+  deployment, runtime smoke, feature proof fire, and generic behavioral proof
+  fire remain forbidden.
+
+### Remote-current authority
+
+- `karmaterminal/openclaw-bootstrap` default branch:
+  `6dd6c3a7712c8ae02937a29054525b2ddacb89c1`.
+- Bootstrap blobs:
+  - `RUNBOOKS/ENTRYPOINT.md`:
+    `8f6c1dd926a06be117e893e18eeb5be8a2568368`;
+  - `RUNBOOKS/PR-DRIFT-CURE-GATES-RUNBOOK.md`:
+    `e42d5eedbf52cb1d0fa307749b83c8625899c26e`;
+  - `RUNBOOKS/PR-PRESENTATION-RUNBOOK.md`:
+    `5602b721b079d3ea251f5e1692846baca9911c7d`;
+  - `RUNBOOKS/PROOF-CORPUS-METHOD.md`:
+    `a0366079fb0dc6659c21747d6cdfc05e073c1204`;
+  - `RUNBOOKS/PRINCE-CODE-AGENT-RUNBOOK.md`:
+    `ac3a38df91bd7636a8cec839e34b659cf65a6ab5`;
+  - branch naming authority:
+    `7b4a4d4d4a0cb1a37a4c3f42a634483ae63a5a24`;
+  - Mode-B workflow:
+    `a66cf30c9e7a0cc44438feba884129ccc0706a47`;
+  - deploy workflow, read for the embargo and live schema only:
+    `61d09fb4e911160f0d8244642b30e98ce692737a`;
+  - Gate 2 walker:
+    `4e86ba83621cec98573c5173d91e426f72e1d321`;
+  - Gate 2 primitive inventory:
+    `8e475b7a1a2bf14a0dda4640bd221fff867f4c1b`;
+  - Gate 2.7 classifier:
+    `90e4caddbe9f40248510d376bc00558ec75bcdcb`;
+  - Gate 2.7 operator notes:
+    `cbe52f1cdbe16f29afcc52a654d6cac8c31968c8`.
+- `karmaterminal/frond-scribe` default branch:
+  `49b50571d16704c2ac6017404cecb27ee5bc8b80`.
+- Frond-scribe blobs:
+  - drift-cure skill:
+    `5adbf9ab956adf258ac72b992beda5bd42090692`;
+  - GitNexus review skill:
+    `cc6059aebe81a98b5226b7a1c9675a609ceeffab`.
+- The frond-scribe default branch advanced after workorder authorship, but both
+  required skill blobs are unchanged. Bootstrap remained at the authored
+  commit.
+- Local authority checkouts differed from remote-current authority. They are
+  stale and excluded. The exact bootstrap authority is checked out detached at
+  `6dd6c3a7712c8ae02937a29054525b2ddacb89c1` for every gate invocation.
+
+### Target policy and watchdogs
+
+- Fork policy source:
+  `karmaterminal/openclaw@aab800a7e47c2b977a65e452a4208d81080c53de`.
+- Fork `AGENTS.md` blob:
+  `fcfb6cd04655ad61210e852bea30a43a91b087b7`;
+  `VISION.md`:
+  `890075593f71ebef4fc7243dbbb6c438ae53f0d5`;
+  PR template:
+  `e902c4789b21765ea16dfb75e436db5801b6450b`.
+- `.github/copilot-instructions.md` and
+  `.github/process_bootstrap.xml` are absent from remote-current fork and
+  upstream trees, not merely missing locally.
+- The fork has no active branch protection or repository rulesets. The
+  candidate still uses normal non-force fast-forward pushes only.
+- Upstream main is protected against deletion/non-fast-forward movement,
+  requires linear history plus `clownfish/exact-merge` and
+  `openclaw/ci-gate`; this lane does not mutate upstream.
+- The in-agent watchdog started with a 60-second inspection loop, five-minute
+  heartbeat, 15-minute no-progress alert, and 30-minute blocker.
+- The independent dispatcher watchdog started with a ten-minute inspection,
+  20-minute status request, 30-minute evidence capture, and 45-minute
+  intervention alert.
+- Both preserve phase, candidate, command, local/remote head, and tmux state.
+  Neither can approve a gate or move presentation.
+
+### Initial substrate and re-baseline
+
+- Presentation ref and live PR head:
+  `c3a0e5a314ecbf572911d4b2e84595bd06f64d69`.
+- Accepted continuation ref and exact source:
+  `09b553e5fc7c2b3a26954046c1d9f52c55af4b40`.
+- The presentation tip is an ancestor of the accepted source.
+- Forbidden deployed composite:
+  `6e6da7bba079b0fc50d134b96657cda683985837`.
+  It was not selected, merged, rebased, cherry-picked, or used for conflict
+  resolution.
+- Fresh upstream:
+  `bfad1bf454138d57b51106376b5d7cffd9b948f0`.
+- Old merge base:
+  `23854c39fc7d87b659d5ae1ab86a97880f2fd210`.
+- Upstream distance after that base: 75 commits, versus the workorder snapshot
+  of 32.
+- Accepted feature-side paths: 929, exactly matching the workorder snapshot.
+- Upstream-drift paths: 488.
+- Shared paths: 34.
+- Live PR state after GitHub computed mergeability:
+  `mergeable=false`, `mergeable_state=dirty`.
+- The first geometry command stopped before classification because `comm`
+  inherited a different locale than the generated `LC_ALL=C` sorted files.
+  The rerun pinned `LC_ALL=C` on both sort and intersection; no ref or source
+  mutation occurred.
+- At-dispatch Gate 2.7 over the accepted source examined all 929 paths:
+  289 `SAFE-NEW`, 312 `GENUINE`, 328 `MIXED-CLOBBER`, zero
+  `FROZEN-STALE`, exit 0. The current threshold therefore does not require a
+  stale-workorder pause. MIXED rows remain a later per-row disposition surface,
+  not acceptance evidence.
+
+### Authentication and durable checkpoints
+
+- Candidate/savegame write identity:
+  `ronan-dandelion-cult`, with live `write` permission to
+  `karmaterminal/openclaw`.
+- Push URL:
+  `https://github.com/karmaterminal/openclaw.git`.
+- `scribe-dandelion-cult` is reserved for the later Mode-B dispatch and
+  receipts. `ronan-auth` has not been loaded or used.
+- Gate 1 immutable savegame:
+  `savegame/20260823-0902Z/pr-85651-pre-continuation-drift-cure`
+  resolves remotely to
+  `c3a0e5a314ecbf572911d4b2e84595bd06f64d69`.
+- Candidate branch:
+  `frond-scribe/20260823/assembly-85651-continuation-drift-cure`.
+- Its initial local and remote checkpoint both resolve exactly to accepted
+  source `09b553e5fc7c2b3a26954046c1d9f52c55af4b40`.
+- Dedicated clean worktree:
+  `/home/figs/flesh_beast_best_beast/source/WORKTREES/openclaw-85651-continuation-drift-cure-candidate-20260823`.
+- The long Phase 0 notification exceeded the Discord payload limit and returned
+  HTTP 400. The mandatory readback had already landed, and a compact authority
+  receipt succeeded immediately afterward. This reporting failure changed no
+  gate or repository state.
+
+Next operation: freeze upstream again immediately before motion, recompute if
+it moved, inventory the prospective merge, then back-merge that one full SHA
+with verbose history and semantic per-file conflict resolution.
