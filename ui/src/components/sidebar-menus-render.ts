@@ -141,6 +141,7 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     ) &&
     !overlaySnapshot?.updateRunning &&
     !overlaySnapshot?.updateReconciliationPending &&
+    overlaySnapshot?.updateSchedule?.campaign?.state !== "applying" &&
     !isUpdateAttentionForced(overlaySnapshot?.updateStatusBanner?.tone) &&
     isUpdateAttentionDismissed(
       loadDismissals(context.gateway.connection.gatewayUrl),

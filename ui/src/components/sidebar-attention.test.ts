@@ -2,7 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { CronJob, CronJobsListResult, ModelAuthStatusResult } from "../api/types.ts";
+import type {
+  CronJob,
+  CronJobsListResult,
+  ModelAuthStatusResult,
+  UpdateScheduleState,
+} from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
@@ -612,7 +617,7 @@ describe("update attention", () => {
         latestVersion: "2026.8.2",
         channel: "latest",
       },
-      updateSchedule: null,
+      updateSchedule: null as UpdateScheduleState | null,
       updateCampaignStatusHydrated: true,
       updateReconciliationPending: false,
       updateRunning: false,
@@ -647,6 +652,20 @@ describe("update attention", () => {
     expect(element.updateSurfaceVisible()).toBe(true);
     overlaySnapshot.updateRunning = false;
     overlaySnapshot.updateReconciliationPending = true;
+    expect(element.updateSurfaceVisible()).toBe(true);
+    overlaySnapshot.updateReconciliationPending = false;
+    overlaySnapshot.updateSchedule = {
+      channel: "stable",
+      autoEnabled: true,
+      target: { kind: "package", version: "2026.8.2" },
+      campaign: {
+        id: "campaign-applying",
+        state: "applying",
+        announcedAtMs: 1,
+        forceAtMs: 2,
+        updatedAtMs: 2,
+      },
+    };
     expect(element.updateSurfaceVisible()).toBe(true);
   });
 

@@ -400,6 +400,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     return (
       snapshot?.updateRunning ||
       snapshot?.updateReconciliationPending ||
+      snapshot?.updateSchedule?.campaign?.state === "applying" ||
       isUpdateAttentionForced(snapshot?.updateStatusBanner?.tone)
     );
   }
