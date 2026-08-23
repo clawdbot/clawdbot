@@ -703,19 +703,13 @@ export async function handleToolExecutionEnd(
     return { status: "stale" };
   }
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
     scheduleEmbeddedAfterToolCallHook({
       ctx,
       hookRunner: hookRunnerAfter,
-      event: {
-        toolName,
-        params: startArgs,
-        runId,
-        toolCallId,
-        result: sanitizedResult,
-        error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
-        durationMs,
-      },
+      params: startArgs,
+      result: sanitizedResult,
+      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+      startedAt: startData?.startTime,
       toolName,
       toolCallId,
       runId,
