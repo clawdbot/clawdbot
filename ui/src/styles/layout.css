@@ -4255,19 +4255,25 @@ openclaw-sidebar-attention {
   min-height: 28px;
 }
 
-.sidebar-approval-row__action.sidebar-approval-row__action--allow-once {
+.sidebar-issues-panel
+  .sidebar-approval-row
+  .sidebar-approval-row__action.sidebar-approval-row__action--allow-once {
   border-color: color-mix(in srgb, var(--ok) 36%, var(--border));
-  background: color-mix(in srgb, var(--ok) 18%, var(--bg-elevated));
+  background: color-mix(in srgb, var(--ok) 20%, var(--bg-elevated));
   color: var(--ok);
 }
 
-.sidebar-approval-row__action.sidebar-approval-row__action--allow-once:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--ok) 25%, var(--bg-elevated));
+.sidebar-issues-panel
+  .sidebar-approval-row
+  .sidebar-approval-row__action.sidebar-approval-row__action--allow-once:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ok) 27%, var(--bg-elevated));
   color: var(--ok);
 }
 
-.sidebar-approval-row__action.sidebar-approval-row__action--allow-once:active:not(:disabled) {
-  background: color-mix(in srgb, var(--ok) 29%, var(--bg-elevated));
+.sidebar-issues-panel
+  .sidebar-approval-row
+  .sidebar-approval-row__action.sidebar-approval-row__action--allow-once:active:not(:disabled) {
+  background: color-mix(in srgb, var(--ok) 31%, var(--bg-elevated));
   color: var(--ok);
 }
 
