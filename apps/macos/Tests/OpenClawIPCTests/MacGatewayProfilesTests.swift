@@ -1,8 +1,50 @@
 import Foundation
+import LocalAuthentication
+import Security
 import Testing
 @testable import OpenClaw
 
 struct MacGatewayProfilesTests {
+    @Test func `gateway profile keychain access never opens authentication UI`() throws {
+        let query = MacGatewayProfileStore.baseQuery(
+            account: "registry-v1",
+            allowInteraction: false)
+        let authenticationContext = try #require(
+            query[kSecUseAuthenticationContext as String] as? LAContext)
+
+        #expect(authenticationContext.interactionNotAllowed)
+        #expect(MacGatewayProfileStore.baseQuery(account: "registry-v1")[
+            kSecUseAuthenticationContext as String] == nil)
+        #expect(MacGatewayProfileStore.isUnavailableKeychainStatus(errSecNoSuchKeychain))
+        #expect(MacGatewayProfileStore.isUnavailableKeychainStatus(errSecInteractionNotAllowed))
+        #expect(!MacGatewayProfileStore.isUnavailableKeychainStatus(errSecParam))
+    }
+
+    @Test func `authorized mutation reloads profiles hidden by an unavailable keychain`() async throws {
+        let existingURL = try #require(URL(string: "wss://existing.example"))
+        let existing = MacGatewayProfileStore.StoredProfile(
+            profile: MacGatewayProfile(id: "existing", name: "Existing", url: existingURL),
+            credentials: .init(token: "existing-token", password: nil))
+        let fake = try MacGatewayProfileFakeKeychain(registry: .init(profiles: [existing]))
+        let store = MacGatewayProfileStore()
+
+        try await MacGatewayProfileStore.$keychainOperations.withValue(fake.operations) {
+            #expect(try await store.profiles().isEmpty)
+
+            let added = try await store.upsert(
+                name: "Added",
+                url: #require(URL(string: "wss://added.example")),
+                token: "added-token",
+                password: nil)
+            #expect(fake.loadAllowInteraction == [false, true])
+            #expect(Set(fake.savedRegistry?.profiles.map(\.profile.id) ?? []) ==
+                Set([added.id, "existing"]))
+
+            try await store.remove(profileID: added.id)
+            #expect(fake.savedRegistry?.profiles.map(\.profile.id) == ["existing"])
+        }
+    }
+
     @Test func `canonical route identity normalizes authority but preserves path`() throws {
         let implicit = try MacGatewayProfileStore.canonicalURL(
             #require(URL(string: "WSS://Studio.Example/alpha")))
@@ -220,5 +262,38 @@ struct MacGatewayProfilesTests {
         if let token { remote["token"] = token }
         if let password { remote["password"] = password }
         return ["gateway": ["mode": mode, "remote": remote]]
+    }
+}
+
+private final class MacGatewayProfileFakeKeychain: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data: Data
+    private(set) var loadAllowInteraction: [Bool] = []
+    private(set) var savedRegistry: MacGatewayProfileStore.Registry?
+
+    init(registry: MacGatewayProfileStore.Registry) throws {
+        self.data = try JSONEncoder().encode(registry)
+    }
+
+    var operations: MacGatewayProfileKeychainOperations {
+        MacGatewayProfileKeychainOperations(
+            load: { [self] _, _, allowInteraction in
+                self.lock.withLock {
+                    self.loadAllowInteraction.append(allowInteraction)
+                    return allowInteraction
+                        ? .data(self.data)
+                        : .unavailable(errSecInteractionNotAllowed)
+                }
+            },
+            save: { [self] data, _, _, allowInteraction in
+                self.lock.withLock {
+                    guard allowInteraction else { return errSecInteractionNotAllowed }
+                    self.data = data
+                    self.savedRegistry = try? JSONDecoder().decode(
+                        MacGatewayProfileStore.Registry.self,
+                        from: data)
+                    return errSecSuccess
+                }
+            })
     }
 }

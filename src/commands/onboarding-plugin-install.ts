@@ -52,6 +52,7 @@ import {
 import type { PluginPackageInstall } from "../plugins/manifest.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { resolvePrewarmedPluginCache } from "../plugins/prewarmed-plugin-cache.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTimeout } from "../utils/with-timeout.js";
@@ -882,6 +883,8 @@ async function installPluginFromNpmPackArchiveWithProgress(params: {
   archivePath: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
+  trustedSourceLinkedOfficialInstall?: boolean;
+  expectedArchiveSha256?: string;
 }): Promise<InstallOutcome<InstallPluginResult & { npmTarballName?: string }>> {
   return await runOnboardingPluginInstallWithProgress({
     ...params,
@@ -892,6 +895,12 @@ async function installPluginFromNpmPackArchiveWithProgress(params: {
         config: params.cfg,
         expectedPluginId: params.entry.pluginId,
         expectedIntegrity: params.entry.install.expectedIntegrity,
+        ...(params.trustedSourceLinkedOfficialInstall
+          ? { trustedSourceLinkedOfficialInstall: true }
+          : {}),
+        ...(params.expectedArchiveSha256
+          ? { expectedArchiveSha256: params.expectedArchiveSha256 }
+          : {}),
         extensionsDir: resolveDefaultPluginExtensionsDir(),
         logger,
         signal,
@@ -1251,14 +1260,41 @@ export async function ensureOnboardingPluginInstalled(params: {
       return incompletePluginInstall(next, entry.pluginId, "failed");
     }
 
+    const cacheResolution = entry.trustedSourceLinkedOfficialInstall
+      ? resolvePrewarmedPluginCache({
+          pluginId: entry.pluginId,
+          catalogNpmSpec: npmSpec ?? npmInstallSpec,
+          effectiveNpmSpec: npmInstallSpec,
+        })
+      : ({ status: "miss" } as const);
+    if (cacheResolution.status === "invalid") {
+      await notePluginInstallFailure(prompter, entry.label, cacheResolution.error);
+      runtime.error?.(`Plugin install failed: ${summarizeInstallError(cacheResolution.error)}`);
+      return incompletePluginInstall(next, entry.pluginId, "failed", cacheResolution.error);
+    }
     await params.beforePersistentEffect?.();
-    const installOutcome = await installPluginFromNpmSpecWithProgress({
-      cfg: next,
-      entry,
-      npmSpec: npmInstallSpec,
-      prompter,
-      runtime,
-    });
+    if (cacheResolution.status === "hit") {
+      runtime.log?.(
+        `Using verified prewarmed plugin cache for ${sanitizeTerminalText(entry.pluginId)}.`,
+      );
+    }
+    const installOutcome =
+      cacheResolution.status === "hit"
+        ? await installPluginFromNpmPackArchiveWithProgress({
+            cfg: next,
+            entry,
+            archivePath: cacheResolution.archivePath,
+            prompter,
+            runtime,
+            expectedArchiveSha256: cacheResolution.archiveSHA256,
+          })
+        : await installPluginFromNpmSpecWithProgress({
+            cfg: next,
+            entry,
+            npmSpec: npmInstallSpec,
+            prompter,
+            runtime,
+          });
 
     if (installOutcome.status === "timed_out") {
       await prompter.note(

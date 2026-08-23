@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
+import { sha256File, sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import {
   resolveNpmPackArchiveMetadata,
   type NpmSpecResolution,
@@ -73,6 +73,7 @@ async function stageNpmPackArchiveInManagedRoot(params: {
   integrity?: string;
   shasum?: string;
   tarballName: string;
+  expectedArchiveSha256?: string;
 }): Promise<
   {
     stableArchivePath: string;
@@ -126,6 +127,12 @@ async function stageNpmPackArchiveInManagedRoot(params: {
   try {
     await fs.mkdir(archiveStoreDir, { recursive: true });
     await fs.copyFile(params.archivePath, tempArchivePath);
+    if (
+      params.expectedArchiveSha256 &&
+      (await sha256File(tempArchivePath)) !== params.expectedArchiveSha256
+    ) {
+      throw new Error("staged npm pack archive SHA-256 mismatch");
+    }
     await fs.rename(tempArchivePath, stableArchivePath);
   } catch (error) {
     await fs.rm(tempArchivePath, { force: true });
@@ -167,6 +174,7 @@ export async function installPluginFromNpmPackArchive(
     dryRun?: boolean;
     expectedPluginId?: string;
     expectedIntegrity?: string;
+    expectedArchiveSha256?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
   },
 ): Promise<InstallPluginResult & { npmTarballName?: string }> {
@@ -250,6 +258,9 @@ export async function installPluginFromNpmPackArchive(
             integrity: metadataResult.metadata.integrity,
             shasum: metadataResult.metadata.shasum,
             tarballName: metadataResult.tarballName,
+            ...(params.expectedArchiveSha256
+              ? { expectedArchiveSha256: params.expectedArchiveSha256 }
+              : {}),
           })),
         };
       } catch (error) {

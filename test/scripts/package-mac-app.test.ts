@@ -1452,6 +1452,9 @@ describe("package-mac-app plist stamping", () => {
     expect(macosCi).toContain("src/gateway/worker-environments/workspace-rsync-path.test.ts");
     expect(macosCi).toContain("test/scripts/package-mac-app.test.ts");
     expect(macosCi).toContain("test/scripts/package-mac-dist.test.ts");
+    expect(macosCi).toContain("test/scripts/install-cli-prewarmed.test.ts");
+    expect(macosCi).toContain("test/scripts/prewarmed-plugin-cache.test.ts");
+    expect(macosCi).toContain("test/scripts/verify-macos-prewarmed-runtime.test.ts");
     expect(macosCi).toContain("test/scripts/create-dmg.test.ts");
     expect(macosCi).toContain("test/scripts/codesign-mac-app.test.ts");
     expect(macosCi).toContain("test/scripts/notarize-mac-artifact.test.ts");
@@ -1705,6 +1708,40 @@ describe("package-mac-app plist stamping", () => {
     expect(cuaBlock).toContain(
       '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
     );
+  });
+
+  it("keeps the prewarmed runtime core-only and stages plugins as a separate cache", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const bundleStart = script.indexOf("bundle_prewarmed_runtime() {");
+    const bundleEnd = script.indexOf("merge_framework_machos()", bundleStart);
+    const bundleBlock = script.slice(bundleStart, bundleEnd);
+    const refreshIndex = script.indexOf(
+      'node --import tsx "$ROOT_DIR/scripts/runtime-postbuild.mts"',
+    );
+    const packageIndex = script.indexOf('node "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs"');
+    const verifyIndex = script.indexOf(
+      'node --import tsx "$ROOT_DIR/scripts/verify-macos-prewarmed-runtime.mts"',
+    );
+    const cacheIndex = script.indexOf(
+      'node --import tsx "$ROOT_DIR/scripts/stage-macos-prewarmed-plugin-cache.mts"',
+    );
+
+    expect(script).toContain('BUNDLE_PREWARMED_RUNTIME="${OPENCLAW_BUNDLE_PREWARMED_RUNTIME:-0}"');
+    expect(script).toContain(
+      'if [[ "$BUNDLE_PREWARMED_RUNTIME" == "1" && "$BUILD_CONFIG" == "release" ]]',
+    );
+    expect(script).toContain('if [[ "$BUNDLE_PREWARMED_RUNTIME" == "1" ]]; then');
+    expect(bundleStart).toBeGreaterThanOrEqual(0);
+    expect(bundleEnd).toBeGreaterThan(bundleStart);
+    expect(refreshIndex).toBeGreaterThanOrEqual(0);
+    expect(packageIndex).toBeGreaterThan(refreshIndex);
+    expect(verifyIndex).toBeGreaterThan(packageIndex);
+    expect(cacheIndex).toBeGreaterThan(verifyIndex);
+    expect(bundleBlock).not.toContain("codex");
+    expect(bundleBlock).not.toContain("dist/extensions");
+    expect(bundleBlock).toContain('pluginCacheDirectory: "prewarmed-plugin-cache"');
+    expect(bundleBlock).toContain("pluginCacheManifestSHA256");
+    expect(bundleBlock).toContain('[[ "$manifest_arch" != "x86_64" ]] || manifest_arch="x64"');
   });
 
   it("does not mask required Info.plist stamp failures", () => {
