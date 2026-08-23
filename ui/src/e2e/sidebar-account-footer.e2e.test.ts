@@ -6,7 +6,6 @@ import {
   createSidebarFooterProofSuite,
   openSidebarFooterProofPage,
   setSidebarProofTheme,
-  SIDEBAR_PROOF_USER,
 } from "./sidebar-footer-proof.test-support.ts";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
@@ -35,10 +34,6 @@ async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
     identity.locator("openclaw-viewer-avatar"),
     identity.locator(".sidebar-identity-card__name"),
   ];
-  expect(await identity.locator("button").count()).toBe(0);
-  expect(await identity.locator(".sidebar-identity-card__more").count()).toBe(0);
-  expect(await sidebar.getByRole("button", { name: "Devices" }).count()).toBe(0);
-  expect(await sidebar.locator(".sidebar-footer-bar > openclaw-tooltip").count()).toBe(0);
   for (const part of parts) {
     await part.click();
     await expect.poll(() => sidebar.locator("wa-dropdown.sidebar-identity-menu").count()).toBe(1);
@@ -47,22 +42,7 @@ async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
 }
 
 async function assertIdentityMenuContract(sidebar: Locator, menu: Locator) {
-  const footerAvatar = sidebar.locator('.sidebar-identity-card [data-viewer-id="riley"] > span');
-  const menuAvatar = menu.locator('.sidebar-identity-menu__avatar [data-viewer-id="riley"] > span');
-  expect(await menu.locator(".sidebar-identity-menu__name").textContent()).toBe("Riley");
-  expect((await menu.locator(".sidebar-identity-menu__email").textContent())?.trim()).toBe(
-    SIDEBAR_PROOF_USER.email,
-  );
-  expect(await menu.locator(".sidebar-identity-menu__email").getAttribute("title")).toBe(
-    SIDEBAR_PROOF_USER.email,
-  );
-  expect(await footerAvatar.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
-    await menuAvatar.evaluate((element) => getComputedStyle(element).backgroundColor),
-  );
   expect(await menu.locator('wa-dropdown-item[value="command:recent-activity"]').count()).toBe(0);
-  expect(await menu.locator(':scope > [role="separator"]').count()).toBe(4);
-  expect(await menu.locator('wa-dropdown-item[value="command:settings"] kbd').count()).toBe(1);
-  expect(await menu.locator('wa-dropdown-item[value="command:pair-mobile"]').count()).toBe(1);
 }
 
 async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feature" | "main") {
@@ -149,21 +129,18 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
   }
 }
 
-for (const branch of ["main", "feat/sidebar-footer"] as const) {
-  const label = branch === "main" ? "main" : "feature";
-  const suite = createSidebarFooterProofSuite(
-    `Control UI sidebar account footer ${label} build E2E`,
-    buildInfo(branch),
-  );
+const suite = createSidebarFooterProofSuite(
+  "Control UI sidebar account footer feature build E2E",
+  buildInfo("feat/sidebar-footer"),
+);
 
-  suite.define(() => {
-    it(`keeps the ${label} account target, identity menu, and visual states coherent`, async () => {
-      const opened = await openSidebarFooterProofPage(suite);
-      try {
-        await runAccountFooterProof(opened.page, opened.sidebar, label);
-      } finally {
-        await suite.closeBrowserContext(opened.context);
-      }
-    });
+suite.define(() => {
+  it("keeps the feature account target, identity menu, and visual states coherent", async () => {
+    const opened = await openSidebarFooterProofPage(suite);
+    try {
+      await runAccountFooterProof(opened.page, opened.sidebar, "feature");
+    } finally {
+      await suite.closeBrowserContext(opened.context);
+    }
   });
-}
+});

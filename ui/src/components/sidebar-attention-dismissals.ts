@@ -37,11 +37,13 @@ export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
     const result: SidebarAttentionDismissals = {};
     for (const kind of SIDEBAR_ATTENTION_KINDS) {
       const value = (parsed as Record<string, unknown>)[kind];
-      if (Array.isArray(value)) {
-        const signatures = value.filter((entry): entry is string => typeof entry === "string");
-        if (signatures.length > 0) {
-          result[kind] = [...new Set(signatures)];
-        }
+      const signatures = Array.isArray(value)
+        ? value.filter((entry): entry is string => typeof entry === "string")
+        : typeof value === "string"
+          ? [value]
+          : [];
+      if (signatures.length > 0) {
+        result[kind] = [...new Set(signatures)];
       }
     }
     return result;

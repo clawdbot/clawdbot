@@ -373,7 +373,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
   const availableUpdate = host.updateAvailable;
   const showUpdate = availableUpdate !== null;
   const updateBusy = host.updateBusy || host.updateSchedule?.campaign?.state === "applying";
-  const showInbox = host.activeRouteId === "chat";
+  const showInbox = true;
   return html`
     <div
       class="sidebar-footer-bar ${showInbox && showUpdate
@@ -555,6 +555,5 @@ function renderAppSidebarAttention(host: AppSidebarRenderHost) {
     .activeRouteId=${host.activeRouteId}
     .onNavigate=${(routeId: NavigationRouteId) => host.onNavigate?.(routeId)}
     .watchUpdateProgress=${host.watchUpdateProgress}
-    .onRefresh=${host.onRefresh}
   ></openclaw-sidebar-attention>`;
 }

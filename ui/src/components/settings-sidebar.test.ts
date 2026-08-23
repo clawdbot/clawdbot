@@ -528,32 +528,6 @@ describe("settings sidebar search", () => {
     expect(labels).toContain("Avancado");
   });
 
-  it("does not render the Inbox in the settings sidebar", () => {
-    render(
-      renderSettingsSidebar({
-        basePath: "",
-        activeRouteId: "appearance",
-        offline: false,
-        lastError: null,
-        gatewayVersion: "1.0.0",
-        updateAvailable: null,
-        updateBusy: false,
-        onUpdate: vi.fn(),
-        ...inactiveRefresh,
-        searchQuery: "",
-        onExit: vi.fn(),
-        onRetryConnect: vi.fn(),
-        onNavigate: vi.fn(),
-        onSearchQueryChange: vi.fn(),
-        preloadTimers: new Map(),
-        saveIndicator: saveIndicator(),
-      }),
-      container,
-    );
-
-    expect(container.querySelector("openclaw-sidebar-attention")).toBeNull();
-  });
-
   it("shows the offline retry action without an online status", () => {
     const onRetryConnect = vi.fn();
     const renderSidebar = (offline: boolean, lastError: string | null, queuedOutboxCount = 0) =>

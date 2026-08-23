@@ -29,15 +29,11 @@ import {
   buildSidebarAttentionItems,
   type SidebarAttentionItem,
 } from "./sidebar-attention-items.ts";
-import {
-  renderSidebarApprovalItem,
-  renderSidebarAskOpenClawButton,
-  renderSidebarIssueItem,
-  renderSidebarUpdateSurface,
-} from "./sidebar-issue-item.ts";
 import "./tooltip.ts";
-import "./menu-surface.ts";
-import { ISSUE_TABS, issueTabLabel, nextIssueTab, type IssueTab } from "./sidebar-issues-tabs.ts";
+import type { IssueTab } from "./sidebar-issues-tabs.ts";
+
+type SidebarAttentionPanelRenderer =
+  typeof import("./sidebar-attention-panel.runtime.ts").renderSidebarAttentionPanel;
 
 // A visibility change only refetches a connection-scoped stale snapshot.
 const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
@@ -66,7 +62,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) watchUpdateProgress:
     | ((listener: (progress: UpdateProgress) => void) => () => void)
     | undefined = undefined;
-  @property({ attribute: false }) onRefresh?: () => void;
 
   private loadedClient: GatewayBrowserClient | null = null;
   private loadedGateway: ApplicationContext["gateway"] | null = null;
@@ -78,6 +73,8 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
   private panelTrigger: HTMLElement | null = null;
+  private panelRenderer: SidebarAttentionPanelRenderer | null = null;
+  private panelLoad: Promise<SidebarAttentionPanelRenderer> | null = null;
 
   private readonly loadTask = new Task(this, {
     autoRun: false,
@@ -226,14 +223,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     if (changed.has("activeRouteId") && changed.get("activeRouteId") !== undefined) {
       this.closePanel(false);
     }
-    if (
-      this.panelOpen &&
-      this.currentItems().length === 0 &&
-      this.approvalQueue().length === 0 &&
-      !this.updateSurfaceVisible()
-    ) {
-      this.closePanel(false);
-    }
   }
 
   protected override updated(changed: PropertyValues<this>) {
@@ -330,10 +319,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   private hasUpdateSurface(): boolean {
     const snapshot = this.context?.overlays.snapshot;
     return Boolean(
-      snapshot?.controlUiRefreshRequired ||
-      snapshot?.updateRunning ||
-      snapshot?.updateStatusBanner ||
-      snapshot?.updateSchedule?.campaign,
+      snapshot?.updateRunning || snapshot?.updateStatusBanner || snapshot?.updateSchedule?.campaign,
     );
   }
 
@@ -344,7 +330,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const snapshot = this.context?.overlays.snapshot;
     const campaign = snapshot?.updateSchedule?.campaign;
     return [
-      snapshot?.controlUiRefreshRequired ? "refresh" : "",
       snapshot?.updateRunning ? "running" : "",
       campaign?.id ?? "",
       campaign?.state ?? "",
@@ -375,11 +360,19 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     this.closePanel(false);
   };
 
-  private openPanel(trigger: HTMLElement) {
+  private async openPanel(trigger: HTMLElement) {
+    this.panelLoad ??= import("./sidebar-attention-panel.runtime.ts").then(
+      (module) => module.renderSidebarAttentionPanel,
+    );
+    const panelRenderer = await this.panelLoad;
+    if (!this.isConnected) {
+      return;
+    }
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(390, globalThis.innerWidth - 16);
     const preferredLeft = rect.left + rect.width / 2 - width / 2;
     this.panelTrigger = trigger;
+    this.panelRenderer = panelRenderer;
     this.panelPosition = {
       left: Math.max(8, Math.min(preferredLeft, globalThis.innerWidth - width - 8)),
       bottom: Math.max(8, globalThis.innerHeight - rect.top + 8),
@@ -434,38 +427,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         this.querySelector<HTMLElement>(`#sidebar-issues-tab-${tab}`)?.focus();
       }
     });
-  }
-
-  private handleTabKeydown(event: KeyboardEvent, tab: IssueTab) {
-    const nextTab = nextIssueTab(tab, event.key);
-    if (!nextTab) {
-      return;
-    }
-    event.preventDefault();
-    this.selectTab(nextTab, true);
-  }
-
-  private renderTab(tab: IssueTab, count: number) {
-    const selected = this.selectedTab === tab;
-    const label = issueTabLabel(tab);
-    const countLabel = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
-      count: String(count),
-    });
-    return html`<button
-      type="button"
-      id=${`sidebar-issues-tab-${tab}`}
-      class="sidebar-issues-panel__tab"
-      role="tab"
-      aria-selected=${String(selected)}
-      aria-label=${`${label}, ${countLabel}`}
-      aria-controls="sidebar-issues-tabpanel"
-      tabindex=${selected ? 0 : -1}
-      @click=${() => this.selectTab(tab)}
-      @keydown=${(event: KeyboardEvent) => this.handleTabKeydown(event, tab)}
-    >
-      <span>${label}</span>
-      <span class="sidebar-issues-panel__tab-count" aria-hidden="true">${count}</span>
-    </button>`;
   }
 
   private async open(item: SidebarAttentionItem) {
@@ -524,17 +485,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     }
   };
 
-  private renderUpdateSurface() {
-    return renderSidebarUpdateSurface({
-      context: this.context,
-      onDismiss: () => this.dismissUpdateSurface(),
-      onNavigate: () => this.onNavigate?.("updates"),
-      onRefresh: this.onRefresh,
-      visible: this.updateSurfaceVisible(),
-      watchUpdateProgress: this.watchUpdateProgress,
-    });
-  }
-
   private async decideApproval(event: Event, approvalId: string, decision: ExecApprovalDecision) {
     const context = this.context;
     if (!context) {
@@ -557,28 +507,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     remaining[Math.min(Math.max(rowIndex, 0), remaining.length - 1)]?.focus();
   }
 
-  private renderApprovalItem(approval: ExecApprovalRequest) {
-    return renderSidebarApprovalItem({
-      approval,
-      context: this.context,
-      onClosePanel: () => this.closePanel(false),
-      onDecision: (event, approvalId, decision) =>
-        void this.decideApproval(event, approvalId, decision),
-    });
-  }
-
-  private renderItem(item: SidebarAttentionItem) {
-    return renderSidebarIssueItem(item, {
-      basePath: this.context?.basePath ?? "",
-      onDismiss: (dismissedItem) => this.dismiss(dismissedItem),
-      onNavigate: (routeId) => {
-        this.closePanel(false);
-        (this.onNavigate ?? ((nextRoute) => this.context?.navigate(nextRoute)))(routeId);
-      },
-      onOpen: (openedItem) => void this.open(openedItem),
-    });
-  }
-
   override render() {
     if (this.context?.gateway.snapshot.phase !== "connected") {
       return nothing;
@@ -592,37 +520,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count),
     });
-    const updateError = this.context.overlays.snapshot.updateStatusBanner?.tone === "danger";
-    const automationItems = items.filter(
-      (item) => item.kind === "cronFailed" || item.kind === "cronOverdue",
-    );
-    const systemItems = items.filter((item) => item.kind === "modelAuthExpired");
-    const visibleItems =
-      this.selectedTab === "automations"
-        ? automationItems
-        : this.selectedTab === "system"
-          ? systemItems
-          : this.selectedTab === "approvals"
-            ? []
-            : items;
-    const showApprovals = this.selectedTab === "all" || this.selectedTab === "approvals";
-    const showUpdate = updateSurface && ["all", "system"].includes(this.selectedTab);
-    const visibleCount =
-      (showApprovals ? approvalQueue.length : 0) + visibleItems.length + (showUpdate ? 1 : 0);
-    const errorItems = visibleItems.filter((item) => item.severity === "error");
-    const warningItems = visibleItems.filter((item) => item.severity === "warning");
-    const tabCounts: Record<IssueTab, number> = {
-      all: count,
-      approvals: approvalQueue.length,
-      automations: automationItems.length,
-      system: systemItems.length + (updateSurface ? 1 : 0),
-    };
-    const custodianItems = items.filter((item) => item.action.kind === "askCustodian");
-    const custodianSeverity = custodianItems.some((item) => item.severity === "error")
-      ? "error"
-      : custodianItems.length
-        ? "warning"
-        : null;
     return html`
       <span class="sr-only" role="status" aria-live="polite">${label}</span>
       <button
@@ -640,7 +537,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
           if (this.panelOpen) {
             this.closePanel(true);
           } else {
-            this.openPanel(trigger);
+            void this.openPanel(trigger);
           }
         }}
       >
@@ -651,90 +548,31 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
             >`
           : nothing}
       </button>
-      ${this.panelOpen
-        ? html`<button
-              type="button"
-              class="sidebar-issues-panel__backdrop"
-              aria-label=${t("common.close")}
-              @click=${() => this.closePanel(true)}
-            ></button>
-            <openclaw-menu-surface>
-              <section
-                id="sidebar-issues-panel"
-                class="sidebar-issues-panel"
-                role="dialog"
-                aria-labelledby="sidebar-issues-panel-heading"
-                style=${`left:${this.panelPosition.left}px;bottom:${this.panelPosition.bottom}px;--sidebar-issues-panel-bottom:${this.panelPosition.bottom}px`}
-                @keydown=${this.handlePanelKeydown}
-              >
-                <div class="sidebar-issues-panel__grabber" aria-hidden="true"></div>
-                <header class="sidebar-issues-panel__header">
-                  <h2 id="sidebar-issues-panel-heading" class="sidebar-issues-panel__heading">
-                    <span class="sidebar-issues-panel__heading-icon" aria-hidden="true"
-                      >${icons.inbox}</span
-                    >
-                    ${t("attention.issues")}
-                  </h2>
-                  ${renderSidebarAskOpenClawButton({
-                    count: custodianItems.length,
-                    severity: custodianSeverity,
-                    snapshot: this.context?.gateway.snapshot,
-                  })}
-                  <button
-                    type="button"
-                    class="sidebar-brand__icon sidebar-issues-panel__mobile-close"
-                    aria-label=${t("common.close")}
-                    @click=${() => this.closePanel(true)}
-                  >
-                    ${icons.x}
-                  </button>
-                </header>
-                <div
-                  class="sidebar-issues-panel__tabs"
-                  role="tablist"
-                  aria-label=${t("attention.tabs.label")}
-                >
-                  ${ISSUE_TABS.map((tab) => this.renderTab(tab, tabCounts[tab]))}
-                </div>
-                <div class="sidebar-issues-panel__list-wrap">
-                  <div
-                    id="sidebar-issues-tabpanel"
-                    class="sidebar-issues-panel__list"
-                    role="tabpanel"
-                    aria-labelledby=${`sidebar-issues-tab-${this.selectedTab}`}
-                    tabindex="0"
-                    @scroll=${this.syncOverflowCue}
-                  >
-                    ${visibleCount === 0
-                      ? html`<div class="sidebar-issues-panel__empty">
-                          <span class="sidebar-issues-panel__empty-icon" aria-hidden="true"
-                            >${icons.inbox}</span
-                          >
-                          <strong>${t("attention.emptyTitle")}</strong>
-                          <span>${t("attention.emptyBody")}</span>
-                        </div>`
-                      : nothing}
-                    ${showApprovals
-                      ? approvalQueue.map((approval) => this.renderApprovalItem(approval))
-                      : nothing}
-                    ${showUpdate && updateError ? this.renderUpdateSurface() : nothing}
-                    ${errorItems.map((item) => this.renderItem(item))}
-                    ${showUpdate && !updateError ? this.renderUpdateSurface() : nothing}
-                    ${warningItems.map((item) => this.renderItem(item))}
-                  </div>
-                  <div
-                    class="sidebar-issues-panel__overflow-cue sidebar-issues-panel__overflow-cue--top"
-                    ?hidden=${!this.overflowAbove}
-                    aria-hidden="true"
-                  ></div>
-                  <div
-                    class="sidebar-issues-panel__overflow-cue sidebar-issues-panel__overflow-cue--bottom"
-                    ?hidden=${!this.overflowBelow}
-                    aria-hidden="true"
-                  ></div>
-                </div>
-              </section>
-            </openclaw-menu-surface>`
+      ${this.panelOpen && this.panelRenderer
+        ? this.panelRenderer({
+            approvalQueue,
+            context: this.context,
+            items,
+            onApprovalDecision: (event, approvalId, decision) =>
+              void this.decideApproval(event, approvalId, decision),
+            onClose: (restoreFocus) => this.closePanel(restoreFocus),
+            onDismiss: (item) => this.dismiss(item),
+            onDismissUpdate: () => this.dismissUpdateSurface(),
+            onKeydown: this.handlePanelKeydown,
+            onNavigate: (routeId) => {
+              this.closePanel(false);
+              (this.onNavigate ?? ((nextRoute) => this.context?.navigate(nextRoute)))(routeId);
+            },
+            onOpen: (item) => void this.open(item),
+            onScroll: this.syncOverflowCue,
+            onSelectTab: (tab) => this.selectTab(tab),
+            overflowAbove: this.overflowAbove,
+            overflowBelow: this.overflowBelow,
+            panelPosition: this.panelPosition,
+            selectedTab: this.selectedTab,
+            updateSurface,
+            watchUpdateProgress: this.watchUpdateProgress,
+          })
         : nothing}
     `;
   }

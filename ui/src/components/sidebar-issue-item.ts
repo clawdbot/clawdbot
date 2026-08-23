@@ -101,7 +101,6 @@ export function renderSidebarUpdateSurface(params: {
   context: ApplicationContext | undefined;
   onDismiss: () => void;
   onNavigate: () => void;
-  onRefresh: (() => void) | undefined;
   visible: boolean;
   watchUpdateProgress: ((listener: (progress: UpdateProgress) => void) => () => void) | undefined;
 }) {
@@ -124,11 +123,11 @@ export function renderSidebarUpdateSurface(params: {
     .canUpdate=${canCallGatewayMethod(gateway, "update.run", "operator.admin")}
     .canHoldUpdate=${canCallGatewayMethod(gateway, "update.hold", "operator.admin")}
     .onUpdate=${() => void context.overlays.runUpdate()}
-    .refreshRequired=${snapshot.controlUiRefreshRequired}
-    .onRefresh=${params.onRefresh ?? (() => undefined)}
+    .refreshRequired=${false}
     .onHoldUpdate=${() => context.overlays.holdUpdate()}
     .onReviewUpdate=${params.onNavigate}
     .onDismiss=${params.onDismiss}
+    .recoverNativeDecline=${false}
   ></openclaw-sidebar-update-card>`;
 }
 

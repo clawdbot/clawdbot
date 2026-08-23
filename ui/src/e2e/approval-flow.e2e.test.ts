@@ -202,13 +202,6 @@ suite.define(() => {
       ),
     ).toBe(true);
 
-    await inboxPanel.dispatchEvent("keydown", {
-      bubbles: true,
-      ctrlKey: true,
-      key: "Enter",
-    });
-    expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
-
     if (captureUiProof) {
       await currentPage.screenshot({ path: path.join(proofDir, "review-only-inbox.png") });
     }

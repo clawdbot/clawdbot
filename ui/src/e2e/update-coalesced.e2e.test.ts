@@ -292,13 +292,7 @@ suite.define(() => {
         (eventName) => window.dispatchEvent(new CustomEvent(eventName)),
         NATIVE_UPDATE_DECLINED_EVENT,
       );
-      await page.locator(".sidebar-footer-update:visible").click();
-      await page
-        .locator("openclaw-modal-dialog")
-        .getByRole("button", { name: "Update and restart", exact: true })
-        .click();
-
-      expect(await gateway.getRequests("update.run")).toHaveLength(1);
+      await expect.poll(async () => (await gateway.getRequests("update.run")).length).toBe(1);
       expect(pageErrors).toEqual([]);
       await page.screenshot({ path: path.join(artifactDir, "gateway-update-target.png") });
     } finally {

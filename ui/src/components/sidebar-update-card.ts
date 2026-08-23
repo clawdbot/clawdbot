@@ -15,6 +15,7 @@ import {
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";
+import "../styles/sidebar-update-card.css";
 import { icons } from "./icons.ts";
 
 class SidebarUpdateCard extends OpenClawLightDomContentsElement {
@@ -35,6 +36,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
   @property({ attribute: false }) onReviewUpdate: () => void = () => undefined;
   @property({ attribute: false }) onDismiss: (() => void) | undefined = undefined;
+  @property({ attribute: false }) recoverNativeDecline = true;
   @state() private holdingCampaignId: string | null = null;
   @state() private nativeUpdateAvailable = hasNativeUpdateBridge();
   private nativeUpdateDeclined = false;
@@ -72,7 +74,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
       this.handleNativeUpdateAvailabilityChanged,
     );
-    window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
+    if (this.recoverNativeDecline) {
+      window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
+    }
   }
 
   override disconnectedCallback() {
@@ -80,7 +84,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
       this.handleNativeUpdateAvailabilityChanged,
     );
-    window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
+    if (this.recoverNativeDecline) {
+      window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
+    }
     super.disconnectedCallback();
   }
 

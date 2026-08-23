@@ -8,7 +8,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const proofArtifactRoot = path.join(process.cwd(), ".artifacts", "control-ui-e2e");
 
-export const SIDEBAR_PROOF_USER = {
+const SIDEBAR_PROOF_USER = {
   self: true,
   id: "riley",
   name: "Riley",

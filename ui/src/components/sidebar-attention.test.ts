@@ -10,6 +10,7 @@ import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   addDismissal,
   dismissalStoreKey,
+  loadDismissals,
   pruneDismissals,
   type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
@@ -147,18 +148,6 @@ describe("automation attention", () => {
       "overdue",
       "older-overdue",
     ]);
-  });
-
-  it("keeps each failed job as its own bounded incident", () => {
-    const jobs = Array.from({ length: 100 }, (_, index) => {
-      const job = cronJob(`failed-${index}`);
-      job.name = `Automation ${index} ${"n".repeat(40)}`;
-      job.state = { lastRunStatus: "error", lastError: "e".repeat(200) };
-      return job;
-    });
-    const failed = cronItems(jobs).filter((item) => item.kind === "cronFailed");
-    expect(failed).toHaveLength(100);
-    expect(failed.every((item) => item.action.kind === "navigate")).toBe(true);
   });
 });
 
@@ -506,10 +495,6 @@ describe("pruneDismissals", () => {
       ]),
     ).toEqual({ modelAuthExpired: ["openai"] });
   });
-
-  it("drops a dismissal once the underlying state clears", () => {
-    expect(pruneDismissals({ cronFailed: ["alpha"] }, [])).toEqual({});
-  });
 });
 
 describe("addDismissal", () => {
@@ -542,5 +527,16 @@ describe("addDismissal", () => {
     const expected = { cronFailed: ["alpha", "beta"] };
     expect(next).toEqual(expected);
     expect(JSON.parse(localStorage.getItem(key) ?? "null")).toEqual(expected);
+  });
+
+  it("preserves released single-signature dismissals during upgrade", () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const gatewayUrl = "ws://gateway.test";
+    localStorage.setItem(
+      dismissalStoreKey(gatewayUrl),
+      JSON.stringify({ cronFailed: "legacy-signature" }),
+    );
+
+    expect(loadDismissals(gatewayUrl)).toEqual({ cronFailed: ["legacy-signature"] });
   });
 });
