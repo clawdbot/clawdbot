@@ -30,6 +30,7 @@ export interface FrvClient {
   ) => Promise<Record<string, unknown> | undefined>;
   rerunFailed?: (runId: string) => Promise<unknown>;
   rerunParent?: (runId: string) => Promise<unknown>;
+  verifyTrustedSourceSha?: (workflowSha: string) => Promise<void>;
   verifyTrustedToolingSha?: (workflowSha: string) => Promise<void>;
   verify?: (runId: string, plan: Record<string, unknown>) => Promise<unknown>;
 }
@@ -44,6 +45,7 @@ export type FrvConcreteClient = FrvClient &
       | "rerunFailed"
       | "rerunParent"
       | "verify"
+      | "verifyTrustedSourceSha"
       | "verifyTrustedToolingSha"
     >
   >;

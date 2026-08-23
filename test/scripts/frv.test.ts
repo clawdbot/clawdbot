@@ -12,6 +12,7 @@ import {
 } from "../../scripts/frv.mjs";
 import {
   buildReleaseExecutionPlanArtifact,
+  HISTORICAL_CONTINUATION_SOURCE_MODE,
   releaseChildSpec,
   releaseCompositeJobsSha256,
   verifyReleaseContinuationSource,
@@ -81,6 +82,7 @@ function continuation() {
     sourceWorkflowPath: ".github/workflows/full-release-validation.yml",
     sourceWorkflowRef: "release-ci/tooling",
     sourceWorkflowSha: SHA,
+    sourceEvidenceMode: HISTORICAL_CONTINUATION_SOURCE_MODE,
     toolingSha: SHA,
     validationInputs: VALIDATION_INPUTS,
   };
@@ -495,6 +497,7 @@ describe("frv continuation controller", () => {
       rerunParent: async () => {
         parentReruns += 1;
       },
+      verifyTrustedSourceSha: async () => {},
       verifyTrustedToolingSha: async () => {},
       verify: async () => "{}",
       repository: "openclaw/openclaw",
@@ -567,6 +570,9 @@ describe("frv continuation controller", () => {
           workflowRef: normalCi.workflowRef,
           workflowSha: normalCi.workflowSha,
         },
+      },
+      continuation: {
+        sourceEvidenceMode: HISTORICAL_CONTINUATION_SOURCE_MODE,
       },
       targetSha: TARGET_SHA,
     });
@@ -836,6 +842,40 @@ describe("frv continuation controller", () => {
         loadSourceManifest: async () => manifest,
       }),
     ).rejects.toThrow("continuation source identity differs from the immutable plan");
+  });
+
+  it("accepts an exact historical failed root when no source manifest exists", async () => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const methods = preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate());
+    await expect(
+      preflightContinuation(continuationPlan(children), "77", {
+        ...methods,
+        loadSourceManifest: async () => undefined,
+      }),
+    ).resolves.toMatchObject({ conclusion: "failure", id: 77 });
+  });
+
+  it("keeps a canonical continuation source manifest mandatory", async () => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const source = continuation();
+    delete (source as { sourceEvidenceMode?: string }).sourceEvidenceMode;
+    const methods = preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate());
+    await expect(
+      preflightContinuation(continuationPlan(children, source), "77", {
+        ...methods,
+        loadSourceManifest: async () => undefined,
+      }),
+    ).rejects.toThrow("continuation source manifest is missing");
   });
 
   it("rejects a source candidate artifact tamper before mutation", async () => {
@@ -1165,6 +1205,28 @@ describe("frv continuation controller", () => {
       }),
     ).rejects.toThrow(`not reachable from protected main in openclaw/openclaw`);
     expect(mutations).toEqual([]);
+  });
+
+  it("trusts source and continuation tooling SHAs independently", async () => {
+    const sourceSha = "c".repeat(40);
+    const reads: string[] = [];
+    const client = createClient("openclaw/openclaw", {
+      apiJson: async (path: string) => {
+        reads.push(path);
+        if (path === `compare/${SHA}...main`) {
+          return { status: "ahead" };
+        }
+        if (path === `compare/${sourceSha}...main`) {
+          return { status: "diverged" };
+        }
+        throw new Error(`unexpected read: ${path}`);
+      },
+    });
+    await expect(client.verifyTrustedToolingSha(SHA)).resolves.toBeUndefined();
+    await expect(client.verifyTrustedSourceSha(sourceSha)).rejects.toThrow(
+      `Source workflow SHA ${sourceSha} is not reachable from protected main`,
+    );
+    expect(reads).toEqual([`compare/${SHA}...main`, `compare/${sourceSha}...main`]);
   });
 
   it("fails a deterministic dispatch rejection immediately without adoption polling", async () => {

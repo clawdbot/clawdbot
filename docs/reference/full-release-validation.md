@@ -122,6 +122,15 @@ already has a canonical execution-plan artifact, legacy mode is rejected.
 Missing identity is an error; the command does not guess from current `main` or
 the newest similarly named run.
 
+Historical legacy plans use `sourceEvidenceMode: historical-exact-tuple`.
+Their failed source root may omit the validation manifest that newer roots
+always emit, but only when the source has no canonical execution-plan artifact.
+The exact reviewed source, candidate, inputs, children, attempts, and dispatch
+logs remain mandatory. A historical manifest that does exist is verified in
+full. Canonical continuation sources still require it. The source FRV SHA and
+the continuation Tooling SHA are each checked independently against protected
+`main`.
+
 The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
 passes the Validation SHA as both the candidate ref and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence

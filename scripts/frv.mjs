@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import {
   classifyReleaseGhTransportError,
   composeReleaseChildAttemptEvidence,
+  HISTORICAL_CONTINUATION_SOURCE_MODE,
   normalizeReleaseCandidate,
   normalizeReleaseValidationInputs,
   releaseChildSpec,
@@ -307,6 +308,7 @@ export function validateLegacySource(
     sourceWorkflowPath: requiredValue(source.workflowPath, "source workflow path"),
     sourceWorkflowRef: requiredValue(source.workflowRef, "source workflow ref"),
     sourceWorkflowSha: requiredValue(source.workflowSha, "source workflow SHA"),
+    sourceEvidenceMode: HISTORICAL_CONTINUATION_SOURCE_MODE,
     toolingSha: requiredValue(value.toolingSha, "continuation tooling SHA"),
     validationInputs,
   };
@@ -480,16 +482,13 @@ export async function preflightContinuation(
     childObservations.map(({ child, parentLog }) => [child.key, parentLog]),
   );
   if (plan.continuation) {
-    if (typeof client.loadSourceManifest !== "function") {
+    if (typeof client.loadSourceManifest !== "function" && !plan.legacy) {
       throw new Error("FRV continuation client cannot load the exact source manifest");
     }
-    const sourceManifest = await client.loadSourceManifest(
+    const sourceManifest = await client.loadSourceManifest?.(
       source.sourceRunId,
       source.sourceRunAttempt,
     );
-    if (!sourceManifest) {
-      throw new Error("FRV continuation source manifest is missing");
-    }
     verifyReleaseContinuationSource({
       children: selectedChildren(plan),
       continuation: plan.continuation,
@@ -690,25 +689,27 @@ export function createClient(repository, dependencies = {}) {
   const attemptJobs =
     dependencies.getAttemptJobs ??
     ((runId, runAttempt) => ghAttemptJobs(repository, runId, runAttempt));
+  const verifyTrustedMainSha = async (workflowSha, label) => {
+    const comparison = await apiJson(`compare/${workflowSha}...main`);
+    try {
+      verifyTrustedWorkflowRef(
+        workflowSha,
+        "main",
+        () => "",
+        () => comparison.status === "ahead" || comparison.status === "identical",
+      );
+    } catch (error) {
+      throw new Error(
+        `${label} SHA ${workflowSha} is not reachable from protected main in ${repository}`,
+        { cause: error },
+      );
+    }
+  };
   const client = {
     repository,
     loadSourceManifest,
-    async verifyTrustedToolingSha(workflowSha) {
-      const comparison = await apiJson(`compare/${workflowSha}...main`);
-      try {
-        verifyTrustedWorkflowRef(
-          workflowSha,
-          "main",
-          () => "",
-          () => comparison.status === "ahead" || comparison.status === "identical",
-        );
-      } catch (error) {
-        throw new Error(
-          `Tooling SHA ${workflowSha} is not reachable from protected main in ${repository}`,
-          { cause: error },
-        );
-      }
-    },
+    verifyTrustedSourceSha: (workflowSha) => verifyTrustedMainSha(workflowSha, "Source workflow"),
+    verifyTrustedToolingSha: (workflowSha) => verifyTrustedMainSha(workflowSha, "Tooling"),
     async findContinuationParent(plan, branch, workflowSha) {
       const response = await apiJson(
         `actions/workflows/full-release-validation.yml/runs?event=workflow_dispatch&branch=${encodeURIComponent(branch)}&per_page=100`,
@@ -1109,6 +1110,12 @@ async function rerunWithTransientRetry(runId, priorRun, mutation, client) {
 
 export async function continueFailed(plan, rootRunId, client, options = {}) {
   await preflightContinuation(plan, rootRunId, client, client.repository ?? DEFAULT_REPOSITORY);
+  if (plan.continuation) {
+    if (typeof client.verifyTrustedSourceSha !== "function") {
+      throw new Error("continuation client cannot verify its source workflow SHA");
+    }
+    await client.verifyTrustedSourceSha(plan.continuation.sourceWorkflowSha);
+  }
   if (plan.legacy) {
     if (typeof client.verifyTrustedToolingSha !== "function") {
       throw new Error("legacy continuation client cannot verify its frozen Tooling SHA");

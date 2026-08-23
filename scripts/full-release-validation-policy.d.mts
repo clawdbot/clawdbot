@@ -30,6 +30,7 @@ export interface ReleaseChildSpec {
 }
 export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
+export const HISTORICAL_CONTINUATION_SOURCE_MODE: "historical-exact-tuple";
 export const RELEASE_VALIDATION_INPUT_KEYS: readonly string[];
 export function releaseChildSpec(key: string): ReleaseChildSpec;
 export function normalizeReleaseCandidate(value: unknown, expected?: ReleaseRecord): ReleaseRecord;

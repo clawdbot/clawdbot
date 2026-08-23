@@ -8,6 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildReleaseExecutionPlanArtifact,
+  HISTORICAL_CONTINUATION_SOURCE_MODE,
   releaseCompositeJobsSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
@@ -721,13 +722,20 @@ function trustedMainPackageFixture({
   };
 }
 
-function strictContinuationFixture() {
+function strictContinuationFixture({
+  sourceLineageDiverged = false,
+  sourceManifestPresent = true,
+}: {
+  sourceLineageDiverged?: boolean;
+  sourceManifestPresent?: boolean;
+} = {}) {
   const sourceRunId = "77";
   const rootRunId = "88";
   const targetSha = "a".repeat(40);
-  const workflowSha = "b".repeat(40);
-  const sourceRef = "release/source";
-  const rootRef = `release-ci/${workflowSha.slice(0, 12)}-${sourceRunId}`;
+  const toolingSha = "b".repeat(40);
+  const sourceWorkflowSha = "d".repeat(40);
+  const sourceRef = `release-ci/${sourceWorkflowSha.slice(0, 12)}-${sourceRunId}`;
+  const rootRef = `release-ci/${toolingSha.slice(0, 12)}-${sourceRunId}`;
   const validationInputs = {
     allowUnreleasedChangelog: "false",
     codexPluginSpec: "",
@@ -768,7 +776,7 @@ function strictContinuationFixture() {
       url: `https://github.com/openclaw/openclaw/actions/runs/${runIds[child.manifestKey as keyof typeof runIds]}`,
       workflow: child.workflow,
       workflowRef: sourceRef,
-      workflowSha,
+      workflowSha: sourceWorkflowSha,
     }));
   const continuation = {
     candidate,
@@ -783,9 +791,10 @@ function strictContinuationFixture() {
     sourceRunId,
     sourceWorkflowPath: ".github/workflows/full-release-validation.yml",
     sourceWorkflowRef: sourceRef,
-    sourceWorkflowSha: workflowSha,
-    toolingSha: workflowSha,
-    validationInputs,
+    sourceWorkflowSha,
+    sourceEvidenceMode: HISTORICAL_CONTINUATION_SOURCE_MODE,
+    toolingSha,
+    validationInputs: structuredClone(validationInputs),
   };
   const executionPlan = buildReleaseExecutionPlanArtifact({
     children,
@@ -796,12 +805,12 @@ function strictContinuationFixture() {
       parentRunId: rootRunId,
       targetSha,
       workflowRef: rootRef,
-      workflowSha,
+      workflowSha: toolingSha,
     },
     gates: [{ name: "Resolve target ref", required: true, result: "success" }],
     releaseProfile: "beta",
     rerunGroup: "all",
-    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: workflowSha },
+    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: toolingSha },
   });
   const childRuns = {
     normalCi: runIds.normalCi,
@@ -814,7 +823,12 @@ function strictContinuationFixture() {
     },
     releaseChecks: runIds.releaseChecks,
   };
-  const manifest = (runId: string, workflowRef: string, continuationSource?: unknown) => ({
+  const manifest = (
+    runId: string,
+    workflowRef: string,
+    workflowSha: string,
+    continuationSource?: unknown,
+  ) => ({
     childRuns,
     continuationSource,
     controls: {
@@ -839,9 +853,9 @@ function strictContinuationFixture() {
     workflowRefType: "branch",
     workflowSha,
   });
-  const sourceManifest = manifest(sourceRunId, sourceRef);
-  const rootManifest = manifest(rootRunId, rootRef, continuation);
-  const run = (id: string, ref: string, conclusion: string) => ({
+  const sourceManifest = manifest(sourceRunId, sourceRef, sourceWorkflowSha);
+  const rootManifest = manifest(rootRunId, rootRef, toolingSha, continuation);
+  const run = (id: string, ref: string, workflowSha: string, conclusion: string) => ({
     conclusion,
     event: "workflow_dispatch",
     head_branch: ref,
@@ -854,10 +868,10 @@ function strictContinuationFixture() {
     status: "completed",
   });
   const sourceRun = {
-    ...run(sourceRunId, sourceRef, "failure"),
+    ...run(sourceRunId, sourceRef, sourceWorkflowSha, "failure"),
     display_title: continuation.sourceDisplayTitle,
   };
-  const rootRun = run(rootRunId, rootRef, "success");
+  const rootRun = run(rootRunId, rootRef, toolingSha, "success");
   const childById = new Map(
     children.map((child) => [
       child.runId,
@@ -904,7 +918,7 @@ function strictContinuationFixture() {
       ];
     }),
   );
-  const artifact = (runId: string, ref: string, id: number) => ({
+  const artifact = (runId: string, ref: string, workflowSha: string, id: number) => ({
     digest: `sha256:${String(id).padStart(64, "0")}`,
     expired: false,
     id,
@@ -912,13 +926,16 @@ function strictContinuationFixture() {
     size_in_bytes: 507,
     workflow_run: { head_branch: ref, head_sha: workflowSha, id: Number(runId) },
   });
-  const sourceArtifact = artifact(sourceRunId, sourceRef, 701);
-  const rootArtifact = artifact(rootRunId, rootRef, 702);
+  const sourceArtifact = artifact(sourceRunId, sourceRef, sourceWorkflowSha, 701);
+  const rootArtifact = artifact(rootRunId, rootRef, toolingSha, 702);
+  const lineageComparisons: string[] = [];
   const client = {
-    compareCommitLineage: () => ({
-      merge_base_commit: { sha: workflowSha },
-      status: "ahead",
-    }),
+    compareCommitLineage: (base: string) => {
+      lineageComparisons.push(base);
+      return base === sourceWorkflowSha && sourceLineageDiverged
+        ? { merge_base_commit: { sha: toolingSha }, status: "diverged" }
+        : { merge_base_commit: { sha: base }, status: "ahead" };
+    },
     compareCommits: () => ({ status: "identical" }),
     getJobLog: (jobId: number) => logByJobId.get(jobId) ?? "",
     getParentJobs: (runId: string) =>
@@ -934,7 +951,7 @@ function strictContinuationFixture() {
               },
             ]
           : [],
-    getRef: () => ({ object: { sha: workflowSha } }),
+    getRef: () => ({ object: { sha: toolingSha } }),
     getRun: (runId: string) => {
       if (runId === rootRunId) {
         return rootRun;
@@ -952,18 +969,31 @@ function strictContinuationFixture() {
       attempt: 1,
       conclusion: "success",
       headBranch: rootRef,
-      headSha: workflowSha,
+      headSha: toolingSha,
       jobs: [],
       status: "completed",
       url: rootRun.html_url,
     }),
-    loadExecutionPlan: () => executionPlan,
+    loadExecutionPlan: (runId: string) => (runId === rootRunId ? executionPlan : undefined),
     loadManifest: (runId: string) =>
       runId === rootRunId
         ? { artifact: rootArtifact, manifest: rootManifest }
-        : { artifact: sourceArtifact, manifest: sourceManifest },
+        : sourceManifestPresent
+          ? { artifact: sourceArtifact, manifest: sourceManifest }
+          : undefined,
   };
-  return { client, rootManifest, rootRunId, targetSha, workflowSha };
+  return {
+    client,
+    executionPlan,
+    lineageComparisons,
+    rootManifest,
+    rootRunId,
+    sourceManifest,
+    sourceRunId,
+    sourceWorkflowSha,
+    targetSha,
+    toolingSha,
+  };
 }
 
 type ReleaseCiWatchState = {
@@ -1593,6 +1623,74 @@ describe("release CI summary child correlation", () => {
     expect(() => validateReleaseRunEvidence(options, fixture.client)).toThrow(
       "recorded continuation source differs from the immutable plan",
     );
+  });
+
+  it("accepts a manifestless historical source only when no canonical source plan exists", () => {
+    const fixture = strictContinuationFixture({ sourceManifestPresent: false });
+    expect(
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.rootRunId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ).children,
+    ).toHaveLength(4);
+  });
+
+  it("rejects manifestless historical mode when the source has a canonical plan", () => {
+    const fixture = strictContinuationFixture({ sourceManifestPresent: false });
+    fixture.client.loadExecutionPlan = (runId: string) =>
+      runId === fixture.rootRunId ? fixture.executionPlan : { kind: "canonical-source-plan" };
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.rootRunId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).toThrow("continuation source manifest is missing");
+  });
+
+  it("rejects a present historical source manifest when its exact inputs were tampered", () => {
+    const fixture = strictContinuationFixture();
+    fixture.sourceManifest.validationInputs.provider = "anthropic";
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.rootRunId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).toThrow("continuation source identity differs from the immutable plan");
+  });
+
+  it("rejects a diverged source SHA even when continuation tooling uses a protected tag", () => {
+    const fixture = strictContinuationFixture({ sourceLineageDiverged: true });
+    const trustedTag = `release-publish/${fixture.toolingSha.slice(0, 12)}-88`;
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.rootRunId,
+          trustedWorkflowFullRef: `refs/tags/${trustedTag}`,
+          trustedWorkflowRef: trustedTag,
+          trustedWorkflowSha: fixture.toolingSha,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).toThrow("producer is not on the trusted main verifier lineage");
+    expect(fixture.lineageComparisons).toEqual([fixture.sourceWorkflowSha]);
   });
 
   it("accepts beta advisory release-check failures through canonical policy", () => {

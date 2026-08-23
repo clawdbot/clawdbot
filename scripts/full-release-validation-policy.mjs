@@ -9,6 +9,7 @@ const MAX_URL_LENGTH = 1024;
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
+export const HISTORICAL_CONTINUATION_SOURCE_MODE = "historical-exact-tuple";
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
 const TRANSIENT_GH_TRANSPORT_PATTERN =
@@ -276,6 +277,10 @@ function normalizedContinuation(value) {
     parentRunId: value.sourceRunId,
   });
   const validationInputs = normalizeReleaseValidationInputs(value.validationInputs);
+  const sourceEvidenceMode =
+    value.sourceEvidenceMode === undefined
+      ? undefined
+      : boundedString(value.sourceEvidenceMode, MAX_LABEL_LENGTH);
   const continuation = {
     candidate,
     publicationEnabled: value.publicationEnabled === true,
@@ -290,6 +295,7 @@ function normalizedContinuation(value) {
     sourceWorkflowPath: boundedString(value.sourceWorkflowPath, MAX_LABEL_LENGTH),
     sourceWorkflowRef: boundedString(value.sourceWorkflowRef, MAX_LABEL_LENGTH),
     sourceWorkflowSha: boundedString(value.sourceWorkflowSha, MAX_LABEL_LENGTH),
+    ...(sourceEvidenceMode === undefined ? {} : { sourceEvidenceMode }),
     toolingSha: boundedString(value.toolingSha, MAX_LABEL_LENGTH),
     validationInputs,
   };
@@ -307,6 +313,8 @@ function normalizedContinuation(value) {
     continuation.sourceWorkflowPath !== ".github/workflows/full-release-validation.yml" ||
     !continuation.sourceWorkflowRef ||
     !SHA_PATTERN.test(continuation.sourceWorkflowSha) ||
+    (sourceEvidenceMode !== undefined &&
+      sourceEvidenceMode !== HISTORICAL_CONTINUATION_SOURCE_MODE) ||
     !SHA_PATTERN.test(continuation.toolingSha)
   ) {
     throw new Error("release execution plan continuation binding is invalid");
@@ -412,8 +420,6 @@ export function verifyReleaseContinuationSource({
   }
   const normalizedRepository = boundedString(repository, MAX_LABEL_LENGTH);
   const normalizedTargetSha = boundedString(targetSha, MAX_LABEL_LENGTH);
-  const manifestInputs = normalizeReleaseValidationInputs(sourceManifest?.validationInputs);
-  const manifestControls = sourceManifest?.controls;
   if (
     String(sourceRun?.id) !== source.sourceRunId ||
     Number(sourceRun?.run_attempt) !== source.sourceRunAttempt ||
@@ -428,35 +434,14 @@ export function verifyReleaseContinuationSource({
   ) {
     throw new Error("source full release parent identity changed");
   }
-  if (
-    source.candidate.packageSourceSha !== normalizedTargetSha ||
-    String(sourceManifest?.runId) !== source.sourceRunId ||
-    Number(sourceManifest?.runAttempt) !== source.sourceRunAttempt ||
-    sourceManifest?.workflowRef !== source.sourceWorkflowRef ||
-    sourceManifest?.workflowSha !== source.sourceWorkflowSha ||
-    sourceManifest?.targetSha !== normalizedTargetSha ||
-    sourceManifest?.releaseProfile !== source.releaseProfile ||
-    sourceManifest?.rerunGroup !== "all" ||
-    sourceManifest?.runReleaseSoak !== source.runReleaseSoak ||
-    manifestControls?.performanceReportPublication !== "artifact-only" ||
-    JSON.stringify(manifestInputs) !== JSON.stringify(source.validationInputs)
-  ) {
+  if (source.candidate.packageSourceSha !== normalizedTargetSha) {
     throw new Error("continuation source identity differs from the immutable plan");
   }
 
-  const normalizedChildren = continuationSourceChildren(children, source, manifestInputs);
-  const manifestChildRunIds = continuationManifestChildRunIds(sourceManifest);
+  const normalizedChildren = continuationSourceChildren(children, source, source.validationInputs);
   const expectedRunIds = Object.fromEntries(CHILD_SPECS.map((spec) => [spec.key, ""]));
   for (const child of normalizedChildren) {
     expectedRunIds[child.key] = child.runId;
-    const evidence = sourceManifest?.childEvidence?.[child.key];
-    if (
-      evidence &&
-      (Number(evidence.plannedRunAttempt) !== child.runAttempt ||
-        String(evidence.runId) !== child.runId)
-    ) {
-      throw new Error(`continuation source child attempt differs: ${child.key}`);
-    }
     validateReleaseChildDispatchBinding({
       candidate: source.candidate,
       child,
@@ -465,6 +450,44 @@ export function verifyReleaseContinuationSource({
       repository: normalizedRepository,
       targetSha: normalizedTargetSha,
     });
+  }
+  if (!sourceManifest) {
+    if (source.sourceEvidenceMode !== HISTORICAL_CONTINUATION_SOURCE_MODE) {
+      throw new Error("continuation source manifest is missing");
+    }
+    return {
+      children: normalizedChildren,
+      continuation: source,
+      sourceManifest: null,
+    };
+  }
+
+  const manifestInputs = normalizeReleaseValidationInputs(sourceManifest.validationInputs);
+  const manifestControls = sourceManifest.controls;
+  if (
+    String(sourceManifest.runId) !== source.sourceRunId ||
+    Number(sourceManifest.runAttempt) !== source.sourceRunAttempt ||
+    sourceManifest.workflowRef !== source.sourceWorkflowRef ||
+    sourceManifest.workflowSha !== source.sourceWorkflowSha ||
+    sourceManifest.targetSha !== normalizedTargetSha ||
+    sourceManifest.releaseProfile !== source.releaseProfile ||
+    sourceManifest.rerunGroup !== "all" ||
+    sourceManifest.runReleaseSoak !== source.runReleaseSoak ||
+    manifestControls?.performanceReportPublication !== "artifact-only" ||
+    JSON.stringify(manifestInputs) !== JSON.stringify(source.validationInputs)
+  ) {
+    throw new Error("continuation source identity differs from the immutable plan");
+  }
+  const manifestChildRunIds = continuationManifestChildRunIds(sourceManifest);
+  for (const child of normalizedChildren) {
+    const evidence = sourceManifest.childEvidence?.[child.key];
+    if (
+      evidence &&
+      (Number(evidence.plannedRunAttempt) !== child.runAttempt ||
+        String(evidence.runId) !== child.runId)
+    ) {
+      throw new Error(`continuation source child attempt differs: ${child.key}`);
+    }
   }
   if (JSON.stringify(manifestChildRunIds) !== JSON.stringify(canonicalValue(expectedRunIds))) {
     throw new Error("continuation source child inventory differs from the immutable plan");
