@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { isUpdateActionable } from "../app/update-overlay-helpers.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -133,6 +134,11 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
   const updateAttentionDismissed = Boolean(
     context &&
     updateAttentionDismissal &&
+    isUpdateActionable(
+      overlaySnapshot?.updateAvailable,
+      overlaySnapshot?.updateSchedule,
+      Boolean(overlaySnapshot?.updateRunning || overlaySnapshot?.updateReconciliationPending),
+    ) &&
     !isUpdateAttentionForced(overlaySnapshot?.updateStatusBanner?.tone) &&
     isUpdateAttentionDismissed(
       loadDismissals(context.gateway.connection.gatewayUrl),

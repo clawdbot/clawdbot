@@ -53,6 +53,21 @@ describe("AppSidebar footer identity menu", () => {
     expect(buildChip?.querySelector(".sidebar-footer-build__update")?.textContent?.trim()).toBe(
       "Update available",
     );
+
+    (context.overlays as unknown as { snapshot: ApplicationOverlays["snapshot"] }).snapshot = {
+      ...context.overlays.snapshot,
+      updateAvailable: {
+        currentVersion: "2026.8.2",
+        latestVersion: "2026.8.2",
+        channel: "latest",
+      },
+    };
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+    expect(
+      (buildChip as HTMLElement & { updateAttentionDismissed?: boolean }).updateAttentionDismissed,
+    ).toBe(false);
+    expect(buildChip?.querySelector(".sidebar-footer-build__update")).toBeNull();
   });
 
   it("owns account utilities, restores focus, and routes Profile", async () => {

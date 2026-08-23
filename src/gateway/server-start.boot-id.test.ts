@@ -1,0 +1,10 @@
+import { describe, expect, it } from "vitest";
+import { startGatewayServerCore } from "./server-start.js";
+
+describe("Gateway boot ID", () => {
+  it.each(["", " ", "x".repeat(97)])("rejects an invalid public boot ID", async (bootId) => {
+    await expect(startGatewayServerCore(0, { bootId })).rejects.toThrow(
+      "Gateway boot ID must contain 1 to 96 characters",
+    );
+  });
+});
