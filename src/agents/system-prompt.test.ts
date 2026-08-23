@@ -501,13 +501,15 @@ describe("buildAgentSystemPrompt", () => {
     },
   );
 
-  it("drops the credential contract only for the resolved opt-out", () => {
+  it("uses the narrowed contract the resolver supplies", () => {
+    const narrowed = "never ask or request users to report, share, or provide them in chat.";
     const optedOut = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      credentialSafetyPrompt: null,
+      credentialSafetyPrompt: narrowed,
     });
 
-    expect(optedOut).not.toContain(TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT);
+    expect(optedOut).toContain(narrowed);
+    expect(optedOut).not.toContain("Never echo or repeat credentials");
     // The rest of the safety section must survive the opt-out.
     expect(optedOut).toContain("Safety/oversight > completion");
   });

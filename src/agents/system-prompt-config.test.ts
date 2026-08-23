@@ -142,11 +142,28 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     );
   });
 
-  it("drops the credential contract when the operator opts out", () => {
+  it("drops only the handling rules when the operator opts out", () => {
     const prompt = buildPrompt({ security: { allowCredentialsInTranscript: true } });
 
     expect(prompt).not.toContain(TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT);
+    expect(prompt).not.toContain("Never echo or repeat credentials");
+    expect(prompt).not.toContain("Never place, put, or include credentials");
     expect(prompt).toContain("Safety/oversight > completion");
+  });
+
+  it("never lets the opt-out remove the no-solicitation rule", () => {
+    // Soliciting a credential creates exposure that would not otherwise exist,
+    // and it reaches non-owner participants, so no config value removes it.
+    for (const config of [
+      {},
+      { security: {} },
+      { security: { allowCredentialsInTranscript: false } },
+      { security: { allowCredentialsInTranscript: true } },
+    ]) {
+      expect(buildPrompt(config)).toContain(
+        "never ask or request users to report, share, or provide",
+      );
+    }
   });
 
   it("keeps the credential contract in system-agent prompts regardless of the opt-out", () => {

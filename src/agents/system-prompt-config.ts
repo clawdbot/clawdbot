@@ -73,7 +73,7 @@ function resolveAgentSystemPromptConfig(params: {
     modelAliasLines: buildModelAliasLines(config),
     memoryCitationsMode: config?.memory?.citations,
     fsWorkspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }),
-    credentialSafetyPrompt: transcriptCredentialSafetyPrompt(config) ?? null,
+    credentialSafetyPrompt: transcriptCredentialSafetyPrompt(config),
   };
 }
 
