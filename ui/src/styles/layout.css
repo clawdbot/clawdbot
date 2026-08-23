@@ -4252,7 +4252,8 @@ openclaw-sidebar-attention {
   color: var(--danger);
 }
 
-.sidebar-approval-row__action--deny:hover:not(:disabled) {
+.sidebar-approval-row__action.sidebar-approval-row__action--deny:hover:not(:disabled),
+.sidebar-approval-row__action.sidebar-approval-row__action--deny:focus-visible:not(:disabled) {
   background: var(--danger-subtle);
   color: var(--danger);
 }
