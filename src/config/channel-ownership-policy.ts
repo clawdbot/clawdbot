@@ -121,6 +121,8 @@ export function createConfiguredChannelOwnershipPolicy(params: {
     },
     isPluginExplicitlySelected: (pluginId) =>
       isPluginExplicitlySelectedByAlias(sourceConfig, pluginId, canonicalId, params.registry),
+    isPluginPolicyDisabled: (pluginId) =>
+      isPluginPolicyDisabled(params.config, pluginId, resolveAlias),
     resolveChannelPreferOverIds: (record, channelId) =>
       resolveChannelPreferOverIds({
         record,

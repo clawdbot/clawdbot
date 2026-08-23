@@ -153,6 +153,13 @@ export type ChannelOwnershipPolicy = {
    */
   isPluginExplicitlySelected: (pluginId: string) => boolean;
   /**
+   * Whether the operator disabled this plugin outright. Distinct from `isPluginActive`, which is
+   * also false for a claimant that is merely displaced: a displaced claimant keeps declaring so a
+   * replacement chain closes the same way in both views, but a plugin the operator switched off
+   * declares nothing at all. Auto-enable skips it as a declarant for the same reason.
+   */
+  isPluginPolicyDisabled: (pluginId: string) => boolean;
+  /**
    * Replacement preference for one record on one channel. Defaults to the manifest declaration,
    * which is all config-independent metadata can see; a caller holding the operator config passes
    * auto-enable's full resolution so a built-in or catalog preference counts here too.
@@ -172,6 +179,7 @@ export type ChannelOwnershipPolicy = {
 export const MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY: ChannelOwnershipPolicy = {
   isPluginActive: () => true,
   isPluginExplicitlySelected: () => false,
+  isPluginPolicyDisabled: () => false,
   resolveChannelPreferOverIds: resolveManifestChannelPreferOverIds,
 };
 
@@ -248,7 +256,13 @@ function collectDisplacedOwnersForClaimants(
         ...base,
         ...claimants.filter(
           (record) =>
-            !base.includes(record) && isDisplacedChannelOwner(displaced, claimedId, record.id),
+            !base.includes(record) &&
+            isDisplacedChannelOwner(displaced, claimedId, record.id) &&
+            // Only an implicitly displaced middle claimant propagates the chain. A plugin the
+            // operator disabled is not inactive because something replaced it, and auto-enable
+            // skips it as a declarant, so re-adding it here would apply an edge the runtime never
+            // applies and strand the channel on a plugin the loader will not let register.
+            !policy.isPluginPolicyDisabled(record.id),
         ),
       ];
       let added = false;

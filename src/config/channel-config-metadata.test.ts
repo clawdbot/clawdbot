@@ -46,6 +46,7 @@ function policyFor(overrides: Partial<ChannelOwnershipPolicy>): ChannelOwnership
   return {
     isPluginActive: () => true,
     isPluginExplicitlySelected: () => false,
+    isPluginPolicyDisabled: () => false,
     resolveChannelPreferOverIds: resolveManifestChannelPreferOverIds,
     ...overrides,
   };
@@ -446,5 +447,28 @@ describe("replacement chains across the materialization boundary", () => {
     ).find((entry) => entry.id === "clickclack")?.schemaPluginId;
 
     expect(owner).toBe("chain-a");
+  });
+
+  // Codex review P1 on #123209: a displaced claimant keeps declaring so both views close the chain
+  // the same way, but that re-add must not resurrect a plugin the operator switched off.
+  // `shouldSkipPreferredPluginAutoEnable` skips a disabled declarant, and the loader refuses to let
+  // chain-c register if this graph says it was displaced — so chain-a would take a channel whose
+  // only preference link was a plugin that is not running.
+  it("does not apply the outgoing edge of an operator-disabled middle claimant", () => {
+    const registry = {
+      plugins: ["chain-c", "chain-b", "chain-a"].map((id) => byId[id]),
+      diagnostics: [],
+    } as unknown as PluginManifestRegistry;
+
+    const owner = collectChannelSchemaMetadataWithOwnership(
+      registry,
+      policyFor({
+        isPluginActive: (pluginId: string) => pluginId !== "chain-b",
+        isPluginPolicyDisabled: (pluginId: string) => pluginId === "chain-b",
+      }),
+    ).find((entry) => entry.id === "clickclack")?.schemaPluginId;
+
+    // chain-c is never displaced, and it sits closest to the operator.
+    expect(owner).toBe("chain-c");
   });
 });
