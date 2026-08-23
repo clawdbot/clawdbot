@@ -3764,7 +3764,7 @@ openclaw-sidebar-attention {
 .sidebar-issues-panel__list > [data-attention-kind] {
   box-sizing: border-box;
   margin-inline: -6px;
-  padding-inline: 6px;
+  padding-inline: 0;
 }
 
 .sidebar-issues-panel__list > [data-attention-kind] + [data-attention-kind] {
@@ -3838,7 +3838,7 @@ openclaw-sidebar-attention {
   min-height: 40px;
   align-items: center;
   gap: 8px;
-  padding: 7px 6px 4px;
+  padding: 7px 12px 4px;
   border-radius: 0;
   cursor: var(--cursor-action);
   list-style: none;
@@ -3866,7 +3866,7 @@ openclaw-sidebar-attention {
 
 .sidebar-issues-panel__body {
   margin-inline-start: 36px;
-  padding: 6px 6px 10px;
+  padding: 6px 12px 10px;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -4087,7 +4087,7 @@ openclaw-sidebar-attention {
 
 .sidebar-update-issue__body {
   margin-inline-start: 0;
-  padding: 2px 6px 8px;
+  padding: 2px 12px 8px;
 }
 
 .sidebar-update-issue__body .sidebar-update-card {
@@ -4137,7 +4137,7 @@ openclaw-sidebar-attention {
 .sidebar-approval-row {
   min-width: 0;
   min-height: 104px;
-  padding: 8px 6px;
+  padding: 8px 12px;
   border-radius: 0;
   transition: background var(--duration-fast) ease;
 }
