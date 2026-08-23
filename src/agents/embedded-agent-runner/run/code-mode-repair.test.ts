@@ -66,9 +66,12 @@ function completedResult(): AgentToolResult<unknown> {
   };
 }
 
-function createAgent(previous?: Agent["afterToolOutcome"]): Agent {
+function createAgent(
+  previous?: Agent["afterToolOutcome"],
+  onReconciliationCandidate?: () => void,
+): Agent {
   const agent = { afterToolOutcome: previous } as Agent;
-  installCodeModeRepairHook({ agent });
+  installCodeModeRepairHook({ agent, onReconciliationCandidate });
   return agent;
 }
 
@@ -199,7 +202,13 @@ describe("installCodeModeRepairHook", () => {
   });
 
   it("never offers a retry after bridge dispatch", async () => {
-    const agent = createAgent();
+    const onReconciliationCandidate = vi.fn();
+    const agent = createAgent(undefined, onReconciliationCandidate);
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: {} }],
+      timestamp: 1,
+    } as unknown as AfterToolOutcomeContext["assistantMessage"];
     const failure = failedResult({
       failurePhase: "bridge",
       bridgeDispatchStarted: true,
@@ -209,6 +218,7 @@ describe("installCodeModeRepairHook", () => {
 
     const result = await agent.afterToolOutcome?.(
       outcome({
+        assistantMessage,
         result: failure,
       }),
     );
@@ -225,6 +235,7 @@ describe("installCodeModeRepairHook", () => {
       },
     });
     expect(payload.output).toEqual([{ type: "text", text: "before dispatch failure" }]);
+    expect(onReconciliationCandidate).toHaveBeenCalledOnce();
   });
 
   it("offers one repair for an authenticated nested no-start bridge failure", async () => {

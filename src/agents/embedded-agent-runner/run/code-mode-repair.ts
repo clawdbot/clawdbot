@@ -218,7 +218,10 @@ function hookFailure(
 }
 
 /** Installs one bounded, side-effect-aware Code Mode repair opportunity. */
-export function installCodeModeRepairHook(params: { agent: Agent }): void {
+export function installCodeModeRepairHook(params: {
+  agent: Agent;
+  onReconciliationCandidate?: () => void;
+}): void {
   const previousAfterToolOutcome = params.agent.afterToolOutcome?.bind(params.agent);
   let repairState: RepairState = "ready";
   let repairOfferedBy: AfterToolOutcomeContext["assistantMessage"] | undefined;
@@ -295,6 +298,12 @@ export function installCodeModeRepairHook(params: { agent: Agent }): void {
       effective.toolCall.name === CODE_MODE_WAIT_TOOL_NAME
     ) {
       repairState = "consumed";
+      if (
+        effective.toolCall.name === CODE_MODE_EXEC_TOOL_NAME &&
+        effective.assistantMessage.content.filter((entry) => entry.type === "toolCall").length === 1
+      ) {
+        params.onReconciliationCandidate?.();
+      }
       return renderFailure({
         failure,
         allowed: false,

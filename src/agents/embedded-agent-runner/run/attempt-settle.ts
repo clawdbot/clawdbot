@@ -129,6 +129,7 @@ export async function runEmbeddedAttemptSettledPhase(
     agentSession: {
       activeSession,
       clientToolCallSlots,
+      getCodeModeReconciliationCandidate,
       hasDeliveredSourceReply,
       hookRunner,
       setActiveSessionSystemPrompt,
@@ -620,6 +621,7 @@ export async function runEmbeddedAttemptSettledPhase(
       lastAssistant,
       currentAttemptAssistant,
       currentAttemptCompletedAssistant,
+      codeModeReconciliationCandidate: getCodeModeReconciliationCandidate(),
       successfulNestedToolNames,
       attemptUsage,
       promptCache: sessionRuntimeState.promptCache,

@@ -222,6 +222,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   };
   setActiveSessionSystemPrompt(input.initialSystemPrompt);
   let didDeliverSourceReplyViaMessageTool = false;
+  let codeModeReconciliationCandidate = false;
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;
   };
@@ -231,7 +232,12 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     onDeliveredSourceReply: markSourceReplyDelivered,
   });
   if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
-    installCodeModeRepairHook({ agent: activeSession.agent });
+    installCodeModeRepairHook({
+      agent: activeSession.agent,
+      onReconciliationCandidate: () => {
+        codeModeReconciliationCandidate = true;
+      },
+    });
   }
   input.markStage("agent-session");
 
@@ -239,6 +245,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     activeSession,
     allCustomTools,
     ...clientToolRuntime,
+    getCodeModeReconciliationCandidate: () => codeModeReconciliationCandidate,
     hasDeliveredSourceReply: () => didDeliverSourceReplyViaMessageTool,
     hookRunner,
     markSourceReplyDelivered,
