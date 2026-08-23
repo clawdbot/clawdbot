@@ -598,6 +598,9 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       requireQueuePersistence: input.requireQueuePersistence,
       deliveryIntentId: input.deliveryIntentId,
       deliveryCompletion: input.deliveryCompletion,
+      // Model-authored sends get the failure back and resend it themselves; every
+      // other caller only reports the error, so recovery keeps its replay right.
+      deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
       onDeliveryIntent: input.onDeliveryIntent,
       onPlatformSendDispatch: input.onPlatformSendDispatch,
       skipQueue: input.skipQueue,

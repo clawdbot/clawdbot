@@ -1,3 +1,4 @@
+import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js";
 // Owns queued delivery execution, custody transitions, and terminal cleanup.
 import { hasTrustedMessageAuditListeners } from "../../audit/message-audit-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -155,16 +156,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       throw new Error("Queued delivery failure requires a queue id");
     }
     return queueOwner.fail(record, error);
-  };
-  // Claim-fenced row removal: the entry is gone, so nothing can replay it.
-  // Callers must already own the retry before asking for this.
-  const deadLetterOwnedQueue = async (): Promise<void> => {
-    throwIfProducerLeaseLost();
-    if (!queueId) {
-      throw new Error("Queued delivery dead-lettering requires a queue id");
-    }
-    const spoolPaths = await moveToFailed(queueId, platformQueueStateDir, producerClaimId ?? null);
-    await releaseSpoolArtifacts(spoolPaths, platformQueueStateDir);
   };
   const persistOwnedPostSendState = () => {
     throwIfProducerLeaseLost();
@@ -503,19 +494,24 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       queuedPostSendState === "marked" ||
       (err instanceof OutboundDeliveryError && err.sentBeforeError) ||
       stablePayloadOutcomes?.some((outcome) => outcome.status === "sent") === true;
+    // Every terminal below reports the same failed batch; only the stage differs.
+    const emitFailedTerminals = (failureStage: AuditMessageFailureStage) =>
+      emitTerminals(() =>
+        failedOutboundAuditTerminals({
+          payloadCount,
+          results: deliveredResults,
+          payloadOutcomes: auditPayloadOutcomes ?? [],
+          failureStage,
+        }),
+      );
+    const platformSendFailureStage: AuditMessageFailureStage =
+      err instanceof OutboundDeliveryError ? err.stage : "platform_send";
     if (queueId) {
       if (queuedPreSendState === "acked") {
         // Best-effort fallback removed durable custody before provider I/O.
         // This process is now the only owner that can publish terminal observers.
         await runCommitHooksAfterAck();
-        emitTerminals(() =>
-          failedOutboundAuditTerminals({
-            payloadCount,
-            results: deliveredResults,
-            payloadOutcomes: auditPayloadOutcomes ?? [],
-            failureStage: err instanceof OutboundDeliveryError ? err.stage : "platform_send",
-          }),
-        );
+        emitFailedTerminals(platformSendFailureStage);
       } else if (isDeliveryAbortError(err)) {
         if (hasPlatformSendEvidence) {
           if (queuedPostSendState !== "failed") {
@@ -542,14 +538,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         ) {
           queuedPostSendState = "acked";
           await runCommitHooksAfterAck();
-          emitTerminals(() =>
-            failedOutboundAuditTerminals({
-              payloadCount,
-              results: deliveredResults,
-              payloadOutcomes: auditPayloadOutcomes ?? [],
-              failureStage: "queue",
-            }),
-          );
+          emitFailedTerminals("queue");
         }
       } else if (!platformResultsReturned) {
         const sendEvidence =
@@ -571,14 +560,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           }
           await runCommitHooksAfterAck();
           if (queuedPostSendState === "acked") {
-            emitTerminals(() =>
-              failedOutboundAuditTerminals({
-                payloadCount,
-                results: deliveredResults,
-                payloadOutcomes: auditPayloadOutcomes ?? [],
-                failureStage: err instanceof OutboundDeliveryError ? err.stage : "platform_send",
-              }),
-            );
+            emitFailedTerminals(platformSendFailureStage);
           }
         } else {
           const permanentRejection = findPlatformMessageRejectedError(err);
@@ -622,40 +604,32 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             if (queueAcked) {
               queuedPostSendState = "acked";
               await runCommitHooksAfterAck();
-              emitTerminals(() =>
-                failedOutboundAuditTerminals({
-                  payloadCount,
-                  results: deliveredResults,
-                  payloadOutcomes: auditPayloadOutcomes ?? [],
-                  failureStage: "platform_send",
-                }),
-              );
+              emitFailedTerminals("platform_send");
             }
           }
           if (!terminalRejectionHandled) {
-            // Throwing hands this proven-not-sent failure back to the caller,
-            // who owns the retry; a row left behind lets the recovery drain
-            // resend the same message behind that retry (#124279). Reusable
-            // intents and durable completions have no independent retry owner,
-            // so they stay replayable (#100979).
+            // A caller that resends this failure itself must not leave a row
+            // behind: the recovery drain would send the same message again
+            // behind that retry (#124279). Callers that only report the error
+            // (CLI, gateway RPC) and durable completions keep their own owner,
+            // so their rows stay replayable (#100979).
             const callerOwnsRetry =
               isProvenDeliveryNotSentError(err) &&
-              !params.reusePendingDeliveryIntent &&
+              params.deliveryRetryOwner === "caller" &&
               !params.deliveryCompletion;
             if (callerOwnsRetry) {
               try {
-                await deadLetterOwnedQueue();
-                // Removing the row retires recovery's chance to report this
-                // delivery, so the terminal audit fact is owed here.
-                emitTerminals(() =>
-                  failedOutboundAuditTerminals({
-                    payloadCount,
-                    results: deliveredResults,
-                    payloadOutcomes: auditPayloadOutcomes ?? [],
-                    failureStage:
-                      err instanceof OutboundDeliveryError ? err.stage : "platform_send",
-                  }),
+                throwIfProducerLeaseLost();
+                // Claim-fenced removal: the row is gone, so nothing replays it.
+                // That also retires recovery's chance to report this delivery,
+                // so the terminal audit fact is owed right here.
+                const spooled = await moveToFailed(
+                  queueId,
+                  platformQueueStateDir,
+                  producerClaimId ?? null,
                 );
+                await releaseSpoolArtifacts(spooled, platformQueueStateDir);
+                emitFailedTerminals(platformSendFailureStage);
               } catch (failErr: unknown) {
                 // Claim loss or a failed removal leaves the row with its owner;
                 // no terminal is emitted because recovery still owns the entry.
@@ -680,14 +654,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       }
     } else {
       flushMessageSentEvents();
-      emitTerminals(() =>
-        failedOutboundAuditTerminals({
-          payloadCount,
-          results: deliveredResults,
-          payloadOutcomes: auditPayloadOutcomes ?? [],
-          failureStage: err instanceof OutboundDeliveryError ? err.stage : "platform_send",
-        }),
-      );
+      emitFailedTerminals(platformSendFailureStage);
     }
     throw err;
   }

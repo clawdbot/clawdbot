@@ -2026,6 +2026,7 @@ describe("deliverOutboundPayloads", () => {
         deliverMatrix({
           deps: { matrix: sendMatrix },
           queuePolicy: "required",
+          deliveryRetryOwner: "caller",
         }),
       ).rejects.toThrow(code);
 
@@ -2056,6 +2057,7 @@ describe("deliverOutboundPayloads", () => {
       deliverMatrix({
         deps: { matrix: sendMatrix },
         queuePolicy: "required",
+        deliveryRetryOwner: "caller",
       }),
     ).rejects.toThrow();
 
@@ -2065,6 +2067,28 @@ describe("deliverOutboundPayloads", () => {
       expect.any(String),
     );
     expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("keeps a reporting-only caller's entry recoverable after a proven pre-connect failure", async () => {
+    const networkError = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    });
+    const sendMatrix = vi.fn().mockRejectedValueOnce(networkError);
+
+    await expect(
+      deliverMatrix({
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("ECONNREFUSED");
+
+    expect(queueMocks.moveToFailed).not.toHaveBeenCalled();
+    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expect.stringContaining("ECONNREFUSED"),
+    );
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
@@ -2079,6 +2103,7 @@ describe("deliverOutboundPayloads", () => {
       deliverMatrix({
         deps: { matrix: sendMatrix },
         queuePolicy: "required",
+        deliveryRetryOwner: "caller",
         deliveryCompletion: {
           kind: "conversation",
           agentId: "main",
@@ -2180,6 +2205,7 @@ describe("deliverOutboundPayloads", () => {
       deliverMatrix({
         deps: { matrix: sendMatrix },
         queuePolicy: "required",
+        deliveryRetryOwner: "caller",
       }),
     ).rejects.toThrow("connect refused");
 
@@ -2243,6 +2269,7 @@ describe("deliverOutboundPayloads", () => {
       deliverMatrix({
         deps: { matrix: sendMatrix },
         queuePolicy: "required",
+        deliveryRetryOwner: "caller",
       }),
     ).rejects.toThrow("Connect Timeout Error");
 
@@ -2270,6 +2297,7 @@ describe("deliverOutboundPayloads", () => {
       deliverMatrix({
         deps: { matrix: sendMatrix },
         queuePolicy: "required",
+        deliveryRetryOwner: "caller",
       }),
     ).rejects.toThrow("A request error occurred");
 
