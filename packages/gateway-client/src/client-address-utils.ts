@@ -13,7 +13,11 @@ import { isSensitiveUrlQueryParamNameForDiagnostics } from "@openclaw/net-policy
 // `: `. Accepting a start-of-text or separator boundary is what keeps that first
 // pair from being the one that survives redaction; the same shape the host
 // logger already uses for form bodies (`src/logging/redact-patterns.ts`).
-const SENSITIVE_KEY_VALUE_PAIR_RE = /(^|[?&\s;,])([^=&\s;,?#]+)=([^&#\s"'<>)]*)/g;
+// The value alternative accepts a quoted string before the unquoted run: a peer
+// may answer `sessionSecret="…"`, and an unquoted-only value class stops at the
+// opening quote, matches empty, and leaves the credential in the text.
+const SENSITIVE_KEY_VALUE_PAIR_RE =
+  /(^|[?&\s;,])([^=&\s;,?#]+)=("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^&#\s"'<>)]*)/g;
 
 // `readUpgradeErrorBody` accepts an arbitrary peer response body, so a proxy can
 // answer with JSON (`{"X-Amz-Signature":"…"}`) or a colon-delimited field rather
@@ -53,6 +57,12 @@ function decodeJsonPropertyName(rawKey: string): string {
  * field such as `X-Amz-Date` stays readable.
  */
 export function redactSensitiveKeyValuePairs(value: string): string {
+  return redactAtDepth(value, 0);
+}
+
+const MAX_NESTED_REDACTION_DEPTH = 4;
+
+function redactAtDepth(value: string, depth: number): string {
   const formRedacted = value.replace(
     SENSITIVE_KEY_VALUE_PAIR_RE,
     (match, prefix: string, key: string) =>
@@ -77,6 +87,33 @@ export function redactSensitiveKeyValuePairs(value: string): string {
         return match;
       }
       if (!isSensitiveUrlQueryParamNameForDiagnostics(decodeJsonPropertyName(rawKey))) {
+        // A safe outer field can carry a *serialized* JSON document as its
+        // string value (`{"detail":"{\"sessionSecret\":\"…\"}"}`). The escaped
+        // inner text never matches the pair patterns, so decode the string,
+        // redact it as its own document, and re-encode. Bounded by
+        // `MAX_NESTED_REDACTION_DEPTH` so a deeply nested peer body cannot make
+        // a logging boundary recurse without limit.
+        if (
+          isQuoted &&
+          rawValue.startsWith('"') &&
+          rawValue.includes("\\") &&
+          depth < MAX_NESTED_REDACTION_DEPTH
+        ) {
+          let decodedValue: unknown;
+          try {
+            decodedValue = JSON.parse(rawValue);
+          } catch {
+            return match;
+          }
+          if (typeof decodedValue !== "string") {
+            return match;
+          }
+          const redactedInner = redactAtDepth(decodedValue, depth + 1);
+          if (redactedInner === decodedValue) {
+            return match;
+          }
+          return `"${rawKey}"${separator}${JSON.stringify(redactedInner)}`;
+        }
         return match;
       }
       // Keep the value's original quoting so a redacted JSON body still parses,

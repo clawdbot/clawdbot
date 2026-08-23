@@ -171,3 +171,50 @@ describe("escaped JSON credential keys", () => {
     expect(() => redactSensitiveKeyValuePairs(text)).not.toThrow();
   });
 });
+
+describe("peer bodies that wrap a credential in another encoding", () => {
+  it("redacts a quote-wrapped form-body value", () => {
+    // A peer may quote the value; an unquoted-only value class stops at the
+    // opening quote and leaves the credential in the forwarded error text.
+    const body = 'sessionSecret="QUOTEDSESSIONSECRET"&safe=value';
+
+    const redacted = redactSensitiveKeyValuePairs(body);
+
+    expect(redacted).not.toContain("QUOTEDSESSIONSECRET");
+    expect(redacted).toContain("safe=value");
+  });
+
+  it("redacts a single-quoted form-body value", () => {
+    const redacted = redactSensitiveKeyValuePairs("privateKeyPem='SINGLEQUOTEDPEM'&safe=value");
+
+    expect(redacted).not.toContain("SINGLEQUOTEDPEM");
+    expect(redacted).toContain("safe=value");
+  });
+
+  it("redacts a credential inside a serialized JSON document nested in a safe field", () => {
+    const inner = JSON.stringify({ sessionSecret: "NESTEDSESSIONSECRET", safe: "keep" });
+    const body = JSON.stringify({ detail: inner });
+
+    const redacted = redactSensitiveKeyValuePairs(body);
+
+    expect(redacted).not.toContain("NESTEDSESSIONSECRET");
+    // The redacted text must still be a parseable JSON document.
+    const outer = JSON.parse(redacted) as { detail: string };
+    expect(JSON.parse(outer.detail)).toEqual({ sessionSecret: "***", safe: "keep" });
+  });
+
+  it("stops recursing at the nesting cap instead of looping without bound", () => {
+    let payload = JSON.stringify({ sessionSecret: "DEEPLYNESTEDSECRET" });
+    for (let i = 0; i < 12; i += 1) {
+      payload = JSON.stringify({ detail: payload });
+    }
+
+    expect(() => redactSensitiveKeyValuePairs(payload)).not.toThrow();
+  });
+
+  it("leaves a safe field holding non-credential serialized JSON unchanged", () => {
+    const body = JSON.stringify({ detail: JSON.stringify({ safe: "value" }) });
+
+    expect(redactSensitiveKeyValuePairs(body)).toBe(body);
+  });
+});
