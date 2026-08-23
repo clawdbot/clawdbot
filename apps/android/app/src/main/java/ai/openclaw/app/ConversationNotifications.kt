@@ -109,7 +109,8 @@ internal fun conversationNotificationLaunchIntent(
   context: Context,
   target: ConversationNotificationTarget,
 ): Intent =
-  Intent(context, ConversationNotificationLaunchActivity::class.java)
+  Intent()
+    .setClass(context, ConversationNotificationLaunchActivity::class.java)
     .setAction(actionOpenConversationNotification)
     .setData(conversationNotificationIntentData(notificationIntentOpenPath, target))
     .putConversationTarget(target)
@@ -142,7 +143,8 @@ internal fun conversationNotificationReplyIntent(
   context: Context,
   target: ConversationNotificationTarget,
 ): Intent =
-  Intent(context, ConversationReplyReceiver::class.java)
+  Intent()
+    .setClass(context, ConversationReplyReceiver::class.java)
     .setAction(actionReplyConversationNotification)
     .setData(conversationNotificationIntentData(notificationIntentReplyPath, target))
     .putConversationTarget(target)

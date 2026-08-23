@@ -1,5 +1,5 @@
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
@@ -47,7 +47,7 @@ function resolveConfiguredCandidateKind(
       config,
       provider: ref.provider,
       modelId: ref.model,
-      agentId: resolveSystemAgentTargetAgentId(config ?? {}, agentId),
+      agentId: resolveAmbientOwnerAgentId(config ?? {}, agentId),
     }).policy?.id,
   );
   if (runtime === "codex") {
@@ -79,7 +79,7 @@ export async function listManualSetupInferenceOptions(
     throw new Error(invalidSetupConfigError(snapshot));
   }
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
-  const targetAgentId = resolveSystemAgentTargetAgentId(cfg, agentId);
+  const targetAgentId = resolveAmbientOwnerAgentId(cfg, agentId);
   const { workspace } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
     configValid: snapshot.valid,
@@ -115,7 +115,7 @@ export async function detectSetupInference(
     throw new Error(invalidSetupConfigError(snapshot));
   }
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
-  const targetAgentId = resolveSystemAgentTargetAgentId(cfg, agentId);
+  const targetAgentId = resolveAmbientOwnerAgentId(cfg, agentId);
   const detected = await (deps.detectInferenceBackends ?? detectInferenceBackends)({
     config: cfg,
     agentId: targetAgentId,

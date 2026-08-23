@@ -29,6 +29,33 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.summary).toContain("Exec failed");
   });
 
+  it.each([
+    ["token", "NO_REPLY"],
+    ["JSON string", '"NO_REPLY"'],
+    ["envelope", '{"action":"NO_REPLY"}'],
+    ["reasoning-prefixed", "<think>internal reasoning</think>\nNO_REPLY"],
+  ])("keeps tool warnings fatal when terminal output is a silent %s", (_label, text) => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }],
+      finalAssistantVisibleText: text,
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("Bash failed");
+  });
+
+  it("keeps genuine visible terminal output as recovery proof", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }],
+      finalAssistantVisibleText: "Mount restored; report written.",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.outputText).toBe("Mount restored; report written.");
+  });
+
   it("lets preferred final assistant text recover a plain tool warning", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [

@@ -17,6 +17,7 @@ export type GatewayRestartSnapshot = {
   healthy: boolean;
   staleGatewayPids: number[];
   gatewayVersion?: string | null;
+  probeError?: string;
   activatedPluginErrors?: PluginHealthErrorSummary[];
   channelProbeErrors?: Array<{ id: string; error: string }>;
   expectedVersion?: string;
@@ -31,4 +32,5 @@ export type GatewayRestartSnapshot = {
 export type GatewayPortHealthSnapshot = {
   portUsage: PortUsage;
   healthy: boolean;
+  probeError?: string;
 };

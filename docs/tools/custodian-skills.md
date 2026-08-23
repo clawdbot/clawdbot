@@ -10,7 +10,7 @@ read_when:
 
 Custodian skills are release-versioned operational playbooks shipped with OpenClaw. They live under `custodian-skills/` in the package and load at the bundled-skill precedence tier, but only for the agent resolved by `agents.defaults.systemAgent.agentId`.
 
-When that setting is absent, OpenClaw uses the existing system-agent fallback: the sole configured agent, or legacy `main` when no explicit agent roster exists. If several agents are configured and no system agent is selected, no agent receives the library. For every other agent, Custodian skills are absent from discovery, snapshots, slash-command catalogs, sandbox sync, and the model-facing skills prompt.
+When that setting is absent, OpenClaw falls back to a retained legacy default owner, the sole configured agent, or legacy `main` when no explicit agent roster exists. If several agents are configured without a system agent or retained legacy owner, no agent receives the library. For every other agent, Custodian skills are absent from discovery, snapshots, slash-command catalogs, sandbox sync, and the model-facing skills prompt.
 
 Normal skill controls still apply. `skills.entries.<name>.enabled: false` disables an individual Custodian skill, and agent skill allowlists can narrow the final set. See [Skills config](/tools/skills-config).
 

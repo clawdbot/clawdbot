@@ -176,7 +176,10 @@ async function evaluateMainCreationGate(
     legacyAgentId: BOOTSTRAP_AGENT_ID,
     mode: "detect",
   });
-  if (!migration.armed || !migration.ledgerComplete) {
+  // An unarmed scan can proceed only when every candidate store proved collision-free.
+  const provenClean = migration.outcomes.every((outcome) => outcome.kind === "no-legacy-rows");
+  const blocked = migration.armed ? !migration.ledgerComplete : !provenClean;
+  if (blocked) {
     const details = migration.outcomes.map(describeLegacySessionOutcome).join("; ");
     return createError(
       "legacy-session-migration-required",

@@ -124,6 +124,21 @@ struct GatewayEnvironmentTests {
             configPort: nil,
             storedPort: 23001,
             profile: work) == 23001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: ["OPENCLAW_GATEWAY_PORT": "65536"],
+            configPort: 22001,
+            storedPort: 23001,
+            profile: work) == 22001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: 65536,
+            storedPort: 23001,
+            profile: work) == 23001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: nil,
+            storedPort: 65536,
+            profile: work) == work.defaultGatewayPort)
         #expect(AppProfile(environment: [:]).defaultGatewayPort == 18789)
     }
 

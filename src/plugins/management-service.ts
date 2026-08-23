@@ -73,8 +73,8 @@ import {
   type HostedOfficialExternalPluginCatalogLoadResult,
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
+import { createConfigScopedPromiseLoader } from "./plugin-cache-primitives.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
   loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
@@ -254,18 +254,14 @@ type OfficialCatalogResult = Pick<HostedOfficialExternalPluginCatalogLoadResult,
   hostedFeaturedAuthoritative?: boolean;
 };
 
-let officialCatalogCache:
-  | { key: string; result: Promise<HostedOfficialExternalPluginCatalogLoadResult> }
-  | undefined;
-
-const OFFICIAL_CATALOG_CACHE_KEY = "built-in";
+const officialCatalogLoader = createConfigScopedPromiseLoader(() =>
+  loadConfiguredHostedOfficialExternalPluginCatalogEntries(),
+);
 
 /** Clear the process-stable hosted catalog snapshot after an explicit owner reload. */
 export function clearManagedPluginOfficialCatalogCache(): void {
-  officialCatalogCache = undefined;
+  officialCatalogLoader.clear();
 }
-
-registerPluginMetadataProcessMemoLifecycleClear(clearManagedPluginOfficialCatalogCache);
 
 function resolveCatalogManifestIcon(manifest: unknown): string | undefined {
   if (!manifest || typeof manifest !== "object") {
@@ -398,14 +394,7 @@ function overlayBundledOfficialPluginCatalogMetadata(
 }
 
 async function loadOfficialCatalog(): Promise<OfficialCatalogResult> {
-  const key = OFFICIAL_CATALOG_CACHE_KEY;
-  if (officialCatalogCache?.key !== key) {
-    officialCatalogCache = {
-      key,
-      result: loadConfiguredHostedOfficialExternalPluginCatalogEntries(),
-    };
-  }
-  const result = await officialCatalogCache.result;
+  const result = await officialCatalogLoader.load();
   const hostedFeaturedAuthoritative =
     result.source === "hosted" || result.source === "hosted-snapshot";
   return {

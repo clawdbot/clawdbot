@@ -1806,44 +1806,54 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
 
-  it("routes plugin callback_query payloads to plugin handlers without fallback callback_data text", async () => {
-    const pluginHandler = vi.fn(async (ctx) => {
-      expect(ctx.callback.namespace).toBe("code-agent");
-      expect(ctx.callback.payload).toBe("approve-123");
-      await ctx.respond.clearButtons();
-      return { handled: true };
-    });
-    expect(
-      registerPluginInteractiveHandler("openclaw-code-agent", {
-        channel: "telegram",
-        namespace: "code-agent",
-        handler: pluginHandler,
-      }),
-    ).toEqual({ ok: true });
+  it.each([
+    { name: "raw", data: "code-agent:approve-123", payload: "approve-123" },
+    {
+      name: "opaque with trailing whitespace",
+      data: buildTelegramOpaqueCallbackData("code-agent:approve-123 "),
+      payload: "approve-123",
+    },
+  ])(
+    "routes $name plugin callback_query payloads without fallback callback_data text",
+    async ({ data, payload }) => {
+      const pluginHandler = vi.fn(async (ctx) => {
+        expect(ctx.callback.namespace).toBe("code-agent");
+        expect(ctx.callback.payload).toBe(payload);
+        await ctx.respond.clearButtons();
+        return { handled: true };
+      });
+      expect(
+        registerPluginInteractiveHandler("openclaw-code-agent", {
+          channel: "telegram",
+          namespace: "code-agent",
+          handler: pluginHandler,
+        }),
+      ).toEqual({ ok: true });
 
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = getCallbackHandler();
-    await callbackHandler(
-      makeCallbackRetryContext({
-        id: "cbq-plugin-1",
-        data: "code-agent:approve-123",
-        messageId: 10,
-        text: "Approve this code-agent action?",
-        message: {
-          reply_markup: {
-            inline_keyboard: [[{ text: "Approve", callback_data: "code-agent:approve-123" }]],
+      createTelegramBot({ token: "tok" });
+      const callbackHandler = getCallbackHandler();
+      await callbackHandler(
+        makeCallbackRetryContext({
+          id: "cbq-plugin-1",
+          data,
+          messageId: 10,
+          text: "Approve this code-agent action?",
+          message: {
+            reply_markup: {
+              inline_keyboard: [[{ text: "Approve", callback_data: data }]],
+            },
           },
-        },
-      }),
-    );
+        }),
+      );
 
-    expect(pluginHandler).toHaveBeenCalledTimes(1);
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
-      reply_markup: { inline_keyboard: [] },
-    });
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-1");
-  });
+      expect(pluginHandler).toHaveBeenCalledTimes(1);
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+        reply_markup: { inline_keyboard: [] },
+      });
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-1");
+    },
+  );
 
   it("preserves raw tgcb1 callbacks emitted before the prefix became reserved", async () => {
     const pluginHandler = vi.fn(async (ctx) => {
@@ -1957,32 +1967,39 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-opaque-1");
   });
 
-  it("toggles OC_MULTI buttons without routing through the generic callback message path", async () => {
-    createTelegramBot({ token: "tok" });
-    const callbackHandler = getCallbackHandler();
-    await callbackHandler(
-      makeCallbackRetryContext({
-        id: "cbq-multi-toggle-1",
-        data: "OC_MULTI|toggle|env|prod",
-        messageId: 10,
-        message: {
-          business_connection_id: "biz-multi-1",
-          reply_markup: {
-            inline_keyboard: [[{ text: "Prod", callback_data: "OC_MULTI|toggle|env|prod" }]],
+  it.each([
+    { name: "delimited", value: "env|prod" },
+    { name: "trailing-whitespace", value: "env|prod " },
+  ])(
+    "toggles $name OC_MULTI buttons without routing through generic messages",
+    async ({ value }) => {
+      const data = `OC_MULTI|toggle|${value}`;
+      createTelegramBot({ token: "tok" });
+      const callbackHandler = getCallbackHandler();
+      await callbackHandler(
+        makeCallbackRetryContext({
+          id: "cbq-multi-toggle-1",
+          data,
+          messageId: 10,
+          message: {
+            business_connection_id: "biz-multi-1",
+            reply_markup: {
+              inline_keyboard: [[{ text: "Prod", callback_data: data }]],
+            },
           },
-        },
-      }),
-    );
+        }),
+      );
 
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
-      business_connection_id: "biz-multi-1",
-      reply_markup: {
-        inline_keyboard: [[{ text: "✅ Prod", callback_data: "OC_MULTI|toggle|env|prod" }]],
-      },
-    });
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-multi-toggle-1");
-  });
+      expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+        business_connection_id: "biz-multi-1",
+        reply_markup: {
+          inline_keyboard: [[{ text: "✅ Prod", callback_data: data }]],
+        },
+      });
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-multi-toggle-1");
+    },
+  );
 
   it("submits OC_MULTI selections as a synthetic inbound message", async () => {
     createTelegramBot({ token: "tok" });
@@ -3910,7 +3927,7 @@ describe("createTelegramBot", () => {
     expect(payload.MessageThreadId).toBe(77);
     expect(payload.OriginatingTo).toBe(`telegram:${chatId}:direct-topic:77`);
     expect(payload.SessionKey).toContain("agent:channel-topic-agent:");
-    expect(payload.SessionKey).toContain(":topic:77");
+    expect(payload.SessionKey).toContain(":direct-topic:77");
   });
 
   it.each([
@@ -4234,7 +4251,7 @@ describe("createTelegramBot", () => {
       accountId: "default",
       chatId: -1001234567890,
       isGroup: true,
-      resolvedThreadId: 99,
+      threadSpec: { id: 99, scope: "forum" },
     });
 
     expect(result.route.sessionKey).toContain(testCase.expectedSessionKeyFragment);
@@ -4701,19 +4718,18 @@ describe("createTelegramBot", () => {
       isForum: true,
       messageThreadId,
     });
-    const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
     const route = resolveTelegramConversationRoute({
       cfg: {},
       accountId: "default",
       chatId: -1001234567890,
       isGroup: true,
-      resolvedThreadId,
+      threadSpec,
     });
 
     const expectedGroupFrom = `telegram:group:-1001234567890:topic:${expectedTopicId}`;
     expect(route.route.sessionKey).toContain(expectedGroupFrom);
-    expect(buildTelegramGroupFrom(-1001234567890, resolvedThreadId)).toBe(expectedGroupFrom);
-    expect(buildTypingThreadParams(resolvedThreadId)).toEqual({
+    expect(buildTelegramGroupFrom(-1001234567890, threadSpec)).toBe(expectedGroupFrom);
+    expect(buildTypingThreadParams(threadSpec.id)).toEqual({
       message_thread_id: expectedTopicId,
     });
   });
@@ -4738,22 +4754,19 @@ describe("createTelegramBot", () => {
       isForum,
       messageThreadId: undefined,
     });
-    const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
     const route = resolveTelegramConversationRoute({
       cfg: {},
       accountId: "default",
       chatId,
       isGroup: true,
-      resolvedThreadId,
+      threadSpec,
     });
 
     expect(getChatSpy).toHaveBeenCalledOnce();
     expect(getChatSpy).toHaveBeenCalledWith(chatId);
     expect(route.route.sessionKey).toContain(`telegram:group:${chatId}:topic:1`);
-    expect(buildTelegramGroupFrom(chatId, resolvedThreadId)).toBe(
-      `telegram:group:${chatId}:topic:1`,
-    );
-    expect(buildTypingThreadParams(resolvedThreadId)).toEqual({ message_thread_id: 1 });
+    expect(buildTelegramGroupFrom(chatId, threadSpec)).toBe(`telegram:group:${chatId}:topic:1`);
+    expect(buildTypingThreadParams(threadSpec.id)).toEqual({ message_thread_id: 1 });
   });
   const allowFromEdgeCases: MessagePolicyCase[] = [
     makeMessagePolicyCase({

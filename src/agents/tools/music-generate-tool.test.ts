@@ -67,77 +67,89 @@ const musicGenerateBackgroundMocks = vi.hoisted(() => ({
   // Mirror the background lifecycle contract so tool tests can assert task-run
   // effects without spawning detached completion workers.
   musicGenerationTaskLifecycle: {
-    createTaskRun: (
-      params: Parameters<typeof musicGenerateBackground.createMusicGenerationTaskRun>[0],
-    ) => musicGenerateBackgroundMocks.createMusicGenerationTaskRun(params),
-    recordTaskProgress: (
-      params: Parameters<typeof musicGenerateBackground.recordMusicGenerationTaskProgress>[0],
-    ) => musicGenerateBackgroundMocks.recordMusicGenerationTaskProgress(params),
-    completeTaskRun: (
-      params: Parameters<typeof musicGenerateBackground.completeMusicGenerationTaskRun>[0],
-    ) => musicGenerateBackgroundMocks.completeMusicGenerationTaskRun(params),
-    failTaskRun: (
-      params: Parameters<typeof musicGenerateBackground.failMusicGenerationTaskRun>[0],
-    ) => musicGenerateBackgroundMocks.failMusicGenerationTaskRun(params),
+    completeTaskRun: vi.fn(
+      (
+        params: Parameters<
+          typeof musicGenerateBackground.musicGenerationTaskLifecycle.completeTaskRun
+        >[0],
+      ) => {
+        if (!params.handle) {
+          return;
+        }
+        taskExecutorMocks.completeTaskRunByRunId({
+          runId: params.handle.runId,
+          runtime: "cli",
+          sessionKey: params.handle.requesterSessionKey,
+        });
+      },
+    ),
+    createTaskRun: vi.fn(
+      (
+        params: Parameters<
+          typeof musicGenerateBackground.musicGenerationTaskLifecycle.createTaskRun
+        >[0],
+      ) => {
+        const sessionKey = params.sessionKey?.trim();
+        if (!sessionKey) {
+          return null;
+        }
+        const runId = "tool:music_generate:test-run";
+        const task = taskExecutorMocks.createRunningTaskRun({
+          runId,
+          runtime: "cli",
+          requesterSessionKey: sessionKey,
+          ownerKey: sessionKey,
+          scopeKind: "session",
+          task: params.prompt,
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+          createdAt: Date.now(),
+        });
+        return {
+          taskId: task.taskId,
+          runId,
+          requesterSessionKey: sessionKey,
+          requesterOrigin: params.requesterOrigin,
+          taskLabel: params.prompt,
+        };
+      },
+    ),
+    failTaskRun: vi.fn(
+      (
+        params: Parameters<
+          typeof musicGenerateBackground.musicGenerationTaskLifecycle.failTaskRun
+        >[0],
+      ) => {
+        if (!params.handle) {
+          return;
+        }
+        taskExecutorMocks.failTaskRunByRunId({
+          runId: params.handle.runId,
+          runtime: "cli",
+          sessionKey: params.handle.requesterSessionKey,
+        });
+      },
+    ),
+    recordTaskProgress: vi.fn(
+      (
+        params: Parameters<
+          typeof musicGenerateBackground.musicGenerationTaskLifecycle.recordTaskProgress
+        >[0],
+      ) => {
+        if (!params.handle) {
+          return;
+        }
+        taskExecutorMocks.recordTaskRunProgressByRunId({
+          runId: params.handle.runId,
+          runtime: "cli",
+          sessionKey: params.handle.requesterSessionKey,
+          progressSummary: params.progressSummary,
+          eventSummary: params.eventSummary,
+        });
+      },
+    ),
     wakeTaskCompletion: vi.fn(),
   },
-  completeMusicGenerationTaskRun: vi.fn((params) => {
-    if (!params.handle) {
-      return;
-    }
-    taskExecutorMocks.completeTaskRunByRunId({
-      runId: params.handle.runId,
-      runtime: "cli",
-      sessionKey: params.handle.requesterSessionKey,
-    });
-  }),
-  createMusicGenerationTaskRun: vi.fn((params) => {
-    const sessionKey = params.sessionKey?.trim();
-    if (!sessionKey) {
-      return null;
-    }
-    const runId = "tool:music_generate:test-run";
-    const task = taskExecutorMocks.createRunningTaskRun({
-      runId,
-      runtime: "cli",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      task: params.prompt,
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      createdAt: Date.now(),
-    });
-    return {
-      taskId: task.taskId,
-      runId,
-      requesterSessionKey: sessionKey,
-      requesterOrigin: params.requesterOrigin,
-      taskLabel: params.prompt,
-    };
-  }),
-  failMusicGenerationTaskRun: vi.fn((params) => {
-    if (!params.handle) {
-      return;
-    }
-    taskExecutorMocks.failTaskRunByRunId({
-      runId: params.handle.runId,
-      runtime: "cli",
-      sessionKey: params.handle.requesterSessionKey,
-    });
-  }),
-  recordMusicGenerationTaskProgress: vi.fn((params) => {
-    if (!params.handle) {
-      return;
-    }
-    taskExecutorMocks.recordTaskRunProgressByRunId({
-      runId: params.handle.runId,
-      runtime: "cli",
-      sessionKey: params.handle.requesterSessionKey,
-      progressSummary: params.progressSummary,
-      eventSummary: params.eventSummary,
-    });
-  }),
 }));
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
@@ -167,7 +179,10 @@ vi.mock("../../utils/fetch-timeout.js", async () => {
     buildTimeoutAbortSignal: vi.fn(actual.buildTimeoutAbortSignal),
   };
 });
-vi.mock("./media-generate-background.js", () => musicGenerateBackgroundMocks);
+vi.mock("./media-generate-background.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./media-generate-background.js")>()),
+  ...musicGenerateBackgroundMocks,
+}));
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 

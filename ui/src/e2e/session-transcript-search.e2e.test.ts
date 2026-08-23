@@ -436,6 +436,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
     });
     page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup"],
       methodResponses: {
         "sessions.list": {
           count: 0,

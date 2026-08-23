@@ -607,6 +607,7 @@ describe("skill workshop proposals", () => {
           "skill-workshop",
           "proposals",
           proposal.record.id,
+          path.dirname(proposal.record.draftFile),
           "references",
           "original.md",
         ),
@@ -1233,7 +1234,13 @@ describe("skill workshop proposals", () => {
       "utf8",
     );
     await fs.writeFile(
-      path.join(stateDir, "skill-workshop", "proposals", proposal.record.id, "PROPOSAL.md"),
+      path.join(
+        stateDir,
+        "skill-workshop",
+        "proposals",
+        proposal.record.id,
+        proposal.record.draftFile,
+      ),
       proposal.content.replace(/date: .+/, 'date: "2099-01-01T00:00:00.000Z"'),
       "utf8",
     );
@@ -1784,6 +1791,7 @@ describe("skill workshop proposals", () => {
         "skill-workshop",
         "proposals",
         proposal.record.id,
+        path.dirname(proposal.record.draftFile),
         "references",
         "check.md",
       ),

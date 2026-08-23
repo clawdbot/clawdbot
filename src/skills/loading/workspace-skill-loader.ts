@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { tryResolveSystemAgentTargetAgentId } from "../../agents/agent-scope-config.js";
+import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -377,9 +377,7 @@ function loadSkillEntries(
   const bundledSkills = bundledSkillsDir
     ? loadSkills({ dir: bundledSkillsDir, source: "openclaw-bundled" })
     : [];
-  const custodianAgentId = opts?.config
-    ? tryResolveSystemAgentTargetAgentId(opts.config)
-    : undefined;
+  const custodianAgentId = opts?.config ? tryResolveAmbientOwnerAgentId(opts.config) : undefined;
   const custodianSkillsDir =
     bundledSkillsDir &&
     opts?.agentId &&

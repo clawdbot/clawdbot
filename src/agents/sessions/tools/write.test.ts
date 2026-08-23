@@ -178,6 +178,18 @@ describe("write tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("finished\n");
   });
 
+  it("writes the literal Unicode-space path instead of an ASCII-space sibling", async () => {
+    const nnbspPath = await createTempPath("report 2026.md");
+    const asciiPath = path.join(tmpDir, "report 2026.md");
+    await fs.writeFile(asciiPath, "ascii\n", "utf-8");
+    const tool = createWriteTool(tmpDir);
+
+    await tool.execute("call-1", { path: nnbspPath, content: "nnbsp\n" }, undefined);
+
+    await expect(fs.readFile(nnbspPath, "utf-8")).resolves.toBe("nnbsp\n");
+    await expect(fs.readFile(asciiPath, "utf-8")).resolves.toBe("ascii\n");
+  });
+
   it("returns terminal no-op when writing identical content to existing file", async () => {
     const filePath = await createTempPath("identical.txt");
     await fs.writeFile(filePath, "hello\n", "utf-8");
