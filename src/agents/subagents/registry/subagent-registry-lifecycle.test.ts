@@ -3588,15 +3588,7 @@ describe("subagent registry lifecycle hardening", () => {
       deliveryStatus: "failed",
       error: "gateway request timeout for agent",
     });
-    expectFields(firstCallArg(taskExecutorMocks.completeTaskRunByRunId), {
-      runId: entry.runId,
-      runtime: "subagent",
-      sessionKey: entry.childSessionKey,
-      progressSummary: "final answer",
-      terminalOutcome: "blocked",
-      terminalSummary:
-        "Required completion delivery failed before reaching the requester: gateway request timeout for agent.",
-    });
+    expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
     expect(persistOrThrow).toHaveBeenCalled();
   });
 
@@ -3767,19 +3759,8 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.delivery?.suspendedAt).toBeTypeOf("number");
     expect(entry.delivery?.suspendedReason).toBe("expiry");
     expect(entry.cleanupCompletedAt).toBeUndefined();
-    expectFields(
-      findCallArg(
-        taskExecutorMocks.completeTaskRunByRunId,
-        (arg) => arg.terminalOutcome === "blocked",
-      ),
-      {
-        runId: entry.runId,
-        runtime: "subagent",
-        sessionKey: entry.childSessionKey,
-        terminalOutcome: "blocked",
-        terminalSummary:
-          "Required completion delivery failed before reaching the requester: UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed.",
-      },
+    expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
     );
     expect(persist).toHaveBeenCalled();
   });

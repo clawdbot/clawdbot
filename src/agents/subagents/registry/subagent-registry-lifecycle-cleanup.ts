@@ -35,7 +35,6 @@ import {
   buildSafeLifecycleErrorMeta,
   markPendingFinalDelivery,
   maskLifecycleIdentifier,
-  safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
 import {
@@ -187,10 +186,6 @@ export function suspendPendingFinalDelivery(
     entry: args.entry,
     deliveryStatus: "failed",
     deliveryError: getDeliveryLastError(args.entry) ?? args.reason,
-  });
-  safeMarkRequiredCompletionDeliveryBlocked(params, {
-    entry: args.entry,
-    reason: getDeliveryLastError(args.entry) ?? args.reason,
   });
   logAnnounceGiveUp(args.entry, args.reason);
   markRequesterSettleWakePending(args.entry);

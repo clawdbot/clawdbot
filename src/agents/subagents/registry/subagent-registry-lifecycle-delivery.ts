@@ -15,7 +15,6 @@ import {
   failTaskRunByRunId,
   setDetachedTaskDeliveryStatusByRunId,
 } from "../../../tasks/detached-task-runtime.js";
-import { resolveRequiredCompletionDeliveryFailureTerminalResult } from "../../../tasks/task-completion-contract.js";
 import type { TaskDeliveryStatus } from "../../../tasks/task-registry.types.js";
 import {
   buildAnnounceIdFromChildRun,
@@ -24,7 +23,6 @@ import {
 import { isSilentAgentReplyText } from "../../embedded-agent-runner/message-visibility.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
-import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -209,6 +207,10 @@ const resolveSubagentTaskTarget = (
   };
 };
 
+/**
+ * Records delivery independently from the finalized execution/artifact state.
+ * A failed announcement must not rewrite a successful task or mirrored flow.
+ */
 export const safeSetSubagentTaskDeliveryStatus = (
   params: SubagentLifecycleOptions,
   args: {
@@ -279,42 +281,6 @@ export const safeFinalizeSubagentTaskRun = (
       outcomeStatus: args.outcome.status,
     });
     return [];
-  }
-};
-
-export const safeMarkRequiredCompletionDeliveryBlocked = (
-  params: SubagentLifecycleOptions,
-  args: {
-    entry: SubagentRunRecord;
-    reason?: string;
-  },
-) => {
-  if (
-    args.entry.expectsCompletionMessage !== true ||
-    args.entry.execution.outcome?.status !== "ok"
-  ) {
-    return;
-  }
-  const endedAt = args.entry.execution.endedAt ?? Date.now();
-  const terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(args.reason);
-  const target = resolveSubagentTaskTarget(params, args.entry);
-  try {
-    completeTaskRunByRunId({
-      runId: target.runId,
-      runtime: "subagent",
-      sessionKey: target.sessionKey,
-      endedAt,
-      lastEventAt: Date.now(),
-      progressSummary: resolveSubagentCompletionResultText(args.entry),
-      terminalSummary: terminalResult.terminalSummary,
-      terminalOutcome: terminalResult.terminalOutcome,
-    });
-  } catch (err) {
-    params.warn("failed to mark subagent completion delivery blocked", {
-      error: buildSafeLifecycleErrorMeta(err),
-      runId: maskLifecycleIdentifier(args.entry.runId, "run"),
-      childSessionKey: maskLifecycleIdentifier(args.entry.childSessionKey, "session"),
-    });
   }
 };
 
