@@ -88,6 +88,42 @@ function createFeishuApiError(
   return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
 }
 
+const FEISHU_TOKEN_INVALID_CODES = new Set([99991663, 99991664]);
+
+/** Cache-owning modules register their clearers at import time so
+ *  requestFeishuApi can invalidate caches before retrying after a
+ *  token-invalid error (99991663/99991664). After clearing the cached
+ *  tenant_access_token the SDK fetches a fresh token on the retry.
+ *  The clearer receives the affected accountId so only that account's
+ *  caches are invalidated, not every configured Feishu account. */
+const feishuTokenCacheClearers: Array<(accountId?: string) => void> = [];
+
+export function addFeishuTokenCacheClearer(fn: (accountId?: string) => void): void {
+  feishuTokenCacheClearers.push(fn);
+}
+
+function clearFeishuTokenCaches(accountId?: string): void {
+  for (const fn of feishuTokenCacheClearers) {
+    fn(accountId);
+  }
+}
+
+function getFeishuTokenInvalidCode(error: unknown): number | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  const data = isRecord(response?.data) ? response.data : undefined;
+  const code = data?.code;
+  return typeof code === "number" && FEISHU_TOKEN_INVALID_CODES.has(code) ? code : undefined;
+}
+
+function isFulfilledTokenInvalidBody(result: unknown): boolean {
+  return (
+    isRecord(result) && FEISHU_TOKEN_INVALID_CODES.has((result as { code?: number }).code as number)
+  );
+}
+
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
 
@@ -99,36 +135,55 @@ export async function requestFeishuApi<T>(
     includeNestedErrorLogId?: boolean;
     /** Base retry delay in ms; doubles on the second retry. @internal */
     retryDelayMs?: number;
+    /** Account ID to scope token cache invalidation to (avoids clearing
+     *  unrelated accounts' caches on a token-invalid retry). @internal */
+    accountId?: string;
   } = {},
 ): Promise<T> {
-  try {
-    return await retryAsync(
-      async () => {
-        const result = await request();
-        // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
-        // instead of throwing. Rethrow it in the AxiosError response shape so
-        // getFeishuSendRateLimitCode classifies it retryable and exhaustion
-        // wraps it exactly like an SDK throw.
-        const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
-        if (fulfilledRateLimit !== undefined) {
-          throw Object.assign(
-            new Error(`Request fulfilled with rate-limit code ${fulfilledRateLimit}`),
-            { response: { status: 200, data: result } },
-          );
-        }
-        return result;
-      },
-      {
-        attempts: FEISHU_SEND_MAX_RETRIES + 1,
-        // With a 2-retry budget the core exponential schedule (1x, 2x base)
-        // matches the previous linear attempt*base backoff exactly; revisit
-        // the delay curve if FEISHU_SEND_MAX_RETRIES grows.
-        minDelayMs: options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS,
-        shouldRetry: (error) => getFeishuSendRateLimitCode(error) !== undefined,
-      },
-    );
-  } catch (error) {
-    throw createFeishuApiError(error, errorPrefix, options);
+  let retriedTokenInvalid = false; // single recovery retry per issue #97287
+  for (;;) {
+    try {
+      const result = await retryAsync(
+        async () => {
+          const res = await request();
+          // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
+          // instead of throwing. Rethrow it in the AxiosError response shape so
+          // getFeishuSendRateLimitCode classifies it retryable and exhaustion
+          // wraps it exactly like an SDK throw.
+          const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(res);
+          if (fulfilledRateLimit !== undefined) {
+            throw Object.assign(
+              new Error(`Request fulfilled with rate-limit code ${fulfilledRateLimit}`),
+              { response: { status: 200, data: res } },
+            );
+          }
+          return res;
+        },
+        {
+          attempts: FEISHU_SEND_MAX_RETRIES + 1,
+          // With a 2-retry budget the core exponential schedule (1x, 2x base)
+          // matches the previous linear attempt*base backoff exactly; revisit
+          // the delay curve if FEISHU_SEND_MAX_RETRIES grows.
+          minDelayMs: options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS,
+          shouldRetry: (error) => getFeishuSendRateLimitCode(error) !== undefined,
+        },
+      );
+      // SDK may also fulfill with a token-invalid body instead of throwing.
+      // Clear caches and retry once (#97287).
+      if (!retriedTokenInvalid && isFulfilledTokenInvalidBody(result)) {
+        retriedTokenInvalid = true;
+        clearFeishuTokenCaches(options.accountId);
+        continue;
+      }
+      return result;
+    } catch (error) {
+      if (!retriedTokenInvalid && getFeishuTokenInvalidCode(error) !== undefined) {
+        retriedTokenInvalid = true;
+        clearFeishuTokenCaches(options.accountId);
+        continue;
+      }
+      throw createFeishuApiError(error, errorPrefix, options);
+    }
   }
 }
 
