@@ -1419,8 +1419,10 @@ body.update-dialog-open .sidebar-update-card__status {
   position: sticky;
   z-index: 2;
   bottom: 8px;
+  flex-wrap: wrap;
+  align-items: flex-start;
   margin-top: auto;
-  border-color: var(--danger);
+  border-color: var(--border);
   box-shadow: var(--shadow-sm);
 }
 
@@ -1490,6 +1492,16 @@ body.update-dialog-open .sidebar-update-card__status {
   max-height: 72px;
   overflow: auto;
   overflow-wrap: anywhere;
+}
+
+.sidebar-session-error.sidebar-session-catalog-error .callout__content {
+  max-height: none;
+  flex-basis: 100%;
+  overflow: visible;
+}
+
+.sidebar-session-catalog-error .btn {
+  margin-inline-start: auto;
 }
 
 .sidebar-session-error .callout__dismiss {
