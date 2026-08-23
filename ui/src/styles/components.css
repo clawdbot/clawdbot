@@ -1107,7 +1107,7 @@ openclaw-session-progress-hovercard-provider {
   border-color: transparent;
 }
 
-.btn:disabled {
+.btn:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.5;
   cursor: not-allowed;
 }
