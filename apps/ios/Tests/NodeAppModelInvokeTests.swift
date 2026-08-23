@@ -974,22 +974,43 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     }
 }
 
+@MainActor
+private final class BatteryMonitoringDevice: UIDevice {
+    private var monitoringEnabled: Bool
+    private(set) var monitoringStatesDuringBatteryReads: [Bool] = []
+
+    init(monitoringEnabled: Bool) {
+        self.monitoringEnabled = monitoringEnabled
+        super.init()
+    }
+
+    override var isBatteryMonitoringEnabled: Bool {
+        get { self.monitoringEnabled }
+        set { self.monitoringEnabled = newValue }
+    }
+
+    override var batteryLevel: Float {
+        self.monitoringStatesDuringBatteryReads.append(self.monitoringEnabled)
+        return 0.5
+    }
+
+    override var batteryState: UIDevice.BatteryState {
+        self.monitoringStatesDuringBatteryReads.append(self.monitoringEnabled)
+        return .charging
+    }
+}
+
 @Suite(.serialized) struct NodeAppModelInvokeTests {
-    @Test @MainActor func `device status preserves battery monitoring ownership`() async {
-        let device = UIDevice.current
-        let original = device.isBatteryMonitoringEnabled
-        defer { device.isBatteryMonitoringEnabled = original }
-        let appModel = NodeAppModel()
+    @Test @MainActor func `device status battery snapshot preserves monitoring ownership`() {
+        for initial in [false, true] {
+            let device = BatteryMonitoringDevice(monitoringEnabled: initial)
 
-        for requestedInitial in [false, true] {
-            device.isBatteryMonitoringEnabled = requestedInitial
-            // Simulator battery support varies, so preserve the state UIKit actually accepted.
-            let initial = device.isBatteryMonitoringEnabled
-            let response = await appModel.handleInvoke(BridgeInvokeRequest(
-                id: "device-status-\(requestedInitial)",
-                command: OpenClawDeviceCommand.status.rawValue))
+            let payload = DeviceStatusService.batteryStatus(device: device)
 
-            #expect(response.ok)
+            #expect(payload.level == 0.5)
+            #expect(payload.state == .charging)
+            #expect(!device.monitoringStatesDuringBatteryReads.isEmpty)
+            #expect(device.monitoringStatesDuringBatteryReads.allSatisfy(\.self))
             #expect(device.isBatteryMonitoringEnabled == initial)
         }
     }
@@ -7561,5 +7582,4 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             try await appModel.sendVoiceTranscript(text: "hello", sessionKey: "main")
         }
     }
-
 }
