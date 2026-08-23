@@ -93,6 +93,7 @@ async function buildDispatchContextPayload(params: {
 
   const { ctxPayload } = await buildIMessageInboundContext({
     cfg,
+    accountService: cfg.channels?.imessage?.service,
     decision,
     message,
     historyLimit: 0,

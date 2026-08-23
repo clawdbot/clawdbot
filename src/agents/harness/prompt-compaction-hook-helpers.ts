@@ -37,6 +37,11 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   messages: unknown[];
   ctx: AgentHarnessHookContext;
   bootstrapContextRunKind?: BootstrapContextRunKind;
+  toolAuthority?: {
+    fingerprint?: string;
+    activeToolNames: () => readonly string[];
+    assertActive: () => void;
+  };
 }): Promise<AgentHarnessPromptBuildResult> {
   const hookRunner = getGlobalHookRunner();
   // heartbeat_prompt_contribution fires only on heartbeat turns. Harness runtimes
@@ -46,7 +51,8 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   const isHeartbeatTurn = params.ctx.trigger === "heartbeat";
   const hasHeartbeatContribution =
     isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
-  if (!hasHeartbeatContribution && !hookRunner?.hasHooks("before_prompt_build")) {
+  const hasPromptBuildHooks = Boolean(hookRunner?.hasHooks("before_prompt_build"));
+  if (!hasHeartbeatContribution && !hasPromptBuildHooks) {
     const developerInstructions = resolveDeveloperInstructions(params.developerInstructions);
     return {
       prompt: params.prompt,
@@ -79,20 +85,36 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
           })
       : undefined;
 
-  const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
-    ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
-        log.warn(`before_prompt_build hook failed: ${String(error)}`);
-        // The contribution is gone; say so in the prompt rather than handing
-        // the agent a context that only looks complete (openclaw-beads-201).
-        // The error stays in the warn above: the marker carries a bounded reason
-        // code, never error-derived text.
-        return buildPromptBuildDropResult([{ reason: "dispatch-failed" }]);
-      })
-    : undefined;
+  const promptBuildResult =
+    hookRunner && hasPromptBuildHooks
+      ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
+          log.warn(`before_prompt_build hook failed: ${String(error)}`);
+          // The contribution is gone; say so in the prompt rather than handing
+          // the agent a context that only looks complete (openclaw-beads-201).
+          // The error stays in the warn above: the marker carries a bounded reason
+          // code, never error-derived text.
+          return buildPromptBuildDropResult([{ reason: "dispatch-failed" }]);
+        })
+      : undefined;
   const developerInstructions = resolveDeveloperInstructions(
     params.developerInstructions,
     promptBuildResult?.toolsAllow,
   );
+  const toolAuthority = params.toolAuthority;
+  const toolAuthorityFingerprint = toolAuthority?.fingerprint?.trim();
+  const authorizedPromptBuildResult =
+    hookRunner && toolAuthorityFingerprint && toolAuthority
+      ? await hookRunner
+          .runAuthorizedPromptBuild(promptEvent, hookCtx, {
+            toolAuthorityFingerprint,
+            activeToolNames: toolAuthority.activeToolNames(),
+            assertHostActive: toolAuthority.assertActive,
+          })
+          .catch((error: unknown) => {
+            log.warn(`authorized before_prompt_build hook failed: ${String(error)}`);
+            return undefined;
+          })
+      : undefined;
   const systemPrompt = resolvePromptBuildSystemPrompt({
     developerInstructions,
     promptBuildResult,
@@ -100,10 +122,12 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   const promptPrefix = joinPresentTextSegments([
     heartbeatResult?.prependContext,
     promptBuildResult?.prependContext,
+    authorizedPromptBuildResult?.prependContext,
   ]);
   const promptSuffix = joinPresentTextSegments([
     heartbeatResult?.appendContext,
     promptBuildResult?.appendContext,
+    authorizedPromptBuildResult?.appendContext,
   ]);
   const prompt =
     joinPresentTextSegments([promptPrefix, params.prompt, promptSuffix]) ?? params.prompt;

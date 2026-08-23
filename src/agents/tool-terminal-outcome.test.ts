@@ -14,7 +14,7 @@ import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 describe("tool terminal outcome observer", () => {
   afterEach(() => resetAdjustedParamsByToolCallIdForTests());
 
-  it("keeps distinct mutation failures until their matching actions recover", () => {
+  it("keeps the latest failure when a different tool succeeds", () => {
     const observe = createToolTerminalObserver("run-1");
     const actionA = { action: "send", to: "channel:a", message: "A" };
     const actionB = { action: "send", to: "channel:b", message: "B" };
@@ -31,65 +31,12 @@ describe("tool terminal outcome observer", () => {
       outcome: "failure",
       failure: { error: "B failed" },
     });
-    const afterB = observe({ toolName: "message", arguments: actionB, outcome: "success" });
+    const afterRead = observe({ toolName: "read", arguments: {}, outcome: "success" });
 
-    expect(afterB.lastToolError).toMatchObject({
-      error: "A failed",
-      actionFingerprint: expect.stringContaining("to=channel:a"),
-    });
-    expect(afterB.lastToolRecovery).toEqual({ toolName: "message" });
-    expect(
-      observe({ toolName: "heartbeat_respond", arguments: {}, outcome: "success" }).lastToolError,
-    ).toMatchObject({ error: "A failed" });
-    expect(
-      observe({ toolName: "message", arguments: actionA, outcome: "success" }).lastToolError,
-    ).toBeUndefined();
-  });
-
-  it("surfaces the successful cross-tool recovery without leaking failure details", () => {
-    const observe = createToolTerminalObserver("run-edit-recovery");
-
-    observe({
-      toolName: "edit",
-      arguments: { path: "/tmp/demo.txt", oldText: "missing", newText: "after" },
-      outcome: "failure",
-      failure: { error: "Could not find TOP_SECRET text in /tmp/demo.txt" },
-    });
-    const recovered = observe({
-      toolName: "write",
-      arguments: { path: "/tmp/demo.txt", content: "after" },
-      outcome: "success",
-    });
-    const afterRead = observe({
-      toolName: "read",
-      arguments: { path: "/tmp/demo.txt" },
-      outcome: "success",
-    });
-    const payloads = buildPayloads({ lastToolRecovery: afterRead.lastToolRecovery });
-
-    expect(recovered.lastToolError).toBeUndefined();
-    expect(recovered.lastToolRecovery).toEqual({ toolName: "write" });
-    expect(afterRead.lastToolRecovery).toEqual({ toolName: "write" });
-    expect(payloads.map((payload) => payload.text)).toEqual(["✅ ✍️ Write succeeded after retry."]);
-    expect(JSON.stringify(payloads)).not.toContain("TOP_SECRET");
-    expect(JSON.stringify(payloads)).not.toContain("/tmp/demo.txt");
-
-    const afterUnrelatedFailure = observe({
-      toolName: "message",
-      arguments: { action: "send", to: "channel:other", message: "hello" },
-      outcome: "failure",
-      failure: { error: "send failed" },
-    });
-    expect(afterUnrelatedFailure.lastToolError).toMatchObject({ error: "send failed" });
-    expect(afterUnrelatedFailure.lastToolRecovery).toEqual({ toolName: "write" });
-
-    const afterSameTargetFailure = observe({
-      toolName: "edit",
-      arguments: { path: "/tmp/demo.txt", oldText: "after", newText: "later" },
-      outcome: "failure",
-      failure: { error: "second edit failed" },
-    });
-    expect(afterSameTargetFailure.lastToolRecovery).toBeUndefined();
+    expect(afterRead.lastToolError).toMatchObject({ error: "B failed" });
+    const payloads = buildPayloads({ lastToolError: afterRead.lastToolError });
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({ isError: true });
   });
 
   it("uses host execution and adjusted-argument evidence before fallback facts", () => {
@@ -193,17 +140,9 @@ describe("tool terminal outcome observer", () => {
     });
 
     expect(afterRetry.lastToolError).toBeUndefined();
-    expect(afterRetry.lastToolRecovery).toEqual({ toolName: "sessions_spawn" });
 
-    const payloads = buildPayloads({
-      assistantTexts: ["Started Investigate in a new session."],
-      lastToolError: afterRetry.lastToolError,
-      lastToolRecovery: afterRetry.lastToolRecovery,
-    });
-    expect(payloads.map((payload) => payload.text)).toEqual([
-      "Started Investigate in a new session.",
-      "✅ 🧑‍🔧 Sub-agent succeeded after retry.",
-    ]);
+    const payloads = buildPayloads({ lastToolError: afterRetry.lastToolError });
+    expect(payloads).toEqual([]);
   });
 
   it("keeps the sessions_spawn failure warning when no later spawn succeeds", () => {
@@ -221,10 +160,10 @@ describe("tool terminal outcome observer", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Started Investigate in a new session."],
       lastToolError: terminal.lastToolError,
-      lastToolRecovery: terminal.lastToolRecovery,
     });
-    expect(payloads.at(-1)?.isError).toBe(true);
-    expect(payloads.at(-1)?.text).toContain("Sub-agent failed");
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "Started Investigate in a new session.",
+    ]);
   });
 
   it("preserves durable memory recall side-effect evidence", () => {
@@ -246,7 +185,7 @@ describe("tool terminal outcome observer", () => {
     ).toMatchObject({ executionStarted: true, sideEffectEvidence: false });
   });
 
-  it("keeps a failed persistence claim visible, appends a correction, and hides owner metadata", () => {
+  it("treats the assistant reply as authoritative after a failed persistence call", () => {
     const observation = {
       toolName: "memory_store",
       arguments: { text: "The user prefers metric units." },
@@ -266,7 +205,6 @@ describe("tool terminal outcome observer", () => {
 
     expect(payloads).toEqual([
       expect.objectContaining({ text: "I've saved that preference and will remember it." }),
-      expect.objectContaining({ isError: true }),
     ]);
     expect(JSON.stringify(payloads)).not.toContain("memory-lancedb");
   });
@@ -283,7 +221,7 @@ describe("tool terminal outcome observer", () => {
     expect(terminal.lastToolError).toMatchObject({ mutatingAction: false });
   });
 
-  it("clears a failed persistence action only after the same fact succeeds", () => {
+  it("clears a failed persistence action after the same tool succeeds", () => {
     const observe = createToolTerminalObserver("run-memory-store-retry");
     const ownerKey = '["memory-lancedb","memory_store"]';
     const ownerMutation = { ownerKey };
@@ -299,16 +237,6 @@ describe("tool terminal outcome observer", () => {
       observe({
         toolName: "memory_store",
         arguments: { text: "The user prefers imperial units." },
-        outcome: "success",
-        ownerMutation,
-      }).lastToolError,
-    ).toMatchObject({
-      actionFingerprint: expect.stringContaining(`owner=${ownerKey}|args=`),
-    });
-    expect(
-      observe({
-        toolName: "memory_store",
-        arguments: { text: "The user prefers metric units." },
         outcome: "success",
         ownerMutation,
       }).lastToolError,

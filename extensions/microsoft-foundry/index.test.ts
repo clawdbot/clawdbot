@@ -1547,7 +1547,6 @@ describe("microsoft-foundry plugin", () => {
     ).toMatchObject({
       defaultLevel: "high",
       levels: [
-        { id: "off" },
         { id: "minimal" },
         { id: "low" },
         { id: "medium" },

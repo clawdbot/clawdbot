@@ -317,7 +317,7 @@ export function registerModelsCli(program: Command) {
     .command("list")
     .description("List saved auth profiles")
     .option("--provider <id>", "Filter by provider id")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--agent <id>", "Agent id (default: configured system agent)")
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
@@ -499,7 +499,7 @@ export function registerModelsCli(program: Command) {
     .command("get")
     .description("Show per-agent auth profile order override")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
-    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--agent <id>", "Agent id (default: configured system agent)")
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {

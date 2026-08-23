@@ -46,6 +46,21 @@ function props(overrides: Partial<Parameters<typeof renderSessionActivityView>[0
   };
 }
 
+describe("session activity semantics", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("leaves the page main landmark to the app shell", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(renderSessionActivityView(props()), container);
+
+    expect(container.querySelectorAll("main")).toHaveLength(0);
+  });
+});
+
 describe("session activity people filter", () => {
   beforeEach(() => {
     document.body.innerHTML = "";

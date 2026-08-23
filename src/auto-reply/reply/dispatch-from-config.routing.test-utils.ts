@@ -26,6 +26,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { isReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -429,13 +430,13 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it.each([
-    ["cancelled", "cancelled", true],
-    ["failed before transport", "failed-before-deliver", true],
-    ["delivered", "delivered", false],
-    ["failed during transport", "failed-deliver", false],
+    ["cancelled", "cancelled", true, undefined],
+    ["failed before transport", "failed-before-deliver", true, undefined],
+    ["delivered", "delivered", false, undefined],
+    ["failed during transport", "failed-deliver", true, "failed-deliver"],
   ] as const)(
     "settles ask_user delivery when the prompt is %s",
-    async (_name, outcome, rejects) => {
+    async (_name, outcome, rejects, expectedOutcome) => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
       const deliver = vi.fn(async (_payload: ReplyPayload, info: { kind: string }) => {
         if (outcome === "failed-deliver" && info.kind === "tool") {
@@ -472,7 +473,13 @@ describe("dispatchReplyFromConfig", () => {
         },
       });
 
-      if (rejects) {
+      if (expectedOutcome) {
+        const error = await dispatch.catch((caught: unknown) => caught);
+        expect(isReplyDispatchDeliveryError(error)).toBe(true);
+        if (isReplyDispatchDeliveryError(error)) {
+          expect(error.outcome).toBe(expectedOutcome);
+        }
+      } else if (rejects) {
         await expect(dispatch).rejects.toThrow();
       } else {
         await expect(dispatch).resolves.toMatchObject({ queuedFinal: true });
@@ -897,7 +904,6 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(false);
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });

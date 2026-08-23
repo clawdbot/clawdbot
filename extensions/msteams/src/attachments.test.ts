@@ -718,9 +718,15 @@ describe("msteams attachments", () => {
         expect(tokenProvider.getAccessToken).toHaveBeenCalled();
       });
 
-      it("falls through to direct fetch for non-shared-link URLs", async () => {
-        const directUrl = createTestUrl("direct.pdf");
-        const fetchMock = createOkFetchMock(CONTENT_TYPE_APPLICATION_PDF, "pdf");
+      it("keeps look-alike hosts out of Graph shares and auth fallback", async () => {
+        const directUrl = "https://notonedrive.com/direct.pdf";
+        const tokenProvider = createTokenProvider();
+        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+          const url = resolveRequestUrl(input);
+          return url.startsWith(GRAPH_SHARES_URL_PREFIX)
+            ? createTextResponse("unauthorized", 401)
+            : createBufferResponse(PDF_BUFFER, CONTENT_TYPE_APPLICATION_PDF);
+        });
         detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_PDF);
         saveMediaBufferMock.mockResolvedValueOnce({
           id: "saved.pdf",
@@ -729,9 +735,13 @@ describe("msteams attachments", () => {
           contentType: CONTENT_TYPE_APPLICATION_PDF,
         });
 
-        const media = await downloadAttachmentsWithFetch(
-          createPdfAttachments(directUrl),
-          fetchMock,
+        const media = await downloadMSTeamsAttachments(
+          buildDownloadParams(createPdfAttachments(directUrl), {
+            tokenProvider,
+            allowHosts: ["notonedrive.com", GRAPH_HOST],
+            authAllowHosts: [GRAPH_HOST],
+            fetchFn: asFetchFn(fetchMock),
+          }),
         );
 
         expectAttachmentMediaLength(media, 1);
@@ -742,6 +752,25 @@ describe("msteams attachments", () => {
         // Should have hit the original host, NOT graph shares.
         expect(calledUrls).toContain(directUrl);
         expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);
+        expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+      });
+
+      it("rejects non-HTTPS shared-link hosts before fetch or auth fallback", async () => {
+        const tokenProvider = createTokenProvider();
+        const fetchMock = vi.fn(async () => createTextResponse("unauthorized", 401));
+
+        await downloadAttachmentsWithFetch(
+          createPdfAttachments("http://onedrive.com/direct.pdf"),
+          fetchMock,
+          {
+            tokenProvider,
+            allowHosts: ["onedrive.com", GRAPH_HOST],
+            authAllowHosts: [GRAPH_HOST],
+          },
+          { expectFetchCalled: false },
+        );
+
+        expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
       });
     });
 

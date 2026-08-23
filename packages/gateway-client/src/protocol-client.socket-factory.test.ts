@@ -16,6 +16,7 @@ type SocketFactoryHarness = {
 
 function createSocketFactoryHarness(options?: {
   initialFailures?: number;
+  onClose?: () => void;
   onConnectError?: (error: Error) => void;
   retryFactoryError?: (error: Error) => boolean;
   rethrowFactoryError?: (error: Error) => boolean;
@@ -41,6 +42,7 @@ function createSocketFactoryHarness(options?: {
     buildConnectPlan: () => ({}),
     buildConnectParams: (plan) => plan,
     resolveClose: () => ({ retry: true, notify: true }),
+    onClose: options?.onClose,
     onConnectError,
     handshake: { mode: "require-challenge", timeoutMs: 100 },
     reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
@@ -162,6 +164,43 @@ describe("GatewayProtocolClient socket factory recovery", () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(createSocket).toHaveBeenCalledTimes(2);
     expect(client.connected).toBe(true);
+
+    client.stop();
+  });
+
+  it("does not schedule a retry over a socket restarted by a close callback", async () => {
+    vi.useFakeTimers();
+    let recoveredRequest: Promise<{ healthy: boolean }> | undefined;
+    const { client, createSocket } = createSocketFactoryHarness({
+      onClose: () => {
+        client.start();
+        recoveredRequest = client.request("sessions.list", {}, { timeoutMs: null });
+      },
+    });
+
+    client.start();
+    createSocket.mock.calls[0]?.[0].close(1012, "service restart");
+
+    expect(createSocket).toHaveBeenCalledTimes(2);
+    expect(client.connected).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(createSocket).toHaveBeenCalledTimes(2);
+
+    const replacementSocket = createSocket.mock.results[1]?.value as GatewayProtocolSocket;
+    const requestFrame = vi.mocked(replacementSocket.send).mock.calls[0]?.[0];
+    expect(requestFrame).toBeDefined();
+    createSocket.mock.calls[1]?.[0].message(
+      JSON.stringify({
+        type: "res",
+        id: JSON.parse(requestFrame ?? "{}").id,
+        ok: true,
+        payload: { healthy: true },
+      }),
+    );
+    await expect(recoveredRequest).resolves.toEqual({ healthy: true });
+    expect(client.hasPendingRequests).toBe(false);
 
     client.stop();
   });

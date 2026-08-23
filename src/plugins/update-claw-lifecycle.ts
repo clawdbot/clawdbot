@@ -1,4 +1,5 @@
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import { isPackageVersionDowngrade } from "../infra/package-update-utils.js";
 import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import type { ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
@@ -53,6 +54,9 @@ export function buildPluginUpdateVersionOutcome(params: {
   const unchanged = Boolean(
     params.currentVersion && params.nextVersion && params.currentVersion === params.nextVersion,
   );
+  const verb = isPackageVersionDowngrade(params.currentVersion, params.nextVersion)
+    ? "Downgraded"
+    : "Updated";
   return {
     pluginId: params.pluginId,
     status: unchanged ? "unchanged" : "updated",
@@ -60,7 +64,7 @@ export function buildPluginUpdateVersionOutcome(params: {
     nextVersion: params.nextVersion,
     message: unchanged
       ? `${params.pluginId} already at ${currentLabel}.${params.channelFallbackSuffix}`
-      : `Updated ${params.pluginId}: ${currentLabel} -> ${nextLabel}.${params.channelFallbackSuffix}`,
+      : `${verb} ${params.pluginId}: ${currentLabel} -> ${nextLabel}.${params.channelFallbackSuffix}`,
     ...(params.channelFallback ? { channelFallback: params.channelFallback } : {}),
   };
 }

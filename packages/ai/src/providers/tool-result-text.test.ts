@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeToolResultMediaPlaceholder,
+  describeUnsupportedToolResultMedia,
   extractToolResultText,
   hasMediaPayload,
   isImageWithMediaPayload,
@@ -145,12 +146,15 @@ describe("describeToolResultMediaPlaceholder", () => {
   });
 
   it("does not advertise payload-less media husks", () => {
+    const husks = [
+      { type: "image", mimeType: "image/png", data: "" },
+      { type: "image", path: "/tmp/image.png" },
+      { type: "audio", mimeType: "audio/mpeg" },
+      { type: "text", text: "ordinary text", mimeType: "image/png" },
+    ];
+    expect(describeToolResultMediaPlaceholder(husks)).toBeUndefined();
     expect(
-      describeToolResultMediaPlaceholder([
-        { type: "image", mimeType: "image/png", data: "" },
-        { type: "image", path: "/tmp/image.png" },
-        { type: "audio", mimeType: "audio/mpeg" },
-      ]),
+      describeUnsupportedToolResultMedia(husks, { images: true, audio: false }),
     ).toBeUndefined();
   });
 

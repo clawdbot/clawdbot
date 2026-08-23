@@ -85,6 +85,101 @@ async function tableBodyContrast(page: Page): Promise<number> {
 }
 
 suite.define(() => {
+  it("blocks empty protected values without rejecting empty environment entries", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["secrets.store.list", "secrets.store.set"],
+        methodResponses: {
+          "secrets.store.list": {
+            sequence: [
+              { entries: [secretEntry] },
+              { entries: [secretEntry] },
+              { entries: [secretEntry] },
+            ],
+          },
+          "secrets.store.set": {
+            sequence: [
+              { ok: true, reloaded: false },
+              { ok: true, reloaded: false },
+            ],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}settings/secrets`);
+      await page.getByRole("heading", { name: "Secrets" }).waitFor();
+
+      const existingSecretRow = page.getByRole("row", { name: /SERVICE_API_KEY/u });
+      await existingSecretRow.getByRole("button", { name: "Actions: SERVICE_API_KEY" }).click();
+      await existingSecretRow.locator('wa-dropdown-item[value="edit"]').click();
+      const editSecretDialog = page.locator('openclaw-modal-dialog[label="Edit"]');
+      await editSecretDialog.getByRole("button", { name: "Save", exact: true }).click();
+      await editSecretDialog.getByRole("alert").getByText("Enter a value.").waitFor();
+      expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);
+      await editSecretDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+
+      await page.getByRole("button", { name: "Add", exact: true }).click();
+      const addSecretDialog = page.locator('openclaw-modal-dialog[label="Add"]');
+      await addSecretDialog.getByLabel("Name", { exact: true }).fill("EMPTY_API_KEY");
+      expect(
+        await addSecretDialog.getByRole("radio", { name: /Protected secret/u }).isChecked(),
+      ).toBe(true);
+      await addSecretDialog.getByRole("button", { name: "Save", exact: true }).click();
+      await addSecretDialog.getByRole("alert").getByText("Enter a value.").waitFor();
+      expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);
+      await capture(page, "04-empty-secret-local-validation.png");
+      await addSecretDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+
+      await page.getByRole("button", { name: "Bulk Add", exact: true }).click();
+      const protectedBulkDialog = page.locator('openclaw-modal-dialog[label="Bulk Add"]');
+      await protectedBulkDialog
+        .getByRole("textbox", { name: "Value", exact: true })
+        .fill("EMPTY_API_KEY=\nEMPTY_ENV=");
+      await protectedBulkDialog.getByText("1 protected secret detected").waitFor();
+      await protectedBulkDialog.getByRole("button", { name: "Save", exact: true }).click();
+      await protectedBulkDialog
+        .getByRole("alert")
+        .getByText("EMPTY_API_KEY: Enter a value.")
+        .waitFor();
+      expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);
+      await capture(page, "05-empty-bulk-local-validation.png");
+      await protectedBulkDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+
+      await page.getByRole("button", { name: "Add", exact: true }).click();
+      const addEnvDialog = page.locator('openclaw-modal-dialog[label="Add"]');
+      await addEnvDialog.getByLabel("Name", { exact: true }).fill("EMPTY_ENV");
+      expect(
+        await addEnvDialog.getByRole("radio", { name: /Agent-readable environment/u }).isChecked(),
+      ).toBe(true);
+      await addEnvDialog.getByRole("button", { name: "Save", exact: true }).click();
+      await page
+        .getByRole("status")
+        .getByText(/Saved EMPTY_ENV/u)
+        .waitFor();
+
+      await page.getByRole("button", { name: "Bulk Add", exact: true }).click();
+      const envBulkDialog = page.locator('openclaw-modal-dialog[label="Bulk Add"]');
+      await envBulkDialog
+        .getByRole("textbox", { name: "Value", exact: true })
+        .fill("EMPTY_BULK_ENV=");
+      await envBulkDialog.getByText("0 protected secrets detected").waitFor();
+      await envBulkDialog.getByRole("button", { name: "Save", exact: true }).click();
+      await page
+        .getByRole("status")
+        .getByText(/Saved 1 entries/u)
+        .waitFor();
+
+      expect(await gateway.getRequests("secrets.store.set")).toEqual([
+        expect.objectContaining({
+          params: expect.objectContaining({ name: "EMPTY_ENV", value: "", kind: "env" }),
+        }),
+        expect.objectContaining({
+          params: { name: "EMPTY_BULK_ENV", value: "", kind: "env" },
+        }),
+      ]);
+    });
+  });
+
   it("adds env and secret values, bulk imports, and deletes without revealing secrets", async () => {
     if (captureUiProofEnabled) {
       await mkdir(proofDir, { recursive: true });
@@ -155,7 +250,7 @@ suite.define(() => {
         await secretDialog.getByLabel("Value", { exact: true }).fill("super-secret-material");
         await secretDialog.locator('textarea[name="allowed-hosts"]').fill("api.example.com");
         await capture(page, "02-secret-allowed-hosts.png");
-        await secretDialog.getByRole("button", { name: "Save", exact: true }).click();
+        await secretDialog.getByLabel("Name", { exact: true }).press("Enter");
         await page
           .getByRole("status")
           .getByText(

@@ -3,15 +3,19 @@
    ============================================= */
 
 /* Chat Group Layout - default (assistant/other on left). Groups without a
-   footer keep the shared 26px rhythm directly. Footer-bearing groups split
+   footer keep the shared turn gap directly. Footer-bearing groups split
    message content and footer into separate rows so each row keeps the avatar
    gutter while only the message row controls avatar alignment. */
 .chat-group {
+  --chat-footer-row-offset: 26px;
   --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
+  --chat-run-block-gap: 12px;
+  --chat-touch-row-margin: 14px;
+  --chat-turn-gap: 50px;
   display: flex;
   gap: 10px;
   align-items: flex-start;
-  padding-bottom: 26px;
+  padding-bottom: var(--chat-turn-gap);
   margin-left: 4px;
   margin-right: 16px;
 }
@@ -23,6 +27,9 @@
 }
 
 .chat-group.user.chat-group--peer {
+  /* The left-aligned identity owns the leading edge while hidden details
+     reserve their desktop footprint after it. */
+  --chat-footer-detail-position: static;
   flex-direction: row;
 }
 
@@ -52,7 +59,7 @@
   grid-template-rows: auto auto;
   gap: 2px 10px;
   justify-content: start;
-  padding-bottom: 0;
+  padding-bottom: calc(var(--chat-turn-gap) - var(--chat-footer-row-offset));
 }
 
 .chat-group.user.chat-group--with-footer {
@@ -69,7 +76,7 @@
   justify-content: start;
 }
 
-.chat-group.chat-group--with-footer .chat-avatar {
+.chat-group.chat-group--with-footer > :is(.chat-avatar, .chat-avatar-slot) {
   grid-column: var(--chat-group-avatar-column);
   grid-row: 1;
 }
@@ -87,6 +94,7 @@
 }
 
 .chat-group-messages {
+  --chat-message-type-boundary-gap: var(--space-1);
   position: relative; /* anchors message-local popovers */
   display: flex;
   flex-direction: column;
@@ -96,6 +104,29 @@
   width: 100%;
   max-width: var(--chat-message-column-max);
   min-width: 0;
+}
+
+.chat-group-messages
+  > :is(
+    .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
+    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell
+  ) {
+  margin-block-start: var(--chat-message-type-boundary-gap);
+}
+
+.chat-group
+  > .chat-group-messages
+  > :is(
+    .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
+    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell,
+    .chat-bubble + .chat-activity-group,
+    .chat-activity-group + .chat-bubble,
+    .chat-work-group + .chat-bubble,
+    .chat-work-group + .chat-activity-group,
+    .chat-bubble + .chat-work-group,
+    .chat-activity-group + .chat-work-group
+  ) {
+  margin-block-start: calc(var(--chat-run-block-gap) - 2px);
 }
 
 /* User messages align content right */
@@ -203,9 +234,13 @@
   min-width: 0;
 }
 
+.chat-group.user.chat-group--peer .chat-group-footer__meta {
+  min-height: 24px;
+}
+
 /* Own-message footers are right-aligned, so hover-revealed time/actions must
    slot in to the LEFT of the always-visible name; otherwise the name jumps
-   sideways on hover. Peer footers are left-aligned and already stable. */
+   sideways on hover. */
 .chat-group.user:not(.chat-group--peer) .chat-group-footer--persistent-identity .chat-sender-name {
   order: 1;
 }
@@ -228,6 +263,10 @@
 .chat-group.assistant .chat-message-actions-row {
   justify-content: flex-start;
   margin-left: 0;
+}
+
+.chat-group.user.chat-group--peer .chat-group-footer button:focus-visible {
+  opacity: 1;
 }
 
 .chat-message-actions-row {
@@ -524,10 +563,10 @@ img.chat-avatar.user {
   object-fit: cover;
 }
 
-/* Sender avatars pair the route image with an initials fallback; the slot
-   swaps them when the canonical route has no avatar (404). */
+/* Keep the image and initials fallback in one stable grid item. display: contents
+   can lose the avatar column when Lit reconciles an attributed message. */
 .chat-avatar-slot {
-  display: contents;
+  display: grid;
 }
 
 .chat-avatar-slot > .chat-avatar--sender-initials {
@@ -659,8 +698,7 @@ img.chat-avatar.chat-avatar--logo {
 /* Direct (1:1) threads drop avatars entirely: one agent plus one user makes
    the repeated identity icons pure decoration. Group threads (any labeled
    foreign sender) keep avatars as the always-visible identity marker. */
-.chat-thread--direct .chat-avatar,
-.chat-thread--direct img.chat-avatar {
+.chat-thread--direct :is(.chat-avatar, .chat-avatar-slot) {
   display: none;
 }
 
@@ -727,11 +765,22 @@ img.chat-avatar.chat-avatar--logo {
   /* Shared message renderers stay touch-readable by default. Transcript rows
      opt into one-at-a-time disclosure through their owning thread. */
   .chat-group {
+    --chat-footer-row-offset: 44px;
     --chat-footer-disclosure-opacity: 1;
     --chat-footer-disclosure-pointer-events: auto;
     --chat-footer-detail-position: static;
+    padding-bottom: calc(var(--chat-turn-gap) - var(--chat-touch-row-margin));
+    margin-bottom: var(--chat-touch-row-margin);
+  }
+
+  .chat-group.chat-group--with-footer:has(
+    .chat-group-footer:not(.chat-group-footer--persistent-identity) .chat-group-footer-actions
+  ),
+  .chat-group.chat-group--with-footer:is(.chat-group--meta-revealed, :focus-within):has(
+    .chat-group-footer--persistent-identity .chat-group-footer-actions
+  ) {
     padding-bottom: 0;
-    margin-bottom: 14px;
+    margin-bottom: 0;
   }
 
   .chat-group-footer {
@@ -750,6 +799,16 @@ img.chat-avatar.chat-avatar--logo {
     --chat-footer-disclosure-pointer-events: auto;
     --chat-footer-detail-position: static;
     --chat-persistent-footer-opacity: 1;
+  }
+
+  :where(.chat-thread)
+    .chat-group.user.chat-group--peer:not(.chat-group--meta-revealed, :focus-within) {
+    --chat-footer-detail-position: absolute;
+  }
+
+  .chat-group.user.chat-group--peer .chat-group-footer-actions {
+    flex-basis: 100%;
+    justify-content: flex-end;
   }
 
   .chat-group-footer-actions .chat-copy-btn,
@@ -849,7 +908,8 @@ img.chat-avatar.chat-avatar--logo {
 
 :root[data-theme-mode="light"] .chat-group.user .chat-bubble {
   border-color: transparent;
-  background: var(--accent-subtle);
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+  color: var(--text-strong);
   box-shadow: none;
 }
 
@@ -1134,7 +1194,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   }
 
   .chat-avatar,
-  img.chat-avatar {
+  .chat-avatar-slot {
     display: none;
   }
 

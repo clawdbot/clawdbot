@@ -1,17 +1,14 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   listModels,
   providerCatalogEntry,
 } from "./models-list-result.openai-routes.test-support.js";
 
-const mocks = vi.hoisted(() => ({
-  readClaudeCliCredentialsCached: vi.fn<() => unknown>(() => null),
-  readCodexCliCredentialsCached: vi.fn<() => unknown>(() => null),
-  readMiniMaxCliCredentialsCached: vi.fn<() => unknown>(() => null),
-}));
-
-vi.mock("../../agents/cli-credentials.js", () => mocks);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const config = {
   agents: {
@@ -40,12 +37,6 @@ async function listClaudeCliModel() {
 describe("models.list CLI runtime availability", () => {
   beforeEach(() => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
-    mocks.readClaudeCliCredentialsCached.mockReset();
-    mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
-    mocks.readCodexCliCredentialsCached.mockReset();
-    mocks.readCodexCliCredentialsCached.mockReturnValue(null);
-    mocks.readMiniMaxCliCredentialsCached.mockReset();
-    mocks.readMiniMaxCliCredentialsCached.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -53,13 +44,21 @@ describe("models.list CLI runtime availability", () => {
   });
 
   it("marks a Claude CLI runtime model available with ambient CLI OAuth", async () => {
-    mocks.readClaudeCliCredentialsCached.mockReturnValue({
-      type: "oauth",
-      provider: "anthropic",
-      access: "test-access",
-      refresh: "test-refresh",
-      expires: Date.now() + 3_600_000,
-    });
+    const homeDir = tempDirs.make("models-list-claude-cli-");
+    const credentialDir = path.join(homeDir, ".claude");
+    fs.mkdirSync(credentialDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(credentialDir, ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "test-access",
+          refreshToken: "test-refresh",
+          expiresAt: Date.now() + 3_600_000,
+        },
+      }),
+      { mode: 0o600 },
+    );
+    vi.stubEnv("HOME", homeDir);
 
     await expect(listClaudeCliModel()).resolves.toEqual({
       models: [expect.objectContaining({ id: "claude-opus-5", available: true })],

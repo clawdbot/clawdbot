@@ -208,7 +208,7 @@ export function refreshSessionWorkspaceState(state: SessionWorkspaceHost): boole
 }
 
 /** Retire facts owned by one checkout without disturbing panel layout or retained drafts. */
-export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost) {
+export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost, presented = true) {
   const current = state.sessionWorkspaceState;
   if (!current || current.sessionKey !== state.sessionKey) {
     return;
@@ -217,7 +217,7 @@ export function retireSessionWorkspaceCheckout(state: SessionWorkspaceHost) {
   clearWorkspaceTimer(current);
   const next = createSessionWorkspaceState(state, current);
   state.sessionWorkspaceState = next;
-  if (state.client && state.connected) {
+  if (presented && state.client && state.connected) {
     loadSessionWorkspace(state, next);
   }
   requestWorkspaceUpdate(state);

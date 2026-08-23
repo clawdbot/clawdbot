@@ -239,6 +239,25 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun connectedHelloKeepsMethodCatalogUnknownWhenHelloOmitsFeatures() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val hello = CompletableDeferred<GatewayHelloSummary>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") webSocket.send(connectResponseFrame(id, methods = null))
+        }
+      val harness = createReconnectHarness(onHello = hello::complete)
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        assertNull(withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { hello.await() }.methods)
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun disconnectAndJoinWaitsForNaturalFailureCallback() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
@@ -1100,8 +1119,11 @@ class GatewaySessionReconnectTest {
 
   private fun connectResponseFrame(
     id: String,
-    methods: Set<String> = emptySet(),
+    methods: Set<String>? = emptySet(),
   ): String {
+    if (methods == null) {
+      return """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
+    }
     val encodedMethods = methods.joinToString(",") { JsonPrimitive(it).toString() }
     return """{"type":"res","id":"$id","ok":true,"payload":{"features":{"methods":[$encodedMethods]},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
   }

@@ -16,7 +16,7 @@ Managed and external llama.cpp servers for GGUF chat and embeddings.
 
 ## Surface
 
-providers: `llama-cpp`, `llama-server`; contracts: `embeddingProviders`
+providers: `llama-cpp`; contracts: `embeddingProviders`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
@@ -36,5 +36,4 @@ choose a cloud provider.
 
 ## Related docs
 
-- [llama-server](/providers/llama-server)
 - [llama-cpp](/plugins/llama-cpp)

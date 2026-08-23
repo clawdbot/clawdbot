@@ -29,6 +29,8 @@ import {
   createContractsVitestConfig,
   pluginContractPatterns,
 } from "./vitest/vitest.contracts-shared.ts";
+import { createGatewayServerIsolatedVitestConfig } from "./vitest/vitest.gateway-server-isolated.config.ts";
+import { gatewayServerIsolatedTestFiles } from "./vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import {
@@ -77,6 +79,20 @@ describe("projects vitest config", () => {
       agentVitestProjectConfigs,
     );
     expect(agentConfigs.size).toBe(agentVitestProjectConfigs.length);
+  });
+
+  it("keeps module-mocking Gateway server tests isolated in every aggregate", () => {
+    const isolatedProject = "test/vitest/vitest.gateway-server-isolated.config.ts";
+    const agenticShard = fullSuiteVitestShards.find((shard) => shard.name === "agentic");
+    const isolatedConfig = requireTestConfig(createGatewayServerIsolatedVitestConfig({}));
+    const gatewayFallback = requireTestConfig(createGatewayVitestConfig());
+
+    expect(rootVitestProjects).toContain(isolatedProject);
+    expect(agenticShard?.projects).toContain(isolatedProject);
+    expect(isolatedConfig.isolate).toBe(true);
+    expect(isolatedConfig.runner).toBeUndefined();
+    expect(isolatedConfig.include).toEqual(gatewayServerIsolatedTestFiles);
+    expect(gatewayFallback.exclude).toContain("server.sessions.compaction-read-errors.test.ts");
   });
 
   it("covers each normal full-suite test file exactly once after configs cached filtered includes", async () => {

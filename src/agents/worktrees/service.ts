@@ -84,6 +84,35 @@ export class WorktreeSnapshotError extends Error {
   }
 }
 
+export type WorktreeRemovalFailureReason =
+  | "busy"
+  | "foreign-lock"
+  | "snapshot-failed"
+  | "cleanup-failed";
+
+export class WorktreeRemovalLockError extends Error {
+  constructor(
+    readonly kind: "busy" | "foreign-lock",
+    message: string,
+  ) {
+    super(message);
+    this.name = "WorktreeRemovalLockError";
+  }
+}
+
+export function classifyWorktreeRemovalError(error: unknown): WorktreeRemovalFailureReason {
+  if (error instanceof WorktreeRemovalContentionError) {
+    return "busy";
+  }
+  if (error instanceof WorktreeRemovalLockError) {
+    return error.kind;
+  }
+  if (error instanceof WorktreeSnapshotError) {
+    return "snapshot-failed";
+  }
+  return "cleanup-failed";
+}
+
 export class WorktreeRepositoryError extends Error {}
 const SNAPSHOT_REF_PREFIX = "refs/openclaw/snapshots";
 const log = createSubsystemLogger("agents/worktrees");
@@ -939,7 +968,8 @@ export class ManagedWorktreeService {
       record = await this.rebindLiveRepository(record);
       const state = await lockState(record);
       if (state.kind === "live" || state.kind === "foreign") {
-        throw new Error(
+        throw new WorktreeRemovalLockError(
+          state.kind === "live" ? "busy" : "foreign-lock",
           state.kind === "live"
             ? `worktree is locked by live OpenClaw pid ${state.pid}`
             : `worktree has a foreign lock${state.reason ? `: ${state.reason}` : ""}`,

@@ -11,7 +11,7 @@ describe("cron trigger enablement", () => {
     expect(() =>
       assertTriggerSupport(triggerJob, {
         cronConfig: {},
-        requireEnabled: true,
+        validateAuthoredTrigger: true,
       }),
     ).not.toThrow();
   });
@@ -20,7 +20,7 @@ describe("cron trigger enablement", () => {
     expect(() =>
       assertTriggerSupport(triggerJob, {
         cronConfig: { triggers: { enabled: false } },
-        requireEnabled: true,
+        validateAuthoredTrigger: true,
       }),
     ).toThrow(
       "cron triggers are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",

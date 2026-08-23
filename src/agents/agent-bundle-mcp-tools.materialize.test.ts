@@ -247,6 +247,7 @@ describe("createBundleMcpToolRuntime", () => {
     expect(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").executionMode).toBe(
       "sequential",
     );
+    expect(runtime.tools[0]?.resultContentSource).toBe("network");
     expect(
       getPluginToolMeta(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant")),
     ).toMatchObject({
@@ -518,6 +519,46 @@ describe("createBundleMcpToolRuntime", () => {
 
   it("exposes MCP resource and prompt utility tools when advertised", async () => {
     const base = makeToolRuntime({ tools: [], serverName: "knowledge" });
+    const publicResults = {
+      prompts_get: {
+        description: "Brief the user",
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: "Summarize MCP",
+              annotations: { audience: ["assistant"] },
+              _meta: { promptBlock: "preserved" },
+            },
+          },
+        ],
+      },
+      prompts_list: {
+        prompts: [{ name: "brief", _meta: { promptEntry: "preserved" } }],
+        nextCursor: "prompt-page-two",
+      },
+      resources_list: {
+        resources: [
+          {
+            uri: "memo://one",
+            name: "memo",
+            annotations: { priority: 0.5 },
+            _meta: { resourceEntry: "preserved" },
+          },
+        ],
+        nextCursor: "resource-page-two",
+      },
+      resources_read: {
+        contents: [{ uri: "memo://one", text: "memo text", _meta: { content: "preserved" } }],
+      },
+    };
+    const privateResults = Object.fromEntries(
+      Object.entries(publicResults).map(([operation, value]) => [
+        operation,
+        { ...value, _meta: { privateState: `${operation}-must-not-leak` } },
+      ]),
+    );
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: {
         ...base,
@@ -536,12 +577,10 @@ describe("createBundleMcpToolRuntime", () => {
           },
           tools: [],
         }),
-        listResources: async () => [{ uri: "memo://one", name: "memo" }],
-        readResource: async (_serverName, uri) => ({
-          contents: [{ uri, text: "memo text" }],
-        }),
-        listPrompts: async () => [{ name: "brief" }],
-        getPrompt: async (_serverName, name, args) => ({ name, args }),
+        listResources: async () => privateResults.resources_list,
+        readResource: async () => privateResults.resources_read,
+        listPrompts: async () => privateResults.prompts_list,
+        getPrompt: async () => privateResults.prompts_get,
       },
     });
 
@@ -552,19 +591,30 @@ describe("createBundleMcpToolRuntime", () => {
       "knowledge__resources_read",
     ]);
 
-    const read = await runtime.tools
-      .find((tool) => tool.name === "knowledge__resources_read")!
-      .execute("call-read", { uri: "memo://one" }, undefined, undefined);
-
-    expectTextContentBlock(
-      read.content[0],
-      JSON.stringify({ contents: [{ uri: "memo://one", text: "memo text" }] }, null, 2),
-    );
-    expect(read.details).toMatchObject({
-      mcpServer: "knowledge",
-      mcpOperation: "resources_read",
-      untrustedMcpOutput: true,
-    });
+    for (const [operation, args] of [
+      ["prompts_get", { name: "brief" }],
+      ["prompts_list", {}],
+      ["resources_list", {}],
+      ["resources_read", { uri: "memo://one" }],
+    ] as const) {
+      const tool = expectDefined(
+        runtime.tools.find((candidate) => candidate.name === `knowledge__${operation}`),
+        `${operation} utility tool`,
+      );
+      const result = await tool.execute(`call-${operation}`, args, undefined, undefined);
+      expectTextContentBlock(result.content[0], JSON.stringify(publicResults[operation], null, 2));
+      expect(result.details).toMatchObject({
+        mcpServer: "knowledge",
+        mcpOperation: operation,
+        untrustedMcpOutput: true,
+      });
+      expect(tool.resultContentSource).toBe("network");
+      expect(expectDefined(privateResults[operation], `${operation} private source`)._meta).toEqual(
+        {
+          privateState: `${operation}-must-not-leak`,
+        },
+      );
+    }
 
     await expect(
       runtime.tools

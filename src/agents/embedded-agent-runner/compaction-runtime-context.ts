@@ -71,8 +71,9 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   sessionKey?: string;
   agentRuntime?: string | null;
 }): ThinkLevel {
+  const configuredLevel = params.config?.agents?.defaults?.compaction?.thinkingLevel;
   const requestedLevel =
-    params.config?.agents?.defaults?.compaction?.thinkingLevel ?? params.inheritedLevel;
+    configuredLevel === "inherit" ? params.inheritedLevel : (configuredLevel ?? "low");
   if (!requestedLevel) {
     return "off";
   }

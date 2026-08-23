@@ -19,7 +19,7 @@ import {
 } from "../transports/openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 import {
-  createOpenAIResponseHook,
+  createOpenAIProviderAcceptanceHook,
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
@@ -52,7 +52,11 @@ import {
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import {
+  createToolArgumentPreviewSchedule,
+  parseStreamingJson,
+  type ToolArgumentPreviewSchedule,
+} from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { projectProviderError } from "../utils/provider-error.js";
@@ -184,7 +188,7 @@ export const streamOpenAICompletions: StreamFunction<
         stream: openaiStream,
         signal: firstEventAbort.signal,
         abort: firstEventAbort.abort,
-        hook: createOpenAIResponseHook(options?.onResponse, response, model),
+        hook: createOpenAIProviderAcceptanceHook(options, response, model),
         onReady: () => stream.push({ type: "start", partial: output }),
       });
 
@@ -206,6 +210,11 @@ export const streamOpenAICompletions: StreamFunction<
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
       const toolCallBlocksByFirstId = new Map<string, StreamingToolCallBlock>();
+      // Preview schedules are per active tool call; WeakMap keys die with the block.
+      const toolArgumentPreviewSchedules = new WeakMap<
+        StreamingToolCallBlock,
+        ToolArgumentPreviewSchedule
+      >();
       const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
       const pendingReasoningDetailsByToolCallId = new Map<string, string>();
       const blocks = output.content as StreamingBlock[];
@@ -381,6 +390,7 @@ export const streamOpenAICompletions: StreamFunction<
             toolCallBlocksById.set(toolCall.id, block);
             rememberFirstToolCallById(toolCall.id, block);
           }
+          toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
           appendBlock(block);
           stream.push({
             type: "toolcall_start",
@@ -576,7 +586,11 @@ export const streamOpenAICompletions: StreamFunction<
                 if (toolCall.function?.arguments) {
                   delta = toolCall.function.arguments;
                   block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
-                  block.arguments = parseStreamingJson(block.partialArgs);
+                  // Preview refresh is scheduled geometrically; the terminal
+                  // finalize re-parses the full buffer authoritatively either way.
+                  if (toolArgumentPreviewSchedules.get(block)?.(block.partialArgs.length)) {
+                    block.arguments = parseStreamingJson(block.partialArgs);
+                  }
                 }
                 stream.push({
                   type: "toolcall_delta",
