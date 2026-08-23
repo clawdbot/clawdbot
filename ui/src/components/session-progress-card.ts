@@ -32,6 +32,17 @@ function currentProgressStep(steps: readonly ProgressCardStep[]): ProgressCardSt
   );
 }
 
+function progressStepMarker(status: ProgressCardStep["status"]) {
+  switch (status) {
+    case "completed":
+      return icons.check;
+    case "in_progress":
+      return icons.circle;
+    case "pending":
+      return icons.clock;
+  }
+}
+
 function renderMarkdown(markdown: string | undefined) {
   if (!markdown) {
     return nothing;
@@ -49,7 +60,6 @@ function renderSteps(card: ProgressCard) {
   return html`<ol class="session-progress-card__steps">
     ${steps.map((step) => {
       const statusLabel = t(STATUS_LABEL_KEYS[step.status]);
-      const marker = step.status === "completed" ? icons.check : icons.circle;
       return html`<li
         class="session-progress-card__step session-progress-card__step--${step.status}"
         aria-label=${t("sessionProgressCard.stepLabel", { status: statusLabel, step: step.step })}
@@ -58,7 +68,7 @@ function renderSteps(card: ProgressCard) {
           class="session-progress-card__step-marker"
           data-status=${step.status}
           aria-hidden="true"
-          >${marker}</span
+          >${progressStepMarker(step.status)}</span
         >
         <span class="session-progress-card__step-text">${step.step}</span>
       </li>`;
@@ -107,7 +117,7 @@ export function renderSessionProgressCard(
     : nothing;
   if (placement === "composer") {
     const current = currentProgressStep(card.steps ?? []);
-    const currentMarker = current?.status === "completed" ? icons.check : icons.circle;
+    const currentStatus = current?.status ?? "pending";
     return html`<details
       class="session-progress-card session-progress-card--composer"
       data-progress-card-placement="composer"
@@ -115,9 +125,9 @@ export function renderSessionProgressCard(
       <summary class="session-progress-card__summary" aria-label=${countLabel}>
         <span
           class="session-progress-card__current-marker"
-          data-status=${current?.status ?? "pending"}
+          data-status=${currentStatus}
           aria-hidden="true"
-          >${currentMarker}</span
+          >${progressStepMarker(currentStatus)}</span
         >
         <span class="session-progress-card__current"
           >${current?.step ?? t("sessionProgressCard.noteLabel")}</span

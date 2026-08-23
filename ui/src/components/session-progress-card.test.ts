@@ -48,7 +48,7 @@ describe("renderSessionProgressCard", () => {
       },
       {
         label: "Run focused tests, pending",
-        marker: expect.stringContaining("<circle"),
+        marker: expect.stringContaining("<polyline"),
         status: "session-progress-card__step--pending",
       },
     ]);
@@ -64,7 +64,26 @@ describe("renderSessionProgressCard", () => {
     ).not.toBeNull();
     expect(
       card?.querySelector(
-        ".session-progress-card__step--pending .session-progress-card__step-marker circle",
+        ".session-progress-card__step--pending .session-progress-card__step-marker polyline",
+      ),
+    ).not.toBeNull();
+  });
+
+  it.each([
+    ["completed", "path"],
+    ["in_progress", "circle"],
+    ["pending", "polyline"],
+  ] as const)("uses the %s marker in the composer summary", (status, markerSelector) => {
+    const container = document.createElement("div");
+    const card = {
+      ...progressCard,
+      steps: [{ step: "Current step", status }],
+    };
+    render(renderSessionProgressCard(card, "composer"), container);
+
+    expect(
+      container.querySelector(
+        `.session-progress-card__current-marker[data-status="${status}"] ${markerSelector}`,
       ),
     ).not.toBeNull();
   });
