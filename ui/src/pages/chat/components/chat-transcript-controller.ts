@@ -139,7 +139,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       return;
     }
     this.pendingInteractionAnchor = anchor;
-    this.host.requestUpdate();
+    queueMicrotask(() => this.pendingInteractionAnchor === anchor && this.host.requestUpdate());
   };
   private measureConnectedRows(): void {
     // Only width invalidation owns forced DOM reads. Ordinary row refs stay on
