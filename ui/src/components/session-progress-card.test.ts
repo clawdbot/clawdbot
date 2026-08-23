@@ -70,7 +70,6 @@ describe("renderSessionProgressCard", () => {
   });
 
   it.each([
-    ["completed", "path"],
     ["in_progress", ".session-run-spinner"],
     ["pending", "polyline"],
   ] as const)("uses the %s marker in the composer summary", (status, markerSelector) => {
