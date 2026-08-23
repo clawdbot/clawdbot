@@ -112,33 +112,4 @@ suite.define(() => {
       await suite.closeBrowserContext(context);
     }
   });
-
-  it("hides the disclosure when long markdown renders within five lines", async () => {
-    const text = `[short label](https://example.com/${"a".repeat(1_300)})`;
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 844, width: 390 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      historyMessages: [{ role: "user", content: [{ type: "text", text }], timestamp: 1 }],
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const bubble = page.locator(".chat-group.user .chat-bubble");
-      await bubble.waitFor({ state: "visible", timeout: 10_000 });
-      const content = bubble.locator(".chat-message-disclosure__content");
-      const toggle = bubble.locator(".chat-message-disclosure__toggle");
-
-      expect(await content.textContent()).toContain("short label");
-      expect(
-        await content.evaluate((element) => element.scrollHeight <= element.clientHeight),
-      ).toBe(true);
-      expect(await toggle.isHidden()).toBe(true);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
 });

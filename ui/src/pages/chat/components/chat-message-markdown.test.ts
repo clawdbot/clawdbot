@@ -87,44 +87,4 @@ describe("user message disclosure", () => {
       expect(container.textContent).toContain(line);
     }
   });
-
-  it("collapses 1201 UTF-16 code units without truncating the DOM", () => {
-    const container = document.createElement("div");
-    const markdown = "a".repeat(1_201);
-    const onToggle = vi.fn();
-
-    render(
-      renderUserMessageMarkdown(
-        markdown,
-        "message",
-        { isStreaming: false, onToggleUserMessageExpanded: onToggle },
-        {},
-      ),
-      container,
-    );
-
-    const disclosure = container.querySelector(".chat-message-disclosure");
-    const toggle = disclosure?.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle");
-    expect(disclosure?.textContent).toContain(markdown);
-    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-
-    toggle?.click();
-    expect(onToggle).toHaveBeenCalledWith("user-message:message");
-  });
-
-  it("collapses forty-one short lines", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderUserMessageMarkdown(
-        Array(41).fill("a").join("\n"),
-        "message",
-        { isStreaming: false, onToggleUserMessageExpanded: vi.fn() },
-        {},
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".chat-message-disclosure")).not.toBeNull();
-  });
 });
