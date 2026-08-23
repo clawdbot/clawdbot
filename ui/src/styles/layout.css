@@ -1417,12 +1417,12 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .sidebar-session-catalog-error.callout.danger {
   position: sticky;
-  z-index: 2;
+  z-index: 10;
   bottom: 8px;
   flex-wrap: wrap;
   align-items: flex-start;
   margin-top: auto;
-  border-color: var(--border);
+  border-color: color-mix(in srgb, var(--danger) 22%, var(--border));
   box-shadow: var(--shadow-sm);
 }
 
@@ -1541,6 +1541,15 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-shell__body--scroll-bottom {
+  --sidebar-body-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
+}
+
+.sidebar-shell__body:has(.sidebar-session-catalog-error).sidebar-shell__body--scroll-top {
+  --sidebar-body-mask: linear-gradient(to bottom, black 0, black 100%);
+}
+
+.sidebar-shell__body:has(.sidebar-session-catalog-error).sidebar-shell__body--scroll-middle,
+.sidebar-shell__body:has(.sidebar-session-catalog-error).sidebar-shell__body--scroll-bottom {
   --sidebar-body-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
 }
 
