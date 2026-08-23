@@ -321,6 +321,19 @@ openclaw-session-owner-chip {
   line-height: 1.55;
 }
 
+.login-gate__failure-steps .login-gate__command {
+  display: inline-flex;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 2px 3px;
+  vertical-align: middle;
+}
+
+.login-gate__failure-steps .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .login-gate__failure-steps li + li {
   margin-top: 4px;
 }
