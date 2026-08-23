@@ -480,8 +480,8 @@ describe("sidebar attention refresh ownership", () => {
 });
 
 describe("update attention", () => {
-  it("keeps a campaign-backed update hidden until its authoritative status arrives", () => {
-    const snapshot = {
+  it("hides an unhydrated campaign only while update status can be polled", () => {
+    const overlaySnapshot = {
       updateAvailable: {
         currentVersion: "2026.8.1",
         latestVersion: "2026.8.1",
@@ -503,12 +503,27 @@ describe("update attention", () => {
       updateRunning: false,
       updateStatusBanner: null,
     };
+    const gatewaySnapshot = {
+      client: {} as GatewayBrowserClient,
+      phase: "connected" as const,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["update.status"] },
+      },
+    };
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
-    element.context = { overlays: { snapshot } } as unknown as ApplicationContext;
+    element.context = {
+      gateway: { snapshot: gatewaySnapshot },
+      overlays: { snapshot: overlaySnapshot },
+    } as unknown as ApplicationContext;
 
     expect(element.hasUpdateSurface()).toBe(false);
 
-    snapshot.updateCampaignStatusHydrated = true;
+    gatewaySnapshot.hello.auth.scopes = ["operator.read"];
+    expect(element.hasUpdateSurface()).toBe(true);
+
+    gatewaySnapshot.hello.auth.scopes = ["operator.admin"];
+    overlaySnapshot.updateCampaignStatusHydrated = true;
     expect(element.hasUpdateSurface()).toBe(true);
   });
 });

@@ -322,7 +322,12 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       return false;
     }
     const campaign = snapshot.updateSchedule?.campaign;
-    if (campaign && !snapshot.updateCampaignStatusHydrated) {
+    const canHydrateCampaign = canCallGatewayMethod(
+      this.context?.gateway.snapshot,
+      "update.status",
+      "operator.admin",
+    );
+    if (campaign && !snapshot.updateCampaignStatusHydrated && canHydrateCampaign) {
       return Boolean(snapshot.updateRunning || snapshot.updateStatusBanner);
     }
     return Boolean(

@@ -241,6 +241,8 @@ describe("application update campaign overlays", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       await flushMicrotasks();
       expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(1);
+      expect(overlays.snapshot.updateCampaignStatusHydrated).toBe(false);
+      expect(overlays.snapshot.updateSchedule?.campaign?.id).toBe("campaign-2");
     } finally {
       overlays.dispose();
     }
