@@ -9,7 +9,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
-import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { isOutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import {
   boundedCronCompletionRetention,
   drainMatrixReconnect,
@@ -976,16 +976,17 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     const sendMatrix = vi.fn().mockRejectedValueOnce(new Error("first payload send failed"));
 
-    await expect(
-      deliverOutboundPayloads({
-        cfg: {} as OpenClawConfig,
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "first" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-      }),
-    ).rejects.toThrow("first payload send failed");
+    const failure = await deliverOutboundPayloads({
+      cfg: {} as OpenClawConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "first" }],
+      deps: { matrix: sendMatrix },
+      queuePolicy: "required",
+    }).catch((caught: unknown) => caught);
+
+    expect(failure).toMatchObject({ message: "first payload send failed" });
+    expect(isOutboundDeliveryError(failure) && failure.recoveryOwnedRetry).not.toBe(true);
 
     const entries = await import("./delivery-queue-storage.js").then((m) =>
       m.loadPendingDeliveries(tmpDir),
@@ -1003,17 +1004,17 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     extra: Partial<Parameters<typeof deliverOutboundPayloads>[0]>,
   ) => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
-    await expect(
-      deliverOutboundPayloads({
-        cfg: {} as OpenClawConfig,
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "first" }],
-        deps: { matrix: vi.fn().mockRejectedValueOnce(error) },
-        queuePolicy: "required",
-        ...extra,
-      }),
-    ).rejects.toThrow(thrown);
+    const failure = await deliverOutboundPayloads({
+      cfg: {} as OpenClawConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "first" }],
+      deps: { matrix: vi.fn().mockRejectedValueOnce(error) },
+      queuePolicy: "required",
+      ...extra,
+    }).catch((caught: unknown) => caught);
+    expect(failure).toMatchObject({ message: expect.stringContaining(thrown) });
+    return failure;
   };
 
   const connectRefusedError = () =>
@@ -1032,7 +1033,10 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
       "upload timed out before completion dispatch",
     ],
   ])("dead-letters a caller-owned entry after %s", async (_label, error, thrown) => {
-    await attemptProvenNotSentSend(error, thrown, { deliveryRetryOwner: "caller" });
+    const failure = await attemptProvenNotSentSend(error, thrown, {
+      deliveryRetryOwner: "caller",
+    });
+    expect(isOutboundDeliveryError(failure) && failure.recoveryOwnedRetry).not.toBe(true);
 
     // The caller received the proven-not-sent error and owns the retry; a
     // pending row here is what produced duplicate sends (#124279).
@@ -1061,7 +1065,8 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   ])(
     "replays %s after a proven pre-connect failure clears send evidence",
     async (_label, extra) => {
-      await attemptProvenNotSentSend(connectRefusedError(), "ECONNREFUSED", extra);
+      const failure = await attemptProvenNotSentSend(connectRefusedError(), "ECONNREFUSED", extra);
+      expect(isOutboundDeliveryError(failure) && failure.recoveryOwnedRetry).toBe(true);
 
       // Neither entry has a caller that resends: reusable intents belong to the
       // queue, and CLI/RPC callers only report the error. Both must stay pending

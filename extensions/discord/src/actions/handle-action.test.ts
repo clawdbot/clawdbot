@@ -863,6 +863,28 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("forwards embed-only Discord sends without requiring message text", async () => {
+    const embeds = [{ title: "Release notes", description: "Version available" }];
+    const cfg = discordConfig();
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: { to: "channel:123", embeds },
+      cfg,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:123",
+        content: "",
+        embeds,
+      }),
+      cfg,
+      defaultActionOptions(),
+    );
+  });
+
   it("downgrades chart-only presentations to Discord component text", async () => {
     const cfg = discordConfig();
 

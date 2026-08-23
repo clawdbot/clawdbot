@@ -402,7 +402,7 @@ extensions/discord/src/monitor/model-picker-preferences-migrations.ts	5
 extensions/discord/src/monitor/model-picker-preferences.ts	1
 extensions/discord/src/monitor/model-picker.state.ts	3
 extensions/discord/src/monitor/native-command-model-picker-interaction.ts	1
-extensions/discord/src/monitor/native-command-reply.ts	3
+extensions/discord/src/monitor/native-command-reply.ts	2
 extensions/discord/src/monitor/native-command.ts	2
 extensions/discord/src/monitor/presence.ts	1
 extensions/discord/src/monitor/provider.allowlist.ts	6

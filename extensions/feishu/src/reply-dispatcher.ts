@@ -1495,7 +1495,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           hasVoiceMedia && hasText ? { fallbackText: text } : undefined,
         );
       }
-      const result = mergeFeishuReplyDeliveryResults(deliveredResults, text);
+      const deliveredContent = hasVoiceMedia ? (deliveredResults.at(-1)?.content ?? text) : text;
+      const result = mergeFeishuReplyDeliveryResults(deliveredResults, deliveredContent);
       if (priorClosedStreamingSettlement?.error !== undefined) {
         throw createFeishuPartialReplyDeliveryError(
           isChannelPartialDeliveryError(priorClosedStreamingSettlement.error) &&

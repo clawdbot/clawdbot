@@ -223,8 +223,10 @@ export async function handleDiscordMessageAction(
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");
     const components = hasComponents ? rawComponents : undefined;
+    const rawEmbeds = params.embeds;
+    const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents && !mediaUrl && !presentationFellBack,
+      required: !asVoice && !hasComponents && !embeds?.length && !mediaUrl && !presentationFellBack,
       allowEmpty: true,
     });
     const deliveryContent =
@@ -236,8 +238,6 @@ export async function handleDiscordMessageAction(
         : content;
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
-    const rawEmbeds = params.embeds;
-    const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const silent = readBooleanParam(params, "silent") === true;
     const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
     const sessionKey = readStringParam(params, "__sessionKey");

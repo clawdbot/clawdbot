@@ -638,16 +638,23 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                 );
               }
             } else {
-              const recordFailure = isProvenDeliveryNotSentError(err)
+              // One retry owner per row: the proven-not-sent row stays replay
+              // eligible, so the thrown error is marked to tell RPC callers the
+              // queue resends and the model must not.
+              const recoveryOwnsRetry = isProvenDeliveryNotSentError(err);
+              const recordFailure = recoveryOwnsRetry
                 ? failDeliveryBeforePlatformSend
                 : failDelivery;
-              await recordOwnedQueueFailure(recordFailure, formatErrorMessage(err)).catch(
-                (failErr: unknown) => {
-                  log.warn(
-                    `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
-                  );
-                },
-              );
+              try {
+                await recordOwnedQueueFailure(recordFailure, formatErrorMessage(err));
+                if (recoveryOwnsRetry && err instanceof OutboundDeliveryError) {
+                  err.recoveryOwnedRetry = true;
+                }
+              } catch (failErr) {
+                log.warn(
+                  `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+                );
+              }
             }
           }
         }
