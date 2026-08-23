@@ -43,7 +43,7 @@ describe("run-with-lease-fence", () => {
       fs.writeFileSync(lostMarker, "lost\n");
 
       try {
-        await expect(waitForChildClose(child, 12_000)).resolves.toEqual({
+        await expect(waitForChildClose(child)).resolves.toEqual({
           code: 97,
           signal: null,
         });
