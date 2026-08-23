@@ -9,22 +9,20 @@ import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { isContextCompactionActivity } from "./chat-progress.ts";
 import { resolveMessageToolUseId, resolveToolBlockId } from "./chat-thread-items.ts";
+import {
+  isKeyedAssistantStreamFallbackMessage,
+  streamPartBoundaryId,
+  streamPartRunId,
+  transcriptRunId,
+} from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsForwardedBoundary,
   chatItemStartsUserTurn,
   safeNormalizeMessage,
 } from "./chat-turn-boundary.ts";
 import { indexTurnContinuations } from "./stream-causal-boundary.ts";
-
-export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
-  const record = asRecord(message);
-  if (normalizeLowercaseStringOrEmpty(record?.role) !== "assistant") {
-    return false;
-  }
-  const fallback = asRecord(record?.openclawStreamFallback);
-  return typeof fallback?.itemId === "string" && fallback.itemId.trim().length > 0;
-}
 
 function stampReplyAttribution(
   items: Array<ChatItem | MessageGroup>,
@@ -78,6 +76,8 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;
     const timestamp = normalized.timestamp || Date.now();
+    const runId =
+      role === "assistant" || role === "tool" ? transcriptRunId(item.message) : undefined;
     const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
@@ -96,6 +96,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       !currentGroup ||
       startsProjectedTurn ||
       currentGroup.role !== role ||
+      currentGroup.runId !== runId ||
       splitsAssistantCommentary ||
       splitsRuntimeActivity ||
       (shouldSplitBySender &&
@@ -114,6 +115,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
         messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
         timestamp,
         isStreaming: false,
+        ...(runId ? { runId } : {}),
       };
     } else {
       currentGroup.messages.push({
@@ -129,7 +131,6 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
   }
   return stampReplyAttribution(result);
 }
-
 function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): ChatItem | null {
   if (callItem.kind !== "message" || resultItem.kind !== "message") {
     return null;
@@ -468,30 +469,42 @@ export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
 }
 
 type RenderChatItem = ChatItem | MessageGroup;
-type StreamRunRenderItem = {
+export type StreamRunRenderItem = {
   kind: "stream-run";
   key: string;
-  parts: Array<
-    Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" }>
-  >;
+  runId?: string;
+  boundaryId?: string;
+  parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" | "question" }>>;
 };
-
 export function coalesceStreamRuns(
   items: RenderChatItem[],
 ): Array<RenderChatItem | StreamRunRenderItem> {
   const result: Array<RenderChatItem | StreamRunRenderItem> = [];
   let run: StreamRunRenderItem["parts"] = [];
-  // Contiguous in-flight stream and reading-indicator items render under one
-  // assistant avatar; messages, groups, and dividers intentionally break the run.
   const flush = () => {
     const [first] = run;
     if (first) {
-      result.push({ kind: "stream-run", key: `stream-run:${first.key}`, parts: run });
+      const runId = streamPartRunId(first);
+      const boundaryId = streamPartBoundaryId(first);
+      result.push({
+        kind: "stream-run",
+        key: `stream-run:${first.key}`,
+        parts: run,
+        ...(runId ? { runId } : {}),
+        ...(boundaryId ? { boundaryId } : {}),
+      });
       run = [];
     }
   };
   for (const item of items) {
     if (item.kind === "stream" || item.kind === "reading-indicator") {
+      const first = run[0];
+      if (
+        first &&
+        (streamPartRunId(first) !== item.runId || streamPartBoundaryId(first) !== item.boundaryId)
+      ) {
+        flush();
+      }
       run.push(item);
       continue;
     }
@@ -501,15 +514,16 @@ export function coalesceStreamRuns(
   flush();
   return result;
 }
+
 /** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
-type WorkGroupRenderItem = {
+export type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
   groups: MessageGroup[];
   durationMs: number | null;
 };
 
-type ActivityRunRenderItem = {
+export type ActivityRunRenderItem = {
   kind: "activity-run";
   key: string;
   groups: MessageGroup[];
@@ -551,10 +565,6 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
     !group.messages.every(({ message }) => isContextCompactionActivity(message)) &&
     groupHasVisibleReplyContent(group)
   );
-}
-
-function isContextCompactionActivity(message: unknown): boolean {
-  return asRecord(asRecord(message)?.["__openclaw"])?.runtimeActivityKind === "context_compaction";
 }
 
 // History carries no final-vs-commentary marker (commentary exists only as
@@ -718,7 +728,7 @@ export function collapseCompletedTurnWork(
   return result;
 }
 
-type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;
+export type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;
 
 /** Presentation-only rollup for tool groups separated by projected turn boundaries. */
 export function coalesceActivityRuns(
@@ -742,6 +752,9 @@ export function coalesceActivityRuns(
   };
   for (const item of items) {
     if (item.kind === "group" && item.role.toLowerCase() === "tool") {
+      if (groups.length > 0 && groups[0]?.runId !== item.runId) {
+        flush();
+      }
       groups.push(item);
       continue;
     }

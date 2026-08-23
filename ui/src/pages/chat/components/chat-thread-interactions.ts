@@ -460,7 +460,8 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
     (element) => element.dataset.messageActionsFor === messageId,
   );
   const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
-  const canReply = Boolean(text && props.onSetReply);
+  const ownsRunFrame = group.dataset.chatRowKey?.startsWith("agent-run:") === true;
+  const canReply = Boolean(text && props.onSetReply && (!ownsRunFrame || actionOwner));
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
   const canCopy = Boolean(copyButton);
   const canFork = isUserMessage && typeof props.onForkMessage === "function";

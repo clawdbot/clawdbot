@@ -245,6 +245,8 @@ export async function activateCodexAttemptTurn(
           cwd: effectiveCwd,
           messages,
           idempotencyScope: `codex-app-server:${resourceState.thread.threadId}`,
+          runId: params.runId,
+          runMirrorIdentityPrefix: `${activeTurnId}:`,
           config: params.config,
         });
       }

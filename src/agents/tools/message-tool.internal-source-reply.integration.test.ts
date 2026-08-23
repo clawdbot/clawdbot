@@ -198,7 +198,24 @@ describe("WebChat message tool internal source reply", () => {
           mediaUrls: imagePaths,
         };
         const updates: SessionTranscriptUpdate[] = [];
-        const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+        const publishedDownloads: Array<Promise<unknown>> = [];
+        const unsubscribe = onSessionTranscriptUpdate((update) => {
+          updates.push(update);
+          const content =
+            update.message && typeof update.message === "object"
+              ? (update.message as { content?: Array<Record<string, unknown>> }).content
+              : undefined;
+          for (const block of content?.filter((entry) => entry.type === "image") ?? []) {
+            publishedDownloads.push(
+              resolveManagedOutgoingMediaArtifactDownload({
+                sessionKey,
+                agentId: "main",
+                artifactId: String(block.artifactId),
+                stateDir,
+              }),
+            );
+          }
+        });
         const [toolResult, overlappingResult] = await Promise.all([
           tool.execute("restart-proof-call", sendParams),
           tool.execute("restart-proof-call", sendParams),
@@ -272,6 +289,10 @@ describe("WebChat message tool internal source reply", () => {
           published?.message as { content?: Array<Record<string, unknown>> }
         )?.content;
         expect(publishedContent?.filter((block) => block.type === "image")).toHaveLength(2);
+        await expect(Promise.all(publishedDownloads)).resolves.toEqual([
+          expect.objectContaining({ type: "image" }),
+          expect.objectContaining({ type: "image" }),
+        ]);
         for (const block of content.filter((entry) => entry.type === "image")) {
           await expect(
             resolveManagedOutgoingMediaArtifactDownload({

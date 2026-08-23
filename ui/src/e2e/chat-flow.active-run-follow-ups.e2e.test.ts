@@ -197,7 +197,8 @@ suite.define(() => {
         stream: "item",
         ts: Date.now(),
       });
-      await page.getByText(commentaryText, { exact: true }).waitFor();
+      const transcript = page.locator(".chat-thread-inner");
+      await transcript.getByText(commentaryText, { exact: true }).waitFor();
       const emitTool = (data: Record<string, unknown>) =>
         gateway.emitGatewayEvent("agent", {
           data,
@@ -227,7 +228,9 @@ suite.define(() => {
         steerParams.idempotencyKey,
         "steer chat send idempotency key",
       );
-      await expect.poll(() => page.getByText(commentaryText, { exact: true }).count()).toBe(1);
+      await expect
+        .poll(() => transcript.getByText(commentaryText, { exact: true }).count())
+        .toBe(1);
       await gateway.resolveDeferred("chat.send", { runId: steerRunId, status: "started" });
       const steerUser = {
         __openclaw: {
@@ -278,7 +281,7 @@ suite.define(() => {
         toolCallId: "callProcess",
       });
       const workingRowKey = await page
-        .locator("[data-virtual-row-key^='stream-run:']")
+        .locator("[data-virtual-row-key^='agent-run:']")
         .last()
         .getAttribute("data-virtual-row-key");
       const finalText = Array.from(
@@ -381,11 +384,7 @@ suite.define(() => {
       });
       await expect
         .poll(() =>
-          page
-            .locator(
-              "[data-virtual-row-key^='stream-run:'] .chat-group.assistant:not(.chat-group--working)",
-            )
-            .count(),
+          page.locator("[data-virtual-row-key^='agent-run:'] .chat-bubble.streaming").count(),
         )
         .toBe(0);
       await gateway.emitChatFinal({ runId, text: finalText });
