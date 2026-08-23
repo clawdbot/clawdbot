@@ -163,6 +163,26 @@ describe("resolveChannelPreferOverIds", () => {
     ).toEqual(["from-second"]);
   });
 
+  // Codex review P1 on #123209: the external-catalog lookup compared raw ids while every caller
+  // resolves a contested channel to canonical form first. A catalog entry declared under an alias
+  // (`lark` for `feishu` via the bundled extension manifest) or a case variant therefore never
+  // matched, and its declaration was silently dropped. Both sides canonicalize now.
+  it.each([
+    { name: "an alias the bundled catalog maps", entryId: "lark", lookupId: "feishu" },
+    { name: "a case variant of the canonical id", entryId: "Feishu", lookupId: "feishu" },
+    { name: "the canonical id looked up by alias", entryId: "feishu", lookupId: "lark" },
+  ])("matches a catalog entry declared under $name", ({ entryId, lookupId }) => {
+    const catalogPath = writeCatalog({ id: entryId, preferOver: ["feishu-legacy"] });
+
+    expect(
+      resolveChannelPreferOverIds({
+        record: undefined,
+        channelId: lookupId,
+        env: { OPENCLAW_PLUGIN_CATALOG_PATHS: catalogPath },
+      }),
+    ).toEqual(["feishu-legacy"]);
+  });
+
   it("prefers the manifest declaration over the catalog", () => {
     const catalogPath = writeCatalog({ id: "clickclack", preferOver: ["from-catalog"] });
     const record = {

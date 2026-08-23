@@ -240,6 +240,19 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     expect(entry?.description).toBe("the active one");
   });
 
+  // Codex review P2 on #123209: two claimants that each declare the other were both marked
+  // displaced, so the tie fell through to the later claimant in registry order — while
+  // auto-enable settles the same pair by candidate processing order. Distinct strict schemas then
+  // let source validation select one plugin and startup serve the other. A mutual pair is set
+  // aside like a suppressed declaration: neither is displaced, both claimants stay active, and
+  // the schema stays with the first claimant, matching the runtime facade's first registrant.
+  it("keeps the first claimant when two claimants declare each other", () => {
+    const first = claimant({ id: "clickclack-plus", preferOver: ["clickclack-core"] });
+    const second = claimant({ id: "clickclack-core", preferOver: ["clickclack-plus"] });
+
+    expect(ownerOf([first, second])).toBe("clickclack-plus");
+  });
+
   // Codex review P2 on #123209: a manifest that names itself declares nothing. Candidate discovery
   // skips the self comparison, so a self-edge would strand ownership on another claimant while the
   // self-naming plugin stays active.

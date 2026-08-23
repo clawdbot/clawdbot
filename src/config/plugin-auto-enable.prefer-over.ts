@@ -161,7 +161,14 @@ function resolveExternalCatalogEntry(
       channels: readExternalCatalogChannels(resolvedPaths),
     };
   }
-  return externalCatalogSnapshot.channels.find((entry) => entry.id === channelId);
+  // A catalog author writes the channel id the way operators do — an alias like `lark` for
+  // `feishu`, or a case variant — while callers resolve a contested channel to canonical form
+  // before this lookup. A raw comparison silently drops exactly those declarations and channel
+  // ownership falls back to ordering, so canonicalize both sides like every other source.
+  const canonicalChannelId = normalizeChatChannelId(channelId) ?? channelId;
+  return externalCatalogSnapshot.channels.find(
+    (entry) => (normalizeChatChannelId(entry.id) ?? entry.id) === canonicalChannelId,
+  );
 }
 
 function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
@@ -368,6 +375,15 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     // a rival for a shared channel, so the preference is not channel-bound.
     const declaredChannelId = candidateChannelId(other);
     if (declaredChannelId !== entryChannelId && claimsChannel(entryPluginId, declaredChannelId)) {
+      continue;
+    }
+    // Two claimants that each declare the other settle nothing. Applying both edges disables
+    // whichever candidate this loop reaches first and hands the channel to the survivor — an
+    // answer made of processing order, while schema ownership walks registry order and can pick
+    // the other plugin. Set the pair aside like a declaration naming an explicitly selected
+    // plugin: neither is skipped, both register, and the runtime facade keeps the first
+    // registrant — the same claimant schema ownership keeps for a set-aside pair.
+    if (getPreferredOverIds(params.entry).includes(resolveAlias(other.pluginId))) {
       continue;
     }
     return true;

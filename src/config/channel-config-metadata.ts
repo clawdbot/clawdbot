@@ -203,10 +203,12 @@ function isDisplacedChannelOwner(
 }
 
 /**
- * Replacement declarations set aside because the named plugin is explicitly selected, per claimed
- * channel, keyed declarant id to the ids it named. Kept apart from `DisplacedChannelOwners`
- * because a set-aside declaration displaces nobody — both claimants stay active — yet the pair
- * must not settle the way a pair nobody declared anything about does.
+ * Replacement declarations set aside rather than applied, per claimed channel, keyed declarant id
+ * to the ids it named. Two causes set one aside: the operator explicitly selected the named
+ * plugin, or the two claimants named each other and neither can be said to replace the other.
+ * Kept apart from `DisplacedChannelOwners` because a set-aside declaration displaces nobody —
+ * both claimants stay active — yet the pair must not settle the way a pair nobody declared
+ * anything about does.
  */
 type SuppressedChannelDeclarations = Map<string, Map<string, Set<string>>>;
 
@@ -297,6 +299,13 @@ function collectDisplacedOwnersForClaimants(
         ),
       ];
       let added = false;
+      const setAsideDeclaration = (declarantId: string, namedId: string) => {
+        const declared = suppressed.get(claimedId) ?? new Map<string, Set<string>>();
+        suppressed.set(claimedId, declared);
+        const setAsideIds = declared.get(declarantId) ?? new Set<string>();
+        declared.set(declarantId, setAsideIds);
+        setAsideIds.add(namedId);
+      };
       for (const record of declarants) {
         for (const replacedId of policy.resolveChannelPreferOverIds(record, claimedId)) {
           // A manifest that names itself declares nothing: `shouldSkipPreferredPluginAutoEnable`
@@ -311,11 +320,21 @@ function collectDisplacedOwnersForClaimants(
           // facade rejects the later registration, while an undeclared pair stays on last-writer.
           // The two are indistinguishable at decision time, so record the suppression here.
           if (policy.isPluginExplicitlySelected(replacedId)) {
-            const declared = suppressed.get(claimedId) ?? new Map<string, Set<string>>();
-            suppressed.set(claimedId, declared);
-            const setAsideIds = declared.get(record.id) ?? new Set<string>();
-            declared.set(record.id, setAsideIds);
-            setAsideIds.add(replacedId);
+            setAsideDeclaration(record.id, replacedId);
+            continue;
+          }
+          // Two declarants that each name the other settle nothing either. Displacing both let
+          // the tie fall through to registry order while auto-enable settles the same pair by
+          // candidate processing order, so validation could select one plugin's schema and
+          // startup serve the other. `shouldSkipPreferredPluginAutoEnable` skips neither of a
+          // mutual pair for the same reason; setting the pair aside here keeps both claimants
+          // active and leaves the channel with the first registrant on both planes.
+          const replacedDeclarant = declarants.find((declarant) => declarant.id === replacedId);
+          if (
+            replacedDeclarant &&
+            policy.resolveChannelPreferOverIds(replacedDeclarant, claimedId).includes(record.id)
+          ) {
+            setAsideDeclaration(record.id, replacedId);
             continue;
           }
           const replacedIds = displaced.get(claimedId) ?? new Set<string>();
@@ -404,10 +423,11 @@ function decideChannelSchemaOwnership(params: {
   }
   // Nothing separates the pair as compared here — and a suppressed pair arrives tied even across
   // origins, because the entry adopts the nearer record's rank before the comparison. How the tie
-  // arose decides. A declaration set aside because the operator selected its target leaves both
-  // claimants active, and the runtime facade then rejects the later registration regardless of
-  // origin (`registry-registrars-network.ts` keeps the first registrant), so the schema must stay
-  // with the first claimant too. A pair with no declaration between them at all stays on the
+  // arose decides. A set-aside declaration — the operator selected its target, or the pair named
+  // each other and neither replaces the other — leaves both claimants active, and the runtime
+  // facade then rejects the later registration regardless of origin
+  // (`registry-registrars-network.ts` keeps the first registrant), so the schema must stay with
+  // the first claimant too. A pair with no declaration between them at all stays on the
   // long-standing last-writer answer.
   return params.pairDeclarationSuppressed ? "keepCurrent" : "takeChannel";
 }

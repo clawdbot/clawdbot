@@ -449,6 +449,37 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.changes.join("\n")).toContain("Modern Chat configured, enabled automatically.");
     });
 
+    // Codex review P2 on #123209: when two claimants each declare the other, processing order
+    // used to disable whichever candidate sorts first and enable the survivor, while schema
+    // ownership walks registry order and could select the other plugin's strict schema. A mutual
+    // pair settles nothing, so neither side is skipped: both register and the runtime facade
+    // keeps the first registrant — the same claimant schema ownership keeps.
+    it("enables both claimants when each declares the other in preferOver", () => {
+      const result = applyPluginAutoEnable({
+        config: { channels: { pairchat: { token: "pair" } } },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "pairchat-b",
+            channels: ["pairchat"],
+            channelConfigs: {
+              pairchat: { schema: { type: "object" }, preferOver: ["pairchat-a"] },
+            },
+          },
+          {
+            id: "pairchat-a",
+            channels: ["pairchat"],
+            channelConfigs: {
+              pairchat: { schema: { type: "object" }, preferOver: ["pairchat-b"] },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["pairchat-a"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["pairchat-b"]?.enabled).toBe(true);
+    });
+
     it("does not disable a renamed external owner through its removed bundled channel id", () => {
       const result = applyPluginAutoEnable({
         config: {
