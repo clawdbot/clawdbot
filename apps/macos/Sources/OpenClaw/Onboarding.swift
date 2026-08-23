@@ -539,7 +539,10 @@ final class OnboardingController: NSObject, NSWindowDelegate {
     static let shared = OnboardingController()
     static let windowStyleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
     private var window: NSWindow?
-    var sheetPresentationWindow: NSWindow? { self.window }
+    var sheetPresentationWindow: NSWindow? {
+        self.window
+    }
+
     /// Human description of work in flight ("Installing the Gateway…").
     /// While set, closing the window asks for confirmation instead of quitting
     /// setup mid-operation.
