@@ -1909,13 +1909,13 @@ openclaw-chat-video-player {
 }
 
 .chat-attachment-file-icon[data-mode="large-placeholder"] {
-  width: 64px;
-  height: 64px;
+  width: 44px;
+  height: 44px;
 }
 
 .chat-attachment-file-icon[data-mode="preview-with-favicon"] {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
 }
 
 .chat-attachment-file-icon__large,
@@ -1953,23 +1953,24 @@ openclaw-chat-video-player {
 
 .chat-attachment-file-icon__overlay {
   position: absolute;
-  top: 22px;
-  left: 22px;
-  width: 20px;
-  height: 20px;
+  top: 15px;
+  left: 15px;
+  width: 14px;
+  height: 14px;
   background-color: currentColor;
-  -webkit-mask: var(--chat-file-icon-overlay) center / 20px 20px no-repeat;
-  mask: var(--chat-file-icon-overlay) center / 20px 20px no-repeat;
+  -webkit-mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
+  mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
 }
 
 .chat-attachment-file-icon__label {
   position: absolute;
-  right: 8px;
-  bottom: 7px;
-  left: 8px;
+  right: 6px;
+  bottom: 5px;
+  left: 6px;
+  display: none;
   overflow: hidden;
   color: currentColor;
-  font-size: 7px;
+  font-size: 6px;
   font-weight: 700;
   letter-spacing: 0.04em;
   line-height: 1;
@@ -1978,26 +1979,13 @@ openclaw-chat-video-player {
   white-space: nowrap;
 }
 
+.chat-attachment-file-icon[data-extension-label] .chat-attachment-file-icon__label {
+  display: block;
+}
+
 .chat-attachment-file-icon--unavailable
   :is(.chat-attachment-file-icon__large, .chat-attachment-file-icon__compact) {
   opacity: 0.42;
-}
-
-.chat-attachment-file-icon__status {
-  position: absolute;
-  right: -2px;
-  bottom: -2px;
-  display: grid;
-  width: 14px;
-  height: 14px;
-  place-items: center;
-  border-radius: 999px;
-  background: var(--chat-attachment-surface, var(--bg));
-}
-
-.chat-attachment-file-icon__status svg {
-  width: 10px;
-  height: 10px;
 }
 
 .chat-assistant-attachment-card__title--unavailable {

@@ -23,6 +23,7 @@ export type AttachmentCardHeaderOptions = {
   downloadHref?: string;
   showExpandAction?: boolean;
   onExpand?: () => void;
+  showExtensionLabel?: boolean;
   visualMode?: AttachmentFileVisualMode;
   voiceNote?: boolean;
 };
@@ -76,6 +77,7 @@ export function renderAttachmentCardIcon(options: {
   kind: AttachmentCardKind;
   label: string;
   mimeType?: string;
+  showExtensionLabel?: boolean;
   visualMode?: AttachmentFileVisualMode;
   unavailable?: boolean;
 }) {
@@ -83,6 +85,7 @@ export function renderAttachmentCardIcon(options: {
     filename: options.label,
     mimeType: options.mimeType,
     mode: options.visualMode ?? "large-placeholder",
+    showExtensionLabel: options.showExtensionLabel,
     unavailable: options.unavailable,
   });
 }
@@ -118,6 +121,7 @@ export function renderAttachmentCardHeader(
           kind: options.kind,
           label: options.label,
           mimeType: options.mimeType,
+          showExtensionLabel: options.showExtensionLabel,
           visualMode: options.visualMode,
         })}
         <span class="chat-assistant-attachment-card__details">

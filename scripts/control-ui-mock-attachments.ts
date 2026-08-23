@@ -221,6 +221,8 @@ const chatAttachmentAssets: Record<string, FixtureAsset> = {
     { "README.txt": "Attachment fixture archive\n", "data.json": '{"ready":true}\n' },
     "application/zip",
   ),
+  "label-off.zip": zipAsset({ "README.txt": "Extension label A fixture\n" }, "application/zip"),
+  "label-on.zip": zipAsset({ "README.txt": "Extension label B fixture\n" }, "application/zip"),
   "script.js": textAsset("export function ready() {\n  return true;\n}\n", "text/javascript"),
 };
 
@@ -414,6 +416,15 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
         },
       ],
       timestamp: baseTime + 18,
+    },
+    sectionTitle("Extension label A / B", baseTime + 19),
+    {
+      role: "assistant",
+      content: [
+        documentAttachment("label-off.zip", "application/zip"),
+        documentAttachment("label-on.zip", "application/zip"),
+      ],
+      timestamp: baseTime + 20,
     },
   ];
 }

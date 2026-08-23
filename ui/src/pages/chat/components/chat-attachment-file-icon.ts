@@ -1,7 +1,6 @@
 import { html } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
-import { icons } from "../../../components/icons.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 
 export type AttachmentFileIconFamily =
@@ -254,6 +253,7 @@ export function renderAttachmentFileIcon(options: {
   filename: string;
   mimeType?: string;
   mode: AttachmentFileVisualMode;
+  showExtensionLabel?: boolean;
   unavailable?: boolean;
 }) {
   const resolved = resolveAttachmentFileIcon(options.filename, options.mimeType);
@@ -270,6 +270,7 @@ export function renderAttachmentFileIcon(options: {
     data-family=${resolved.family}
     data-mode=${options.mode}
     data-accent=${resolved.accent}
+    ?data-extension-label=${options.showExtensionLabel}
     aria-hidden="true"
     style=${styleMap({
       "--chat-file-icon-shell-light": `url("${fileIconAssetPath("large/shell-light")}")`,
@@ -284,8 +285,5 @@ export function renderAttachmentFileIcon(options: {
       <span class="chat-attachment-file-icon__label">${resolved.extensionLabel}</span>
     </span>
     <span class="chat-attachment-file-icon__compact"></span>
-    ${options.unavailable
-      ? html`<span class="chat-attachment-file-icon__status">${icons.alertTriangle}</span>`
-      : null}
   </span>`;
 }
