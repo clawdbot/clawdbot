@@ -1411,6 +1411,19 @@ body.update-dialog-open .sidebar-update-card__status {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--muted) 35%, transparent);
 }
 
+.sidebar-sessions:has(.sidebar-session-catalog-error) {
+  flex: 1 0 auto;
+}
+
+.sidebar-session-catalog-error.callout.danger {
+  position: sticky;
+  z-index: 2;
+  bottom: 8px;
+  margin-top: auto;
+  border-color: var(--danger);
+  box-shadow: var(--shadow-sm);
+}
+
 .sidebar-session-toolbar {
   display: flex;
   align-items: center;

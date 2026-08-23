@@ -1987,70 +1987,77 @@ async function createChatPickerScenario(
       // right-click menu, hide/restore preference) are exercised in the mock.
       // Ids must match registered plugin catalogs (`claude`, `codex`) or the
       // sidebar cannot resolve bundled brand marks.
-      "sessions.catalog.list": {
-        catalogs: [
-          {
-            id: "codex",
-            label: "Codex",
-            capabilities: { continueSession: true, archive: false },
-            hosts: [
+      "sessions.catalog.list": richAttention
+        ? {
+            __mockError: {
+              code: "UNAVAILABLE",
+              message: "Authenticated profile verification is unavailable; retry the request.",
+            },
+          }
+        : {
+            catalogs: [
               {
-                hostId: "gateway",
-                label: "This Mac",
-                kind: "gateway",
-                connected: true,
-                sessions: [
+                id: "codex",
+                label: "Codex",
+                capabilities: { continueSession: true, archive: false },
+                hosts: [
                   {
-                    threadId: "codex-thread-1",
-                    name: "Release checklist sweep",
-                    cwd: "/Users/demo/projects/openclaw",
-                    status: "idle",
-                    updatedAt: baseTime - 10 * 60_000,
-                    archived: false,
-                    canContinue: true,
-                    canArchive: false,
+                    hostId: "gateway",
+                    label: "This Mac",
+                    kind: "gateway",
+                    connected: true,
+                    sessions: [
+                      {
+                        threadId: "codex-thread-1",
+                        name: "Release checklist sweep",
+                        cwd: "/Users/demo/projects/openclaw",
+                        status: "idle",
+                        updatedAt: baseTime - 10 * 60_000,
+                        archived: false,
+                        canContinue: true,
+                        canArchive: false,
+                      },
+                      {
+                        threadId: "codex-thread-2",
+                        name: "Sidebar context-menu proof",
+                        cwd: "/Users/demo/projects/openclaw",
+                        status: "idle",
+                        updatedAt: baseTime - 45 * 60_000,
+                        archived: false,
+                        canContinue: true,
+                        canArchive: false,
+                      },
+                    ],
                   },
+                ],
+              },
+              {
+                id: "claude",
+                label: "Claude Code",
+                capabilities: { continueSession: true, archive: false },
+                hosts: [
                   {
-                    threadId: "codex-thread-2",
-                    name: "Sidebar context-menu proof",
-                    cwd: "/Users/demo/projects/openclaw",
-                    status: "idle",
-                    updatedAt: baseTime - 45 * 60_000,
-                    archived: false,
-                    canContinue: true,
-                    canArchive: false,
+                    hostId: "gateway",
+                    label: "This Mac",
+                    kind: "gateway",
+                    connected: true,
+                    sessions: [
+                      {
+                        threadId: "claude-thread-1",
+                        name: "Docs refresh",
+                        cwd: "/Users/demo/projects/peekaboo",
+                        status: "idle",
+                        updatedAt: baseTime - 30 * 60_000,
+                        archived: false,
+                        canContinue: true,
+                        canArchive: false,
+                      },
+                    ],
                   },
                 ],
               },
             ],
           },
-          {
-            id: "claude",
-            label: "Claude Code",
-            capabilities: { continueSession: true, archive: false },
-            hosts: [
-              {
-                hostId: "gateway",
-                label: "This Mac",
-                kind: "gateway",
-                connected: true,
-                sessions: [
-                  {
-                    threadId: "claude-thread-1",
-                    name: "Docs refresh",
-                    cwd: "/Users/demo/projects/peekaboo",
-                    status: "idle",
-                    updatedAt: baseTime - 30 * 60_000,
-                    archived: false,
-                    canContinue: true,
-                    canArchive: false,
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
       "sessions.catalog.read": {
         cases: [
           {

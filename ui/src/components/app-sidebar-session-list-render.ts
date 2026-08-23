@@ -366,34 +366,21 @@ function renderSessionListBody(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
-  const catalogsVisible = host.sessionsStatusFilter !== "archived";
   const catalogsBySectionId = new Map(
     params.catalogs.catalogs.map((catalog) => [`catalog:${catalog.id}`, catalog]),
   );
-  const firstCatalogSectionIndex = catalogsVisible
-    ? params.sections.findIndex((section) => section.id.startsWith("catalog:"))
-    : -1;
-  const catalogStatus = catalogsVisible
-    ? renderPanelRefreshStatus({
-        status: params.catalogs.refreshStatus,
-        onRetry: () => void host.sessionData.refreshSessionCatalogs(),
-        className: "sidebar-session-error sidebar-session-catalog-error",
-      })
-    : nothing;
   return html`
-    ${params.sections.map((section, index) => {
+    ${params.sections.map((section) => {
       if (section.id.startsWith("catalog:")) {
         const catalog = catalogsBySectionId.get(section.id);
-        return html`${index === firstCatalogSectionIndex ? catalogStatus : nothing}${catalog
-          ? params.catalogRenderer
-            ? renderSessionCatalog({
-                host,
-                snapshot: params.catalogs,
-                catalog,
-                renderer: params.catalogRenderer,
-              })
-            : nothing
-          : nothing}`;
+        return catalog && params.catalogRenderer
+          ? renderSessionCatalog({
+              host,
+              snapshot: params.catalogs,
+              catalog,
+              renderer: params.catalogRenderer,
+            })
+          : nothing;
       }
       if (section.id === "work") {
         if (section.totalRowCount === 0) {
@@ -418,7 +405,6 @@ function renderSessionListBody(params: {
         nativeSessionsHaveMore: params.nativeSessionsHaveMore,
       });
     })}
-    ${firstCatalogSectionIndex < 0 ? catalogStatus : nothing}
   `;
 }
 
@@ -467,6 +453,14 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
+  const catalogStatus =
+    host.sessionsStatusFilter === "archived"
+      ? nothing
+      : renderPanelRefreshStatus({
+          status: params.catalogs.refreshStatus,
+          onRetry: () => void host.sessionData.refreshSessionCatalogs(),
+          className: "sidebar-session-error sidebar-session-catalog-error",
+        });
   return html`
     <section
       class="sidebar-sessions ${host.sessionOrganizer.sessionListRemovalDrop
@@ -512,6 +506,7 @@ export function renderSessionList(params: {
             >`
           : nothing}
       </div>
+      ${catalogStatus}
     </section>
   `;
 }
