@@ -8,6 +8,7 @@ import {
   publishArtifactFiles,
   renderEvidenceComment,
   shouldPublishPrComment,
+  validateEvidenceManifestFile,
 } from "../../scripts/mantis/publish-pr-evidence.mjs";
 
 const tempDirs: string[] = [];
@@ -30,7 +31,7 @@ function writeFixtureManifest() {
   writeFileSync(
     manifestPath,
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: "discord-status-reactions",
       title: "Mantis Discord Status Reactions QA",
       summary: "Mantis reran the scenario.",
@@ -38,11 +39,13 @@ function writeFixtureManifest() {
       comparison: {
         baseline: {
           expected: "queued-only",
+          expectationMet: true,
           sha: "aaa",
           status: "fail",
         },
         candidate: {
           expected: "queued -> thinking -> done",
+          expectationMet: true,
           sha: "bbb",
           status: "pass",
         },
@@ -85,6 +88,64 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     expect(source).toContain('.user.login == "openclaw-mantis[bot]"');
   });
 
+  it("rejects manifests without a recorded lane expectation judgment", () => {
+    const manifestPath = writeFixtureManifest();
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    delete manifest.comparison.candidate.expectationMet;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    expect(() => loadEvidenceManifest(manifestPath)).toThrow(
+      "Mantis evidence comparison.candidate.expectationMet must be a boolean.",
+    );
+  });
+
+  it("downgrades run 32619081130's contradictory pass claim", () => {
+    const manifestPath = writeFixtureManifest();
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.id = "telegram-desktop-proof";
+    manifest.scenario = "telegram-desktop-proof";
+    manifest.comparison = {
+      baseline: {
+        expected: "Baseline should retain the old delivery hint.",
+        expectationMet: true,
+        status: "pass",
+      },
+      candidate: {
+        expected:
+          "Candidate should replace the old hint with the delivered-reply acknowledgement in the provider request containing the second user message; request 3 still had the old hint and no acknowledgement.",
+        expectationMet: false,
+        status: "pass",
+      },
+      outcome: "pass",
+      pass: true,
+    };
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    validateEvidenceManifestFile(manifestPath);
+    const validated = loadEvidenceManifest(manifestPath);
+    const body = renderEvidenceComment({
+      manifest: validated,
+      marker: "<!-- mantis-telegram-desktop-proof -->",
+      rawBase: "https://artifacts.openclaw.ai/mantis/telegram-desktop/pr-127989/run-32619081130",
+    });
+
+    expect(validated.comparison).toMatchObject({
+      outcome: "fail",
+      pass: false,
+      verdictNote: "verdict downgraded: candidate expectation not met",
+    });
+    expect(body).toContain("- Note: verdict downgraded: candidate expectation not met");
+    expect(body).toContain("- Overall: `fail`");
+    expect(JSON.parse(readFileSync(manifestPath, "utf8")).comparison.pass).toBe(false);
+  });
+
+  it("keeps a mechanically successful verdict when every expectation was observed", () => {
+    const manifest = loadEvidenceManifest(writeFixtureManifest());
+
+    expect(manifest.comparison).toMatchObject({ outcome: "pass", pass: true });
+    expect(manifest.comparison).not.toHaveProperty("verdictNote");
+  });
+
   it("renders a manifest-driven PR comment with inline screenshots and video links", () => {
     const manifest = loadEvidenceManifest(writeFixtureManifest());
     const body = renderEvidenceComment({
@@ -109,7 +170,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       "[Baseline change MP4](https://qa.openclaw.ai/mantis/discord/pr-1/run-1/baseline-change.mp4)",
     );
     expect(body).not.toContain("raw.githubusercontent.com");
-    expect(body).toContain("- Overall: `true`");
+    expect(body).toContain("- Overall: `pass`");
   });
 
   it("renders trusted lane digests and their count differential", () => {
@@ -119,6 +180,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
         digest:
           "2 sent · 2 bot messages · 1 edit · 1 delete · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
         expected: "baseline behavior",
+        expectationMet: true,
         sha: "aaa",
         status: "pass",
       },
@@ -126,6 +188,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
         digest:
           "2 sent · 3 bot messages · 1 edit · 0 deletes · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
         expected: "candidate behavior",
+        expectationMet: true,
         sha: "bbb",
         status: "pass",
       },
@@ -367,7 +430,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     writeFileSync(
       manifestPath,
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         id: "slack-desktop-smoke",
         title: "Mantis Slack Desktop Smoke QA",
         summary: "Mantis could not finish VM setup.",
@@ -375,6 +438,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
         comparison: {
           candidate: {
             expected: "Slack QA and VM gateway setup pass",
+            expectationMet: false,
             sha: "bbb",
             status: "fail",
           },
@@ -426,7 +490,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     });
 
     expect(body).toContain("Summary: Mantis could not finish VM setup.");
-    expect(body).toContain("- Overall: `false`");
+    expect(body).toContain("- Overall: `fail`");
     expect(body).not.toContain("<img ");
   });
 
@@ -441,17 +505,19 @@ describe("scripts/mantis/publish-pr-evidence", () => {
         comparison: {
           baseline: {
             expected: "no visible Telegram Desktop delta",
+            expectationMet: true,
             status: "skipped",
           },
           candidate: {
             expected: "no visible Telegram Desktop delta",
+            expectationMet: true,
             status: "skipped",
           },
           pass: true,
         },
         id: "telegram-desktop-proof",
         scenario: "telegram-desktop-proof",
-        schemaVersion: 1,
+        schemaVersion: 2,
         summary:
           "Mantis did not generate before/after GIFs because this PR changes CI wiring only.",
         title: "Mantis Telegram Desktop Proof",
@@ -476,7 +542,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     expect(body).toContain(
       "Summary: Mantis did not generate before/after GIFs because this PR changes CI wiring only.",
     );
-    expect(body).toContain("- Overall: `true`");
+    expect(body).toContain("- Overall: `pass`");
     expect(body).not.toContain("<table");
     expect(body).not.toContain("<img ");
     expect(shouldPublishPrComment(manifest, { requestSource: "issue_comment" })).toBe(true);
@@ -494,17 +560,19 @@ describe("scripts/mantis/publish-pr-evidence", () => {
         comparison: {
           baseline: {
             expected: "no acceptable native Telegram Desktop visual artifact",
+            expectationMet: false,
             status: "skipped",
           },
           candidate: {
             expected: "no acceptable native Telegram Desktop visual artifact",
+            expectationMet: false,
             status: "skipped",
           },
           pass: false,
         },
         id: "telegram-desktop-proof",
         scenario: "telegram-desktop-proof",
-        schemaVersion: 1,
+        schemaVersion: 2,
         summary:
           "Mantis could not capture Telegram Desktop proof because native Telegram Desktop opened to the logged-out welcome screen.",
         title: "Mantis Telegram Desktop Proof",
@@ -524,7 +592,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     expect(body).toContain(
       "Summary: Mantis could not capture Telegram Desktop proof because native Telegram Desktop opened to the logged-out welcome screen.",
     );
-    expect(body).toContain("- Overall: `false`");
+    expect(body).toContain("- Overall: `fail`");
     expect(shouldPublishPrComment(manifest, { requestSource: "issue_comment" })).toBe(false);
     expect(shouldPublishPrComment(manifest, { requestSource: "pull_request_target" })).toBe(false);
   });
@@ -538,14 +606,22 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       JSON.stringify({
         artifacts: [],
         comparison: {
-          baseline: { expected: "typed reasoning chunks", status: "blocked" },
-          candidate: { expected: "typed reasoning chunks", status: "blocked" },
+          baseline: {
+            expected: "typed reasoning chunks",
+            expectationMet: false,
+            status: "blocked",
+          },
+          candidate: {
+            expected: "typed reasoning chunks",
+            expectationMet: false,
+            status: "blocked",
+          },
           outcome: "blocked",
           pass: false,
         },
         id: "telegram-desktop-proof",
         scenario: "telegram-desktop-proof",
-        schemaVersion: 1,
+        schemaVersion: 2,
         summary:
           "Mantis could not prove this change because the harness cannot emit typed reasoning chunks.",
         title: "Mantis Telegram Desktop Proof",
@@ -579,9 +655,13 @@ describe("scripts/mantis/publish-pr-evidence", () => {
             path: "../outside.json",
           },
         ],
+        comparison: {
+          candidate: { expected: "artifact path is contained", expectationMet: true },
+          pass: true,
+        },
         id: "bad",
         scenario: "bad",
-        schemaVersion: 1,
+        schemaVersion: 2,
         title: "Bad",
       }),
     );

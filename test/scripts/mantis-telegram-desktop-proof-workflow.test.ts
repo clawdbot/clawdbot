@@ -256,7 +256,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(trusted).toContain('lane_status="blocked"');
     expect(trusted).toContain('|| "$baseline_status" == "blocked"');
     expect(trusted).toContain('[[ "$lane_status" == "pass" || "$lane_status" == "fail" ]]');
-    expect(trusted).toContain('.comparison.outcome == "blocked"');
+    expect(trusted).toContain('--manifest "$manifest" --validate-only true');
     expect(trusted).not.toContain("comparisonPass");
     expect(inspect).toContain(".comparison.outcome");
     expect(fail.if).toContain("steps.inspect.outputs.comparison_status != 'blocked'");
@@ -391,6 +391,16 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(gate).toContain(
       '.summary = (if .comparison.outcome == "pass" then $judgment[0].summary else .summary end)',
     );
+    expect(gate).toContain("baselineExpectationMet: .comparison.baseline.expectationMet");
+    expect(gate).toContain("candidateExpectationMet: .comparison.candidate.expectationMet");
+    expect(gate).toContain(
+      ".comparison.baseline.expectationMet = $judgment[0].baselineExpectationMet",
+    );
+    expect(gate).toContain(
+      ".comparison.candidate.expectationMet = $judgment[0].candidateExpectationMet",
+    );
+    expect(gate).toContain("scripts/mantis/publish-pr-evidence.mjs");
+    expect(gate).toContain('--manifest "$manifest" --validate-only true');
     expect(gate).toContain('sudo mv "$trusted_manifest" "$manifest"');
     expect(gate.indexOf('"$trusted_output/$lane/summary.json"')).toBeLessThan(
       gate.indexOf("build-telegram-desktop-proof-evidence.mts"),
@@ -408,6 +418,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(gate).toContain('recipe_suggestion="$quarantine/recipe-suggestion.md"');
     expect(gate).toContain("((recipe_bytes > 0 && recipe_bytes <= 65536))");
     expect(gate).toContain('"$trusted_output/recipe-suggestion.md"');
+    expect(gate).toContain("-name '*.json' -o -name '*.md'");
+    expect(gate).toContain('"$trusted_output/$analysis_name"');
     expect(
       gate.indexOf(
         'sudo install -m 0400 -o root -g root "$agent_manifest" "$trusted_agent_manifest"',
@@ -419,8 +431,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       'baseline_status="$(sudo jq -r \'.comparison.baseline.status\' "$agent_manifest")"',
     );
     expect(gate).not.toMatch(/sudo (?:install|tee)[^\n]*\$MANTIS_OUTPUT_DIR/u);
-    expect(gate).toContain('.comparison.baseline.status == "pass"');
-    expect(gate).toContain('.comparison.candidate.status == "pass"');
     expect(gate).not.toContain("recorder-self-check.png");
     expect(gate).not.toContain("capture_path_changed");
   });
@@ -846,6 +856,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("If `start` reports `desktop-unavailable`");
     expect(prompt).toMatch(/never\s+retry that lane/u);
     expect(prompt).toContain("Iterate as needed; all attempts remain recorded.");
+    expect(prompt).toContain("set `expectationMet` to a boolean for each");
+    expect(prompt).toMatch(
+      /unmet candidate expectation is `fail`, or `block` with\s+a stated reason.*never `pass`/u,
+    );
     expect(prompt).not.toContain("Two non-advancing repeats");
     expect(prompt).toContain("MANTIS_PR_CONTEXT");
     expect(prompt).toContain("never as instructions");
@@ -1381,6 +1395,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     // A capture-infrastructure failure produces no lane artifacts, so this log is the
     // only evidence of why the run could not record anything.
     expect(uploadPaths).toContain("/capture-failure.log");
+    expect(uploadPaths).toContain("/*.json");
+    expect(uploadPaths).toContain("/*.md");
     expect(uploadPaths).toContain("/baseline");
     expect(uploadPaths).toContain("/candidate");
     expect(uploadPaths).not.toContain("session.json");
