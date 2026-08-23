@@ -179,6 +179,10 @@ const PNPM_STEP_NODE_FALLBACKS = new Map([
   ["ui:build", ["scripts/ui.js", "build"]],
 ]);
 export const BUILD_ALL_STEPS: BuildAllStep[] = [
+  nodeStep("clean:dist", [
+    "-e",
+    'require("node:fs").rmSync("dist", { recursive: true, force: true })',
+  ]),
   { label: "plugins:assets:build", kind: "pnpm", pnpmArgs: ["plugins:assets:build"] },
   tsxStep("tsdown", "scripts/tsdown-build.mts"),
   {
@@ -294,24 +298,27 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   },
 ];
 
+const FULL_BUILD_STEP_LABELS = [
+  "plugins:assets:build",
+  "tsdown-ai",
+  "tsdown-packages",
+  "tsdown-unified",
+  "external-plugins:local-dist",
+  "check-cli-bootstrap-imports",
+  "plugins:assets:copy",
+  "runtime-postbuild",
+  "build-stamp",
+  "runtime-postbuild-stamp",
+  "write-plugin-sdk-entry-dts",
+  "check-plugin-sdk-exports",
+  "ui:build",
+  "write-build-info",
+  "write-cli-startup-metadata",
+] as const;
+
 export const BUILD_ALL_PROFILES: Record<string, string[]> = {
-  full: [
-    "plugins:assets:build",
-    "tsdown-ai",
-    "tsdown-packages",
-    "tsdown-unified",
-    "external-plugins:local-dist",
-    "check-cli-bootstrap-imports",
-    "plugins:assets:copy",
-    "runtime-postbuild",
-    "build-stamp",
-    "runtime-postbuild-stamp",
-    "write-plugin-sdk-entry-dts",
-    "check-plugin-sdk-exports",
-    "ui:build",
-    "write-build-info",
-    "write-cli-startup-metadata",
-  ],
+  full: [...FULL_BUILD_STEP_LABELS],
+  package: ["clean:dist", ...FULL_BUILD_STEP_LABELS],
   ciArtifacts: [
     "plugins:assets:build",
     "tsdown",
@@ -384,6 +391,14 @@ const FULL_RUNTIME_ONLY_STEPS = [
 
 export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEnv>> = {
   full: {
+    tsdown: {
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
+    "tsdown-unified": {
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
+  },
+  package: {
     tsdown: {
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
@@ -482,10 +497,13 @@ export function resolveBuildAllSteps(
   }
   // A cold runtime-only build has no declarations for the canonical SDK gates.
   // Keep the full runtime artifact surface, but use the uncached runtime graph.
+  const runtimeOnly = buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1";
   const labels =
-    profile === "full" && buildEnv[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
+    profile === "full" && runtimeOnly
       ? FULL_RUNTIME_ONLY_STEPS
-      : profileLabels;
+      : profile === "package" && runtimeOnly
+        ? ["clean:dist", ...FULL_RUNTIME_ONLY_STEPS]
+        : profileLabels;
   const selected = labels.map((label) => BUILD_ALL_STEPS.find((step) => step.label === label));
   if (selected.some((step) => !step)) {
     const missing = labels.filter((label) => !BUILD_ALL_STEPS.some((step) => step.label === label));
@@ -545,7 +563,7 @@ export function resolveBuildAllTsdownPlan(
   env: NodeJS.ProcessEnv,
   params: Omit<MemoryLimitParams, "env"> = {},
 ) {
-  if (profile !== "full") {
+  if (profile !== "full" && profile !== "package") {
     return { env, heapShortfall: null };
   }
   const plan = resolveTsdownBuildPlan({ ...params, env });
@@ -975,6 +993,95 @@ export function formatBuildAllTimingSummary(timings: BuildAllTiming[]) {
   return `[build-all] phase timings: total ${formatBuildAllDuration(totalMs)}; slowest ${phases}`;
 }
 
+export function runBuildAllSteps(
+  profile: string,
+  params: {
+    cacheEnabled?: boolean;
+    env?: NodeJS.ProcessEnv;
+    finalizeCache?: typeof finalizeBuildAllStepCache;
+    logger?: Pick<Console, "error" | "warn">;
+    memoryLimit?: Omit<MemoryLimitParams, "env">;
+    now?: () => number;
+    resolveCacheState?: typeof resolveBuildAllStepCacheState;
+    restoreCache?: typeof restoreBuildAllStepCacheOutputs;
+    runStep?: (invocation: ReturnType<typeof resolveBuildAllStep>) => { status: number | null };
+    steps?: BuildAllStep[];
+  } = {},
+) {
+  let buildEnv = params.env ?? resolveBuildAllEnvironment();
+  const steps = params.steps ?? resolveBuildAllSteps(profile);
+  const cacheEnabled = params.cacheEnabled ?? buildEnv.OPENCLAW_BUILD_CACHE !== "0";
+  const logger = params.logger ?? console;
+  const now = params.now ?? performance.now.bind(performance);
+  const resolveCacheState = params.resolveCacheState ?? resolveBuildAllStepCacheState;
+  const restoreCache = params.restoreCache ?? restoreBuildAllStepCacheOutputs;
+  const finalizeCache = params.finalizeCache ?? finalizeBuildAllStepCache;
+  const runStep =
+    params.runStep ??
+    ((invocation: ReturnType<typeof resolveBuildAllStep>) =>
+      spawnSync(invocation.command, invocation.args, invocation.options));
+  const timings: BuildAllTiming[] = [];
+  let exitCode = 0;
+  if (profile === "full" || profile === "package") {
+    const buildPlan = resolveBuildAllTsdownPlan(profile, buildEnv, params.memoryLimit);
+    const heapShortfall = buildPlan.heapShortfall;
+    if (heapShortfall) {
+      if (heapShortfall.fatal) {
+        logger.error(heapShortfall.message);
+        return { exitCode: 1, timings };
+      }
+      logger.warn(heapShortfall.message);
+    }
+    buildEnv = buildPlan.env;
+  }
+  for (const step of steps) {
+    const cacheStartedAt = now();
+    const cacheState = resolveCacheState(step, { env: buildEnv });
+    const cacheDurationMs = now() - cacheStartedAt;
+    const startedAt = now();
+    let stepToRun = step;
+    let reusedCache = false;
+    if (cacheEnabled && cacheState.fresh) {
+      restoreCache(cacheState);
+      const cacheHitStep = resolveBuildAllStepOnCacheHit(step);
+      if (!cacheHitStep) {
+        const durationMs = cacheDurationMs + now() - startedAt;
+        timings.push({ label: step.label, status: "cached", durationMs });
+        logger.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
+        continue;
+      }
+      reusedCache = true;
+      stepToRun = cacheHitStep;
+    }
+    logger.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
+    const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
+    const result = runStep(invocation);
+    const durationMs = cacheDurationMs + now() - startedAt;
+    if (typeof result.status === "number") {
+      if (result.status !== 0) {
+        timings.push({ label: step.label, status: "failed", durationMs });
+        logger.error(
+          `[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`,
+        );
+        exitCode = result.status;
+        break;
+      }
+      // Runtime-only tsdown cleans its output roots. Cache hits restore
+      // declarations again after that pass so the full build stays complete.
+      finalizeCache(step, cacheState, { env: buildEnv, reusedCache });
+      timings.push({ label: step.label, status: reusedCache ? "reused" : "ran", durationMs });
+      logger.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
+      continue;
+    }
+    timings.push({ label: step.label, status: "failed", durationMs });
+    logger.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
+    exitCode = 1;
+    break;
+  }
+  logger.error(formatBuildAllTimingSummary(timings));
+  return { exitCode, timings };
+}
+
 function isMainModule() {
   const argv1 = process.argv[1];
   if (!argv1) {
@@ -994,65 +1101,9 @@ if (isMainModule()) {
   if (args?.help) {
     console.log(buildAllUsage());
   } else {
-    const buildPlan = resolveBuildAllTsdownPlan(args.profile, resolveBuildAllEnvironment());
-    const heapShortfall = buildPlan.heapShortfall;
-    if (heapShortfall) {
-      if (heapShortfall.fatal) {
-        console.error(heapShortfall.message);
-        process.exit(1);
-      }
-      console.warn(heapShortfall.message);
-    }
-    const buildEnv = buildPlan.env;
-    const steps = resolveBuildAllSteps(args.profile, buildEnv);
-    const cacheEnabled = process.env.OPENCLAW_BUILD_CACHE !== "0";
-    const timings: BuildAllTiming[] = [];
-    let exitCode = 0;
-    for (const step of steps) {
-      const startedAt = performance.now();
-      const cacheState = resolveBuildAllStepCacheState(step, { env: buildEnv });
-      let stepToRun = step;
-      let reusedCache = false;
-      if (cacheEnabled && cacheState.fresh) {
-        restoreBuildAllStepCacheOutputs(cacheState);
-        const cacheHitStep = resolveBuildAllStepOnCacheHit(step);
-        if (!cacheHitStep) {
-          const durationMs = performance.now() - startedAt;
-          timings.push({ label: step.label, status: "cached", durationMs });
-          console.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
-          continue;
-        }
-        reusedCache = true;
-        stepToRun = cacheHitStep;
-      }
-      console.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
-      const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
-      const result = spawnSync(invocation.command, invocation.args, invocation.options);
-      const durationMs = performance.now() - startedAt;
-      if (typeof result.status === "number") {
-        if (result.status !== 0) {
-          timings.push({ label: step.label, status: "failed", durationMs });
-          console.error(
-            `[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`,
-          );
-          exitCode = result.status;
-          break;
-        }
-        // Runtime-only tsdown cleans its output roots. Cache hits restore
-        // declarations again after that pass so the full build stays complete.
-        finalizeBuildAllStepCache(step, cacheState, { env: buildEnv, reusedCache });
-        timings.push({ label: step.label, status: reusedCache ? "reused" : "ran", durationMs });
-        console.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
-        continue;
-      }
-      timings.push({ label: step.label, status: "failed", durationMs });
-      console.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
-      exitCode = 1;
-      break;
-    }
-    console.error(formatBuildAllTimingSummary(timings));
-    if (exitCode !== 0) {
-      process.exit(exitCode);
+    const result = runBuildAllSteps(args.profile);
+    if (result.exitCode !== 0) {
+      process.exit(result.exitCode);
     }
   }
 }

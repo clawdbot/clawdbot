@@ -15,7 +15,7 @@ Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting
 ## Prerequisites
 
 - Docker Desktop (or Docker Engine) + Docker Compose v2
-- At least 2 GB RAM for image build (`pnpm install` may be OOM-killed on 1 GB hosts with exit 137)
+- At least 6 GB RAM for a local source image build; pre-built images avoid this build requirement
 - Enough disk for images and logs
 - On a VPS/public host, review [Security hardening for network exposure](/gateway/security), especially the Docker `DOCKER-USER` firewall chain
 
@@ -625,7 +625,7 @@ For npm installs without a source checkout, see [Sandboxing § Images and setup]
   </Accordion>
 
   <Accordion title="OOM-killed during image build (exit 137)">
-    The VM needs at least 2 GB RAM. Use a larger machine class and retry.
+    A local source image build needs at least 6 GB RAM. Use a larger machine class or a pre-built image and retry.
   </Accordion>
 
   <Accordion title="Unauthorized or pairing required in Control UI">
