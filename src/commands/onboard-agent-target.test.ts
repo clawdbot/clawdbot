@@ -198,6 +198,67 @@ describe("onboarding agent target", () => {
     expect(updated.agents?.entries?.ops).toBeUndefined();
   });
 
+  it("preserves unrelated global defaults while projecting model changes onto the authored agent", () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: {
+          model: { primary: "openai/global" },
+          models: { "openai/global": { alias: "Global" } },
+          modelPolicy: { allow: ["openai/global"] },
+        },
+        entries: {
+          main: { model: { primary: "openai/sibling" } },
+          OPS: {
+            model: { primary: "openai/old" },
+            models: { "openai/old": { alias: "Old" } },
+            modelPolicy: { allow: ["openai/old"] },
+          },
+        },
+      },
+    };
+    const target = resolveOnboardingAgentTarget(config, "ops");
+
+    const updated = applyAgentModelDefaults(config, target, (projected) => ({
+      ...projected,
+      plugins: { entries: { fixture: { enabled: true } } },
+      agents: {
+        ...projected.agents,
+        defaults: {
+          ...projected.agents?.defaults,
+          model: { primary: "provider/selected" },
+          models: {
+            ...projected.agents?.defaults?.models,
+            "provider/selected": { alias: "Selected" },
+          },
+          modelPolicy: { allow: ["provider/selected"] },
+          mediaModels: { video: { primary: "media/video" } },
+          experimental: { localModelLean: true },
+        },
+      },
+    }));
+
+    expect(updated.agents?.defaults).toEqual({
+      model: { primary: "openai/global" },
+      models: { "openai/global": { alias: "Global" } },
+      modelPolicy: { allow: ["openai/global"] },
+      mediaModels: { video: { primary: "media/video" } },
+      experimental: { localModelLean: true },
+    });
+    expect(updated.agents?.entries).toEqual({
+      main: { model: { primary: "openai/sibling" } },
+      OPS: {
+        model: { primary: "provider/selected" },
+        models: {
+          "openai/old": { alias: "Old" },
+          "provider/selected": { alias: "Selected" },
+        },
+        modelPolicy: { allow: ["provider/selected"] },
+      },
+    });
+    expect(updated.plugins?.entries?.fixture?.enabled).toBe(true);
+  });
+
   it("preserves every list-form agent when applying the primary model", () => {
     const config = {
       agents: {

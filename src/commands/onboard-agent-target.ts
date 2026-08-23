@@ -139,14 +139,13 @@ export function applyOnboardingPrimaryModel(
   });
 }
 
-/** Apply a model-default mutation to one agent without flattening it globally. */
-export function applyAgentModelDefaults(
+/** Expose one agent's effective model settings through the defaults-based provider contract. */
+export function prepareAgentModelDefaults(
   config: OpenClawConfig,
   target: OnboardingAgentTarget,
-  mutate: (config: OpenClawConfig) => OpenClawConfig,
 ): OpenClawConfig {
   const entry = resolveMutableAgentEntry(config, target.agentId);
-  const projected = {
+  return {
     ...config,
     agents: {
       ...config.agents,
@@ -158,7 +157,19 @@ export function applyAgentModelDefaults(
       },
     },
   };
-  return projectAgentModelDefaults(config, target, mutate(projected));
+}
+
+/** Apply a model-default mutation to one agent without flattening it globally. */
+export function applyAgentModelDefaults(
+  config: OpenClawConfig,
+  target: OnboardingAgentTarget,
+  mutate: (config: OpenClawConfig) => OpenClawConfig,
+): OpenClawConfig {
+  return projectAgentModelDefaults(
+    config,
+    target,
+    mutate(prepareAgentModelDefaults(config, target)),
+  );
 }
 
 /** Move a defaults-based model mutation onto one agent while preserving its other config changes. */
@@ -181,5 +192,32 @@ export function projectAgentModelDefaults(
       ? { modelPolicy: updatedDefaults.modelPolicy }
       : {}),
   };
-  return replaceOnboardingAgentEntry(config, updated, target, nextEntry);
+  const {
+    model: _updatedModel,
+    models: _updatedModels,
+    modelPolicy: _updatedModelPolicy,
+    ...sharedDefaults
+  } = updatedDefaults ?? {};
+  const originalDefaults = config.agents?.defaults;
+  const baseConfig = {
+    ...config,
+    agents: {
+      ...config.agents,
+      ...(originalDefaults || updatedDefaults
+        ? {
+            defaults: {
+              ...sharedDefaults,
+              ...(originalDefaults?.model !== undefined ? { model: originalDefaults.model } : {}),
+              ...(originalDefaults?.models !== undefined
+                ? { models: originalDefaults.models }
+                : {}),
+              ...(originalDefaults?.modelPolicy !== undefined
+                ? { modelPolicy: originalDefaults.modelPolicy }
+                : {}),
+            },
+          }
+        : {}),
+    },
+  };
+  return replaceOnboardingAgentEntry(baseConfig, updated, target, nextEntry);
 }

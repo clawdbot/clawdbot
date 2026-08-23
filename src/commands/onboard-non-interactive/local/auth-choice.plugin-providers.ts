@@ -28,7 +28,11 @@ import {
 } from "../../codex-runtime-plugin-install.js";
 import { ensureCopilotRuntimePluginForModelSelection } from "../../copilot-runtime-plugin-install.js";
 import { createNonInteractiveLoggingPrompter } from "../../non-interactive-prompter.js";
-import type { OnboardingAgentTarget } from "../../onboard-agent-target.js";
+import {
+  prepareAgentModelDefaults,
+  projectAgentModelDefaults,
+  type OnboardingAgentTarget,
+} from "../../onboard-agent-target.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
@@ -231,9 +235,17 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     return null;
   }
 
+  const agentScopedModels = enableResult.config.agents?.ownership === "explicit";
+  const providerConfig = agentScopedModels
+    ? prepareAgentModelDefaults(enableResult.config, params.target)
+    : enableResult.config;
+  const projectProviderResult = (updated: OpenClawConfig) =>
+    agentScopedModels
+      ? projectAgentModelDefaults(enableResult.config, params.target, updated)
+      : updated;
   const result = await method.runNonInteractive({
     authChoice: params.authChoice,
-    config: enableResult.config,
+    config: providerConfig,
     baseConfig: params.baseConfig,
     opts: params.opts as ProviderAuthOptionBag,
     runtime: params.runtime,
@@ -247,7 +259,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   }
   const selectedModel = resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
   if (!selectedModel) {
-    return result;
+    return projectProviderResult(result);
   }
   // Model selection can imply a runtime plugin even when auth setup belonged to
   // a provider plugin; install those runtimes before persisting the config.
@@ -283,17 +295,19 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     runtime: params.runtime,
     workspaceDir,
   });
-  const previousModel = enableResult.config.agents?.defaults?.model;
+  const previousModel = providerConfig.agents?.defaults?.model;
   const previousAutoModel = enableResult.config.wizard?.localModelLeanAutoModel;
   const retainsAutoModelOwnership =
     previousAutoModel !== undefined &&
     previousAutoModel === resolveAgentModelPrimaryValue(previousModel) &&
     previousAutoModel === copilotInstall.cfg.wizard?.localModelLeanAutoModel;
 
-  return applyAutoLocalModelLean({
-    config: copilotInstall.cfg,
-    providerId: providerChoice.provider.id,
-    modelRef: selectedModel,
-    ...(retainsAutoModelOwnership ? { previousModelRef: previousAutoModel } : {}),
-  }).config;
+  return projectProviderResult(
+    applyAutoLocalModelLean({
+      config: copilotInstall.cfg,
+      providerId: providerChoice.provider.id,
+      modelRef: selectedModel,
+      ...(retainsAutoModelOwnership ? { previousModelRef: previousAutoModel } : {}),
+    }).config,
+  );
 }
