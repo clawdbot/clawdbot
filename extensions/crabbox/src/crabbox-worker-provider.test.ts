@@ -20,6 +20,7 @@ import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./crabbox-work
 import {
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
+  resolveCrabboxProvisionBaseTimeoutMs,
 } from "./crabbox-worker-timeouts.js";
 
 const OPERATION_ID = `provision:v2:${"0".repeat(64)}`;
@@ -1319,6 +1320,29 @@ describe("Crabbox worker provider", () => {
     expect(calls.map((argv) => argv[1])).toEqual(["config"]);
   });
 
+  const provisionTimeoutCases = [
+    { name: "normal without setup", profile: { ...PROFILE }, minutes: 67 },
+    {
+      name: "normal with setup",
+      profile: { ...PROFILE, setup: "install-node" },
+      minutes: 72,
+    },
+    { name: "desktop without setup", profile: { ...PROFILE, desktop: true }, minutes: 122 },
+    {
+      name: "desktop with setup",
+      profile: { ...PROFILE, desktop: true, setup: "install-node" },
+      minutes: 127,
+    },
+  ] satisfies Array<{ name: string; profile: WorkerProfile; minutes: number }>;
+  it.each(provisionTimeoutCases)(
+    "includes warmup, lifecycle, setup, and node enrollment for $name",
+    ({ profile, minutes }) => {
+      const provider = providerWithRunner(async () => commandResult());
+
+      expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(minutes * 60_000);
+    },
+  );
+
   it.each([
     {
       name: "direct AWS",
@@ -1397,7 +1421,7 @@ describe("Crabbox worker provider", () => {
     });
     expect(calls.find((call) => call.argv[1] === "warmup")).toEqual(
       expect.objectContaining({
-        options: expect.objectContaining({ timeoutMs: 50 * 60_000 }),
+        options: expect.objectContaining({ timeoutMs: 100 * 60_000 }),
       }),
     );
     expect(calls.find((call) => call.argv[1] === "warmup")?.argv.slice(-4)).toEqual([
@@ -1412,7 +1436,7 @@ describe("Crabbox worker provider", () => {
         provider: providerId,
         desktop: true,
       }),
-    ).toBe(72 * 60_000);
+    ).toBe(122 * 60_000);
     expect(setupOrder).toEqual(["desktop", "enrollment"]);
   });
 
@@ -1680,7 +1704,7 @@ describe("Crabbox worker provider", () => {
       "--keep=true",
     ]);
     expect(calls[0]?.options).toEqual({
-      timeoutMs: 240_000,
+      timeoutMs: 50 * 60_000,
       maxOutputBytes: 65_536,
       killProcessTree: true,
     });
@@ -1996,7 +2020,7 @@ describe("Crabbox worker provider", () => {
       pathEnv: "",
       isExecutable: (candidate) => candidate === SIBLING_BINARY,
       sleep: async () => {
-        nowMs += 290_001;
+        nowMs += resolveCrabboxProvisionBaseTimeoutMs({}) + 1;
       },
       wallpaperPath: WORKER_WALLPAPER_PATH,
     });
