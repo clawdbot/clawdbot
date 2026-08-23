@@ -335,6 +335,29 @@ function runBlockSpacingHtml() {
             </div>
           </div>
         </div>
+        <div class="chat-group assistant chat-group--with-footer" data-after-persistent-turn>
+          <div class="chat-group-messages">
+            <div class="chat-bubble"><div class="chat-text">After persistent identity</div></div>
+          </div>
+          <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
+        </div>
+        <div class="chat-group user chat-group--with-footer chat-group--meta-revealed" data-revealed-persistent-turn>
+          <div class="chat-group-messages">
+            <div class="chat-bubble"><div class="chat-text">Revealed persistent identity</div></div>
+          </div>
+          <div class="chat-group-footer chat-group-footer--persistent-identity">
+            <span class="chat-sender-name">You</span>
+            <div class="chat-group-footer-actions">
+              <button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button>
+            </div>
+          </div>
+        </div>
+        <div class="chat-group assistant chat-group--with-footer" data-after-revealed-turn>
+          <div class="chat-group-messages">
+            <div class="chat-bubble"><div class="chat-text">After revealed identity</div></div>
+          </div>
+          <div class="chat-group-footer"><span class="chat-sender-name">Assistant</span></div>
+        </div>
       </div>
     </div>
   `;
@@ -1384,6 +1407,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           ),
           turn: gap('[data-run-block="work"]', "[data-next-turn] .chat-bubble"),
           persistentTurn: gap(
+            "[data-persistent-turn] .chat-bubble",
+            "[data-after-persistent-turn] .chat-bubble",
+          ),
+          revealedPersistentTurn: gap(
+            "[data-revealed-persistent-turn] .chat-bubble",
+            "[data-after-revealed-turn] .chat-bubble",
+          ),
+          simpleToPersistentTurn: gap(
             "[data-next-turn] .chat-bubble",
             "[data-persistent-turn] .chat-bubble",
           ),
@@ -1399,6 +1430,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         workedForSeparator: 0,
         turn: 50,
         persistentTurn: 50,
+        revealedPersistentTurn: 50,
+        simpleToPersistentTurn: 50,
       });
     } finally {
       await closeBrowserPage(page);
