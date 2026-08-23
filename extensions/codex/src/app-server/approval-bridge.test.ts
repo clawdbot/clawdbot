@@ -1172,6 +1172,10 @@ describe("Codex app-server approval bridge", () => {
 
   it("keeps object-shaped execpolicy amendment command approvals on the plugin approval route", async () => {
     const params = createParams();
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      prepareMutableFileApproval: prepareApprovalWithoutMutableFile,
+    };
     params.config = {
       tools: {
         exec: {
@@ -1353,6 +1357,10 @@ describe("Codex app-server approval bridge", () => {
 
   it("keeps amendment-only decision command approvals on the plugin approval route", async () => {
     const params = createParams();
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      prepareMutableFileApproval: prepareApprovalWithoutMutableFile,
+    };
     params.config = {
       tools: {
         exec: {
@@ -2378,6 +2386,10 @@ describe("Codex app-server approval bridge", () => {
 
   it("describes command approval permission and policy amendments", async () => {
     const params = createParams();
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      prepareMutableFileApproval: prepareApprovalWithoutMutableFile,
+    };
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-command-permissions", status: "accepted" })
       .mockResolvedValueOnce({
