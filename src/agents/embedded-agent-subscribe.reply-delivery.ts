@@ -10,6 +10,7 @@ import {
   consumePendingToolMediaIntoReply,
   hasAssistantVisibleReply,
   readPendingToolMediaReply,
+  restorePendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
@@ -88,14 +89,29 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   const clearDeferredAssistantEvents = () => {
     state.deferredAssistantEvents.length = 0;
   };
-  const deferredToolMediaReplies = new WeakSet<BlockReplyPayload>();
+  const deferredToolMediaReplies = new WeakMap<BlockReplyPayload, BlockReplyPayload>();
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>>[0],
-    options?: { assistantMessageIndex?: number },
-  ): boolean => {
+    options?: { assistantMessageIndex?: number; pendingToolMedia?: BlockReplyPayload | null },
+  ): void => {
     if (!params.onBlockReply) {
-      return false;
+      return;
     }
+    const recordDeliveredReply = () => {
+      if (!payload.isReasoning && hasAssistantVisibleReply(payload)) {
+        state.visibleBlockReplyCount += 1;
+        if (options?.pendingToolMedia) {
+          state.pendingToolMediaDeliveryFailed = false;
+          state.hasToolMediaBlockReply = true;
+        }
+      }
+    };
+    const recordDeliveryFailure = (error: unknown) => {
+      if (options?.pendingToolMedia) {
+        restorePendingToolMediaReply(state, options.pendingToolMedia);
+      }
+      log.warn(`block reply callback failed: ${String(error)}`);
+    };
     try {
       const taggedPayload =
         options?.assistantMessageIndex !== undefined
@@ -111,19 +127,16 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         ? params.onBlockReply(taggedPayload, context)
         : params.onBlockReply(taggedPayload);
       if (!isPromiseLike<void>(maybeTask)) {
-        return true;
+        recordDeliveredReply();
+        return;
       }
-      const task = Promise.resolve(maybeTask).catch((err: unknown) => {
-        log.warn(`block reply callback failed: ${String(err)}`);
-      });
+      const task = Promise.resolve(maybeTask).then(recordDeliveredReply, recordDeliveryFailure);
       pendingBlockReplyTasks.add(task);
       void task.finally(() => {
         pendingBlockReplyTasks.delete(task);
       });
-      return true;
     } catch (err) {
-      log.warn(`block reply callback failed: ${String(err)}`);
-      return false;
+      recordDeliveryFailure(err);
     }
   };
   const emitBlockReply = (
@@ -131,8 +144,10 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
   ) => {
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
-    const consumesPendingToolMedia =
-      options?.consumePendingToolMedia !== false && readPendingToolMediaReply(state) !== null;
+    const pendingToolMedia =
+      payload.isReasoning || options?.consumePendingToolMedia === false
+        ? null
+        : readPendingToolMediaReply(state);
     const withToolMedia =
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
@@ -146,19 +161,13 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
           })
         : withToolMedia;
     if (state.deferBlockReplyDelivery) {
-      if (consumesPendingToolMedia) {
-        deferredToolMediaReplies.add(taggedPayload);
+      if (pendingToolMedia) {
+        deferredToolMediaReplies.set(taggedPayload, pendingToolMedia);
       }
       state.deferredBlockReplies.push(taggedPayload);
       return;
     }
-    const emitted = emitBlockReplySafely(taggedPayload, options);
-    if (emitted && !taggedPayload.isReasoning && hasAssistantVisibleReply(taggedPayload)) {
-      state.visibleBlockReplyCount += 1;
-      if (consumesPendingToolMedia) {
-        state.hasToolMediaBlockReply = true;
-      }
-    }
+    emitBlockReplySafely(taggedPayload, { ...options, pendingToolMedia });
   };
   const flushDeferredBlockReplies = () => {
     if (state.deferredBlockReplies.length === 0) {
@@ -166,13 +175,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     }
     const deferred = state.deferredBlockReplies.splice(0);
     for (const payload of deferred) {
-      const emitted = emitBlockReplySafely(payload);
-      if (emitted && !payload.isReasoning && hasAssistantVisibleReply(payload)) {
-        state.visibleBlockReplyCount += 1;
-        if (deferredToolMediaReplies.has(payload)) {
-          state.hasToolMediaBlockReply = true;
-        }
-      }
+      emitBlockReplySafely(payload, { pendingToolMedia: deferredToolMediaReplies.get(payload) });
     }
   };
   const clearDeferredBlockReplies = () => {
