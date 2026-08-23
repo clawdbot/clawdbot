@@ -119,6 +119,51 @@ function normalizeLegacyWebhookPath(params: {
   return { entry: { ...params.entry, webhookPath: canonical }, changed: true };
 }
 
+function hasAllowFromWildcard(value: unknown): boolean {
+  return Array.isArray(value) && value.some((entry) => String(entry).trim() === "*");
+}
+
+function hasInvalidOpenDmAccount(entry: Record<string, unknown>, parent: Record<string, unknown>) {
+  const effectivePolicy = entry.dmPolicy ?? parent.dmPolicy ?? "pairing";
+  const effectiveAllowFrom = entry.allowFrom ?? parent.allowFrom;
+  return effectivePolicy === "open" && !hasAllowFromWildcard(effectiveAllowFrom);
+}
+
+function hasInvalidOpenDmAccounts(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  const accounts = asObjectRecord(entry?.accounts);
+  return Boolean(
+    entry &&
+      accounts &&
+      Object.values(accounts).some((accountValue) => {
+        const account = asObjectRecord(accountValue);
+        return account ? hasInvalidOpenDmAccount(account, entry) : false;
+      }),
+  );
+}
+
+function normalizeOpenDmAccountPolicies(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
+  const channels = asObjectRecord(cfg.channels);
+  const feishu = asObjectRecord(channels?.feishu);
+  if (!feishu) {
+    return cfg;
+  }
+  return normalizeChannelConfigEntries({
+    cfg,
+    channelId: "feishu",
+    changes,
+    normalizeEntry: (params) => {
+      if (!params.accountId || !hasInvalidOpenDmAccount(params.entry, feishu)) {
+        return { entry: params.entry, changed: false };
+      }
+      params.changes.push(
+        `Changed ${params.pathPrefix}.dmPolicy to "allowlist" to preserve restricted DM access without a wildcard.`,
+      );
+      return { entry: { ...params.entry, dmPolicy: "allowlist" }, changed: true };
+    },
+  }).config;
+}
+
 function normalizeFeishuLegacyConfigEntries(
   cfg: OpenClawConfig,
   changes: string[],
@@ -166,6 +211,12 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       );
     },
   },
+  {
+    path: ["channels", "feishu"],
+    message:
+      'channels.feishu.accounts.<id>.dmPolicy="open" requires effective allowFrom to include "*"; run "openclaw doctor --fix".',
+    match: hasInvalidOpenDmAccounts,
+  },
 ];
 
 export function normalizeCompatibilityConfig({
@@ -174,8 +225,9 @@ export function normalizeCompatibilityConfig({
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg });
+  const normalized = normalizeFeishuLegacyConfigEntries(aliases.config, aliases.changes);
   return {
-    config: normalizeFeishuLegacyConfigEntries(aliases.config, aliases.changes),
+    config: normalizeOpenDmAccountPolicies(normalized, aliases.changes),
     changes: aliases.changes,
   };
 }
