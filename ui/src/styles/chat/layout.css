@@ -1524,6 +1524,14 @@ openclaw-chat-video-player {
   flex: none;
 }
 
+.chat-assistant-attachment-card__separator {
+  flex: none;
+  margin: 0 0.35em;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
 .chat-assistant-attachment-card__title,
 .chat-assistant-attachment-card__link {
   color: var(--text);

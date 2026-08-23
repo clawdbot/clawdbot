@@ -94,7 +94,7 @@ export function renderAttachmentCardHeader(
   const compactPreview = options.visualMode === "preview-with-favicon";
   const compactSize =
     compactPreview && options.sizeBytes !== undefined
-      ? ` · ${formatBytes(options.sizeBytes)}`
+      ? formatBytes(options.sizeBytes)
       : undefined;
   const typeLabel = attachmentTypeLabel(options.kind, options.label, options.mimeType);
   const metadata = [
@@ -141,7 +141,11 @@ export function renderAttachmentCardHeader(
           ${title}
           ${compactPreview
             ? compactSize
-              ? html`<span class="chat-assistant-attachment-card__meta">${compactSize}</span>`
+              ? html`<span
+                    class="chat-assistant-attachment-card__separator"
+                    aria-hidden="true"
+                    >·</span
+                  ><span class="chat-assistant-attachment-card__meta">${compactSize}</span>`
               : null
             : html`<span class="chat-assistant-attachment-card__meta">${metadata}</span>`}
         </span>
