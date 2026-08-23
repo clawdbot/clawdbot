@@ -17,6 +17,7 @@ import {
 } from "../embedded-agent-runner/run-state.js";
 import { resolveAgentSessionDirs } from "../session-dirs.js";
 import {
+  isMainRestartRecoveryAggregateTerminalOnly,
   isMainRestartRecoveryCandidate,
   normalizeMainSessionRecoveryRunFences,
   transitionMainSessionRecovery,
@@ -35,7 +36,10 @@ async function markRecoveryStore(params: {
   plan: (
     entry: SessionEntry,
     sessionKey: string,
-  ) => { replaceRuns?: boolean; resetRuntime?: boolean; runs?: RestartRecoveryRun[] } | undefined;
+  ) =>
+    | { action: "mark"; replaceRuns?: boolean; resetRuntime?: boolean; runs?: RestartRecoveryRun[] }
+    | { action: "retire_terminal" }
+    | undefined;
 }) {
   return await applySessionEntryReplacements<{ marked: number; skipped: number }>({
     storePath: params.storePath,
@@ -50,6 +54,17 @@ async function markRecoveryStore(params: {
           continue;
         }
         if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
+          counts.skipped++;
+          continue;
+        }
+        if (plan.action === "retire_terminal") {
+          transitionMainSessionRecovery(entry, {
+            kind: "observe",
+            cycleId: randomUUID(),
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            sessionKey,
+          });
+          replacements.push({ sessionKey, entry });
           counts.skipped++;
           continue;
         }
@@ -197,7 +212,7 @@ export async function markRestartAbortedMainSessions(params: {
             lifecycleGeneration,
           })),
         ]);
-        return { replaceRuns: true, resetRuntime: !wasRunning, runs };
+        return { action: "mark", replaceRuns: true, resetRuntime: !wasRunning, runs };
       },
     });
     result.marked += storeResult.marked;
@@ -269,7 +284,9 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
         ) {
           return undefined;
         }
-        return {};
+        return isMainRestartRecoveryAggregateTerminalOnly(entry)
+          ? { action: "retire_terminal" }
+          : { action: "mark" };
       },
     });
     result.marked += storeResult.marked;

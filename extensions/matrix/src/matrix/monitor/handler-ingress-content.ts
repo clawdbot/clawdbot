@@ -1,5 +1,6 @@
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import { isLikelyBareFilename } from "../media-text.js";
@@ -20,7 +21,6 @@ import type { MatrixHandlerRuntimeConfig } from "./handler-types.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
 import {
-  formatMatrixAudioTranscript,
   isMatrixAudioContent,
   resolveMatrixPreflightAudioTranscript,
   sendMatrixPreflightAudioTranscriptEcho,
@@ -328,7 +328,7 @@ export async function resolveMatrixIngressContent(config: {
   const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
   if (mentionDecision.shouldSkip) {
     const pendingHistoryBody = preflightAudioTranscript
-      ? formatMatrixAudioTranscript(preflightAudioTranscript)
+      ? formatAudioTranscriptForAgent(preflightAudioTranscript)
       : pendingHistoryText || pendingHistoryPollText;
     if (historyLimit > 0 && pendingHistoryBody) {
       const pendingEntry: HistoryEntry = {
@@ -448,7 +448,7 @@ export async function resolveMatrixIngressContent(config: {
     bodyText = preflightMedia.placeholder;
   }
   if (preflightAudioTranscript) {
-    const transcriptBody = formatMatrixAudioTranscript(preflightAudioTranscript);
+    const transcriptBody = formatAudioTranscriptForAgent(preflightAudioTranscript);
     bodyText =
       !bodyText || bodyText === media?.placeholder
         ? transcriptBody

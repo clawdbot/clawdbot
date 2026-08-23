@@ -21,16 +21,6 @@ describe("tryResolveAmbientHeartbeatAgentId", () => {
       expected: "ops",
     },
     {
-      name: "legacy default marker before the system owner",
-      cfg: {
-        agents: {
-          entries: { legacy: { default: true }, ops: {} },
-          defaults: { systemAgent: { agentId: "ops" } },
-        },
-      } as OpenClawConfig,
-      expected: "legacy",
-    },
-    {
       name: "system owner",
       cfg: {
         agents: {

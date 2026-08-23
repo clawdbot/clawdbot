@@ -363,7 +363,6 @@ export async function writeConfigFileFromContext(
     env: deps.env,
     pluginValidation: options.skipPluginValidation ? "skip" : "full",
     semanticValidation: "strict",
-    pluginMetadataSnapshot: snapshotRead.pluginMetadataSnapshot,
     preservedLegacyRootKeys: options.preservedLegacyRootKeys,
   });
   if (!validated.ok) {

@@ -18,7 +18,7 @@ import {
   convertProviderResponsesMessages,
 } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
-import { createOpenAIResponseHook } from "../transports/openai-transport-shared.js";
+import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
   transportAbortError,
   withProviderResponseHook,
@@ -296,7 +296,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       stream: openaiStream,
       signal: firstEventAbort.signal,
       abort: firstEventAbort.abort,
-      hook: createOpenAIResponseHook(options?.onResponse, response, model),
+      hook: createOpenAIProviderAcceptanceHook(options, response, model),
       onReady: () => stream.push({ type: "start", partial: output }),
     });
 

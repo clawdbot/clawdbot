@@ -21,11 +21,15 @@ import {
   validateCommandLaneGroupSpec,
 } from "./command-queue.capacity-groups.js";
 import {
+  createLaneQueue,
+  dequeueLaneQueue,
+  enqueueLaneQueue,
   type CommandLaneTaskMarker,
   getQueueState,
   type LaneState,
   normalizeLane,
   type QueueEntry,
+  type QueuePriority,
 } from "./command-queue.state.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import {
@@ -172,7 +176,7 @@ function getLaneState(lane: string): LaneState {
   }
   const created: LaneState = {
     lane,
-    queue: [],
+    queue: createLaneQueue(),
     activeTaskIds: new Set(),
     maxConcurrent: 1,
     draining: false,
@@ -218,7 +222,7 @@ function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   return clampPositiveTimerTimeoutMs(value);
 }
 
-function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): number {
+function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): QueuePriority {
   switch (priority) {
     case "foreground":
       return 1;
@@ -230,18 +234,8 @@ function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]):
 }
 
 function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
-  const insertAt = state.queue.findIndex(
-    (queued) =>
-      queued.priority < entry.priority ||
-      (queued.priority === entry.priority && queued.sequence > entry.sequence),
-  );
-  entry.queuedAheadAtEnqueue = insertAt < 0 ? state.queue.length : insertAt;
+  entry.queuedAheadAtEnqueue = enqueueLaneQueue(state.queue, entry);
   entry.activeAheadAtEnqueue = state.activeTaskIds.size;
-  if (insertAt < 0) {
-    state.queue.push(entry);
-    return;
-  }
-  state.queue.splice(insertAt, 0, entry);
 }
 
 async function runQueueEntryTask(
@@ -395,7 +389,7 @@ function drainLane(
       state.queue.length > 0 &&
       canAdmitInGroup(lane)
     ) {
-      const entry = state.queue.shift() as QueueEntry;
+      const entry = dequeueLaneQueue(state.queue) as QueueEntry;
       const waitedMs = Date.now() - entry.enqueuedAt;
       const activeBeforeStart = state.activeTaskIds.size;
       const taskId = getQueueState().nextTaskId++;
@@ -692,8 +686,8 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
     return 0;
   }
   const removed = state.queue.length;
-  const pending = state.queue.splice(0);
-  for (const entry of pending) {
+  let entry: QueueEntry | undefined;
+  while ((entry = dequeueLaneQueue(state.queue))) {
     entry.reject(new CommandLaneClearedError(cleaned));
   }
   return removed;

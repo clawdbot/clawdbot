@@ -9,6 +9,7 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/openclaw-mascot.ts";
+import { renderLazyElementState } from "../components/lazy-view-error.ts";
 import { installNativeTitleGuard } from "../components/tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -25,11 +26,11 @@ import {
   DASHBOARD_DOCUMENT_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   isOptionalElementDefined,
-  preloadOptionalElement,
+  LazyCustomElementRequestController,
+  type OptionalCustomElement,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
-import { controlUiPublicAssetPath } from "./public-assets.ts";
 
 type FocusDashboardRouteState =
   | { kind: "loading" }
@@ -46,10 +47,6 @@ function isRouteNotFound(result: ChatRouteData | RouteNotFound): result is Route
   return "type" in result && result.type === "notFound";
 }
 
-export function resolveTerminalThemeMode(): "dark" | "light" {
-  return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
-}
-
 function renderConnectingSplash(status?: string) {
   return html`
     <main
@@ -61,25 +58,6 @@ function renderConnectingSplash(status?: string) {
       <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
       ${status ? html`<span class="connect-splash__status">${status}</span>` : nothing}
     </main>
-  `;
-}
-
-function renderApprovalDocument(runtime: ApplicationRuntime) {
-  const documentMode = runtime.documentMode;
-  if (documentMode?.kind !== "approval") {
-    return nothing;
-  }
-  return html`
-    <openclaw-approval-page .approvalId=${documentMode.approvalId ?? ""}>
-      <main class="approval-page approval-page--booting" role="status" aria-live="polite">
-        <img
-          class="connect-splash__logo"
-          src=${controlUiPublicAssetPath("favicon.svg", runtime.context.resourceBasePath)}
-          alt=""
-        />
-        <span>${t("common.loading")}</span>
-      </main>
-    </openclaw-approval-page>
   `;
 }
 
@@ -104,6 +82,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
   private loginGatewaySource: ApplicationContext["gateway"] | null = null;
   private loginConnectionClient: GatewayBrowserClient | null = null;
   private focusDashboardAbort: AbortController | null = null;
+  private readonly lazyCustomElements = new LazyCustomElementRequestController(this, () =>
+    this.closeDocument(this.context?.basePath ?? ""),
+  );
 
   private get context(): ApplicationContext<RouteId> | undefined {
     return this.runtime?.context;
@@ -134,27 +115,30 @@ export class OpenClawApp extends OpenClawLightDomElement {
         () => (this.terminalOnly ? this.context?.agentSelection : undefined),
         (selection, notify) => selection.subscribe(notify),
       )
+      .watch(
+        () => (this.terminalOnly ? this.context?.theme : undefined),
+        (theme, notify) => theme.subscribe(notify),
+      )
       .effect(() => this.ownerDocument, installNativeTitleGuard);
   }
 
   override connectedCallback() {
     super.connectedCallback();
-    void import("../components/app-sidebar.ts");
     void import("../components/session-progress-hovercard-registration.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
     const focusTarget = this.focusTarget;
     if (focusTarget?.kind === "terminal") {
-      preloadOptionalElement(this, TERMINAL_PANEL_ELEMENT);
+      this.requestLazyDocument(TERMINAL_PANEL_ELEMENT);
     }
     if (focusTarget?.kind === "desktop") {
-      preloadOptionalElement(this, DESKTOP_PANEL_ELEMENT);
+      this.requestLazyDocument(DESKTOP_PANEL_ELEMENT);
     }
     if (focusTarget?.kind === "dashboard") {
-      preloadOptionalElement(this, DASHBOARD_DOCUMENT_ELEMENT);
+      this.requestLazyDocument(DASHBOARD_DOCUMENT_ELEMENT);
     }
     if (this.runtime.documentMode?.kind === "approval") {
-      preloadOptionalElement(this, APPROVAL_PAGE_ELEMENT);
+      this.requestLazyDocument(APPROVAL_PAGE_ELEMENT);
     }
     const context = this.runtime.context;
     this.pendingGatewayUrl = this.runtime.pendingGatewayConnection?.gatewayUrl ?? null;
@@ -178,6 +162,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.subscriptions.clear();
     this.focusDashboardAbort?.abort();
     this.focusDashboardAbort = null;
+    this.lazyCustomElements.abandon();
     this.runtime?.stop();
     this.runtime = undefined;
     this.loginGatewaySource = null;
@@ -245,6 +230,36 @@ export class OpenClawApp extends OpenClawLightDomElement {
     >
       ${label}
     </button>`;
+  }
+
+  private requestLazyDocument(element: OptionalCustomElement): void {
+    if (!isOptionalElementDefined(element)) {
+      this.lazyCustomElements.request(element);
+    }
+  }
+
+  private renderLazyDocumentState(element: OptionalCustomElement) {
+    const lazyState = this.lazyCustomElements.visibleState;
+    if (!lazyState || lazyState.element !== element) {
+      return nothing;
+    }
+    return html`<main class="connect-splash">
+      ${renderLazyElementState(
+        lazyState,
+        () => this.lazyCustomElements.retry(),
+        () => this.lazyCustomElements.close(),
+      )}
+    </main>`;
+  }
+
+  private renderApprovalDocument(runtime: ApplicationRuntime) {
+    const lazyState = this.lazyCustomElements.visibleState;
+    if (lazyState?.element === APPROVAL_PAGE_ELEMENT) {
+      return this.renderLazyDocumentState(APPROVAL_PAGE_ELEMENT);
+    }
+    const approvalId =
+      runtime.documentMode?.kind === "approval" ? runtime.documentMode.approvalId : "";
+    return html`<openclaw-approval-page .approvalId=${approvalId ?? ""}></openclaw-approval-page>`;
   }
 
   private replaceFocusDashboardLocation(location: RouteLocation, source: RouteLocation): void {
@@ -384,9 +399,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
       ${!gatewayConnected && gatewaySnapshot.lastError === null
         ? renderConnectingSplash(gatewayStartupStatus)
         : nothing}
-      ${!isOptionalElementDefined(DASHBOARD_DOCUMENT_ELEMENT) && gatewayConnected
-        ? renderConnectingSplash(gatewayStartupStatus)
-        : nothing}
+      ${gatewayConnected ? this.renderLazyDocumentState(DASHBOARD_DOCUMENT_ELEMENT) : nothing}
     `;
   }
 
@@ -442,15 +455,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${terminalAvailable}
           .agentId=${terminalAgentId}
-          .themeMode=${resolveTerminalThemeMode()}
+          .themeMode=${context.theme.resolvedMode}
           fullscreen
         ></openclaw-terminal-panel>
         ${!gatewayConnected && gatewaySnapshot.lastError === null
           ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
-        ${!isOptionalElementDefined(TERMINAL_PANEL_ELEMENT) && terminalAvailable
-          ? renderConnectingSplash(gatewayStartupStatus)
-          : nothing}
+        ${terminalAvailable ? this.renderLazyDocumentState(TERMINAL_PANEL_ELEMENT) : nothing}
         ${!terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="terminal-view-unavailable">
               <div class="stack">
@@ -481,9 +492,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
         ${!gatewayConnected && gatewaySnapshot.lastError === null
           ? renderConnectingSplash(gatewayStartupStatus)
           : nothing}
-        ${!isOptionalElementDefined(DESKTOP_PANEL_ELEMENT) && desktopAvailable
-          ? renderConnectingSplash(gatewayStartupStatus)
-          : nothing}
+        ${desktopAvailable ? this.renderLazyDocumentState(DESKTOP_PANEL_ELEMENT) : nothing}
         ${!desktopAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="desktop-view-unavailable">
               <div class="stack">
@@ -564,7 +573,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     if (runtime.documentMode?.kind === "approval") {
       return html`
         <openclaw-tooltip-provider>
-          ${gatewayUrlConfirmation} ${renderApprovalDocument(runtime)}
+          ${gatewayUrlConfirmation} ${this.renderApprovalDocument(runtime)}
         </openclaw-tooltip-provider>
       `;
     }

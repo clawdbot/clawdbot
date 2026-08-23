@@ -691,7 +691,7 @@ describe("runNodeHost", () => {
   it("publishes opt-in consent and capacity in the atomic runner inventory", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
-      nodeHost: { workerRuns: { enabled: true } },
+      nodeHost: { workerRuns: { enabled: true, capacity: 5 } },
     } as never);
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
       "event loop readiness timeout",
@@ -708,7 +708,7 @@ describe("runNodeHost", () => {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
       workerHost: {
         enabled: true,
-        capacity: { total: 2, available: 2 },
+        capacity: { total: 5, available: 5 },
         bundlePrewarm: 1,
       },
     });

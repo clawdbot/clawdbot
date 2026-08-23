@@ -527,10 +527,13 @@ async function withCodexHomeEnvironment(
     codexHome,
     config: computerUseConfig,
   });
-  if (computerUseConfig.enabled && computerUseConfig.autoInstall) {
+  const ownsIsolatedCodexHome =
+    startOptions.homeScope !== "user" && !startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim();
+  if (computerUseConfig.enabled && computerUseConfig.autoInstall && ownsIsolatedCodexHome) {
     try {
       await ensureCodexComputerUseServiceApp({
         codexHome,
+        ownershipRoot: agentDir,
         appServerCommand: startOptions.command,
       });
     } catch (error) {

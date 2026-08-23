@@ -60,6 +60,8 @@ const state = vi.hoisted(() => ({
   createAcpVisibleTextAccumulatorMock: vi.fn(),
   emitAcpLifecycleEndMock: vi.fn(),
   emitAcpLifecycleErrorMock: vi.fn(),
+  emitAcpRuntimeEventMock: vi.fn(),
+  gatewayCallMock: vi.fn(),
   persistCliTurnTranscriptMock: vi.fn(),
   persistAcpTurnTranscriptMock: vi.fn(),
   appendExactAssistantMessageMock: vi.fn(),
@@ -111,7 +113,7 @@ const state = vi.hoisted(() => ({
   isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
-  loadManifestModelCatalogMock: vi.fn(() => []),
+  loadManifestModelCatalogMock: vi.fn((): ModelCatalogSnapshot["entries"] => []),
   manifestMetadataSnapshot: { plugins: [] },
   resolvePluginMetadataSnapshotMock: vi.fn(),
   listSkillCommandsForWorkspaceMock: vi.fn((_params: unknown) => []),
@@ -180,7 +182,7 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   emitAcpLifecycleError: (...args: unknown[]) => state.emitAcpLifecycleErrorMock(...args),
   emitAcpLifecycleStart: vi.fn(),
   emitAcpPromptSubmitted: vi.fn(),
-  emitAcpRuntimeEvent: vi.fn(),
+  emitAcpRuntimeEvent: (...args: unknown[]) => state.emitAcpRuntimeEventMock(...args),
   persistCliTurnTranscript: (...args: unknown[]) => state.persistCliTurnTranscriptMock(...args),
   persistAcpTurnTranscript: (...args: unknown[]) => state.persistAcpTurnTranscriptMock(...args),
   persistSessionEntry: vi.fn(),
@@ -325,6 +327,10 @@ vi.mock("../acp/runtime/errors.js", () => ({
   toAcpRuntimeError: ({ error }: { error: unknown }) => toStringifiedError(error),
 }));
 
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: (...args: unknown[]) => state.gatewayCallMock(...args),
+}));
+
 vi.mock("@openclaw/acp-core/runtime/session-identifiers", () => ({
   resolveAcpSessionCwd: () => "/tmp",
 }));
@@ -391,6 +397,9 @@ vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
 
 vi.mock("../config/runtime-snapshot.js", () => ({
   getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+  // No source snapshot: runtime-source projection no-ops and resolvers read the
+  // provided config directly, matching this suite's pre-projection world.
+  getRuntimeConfigSourceSnapshot: () => null,
   registerRuntimeConfigSnapshotPreparer: vi.fn(),
   setRuntimeConfigSnapshot: vi.fn(),
 }));
@@ -2703,6 +2712,84 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.loadFullModelCatalogMock).not.toHaveBeenCalled();
   });
 
+  it("keeps later provider capability metadata after hydrating a Codex primary", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            "gmn/gpt-5.4": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        name: "GPT 5.6 Sol",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["max"] },
+      },
+      {
+        provider: "gmn",
+        id: "gpt-5.4",
+        name: "GPT 5.4 via GMN",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      },
+    ]);
+    state.loadProviderScopedThinkingCatalogMock.mockImplementation(async (params: unknown) => {
+      const { provider } = params as { provider?: string };
+      if (provider !== "openai") {
+        throw new Error(`unexpected scoped thinking hydration for ${provider}`);
+      }
+      return [
+        {
+          provider: "openai",
+          id: "gpt-5.6-sol",
+          name: "GPT 5.6 Sol",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["max", "ultra"] },
+        },
+      ];
+    });
+    state.resolveThinkingDefaultMock.mockImplementation((args: unknown) => {
+      const { provider, catalog } = args as {
+        provider?: string;
+        catalog?: Array<{ provider: string; id: string }>;
+      };
+      if (provider === "gmn") {
+        expect(catalog).toContainEqual(expect.objectContaining({ provider: "gmn", id: "gpt-5.4" }));
+        return "xhigh";
+      }
+      return "ultra";
+    });
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await params.run(params.provider, params.model);
+      const result = await params.run("gmn", "gpt-5.4");
+      return { result, provider: "gmn", model: "gpt-5.4", attempts: [] };
+    });
+    state.runAgentAttemptMock.mockImplementation(
+      async (params: { providerOverride: string; modelOverride: string }) =>
+        makeSuccessResult(params.providerOverride, params.modelOverride),
+    );
+
+    await runBasicAgentCommand();
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 0), {
+      modelOverride: "gpt-5.6-sol",
+      resolvedThinkLevel: "ultra",
+    });
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
+      providerOverride: "gmn",
+      modelOverride: "gpt-5.4",
+      resolvedThinkLevel: "xhigh",
+    });
+    expect(state.loadProviderScopedThinkingCatalogMock).toHaveBeenCalledTimes(1);
+  });
+
   it("persists and clears current run delivery context for restart recovery", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
@@ -3714,6 +3801,75 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       },
     );
     expect(lifecycleFinishingCalls).toHaveLength(1);
+  });
+
+  it("forwards harness-augmented GPT-5.6 thinking capability to the attempt", async () => {
+    const modelId = "gpt-5.6-sol";
+    const modelKey = `openai/${modelId}`;
+    const providerReasoningEfforts = ["low", "medium", "high", "xhigh", "max"];
+    const harnessReasoningEfforts = [...providerReasoningEfforts, "ultra"];
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: modelKey },
+          models: { [modelKey]: { agentRuntime: { id: "codex" } } },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([
+      {
+        provider: "openai",
+        id: modelId,
+        name: modelId,
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        compat: {
+          thinkingFormat: "openai",
+          supportedReasoningEfforts: providerReasoningEfforts,
+        },
+      },
+    ]);
+    state.loadProviderScopedThinkingCatalogMock.mockResolvedValue([
+      {
+        provider: "openai",
+        id: modelId,
+        name: modelId,
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        compat: {
+          thinkingFormat: "openai",
+          supportedReasoningEfforts: harnessReasoningEfforts,
+        },
+      },
+    ]);
+    setupSuccessfulAttempt("openai", modelId);
+
+    await agentCommand({ message: "hello", to: "+1234567890", thinking: "ultra" });
+
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      modelOverride: modelId,
+      resolvedThinkLevel: "ultra",
+      modelThinkingCapability: {
+        provider: "openai",
+        modelId,
+        agentRuntime: "codex",
+        compat: {
+          thinkingFormat: "openai",
+          supportedReasoningEfforts: harnessReasoningEfforts,
+        },
+      },
+    });
   });
 
   it.each([
@@ -4787,15 +4943,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
   });
 
-  it("marks ACP execution start when the prompt is submitted", async () => {
+  it("marks ACP execution start before prompt submission", async () => {
     setupAcpSession();
     const onExecutionStarted = vi.fn();
     state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
       const callbacks = params as {
+        onBeforePrompt?: () => void;
         onLifecycle?: (event: { type: string; at: number }) => void;
         onEvent?: (event: unknown) => void;
       };
       expect(onExecutionStarted).not.toHaveBeenCalled();
+      callbacks.onBeforePrompt?.();
+      expect(onExecutionStarted).toHaveBeenCalledOnce();
       callbacks.onLifecycle?.({ type: "prompt_submitted", at: Date.now() });
       callbacks.onEvent?.({ type: "done", stopReason: "end_turn" });
     });
@@ -4843,6 +5002,98 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.resolveAcpExplicitTurnPolicyErrorMock).toHaveBeenCalledTimes(1);
     expect(state.resolveAcpDispatchPolicyErrorMock).not.toHaveBeenCalled();
     expect(state.acpRunTurnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps manual ACP elicitation owned by the child turn without channel delivery", async () => {
+    setupAcpSession();
+    const childSessionKey = "agent:codex:acp:child";
+    state.resolvedSessionKeyMock = childSessionKey;
+    let answerQuestion: ((value: unknown) => void) | undefined;
+    let questionRequest:
+      | { id: string; questions: Array<{ questionId: string }>; sessionKey?: string }
+      | undefined;
+    state.gatewayCallMock.mockImplementation(
+      async (method: string, _opts: unknown, rawParams: unknown) => {
+        const params = rawParams as { id: string; questions: Array<{ questionId: string }> };
+        if (method === "question.request") {
+          questionRequest = params;
+          return { id: params.id };
+        }
+        if (method === "question.waitAnswer") {
+          return await new Promise((resolve) => {
+            answerQuestion = resolve;
+          });
+        }
+        if (method === "question.resolve") {
+          return { status: "cancelled" };
+        }
+        throw new Error(`unexpected Gateway question method: ${method}`);
+      },
+    );
+    state.acpRunTurnMock.mockImplementationOnce(async (rawTurn: unknown) => {
+      const turn = rawTurn as {
+        onElicitation?: (
+          request: Record<string, unknown>,
+          context: { requestId: string; signal: AbortSignal },
+        ) => Promise<{ action: string; content?: Record<string, unknown> }>;
+        onEvent?: (event: unknown) => void;
+      };
+      expect(turn.onElicitation).toBeTypeOf("function");
+      const response = turn.onElicitation!(
+        {
+          mode: "form",
+          sessionId: "acp-session",
+          message: "Choose a flavor",
+          requestedSchema: {
+            type: "object",
+            properties: {
+              flavor: { type: "string", enum: ["Vanilla", "Chocolate"] },
+            },
+            required: ["flavor"],
+          },
+        },
+        { requestId: "elicitation-1", signal: new AbortController().signal },
+      );
+      await vi.waitFor(() =>
+        expect(state.emitAcpRuntimeEventMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionKey: childSessionKey,
+            event: expect.objectContaining({
+              type: "status",
+              text: expect.stringContaining("flavor"),
+            }),
+          }),
+        ),
+      );
+      const questionId = expectDefined(
+        questionRequest?.questions[0]?.questionId,
+        "manual ACP question id",
+      );
+      answerQuestion?.({
+        status: "answered",
+        answers: { answers: { [questionId]: ["Vanilla"] } },
+      });
+      const resolved = await response;
+      expect(resolved).toEqual({ action: "accept", content: { flavor: "Vanilla" } });
+      turn.onEvent?.({ type: "text_delta", stream: "output", text: "FLAVOR:Vanilla" });
+      turn.onEvent?.({ type: "done", stopReason: "end_turn" });
+    });
+
+    await agentCommand({
+      message: "bootstrap ACP child",
+      sessionKey: childSessionKey,
+      acpTurnSource: "manual_spawn",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:parent",
+        sourceTool: "sessions_spawn",
+      },
+    });
+
+    expect(questionRequest).toMatchObject({ sessionKey: childSessionKey });
+    expect(state.buildAcpResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payloadText: "FLAVOR:Vanilla" }),
+    );
   });
 
   it("keeps ordinary ACP turns blocked when ACP dispatch is disabled", async () => {

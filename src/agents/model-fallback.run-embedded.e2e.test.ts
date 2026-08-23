@@ -46,6 +46,7 @@ const installRunEmbeddedMocks = () => {
   // exercises fallback orchestration without live model/provider calls.
   vi.doMock("../plugins/runtime.js", () => ({
     getActivePluginRegistry: () => null,
+    getActivePluginRegistryWorkspaceDir: () => undefined,
     requireActivePluginRegistry: () => ({}),
   }));
   vi.doMock("./harness/runtime-plugin.js", () => ({
@@ -79,7 +80,6 @@ let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithMod
 let runEmbeddedAgentEntry: typeof import("./embedded-agent-runner/run-entry.js").runEmbeddedAgentEntry;
 
 beforeAll(async () => {
-  vi.resetModules();
   installRunEmbeddedMocks();
   runEmbeddedAgent = wrapRunWithTestAdmission(
     (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,

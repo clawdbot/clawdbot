@@ -20,59 +20,15 @@ import {
   globalAfterEach0,
   globalAfterAll1,
   updatePluginManifest,
+  writeFixtureText,
+  writeFixtureJson,
+  pluginManifest,
+  channelPluginSource,
 } from "./loader.test-harness.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
-
-function writeFixtureText(rootDir: string, relativePath: string, body: string) {
-  const filePath = path.join(rootDir, relativePath);
-  mkdirSafe(path.dirname(filePath));
-  fs.writeFileSync(filePath, body, "utf-8");
-}
-
-function writeFixtureJson(rootDir: string, relativePath: string, value: unknown) {
-  writeFixtureText(rootDir, relativePath, JSON.stringify(value, null, 2));
-}
-
-function pluginManifest(id: string, channels?: string[]) {
-  return {
-    id,
-    configSchema: EMPTY_PLUGIN_SCHEMA,
-    ...(channels ? { channels } : {}),
-  };
-}
-
-function channelPluginSource(params: {
-  pluginId: string;
-  channelId?: string;
-  label: string;
-  docsPath: string;
-  blurb: string;
-}) {
-  const channelId = params.channelId ?? params.pluginId;
-  return `module.exports = { id: ${JSON.stringify(params.pluginId)}, register(api) {
-    api.registerChannel({
-      plugin: {
-        id: ${JSON.stringify(channelId)},
-        meta: {
-          id: ${JSON.stringify(channelId)},
-          label: ${JSON.stringify(params.label)},
-          selectionLabel: ${JSON.stringify(params.label)},
-          docsPath: ${JSON.stringify(params.docsPath)},
-          blurb: ${JSON.stringify(params.blurb)},
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" }),
-        },
-        outbound: { deliveryMode: "direct" },
-      },
-    });
-  } };`;
-}
 
 function createSetupFailureFixture(params: {
   id: string;

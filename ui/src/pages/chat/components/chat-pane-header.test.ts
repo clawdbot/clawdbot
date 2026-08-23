@@ -305,7 +305,7 @@ describe("chat pane header", () => {
     expect(actions?.querySelector(".chat-pane__close-pane")).not.toBeNull();
   });
 
-  it("keeps persistent surface actions in a narrow header", () => {
+  it("moves narrow session actions into the compact menu", () => {
     const { container } = mount({
       narrow: true,
       mergedChrome: true,
@@ -316,9 +316,10 @@ describe("chat pane header", () => {
       workspaceAction: html`<button data-action="workspace"></button>`,
       sessionRailAction: html`<button data-action="rail"></button>`,
       sessionMenuAction: html`<button data-action="session-menu"></button>`,
+      onOpenSplitView: vi.fn(),
     });
 
-    expect(container.querySelector('[data-action="persistent-surface"]')).not.toBeNull();
+    expect(container.querySelector('[data-action="persistent-surface"]')).toBeNull();
     expect(container.querySelector('[data-action="discussion"]')).toBeNull();
     expect(container.querySelector('[data-action="diff"]')).toBeNull();
     expect(container.querySelector('[data-action="tasks"]')).toBeNull();
@@ -326,7 +327,8 @@ describe("chat pane header", () => {
     expect(container.querySelector('[data-action="rail"]')).toBeNull();
     expect(container.querySelector('[data-action="session-menu"]')).not.toBeNull();
     expect(container.querySelector(".chat-pane__nav-toggle")).not.toBeNull();
-    expect(container.querySelector(".chat-pane__palette-open")).not.toBeNull();
+    expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
+    expect(container.querySelector(".chat-open-split-view")).toBeNull();
   });
 
   it("keeps narrow catalog panel shortcuts visible without a session menu", () => {

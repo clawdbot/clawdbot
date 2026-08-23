@@ -189,6 +189,7 @@ function createUnavailableNodesRuntime(): PluginRuntime["nodes"] {
   return {
     list: unavailable,
     invoke: unavailable,
+    openDuplex: unavailable,
   };
 }
 

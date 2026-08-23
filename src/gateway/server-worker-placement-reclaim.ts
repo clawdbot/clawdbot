@@ -15,7 +15,7 @@ import type { WorkerSessionPlacementStore } from "./worker-environments/placemen
 import type { WorkerPlacementReclaimRequest } from "./worker-environments/service-contract.js";
 
 type SessionUtilsRuntime = typeof import("./session-utils.js");
-type WorkerPlacementSessionRuntime = {
+export type WorkerPlacementSessionRuntime = {
   managedWorktrees: Pick<ManagedWorktreeService, "findLiveByOwner">;
   resolveCanonicalSessionEntryFromStoreKeys: SessionUtilsRuntime["resolveCanonicalSessionEntryFromStoreKeys"];
   resolveGatewaySessionStoreTargetWithStore: SessionUtilsRuntime["resolveGatewaySessionStoreTargetWithStore"];

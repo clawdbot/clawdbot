@@ -69,7 +69,6 @@ function createFixture() {
     getLastAssistantUsage: vi.fn(() => undefined),
     getLastCompactionTokensAfter: vi.fn(() => undefined),
     getLastToolError: vi.fn(() => undefined),
-    getLastToolRecovery: vi.fn(() => undefined),
     getLatestMcpAppChannelView: vi.fn(() => undefined),
     getLatestMcpConnectAction: vi.fn(() => undefined),
     getMessagingToolSentMediaUrls: vi.fn(() => []),
@@ -174,8 +173,11 @@ function createFixture() {
     agentSession: {
       activeSession,
       clientToolCallSlots: [],
+      coreReadAuthorized: true,
+      getCodeModeReconciliationCandidate: vi.fn(() => false),
       hasDeliveredSourceReply: vi.fn(() => true),
       hookRunner,
+      setCodeModeReconciliationReadAuthorized: vi.fn(),
       setActiveSessionSystemPrompt: vi.fn(),
       settingsManager: { getCompactionReserveTokens: vi.fn(() => 1_000) },
     },
@@ -414,6 +416,9 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         display: true,
         content: expect.stringMatching(/1.*image contents.*unavailable.*resend.*not claim/is),
       }),
+    );
+    expect(fixture.sessionManager.appendMessage.mock.calls[0]?.[0]).not.toHaveProperty(
+      "excludeFromContext",
     );
     expect(mocks.completeResult).toHaveBeenCalledWith(
       expect.objectContaining({

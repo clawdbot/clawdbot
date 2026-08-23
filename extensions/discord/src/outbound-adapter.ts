@@ -17,9 +17,13 @@ import {
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { createDiscordActionGate } from "./accounts.js";
 import { formatDiscordApprovalDisplayValue } from "./approval-message-safety.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
-import { notifyDiscordInboundEventOutboundPayloadSuccess } from "./inbound-event-delivery.js";
+import {
+  discordInboundEventDelivery,
+  notifyDiscordInboundEventOutboundPayloadSuccess,
+} from "./inbound-event-delivery.js";
 import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
 import { normalizeDiscordOutboundTarget } from "./normalize.js";
@@ -265,15 +269,40 @@ export const discordOutbound: ChannelOutboundAdapter = {
       }
       return toDiscordOutboundDeliveryResult(await send(target, ctx.text, mediaOptions));
     },
-    sendPoll: async ({ cfg, to, poll, accountId, threadId, silent, onPlatformSendDispatch }) =>
-      await (
+    sendPoll: async ({
+      cfg,
+      to,
+      poll,
+      content,
+      accountId,
+      threadId,
+      silent,
+      sessionKey,
+      inboundEventKind,
+      onPlatformSendDispatch,
+    }) => {
+      if (!createDiscordActionGate({ cfg, accountId })("polls")) {
+        throw new Error("Discord polls are disabled.");
+      }
+      const outboundTo = resolveDiscordOutboundTarget({ to, threadId });
+      const result = await (
         await loadDiscordSendRuntime()
-      ).sendPollDiscord(resolveDiscordOutboundTarget({ to, threadId }), poll, {
+      ).sendPollDiscord(outboundTo, poll, {
         accountId: accountId ?? undefined,
+        content,
+        threadId: threadId ?? undefined,
         silent: silent ?? undefined,
         cfg,
         onPlatformSendDispatch,
-      }),
+      });
+      discordInboundEventDelivery.notify({
+        sessionKey,
+        inboundEventKind,
+        to: outboundTo,
+        accountId,
+      });
+      return result;
+    },
   }),
   adoptTargetFromDelivery: ({ result }) => {
     const threadId = normalizeOptionalStringifiedId(result.receipt?.threadId);

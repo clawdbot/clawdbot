@@ -46,7 +46,7 @@ import {
   resolveMSTeamsAutoThreadId,
 } from "./action-threading.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
-import type { ResolvedMSTeamsAccount } from "./channel-config.js";
+import { resolveMSTeamsAccount, type ResolvedMSTeamsAccount } from "./channel-config.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
 import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
@@ -67,7 +67,6 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { inferMSTeamsTargetChatType, resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
-import { resolveMSTeamsCredentials } from "./token.js";
 
 const TEAMS_GRAPH_PERMISSION_HINTS: Record<string, string> = {
   "ChannelMessage.Read.All": "channel history",
@@ -323,9 +322,8 @@ function describeMSTeamsMessageTool({
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
-  const enabled =
-    cfg.channels?.msteams?.enabled !== false &&
-    Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams));
+  const account = resolveMSTeamsAccount(cfg);
+  const enabled = account.enabled && account.configured && account.tokenStatus === "available";
   return {
     actions: enabled
       ? ([
@@ -1056,6 +1054,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           configured: account.configured,
           extra: {
             port: runtime?.port ?? null,
+            tokenStatus: account.tokenStatus,
           },
         }),
       }),

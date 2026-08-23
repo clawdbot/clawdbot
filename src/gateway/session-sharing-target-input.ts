@@ -1,5 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
 export type SessionMutationTarget = {
   sessionKey: string;
@@ -31,6 +33,7 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
   ["sessions.delete", ["key"]],
   ["sessions.dispatch", ["key"]],
   ["sessions.files.set", ["sessionKey"]],
+  ["sessions.github.publish", ["sessionKey"]],
   ["sessions.fork", ["sessionKey"]],
   ["sessions.patch", ["key"]],
   ["sessions.pluginPatch", ["key"]],
@@ -68,6 +71,7 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
   "sessions.groups.delete",
   "sessions.groups.rename",
   "sessions.groups.update",
+  "sessions.github.publish",
   "sessions.patch",
   "sessions.pluginPatch",
   "sessions.reclaim",
@@ -126,7 +130,8 @@ export function resolveDirectIncognitoTargets(
   }
   const agentId = normalizeOptionalString(record.agentId);
   return candidates.flatMap((candidate): SessionMutationTarget[] =>
-    typeof candidate === "string" && isIncognitoSessionKey(candidate)
+    typeof candidate === "string" &&
+    isIncognitoSessionKey(canonicalizeSessionKeyForAgent(agentId ?? DEFAULT_AGENT_ID, candidate))
       ? [{ sessionKey: candidate, ...(agentId ? { agentId } : {}) }]
       : [],
   );

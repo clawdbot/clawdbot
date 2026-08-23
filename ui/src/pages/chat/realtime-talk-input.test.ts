@@ -134,6 +134,15 @@ describe("realtime Talk microphone inputs", () => {
     });
   });
 
+  it("reports microphone permission denial with actionable guidance", async () => {
+    const getUserMedia = vi.fn().mockRejectedValue(new DOMException("denied", "NotAllowedError"));
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+
+    await expect(openRealtimeTalkInput(undefined)).rejects.toThrow(
+      "Microphone access is blocked. Allow it in browser site settings to list inputs.",
+    );
+  });
+
   it("does not silently fall back when the selected microphone is unavailable", async () => {
     const getUserMedia = vi.fn(async () => {
       throw new DOMException("missing", "OverconstrainedError");

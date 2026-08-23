@@ -32,6 +32,20 @@ describe("node agent-runs config", () => {
     expect(validateConfigObject({ nodeHost: { workerRuns: { enabled } } }).ok).toBe(true);
   });
 
+  it.each([1, 5, 1024])("accepts worker session hosting capacity=%s", (capacity) => {
+    expect(validateConfigObject({ nodeHost: { workerRuns: { capacity } } }).ok).toBe(true);
+  });
+
+  it.each([0, -1, 1.5, 1025])("rejects invalid worker session hosting capacity=%s", (capacity) => {
+    const result = validateConfigObject({ nodeHost: { workerRuns: { capacity } } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((issue) => issue.path === "nodeHost.workerRuns.capacity")).toBe(
+        true,
+      );
+    }
+  });
+
   it("rejects non-boolean worker session hosting enablement", () => {
     const result = validateConfigObject({ nodeHost: { workerRuns: { enabled: "yes" } } });
     expect(result.ok).toBe(false);

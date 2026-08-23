@@ -8,13 +8,15 @@ import {
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
-import { LLAMA_SERVER_LOCAL_AUTH_MARKER, LLAMA_SERVER_PROVIDER_ID } from "./defaults.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { LLAMA_CPP_PROVIDER_ID, resolveLlamaCppSyntheticApiKey } from "../defaults.js";
 
 export function hasLlamaServerAuthorizationHeader(headers: unknown): boolean {
-  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+  const record = asOptionalRecord(headers);
+  if (!record) {
     return false;
   }
-  return Object.entries(headers).some(
+  return Object.entries(record).some(
     ([name, value]) =>
       name.trim().toLowerCase() === "authorization" && hasConfiguredSecretInput(value),
   );
@@ -26,29 +28,9 @@ export function shouldUseLlamaServerSyntheticAuth(
   const apiKey = normalizeOptionalSecretInput(providerConfig?.apiKey)?.trim();
   const hasRealApiKey =
     hasConfiguredSecretInput(providerConfig?.apiKey) &&
-    apiKey !== LLAMA_SERVER_LOCAL_AUTH_MARKER &&
+    apiKey !== resolveLlamaCppSyntheticApiKey() &&
     apiKey !== CUSTOM_LOCAL_AUTH_MARKER;
   return !hasRealApiKey;
-}
-
-export function buildLlamaServerAuthHeaders(
-  apiKey?: string,
-  configuredHeaders?: Record<string, string>,
-): Record<string, string> {
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    ...configuredHeaders,
-  };
-  const normalized = apiKey?.trim();
-  if (normalized && !isNonSecretApiKeyMarker(normalized)) {
-    for (const name of Object.keys(headers)) {
-      if (name.trim().toLowerCase() === "authorization") {
-        delete headers[name];
-      }
-    }
-    headers.Authorization = `Bearer ${normalized}`;
-  }
-  return headers;
 }
 
 export async function resolveLlamaServerProviderHeaders(params: {
@@ -56,18 +38,19 @@ export async function resolveLlamaServerProviderHeaders(params: {
   env?: NodeJS.ProcessEnv;
   headers?: unknown;
 }): Promise<Record<string, string> | undefined> {
-  if (!params.headers || typeof params.headers !== "object" || Array.isArray(params.headers)) {
+  const headers = asOptionalRecord(params.headers);
+  if (!headers) {
     return undefined;
   }
   const resolved: Record<string, string> = {};
-  for (const [name, value] of Object.entries(params.headers)) {
+  for (const [name, value] of Object.entries(headers)) {
     if (!params.config) {
       if (typeof value === "string" && value.trim()) {
         resolved[name] = value.trim();
       }
       continue;
     }
-    const path = `models.providers.${LLAMA_SERVER_PROVIDER_ID}.headers.${name}`;
+    const path = `models.providers.${LLAMA_CPP_PROVIDER_ID}.headers.${name}`;
     const header = await resolveConfiguredSecretInputString({
       config: params.config,
       env: params.env ?? process.env,
@@ -91,7 +74,7 @@ export async function resolveLlamaServerRuntimeApiKey(params: {
   profileId?: string;
 }): Promise<string | undefined> {
   const auth = await resolveApiKeyForProvider({
-    provider: LLAMA_SERVER_PROVIDER_ID,
+    provider: LLAMA_CPP_PROVIDER_ID,
     cfg: params.config,
     agentDir: params.agentDir,
     profileId: params.profileId,

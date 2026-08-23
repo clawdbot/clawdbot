@@ -385,6 +385,7 @@ const LAUNCHER_PRECOMPUTED_COMMAND_HELP = {
   nodes: { command: "nodes", metadataKey: "nodesHelpText" },
 };
 const LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP = new Set([
+  "config",
   "doctor",
   "gateway",
   "models",
