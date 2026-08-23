@@ -733,6 +733,7 @@ struct TalkModeRuntimeSpeechTests {
                 requests: requests,
                 realtimeModel: "fresh-model")
             let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: { bootstrap })
+            await runtime._test_setRealtimeAudioCaptureProvider { RuntimeTestAudioCapture() }
             await runtime._test_setVoiceWakeReadiness(supported: true, permissionGranted: true)
             _ = await runtime._test_prepareEnabledLifecycle()
             await runtime.setPaused(true)
@@ -1013,6 +1014,7 @@ struct TalkModeRuntimeSpeechTests {
                 bootstraps: [firstBootstrap, retryBootstrap],
                 firstBarrier: barrier)
             let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: { try await sequence.next() })
+            await runtime._test_setRealtimeAudioCaptureProvider { RuntimeTestAudioCapture() }
             await runtime._test_setVoiceWakeReadiness(supported: true, permissionGranted: true)
             let attempt = Task {
                 await runtime.setEnabled(true)
@@ -1104,6 +1106,7 @@ struct TalkModeRuntimeSpeechTests {
         let runtime = TalkModeRuntime(realtimeTalkBootstrapProvider: {
             try await sequence.next()
         })
+        await runtime._test_setRealtimeAudioCaptureProvider { RuntimeTestAudioCapture() }
         let lifecycleA = await runtime._test_prepareEnabledLifecycle()
         await runtime._test_enableRealtimeRelaySelection()
         let attemptA = Task {

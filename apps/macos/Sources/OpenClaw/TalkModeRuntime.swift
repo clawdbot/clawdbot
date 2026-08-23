@@ -110,6 +110,10 @@ actor TalkModeRuntime {
         await PermissionManager.ensureVoiceWakePermissions(interactive: true)
     }
 
+    var realtimeAudioCaptureProvider: RealtimeAudioCaptureProvider = {
+        MacRealtimeTalkAudioCapture()
+    }
+
     var realtimeConfigApplicationCheckpoint: (@Sendable () async -> Void)?
     var recognitionCleanupProbe: (@Sendable () -> Void)?
     #endif

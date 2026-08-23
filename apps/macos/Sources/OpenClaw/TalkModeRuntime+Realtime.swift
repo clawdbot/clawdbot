@@ -14,6 +14,8 @@ private enum RealtimeRelayConfigurationError: LocalizedError {
 extension TalkModeRuntime {
     #if DEBUG
     typealias VoiceWakePermissionProvider = @Sendable () async -> Bool
+    typealias RealtimeAudioCaptureProvider =
+        @MainActor @Sendable () -> any RealtimeTalkAudioCapturing
     #endif
 
     private enum ScheduledRealtimeRecoveryState: Equatable {
@@ -402,11 +404,19 @@ extension TalkModeRuntime {
             provider: realtimeProvider,
             model: realtimeModelId,
             voice: realtimeSpeakerVoice)
+        #if DEBUG
+        let audioCaptureProvider = self.realtimeAudioCaptureProvider
+        #endif
         return await MainActor.run {
-            RealtimeTalkRelaySession(
+            #if DEBUG
+            let audioCapture = audioCaptureProvider()
+            #else
+            let audioCapture = MacRealtimeTalkAudioCapture()
+            #endif
+            return RealtimeTalkRelaySession(
                 transport: bootstrap.transport,
                 options: options,
-                audioCapture: MacRealtimeTalkAudioCapture(),
+                audioCapture: audioCapture,
                 pcmPlayer: RealtimePCMStreamingAudioPlayer(),
                 onStatus: { [weak self] status in
                     Task { await self?.handleRealtimeStatus(status, relayGeneration: relayGeneration) }
@@ -763,6 +773,12 @@ extension TalkModeRuntime {
     func _test_setVoiceWakeReadiness(supported: Bool, permissionGranted: Bool) {
         self.voiceWakeSupportedProvider = { supported }
         self.voiceWakePermissionProvider = { permissionGranted }
+    }
+
+    func _test_setRealtimeAudioCaptureProvider(
+        _ provider: @escaping RealtimeAudioCaptureProvider)
+    {
+        self.realtimeAudioCaptureProvider = provider
     }
 
     func _test_setRealtimeConfigApplicationCheckpoint(
