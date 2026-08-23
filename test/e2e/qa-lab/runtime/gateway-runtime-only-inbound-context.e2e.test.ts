@@ -296,7 +296,6 @@ describe("Gateway runtime-only inbound context", () => {
         OPENCLAW_SKIP_CRON: "1",
         OPENCLAW_SKIP_CANVAS_HOST: "1",
         OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       })) {
@@ -305,6 +304,7 @@ describe("Gateway runtime-only inbound context", () => {
       deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
       deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
       deleteTestEnvValue("OPENCLAW_SKIP_CHANNELS");
+      deleteTestEnvValue("OPENCLAW_SKIP_PROVIDERS");
 
       const providerRequests: Array<Record<string, unknown>> = [];
       const providerServer = createServer((request, response) => {
