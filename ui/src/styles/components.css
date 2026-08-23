@@ -6275,3 +6275,21 @@ td.data-table-key-col {
     transform: rotate(-10deg);
   }
 }
+
+/* Identity links: a person's name or avatar anywhere in the UI opens their Activity feed.
+   Neutral until hover so identity chrome keeps its weight in dense surfaces. */
+.person-activity-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.person-activity-link:hover,
+.person-activity-link:focus-visible {
+  text-decoration: underline;
+}
+
+.person-activity-avatar-link {
+  display: block;
+  min-width: 0;
+  line-height: 0;
+}

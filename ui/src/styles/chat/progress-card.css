@@ -174,22 +174,6 @@
   font-weight: 500;
 }
 
-.session-hovercard__identity-avatar-link {
-  display: block;
-  min-width: 0;
-  line-height: 0;
-}
-
-.session-hovercard__identity-link {
-  color: inherit;
-  text-decoration: none;
-}
-
-.session-hovercard__identity-link:hover,
-.session-hovercard__identity-link:focus-visible {
-  text-decoration: underline;
-}
-
 .session-hovercard__identity-separator {
   flex: none;
   color: var(--muted);
