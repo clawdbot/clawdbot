@@ -514,6 +514,12 @@
   color: var(--session-progress-neutral);
 }
 
+.session-progress-card__current-marker > .session-run-spinner,
+.session-progress-card__step-marker > .session-run-spinner {
+  border-color: color-mix(in srgb, var(--session-progress-neutral) 28%, transparent);
+  border-top-color: var(--session-progress-neutral);
+}
+
 .session-progress-card__current {
   min-width: 0;
   overflow: hidden;
