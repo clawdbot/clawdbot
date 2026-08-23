@@ -1,7 +1,7 @@
 // Gateway WebSocket connection handler owns pre-auth limits, handshake auth, presence, and message-handler attachment.
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { RawData, WebSocket, WebSocketServer } from "ws";
+import { WebSocket, type RawData, type WebSocketServer } from "ws";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -347,6 +347,14 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     const send = (obj: unknown) => {
       if (closed) {
+        return { kind: "unavailable" } as const;
+      }
+      if (socket.readyState !== WebSocket.OPEN) {
+        // Keep pending node results revocable until their close handler drains admitted work.
+        if (client?.connect.role === "node" && nodeLifecycleDispatch.hasActive()) {
+          retainClientUntilNodeDrain = true;
+        }
+        close();
         return { kind: "unavailable" } as const;
       }
       if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {

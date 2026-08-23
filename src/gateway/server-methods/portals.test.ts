@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import type {
   PortalOpenResult,
   PortalSummary,
@@ -175,6 +176,7 @@ describe("portal gateway methods", () => {
         usesSharedGatewayAuth: false,
         connect: { role, scopes } as GatewayWsClient["connect"],
         socket: {
+          readyState: WebSocket.OPEN,
           bufferedAmount: 0,
           close: vi.fn(),
           send: (value: string) =>

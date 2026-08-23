@@ -1,3 +1,4 @@
+import { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -269,7 +270,8 @@ export function createGatewayBroadcaster(params: {
     const sessionMessageSubscribers = params.sessionMessageSubscribers;
     let sessionSubscriberConnIdsByKey: Array<ReadonlySet<string> | undefined> | undefined;
     for (const c of params.clients) {
-      if (c.invalidated === true) {
+      // Closing nodes remain discoverable until their owner drains admitted lifecycle work.
+      if (c.invalidated === true || c.socket.readyState !== WebSocket.OPEN) {
         continue;
       }
       if (targetConnIds && !targetConnIds.has(c.connId)) {
