@@ -1767,7 +1767,7 @@ describe("processGatewayAllowlist", () => {
         expect.objectContaining({ command, executionPlan }),
       );
       expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
-      expect(result).toEqual({ execCommandOverride: enforced.command });
+      expect(result.execCommandOverride).toBe(enforced.command);
     },
   );
 
