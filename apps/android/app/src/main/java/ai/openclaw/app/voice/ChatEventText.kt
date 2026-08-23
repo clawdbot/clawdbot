@@ -6,6 +6,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 internal object ChatEventText {
+  private val visibleAssistantTextTypes = setOf("", "text", "input_text", "output_text")
+
   /** Extracts assistant reply text from a gateway chat event payload. */
   fun assistantTextFromPayload(payload: JsonObject): String? = assistantTextFromMessage(payload["message"])
 
@@ -38,8 +40,13 @@ internal object ChatEventText {
       ?.takeIf { it.isNotEmpty() }
       ?.let { return it }
     val obj = part.asObjectOrNull() ?: return null
-    val type = obj["type"].asStringOrNull()
-    if (type != null && type != "text") return null
+    val type =
+      obj["type"]
+        .asStringOrNull()
+        ?.trim()
+        ?.lowercase()
+        .orEmpty()
+    if (type !in visibleAssistantTextTypes) return null
     return obj["text"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
   }
 }

@@ -36,6 +36,8 @@ function normalizeBoardSummary(value: unknown): WorkboardBoardSummary | null {
       }
     }
   }
+  const automationJobId =
+    typeof value.automationJobId === "string" ? value.automationJobId.trim() : "";
   return {
     id,
     total: normalizeCount(value.total),
@@ -48,6 +50,7 @@ function normalizeBoardSummary(value: unknown): WorkboardBoardSummary | null {
       : {}),
     ...(typeof value.icon === "string" && value.icon.trim() ? { icon: value.icon.trim() } : {}),
     ...(typeof value.color === "string" && value.color.trim() ? { color: value.color.trim() } : {}),
+    ...(automationJobId && automationJobId.length <= 128 ? { automationJobId } : {}),
     ...(typeof value.updatedAt === "number" ? { updatedAt: value.updatedAt } : {}),
     ...(typeof value.archivedAt === "number" ? { archivedAt: value.archivedAt } : {}),
   };

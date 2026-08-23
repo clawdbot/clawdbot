@@ -27,6 +27,7 @@ describe("runCronIsolatedAgentTurn runtime plugin owner", () => {
     await expect(runCronIsolatedAgentTurn(params)).resolves.toMatchObject({ status: "ok" });
     expect(loadModelCatalogOwnerMock).toHaveBeenCalledWith({
       config: params.cfg,
+      readOnly: true,
       allowGatewaySubagentBinding: true,
     });
     expect(loadAgentRuntimePluginRegistryHandleMock).toHaveBeenCalledWith({

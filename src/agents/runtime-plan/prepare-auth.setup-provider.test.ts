@@ -19,7 +19,7 @@ const authLookupMocks = vi.hoisted(() => ({
 }));
 
 const setupRegistryMocks = vi.hoisted(() => ({
-  resolvePluginSetupProvider: vi.fn(() => ({
+  resolvePluginSetupProviderCore: vi.fn(() => ({
     resolveConfigApiKey: () => "gcp-vertex-credentials",
   })),
 }));
@@ -31,7 +31,7 @@ vi.mock("../model-auth-env-vars.js", async (importOriginal) => ({
 
 vi.mock("../../plugins/setup-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/setup-registry.js")>()),
-  resolvePluginSetupProvider: setupRegistryMocks.resolvePluginSetupProvider,
+  resolvePluginSetupProviderCore: setupRegistryMocks.resolvePluginSetupProviderCore,
 }));
 
 describe("prepared setup-provider auth fallback", () => {
@@ -61,7 +61,7 @@ describe("prepared setup-provider auth fallback", () => {
       authProfileStore: store,
     });
 
-    expect(setupRegistryMocks.resolvePluginSetupProvider).not.toHaveBeenCalled();
+    expect(setupRegistryMocks.resolvePluginSetupProviderCore).not.toHaveBeenCalled();
     expect(prepared.attempts).toMatchObject([
       { kind: "profile", profileId },
       {
@@ -104,6 +104,6 @@ describe("prepared setup-provider auth fallback", () => {
       source: "gcloud adc",
       mode: "api-key",
     });
-    expect(setupRegistryMocks.resolvePluginSetupProvider).toHaveBeenCalledOnce();
+    expect(setupRegistryMocks.resolvePluginSetupProviderCore).toHaveBeenCalledOnce();
   });
 });

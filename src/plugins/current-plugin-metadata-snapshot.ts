@@ -13,6 +13,7 @@ import {
   resolvePluginControlPlaneFingerprint,
   type ResolvePluginControlPlaneContextParams,
 } from "./plugin-control-plane-context.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
 import type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotPluginIdScope,
@@ -29,6 +30,8 @@ type CurrentPluginMetadataSnapshotOptions = {
   config?: OpenClawConfig;
   compatibleConfigs?: readonly OpenClawConfig[];
   env?: NodeJS.ProcessEnv;
+  /** Only immutable runtime generations may trust identity across policy drift. */
+  trustConfigIdentity?: boolean;
   workspaceDir?: string;
 };
 
@@ -60,6 +63,7 @@ type PluginMetadataSnapshotCandidate = {
   compatiblePolicyHashes?: readonly string[];
   compatibleConfigFingerprints?: readonly string[];
   hasConfigIdentity?: (config: OpenClawConfig) => boolean;
+  immutableRuntimeGeneration?: boolean;
 };
 
 type ScopedPluginMetadataSnapshot = PluginMetadataSnapshotCandidate & {
@@ -279,7 +283,11 @@ export function withPluginMetadataSnapshotScope<T>(
   const configIdentities = new WeakSet<OpenClawConfig>();
   if (options.config) {
     const policyHash = resolveInstalledPluginIndexPolicyHash(options.config);
-    if (policyHash === snapshot.policyHash || compatiblePolicyHashes?.includes(policyHash)) {
+    if (
+      options.trustConfigIdentity === true ||
+      policyHash === snapshot.policyHash ||
+      compatiblePolicyHashes?.includes(policyHash)
+    ) {
       configIdentities.add(options.config);
     }
   }
@@ -293,6 +301,7 @@ export function withPluginMetadataSnapshotScope<T>(
       compatiblePolicyHashes,
       compatibleConfigFingerprints,
       hasConfigIdentity: (config) => configIdentities.has(config),
+      immutableRuntimeGeneration: options.trustConfigIdentity === true,
       parent: scopedPluginMetadataSnapshot.getStore(),
     },
     run,
@@ -326,9 +335,16 @@ function resolveCompatiblePluginMetadataSnapshot(
   ) {
     return undefined;
   }
+  // Immutable runtime generations already selected their executable plugin graph. Nested config
+  // and workspace projections are run data, not authority to reopen lifecycle-owned discovery.
+  if (candidate.immutableRuntimeGeneration) {
+    return snapshot;
+  }
   const requestedWorkspaceDir =
     params.workspaceDir ??
-    (params.allowWorkspaceScopedSnapshot === true ? snapshot.workspaceDir : undefined);
+    (params.allowWorkspaceScopedSnapshot === true || options.scopedOwnerContext === true
+      ? snapshot.workspaceDir
+      : undefined);
   if (snapshot.workspaceDir !== undefined && requestedWorkspaceDir === undefined) {
     return undefined;
   }
@@ -389,6 +405,17 @@ function resolveCompatiblePluginMetadataSnapshot(
   return snapshot;
 }
 
+export function isCurrentPluginMetadataSnapshotRuntimeGeneration(
+  snapshot: PluginMetadataSnapshot,
+): boolean {
+  for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
+    if (scoped.snapshot === snapshot && scoped.immutableRuntimeGeneration === true) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function getCurrentPluginMetadataSnapshot(
   params: CurrentPluginMetadataSnapshotParams = {},
 ): PluginMetadataSnapshot | undefined {
@@ -416,3 +443,8 @@ export function getCurrentPluginMetadataSnapshot(
     params,
   );
 }
+
+// Light bridges (plugin-metadata-snapshot.runtime.ts) serve reads through this
+// instance whenever the metadata system is loaded; the require fallback only
+// covers cold processes.
+registerPluginMetadataSnapshotReaders({ getCurrentPluginMetadataSnapshot });

@@ -13,7 +13,6 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
-import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import {
   shouldRefreshContextWindowCache,
@@ -24,7 +23,10 @@ import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
-import { restartGatewayChannels } from "./server-reload-channel-restart.js";
+import {
+  restartGatewayChannels,
+  startGatewayChannelFromActiveRegistry,
+} from "./server-reload-channel-restart.js";
 import {
   GatewayHotReloadCancelledError,
   GatewayHotReloadRecoveryError,
@@ -102,11 +104,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     resetPreparedModelRuntimeStateForHotReload();
 
-    let hooksReloadResolved = false;
-    if (plan.reloadHooks) {
+    if (plan.reloadHooks || plan.refreshHooksPolicy) {
       try {
         nextState.hooksConfig = resolveHooksConfig(nextConfig);
-        hooksReloadResolved = true;
       } catch (err) {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
         throw err;
@@ -120,15 +120,25 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         deps: params.deps,
         broadcast: params.broadcast,
         env: publication?.runtimeEnv ?? process.env,
+        // Without this a cron hot reload silently drops scheduler gateway
+        // context, so scheduled runs regress to contextless after any reload.
+        ...(params.resolveGatewayContext
+          ? { resolveGatewayContext: params.resolveGatewayContext }
+          : {}),
       });
     }
 
     resetDirectoryCache();
 
     const channelsToRestart = new Set(plan.restartChannels);
-    const restartChannelAccounts =
-      plan.restartChannelAccounts ?? new Map<ChannelKind, Set<string>>();
+    const restartChannelAccounts = new Map<ChannelKind, Set<string>>(
+      [...(plan.restartChannelAccounts ?? [])].map(([channel, accountIds]) => [
+        channel,
+        new Set(accountIds),
+      ]),
+    );
     const channelsStoppedBeforePluginReload = new Set<ChannelKind>();
+    const accountsStoppedBeforePluginReload = new Map<ChannelKind, Set<string>>();
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
     let pluginReloadAborted = false;
     const isLifecycleReloadAborted = () => isGatewayReloadGenerationAborted(myGeneration);
@@ -159,7 +169,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         `${action} suppressed by crash-loop breaker for channels: ${[...channels].join(", ")}`,
       );
     };
-    const commitRuntime = async () => {
+    const commitRuntime = async (onCommit?: () => void) => {
       if (runtimeCommitted) {
         return;
       }
@@ -168,7 +178,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           nextState.heartbeatRunner.updateConfig(nextConfig);
           // Heartbeat cadence lives in system-owned cron monitor jobs;
           // reconverge them against the new config in the background.
-          void nextState.cronState.reconcileHeartbeatJobs?.(nextConfig).catch((error: unknown) => {
+          void nextState.cronState.reconcileHeartbeatJobs(nextConfig).catch((error: unknown) => {
             params.logReload.warn(`heartbeat monitor reconvergence failed: ${String(error)}`);
           });
         }
@@ -181,11 +191,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         params.setState(nextState);
         // All rejecting work is complete. Publish pre-resolved lane limits at
         // the final synchronous commit edge, alongside the accepted state.
-        if (hooksReloadResolved) {
+        if (plan.reloadHooks) {
           commitHooksConfigReload();
         }
         applyGatewayLaneConcurrency(laneConcurrency);
         runtimeCommitted = true;
+        onCommit?.();
         setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
         if (plan.restartCron) {
           params.cronReconciliation.invalidate();
@@ -194,8 +205,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             await state.cronState.cron.stopAndDrain();
           } else {
             state.cronState.cron.stop();
-            state.cronState.stopExitWatchers?.();
-            await state.cronState.stopStreamWatchers?.();
+            state.cronState.stopExitWatchers();
+            await state.cronState.stopStreamWatchers();
           }
           startGatewayCronWithLogging({
             cronState: nextState.cronState,
@@ -204,8 +215,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             config: nextConfig,
             afterStart: async () => {
               await Promise.all([
-                nextState.cronState.reconcileExitWatchers?.(),
-                nextState.cronState.reconcileStreamWatchers?.(),
+                nextState.cronState.reconcileExitWatchers(),
+                nextState.cronState.reconcileStreamWatchers(),
               ]);
             },
             logCron: params.logCron,
@@ -296,7 +307,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         });
         return;
       }
-      params.logReload.warn(`${surface} failed after config commit${detail}; restarting gateway`);
+      const commitState = runtimeCommitted ? "after config commit" : "before config commit";
+      params.logReload.warn(`${surface} failed ${commitState}${detail}; restarting gateway`);
       if (recoveryRestartScheduled) {
         return;
       }
@@ -330,12 +342,33 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
     };
     if (plan.reloadPlugins) {
+      const restartStoppedPluginAccounts = async (reason: string): Promise<string[]> => {
+        const failures: string[] = [];
+        for (const [channel, accountIds] of accountsStoppedBeforePluginReload) {
+          for (const accountId of accountIds) {
+            try {
+              params.logChannels.info(`restarting ${channel} account ${accountId} after ${reason}`);
+              await startGatewayChannelFromActiveRegistry(params, channel, accountId);
+              accountIds.delete(accountId);
+            } catch (err) {
+              failures.push(`${channel}[${accountId}]`);
+              params.logChannels.error(
+                `failed to restart ${channel} account ${accountId} after ${reason}: ${formatErrorMessage(err)}`,
+              );
+            }
+          }
+          if (accountIds.size === 0) {
+            accountsStoppedBeforePluginReload.delete(channel);
+          }
+        }
+        return failures;
+      };
       const restartStoppedPluginChannels = async (reason: string) =>
         await collectChannelOperationFailures({
           channels: [...channelsStoppedBeforePluginReload],
           run: async (channel) => {
             params.logChannels.info(`restarting ${channel} channel after ${reason}`);
-            await runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel));
+            await startGatewayChannelFromActiveRegistry(params, channel);
             channelsStoppedBeforePluginReload.delete(channel);
           },
           onFailure: (channel, err) => {
@@ -344,16 +377,36 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             );
           },
         });
-      const failPluginChannelRollback = (reason: string, failures: ChannelKind[]): never => {
+      const rollbackStoppedPluginTargets = async (reason: string): Promise<string[]> => [
+        ...(await restartStoppedPluginAccounts(reason)),
+        ...(await restartStoppedPluginChannels(reason)),
+      ];
+      const failPluginChannelRollback = (reason: string, failures: string[]): never => {
         const error = new Error(
           `plugin reload cancellation rollback failed for: ${failures.join(", ")}`,
         );
         scheduleRecoveryRestart(`plugin channel rollback after ${reason}`, error);
         throw error;
       };
-      const stopChannelsBeforePluginReplace = async (channels: ReadonlySet<ChannelKind>) => {
+      const stopChannelsBeforePluginReplace = async (
+        channels: ReadonlySet<ChannelKind>,
+        accounts: ReadonlyMap<ChannelKind, ReadonlySet<string>> = new Map(),
+      ) => {
         for (const channel of channels) {
           channelsToRestart.add(channel);
+        }
+        for (const [channel, accountIds] of accounts) {
+          if (channelsToRestart.has(channel)) {
+            continue;
+          }
+          let restartAccountIds = restartChannelAccounts.get(channel);
+          if (!restartAccountIds) {
+            restartAccountIds = new Set();
+            restartChannelAccounts.set(channel, restartAccountIds);
+          }
+          for (const accountId of accountIds) {
+            restartAccountIds.add(accountId);
+          }
         }
         const targets = channelReloadTargets();
         if (targets.size === 0 || shouldSkipChannelRestart) {
@@ -366,7 +419,42 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           pluginReloadAborted = true;
           return;
         }
-        const stopFailures = await collectChannelOperationFailures({
+        const accountStopFailures: string[] = [];
+        for (const [channel, accountIds] of accounts) {
+          if (channelsToRestart.has(channel)) {
+            continue;
+          }
+          for (const accountId of accountIds) {
+            if (isPluginReloadAborted()) {
+              pluginReloadAborted = true;
+              break;
+            }
+            let stoppedAccountIds = accountsStoppedBeforePluginReload.get(channel);
+            if (!stoppedAccountIds) {
+              stoppedAccountIds = new Set();
+              accountsStoppedBeforePluginReload.set(channel, stoppedAccountIds);
+            }
+            if (stoppedAccountIds.has(accountId)) {
+              continue;
+            }
+            stoppedAccountIds.add(accountId);
+            try {
+              params.logChannels.info(
+                `stopping ${channel} account ${accountId} before plugin reload`,
+              );
+              await params.stopChannel(channel, accountId, { manual: false });
+              if (isPluginReloadAborted()) {
+                pluginReloadAborted = true;
+              }
+            } catch (err) {
+              accountStopFailures.push(`${channel}[${accountId}]`);
+              params.logChannels.error(
+                `failed to stop ${channel} account ${accountId} before plugin reload: ${formatErrorMessage(err)}`,
+              );
+            }
+          }
+        }
+        const channelStopFailures = await collectChannelOperationFailures({
           channels: channelsToRestart,
           run: async (channel) => {
             if (isPluginReloadAborted()) {
@@ -396,7 +484,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           if (isLifecycleReloadAborted()) {
             return;
           }
-          const rollbackFailures = await restartStoppedPluginChannels(
+          const rollbackFailures = await rollbackStoppedPluginTargets(
             "cancelled plugin reload pre-stop",
           );
           if (rollbackFailures.length > 0) {
@@ -404,8 +492,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           }
           return;
         }
+        const stopFailures = [...accountStopFailures, ...channelStopFailures];
         if (stopFailures.length > 0) {
-          const rollbackFailures = await restartStoppedPluginChannels(
+          const rollbackFailures = await rollbackStoppedPluginTargets(
             "failed plugin reload pre-stop",
           );
           if (rollbackFailures.length > 0) {
@@ -421,15 +510,23 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         try {
           pluginReloadResult = await params.reloadPlugins({
             nextConfig,
+            // Without a managed publication, the direct caller's input is itself authored.
+            sourceConfig: publication ? publication.sourceConfig : nextConfig,
             changedPaths: plan.changedPaths,
             beforeReplace: stopChannelsBeforePluginReplace,
             commitRuntime,
+            onReplacementTeardownFailure: (error) =>
+              scheduleRecoveryRestart("plugin service replacement teardown", error),
             env: publication?.runtimeEnv ?? process.env,
             isAborted: isPluginReloadAborted,
           });
         } catch (err) {
           if (!runtimeCommitted) {
-            const rollbackFailures = await restartStoppedPluginChannels(
+            // Once replacement teardown begins, old services cannot safely be rolled back.
+            if (recoveryRestartScheduled) {
+              throw err;
+            }
+            const rollbackFailures = await rollbackStoppedPluginTargets(
               "failed plugin runtime publication",
             );
             if (rollbackFailures.length > 0) {
@@ -443,7 +540,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (pluginReloadResult.cancelled) {
           pluginReloadAborted = true;
           if (!isLifecycleReloadAborted()) {
-            const rollbackFailures = await restartStoppedPluginChannels(
+            const rollbackFailures = await rollbackStoppedPluginTargets(
               "cancelled plugin runtime publication",
             );
             if (rollbackFailures.length > 0) {
@@ -453,12 +550,16 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         // beforeReplace may have set pluginReloadAborted inside reloadPlugins;
         // skip metadata/runtime updates when the reload was cancelled mid-flight.
-        if (!pluginReloadAborted) {
+        if (!pluginReloadAborted && !isLifecycleReloadAborted()) {
           for (const channel of pluginReloadResult.restartChannels) {
             channelsToRestart.add(channel);
           }
           activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+          // Only a successfully published replacement can authoritatively retire channel owners.
+          params.pruneInactiveChannelAccountState(activePluginChannelsAfterReload);
           resetPreparedModelRuntimeStateForHotReload();
+        } else {
+          pluginReloadAborted = true;
         }
       }
     }
@@ -494,9 +595,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     try {
+      const pluginMetadataSnapshot = params.getPluginMetadataSnapshot?.();
       await refreshPreparedModelRuntimeSnapshots(nextConfig, {
         catalogMode: "static",
         allowGatewaySubagentBinding: true,
+        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
       });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);
@@ -566,6 +669,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       restartChannelAccounts,
       activePluginChannelsAfterReload,
       channelsStoppedBeforePluginReload,
+      accountsStoppedBeforePluginReload,
       shouldSkipChannelRestart,
       skipChannelRestartLogMessage:
         "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",

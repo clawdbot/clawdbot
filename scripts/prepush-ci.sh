@@ -48,6 +48,7 @@ has_native_swift_changes() {
     scripts/install-swift-tools.sh
     scripts/install-xcodegen.sh
     scripts/ios-write-swift-filelist.mjs
+    scripts/ios-write-swift-filelist.mts
     scripts/lint-swift.sh
   )
 

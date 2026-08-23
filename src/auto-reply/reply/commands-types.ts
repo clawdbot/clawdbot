@@ -4,6 +4,7 @@ import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunk
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginCommandContext } from "../../plugins/types.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import type { MsgContext } from "../templating.js";
 import type {
@@ -84,11 +85,18 @@ export type HandleCommandsParams = {
   skillCommands?: SkillCommandSpec[];
   loadSkillCommands?: () => Promise<SkillCommandSpec[]>;
   typing?: TypingController;
+  /** Invocation authority for host-bound plugin command capabilities. */
+  commandInvocationSignal?: AbortSignal;
+  /** Session generation captured when a host-bound compaction capability was admitted. */
+  compactionSessionEntry?: SessionEntry;
 };
 
 /** Result returned by a command handler. */
 export type CommandHandlerResult = {
   reply?: ReplyPayload;
+  sessionCompaction?: Awaited<
+    ReturnType<NonNullable<NonNullable<PluginCommandContext["runtimeContext"]>["compactCurrent"]>>
+  >;
   shouldContinue: boolean;
 };
 

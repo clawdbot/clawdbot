@@ -1,15 +1,9 @@
 // Memory Host SDK module implements embeddings remote fetch behavior.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 import { postJson } from "./post-json.js";
-import type { SsrFPolicy } from "./ssrf-policy.js";
 
 // Fetches and validates OpenAI-compatible embedding responses.
-
-/** Narrow unknown JSON payloads to plain objects. */
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 /** Build the common malformed embedding response error. */
 function malformedEmbeddingResponse(errorPrefix: string): Error {
@@ -31,7 +25,7 @@ function readEmbeddingVector(value: unknown, errorPrefix: string): number[] {
 
 /** Resolve expected response count from the request body when input is an array. */
 function resolveExpectedEmbeddingCount(body: unknown): number | undefined {
-  const input = asRecord(body)?.input;
+  const input = asOptionalRecord(body)?.input;
   return Array.isArray(input) ? input.length : undefined;
 }
 
@@ -54,7 +48,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
     body: params.body,
     errorPrefix: params.errorPrefix,
     parse: (payload) => {
-      const root = asRecord(payload);
+      const root = asOptionalRecord(payload);
       if (!root || !Array.isArray(root.data)) {
         throw malformedEmbeddingResponse(params.errorPrefix);
       }
@@ -63,7 +57,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
         throw malformedEmbeddingResponse(params.errorPrefix);
       }
       return root.data.map((entry) => {
-        const record = asRecord(entry);
+        const record = asOptionalRecord(entry);
         if (!record) {
           throw malformedEmbeddingResponse(params.errorPrefix);
         }

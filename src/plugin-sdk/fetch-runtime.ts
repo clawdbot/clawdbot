@@ -1,7 +1,5 @@
 // Public fetch/proxy helpers for plugins that need wrapped fetch behavior.
 
-import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
-
 export { resolveFetch, wrapFetchWithAbortSignal } from "../infra/fetch.js";
 export {
   createHttp1EnvHttpProxyAgent,
@@ -26,11 +24,7 @@ export {
 export { getProxyUrlFromFetch, makeProxyFetch } from "../infra/net/proxy-fetch.js";
 export { createPinnedLookup } from "../infra/net/ssrf.js";
 export type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
-
-type GuardedFetchPresetOptions = Omit<
-  GuardedFetchOptions,
-  "mode" | "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
->;
+export { withTrustedEnvProxyGuardedFetchMode } from "../infra/net/fetch-guard.js";
 
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 
@@ -90,11 +84,4 @@ export function responseWithRelease(response: Response, release: () => Promise<v
     statusText: response.statusText,
     headers: response.headers,
   });
-}
-
-/** Apply the trusted-env-proxy guarded fetch preset without exposing raw mode strings to plugins. */
-export function withTrustedEnvProxyGuardedFetchMode(
-  params: GuardedFetchPresetOptions,
-): GuardedFetchOptions {
-  return { ...params, mode: "trusted_env_proxy" };
 }

@@ -3,8 +3,9 @@
  */
 
 import type { KeyId } from "@earendil-works/pi-tui";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ImageContent, Model } from "../../../llm/types.js";
-import { type Theme, theme } from "../../modes/interactive/theme/theme.js";
+import { interactiveAgentTheme as theme, type Theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { KeybindingsConfig } from "../keybindings.js";
@@ -335,7 +336,7 @@ export class ExtensionRunner {
         this.emitError({
           extensionPath,
           event: "register_provider",
-          error: err instanceof Error ? err.message : String(err),
+          error: coerceErrorMessage(err),
           stack: err instanceof Error ? err.stack : undefined,
         });
       }
@@ -734,7 +735,7 @@ export class ExtensionRunner {
             }
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -782,7 +783,7 @@ export class ExtensionRunner {
           currentMessage = handlerResult.message;
           modified = true;
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -830,7 +831,7 @@ export class ExtensionRunner {
             modified = true;
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -894,7 +895,7 @@ export class ExtensionRunner {
             return handlerResult as UserBashEventResult;
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -934,7 +935,7 @@ export class ExtensionRunner {
             currentMessages = (handlerResult as ContextEventResult).messages!;
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -970,7 +971,7 @@ export class ExtensionRunner {
             currentPayload = handlerResult;
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -1031,7 +1032,7 @@ export class ExtensionRunner {
             }
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -1094,7 +1095,7 @@ export class ExtensionRunner {
             );
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = coerceErrorMessage(err);
           const stack = err instanceof Error ? err.stack : undefined;
           this.emitError({
             extensionPath: ext.path,
@@ -1140,7 +1141,7 @@ export class ExtensionRunner {
           this.emitError({
             extensionPath: ext.path,
             event: "input",
-            error: err instanceof Error ? err.message : String(err),
+            error: coerceErrorMessage(err),
             stack: err instanceof Error ? err.stack : undefined,
           });
         }

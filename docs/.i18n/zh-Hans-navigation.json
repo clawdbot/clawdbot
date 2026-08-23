@@ -142,7 +142,6 @@
               "pages": [
                 "zh-CN/concepts/memory",
                 "zh-CN/concepts/memory-builtin",
-                "zh-CN/concepts/memory-qmd",
                 "zh-CN/concepts/memory-honcho",
                 "zh-CN/concepts/memory-search",
                 "zh-CN/concepts/active-memory",
@@ -508,8 +507,28 @@
       "tab": "发布与 CI",
       "groups": [
         {
-          "group": "发布策略",
-          "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
+          "group": "发布说明",
+          "pages": [
+            "zh-CN/releases/index",
+            "zh-CN/releases/2026.7.1",
+            "zh-CN/releases/2026.6.11"
+          ]
+        },
+        {
+          "group": "成熟度",
+          "pages": ["zh-CN/maturity/scorecard", "zh-CN/maturity/taxonomy"]
+        },
+        {
+          "group": "发布流程",
+          "pages": [
+            "zh-CN/reference/RELEASING",
+            "zh-CN/reference/full-release-validation",
+            "zh-CN/reference/release-performance-sweep"
+          ]
+        },
+        {
+          "group": "测试与 CI",
+          "pages": ["zh-CN/reference/test", "zh-CN/ci", "zh-CN/help/scripts"]
         }
       ]
     },

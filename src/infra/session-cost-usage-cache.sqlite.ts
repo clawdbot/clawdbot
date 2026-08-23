@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
@@ -241,19 +242,10 @@ function parseRefreshLock(raw: string | null): SessionCostUsageRefreshLock | nul
   }
 }
 
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
 export function isSessionCostUsageRefreshRunning(agentId?: string, databasePath?: string): boolean {
   const raw = readCacheValue(agentId, LEGACY_CACHE_SCOPE, REFRESH_LOCK_KEY, databasePath);
   const lock = parseRefreshLock(raw);
-  if (lock && isProcessRunning(lock.pid)) {
+  if (lock && isPidAlive(lock.pid)) {
     return true;
   }
   if (raw !== null) {
@@ -276,7 +268,7 @@ export function acquireSessionCostUsageRefreshLock(
   const previousLock = parseRefreshLock(previousRaw);
   // Process liveness is resolved before BEGIN. The transaction only compares
   // the authoritative row and commits the prepared replacement synchronously.
-  const previousOwnerIsRunning = previousLock ? isProcessRunning(previousLock.pid) : false;
+  const previousOwnerIsRunning = previousLock ? isPidAlive(previousLock.pid) : false;
   const lock: SessionCostUsageRefreshLock = {
     pid: process.pid,
     startedAt: Date.now(),

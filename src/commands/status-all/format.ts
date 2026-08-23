@@ -520,7 +520,7 @@ export function buildGatewayStatusJsonPayload(params: {
 }
 
 /** Redacts common credential shapes before text is printed in status diagnostics. */
-export function redactSecrets(text: string): string {
+export function redactStatusSecrets(text: string): string {
   if (!text) {
     return text;
   }

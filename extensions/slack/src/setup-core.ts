@@ -187,9 +187,24 @@ const slackSetupAdapterBase = createPatchedAccountSetupAdapter({
       return 'Slack user identity setup supports mode "socket" or "http", not "relay".';
     }
     if (setupInput.useEnv) {
-      return identity === "user"
-        ? "Slack user identity setup does not support --use-env; configure userToken and the transport credential explicitly."
-        : null;
+      if (identity === "user") {
+        return "Slack user identity setup does not support --use-env; configure userToken and the transport credential explicitly.";
+      }
+      if (
+        mode === "socket" &&
+        !normalizeOptionalString(setupInput.appToken) &&
+        account.appTokenStatus === "missing"
+      ) {
+        return "Slack Socket Mode requires SLACK_APP_TOKEN when using --use-env.";
+      }
+      if (
+        mode === "http" &&
+        !normalizeOptionalString(setupInput.signingSecret) &&
+        account.signingSecretStatus === "missing"
+      ) {
+        return "Slack HTTP mode requires a configured signing secret when using --use-env.";
+      }
+      return null;
     }
     if (hasSlackSetupCredentials({ input: setupInput, identity, mode })) {
       return null;
@@ -263,6 +278,7 @@ export const slackSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use Slack environment credentials" },
+      envVars: ["SLACK_BOT_TOKEN"],
     },
   },
   legacyAdapter: slackSetupAdapter,

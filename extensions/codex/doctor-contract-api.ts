@@ -1,9 +1,8 @@
 /**
- * Doctor contract hooks for Codex plugin config migrations and session-route
- * ownership warnings.
+ * Doctor contract hooks for Codex plugin config and state migrations.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { DoctorSessionRouteStateOwner } from "openclaw/plugin-sdk/runtime-doctor";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type LegacyConfigRule = {
   path: string[];
@@ -11,32 +10,26 @@ type LegacyConfigRule = {
   match: (value: unknown) => boolean;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function hasRetiredDynamicToolsProfile(value: unknown): boolean {
-  return Object.hasOwn(asRecord(value) ?? {}, "codexDynamicToolsProfile");
+  return Object.hasOwn(asNullableRecord(value) ?? {}, "codexDynamicToolsProfile");
 }
 
 function hasLegacyPluginDestructivePolicy(value: unknown): boolean {
-  const codexPlugins = asRecord(value);
+  const codexPlugins = asNullableRecord(value);
   if (!codexPlugins) {
     return false;
   }
   if (codexPlugins.allow_destructive_actions === "on-request") {
     return true;
   }
-  const plugins = asRecord(codexPlugins.plugins);
+  const plugins = asNullableRecord(codexPlugins.plugins);
   return Object.values(plugins ?? {}).some(
-    (plugin) => asRecord(plugin)?.allow_destructive_actions === "on-request",
+    (plugin) => asNullableRecord(plugin)?.allow_destructive_actions === "on-request",
   );
 }
 
 function hasRetiredOnFailureApprovalPolicy(value: unknown): boolean {
-  return asRecord(value)?.approvalPolicy === "on-failure";
+  return asNullableRecord(value)?.approvalPolicy === "on-failure";
 }
 
 /** Legacy Codex config keys that doctor should report or repair. */
@@ -68,10 +61,10 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   config: OpenClawConfig;
   changes: string[];
 } {
-  const rawEntry = asRecord(cfg.plugins?.entries?.codex);
-  const rawPluginConfig = asRecord(rawEntry?.config);
-  const rawCodexPlugins = asRecord(rawPluginConfig?.codexPlugins);
-  const rawAppServer = asRecord(rawPluginConfig?.appServer);
+  const rawEntry = asNullableRecord(cfg.plugins?.entries?.codex);
+  const rawPluginConfig = asNullableRecord(rawEntry?.config);
+  const rawCodexPlugins = asNullableRecord(rawPluginConfig?.codexPlugins);
+  const rawAppServer = asNullableRecord(rawPluginConfig?.appServer);
   const shouldRemoveDynamicToolsProfile =
     rawPluginConfig !== null && hasRetiredDynamicToolsProfile(rawPluginConfig);
   const shouldRewriteDestructivePolicy = hasLegacyPluginDestructivePolicy(rawCodexPlugins);
@@ -88,10 +81,10 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   const nextConfig = structuredClone(cfg) as OpenClawConfig & {
     plugins?: Record<string, unknown>;
   };
-  const nextPlugins = asRecord(nextConfig.plugins);
-  const nextEntries = asRecord(nextPlugins?.entries);
-  const nextEntry = asRecord(nextEntries?.codex);
-  const nextPluginConfig = asRecord(nextEntry?.config);
+  const nextPlugins = asNullableRecord(nextConfig.plugins);
+  const nextEntries = asNullableRecord(nextPlugins?.entries);
+  const nextEntry = asNullableRecord(nextEntries?.codex);
+  const nextPluginConfig = asNullableRecord(nextEntry?.config);
   if (!nextPluginConfig) {
     return { config: cfg, changes: [] };
   }
@@ -105,13 +98,13 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   }
 
   if (shouldRewriteDestructivePolicy) {
-    const nextCodexPlugins = asRecord(nextPluginConfig.codexPlugins);
+    const nextCodexPlugins = asNullableRecord(nextPluginConfig.codexPlugins);
     if (nextCodexPlugins?.allow_destructive_actions === "on-request") {
       nextCodexPlugins.allow_destructive_actions = "auto";
     }
-    const nextPluginPolicies = asRecord(nextCodexPlugins?.plugins);
+    const nextPluginPolicies = asNullableRecord(nextCodexPlugins?.plugins);
     for (const plugin of Object.values(nextPluginPolicies ?? {})) {
-      const nextPlugin = asRecord(plugin);
+      const nextPlugin = asNullableRecord(plugin);
       if (nextPlugin?.allow_destructive_actions === "on-request") {
         nextPlugin.allow_destructive_actions = "auto";
       }
@@ -122,7 +115,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   }
 
   if (shouldRewriteApprovalPolicy) {
-    const nextAppServer = asRecord(nextPluginConfig.appServer);
+    const nextAppServer = asNullableRecord(nextPluginConfig.appServer);
     if (nextAppServer?.approvalPolicy === "on-failure") {
       nextAppServer.approvalPolicy = "on-request";
     }
@@ -136,17 +129,5 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     changes,
   };
 }
-
-/** Session/auth ownership metadata used by doctor route-state checks. */
-export const sessionRouteStateOwners: DoctorSessionRouteStateOwner[] = [
-  {
-    id: "codex",
-    label: "Codex",
-    providerIds: ["codex", "codex-cli", "openai-codex"],
-    runtimeIds: ["codex", "codex-cli"],
-    cliSessionKeys: ["codex-cli"],
-    authProfilePrefixes: ["codex:", "codex-cli:", "openai-codex:"],
-  },
-];
 
 export { stateMigrations } from "./src/migration/session-binding-sidecars.js";

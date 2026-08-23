@@ -1,13 +1,12 @@
 // Implements ACP session commands and runtime status formatting.
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { rejectNonOwnerCommand, requireGatewayClientScope } from "./command-gates.js";
+import { commandReply, rejectNonOwnerCommand, requireGatewayClientScope } from "./command-gates.js";
 import {
   COMMAND,
   type AcpAction,
   resolveAcpAction,
   resolveAcpHelpText,
-  stopWithText,
 } from "./commands-acp/shared.js";
 import type {
   CommandHandler,
@@ -101,7 +100,7 @@ export const handleAcpCommand: CommandHandler = async (params, _allowTextCommand
   const tokens = rest.split(/\s+/).filter(Boolean);
   const action = resolveAcpAction(tokens);
   if (action === "help") {
-    return stopWithText(resolveAcpHelpText());
+    return commandReply(resolveAcpHelpText());
   }
 
   if (ACP_OWNER_REQUIRED_ACTIONS.has(action)) {

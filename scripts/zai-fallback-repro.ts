@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolvePnpmRunner } from "./pnpm-runner.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mts";
 
 type RunResult = {
   code: number | null;
@@ -125,9 +125,9 @@ export function resolveZaiFallbackPnpmCommand(
     nodeExecPath: options.execPath ?? process.execPath,
     platform: options.platform,
     pnpmArgs: args,
-  });
+  }) as PnpmCommand;
   if (command.env === undefined) {
-    const invocation = { ...command };
+    const invocation: PnpmCommand = { ...command };
     delete invocation.env;
     return invocation;
   }

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { createAgentExecutionAttribution } from "../agent-execution-attribution.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
-import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
+import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn());
@@ -44,10 +44,10 @@ vi.mock("./cli-backend-dispatch-transcript.js", () => ({
   createCliDispatchTranscriptRecorder,
 }));
 
-function baseRunParams(
-  overrides: Partial<RunEmbeddedAgentInternalParams> = {},
-): RunEmbeddedAgentInternalParams {
+function baseRunParams(overrides: Partial<RunEmbeddedAgentParams> = {}): RunEmbeddedAgentParams {
+  const runId = overrides.runId ?? "run-cli-dispatch-test";
   return {
+    admittedRunContext: createTestAdmittedRunContext(runId),
     sessionId: "recall-session",
     sessionKey: "agent:main:recall",
     sessionFile: "/tmp/recall/session.jsonl",
@@ -56,7 +56,7 @@ function baseRunParams(
     provider: "claude-cli",
     model: "claude-opus-4-8",
     timeoutMs: 30_000,
-    runId: "run-cli-dispatch-test",
+    runId,
     cliBackendDispatch: "subscription-auth" as const,
     toolsAllow: ["memory_search"],
     ...overrides,
@@ -213,7 +213,7 @@ describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
 });
 
 describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
-  const runGate = (overrides: Partial<RunEmbeddedAgentInternalParams> = {}) =>
+  const runGate = (overrides: Partial<RunEmbeddedAgentParams> = {}) =>
     runEmbeddedAgentViaCliBackendIfEligible(baseRunParams(overrides));
 
   it("returns undefined without the opt-in", async () => {
@@ -395,7 +395,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
   ] as const)("refuses dispatch for %s", async (_label, overrides) => {
     expect(
       await runEmbeddedAgentViaCliBackendIfEligible(
-        baseRunParams(overrides as Partial<RunEmbeddedAgentInternalParams>),
+        baseRunParams(overrides as Partial<RunEmbeddedAgentParams>),
       ),
     ).toBeUndefined();
     expect(runCliAgent).not.toHaveBeenCalled();
@@ -411,41 +411,20 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(onExecutionStarted).toHaveBeenCalledWith({ lifecycleGeneration: "gen-1" });
   });
 
-  it("preserves admission attribution through the embedded-to-CLI bridge", async () => {
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-cli-dispatch-test",
-      lifecycleGeneration: "gen-1",
-      sessionKey: "agent:main:recall",
-      sessionId: "recall-session",
-      agentId: "main",
-    });
-    const onExecutionStarted = vi.fn();
-    const onExecutionAttributionChanged = vi.fn();
-
-    await runEmbeddedAgentViaCliBackendIfEligible(
-      baseRunParams({
-        attribution,
-        lifecycleGeneration: "gen-1",
-        onExecutionStarted,
-        onExecutionAttributionChanged,
-      }),
-    );
-
-    expect(runCliAgent.mock.calls[0]?.[0]?.attribution).toBe(attribution);
-    expect(onExecutionStarted).toHaveBeenCalledWith({ lifecycleGeneration: "gen-1" });
-    expect(onExecutionAttributionChanged).toHaveBeenCalledWith({
-      lifecycleGeneration: "gen-1",
-      attribution,
-    });
-  });
-
-  it("retains prompt media facts through the embedded-to-CLI bridge", async () => {
+  it("retains the prepared vision capability with ordered prompt images and media", async () => {
+    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+    const imageOrder = ["inline" as const];
     const media = [{ path: "/tmp/recall.png", contentType: "image/png" }];
 
-    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ media }));
+    await runEmbeddedAgentViaCliBackendIfEligible(
+      baseRunParams({ modelHasVision: true, images, imageOrder, media }),
+    );
 
     expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
       prompt: "recall prompt",
+      modelHasVision: true,
+      images,
+      imageOrder,
       media,
     });
   });
@@ -453,9 +432,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
   it("forwards execution phases from the CLI backend", async () => {
     const onExecutionPhase = vi.fn();
     runCliAgent.mockImplementation(
-      async (cliParams: {
-        onExecutionPhase?: RunEmbeddedAgentInternalParams["onExecutionPhase"];
-      }) => {
+      async (cliParams: { onExecutionPhase?: RunEmbeddedAgentParams["onExecutionPhase"] }) => {
         cliParams.onExecutionPhase?.({
           phase: "model_call_started",
           provider: "anthropic",

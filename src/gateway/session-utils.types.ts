@@ -5,13 +5,17 @@ import type {
   SessionCreatedActor,
   SessionClassification,
   SessionPeerKind,
+  SessionOwner,
   SessionPlacement,
+  SessionPlacementMove,
   SessionRow,
+  SessionRunStatus,
   SessionSharingRole,
   SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import type { QueueMode } from "../auto-reply/reply/queue/types.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,
@@ -24,6 +28,7 @@ import type { FastModeSource } from "../shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
+  GatewayContextWindowOption,
   GatewayThinkingLevelOption,
   SessionBoardFace,
   SessionsListResultBase,
@@ -37,14 +42,14 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  contextWindow?: string;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
   agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
 };
-
-/** Runtime status surfaced for the latest session run. */
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
 type SubagentRunState = "active" | "interrupted" | "historical";
 
@@ -74,6 +79,8 @@ export type GatewaySessionRow = {
   swarmGroupId?: string;
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
+  permissionMode?: SessionEntry["permissionMode"];
+  sessionRoot?: string;
   /** Managed worktree bound to this session (repo checkout + branch). */
   worktree?: SessionEntry["worktree"];
   /** Session-scoped exec node binding (exec host=node routing). */
@@ -86,11 +93,16 @@ export type GatewaySessionRow = {
   subagentControlScope?: SessionEntry["subagentControlScope"];
   createdVia?: SessionEntry["createdVia"];
   createdActor?: SessionCreatedActor;
+  owner?: SessionOwner;
+  participants?: SessionCreatedActor[];
+  participantCount?: number;
   createdAt?: SessionEntry["createdAt"];
   forkSource?: SessionEntry["forkSource"];
   previousSessionId?: SessionEntry["previousSessionId"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
+  icon?: string;
+  channelAvatarUrl?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   /** Preferred Control UI face for generic session navigation. */
@@ -103,14 +115,13 @@ export type GatewaySessionRow = {
   groupChannel?: string;
   space?: string;
   chatType?: ChatType;
-  origin?: SessionOrigin;
+  origin?: Omit<SessionOrigin, "avatar">;
   updatedAt: number | null;
   archived?: boolean;
   archivedAt?: number;
   archivedBy?: SessionEntry["archivedBy"];
   pinned?: boolean;
   pinnedAt?: number;
-  icon?: string;
   unread?: boolean;
   lastReadAt?: number;
   agentStatus?: SessionEntry["agentStatus"];
@@ -123,9 +134,14 @@ export type GatewaySessionRow = {
   lastActivityAt?: number;
   sessionId?: string;
   placement?: SessionPlacement;
+  placementMove?: SessionPlacementMove;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  restartRecoveryStatus?: "tombstoned";
   thinkingLevel?: string;
+  contextWindow?: string;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
@@ -148,7 +164,10 @@ export type GatewaySessionRow = {
   status?: SessionRunStatus;
   /** Compact user-facing reason for the latest failed or timed-out run. */
   lastRunError?: string;
+  /** Exact run that produced the latest terminal lifecycle projection. */
+  lastRunId?: string;
   hasActiveRun?: boolean;
+  /** Complete exact active set when present; omitted for active owners without exact identities. */
   activeRunIds?: string[];
   /** Active transcript-branch leaf for history rendered from this row. */
   activeLeafEntryId?: string | null;
@@ -214,12 +233,21 @@ export type SessionsPreviewResult = {
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
+/**
+ * Per-agent completed model catalogs for a session listing. Scoped listings
+ * carry exactly one agent's catalog; unscoped listings carry one per configured
+ * agent so row projections stay owner-scoped.
+ */
+export type SessionListModelCatalog = ReadonlyMap<string, ModelCatalogEntry[] | undefined>;
+
 export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
   entry: SessionEntry;
   resolved?: {
     modelProvider?: string;
     model?: string;
     agentRuntime?: GatewayAgentRuntime;
+    contextWindow?: string;
+    contextWindows?: GatewayContextWindowOption[];
     thinkingLevel?: string;
     thinkingLevels?: GatewayThinkingLevelOption[];
   };

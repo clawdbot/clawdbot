@@ -5,16 +5,12 @@
  * export Zod schema builders, while this subpath owns config CRUD adapters,
  * config-write authorization, and DM access/policy resolution for accounts.
  */
-import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   deleteAccountFromConfigSection as deleteAccountFromConfigSectionInSection,
   setAccountEnabledInConfigSection as setAccountEnabledInConfigSectionInSection,
 } from "../channels/plugins/config-helpers.js";
 import {
-  authorizeConfigWriteShared,
-  canBypassConfigWritePolicyShared,
-  formatConfigWriteDeniedMessageShared,
   resolveChannelConfigWritesShared,
   type ConfigWriteAuthorizationResultLike,
   type ConfigWriteScopeLike,
@@ -38,8 +34,6 @@ export {
   type ChannelDmPolicy,
   type DmAccessRecord,
 } from "../channels/plugins/dm-access.js";
-
-const INTERNAL_MESSAGE_CHANNEL = "webchat";
 
 /** Origin scope used when authorizing channel config writes. */
 export type ConfigWriteScope = ConfigWriteScopeLike;
@@ -80,35 +74,11 @@ export function resolveChannelConfigWrites(params: {
   return resolveChannelConfigWritesShared(params);
 }
 
-/** Authorizes a channel config mutation against origin and target policy. */
-export function authorizeConfigWrite(params: {
-  cfg: OpenClawConfig;
-  origin?: ConfigWriteScope;
-  target?: ConfigWriteTarget;
-  allowBypass?: boolean;
-}): ConfigWriteAuthorizationResult {
-  return authorizeConfigWriteShared(params);
-}
-
-/** Returns true when trusted internal message scopes can bypass config write policy. */
-export function canBypassConfigWritePolicy(params: {
-  channel?: string | null;
-  gatewayClientScopes?: string[] | null;
-}): boolean {
-  return canBypassConfigWritePolicyShared({
-    ...params,
-    isInternalMessageChannel: (channel) =>
-      normalizeOptionalLowercaseString(channel) === INTERNAL_MESSAGE_CHANNEL,
-  });
-}
-
-/** Formats the denial message shown when config write authorization fails. */
-export function formatConfigWriteDeniedMessage(params: {
-  result: Exclude<ConfigWriteAuthorizationResult, { allowed: true }>;
-  fallbackChannelId?: string | null;
-}): string {
-  return formatConfigWriteDeniedMessageShared(params);
-}
+export {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+} from "../channels/plugins/config-writes.js";
 
 type ChannelConfigAccessorParams<Config extends OpenClawConfig = OpenClawConfig> = {
   cfg: Config;

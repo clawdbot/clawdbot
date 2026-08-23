@@ -39,20 +39,35 @@
       "import": "./dist/expect.mjs",
       "default": "./dist/expect.mjs"
     },
-    "./number-coercion": {
-      "types": "./dist/number-coercion.d.mts",
-      "import": "./dist/number-coercion.mjs",
-      "default": "./dist/number-coercion.mjs"
+    "./json-coercion": {
+      "types": "./dist/json-coercion.d.mts",
+      "import": "./dist/json-coercion.mjs",
+      "default": "./dist/json-coercion.mjs"
     },
     "./json-schema": {
       "types": "./dist/json-schema.d.mts",
       "import": "./dist/json-schema.mjs",
       "default": "./dist/json-schema.mjs"
     },
+    "./markdown-plain-text": {
+      "types": "./dist/markdown-plain-text.d.mts",
+      "import": "./dist/markdown-plain-text.mjs",
+      "default": "./dist/markdown-plain-text.mjs"
+    },
+    "./number-coercion": {
+      "types": "./dist/number-coercion.d.mts",
+      "import": "./dist/number-coercion.mjs",
+      "default": "./dist/number-coercion.mjs"
+    },
     "./phone-presentation": {
       "types": "./dist/phone-presentation.d.mts",
       "import": "./dist/phone-presentation.mjs",
       "default": "./dist/phone-presentation.mjs"
+    },
+    "./promise-like": {
+      "types": "./dist/promise-like.d.mts",
+      "import": "./dist/promise-like.mjs",
+      "default": "./dist/promise-like.mjs"
     },
     "./record-coerce": {
       "types": "./dist/record-coerce.d.mts",
@@ -91,7 +106,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/cjk-chars.ts src/error-coercion.ts src/expect.ts src/json-schema.ts src/number-coercion.ts src/phone-presentation.ts src/record-coerce.ts src/result.ts src/stable-node-path.ts src/stable-stringify.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/cjk-chars.ts src/error-coercion.ts src/expect.ts src/json-coercion.ts src/json-schema.ts src/markdown-plain-text.ts src/number-coercion.ts src/phone-presentation.ts src/promise-like.ts src/record-coerce.ts src/result.ts src/stable-node-path.ts src/stable-stringify.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "libphonenumber-js": "1.13.9",

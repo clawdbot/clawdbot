@@ -57,20 +57,20 @@ observation side effects.
 
 `api.on(name, handler, opts?)` accepts:
 
-| Option             | Effect                                                                                                                                                                                                                                                 |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `matcher`          | Non-empty list of canonical OpenClaw tool ids handled by `before_tool_call` or `after_tool_call`, such as `exec`, `apply_patch`, or `spawn_agent`. Omit to match all tools. Empty lists, wildcards, blanks, and provider-specific aliases are invalid. |
-| `priority`         | Ordering; higher runs first.                                                                                                                                                                                                                           |
-| `registrationId`   | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
-| `timeoutMs`        | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout.                                                      |
-| `eligibleTriggers` | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
+| Option                  | Effect                                                                                                                                                                                                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `matcher`               | Non-empty list of canonical OpenClaw tool ids handled by `before_tool_call` or `after_tool_call`, such as `exec`, `apply_patch`, or `spawn_agent`. Omit to match all tools. Empty lists, wildcards, blanks, and provider-specific aliases are invalid. |
+| `priority`              | Ordering; higher runs first.                                                                                                                                                                                                                           |
+| `registrationId`        | Stable identity for one registration inside a plugin. Skill evaluators use it as `evaluatorId`; otherwise the plugin id is used.                                                                                                                       |
+| `timeoutMs`             | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout.                                                      |
+| `eligibleTriggers`      | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                  |
+| `requiresToolAuthority` | For `before_prompt_build` only, runs the handler after the host finalizes the current turn's tool surface and supplies ephemeral `ctx.toolAuthority`. Use this for context retrieval that must follow tool policy.                                     |
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
 hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
-inactive for user turns and does not block recovery of an interrupted user
-turn. Omitted, empty, malformed, or partly unknown lists remain unrestricted
-so dispatch and recovery fail closed. Other hook kinds do not accept this
-option.
+inactive for user turns, including a recovered user turn. Omitted, empty,
+malformed, or partly unknown lists remain unrestricted, so the hook runs for
+those turns. Other hook kinds do not accept this option.
 
 Operators can set hook budgets without patching plugin code:
 
@@ -136,16 +136,16 @@ observation-only.
 
 **Agent turn**
 
-| Hook                            | Purpose                                                                                  |
-| ------------------------------- | ---------------------------------------------------------------------------------------- |
-| `before_model_resolve`          | Override provider or model before session messages load                                  |
-| `agent_turn_prepare`            | Consume queued plugin turn injections and add same-turn context before prompt hooks      |
-| `before_prompt_build`           | Add prompt context or narrow the current turn's submitted tool surface                   |
-| **`before_agent_run`**          | Inspect the final prompt and session messages before model submission; can block the run |
-| **`before_agent_reply`**        | Short-circuit the model turn with a synthetic reply or silence                           |
-| **`before_agent_finalize`**     | Inspect the natural final answer and request one more model pass                         |
-| `agent_end`                     | Observe final messages, success state, and run duration                                  |
-| `heartbeat_prompt_contribution` | Add heartbeat-only context for background monitor and lifecycle plugins                  |
+| Hook                            | Purpose                                                                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `before_model_resolve`          | Override provider or model before session messages load                                                     |
+| `agent_turn_prepare`            | Consume queued plugin turn injections and add same-turn context before prompt hooks                         |
+| `before_prompt_build`           | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment |
+| **`before_agent_run`**          | Inspect the final prompt and session messages before model submission; can block the run                    |
+| **`before_agent_reply`**        | Short-circuit the model turn with a synthetic reply or silence                                              |
+| **`before_agent_finalize`**     | Inspect the natural final answer and request one more model pass                                            |
+| `agent_end`                     | Observe final messages, success state, and run duration                                                     |
+| `heartbeat_prompt_contribution` | Add heartbeat-only context for background monitor and lifecycle plugins                                     |
 
 **Conversation observation**
 
@@ -204,7 +204,6 @@ For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`
 
 - `subagent_spawned` / `subagent_ended` - observe subagent launch and completion.
 - `subagent_delivery_target` - compatibility hook for completion delivery when no core session binding can project a route.
-- `subagent_spawning` - deprecated compatibility hook. Core now prepares `thread: true` subagent bindings through channel session-binding adapters before `subagent_spawned` fires.
 - `subagent_spawned` includes `resolvedModel` and `resolvedProvider` when OpenClaw has resolved the child session's native model before launch.
 - `subagent_ended` carries `targetSessionKey` (identity - matches `subagent_spawned.childSessionKey`), `targetKind` (`"subagent"` or `"acp"`), `reason`, optional `outcome` (`"ok"`, `"error"`, `"timeout"`, `"killed"`, `"reset"`, or `"deleted"`), optional `error`, `runId`, `endedAt`, `accountId`, and `sendFarewell`. It does **not** include `agentId` or `childSessionKey`; use `targetSessionKey` to correlate with the matching `subagent_spawned` event.
 
@@ -213,7 +212,6 @@ For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`
 | Hook                             | Purpose                                                                                              |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `gateway_start` / `gateway_stop` | Start or stop plugin-owned services with the Gateway                                                 |
-| `deactivate`                     | Deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins                 |
 | `cron_reconciled`                | Reconcile against the complete Gateway cron state after startup or reload                            |
 | `cron_changed`                   | Observe Gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled) |
 | **`before_install`**             | Inspect staged skill or plugin install material from a loaded plugin runtime                         |
@@ -249,6 +247,13 @@ api.on(
   { registrationId: "quality-regression", timeoutMs: 90_000 },
 );
 ```
+
+When evaluation input includes `correlationId`, OpenClaw forwards it to the
+evaluator event for both manual and apply-triggered evaluations. This value is
+caller-supplied correlation metadata, not authenticated identity or proof of
+authorization. An authorization plugin must mint or replace the value through
+a trusted entry point, bind it to the intended operation, and validate and
+consume it itself.
 
 Stored outcomes identify the evaluator, plugin id, plugin package version,
 status, and returned result. Timeouts and thrown errors are recorded as
@@ -454,12 +459,12 @@ Load the file directly and restart the Gateway:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "maintenance-agent",
+    entries: {
+      "maintenance-agent": {
+        default: true,
         workspace: "~/.openclaw/workspace-maintenance",
       },
-    ],
+    },
   },
   bindings: [
     {
@@ -573,9 +578,64 @@ Use the phase-specific hooks for new plugins:
   dynamic tools are thread-scoped and Codex `turn/start` has no tool-surface
   override; use the embedded or Copilot runtime when a plugin requires this
   policy.
+- `before_prompt_build` with `{ requiresToolAuthority: true }`: runs in a
+  second, post-policy phase. Use it when prompt enrichment reads data through
+  a tool-backed capability and the same turn must be allowed to call that
+  tool. See [Authorized prompt enrichment](#authorized-prompt-enrichment).
 - `heartbeat_prompt_contribution`: runs only for heartbeat turns and returns
   `prependContext` or `appendContext`. Intended for background monitors that
   need to summarize current state without changing user-initiated turns.
+
+### Authorized prompt enrichment
+
+Register `before_prompt_build` with `requiresToolAuthority: true` when a plugin
+must verify the finalized per-turn tool policy before retrieving context:
+
+```typescript
+api.on(
+  "before_prompt_build",
+  async (event, ctx) => {
+    const authority = ctx.toolAuthority;
+    if (!authority?.allows("memory_search")) {
+      return;
+    }
+
+    const recalledContext = await recallForPrompt(event.prompt);
+    authority.assertActive();
+    return { prependContext: recalledContext };
+  },
+  { requiresToolAuthority: true },
+);
+```
+
+The host excludes this handler from the ordinary prompt-build phase. After all
+ordinary hooks and tool restrictions settle, a supported runtime invokes it
+with `ctx.toolAuthority` bound to that exact active turn and finalized tool
+surface. Embedded, CLI, Copilot, and Codex runtimes support this phase. If a
+runtime cannot prove the authority, it skips the handler.
+
+Treat `toolAuthority` as an ephemeral capability:
+
+- `allows(toolName)` checks a canonical tool id against the finalized surface
+  and also verifies that the capability is still active.
+- `assertActive()` rejects after abort, cancellation, run replacement,
+  lifecycle rotation, or hook dispatch completion. Call it after awaited work
+  and before committing plugin-owned side effects.
+- `fingerprint` is opaque cache-partitioning input. It is not a bearer token or
+  authorization proof; never persist, transmit, or compare it as authority.
+- Return only `prependContext` or `appendContext` from this phase. It cannot
+  replace the system prompt or change `toolsAllow` after policy has settled.
+
+The host revalidates authority after each awaited handler and discards stale
+enrichment. A retained `toolAuthority` object fails closed after dispatch.
+
+This option requires a host that implements the post-policy phase. Published
+plugins must set `package.json` `openclaw.compat.pluginApi` to a range beginning
+with the first OpenClaw version they build against for this contract. Older
+hosts skip incompatible packages during discovery and reject incompatible
+installs or updates. Do not publish a package that uses this option while
+claiming compatibility with an older plugin API; an older host may otherwise
+treat an unknown option as an ordinary pre-policy hook.
 
 `before_agent_run` runs after prompt construction and before any model input,
 including prompt-local image loading and `llm_input` observation. It receives
@@ -668,9 +728,9 @@ bodies, or provider request IDs. These hooks include stable metadata such as
 `durationMs`/`outcome`, and `upstreamRequestIdHash` when OpenClaw can derive a
 bounded provider request-id hash. When the runtime has resolved
 context-window metadata, the hook event and context also include
-`contextTokenBudget`, the effective token budget after model/config/agent
-caps, plus `contextWindowSource` and `contextWindowReferenceTokens` when a
-lower cap was applied.
+`contextTokenBudget`, the effective token budget after model configuration,
+fixed model contracts, and runtime discovery, plus `contextWindowSource` and
+`contextWindowReferenceTokens` when a lower cap was applied.
 
 `before_agent_finalize` runs only when a harness is about to accept a natural
 final assistant answer. It is not the `/stop` cancellation path and does not
@@ -756,7 +816,8 @@ Use message hooks for channel-level routing and delivery policy:
 
 - `message_received`: observe inbound content, sender, `threadId`,
   `messageId`, `senderId`, optional run/session correlation, ordered `media`,
-  and metadata.
+  normalized `location`, stable `providerUpdate` identity when supplied by the
+  channel, and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `reply_payload_sending`: rewrite normalized `ReplyPayload` objects
   (including `presentation`, `delivery`, media refs, and text) or return
@@ -822,7 +883,7 @@ Decision rules:
 
 ## Install hooks
 
-Use `security.installPolicy` for operator-owned allow/block decisions. That
+Use `security.installPolicy` for operator-owned allow/warn/block decisions. That
 policy runs from OpenClaw config, covers CLI install and update paths, and
 fails closed when enabled but unavailable.
 
@@ -845,6 +906,10 @@ Use `gateway_start` to start general plugin services and `gateway_stop` to
 clean up long-running resources. The cron scheduler can still be loading when
 `gateway_start` runs, so do not use it as the baseline signal for an external
 cron projection.
+
+The legacy `api.on("deactivate", ...)` alias was removed in August 2026. Use
+`gateway_stop` for cleanup; see the
+[migration note](/plugins/sdk-migration#deactivate-hook-alias).
 
 Do not rely on the internal `gateway:startup` hook for plugin-owned runtime
 services.
@@ -1044,13 +1109,7 @@ before the next major release:
 - **Plaintext channel envelopes** in `inbound_claim` and `message_received`
   handlers. Read `BodyForAgent` and the structured user-context blocks
   instead of parsing flat envelope text. See
-  [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#active-deprecations).
-- **`subagent_spawning`** remains for compatibility with older plugins, but
-  new plugins should not return thread routing from it. Core prepares
-  `thread: true` subagent bindings through channel session-binding adapters
-  before `subagent_spawned` fires.
-- **`deactivate`** remains as a deprecated cleanup compatibility alias until
-  after 2026-08-16. New plugins should use `gateway_stop`.
+  [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#removal-timeline).
 - **`onResolution` in `before_tool_call`** now uses the typed
   `PluginApprovalResolution` union (`allow-once` / `allow-always` / `deny` /
   `timeout` / `cancelled`) instead of a free-form `string`.
@@ -1062,7 +1121,7 @@ before the next major release:
 For the full list - memory capability registration, provider thinking
 profile, external auth providers, provider discovery types, task runtime
 accessors, and the `command-auth` → `command-status` rename - see
-[Plugin SDK migration → Active deprecations](/plugins/sdk-migration#active-deprecations).
+[Plugin SDK migration → Active deprecations](/plugins/sdk-migration#removal-timeline).
 
 ## Related
 

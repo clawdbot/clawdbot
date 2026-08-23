@@ -1,9 +1,11 @@
 // Owns catalog-row menu state, actions, focus anchor, and rendering for AppSidebar.
 import { html, nothing } from "lit";
+import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import "./catalog-session-menu.ts";
 import type { CatalogSessionMenuAction } from "./catalog-session-menu.ts";
+import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 
 type SidebarCatalogSessionMenuState = CatalogSessionMenuRequest & { x: number; y: number };
 
@@ -24,12 +26,24 @@ export class SidebarCatalogMenuController {
     return this.state !== null;
   }
 
+  isOpenFor(key: CatalogSessionKey): boolean {
+    const openKey = this.state?.key;
+    return (
+      openKey?.catalogId === key.catalogId &&
+      openKey.hostId === key.hostId &&
+      openKey.threadId === key.threadId
+    );
+  }
+
   open(
     request: CatalogSessionMenuRequest,
     x: number,
     y: number,
     trigger: HTMLElement | null = null,
   ): void {
+    trigger?.dispatchEvent(
+      new CustomEvent(SESSION_MENU_OPEN_EVENT, { bubbles: true, composed: true }),
+    );
     this.hooks.beforeOpen();
     this.trigger = trigger;
     this.state = { ...request, x, y };
@@ -51,7 +65,7 @@ export class SidebarCatalogMenuController {
   ): void {
     if (action === "terminal") {
       if (menu.canOpenTerminal && this.hooks.terminalAvailable()) {
-        openCatalogSessionInTerminal(menu.key);
+        openCatalogSessionInTerminal(menu.key, menu.agentId);
       }
       return;
     }

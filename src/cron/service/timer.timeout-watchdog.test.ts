@@ -2,11 +2,11 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
-  createDeferred,
   createIsolatedRegressionJob,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { saveCronStore } from "../store.js";
@@ -16,7 +16,7 @@ import type {
   CronAgentExecutionStarted,
   CronJob,
 } from "../types.js";
-import { createCronServiceState } from "./state.js";
+import { createCronServiceState, type CronServiceDeps } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
 const timerRegressionFixtures = setupCronRegressionFixtures({
@@ -64,7 +64,7 @@ describe("cron service timer regressions", () => {
       const wallStart = Date.now();
       let abortWallMs: number | undefined;
       let abortReason: unknown;
-      const started = createDeferred<void>();
+      const started = createDeferred();
 
       const state = createCronServiceState({
         cronEnabled: true,
@@ -151,7 +151,7 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const started = createDeferred<void>();
+      const started = createDeferred();
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
       const state = createCronServiceState({
@@ -231,7 +231,7 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const started = createDeferred<void>();
+      const started = createDeferred();
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
       const onIsolatedAgentSetupTimeout = vi.fn();
@@ -300,8 +300,8 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const laneEntered = createDeferred<void>();
-      const releaseLane = createDeferred<void>();
+      const laneEntered = createDeferred();
+      const releaseLane = createDeferred();
       const laneBlocker = enqueueCommandInLane(CommandLane.CronNested, async () => {
         laneEntered.resolve();
         await releaseLane.promise;
@@ -370,7 +370,7 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const started = createDeferred<void>();
+      const started = createDeferred();
       const onIsolatedAgentSetupTimeout = vi.fn();
       const state = createCronServiceState({
         cronEnabled: true,
@@ -403,7 +403,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("times out isolated agent runs that stall before execution starts (#74803)", async () => {
+  it("lets isolated setup progress use the configured job timeout (#93912)", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -420,7 +420,7 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const started = createDeferred<void>();
+      const started = createDeferred();
       let abortObserved = false;
       let abortReason: unknown;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
@@ -451,13 +451,23 @@ describe("cron service timer regressions", () => {
               sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
               phase: "runner_entered",
             });
-            onExecutionPhase?.({
-              jobId: "isolated-pre-model-timeout-74803",
-              agentId: "main",
-              sessionId: "cron-run-session",
-              sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
-              phase: "context_engine",
-            });
+            for (const phase of [
+              "workspace",
+              "runtime_plugins",
+              "before_agent_reply",
+              "runtime_plugins",
+              "model_resolution",
+              "auth",
+              "context_engine",
+            ] as const) {
+              onExecutionPhase?.({
+                jobId: "isolated-pre-model-timeout-74803",
+                agentId: "main",
+                sessionId: "cron-run-session",
+                sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
+                phase,
+              });
+            }
             started.resolve();
             abortSignal?.addEventListener(
               "abort",
@@ -476,16 +486,21 @@ describe("cron service timer regressions", () => {
       await started.promise;
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
+      expect(abortObserved).toBe(false);
+      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_139_900);
+      now += 1_139_900;
       await timerPromise;
 
       const job = requireJob(state, "isolated-pre-model-timeout-74803");
       expect(abortObserved).toBe(true);
       expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("stalled before execution start");
+      expect(job.state.lastError).toContain("job execution timed out");
       expect(job.state.lastError).toContain("context-engine");
       expect(abortReason).toMatchObject({
         name: "TimeoutError",
-        message: expect.stringContaining("context-engine"),
+        message: expect.stringContaining("job execution timed out"),
       });
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
       const cleanupArgs = requireRecord(firstMockArg(cleanupTimedOutAgentRun));
@@ -517,7 +532,7 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const started = createDeferred<void>();
+      const started = createDeferred();
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
       const state = createCronServiceState({
@@ -625,7 +640,7 @@ describe("cron service timer regressions", () => {
 
         vi.setSystemTime(scheduledAt);
         let now = scheduledAt;
-        const started = createDeferred<void>();
+        const started = createDeferred();
         let abortObserved = false;
         const cleanupTimedOutAgentRun = vi.fn(async () => {});
         const state = createCronServiceState({
@@ -691,7 +706,7 @@ describe("cron service timer regressions", () => {
     },
   );
 
-  it("re-arms the pre-execution watchdog when before_agent_reply does not claim (#82811)", async () => {
+  it("re-arms the pre-execution watchdog when a fallback runner returns to setup (#82811)", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -720,10 +735,12 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const started = createDeferred<void>();
+      const started = createDeferred();
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
-      const sendCronFailureAlert = vi.fn(async () => {});
+      const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
+        async () => {},
+      );
       const state = createCronServiceState({
         cronEnabled: true,
         storePath: store.storePath,
@@ -751,6 +768,13 @@ describe("cron service timer regressions", () => {
               jobId: "isolated-before-agent-reply-unhandled-82811",
               phase: "before_agent_reply",
             });
+            onExecutionStarted?.({
+              jobId: "isolated-before-agent-reply-unhandled-82811",
+              phase: "runner_entered",
+              isFallback: true,
+              provider: "fallback-provider",
+              model: "fallback-model",
+            });
             onExecutionPhase?.({
               jobId: "isolated-before-agent-reply-unhandled-82811",
               phase: "runtime_plugins",
@@ -775,19 +799,38 @@ describe("cron service timer regressions", () => {
       await timerPromise;
 
       const job = requireJob(state, "isolated-before-agent-reply-unhandled-82811");
+      const diagnostic =
+        "cron: isolated agent run stalled before execution start (last phase: runtime-plugins)";
       expect(abortObserved).toBe(true);
       expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("stalled before execution start");
-      expect(job.state.lastError).toContain("runtime-plugins");
+      expect(job.state.lastError).toBe(diagnostic);
+      expect(job.state.lastDiagnosticSummary).toBe(diagnostic);
+      expect(job.state.lastDiagnostics).toEqual({
+        summary: diagnostic,
+        entries: [
+          { source: "cron-setup", severity: "error", message: diagnostic, ts: scheduledAt },
+        ],
+      });
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
       expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-      expect(sendCronFailureAlert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "telegram",
-          to: "12345",
-          text: expect.stringContaining("runtime-plugins"),
+      expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith({
+        job: expect.objectContaining({
+          id: "isolated-before-agent-reply-unhandled-82811",
+          state: expect.objectContaining({ lastDiagnosticSummary: diagnostic }),
         }),
-      );
+        payload: {
+          text:
+            'Automation "before agent reply unhandled regression" failed 1 times\n' +
+            "Check automation history for details.",
+        },
+        runAtMs: expect.any(Number),
+        channel: "telegram",
+        to: "12345",
+        mode: "announce",
+        accountId: undefined,
+        threadId: undefined,
+        inheritSessionThread: false,
+      });
     } finally {
       vi.useRealTimers();
     }

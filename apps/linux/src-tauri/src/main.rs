@@ -1,10 +1,14 @@
-#[cfg(target_os = "linux")]
-mod canvas;
 mod cli;
 mod discovery;
 mod gateway;
 mod gateway_device_identity;
 mod gateway_operation_queue;
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+mod gateway_sleep;
+#[cfg(target_os = "linux")]
+mod gateway_sleep_logind;
+#[cfg(target_os = "linux")]
+mod gateway_sleep_logind_listener;
 mod gateway_ws;
 mod installer;
 mod notify;
@@ -730,11 +734,9 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_denylist(&["canvas", quickchat::QUICKCHAT_LABEL])
+                .with_denylist(&[quickchat::QUICKCHAT_LABEL])
                 .build(),
         );
-    #[cfg(target_os = "linux")]
-    let builder = canvas::register_protocol(builder);
 
     let builder = builder.setup(move |app| {
         let window = app
@@ -743,6 +745,10 @@ fn main() {
         let state = DesktopState::new(window.url()?);
         app.manage(state.clone());
         app.manage(gateway_ws::GatewayClient::new());
+        #[cfg(target_os = "linux")]
+        app.manage(gateway_sleep_logind::SleepBridge::start(
+            app.handle().clone(),
+        ));
         let operation_app = app.handle().clone();
         let operation_state = state.clone();
         let error_app = app.handle().clone();
@@ -778,44 +784,9 @@ fn main() {
         app.manage(discovery::GatewayDiscovery::default());
         app.manage(quickchat_state.clone());
         app.manage(updater::UpdaterState::default());
-        #[cfg(target_os = "linux")]
-        match canvas::CanvasBridge::start(app.handle().clone()) {
-            Ok(bridge) => {
-                app.manage(bridge);
-            }
-            Err(error) => eprintln!("Canvas bridge unavailable: {error}"),
-        }
         state.set_tray(tray::build(app, state.clone(), global_shortcuts_supported)?);
         Ok(())
     });
-    #[cfg(target_os = "linux")]
-    let builder = builder.invoke_handler(tauri::generate_handler![
-        bootstrap,
-        build_info,
-        canvas::canvas_a2ui_action,
-        updater::check_for_updates,
-        discovery::connect_discovered_gateway,
-        discovery::discover_gateways,
-        install_cli,
-        gateway_action,
-        quickchat::quickchat_activate,
-        quickchat::quickchat_agents,
-        quickchat::quickchat_hide,
-        quickchat::quickchat_identity,
-        quickchat::quickchat_ready,
-        quickchat::quickchat_select_agent,
-        quickchat::quickchat_send,
-        quickchat::quickchat_set_expanded,
-        quickchat::quickchat_set_shortcut,
-        quickchat::quickchat_shortcut,
-        quickchat::quickchat_show_dashboard,
-        quickchat_widgets::quickchat_refresh_widget_surface,
-        quickchat_widgets::quickchat_sync_widgets,
-        updater::open_release_page,
-        updater::relaunch,
-        updater::updater_ready
-    ]);
-    #[cfg(not(target_os = "linux"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         bootstrap,
         build_info,
@@ -874,7 +845,7 @@ fn main() {
     app.run(|app, event| {
         #[cfg(target_os = "linux")]
         if matches!(event, tauri::RunEvent::Exit) {
-            if let Some(bridge) = app.try_state::<canvas::CanvasBridge>() {
+            if let Some(bridge) = app.try_state::<gateway_sleep_logind::SleepBridge>() {
                 bridge.shutdown();
             }
         }

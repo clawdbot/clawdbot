@@ -1,8 +1,8 @@
 import { css } from "lit";
 
 export const terminalPanelUploadStyles = css`
-  .tp-icon:disabled {
-    opacity: 0.35;
+  .rail-header__action:disabled {
+    opacity: var(--rail-header-action-disabled-opacity, 0.4);
     pointer-events: none;
   }
   .tp-file-input {
@@ -85,7 +85,7 @@ export const terminalPanelUploadStyles = css`
     background: transparent;
     color: var(--muted, #8a919e);
     font: inherit;
-    cursor: pointer;
+    cursor: var(--cursor-action);
   }
   .tp-upload-card__action:hover {
     background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);

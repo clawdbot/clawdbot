@@ -1,6 +1,6 @@
 // Tests for CLI message text formatting helpers (renderMessageList, formatMessageCliText).
 import { describe, expect, it, vi } from "vitest";
-import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
+import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import { formatMessageCliText } from "./message-format.js";
 
 const getChannelPluginMock = vi.hoisted(() =>
@@ -236,15 +236,59 @@ describe("formatMessageCliText poll results", () => {
         via: "direct",
         result: {
           messageId: "p1",
-          conversationId: "conv-1",
+          target: { kind: "conversation", id: "conv-1" },
           pollId: "poll-1",
         },
       },
-    } satisfies MessageActionRunResult;
+    } satisfies MessageActionResult;
 
     expect(formatMessageCliText(result)).toEqual([
       "✅ Poll sent via Direct Chat. Message ID: p1 (conversation conv-1)",
       "Poll id: poll-1",
     ]);
+  });
+});
+
+describe("formatMessageCliText broadcast results", () => {
+  it("reports aggregate failure while preserving every target row", () => {
+    const result = {
+      kind: "broadcast",
+      action: "broadcast",
+      channel: "directchat",
+      handledBy: "core",
+      payload: {
+        results: [
+          ...Array.from({ length: 51 }, (_, index) => ({
+            channel: "directchat" as const,
+            to: `room-ok-${index}`,
+            ok: true as const,
+          })),
+          {
+            channel: "directchat",
+            to: "room-suppressed",
+            ok: false,
+            error: "Broadcast send suppressed: cancelled_by_message_sending_hook.",
+          },
+          {
+            channel: "directchat",
+            to: "room-partial",
+            ok: false,
+            error: "second payload failed",
+            sentBeforeError: true,
+          },
+        ],
+      },
+      dryRun: false,
+    } satisfies MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+
+    expect(output).toContain("Broadcast failed (51/53 succeeded, 2 failed)");
+    expect(output).not.toContain("Broadcast complete");
+    expect(output).toContain("room-ok-50");
+    expect(output).toContain("room-suppressed");
+    expect(output).toContain("room-partial");
+    expect(output).toContain("Broadcast send suppressed");
+    expect(output).toContain("second payload failed");
   });
 });

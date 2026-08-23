@@ -190,7 +190,7 @@ describe("diagnostics-otel gateway runtime", () => {
       }>;
       const readPlans = scenarioRequests.filter((request) => request.plannedToolName === "read");
       const finalizations = scenarioRequests.filter((request) =>
-        String(request.allInputText ?? "").includes(
+        (request.allInputText ?? "").includes(
           "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
         ),
       );
@@ -199,20 +199,20 @@ describe("diagnostics-otel gateway runtime", () => {
       expect(finalizations).toHaveLength(1);
       expect(finalizations[0]?.body?.tools ?? []).toHaveLength(0);
       expect(finalizations[0]?.allInputText).toContain(
-        "state that failure plainly and do not claim it succeeded",
+        "If a tool failed, say so; never claim completion or success.",
       );
       const finalizationInput = finalizations[0]?.body?.input ?? [];
       const failedExecCalls = finalizationInput.filter(
         (item) =>
           item.type === "function_call" &&
           item.name === "exec" &&
-          String(item.arguments ?? "").includes("qa-failed-terminal-missing-file.txt"),
+          JSON.stringify(item.arguments ?? "").includes("qa-failed-terminal-missing-file.txt"),
       );
       const failedExecOutputs = finalizationInput.filter(
         (item) =>
           item.type === "function_call_output" &&
           item.call_id === failedExecCalls[0]?.call_id &&
-          /ENOENT|no such file/iu.test(String(item.output ?? "")),
+          /ENOENT|no such file/iu.test(JSON.stringify(item.output ?? "")),
       );
       expect(failedExecCalls).toHaveLength(1);
       expect(failedExecOutputs).toHaveLength(1);
@@ -250,15 +250,8 @@ describe("diagnostics-otel gateway runtime", () => {
         },
         45_000,
         () => ({
-          requests: activeReceiver.capturedRequests,
-          spans: activeReceiver.capturedSpans.map((span) => ({
-            attributes: span.attributes,
-            name: span.name,
-            parentSpanId: span.parentSpanId,
-            spanId: span.spanId,
-            statusCode: span.statusCode,
-            traceId: span.traceId,
-          })),
+          requests: activeReceiver.capturedRequests.slice(-8),
+          traces: activeReceiver.recentTraceSummary(),
         }),
       );
 

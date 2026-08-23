@@ -16,8 +16,7 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles/store.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import type { AuthProfileStore, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   COPILOT_INTEGRATION_ID,
   buildCopilotIdeHeaders,
@@ -34,6 +33,7 @@ import {
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { logWarn } from "../logger.js";
 import {
   DEFAULT_GITHUB_COPILOT_DOMAIN,
@@ -60,14 +60,13 @@ export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-prof
 export {
   ensureAuthProfileStore,
   ensureAuthProfileStoreForLocalUpdate,
-  updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store.js";
+export { listProfilesForProvider, upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 export {
-  listProfilesForProvider,
-  removeProviderAuthProfilesWithLock,
-  upsertAuthProfile,
-  upsertAuthProfileWithLock,
-} from "../agents/auth-profiles/profiles.js";
+  removeProviderAuthProfilesWithLockCompat as removeProviderAuthProfilesWithLock,
+  updateAuthProfileStoreWithLockCompat as updateAuthProfileStoreWithLock,
+  upsertAuthProfileWithLockCompat as upsertAuthProfileWithLock,
+} from "./provider-auth-write-compat.js";
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
 export {
   readClaudeCliCredentialsCached,
@@ -109,7 +108,7 @@ export {
 } from "../plugins/provider-auth-helpers.js";
 export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 export { coerceSecretRef, hasConfiguredSecretInput } from "../config/types.secrets.js";
-export { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+export { resolveDefaultSecretProviderAlias } from "./secret-provider-alias.js";
 export { resolveRequiredHomeDir } from "../infra/home-dir.js";
 export {
   normalizeOptionalSecretInput,
@@ -271,12 +270,6 @@ function parseCopilotTokenResponse(value: unknown): {
   }
 
   return { token, expiresAt: expiresAtMs };
-}
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */

@@ -1,17 +1,23 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * OpenAI Responses payload policy.
  * Classifies endpoint capabilities and applies store, prompt-cache,
  * server-compaction, service-tier, and reasoning payload rules.
  */
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { supportsOpenAIReasoningEffort } from "../providers/openai-reasoning-effort.js";
+import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;
   baseUrl?: unknown;
   id?: unknown;
   provider?: unknown;
+  contextTokens?: unknown;
   contextWindow?: unknown;
   compat?: unknown;
 };
@@ -49,7 +55,7 @@ type OpenAIResponsesEndpointClass =
 
 type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
-  compactThreshold: number;
+  compactThreshold: number | undefined;
   explicitStore: boolean | undefined;
   shouldStripDisabledReasoningPayload: boolean;
   shouldStripInputStatus: boolean;
@@ -66,13 +72,6 @@ type OpenAIResponsesPayloadCapabilities = {
   usesKnownNativeOpenAIRoute: boolean;
 };
 
-const OPENAI_RESPONSES_APIS = new Set([
-  "openai-responses",
-  "azure-openai-responses",
-  "openai-chatgpt-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-openai-chatgpt-responses-transport",
-]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
@@ -85,11 +84,6 @@ const MOONSHOT_NATIVE_BASE_URLS = new Set([
   "https://api.moonshot.ai/v1",
   "https://api.moonshot.cn/v1",
 ]);
-
-function normalizeLowercaseString(value: unknown): string | undefined {
-  const stringValue = readStringValue(value)?.trim().toLowerCase();
-  return stringValue ? stringValue : undefined;
-}
 
 function normalizeComparableBaseUrl(value: unknown): string | undefined {
   const trimmed = readStringValue(value)?.trim();
@@ -186,7 +180,14 @@ function resolveBundledOpenAIResponsesEndpointClass(
   if (hostMatchesSuffix(host, ".githubcopilot.com")) {
     return "github-copilot-native";
   }
-  if (hostMatchesSuffix(host, ".openai.azure.com")) {
+  if (
+    [
+      ".openai.azure.com",
+      ".cognitiveservices.azure.com",
+      ".services.ai.azure.com",
+      ".api.cognitive.microsoft.com",
+    ].some((suffix) => hostMatchesSuffix(host, suffix))
+  ) {
     return "azure-openai";
   }
   if (hostMatchesSuffix(host, "openrouter.ai")) {
@@ -228,8 +229,8 @@ function readCompatPayloadBoolean(
 function resolveOpenAIResponsesPayloadCapabilities(
   model: OpenAIResponsesPayloadModel,
 ): OpenAIResponsesPayloadCapabilities {
-  const provider = normalizeLowercaseString(model.provider);
-  const api = normalizeLowercaseString(model.api);
+  const provider = normalizeOptionalLowercaseString(model.provider);
+  const api = normalizeOptionalLowercaseString(model.api);
   const isOpenAIProvider = provider === "openai";
   const endpointClass = resolveBundledOpenAIResponsesEndpointClass(model.baseUrl);
   const isResponsesApi = isOpenAIResponsesApi(api);
@@ -285,30 +286,57 @@ function parsePositiveInteger(value: unknown): number | undefined {
   return undefined;
 }
 
-function resolveOpenAIResponsesCompactThreshold(model: { contextWindow?: unknown }): number {
+function resolveOpenAIResponsesCompactThreshold(model: {
+  contextTokens?: unknown;
+  contextWindow?: unknown;
+}): number {
+  const contextTokens = parsePositiveInteger(model.contextTokens);
   const contextWindow = parsePositiveInteger(model.contextWindow);
-  if (contextWindow) {
-    return Math.max(1_000, Math.floor(contextWindow * 0.7));
+  const effectiveBudget =
+    contextTokens && contextWindow
+      ? Math.min(contextTokens, contextWindow)
+      : contextTokens || contextWindow;
+  if (effectiveBudget) {
+    return Math.max(1_000, Math.floor(effectiveBudget * 0.7));
   }
   return 80_000;
 }
 
-function shouldEnableOpenAIResponsesServerCompaction(
-  explicitStore: boolean | undefined,
-  provider: unknown,
-  extraParams: Record<string, unknown> | undefined,
-): boolean {
+/** Resolve the server-compaction gate and effective threshold for a Responses route. */
+export function resolveOpenAIResponsesServerCompactionPlan(
+  model: OpenAIResponsesPayloadModel,
+  extraParams?: Record<string, unknown>,
+): { enabled: boolean; threshold: number | undefined } {
+  const provider = normalizeOptionalLowercaseString(model.provider);
+  const allowsResponsesStore =
+    resolveOpenAIResponsesPayloadCapabilities(model).allowsResponsesStore;
   const configured = extraParams?.responsesServerCompaction;
-  if (configured === false) {
-    return false;
-  }
-  if (explicitStore !== true) {
-    return false;
-  }
-  if (configured === true) {
-    return true;
-  }
-  return provider === "openai";
+  const enabled =
+    configured !== false && allowsResponsesStore && (configured === true || provider === "openai");
+  return {
+    enabled,
+    threshold: enabled
+      ? (parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
+        resolveOpenAIResponsesCompactThreshold(model))
+      : undefined,
+  };
+}
+
+/** Resolve the manual Responses compact-endpoint gate for one route. */
+export function resolveOpenAIResponsesCompactEndpointPlan(
+  model: OpenAIResponsesPayloadModel,
+  extraParams?: Record<string, unknown>,
+): { enabled: boolean } {
+  const configured = extraParams?.responsesCompactEndpoint;
+  const provider = typeof model.provider === "string" ? normalizeProviderId(model.provider) : "";
+  return {
+    enabled:
+      isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api)) &&
+      (configured === true ||
+        (configured !== false &&
+          (provider === "xai" || provider === "x-ai") &&
+          resolveBundledOpenAIResponsesEndpointClass(model.baseUrl) === "xai-native")),
+  };
 }
 
 function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>): void {
@@ -359,19 +387,21 @@ export function resolveOpenAIResponsesPayloadPolicy(
         : capabilities.allowsResponsesStore
           ? true
           : undefined;
-  const isResponsesApi = isOpenAIResponsesApi(normalizeLowercaseString(model.api));
+  const isResponsesApi = isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api));
   const shouldStripDisabledReasoningPayload =
     isResponsesApi &&
     (!capabilities.usesKnownNativeOpenAIRoute || !supportsOpenAIReasoningEffort(model, "none"));
   // Strict OpenAI-compatible Responses endpoints reject output-only fields
   // such as `status` on replayed input items. Strip them for non-native routes.
   const shouldStripInputStatus = isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute;
+  const serverCompactionPlan = resolveOpenAIResponsesServerCompactionPlan(
+    model,
+    options.extraParams,
+  );
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
-    compactThreshold:
-      parsePositiveInteger(options.extraParams?.responsesCompactThreshold) ??
-      resolveOpenAIResponsesCompactThreshold(model),
+    compactThreshold: serverCompactionPlan.threshold,
     explicitStore,
     shouldStripDisabledReasoningPayload,
     shouldStripInputStatus,
@@ -381,13 +411,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
       explicitStore !== true &&
       readCompatPayloadBoolean(model.compat, "supportsStore") === false &&
       isResponsesApi,
-    useServerCompaction:
-      options.enableServerCompaction === true &&
-      shouldEnableOpenAIResponsesServerCompaction(
-        explicitStore,
-        model.provider,
-        options.extraParams,
-      ),
+    useServerCompaction: options.enableServerCompaction === true && serverCompactionPlan.enabled,
   };
 }
 
@@ -406,7 +430,11 @@ export function applyOpenAIResponsesPayloadPolicy(
     delete payloadObj.prompt_cache_key;
     delete payloadObj.prompt_cache_retention;
   }
-  if (policy.useServerCompaction && payloadObj.context_management === undefined) {
+  if (
+    policy.useServerCompaction &&
+    policy.compactThreshold !== undefined &&
+    payloadObj.context_management === undefined
+  ) {
     payloadObj.context_management = [
       {
         type: "compaction",

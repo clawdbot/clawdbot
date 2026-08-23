@@ -20,16 +20,21 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
   resolveRunModelFallbacksOverride,
 } from "../agent-scope.js";
+import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
+import {
+  getPreparedModelRuntimePluginGeneration,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -78,21 +83,7 @@ const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
-  // The plugin-facing API is a JavaScript boundary. Strip host-only fields even
-  // when an untyped caller adds them to the public params object.
-  const {
-    attribution: _attribution,
-    onExecutionAttributionChanged: _onExecutionAttributionChanged,
-    ...publicParams
-  } = paramsInput as RunEmbeddedAgentParams &
-    Pick<RunEmbeddedAgentInternalParams, "attribution" | "onExecutionAttributionChanged">;
-  return runEmbeddedAgentInternal(publicParams);
-}
-
-export function runEmbeddedAgentInternal(
-  paramsInput: RunEmbeddedAgentInternalParams,
-): Promise<EmbeddedAgentRunResult> {
-  const internalParamsInput = paramsInput;
+  const internalParamsInput = paramsInput as RunEmbeddedAgentInternalParams;
   const requestedProvider = normalizeOptionalString(internalParamsInput.provider);
   const requestedModel = normalizeOptionalString(internalParamsInput.model);
   const needsConfiguredDefault =
@@ -103,18 +94,29 @@ export function runEmbeddedAgentInternal(
   const lifecycleGeneration =
     internalParamsInput.lifecycleGeneration ??
     captureAgentRunLifecycleGeneration(internalParamsInput.runId);
+  // Isolated probes acquire their own read-only runtime snapshot. Carrying the caller's
+  // ambient generation makes the admission guard reject that independent snapshot.
+  const pluginGeneration =
+    internalParamsInput.pluginGeneration ??
+    (internalParamsInput.preparedModelRuntimeMode === "isolated-read-only"
+      ? undefined
+      : getPreparedModelRuntimePluginGeneration());
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    runEmbeddedAgentOrchestrated({
+    runEmbeddedAgentInternal({
       ...internalParamsInput,
       config,
       lifecycleGeneration,
+      ...(pluginGeneration ? { pluginGeneration } : {}),
     }),
   );
 }
 
-async function runEmbeddedAgentOrchestrated(
+async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
+  const contextEngineAgentId =
+    normalizeOptionalString(paramsInput.sessionTarget?.agentId) ??
+    normalizeOptionalString(paramsInput.agentId);
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
     ? (paramsBase.skillWorkshopProposalMutationBudget ?? { remaining: 1 })
@@ -149,11 +151,10 @@ async function runEmbeddedAgentOrchestrated(
   // Outer fallback attempts defer session suspension only while another
   // candidate remains. Direct and final-candidate runs suspend normally.
   const failureSuspension = resolveSessionSuspensionTarget();
-  const suspendForFailure = (suspensionParams: Omit<SessionSuspensionParams, "laneId">) => {
+  const suspendForFailure = (suspensionParams: SessionSuspensionParams) => {
     const suspension = buildEmbeddedFailureSuspension({
       suspension: suspensionParams,
       runAgentId: params.agentId,
-      laneId: globalLane,
     });
     if (failureSuspension.mode === "defer") {
       failureSuspension.defer(suspension);
@@ -233,7 +234,9 @@ async function runEmbeddedAgentOrchestrated(
         provider: params.provider,
         model: params.model,
       });
-      const requestedHarnessRuntime = params.agentHarnessId ?? params.agentHarnessRuntimeOverride;
+      const explicitHarnessRuntime = params.agentHarnessId ?? params.agentHarnessRuntimeOverride;
+      const requestedHarnessRuntime =
+        explicitHarnessRuntime ?? params.agentHarnessRuntimePreparationHint;
       const runtimePluginFallbacksOverride =
         params.modelFallbacksOverride ??
         resolveRunModelFallbacksOverride({
@@ -241,14 +244,25 @@ async function runEmbeddedAgentOrchestrated(
           agentId: requestedWorkspaceResolution.agentId,
           sessionKey: params.sessionKey,
         });
+      const pluginMetadataSnapshot =
+        params.pluginGeneration?.pluginMetadataSnapshot ??
+        loadPluginMetadataSnapshot({
+          config,
+          workspaceDir: requestedWorkspaceResolution.workspaceDir,
+          env: process.env,
+        });
       const runtimePluginSelections = resolveModelCandidateChain({
         cfg: config,
+        agentId: requestedWorkspaceResolution.agentId,
+        manifestPlugins: pluginMetadataSnapshot.plugins,
         provider: requestedRuntimeSelection.provider,
         model: requestedRuntimeSelection.modelId,
         requestedRouteResolution: "resolved",
         fallbacksOverride: runtimePluginFallbacksOverride,
-      }).map((candidate) =>
-        requestedHarnessRuntime
+      }).map((candidate, index) =>
+        requestedHarnessRuntime &&
+        // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
+        (index === 0 || explicitHarnessRuntime)
           ? {
               provider: candidate.provider,
               modelId: candidate.model,
@@ -265,10 +279,15 @@ async function runEmbeddedAgentOrchestrated(
         config,
         agentId: requestedWorkspaceResolution.agentId,
         agentDir: requestedAgentDir,
-        inheritedAuthDir: resolveDefaultAgentDir(config),
+        // Shared credential inheritance stays anchored to its compatibility owner;
+        // the selected session agent already owns this prepared runtime.
+        inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
         workspaceDir: requestedWorkspaceResolution.workspaceDir,
         preserveWorkspaceDirOnRefresh: !requestedWorkspaceResolution.isCanonicalWorkspace,
         ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+        ...(params.preparedModelRuntimeMode === "isolated-read-only"
+          ? { loadRuntimePlugins: true }
+          : {}),
         runtimePluginSelections,
       };
       startupStages.mark("harness-selection");
@@ -281,11 +300,24 @@ async function runEmbeddedAgentOrchestrated(
         () =>
           params.preparedModelRuntimeMode === "isolated-read-only"
             ? acquireReadOnlyPreparedModelRuntime(preparedInput)
-            : acquireAgentRunPreparedModelRuntime(preparedInput, { retainIdleRunOwner }),
+            : acquireAgentRunPreparedModelRuntime(preparedInput, {
+                retainIdleRunOwner,
+                // Turns need only configured admission facts. Full live model inventory remains
+                // available through the snapshot's lazy control-plane loader.
+                catalogMode: "static",
+                ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
+              }),
       );
       startupStages.mark("prepared-runtime");
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       try {
+        if (
+          params.pluginGeneration &&
+          preparedModelRuntimeOwnerSnapshot.metadataSnapshot !==
+            params.pluginGeneration.pluginMetadataSnapshot
+        ) {
+          throw new Error("prepared model runtime replaced the admitted plugin generation");
+        }
         // A reload may complete while admission waits. The committed generation owns config,
         // directories, model selection, hooks, fallbacks, and every later run projection.
         const rebound = bindRunToPreparedModelRuntime({
@@ -330,10 +362,6 @@ async function runEmbeddedAgentOrchestrated(
             tracker: startupStages,
           });
           params.onExecutionStarted?.({ lifecycleGeneration });
-          params.onExecutionAttributionChanged?.({
-            lifecycleGeneration,
-            ...(params.attribution ? { attribution: params.attribution } : {}),
-          });
           notifyExecutionPhase("runner_entered");
           const canonicalWorkspace = resolveUserPath(
             resolveAgentWorkspaceDir(preparedModelRuntime.config, preparedAgentId),
@@ -413,11 +441,13 @@ async function runEmbeddedAgentOrchestrated(
 
           return await executePreparedEmbeddedRun({
             runParams: params,
+            contextEngineAgentId,
             provider,
             modelId,
             agentDir,
             workspaceResolution,
             workspaceDir: resolvedWorkspace,
+            bootstrapWorkspaceDir: canonicalWorkspace,
             isCanonicalWorkspace,
             globalLane,
             hookRunner,
@@ -436,10 +466,14 @@ async function runEmbeddedAgentOrchestrated(
             preparedModelRuntime,
           });
         };
-        return await withPluginRuntimeRegistryScope(
-          preparedModelRuntime.pluginRegistry,
-          runPrepared,
-        );
+        const runWithPreparedRuntime = () =>
+          withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared);
+        return params.pluginGeneration
+          ? await withPreparedModelRuntimePluginGenerationScope(
+              params.pluginGeneration,
+              runWithPreparedRuntime,
+            )
+          : await runWithPreparedRuntime();
       } finally {
         preparedModelRuntimeLease.release();
       }

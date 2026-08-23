@@ -1,15 +1,19 @@
 // Remote filesystem bridge tests cover SSH-style sandbox file operations using
 // the pinned mutation helper and remote stat/path guards.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
+import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-helper.js";
 import { createSandbox } from "./fs-bridge.test-helpers.js";
 import {
   createRemoteShellSandboxFsBridge,
   type RemoteShellSandboxHandle,
 } from "./remote-fs-bridge.js";
+import {
+  createLocalRemoteShellScriptRunner,
+  type LocalRemoteShellSpawn,
+  type LocalRemoteShellSpawnResult,
+} from "./remote-fs-bridge.test-helpers.js";
 
 function shellResult(stdout: string) {
   return { stdout: Buffer.from(stdout), stderr: Buffer.alloc(0), code: 0 };
@@ -43,6 +47,7 @@ function createStatRuntime(
 function createLocalRemoteRuntime(params: {
   remoteWorkspaceDir: string;
   remoteAgentWorkspaceDir: string;
+  spawn?: LocalRemoteShellSpawn;
 }) {
   // Execute remote shell snippets locally so the bridge scripts are exercised
   // without a real SSH host.
@@ -50,37 +55,10 @@ function createLocalRemoteRuntime(params: {
   const runtime: RemoteShellSandboxHandle = {
     remoteWorkspaceDir: params.remoteWorkspaceDir,
     remoteAgentWorkspaceDir: params.remoteAgentWorkspaceDir,
-    runRemoteShellScript: async (command) => {
-      calls.push(command);
-      const result = command.script.includes("python3 /dev/fd/3 \"$@\" 3<<'PY'")
-        ? spawnSync("python3", ["-c", SANDBOX_PINNED_MUTATION_PYTHON, ...(command.args ?? [])], {
-            input: command.stdin,
-            encoding: "buffer",
-            stdio: ["pipe", "pipe", "pipe"],
-          })
-        : spawnSync("sh", ["-c", command.script, "openclaw-sandbox-fs", ...(command.args ?? [])], {
-            input: command.stdin,
-            encoding: "buffer",
-            stdio: ["pipe", "pipe", "pipe"],
-          });
-      const stdout = Buffer.isBuffer(result.stdout)
-        ? result.stdout
-        : Buffer.from(result.stdout ?? []);
-      const stderr = Buffer.isBuffer(result.stderr)
-        ? result.stderr
-        : Buffer.from(result.stderr ?? []);
-      const code = result.status ?? (result.signal ? 128 : 1);
-      if (result.error) {
-        throw result.error;
-      }
-      if (code !== 0 && !command.allowFailure) {
-        throw Object.assign(
-          new Error(stderr.toString("utf8").trim() || `shell exited with code ${code}`),
-          { code, stdout, stderr },
-        );
-      }
-      return { stdout, stderr, code };
-    },
+    runRemoteShellScript: createLocalRemoteShellScriptRunner({
+      spawn: params.spawn,
+      onCommand: (command) => calls.push(command),
+    }),
   };
   return { calls, runtime };
 }
@@ -100,6 +78,89 @@ function createWorkspaceReadBridge(workspaceDir: string) {
 }
 
 describe("remote sandbox fs bridge", () => {
+  it("preserves an authoritative create collision when stdin closes with EPIPE", async () => {
+    const pipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    const { runtime } = createLocalRemoteRuntime({
+      remoteWorkspaceDir: "/workspace",
+      remoteAgentWorkspaceDir: "/workspace",
+      spawn: () => ({
+        error: pipeError,
+        status: SANDBOX_CREATE_EXISTS_EXIT_CODE,
+        signal: null,
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+      }),
+    });
+
+    await expect(
+      runtime.runRemoteShellScript({
+        script: "python3 /dev/fd/3 \"$@\" 3<<'PY'",
+        args: ["create", "/workspace", "", "existing.txt", "1"],
+        stdin: Buffer.alloc(1_048_576),
+        allowFailure: true,
+      }),
+    ).resolves.toMatchObject({ code: SANDBOX_CREATE_EXISTS_EXIT_CODE });
+  });
+
+  it.each([
+    {
+      name: "an unrecognized script",
+      command: { script: "exit 17" },
+      result: {},
+    },
+    {
+      name: "a non-create operation",
+      command: { args: ["read", "/workspace", "", "existing.txt"] },
+      result: {},
+    },
+    {
+      name: "a disallowed failure",
+      command: { allowFailure: false },
+      result: {},
+    },
+    {
+      name: "a different exit status",
+      command: {},
+      result: { status: SANDBOX_CREATE_EXISTS_EXIT_CODE + 1 },
+    },
+    {
+      name: "a signaled child",
+      command: {},
+      result: { status: null, signal: "SIGTERM" as NodeJS.Signals },
+    },
+    {
+      name: "a non-EPIPE spawn error",
+      command: {},
+      result: { errorCode: "ECONNRESET" },
+    },
+  ])("keeps spawn errors fatal for $name", async ({ command, result }) => {
+    const spawnError = Object.assign(new Error("spawn failed"), {
+      code: "errorCode" in result ? result.errorCode : "EPIPE",
+    });
+    const spawnResult: LocalRemoteShellSpawnResult = {
+      error: spawnError,
+      status: result.status === undefined ? SANDBOX_CREATE_EXISTS_EXIT_CODE : result.status,
+      signal: result.signal === undefined ? null : result.signal,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+    };
+    const { runtime } = createLocalRemoteRuntime({
+      remoteWorkspaceDir: "/workspace",
+      remoteAgentWorkspaceDir: "/workspace",
+      spawn: () => spawnResult,
+    });
+
+    await expect(
+      runtime.runRemoteShellScript({
+        script: "python3 /dev/fd/3 \"$@\" 3<<'PY'",
+        args: ["create", "/workspace", "", "existing.txt", "1"],
+        stdin: Buffer.alloc(1_048_576),
+        allowFailure: true,
+        ...command,
+      }),
+    ).rejects.toBe(spawnError);
+  });
+
   it.runIf(process.platform !== "win32")(
     "creates files exclusively and preserves existing entries",
     async () => {
@@ -159,7 +220,7 @@ describe("remote sandbox fs bridge", () => {
         expect(createFileExclusive).toBeTypeOf("function");
 
         await expect(
-          createFileExclusive!({ filePath: "link.txt", data: "replacement" }),
+          createFileExclusive!({ filePath: "link.txt", data: Buffer.alloc(1_048_576) }),
         ).resolves.toBe("exists");
         await expect(fs.readFile(path.join(workspaceDir, "target.txt"), "utf8")).resolves.toBe(
           "keep",

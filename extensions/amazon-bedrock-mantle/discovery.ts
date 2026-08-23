@@ -242,13 +242,6 @@ export async function resolveMantleRuntimeBearerToken(params: {
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
-/** Clear the IAM token cache for tests. */
-export function resetIamTokenCacheForTest(): void {
-  iamTokenCache.clear();
-  iamTokenFailureDetailByRegion.clear();
-  iamTokenSuccessEpochByRegion.clear();
-}
-
 // ---------------------------------------------------------------------------
 // OpenAI-format model list response
 // ---------------------------------------------------------------------------
@@ -317,11 +310,6 @@ type MantleDiscoveryConfig = {
 };
 
 const discoveryCache = new Map<string, MantleCacheEntry>();
-
-/** Clear the Mantle discovery cache for tests. */
-export function resetMantleDiscoveryCacheForTest(): void {
-  discoveryCache.clear();
-}
 
 // ---------------------------------------------------------------------------
 // Model discovery

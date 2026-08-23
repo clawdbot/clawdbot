@@ -28,7 +28,7 @@ import {
   forceNpmInstallRecordRepair,
   isInstalledRecordMissingOnDisk,
   isTrustedOfficialInstallRecordForCandidate,
-  pathsEqual,
+  installPathsEqual,
   recordMatchesBundledPackage,
   resolveSafeBrokenOfficialInstallRemovalPath,
 } from "./missing-configured-plugin-install.records.js";
@@ -354,7 +354,7 @@ async function repairMissingPluginInstalls(params: {
         replacementSucceeded &&
         removalPath &&
         (!installedRecord?.installPath ||
-          !pathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
+          !installPathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
       ) {
         try {
           await rm(removalPath, { recursive: true, force: true });

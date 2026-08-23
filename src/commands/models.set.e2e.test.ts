@@ -9,28 +9,25 @@ const mocks = vi.hoisted(() => ({
   writtenConfig: undefined as Record<string, unknown> | undefined,
 }));
 
-vi.mock("./models/shared.js", async () => {
-  const actual = await vi.importActual<typeof import("./models/shared.js")>("./models/shared.js");
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    updateConfig: async (
-      mutator: (
-        cfg: Record<string, unknown>,
-        context: {
-          runtimeConfig: Record<string, unknown>;
-        },
-      ) => Record<string, unknown>,
-    ) => {
-      const sourceConfig = structuredClone(mocks.currentConfig);
-      const runtimeConfig = structuredClone(mocks.currentConfig);
-      const next = mutator(sourceConfig, { runtimeConfig });
-      mocks.writtenConfig = next;
-      return next;
+    readConfigFileSnapshot: async () => ({
+      valid: true,
+      hash: "config-hash",
+      sourceConfig: structuredClone(mocks.currentConfig),
+      runtimeConfig: structuredClone(mocks.currentConfig),
+      config: structuredClone(mocks.currentConfig),
+    }),
+    replaceConfigFile: async ({ nextConfig }: { nextConfig: Record<string, unknown> }) => {
+      mocks.writtenConfig = nextConfig;
     },
   };
 });
 
 import { modelsFallbacksAddCommand } from "./models/fallbacks.js";
+import { modelsSetImageCommand } from "./models/set-image.js";
 import { modelsSetCommand } from "./models/set.js";
 
 function mockConfigSnapshot(config: Record<string, unknown> = {}) {
@@ -72,6 +69,61 @@ describe("models set + fallbacks", () => {
     await modelsSetCommand("z.ai/glm-4.7", runtime);
 
     expectWrittenPrimaryModel("zai/glm-4.7");
+  });
+
+  it("does not warn for a cataloged model under a known provider", async () => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("openai/gpt-5.6-sol", runtime);
+
+    expectWrittenPrimaryModel("openai/gpt-5.6-sol");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["text", modelsSetCommand],
+    ["image", modelsSetImageCommand],
+  ])("rejects an unknown %s model provider without writing config", async (_kind, command) => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    await expect(command("no-such-provider/no-such-model", runtime)).rejects.toThrow(
+      'Unknown model provider "no-such-provider"',
+    );
+
+    expect(mocks.writtenConfig).toBeUndefined();
+  });
+
+  it.each([
+    ["text", modelsSetCommand],
+    ["image", modelsSetImageCommand],
+  ])("warns but saves an unknown %s model for a known provider", async (_kind, command) => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    await command("openai/not-in-the-local-catalog", runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Model "openai/not-in-the-local-catalog" is not in the local model catalog',
+      ),
+    );
+    expect(getWrittenConfig().agents?.defaults?.models).toHaveProperty(
+      "openai/not-in-the-local-catalog",
+    );
+  });
+
+  it("recognizes a provider declared by a disabled installed plugin", async () => {
+    mockConfigSnapshot({ plugins: { entries: { ollama: { enabled: false } } } });
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("ollama/site-local-model", runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining('Model "ollama/site-local-model" is not in the local model catalog'),
+    );
+    expect(getWrittenConfig().agents?.defaults?.models).toHaveProperty("ollama/site-local-model");
   });
 
   it("does not make an unlisted model override invalid on a fresh config", async () => {

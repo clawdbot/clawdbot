@@ -19,12 +19,13 @@ Use this skill for `qa-lab` / `qa-channel` work. Repo-local QA only.
 
 ## Model policy
 
-- Live OpenAI lane: `openai/gpt-5.4`
-- Fast mode: on
-- Do not use:
-  - `openai/gpt-5.4-pro`
-  - `openai/gpt-5.4-mini`
-- Only change model policy if the user explicitly asks.
+- Normal live suite runs rely on QA Lab source- and auth-aware defaults.
+- Do not pass `--model`, `--alt-model`, or `--fast` by default. Omitted
+  `--fast` does not mean fast is disabled; fast behavior is source-owned.
+- For scenario-specific runs, the complete `execution.summary` is authoritative
+  and overrides generic default guidance, including when it requires other
+  flags. Add explicit provider/model pins only when
+  `execution.config.requiredProvider` or `requiredModel` requires them.
 
 ## Default workflow
 
@@ -32,14 +33,11 @@ Use this skill for `qa-lab` / `qa-channel` work. Repo-local QA only.
 2. Decide lane:
    - mock/dev: `mock-openai`
    - real validation: `live-frontier`
-3. For live OpenAI, use:
+3. For a normal live suite, use:
 
 ```bash
-OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" \
 pnpm openclaw qa suite \
   --provider-mode live-frontier \
-  --model openai/gpt-5.4 \
-  --alt-model openai/gpt-5.4 \
   --output-dir .artifacts/qa-e2e/run-all-live-frontier-<tag>
 ```
 
@@ -156,28 +154,19 @@ Use `qa character-eval` for style/persona/vibe checks across multiple live model
 
 ```bash
 pnpm openclaw qa character-eval \
-  --model openai/gpt-5.4,thinking=xhigh \
-  --model openai/gpt-5.2,thinking=xhigh \
-  --model openai/gpt-5,thinking=xhigh \
-  --model anthropic/claude-opus-4-6,thinking=high \
-  --model anthropic/claude-sonnet-4-6,thinking=high \
-  --model zai/glm-5.1,thinking=high \
-  --model moonshot/kimi-k2.5,thinking=high \
-  --model google/gemini-3.1-pro-preview,thinking=high \
-  --judge-model openai/gpt-5.4,thinking=xhigh,fast \
-  --judge-model anthropic/claude-opus-4-6,thinking=high \
-  --concurrency 16 \
-  --judge-concurrency 16 \
   --output-dir .artifacts/qa-e2e/character-eval-<tag>
 ```
 
 - Runs local QA gateway child processes, not Docker.
-- Preferred model spec syntax is `provider/model,thinking=<level>[,fast|,no-fast|,fast=<bool>]` for both `--model` and `--judge-model`.
+- Packaged `pnpm build` omits QA Lab + qa-channel by design (source-checkout
+  only). To exercise `openclaw qa`/qa-channel from a built dist, build with
+  `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build` (emits `dist/plugin-sdk/qa-lab.js`,
+  `qa-runtime.js`, `dist/extensions/{qa-lab,qa-channel}`) or run via `pnpm dev`.
+- With no model flags, character eval uses its current source-defined candidate,
+  judge, thinking, and fast defaults.
+- Repeat `--model provider/model,thinking=<level>[,fast|,no-fast|,fast=<bool>]`
+  or `--judge-model ...` only to replace the corresponding inventory explicitly.
 - Do not add new examples with separate `--model-thinking`; keep that flag as legacy compatibility only.
-- Defaults to candidate models `openai/gpt-5.4`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-6`, `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`, `moonshot/kimi-k2.5`, and `google/gemini-3.1-pro-preview` when no `--model` is passed.
-- Candidate thinking defaults to `high`, with `xhigh` for OpenAI models that support it. Prefer inline `--model provider/model,thinking=<level>`; `--thinking <level>` and `--model-thinking <provider/model=level>` remain compatibility shims.
-- OpenAI candidate refs default to fast mode so priority processing is used where supported. Use inline `,fast`, `,no-fast`, or `,fast=false` for one model; use `--fast` only to force fast mode for every candidate.
-- Judges default to `openai/gpt-5.4,thinking=xhigh,fast` and `anthropic/claude-opus-4-6,thinking=high`.
 - Report includes judge ranking, run stats, durations, and full transcripts; do not include raw judge replies. Duration is benchmark context, not a grading signal.
 - Candidate and judge concurrency default to 16. Use `--concurrency <n>` and `--judge-concurrency <n>` to override when local gateways or provider limits need a gentler lane.
 - Scenario source is YAML-only under `qa/scenarios/`: use `index.yaml` and

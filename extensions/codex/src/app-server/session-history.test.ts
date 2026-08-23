@@ -56,6 +56,30 @@ function messageEntry(params: {
   };
 }
 
+function bashEntry(params: {
+  id: string;
+  parentId: string;
+  output: string;
+  excludeFromContext: boolean;
+}) {
+  return {
+    type: "message",
+    id: params.id,
+    parentId: params.parentId,
+    timestamp: "2026-06-15T00:00:00.000Z",
+    message: {
+      role: "bashExecution",
+      command: `print ${params.output}`,
+      output: params.output,
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: 1,
+      excludeFromContext: params.excludeFromContext,
+    },
+  };
+}
+
 function mirroredTarget(sessionFile: string) {
   return {
     sessionFile,
@@ -363,6 +387,42 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       { role: "user", content: "root prompt" },
       { role: "assistant", content: [{ type: "text", text: "active answer" }] },
     ]);
+  });
+
+  it("projects private shell rows out of mirrored history without rewriting persisted bytes", async () => {
+    const sessionFile = await writeSession([
+      messageEntry({ id: "root", parentId: null, role: "user", content: "root prompt" }),
+      bashEntry({
+        id: "private-shell",
+        parentId: "root",
+        output: "private shell output",
+        excludeFromContext: true,
+      }),
+      bashEntry({
+        id: "visible-shell",
+        parentId: "private-shell",
+        output: "visible shell output",
+        excludeFromContext: false,
+      }),
+      messageEntry({
+        id: "continued",
+        parentId: "visible-shell",
+        role: "user",
+        content: "continue prompt",
+      }),
+    ]);
+    const persistedBefore = await fs.readFile(sessionFile, "utf8");
+
+    const messages = await readCodexMirroredSessionHistoryMessages(mirroredTarget(sessionFile));
+
+    expect(messages).toMatchObject([
+      { role: "user", content: "root prompt" },
+      { role: "bashExecution", output: "visible shell output" },
+      { role: "user", content: "continue prompt" },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("private shell output");
+    expect(await fs.readFile(sessionFile, "utf8")).toBe(persistedBefore);
+    expect(persistedBefore).toContain("private shell output");
   });
 
   it("honors explicit navigation to an empty branch", async () => {

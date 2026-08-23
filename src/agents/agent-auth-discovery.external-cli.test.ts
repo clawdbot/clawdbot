@@ -35,10 +35,10 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin,
 }));
 
-import { resolveAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
+import { resolveAgentDiscoveryAuthFacts } from "./agent-auth-discovery.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 
-describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
+describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     credentialMocks.resolveAgentCredentialMapFromStore.mockReturnValue({});
@@ -51,7 +51,7 @@ describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
       providers: ["fireworks"],
     });
 
-    resolveAgentCredentialsForDiscovery("/tmp/openclaw-agent", {
+    resolveAgentDiscoveryAuthFacts("/tmp/openclaw-agent", {
       config: cfg,
       env: {},
       externalCli,
@@ -71,7 +71,7 @@ describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
       providers: ["fireworks"],
     });
 
-    resolveAgentCredentialsForDiscovery("/tmp/openclaw-agent", {
+    resolveAgentDiscoveryAuthFacts("/tmp/openclaw-agent", {
       config: cfg,
       env: {},
       externalCli,
@@ -91,7 +91,7 @@ describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
       fireworks: { type: "api_key", key: "agent-key" },
     });
 
-    const credentials = resolveAgentCredentialsForDiscovery("/tmp/openclaw-agent", {
+    const { credentials } = resolveAgentDiscoveryAuthFacts("/tmp/openclaw-agent", {
       ambientCredentials: {
         fireworks: { type: "api_key", key: "ambient-key" },
         "claude-cli": { type: "api_key", key: "synthetic-key" },
@@ -110,7 +110,7 @@ describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
   });
 
   it("can skip runtime external auth overlays and scope synthetic auth discovery", () => {
-    resolveAgentCredentialsForDiscovery("/tmp/openclaw-agent", {
+    resolveAgentDiscoveryAuthFacts("/tmp/openclaw-agent", {
       env: {},
       skipExternalAuthProfiles: true,
       syntheticAuthProviderRefs: ["fireworks"],
@@ -151,7 +151,7 @@ describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
         },
       } satisfies OpenClawConfig;
 
-      const credentials = resolveAgentCredentialsForDiscovery("/tmp/openclaw-agent", {
+      const { credentials } = resolveAgentDiscoveryAuthFacts("/tmp/openclaw-agent", {
         config: cfg,
         env: {},
         syntheticAuthProviderRefs: ["fireworks"],

@@ -5,11 +5,12 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { Readable } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata-paths.mjs";
-import { terminateManagedChild } from "../../scripts/lib/managed-child-process.mjs";
+} from "../../scripts/lib/local-build-metadata-paths.mts";
+import { terminateManagedChild } from "../../scripts/lib/managed-child-process.mts";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -395,10 +396,6 @@ function hasChildExited(child: Pick<OpenClawTestProcess, "exitCode" | "signalCod
   return child.exitCode !== null || child.signalCode !== null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function mergeConfig(
   base: Record<string, unknown>,
   override: Record<string, unknown> | undefined,
@@ -501,9 +498,9 @@ export async function createOpenClawTestInstance(
   const releaseGatewayChild = async (
     target: OpenClawTestProcess,
     deadline: number,
-    options: GatewayProcessStopOptions = {},
+    stopOptions: GatewayProcessStopOptions = {},
   ): Promise<boolean> => {
-    const closed = await stopGatewayProcess(target, deadline, stopTimeoutMs, options);
+    const closed = await stopGatewayProcess(target, deadline, stopTimeoutMs, stopOptions);
     if (closed && child === target) {
       child = undefined;
     }

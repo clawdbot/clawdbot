@@ -85,7 +85,7 @@ cd "$tmp_dir"
 OPENCLAW_LIVE_TEST=1 \
 OPENCLAW_LIVE_SUBAGENT_E2E=1 \
 OPENCLAW_VITEST_MAX_WORKERS="${OPENCLAW_VITEST_MAX_WORKERS:-1}" \
-node scripts/test-live.mjs -- src/agents/subagent-announce.live.test.ts -- --reporter=verbose
+node --import tsx scripts/test-live.mts -- src/agents/subagents/announce/subagent-announce.live.test.ts -- --reporter=verbose
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"
@@ -98,7 +98,7 @@ if openclaw_live_uses_managed_bind_dirs; then
 fi
 
 echo "==> Run subagent announce live test in Docker"
-echo "==> Target: src/agents/subagent-announce.live.test.ts"
+echo "==> Target: src/agents/subagents/announce/subagent-announce.live.test.ts"
 echo "==> Model: ${OPENCLAW_LIVE_SUBAGENT_E2E_MODEL:-openai/gpt-5.6-luna}"
 echo "==> Profile file: $PROFILE_STATUS"
 DOCKER_RUN_ARGS=()

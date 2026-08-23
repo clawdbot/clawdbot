@@ -22,8 +22,8 @@ scenario:
               - message
   successCriteria:
     - Visible completion output reaches the originating QA DM exactly once.
-    - Exact NO_REPLY completion output produces no channel delivery.
-    - Genuinely empty completion output is represented intentionally once.
+    - Exact worker NO_REPLY stays private while required parent completion represents missing child output visibly exactly once.
+    - Empty output after a side effect settles as a blocked completion while its terminal representation is delivered exactly once.
     - Gateway restart does not replay prior terminal payloads or synthesize interruption notices for already-settled handoffs, and a post-restart completion is delivered exactly once.
     - Direct fallback strips protected internal metadata before one channel delivery.
   docsRefs:
@@ -32,8 +32,8 @@ scenario:
     - docs/channels/qa-channel.md
   codeRefs:
     - src/agents/agent-run-terminal-reply.ts
-    - src/agents/subagent-announce-delivery.ts
-    - src/agents/subagent-registry-lifecycle.ts
+    - src/agents/subagents/announce/subagent-announce-delivery.ts
+    - src/agents/subagents/registry/subagent-registry-lifecycle.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
@@ -47,8 +47,8 @@ scenario:
           marker: QA-SUBAGENT-TERMINAL-VISIBLE-OK
           expectedSendCount: 1
         - name: silent
-          marker: NO_REPLY
-          expectedSendCount: 0
+          marker: QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED
+          expectedSendCount: 1
         - name: fallback
           marker: QA-SUBAGENT-TERMINAL-FALLBACK-OK
           expectedSendCount: 1
@@ -82,7 +82,7 @@ flow:
               params:
                 - caseName
               async: true
-              expr: "(await env.gateway.call('tasks.list', { status: 'completed', agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks?.find((task) => task.title === `qa-terminal-${caseName}` && task.status === 'completed' && task.deliveryStatus === 'delivered')"
+              expr: "(await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks?.find((task) => task.title === `qa-terminal-${caseName}` && task.deliveryStatus === 'delivered')"
         - forEach:
             items:
               expr: config.cases
@@ -159,7 +159,7 @@ flow:
                     expr: "`terminal ${terminalCase.name}: task lifecycle did not settle authoritatively; task=${JSON.stringify(terminalTask)}`"
               - set: appendVerdict
                 value:
-                  expr: "verdicts.push({ case: terminalCase.name, conversationId, taskId: terminalTask.taskId, taskDeliveryStatus: terminalTask.deliveryStatus, inputDisposition: terminalCase.name, representation: terminalCase.name === 'silent' ? 'no terminal channel payload' : 'exact terminal text', restart: false, fallback: terminalCase.name === 'fallback', expectedTerminalSendCount: terminalCase.expectedSendCount, actualTerminalSendCount: matchingOutbound.length, capturedTerminalPayloads: matchingOutbound.map((message) => String(message.text ?? '')), auxiliaryChannelEvents: caseOutbound.filter((message) => !matchingOutbound.includes(message)).map((message) => String(message.text ?? '')), silenceTokenLeaked: caseOutbound.some((message) => String(message.text ?? '').trim() === 'NO_REPLY'), internalMetadataLeak: caseOutbound.some((message) => String(message.text ?? '').includes(config.metadataSentinel)), pass: true })"
+                  expr: "verdicts.push({ case: terminalCase.name, conversationId, taskId: terminalTask.taskId, taskDeliveryStatus: terminalTask.deliveryStatus, inputDisposition: terminalCase.name, representation: terminalCase.name === 'silent' ? 'visible representation of private child silence or missing output' : 'exact terminal text', restart: false, fallback: terminalCase.name === 'fallback', expectedTerminalSendCount: terminalCase.expectedSendCount, actualTerminalSendCount: matchingOutbound.length, capturedTerminalPayloads: matchingOutbound.map((message) => String(message.text ?? '')), auxiliaryChannelEvents: caseOutbound.filter((message) => !matchingOutbound.includes(message)).map((message) => String(message.text ?? '')), silenceTokenLeaked: caseOutbound.some((message) => String(message.text ?? '').trim() === 'NO_REPLY'), internalMetadataLeak: caseOutbound.some((message) => String(message.text ?? '').includes(config.metadataSentinel)), pass: true })"
         # Every prior task is now terminal and delivery-settled, so restart from
         # the lifecycle boundary rather than waiting an arbitrary grace period.
         - set: preRestartOutbound
@@ -265,14 +265,14 @@ flow:
               ref: emptyConversationId
             senderName: QA Empty Reply Operator
             text: "Subagent terminal reply QA check: empty. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP."
-        # Empty output after one side effect is terminal and must surface one
-        # explicit representation without leaking the protected raw result.
+        # Delivery can settle before the empty completion's execution metadata.
+        # Wait for every task fact asserted below plus its visible representation.
         - call: waitForCondition
           saveAs: emptyTask
           args:
             - lambda:
                 async: true
-                expr: "(async () => { const task = await readSettledTerminalTask('empty'); if (!task) return undefined; const represented = state.getSnapshot().messages.slice(emptyStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === emptyConversationId && String(candidate.text ?? '').trim() === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED'); return represented ? task : undefined; })().catch(() => undefined)"
+                expr: "(async () => { const task = await readSettledTerminalTask('empty'); if (!task || task.status !== 'completed' || task.terminalOutcome !== 'blocked' || task.toolUseCount !== 1 || task.lastToolName !== 'write') return undefined; const represented = state.getSnapshot().messages.slice(emptyStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === emptyConversationId && String(candidate.text ?? '').trim() === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED'); return represented ? task : undefined; })().catch(() => undefined)"
             - 60000
             - 250
         - set: emptyOutbound
@@ -297,12 +297,12 @@ flow:
             message:
               expr: "`empty completion did not exercise native spawn/direct-fallback: ${JSON.stringify(emptyRequests)}`"
         - assert:
-            expr: "emptyTask.title === 'qa-terminal-empty' && emptyTask.status === 'completed' && emptyTask.deliveryStatus === 'delivered'"
+            expr: "emptyTask.title === 'qa-terminal-empty' && emptyTask.status === 'completed' && emptyTask.terminalOutcome === 'blocked' && emptyTask.deliveryStatus === 'delivered' && emptyTask.toolUseCount === 1 && emptyTask.lastToolName === 'write'"
             message:
-              expr: "`empty completion task lifecycle did not settle authoritatively; task=${JSON.stringify(emptyTask)}`"
+              expr: "`empty completion execution and delivery did not settle independently; task=${JSON.stringify(emptyTask)}`"
         - set: appendEmptyVerdict
           value:
-            expr: "verdicts.push({ case: 'empty', conversationId: emptyConversationId, taskId: emptyTask.taskId, taskDeliveryStatus: emptyTask.deliveryStatus, inputDisposition: 'empty-after-side-effect', representation: 'visible ambiguity warning for producer-empty result', restart: false, fallback: false, expectedTerminalSendCount: 1, actualTerminalSendCount: emptyRepresentation.length, capturedTerminalPayloads: emptyRepresentation.map((message) => String(message.text ?? '')), auxiliaryChannelEvents: emptyOutbound.filter((message) => !emptyRepresentation.includes(message)).map((message) => String(message.text ?? '')), silenceTokenLeaked: false, internalMetadataLeak: false, pass: true })"
+            expr: "verdicts.push({ case: 'empty', conversationId: emptyConversationId, taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, inputDisposition: 'empty-after-side-effect', representation: 'visible ambiguity warning for producer-empty result', restart: false, fallback: false, expectedTerminalSendCount: 1, actualTerminalSendCount: emptyRepresentation.length, capturedTerminalPayloads: emptyRepresentation.map((message) => String(message.text ?? '')), auxiliaryChannelEvents: emptyOutbound.filter((message) => !emptyRepresentation.includes(message)).map((message) => String(message.text ?? '')), silenceTokenLeaked: false, internalMetadataLeak: false, pass: true })"
         - assert:
             expr: "verdicts.length === 5 && verdicts.every((verdict) => verdict.pass === true)"
             message:

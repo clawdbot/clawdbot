@@ -77,6 +77,7 @@ const rules = [
   },
 ];
 
+/** @type {Record<string, { color: string; description: string }>} */
 export const managedLabelSpecs = {
   "r: skill": {
     color: "5319E7",
@@ -898,6 +899,13 @@ async function removeLabels(github, context, issueNumber, labels, labelSet) {
   }
 }
 
+/**
+ * @param {{
+ *   github: Record<string, unknown>;
+ *   context: Record<string, unknown>;
+ *   core?: Pick<Console, "info">;
+ * }} params
+ */
 export async function runBarnacleAutoResponse({ github, context, core = console }) {
   const target = context.payload.issue ?? context.payload.pull_request;
   if (!target) {

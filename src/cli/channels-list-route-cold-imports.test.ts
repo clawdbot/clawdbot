@@ -24,7 +24,7 @@ vi.mock("./command-execution-startup.js", () => ({
 
 vi.mock("../commands/channels/shared.js", () => ({
   formatChannelAccountLabel: vi.fn(),
-  requireValidConfig: vi.fn(async () => testState.config),
+  requireValidChannelConfig: vi.fn(async () => testState.config),
 }));
 
 vi.mock("../commands/channel-setup/trusted-catalog.js", () => ({
@@ -34,6 +34,8 @@ vi.mock("../commands/channel-setup/trusted-catalog.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: vi.fn(() => undefined),
   resolveDefaultAgentId: vi.fn(() => "main"),
+  tryResolveConfiguredAgentWorkspaceDir: vi.fn(() => undefined),
+  tryResolveSystemAgentWorkspaceDir: vi.fn(() => undefined),
 }));
 
 vi.mock("../runtime.js", () => ({

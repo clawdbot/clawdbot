@@ -13,10 +13,10 @@ OpenCode exposes two hosted catalogs in OpenClaw:
 | **Zen** | `opencode/...`    | `opencode`       |
 | **Go**  | `opencode-go/...` | `opencode-go`    |
 
-Both catalogs share one OpenCode API key (`OPENCODE_API_KEY`, alias
-`OPENCODE_ZEN_API_KEY`). OpenClaw keeps the runtime provider ids split so
-upstream per-model routing stays correct, but onboarding and docs treat them as
-one OpenCode setup.
+Both catalogs use the same OpenCode API key infrastructure (`OPENCODE_API_KEY`,
+alias `OPENCODE_ZEN_API_KEY`). Go still requires its own paid subscription;
+having a Zen key does not by itself grant Go access. OpenClaw keeps the runtime
+provider ids split so upstream per-model routing stays correct.
 
 ## Getting started
 
@@ -52,14 +52,13 @@ one OpenCode setup.
   </Tab>
 
   <Tab title="Go catalog">
-    **Best for:** the OpenCode-hosted Kimi, GLM, MiniMax, Qwen, and DeepSeek lineup.
+    **Best for:** the separately subscribed Go lineup across DeepSeek, GLM, GPT,
+    Grok, Hy3, Kimi, MiMo, MiniMax, and Qwen.
 
     <Steps>
-      <Step title="Install the Go catalog plugin">
-        ```bash
-        openclaw plugins install @openclaw/opencode-go-provider
-        openclaw gateway restart
-        ```
+      <Step title="Use the bundled Go catalog">
+        OpenCode Go is included with OpenClaw for this release, so no separate
+        plugin installation or Gateway restart is required.
       </Step>
       <Step title="Run onboarding">
         ```bash
@@ -74,7 +73,7 @@ one OpenCode setup.
       </Step>
       <Step title="Set a Go model as the default">
         ```bash
-        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k2.6"
+        openclaw config set agents.defaults.model.primary "opencode-go/kimi-k3"
         ```
       </Step>
       <Step title="Verify models are available">
@@ -91,7 +90,7 @@ one OpenCode setup.
 
 ```json5
 {
-  env: { OPENCODE_API_KEY: "sk-..." },
+  env: { vars: { OPENCODE_API_KEY: "sk-..." } },
   agents: { defaults: { model: { primary: "opencode/gpt-5.6-sol" } } },
 }
 ```
@@ -100,23 +99,30 @@ one OpenCode setup.
 
 ### Zen
 
-| Property         | Value                                                                                             |
-| ---------------- | ------------------------------------------------------------------------------------------------- |
-| Runtime provider | `opencode`                                                                                        |
-| Example models   | `opencode/gpt-5.6-sol`, `opencode/gemini-3.6-flash`, `opencode/minimax-m3`, `opencode/big-pickle` |
+| Property         | Value                                                                                                                 |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Runtime provider | `opencode`                                                                                                            |
+| Example models   | `opencode/gpt-5.6-sol`, `opencode/kimi-k3`, `opencode/gemini-3.6-flash`, `opencode/minimax-m3`, `opencode/big-pickle` |
 
-Run `openclaw models list --provider opencode` for the full current list, which
-also includes the currently promoted free-tier rows `opencode/big-pickle`,
+Run `openclaw models list --provider opencode` for the current active list,
+which also includes the promoted free-tier rows `opencode/big-pickle`,
 `opencode/deepseek-v4-flash-free`, `opencode/laguna-s-2.1-free`,
-`opencode/ling-3.0-flash-free`, `opencode/mimo-v2.5-free`,
+`opencode/ling-3.0-tiny-free`, `opencode/longcat-2.0-free`,
+`opencode/mimo-v2.5-free`,
 `opencode/nemotron-3-ultra-free`, and `opencode/north-mini-code-free`.
+
+Live discovery safely intersects OpenCode's returned IDs with trusted OpenClaw
+metadata. A key-scoped response can omit models that are unavailable to that
+workspace; that absence does not retire the offline definition. Deprecated
+explicit refs remain resolvable for existing configurations but are not shown
+as current recommendations.
 
 ### Go
 
-| Property         | Value                                                                    |
-| ---------------- | ------------------------------------------------------------------------ |
-| Runtime provider | `opencode-go`                                                            |
-| Example models   | `opencode-go/kimi-k2.6`, `opencode-go/glm-5`, `opencode-go/minimax-m2.5` |
+| Property         | Value                                                                        |
+| ---------------- | ---------------------------------------------------------------------------- |
+| Runtime provider | `opencode-go`                                                                |
+| Example models   | `opencode-go/kimi-k3`, `opencode-go/gpt-5.6-luna`, `opencode-go/qwen3.8-max` |
 
 See [OpenCode Go](/providers/opencode-go) for the full Go model table.
 
@@ -128,8 +134,9 @@ See [OpenCode Go](/providers/opencode-go) for the full Go model table.
   </Accordion>
 
   <Accordion title="Shared credentials">
-    Entering one OpenCode key during setup stores credentials for both runtime
-    providers. You do not need to onboard each catalog separately.
+    Entering one OpenCode key during setup can store credentials for both
+    runtime providers. It does not create a Go subscription or grant Go
+    entitlement; subscribe to Go in the OpenCode console before using it.
   </Accordion>
 
   <Accordion title="Getting an API key">
@@ -146,6 +153,11 @@ See [OpenCode Go](/providers/opencode-go) for the full Go model table.
 
   <Accordion title="Non-Gemini replay behavior">
     Non-Gemini OpenCode refs keep the minimal OpenAI-compatible replay policy.
+  </Accordion>
+  <Accordion title="Pricing and privacy">
+    Billing, retention, and training policies are model-specific. Check the
+    current [OpenCode Zen pricing and policy](https://opencode.ai/docs/zen/)
+    before selecting a route. Free models may be temporary feedback programs.
   </Accordion>
 </AccordionGroup>
 

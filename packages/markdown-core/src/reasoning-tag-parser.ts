@@ -12,6 +12,7 @@ export const REASONING_TAG_NAMES = [
   "thinking",
   "thought",
   "reasoning",
+  "internal",
   "antthinking",
   "antml:think",
   "antml:thinking",
@@ -32,6 +33,7 @@ type ReasoningTagMatch = {
   text: string;
   isClose: boolean;
   isSelfClosing: boolean;
+  isPrivate: boolean;
 };
 
 type ReasoningTagScan = {
@@ -127,6 +129,7 @@ export function parseReasoningTagAt(
           text: text.slice(start, end),
           isClose,
           isSelfClosing: !isClose && lastSignificant === "/",
+          isPrivate: partialName === "internal",
         },
       };
     }
@@ -252,6 +255,7 @@ export type ReductionState = {
   visibleEver: boolean;
   pending?: {
     content: string;
+    containsPrivate: boolean;
     openTag: string;
     protectedClose: boolean;
     visibleBefore: boolean;
@@ -306,18 +310,20 @@ export function reduceReasoningText(
       index: scannedTag.index + start,
       isClose: scannedTag.isClose,
       isSelfClosing: scannedTag.isSelfClosing,
+      isPrivate: scannedTag.isPrivate,
       text: scannedTag.text,
     };
     if (!isInsideCode(tag.index, codeSpans)) {
       tags.push(tag);
     }
   }
-  const hasCloseAfter: boolean[] = [];
+  const mustParseRemainder: boolean[] = [];
   if (options.scope === "leading") {
-    let seenClose = false;
+    let mustParse = false;
     for (let index = tags.length - 1; index >= 0; index -= 1) {
-      hasCloseAfter[index] = seenClose;
-      seenClose ||= tags[index]?.isClose === true;
+      mustParse ||= tags[index]?.isPrivate === true;
+      mustParseRemainder[index] = mustParse;
+      mustParse ||= tags[index]?.isClose === true;
     }
   }
   let cursor = start;
@@ -346,7 +352,7 @@ export function reduceReasoningText(
         state.depth === 0 &&
         options.scope === "leading" &&
         state.visibleEver &&
-        !hasCloseAfter[tagIndex]
+        !mustParseRemainder[tagIndex]
       ) {
         emit("text", text.slice(tag.index));
         cursor = text.length;
@@ -355,10 +361,14 @@ export function reduceReasoningText(
       if (state.depth === 0) {
         state.pending = {
           content: "",
+          containsPrivate: tag.isPrivate,
           openTag: tag.text,
           protectedClose: false,
           visibleBefore: state.visibleEver,
         };
+      } else if (state.pending) {
+        // A nested private block makes the enclosing reasoning non-emitting.
+        state.pending.containsPrivate ||= tag.isPrivate;
       }
       state.depth += 1;
       cursor = tagEnd;
@@ -368,7 +378,9 @@ export function reduceReasoningText(
     if (state.depth > 0) {
       state.depth -= 1;
       if (state.depth === 0 && state.pending) {
-        emit("thinking", state.pending.content);
+        if (!state.pending.containsPrivate) {
+          emit("thinking", state.pending.content);
+        }
         state.pending = undefined;
       } else if (state.pending) {
         state.pending.protectedClose = true;
@@ -393,18 +405,20 @@ export function reduceReasoningText(
   append(text.slice(cursor));
   if (options.final && state.depth > 0 && state.pending) {
     const pending = state.pending;
-    const recoverAsText =
-      options.mode === "static-preserve" ||
-      (options.mode === "static-strict" && !pending.visibleBefore && !pending.protectedClose) ||
-      (options.mode === "visible" && !pending.protectedClose);
-    if (recoverAsText) {
-      const value =
-        options.mode === "visible" && pending.visibleBefore
-          ? pending.openTag + pending.content
-          : pending.content;
-      emit("text", value);
-    } else {
-      emit("thinking", pending.content);
+    if (!pending.containsPrivate) {
+      const recoverAsText =
+        options.mode === "static-preserve" ||
+        (options.mode === "static-strict" && !pending.visibleBefore && !pending.protectedClose) ||
+        (options.mode === "visible" && !pending.protectedClose);
+      if (recoverAsText) {
+        const value =
+          options.mode === "visible" && pending.visibleBefore
+            ? pending.openTag + pending.content
+            : pending.content;
+        emit("text", value);
+      } else {
+        emit("thinking", pending.content);
+      }
     }
     state.depth = 0;
     state.pending = undefined;

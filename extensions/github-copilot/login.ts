@@ -1,27 +1,14 @@
 // Github Copilot plugin module implements login behavior.
-import { intro, note, outro, spinner } from "@clack/prompts";
-import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
-import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-mutation";
 import {
   resolveExpiresAtMsFromDurationMs,
   nonNegativeSecondsToSafeMilliseconds,
   positiveSecondsToSafeMilliseconds,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import {
-  applyAuthProfileConfig,
-  ensureAuthProfileStore,
-  normalizeGithubCopilotDomain,
-  upsertAuthProfileWithLock,
-} from "openclaw/plugin-sdk/provider-auth";
+import { normalizeGithubCopilotDomain } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  PUBLIC_GITHUB_COPILOT_DOMAIN,
-  resolveGithubCopilotDomain,
-  withGithubCopilotDomainConfig,
-} from "./domain.js";
+import { PUBLIC_GITHUB_COPILOT_DOMAIN } from "./domain.js";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
@@ -63,23 +50,12 @@ type DeviceTokenResponse =
 const GITHUB_DEVICE_ACCESS_DENIED = Symbol("github-device-access-denied");
 const GITHUB_DEVICE_EXPIRED = Symbol("github-device-expired");
 
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
 class GitHubDeviceFlowError extends Error {
   readonly kind: symbol;
   constructor(kind: symbol, message: string) {
     super(message);
     this.kind = kind;
     this.name = "GitHubDeviceFlowError";
-  }
-}
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
   }
 }
 
@@ -233,9 +209,11 @@ async function pollForAccessToken(params: {
       continue;
     }
     if (err === "slow_down") {
-      intervalMs =
-        positiveSecondsToSafeMilliseconds(json.interval) ??
-        Math.min(Number.MAX_SAFE_INTEGER, intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS);
+      // slow_down is cumulative; a returned interval may raise but never lower the required floor.
+      intervalMs = Math.max(
+        Math.min(Number.MAX_SAFE_INTEGER, intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS),
+        positiveSecondsToSafeMilliseconds(json.interval) ?? 0,
+      );
       continue;
     }
     if (err === "expired_token") {
@@ -368,91 +346,4 @@ export async function runGitHubCopilotDeviceFlow(
     }
     throw err;
   }
-}
-
-export async function githubCopilotLoginCommand(
-  opts: { profileId?: string; yes?: boolean; agentDir?: string },
-  runtime: RuntimeEnv,
-) {
-  if (!process.stdin.isTTY) {
-    throw new Error("github-copilot login requires an interactive TTY.");
-  }
-
-  intro(stylePromptTitle("GitHub Copilot login"));
-
-  const profileId = opts.profileId?.trim() || "github-copilot:github";
-  const store = ensureAuthProfileStore(opts.agentDir, {
-    allowKeychainPrompt: false,
-  });
-
-  if (store.profiles[profileId] && !opts.yes) {
-    note(
-      `Auth profile already exists: ${profileId}\nRe-running will overwrite it.`,
-      stylePromptTitle("Existing credentials"),
-    );
-  }
-
-  // Mint against the same host the runtime will route to. resolveGithubCopilotDomain
-  // is env-authoritative (COPILOT_GITHUB_DOMAIN wins), and runtime authentication
-  // uses the same resolver, so honoring it here keeps the minted token and the
-  // runtime endpoint on the same tenant instead of minting a public token that
-  // then 401s against api.<tenant>.
-  const domain = resolveGithubCopilotDomain();
-  if (domain !== PUBLIC_GITHUB_COPILOT_DOMAIN) {
-    note(
-      `Using the GitHub Enterprise domain from COPILOT_GITHUB_DOMAIN (${domain}). Unset it to log in against github.com.`,
-      stylePromptTitle("GitHub Copilot"),
-    );
-  }
-
-  const spin = spinner();
-  spin.start(`Requesting device code from ${domain}...`);
-  const device = await requestDeviceCode({
-    scope: "read:user",
-    domain,
-  });
-  spin.stop("Device code ready");
-
-  note(
-    [`Visit: ${device.verificationUri}`, `Code: ${device.userCode}`].join("\n"),
-    stylePromptTitle("Authorize"),
-  );
-
-  const intervalMs = Math.max(1000, device.intervalMs);
-
-  const polling = spinner();
-  polling.start("Waiting for GitHub authorization...");
-  const accessToken = await pollForAccessToken({
-    deviceCode: device.deviceCode,
-    intervalMs,
-    expiresAt: device.expiresAt,
-    domain,
-  });
-  polling.stop("GitHub access token acquired");
-
-  await upsertAuthProfileWithLockOrThrow({
-    profileId,
-    credential: {
-      type: "token",
-      provider: "github-copilot",
-      token: accessToken,
-    },
-    agentDir: opts.agentDir,
-  });
-
-  await updateConfig((cfg) =>
-    withGithubCopilotDomainConfig(
-      applyAuthProfileConfig(cfg, {
-        provider: "github-copilot",
-        profileId,
-        mode: "token",
-      }),
-      domain,
-    ),
-  );
-
-  logConfigUpdated(runtime);
-  runtime.log(`Auth profile: ${profileId} (github-copilot/token)`);
-
-  outro("Done");
 }

@@ -16,7 +16,7 @@ import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
-import { parseFrontmatter } from "./frontmatter.js";
+import { parseHookFrontmatter } from "./frontmatter.js";
 
 // HOOK.md is only parsed for frontmatter; a small cap prevents a malicious or
 // malformed hook package from OOMing the install path.
@@ -94,6 +94,7 @@ function buildHookInstallForwardParams(params: HookInstallForwardParams): HookIn
   return {
     config: params.config,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     hooksDir: params.hooksDir,
     timeoutMs: params.timeoutMs,
@@ -156,6 +157,7 @@ async function runHookInstallPolicy(params: {
       await scanPackageInstallSource({
         config: params.forward.config,
         dangerouslyForceUnsafeInstall: params.forward.dangerouslyForceUnsafeInstall,
+        onInstallPolicyWarning: params.forward.onInstallPolicyWarning,
         trustedSourceLinkedOfficialInstall: params.forward.trustedSourceLinkedOfficialInstall,
         packageDir: params.packageDir,
         pluginId: params.hookPackId,
@@ -187,7 +189,7 @@ async function runHookInstalledDependencyPolicy(params: {
     scan: async () =>
       await scanInstalledPackageDependencyTree({
         config: params.forward.config,
-        dangerouslyForceUnsafeInstall: params.forward.dangerouslyForceUnsafeInstall,
+        onInstallPolicyWarning: params.forward.onInstallPolicyWarning,
         trustedSourceLinkedOfficialInstall: params.forward.trustedSourceLinkedOfficialInstall,
         packageDir: params.installedDir,
         pluginId: params.hookPackId,
@@ -364,7 +366,7 @@ async function resolveHookNameFromDir(hookDir: string): Promise<string> {
     throw new Error(`HOOK.md missing in ${hookDir}`);
   }
   const { buffer } = await readRegularFile({ filePath: hookMdPath, maxBytes: HOOK_MD_MAX_BYTES });
-  const frontmatter = parseFrontmatter(buffer.toString("utf-8"));
+  const frontmatter = parseHookFrontmatter(buffer.toString("utf-8"));
   return frontmatter.name || path.basename(hookDir);
 }
 

@@ -12,10 +12,10 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { TranscriptEvent } from "./session-accessor.js";
 import {
-  appendSqliteTranscriptEvent,
-  appendSqliteTranscriptMessage,
-  replaceSqliteTranscriptEvents,
-} from "./session-accessor.sqlite.js";
+  appendTranscriptEvent,
+  appendTranscriptMessage,
+  replaceTranscriptEvents,
+} from "./session-accessor.sqlite-transcript-write.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import { searchSessionTranscripts } from "./session-transcript-search.js";
 
@@ -50,13 +50,13 @@ function transcriptScope(sessionId: string, sessionKey: string) {
 }
 
 async function appendUserMessage(sessionId: string, sessionKey: string, text: string) {
-  await appendSqliteTranscriptMessage(transcriptScope(sessionId, sessionKey), {
+  await appendTranscriptMessage(transcriptScope(sessionId, sessionKey), {
     message: { role: "user", content: [{ type: "text", text }] },
   });
 }
 
 async function appendAssistantMessage(sessionId: string, sessionKey: string, text: string) {
-  await appendSqliteTranscriptMessage(transcriptScope(sessionId, sessionKey), {
+  await appendTranscriptMessage(transcriptScope(sessionId, sessionKey), {
     message: { role: "assistant", content: [{ type: "text", text }] },
   });
 }
@@ -120,7 +120,7 @@ describe("searchSessionTranscripts", () => {
 
   it("ignores non-message events and misses non-matching queries", async () => {
     await appendUserMessage("session-1", "agent:main:main", "alpha topic");
-    await appendSqliteTranscriptEvent(transcriptScope("session-1", "agent:main:main"), {
+    await appendTranscriptEvent(transcriptScope("session-1", "agent:main:main"), {
       type: "model_change",
       id: "model-change-1",
       model: "sonnet-4.6",
@@ -159,7 +159,7 @@ describe("searchSessionTranscripts", () => {
 
   it("reindexes synchronously when a linear transcript is replaced", async () => {
     await appendUserMessage("session-1", "agent:main:main", "obsolete branch text");
-    await replaceSqliteTranscriptEvents(transcriptScope("session-1", "agent:main:main"), [
+    await replaceTranscriptEvents(transcriptScope("session-1", "agent:main:main"), [
       {
         type: "message",
         id: "m-new",
@@ -178,7 +178,7 @@ describe("searchSessionTranscripts", () => {
 
   it("only surfaces the active branch after a deferred leaf-control rebuild", async () => {
     const scope = transcriptScope("session-1", "agent:main:main");
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       {
         type: "message",
         id: "m1",
@@ -192,7 +192,7 @@ describe("searchSessionTranscripts", () => {
         message: { role: "assistant", content: [{ type: "text", text: "beta abandoned" }] },
       },
     ] as unknown as TranscriptEvent[]);
-    await appendSqliteTranscriptEvent(scope, {
+    await appendTranscriptEvent(scope, {
       type: "leaf",
       id: "leaf-1",
       parentId: "m2",
@@ -211,7 +211,7 @@ describe("searchSessionTranscripts", () => {
   it("streams large searchable projections to the writer in bounded chunks", async () => {
     const scope = transcriptScope("session-1", "agent:main:main");
     const largeText = "x".repeat(140 * 1024);
-    await replaceSqliteTranscriptEvents(
+    await replaceTranscriptEvents(
       scope,
       ["alpha-stream", "beta-stream", "gamma-stream"].map((marker, index) => ({
         type: "message",
@@ -220,7 +220,7 @@ describe("searchSessionTranscripts", () => {
         message: { role: "user", content: [{ type: "text", text: `${marker} ${largeText}` }] },
       })) as unknown as TranscriptEvent[],
     );
-    await appendSqliteTranscriptEvent(scope, {
+    await appendTranscriptEvent(scope, {
       type: "leaf",
       id: "leaf-large",
       parentId: "m3",

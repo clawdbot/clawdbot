@@ -3,6 +3,8 @@ import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallId, CallRecord } from "../types.js";
 
+export type CallEndResult = { success: boolean; error?: string };
+
 type TranscriptWaiter = {
   resolve: (text: string) => void;
   reject: (err: Error) => void;
@@ -28,6 +30,7 @@ type CallManagerRuntimeDeps = {
 
 type CallManagerTransientState = {
   activeTurnCalls: Set<CallId>;
+  endCallOperations: Map<CallId, Promise<CallEndResult>>;
   transcriptWaiters: Map<CallId, TranscriptWaiter>;
   maxDurationTimers: Map<CallId, NodeJS.Timeout>;
   initialMessageInFlight: Set<CallId>;

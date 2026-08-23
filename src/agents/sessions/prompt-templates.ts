@@ -12,7 +12,7 @@ import {
  */
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { CONFIG_DIR_NAME } from "../config.js";
-import { parseFrontmatter } from "../utils/frontmatter.js";
+import { parsePromptFrontmatter } from "../utils/frontmatter.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 
 /**
@@ -30,7 +30,7 @@ export interface PromptTemplate {
 function loadTemplateFromFile(filePath: string, sourceInfo: SourceInfo): PromptTemplate | null {
   try {
     const rawContent = readFileSync(filePath, "utf-8");
-    const { frontmatter, body } = parseFrontmatter<Record<string, string>>(rawContent);
+    const { frontmatter, body } = parsePromptFrontmatter<Record<string, string>>(rawContent);
 
     const name = basename(filePath).replace(/\.md$/, "");
 

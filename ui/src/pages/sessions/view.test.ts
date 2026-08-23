@@ -49,6 +49,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     sortColumn: "updated",
     sortDir: "desc",
     groupBy: "none",
+    personGroupingAvailable: true,
     knownCategories: [],
     page: 0,
     pageSize: 10,
@@ -227,8 +228,8 @@ describe("sessions view", () => {
       ...container.querySelectorAll<HTMLInputElement>('tbody input[type="checkbox"]'),
     ];
     expect(checkboxes.map((checkbox) => checkbox.getAttribute("aria-label"))).toEqual([
-      "Select thread: agent:main:first",
-      "Select thread: agent:main:second",
+      "Select session: agent:main:first",
+      "Select session: agent:main:second",
     ]);
 
     checkboxes[0]?.dispatchEvent(new Event("change", { bubbles: true }));
@@ -423,18 +424,20 @@ describe("sessions view", () => {
     expect(container.querySelectorAll(".session-data-row--archived")).toHaveLength(1);
   });
 
-  it("groups sessions by channel with section headers and no pagination", async () => {
+  it("paginates grouped sessions while preserving full group counts", async () => {
     const container = document.createElement("div");
+    const onPageChange = vi.fn();
+    const result = buildMultiResult([
+      { key: "agent:main:discord:channel:1", kind: "group", updatedAt: 3 },
+      { key: "agent:main:telegram:direct:2", kind: "direct", updatedAt: 2 },
+      { key: "agent:main:discord:channel:3", kind: "group", updatedAt: 1 },
+    ]);
     render(
       renderSessions({
-        ...buildProps(
-          buildMultiResult([
-            { key: "agent:main:discord:channel:1", kind: "group", updatedAt: 3 },
-            { key: "agent:main:telegram:direct:2", kind: "direct", updatedAt: 2 },
-            { key: "agent:main:discord:channel:3", kind: "group", updatedAt: 1 },
-          ]),
-        ),
+        ...buildProps(result),
         groupBy: "channel",
+        pageSize: 2,
+        onPageChange,
       }),
       container,
     );
@@ -443,12 +446,92 @@ describe("sessions view", () => {
     const headers = Array.from(container.querySelectorAll(".session-group-row__label")).map((el) =>
       el.textContent?.trim(),
     );
-    expect(headers).toEqual(["discord", "telegram"]);
+    expect(headers).toEqual(["discord"]);
     const counts = Array.from(container.querySelectorAll(".session-group-row__count")).map((el) =>
       el.textContent?.trim(),
     );
-    expect(counts).toEqual(["2 threads", "1 thread"]);
-    expect(container.querySelector(".data-table-pagination")).toBeNull();
+    expect(counts).toEqual(["2 sessions"]);
+    expect(container.querySelectorAll(".session-data-row")).toHaveLength(2);
+    expect(container.querySelector(".data-table-pagination")?.textContent).toContain(
+      "1-2 of 3 rows",
+    );
+
+    const next = Array.from(container.querySelectorAll(".data-table-pagination button")).find(
+      (button) => button.textContent?.trim() === "Next",
+    );
+    expect(next).toBeInstanceOf(HTMLButtonElement);
+    next!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onPageChange).toHaveBeenCalledWith(1);
+
+    render(
+      renderSessions({
+        ...buildProps(result),
+        groupBy: "channel",
+        page: 1,
+        pageSize: 2,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".session-group-row__label")?.textContent?.trim()).toBe(
+      "telegram",
+    );
+    expect(container.querySelector(".session-group-row__count")?.textContent?.trim()).toBe(
+      "1 session",
+    );
+    expect(container.querySelectorAll(".session-data-row")).toHaveLength(1);
+  });
+
+  it("offers person grouping and labels owner sections from their durable profile", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:ada",
+              kind: "direct",
+              updatedAt: 2,
+              owner: { actor: { type: "human", id: "profile-ada", label: "Ada Lovelace" } },
+            },
+            { key: "agent:main:ownerless", kind: "direct", updatedAt: 1 },
+          ]),
+        ),
+        groupBy: "person",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      container
+        .querySelector<HTMLOptionElement>('.session-groupby__select option[value="person"]')
+        ?.textContent?.trim(),
+    ).toBe("Person");
+    expect(
+      [...container.querySelectorAll(".session-group-row__label")].map((label) =>
+        label.textContent?.trim(),
+      ),
+    ).toEqual(["Ada Lovelace", "Ungrouped"]);
+  });
+
+  it("hides the person grouping option without the identity capability", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(buildResult({ key: "agent:main:a", kind: "direct", updatedAt: 1 })),
+        personGroupingAvailable: false,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const modes = [
+      ...container.querySelectorAll<HTMLOptionElement>(".session-groupby__select option"),
+    ].map((option) => option.value);
+    expect(modes).not.toContain("person");
+    expect(modes).toContain("category");
   });
 
   it("selects and names the current page size on first render", async () => {
@@ -518,7 +601,7 @@ describe("sessions view", () => {
 
     // Rows render in group order: Research (agent:main:main) first, then Ungrouped (discord).
     const select = container.querySelectorAll<HTMLSelectElement>(
-      'select[aria-label="Move thread to a group"]',
+      'select[aria-label="Move session to a group"]',
     )[1];
     if (!select) {
       throw new Error("Expected group select");
@@ -570,7 +653,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const select = container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Move thread to a group"]',
+      'select[aria-label="Move session to a group"]',
     );
     expect(select?.disabled).toBe(true);
     expect(select?.title).toBe(reason);
@@ -592,7 +675,7 @@ describe("sessions view", () => {
     expect(onAssignCategory).not.toHaveBeenCalled();
   });
 
-  it("opens the session menu from the kebab and row context menu", async () => {
+  it("opens the session menu from the kebab and row context-menu shortcuts", async () => {
     const container = document.createElement("div");
     const onOpenSessionMenu = vi.fn();
     const session = {
@@ -610,7 +693,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const button = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Open thread menu"]',
+      'button[aria-label="Open session menu"]',
     );
     if (!button) {
       throw new Error("Expected session menu button");
@@ -642,6 +725,21 @@ describe("sessions view", () => {
       null,
     );
     expect(contextMenu.defaultPrevented).toBe(true);
+
+    const keyboardContextMenu = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "F10",
+      shiftKey: true,
+    });
+    row.dispatchEvent(keyboardContextMenu);
+    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ key: session.key }),
+      { x: expect.any(Number), y: expect.any(Number) },
+      button,
+    );
+    expect(keyboardContextMenu.defaultPrevented).toBe(true);
   });
 
   it("keeps pinned sessions above newer unpinned sessions", async () => {
@@ -684,14 +782,14 @@ describe("sessions view", () => {
 
     expect(activeField?.querySelector(".session-filter-label")?.textContent).toBe("Updated within");
     expect(tooltips).toEqual([
-      "Loads threads updated in the last 120 minutes.",
-      "Max threads to load.",
-      "Include global threads.",
-      "Include unknown threads.",
+      "Loads sessions updated in the last 120 minutes.",
+      "Max sessions to load.",
+      "Include global sessions.",
+      "Include unknown sessions.",
     ]);
   });
 
-  it("keeps active and limit together and renders streamlined source toggles", async () => {
+  it("keeps session state visible and moves advanced controls into the filter popover", async () => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -704,17 +802,23 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const primaryRow = container.querySelector(".session-filter-primary-row");
-    expect(primaryRow?.querySelector(".session-filter-input--minutes")?.closest("label")).toBe(
-      primaryRow?.firstElementChild?.querySelector("label"),
-    );
-    expect(primaryRow?.querySelector(".session-filter-input--limit")?.closest("label")).toBe(
-      primaryRow?.lastElementChild?.querySelector("label"),
-    );
+    const toolbar = container.querySelector(".sessions-filter-bar");
+    const trigger = toolbar?.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger");
+    const popover = toolbar?.querySelector("wa-popover");
+    const panel = popover?.querySelector(".sessions-filter-popover__panel");
+    expect(toolbar?.querySelector(".sessions-view-segment")).not.toBeNull();
+    expect(trigger?.textContent?.trim()).toBe("");
+    expect(trigger?.getAttribute("aria-label")).toBe("Filters");
+    expect(trigger?.getAttribute("title")).toBe("Filters");
+    expect(trigger?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(panel?.querySelector(".session-filter-input--minutes")?.closest("label")).not.toBeNull();
+    expect(panel?.querySelector(".session-filter-input--limit")?.closest("label")).not.toBeNull();
+    expect(panel?.querySelector(".session-groupby__select")).not.toBeNull();
 
-    const toggleGroup = container.querySelector(".session-filter-toggle-group");
+    const toggleGroup = panel?.querySelector(".session-filter-toggle-group");
     expect(toggleGroup?.getAttribute("role")).toBe("group");
-    expect(toggleGroup?.getAttribute("aria-label")).toBe("Thread source filters");
+    expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
     expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(2);
     expect(
       Array.from(toggleGroup?.querySelectorAll(".session-filter-check") ?? []).map((toggle) => [
@@ -729,6 +833,11 @@ describe("sessions view", () => {
       ["includeUnknown", ["session-filter-check", "session-filter-toggle"]],
     ]);
     expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
+
+    popover?.dispatchEvent(new Event("wa-show"));
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+    popover?.dispatchEvent(new Event("wa-hide"));
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("renders and patches provider-owned thinking ids", async () => {
@@ -953,12 +1062,19 @@ describe("sessions view", () => {
     expect(badge?.textContent?.trim()).toBe("cron");
   });
 
-  it("renders live and terminal run status badges", async () => {
+  it("renders queued, live, and terminal run status badges", async () => {
     const container = document.createElement("div");
     render(
       renderSessions(
         buildProps(
           buildMultiResult([
+            {
+              key: "agent:main:queued",
+              kind: "direct",
+              updatedAt: 40,
+              hasActiveRun: true,
+              status: "queued",
+            },
             {
               key: "agent:main:live",
               kind: "direct",
@@ -996,12 +1112,14 @@ describe("sessions view", () => {
     expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
     const badges = Array.from(container.querySelectorAll(".settings-status"));
     expect(badges.map((badge) => badge.textContent?.trim())).toEqual([
+      "Queued",
       "Live",
       "Idle",
       "Failed",
       "Done",
     ]);
     expect(badges.map((badge) => [...badge.classList])).toEqual([
+      ["settings-status", "settings-status--warn"],
       ["settings-status", "settings-status--ok"],
       ["settings-status"],
       ["settings-status", "settings-status--danger"],
@@ -1011,7 +1129,7 @@ describe("sessions view", () => {
       badges.map(
         (badge) => (badge.parentElement as (HTMLElement & { content: string }) | null)?.content,
       ),
-    ).toEqual(["Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
+    ).toEqual(["Status: Queued", "Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
   });
 
   it("renders session goals in the status cell and search index", async () => {
@@ -1185,7 +1303,7 @@ describe("sessions view", () => {
 
     expect(onToggleDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
-    expect(tokenCell?.textContent?.trim()).toBe("123k / 200k");
+    expect(tokenCell?.textContent?.trim()).toBe("123.5k / 200k");
   });
 
   it("renders the checkpoint count on the details disclosure", async () => {
@@ -1303,7 +1421,7 @@ describe("sessions view", () => {
 
     const details = container.querySelector(".session-details-panel");
     expect(details?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim()).toBe(
-      "Thread details",
+      "Session details",
     );
     expect(details?.querySelector(".session-details-panel__title")?.textContent?.trim()).toBe(
       "agent:main:main",
@@ -1546,7 +1664,7 @@ describe("sessions view", () => {
     const emptyState = container.querySelector(".data-table-empty-state");
     expect(emptyState?.getAttribute("role")).toBe("status");
     expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
-      "No threads match your filters.",
+      "No sessions match your filters.",
     );
     const showAll = emptyState?.querySelector<HTMLButtonElement>("button");
     if (!(showAll instanceof HTMLButtonElement)) {
@@ -1597,12 +1715,12 @@ describe("sessions view", () => {
 
     const emptyState = container.querySelector(".data-table-empty-state");
     expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
-      testCase.filtered ? "No threads match your filters." : "No archived sessions.",
+      testCase.filtered ? "No sessions match your filters." : "No archived sessions.",
     );
     expect(emptyState?.querySelector("button") !== null).toBe(testCase.filtered);
   });
 
-  it("summarizes loaded sessions in the overview tiles", async () => {
+  it("summarizes loaded sessions beside the roster heading", async () => {
     const container = document.createElement("div");
     render(
       renderSessions(
@@ -1630,19 +1748,18 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const tiles = Array.from(container.querySelectorAll(".sessions-overview__tile"));
-    const readTile = (tile: Element) => [
-      tile.querySelector(".sessions-overview__label")?.textContent?.trim(),
-      tile.querySelector(".sessions-overview__value")?.textContent?.trim(),
-    ];
-    expect(tiles.map(readTile)).toEqual([
-      ["Threads", "2"],
-      ["Live", "1"],
-      ["Unread", "1"],
-      ["Tokens", "1.5k"],
+    const facts = Array.from(container.querySelectorAll(".sessions-heading-fact"));
+    const readFact = (fact: Element) => {
+      const value = fact.querySelector("strong")?.textContent?.trim() ?? "";
+      return [value, fact.textContent?.replace(value, "").trim()];
+    };
+    expect(container.querySelector(".settings-count")?.textContent?.trim()).toBe("2");
+    expect(facts.map(readFact)).toEqual([
+      ["1", "Live"],
+      ["1", "Unread"],
     ]);
-    expect(tiles[1]?.classList.contains("sessions-overview__tile--active")).toBe(true);
-    expect(tiles[2]?.classList.contains("sessions-overview__tile--active")).toBe(true);
+    expect(facts[0]?.classList.contains("sessions-heading-fact--active")).toBe(true);
+    expect(facts[1]?.classList.contains("sessions-heading-fact--active")).toBe(true);
   });
 
   it("renders a context meter with usage tone on the tokens cell", async () => {
@@ -1702,41 +1819,6 @@ describe("sessions view", () => {
     expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe(
       "~180k / 200k",
     );
-  });
-
-  it("reports the overview token sum as unavailable or partial when snapshots are missing", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildMultiResult([
-            { key: "agent:main:a", kind: "direct", updatedAt: 2, totalTokens: 1200 },
-            { key: "agent:main:b", kind: "direct", updatedAt: 1 },
-          ]),
-        ),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    const tokensTile = container.querySelector(".sessions-overview__tile--tokens");
-    expect(tokensTile?.querySelector(".sessions-overview__value")?.textContent?.trim()).toBe(
-      "~1.2k",
-    );
-
-    render(
-      renderSessions(
-        buildProps(buildMultiResult([{ key: "agent:main:b", kind: "direct", updatedAt: 1 }])),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(
-      container
-        .querySelector(".sessions-overview__tile--tokens .sessions-overview__value")
-        ?.textContent?.trim(),
-    ).toBe("n/a");
   });
 
   it("omits the context meter when a session reports no context window", async () => {
@@ -1801,7 +1883,7 @@ describe("sessions view", () => {
 
     expect(container.querySelectorAll(".session-skeleton-row").length).toBeGreaterThan(0);
     expect(container.querySelector(".data-table-empty-cell")).toBeNull();
-    expect(container.querySelector(".sessions-overview")).toBeNull();
+    expect(container.querySelector(".sessions-heading-facts")).toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -184,7 +184,9 @@ export function renderAppearanceSection(
                     props.theme
                       ? "settings-theme-card--active"
                       : ""}"
-                    aria-pressed=${String(opt.id === props.theme)}
+                    aria-pressed=${opt.id === "custom" && !props.hasCustomTheme
+                      ? nothing
+                      : String(opt.id === props.theme)}
                     title=${opt.description}
                     @click=${(e: Event) => {
                       if (opt.id === "custom" && !props.hasCustomTheme) {
@@ -291,6 +293,9 @@ export function renderAppearanceSection(
                       ? html`<div
                           class="settings-theme-import__message settings-theme-import__message--${props
                             .customThemeImportMessage.kind}"
+                          role=${props.customThemeImportMessage.kind === "error"
+                            ? "alert"
+                            : "status"}
                         >
                           ${props.customThemeImportMessage.text}
                         </div>`

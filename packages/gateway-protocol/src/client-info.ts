@@ -4,12 +4,10 @@
  * These values cross the WebSocket handshake boundary, so additions must stay
  * aligned with protocol schemas and server policy checks.
  */
-function normalizeOptionalLowercaseString(raw?: string | null): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const normalized = raw.trim().toLowerCase();
-  return normalized || undefined;
+import { normalizeOptionalProtocolString } from "./protocol-value-normalization.js";
+
+function normalizeOptionalProtocolLowercaseString(raw?: string | null): string | undefined {
+  return normalizeOptionalProtocolString(raw)?.toLowerCase();
 }
 
 /** Canonical client ids accepted in gateway hello/connect payloads. */
@@ -65,6 +63,8 @@ export type GatewayClientInfo = {
   displayName?: string;
   /** Client app or package version reported by the connecting process. */
   version: string;
+  /** Exact immutable artifact identity when the client can report one. */
+  buildId?: string;
   /** Runtime platform string, such as `darwin`, `ios`, `android`, or `web`. */
   platform: string;
   /** Optional device family used by native clients for display and routing hints. */
@@ -102,7 +102,7 @@ const GATEWAY_CLIENT_MODE_SET = new Set<GatewayClientMode>(Object.values(GATEWAY
 export function normalizeGatewayClientId(raw?: string | null): GatewayClientId | undefined {
   // Handshake input is intentionally case-insensitive, but policy decisions use
   // the canonical lowercase ids from the closed registry above.
-  const normalized = normalizeOptionalLowercaseString(raw);
+  const normalized = normalizeOptionalProtocolLowercaseString(raw);
   if (!normalized) {
     return undefined;
   }
@@ -118,7 +118,7 @@ export function normalizeGatewayClientName(raw?: string | null): GatewayClientNa
 
 /** Normalizes untrusted client modes and rejects unknown values. */
 export function normalizeGatewayClientMode(raw?: string | null): GatewayClientMode | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
+  const normalized = normalizeOptionalProtocolLowercaseString(raw);
   if (!normalized) {
     return undefined;
   }

@@ -38,7 +38,6 @@ vi.mock("./register.status-health-sessions.js", () => ({
     program.command("status");
     program.command("health");
     program.command("sessions");
-    program.command("commitments");
     const tasks = program.command("tasks");
     tasks.command("show");
   },
@@ -107,7 +106,6 @@ describe("command-registry", () => {
     expect(names).toContain("backup");
     expect(names).toContain("mcp");
     expect(names).toContain("sessions");
-    expect(names).toContain("commitments");
     expect(names).toContain("tasks");
     expect(names).toContain("agent");
     expect(names).not.toContain("setup");
@@ -183,21 +181,19 @@ describe("command-registry", () => {
     expect(names).toContain("status");
     expect(names).toContain("health");
     expect(names).toContain("sessions");
-    expect(names).toContain("commitments");
     expect(names).toContain("tasks");
   });
 
   it("can eagerly register the status/session command group repeatedly for completion", async () => {
     const program = createProgram();
 
-    for (const name of ["status", "health", "sessions", "commitments", "tasks"]) {
+    for (const name of ["status", "health", "sessions", "tasks"]) {
       await expect(registerCoreCliByName(program, testProgramContext, name)).resolves.toBe(true);
     }
 
     const names = namesOf(program);
     const countName = (target: string) =>
       names.reduce((count, name) => count + (name === target ? 1 : 0), 0);
-    expect(countName("commitments")).toBe(1);
     expect(countName("tasks")).toBe(1);
   });
 

@@ -11,7 +11,7 @@ import {
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../src/process/gateway-work-admission.js";
-import { createDeferred } from "../../src/test-utils/deferred.js";
+import { createDeferred } from "../helpers/promise.js";
 
 function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2, 3]): WorkerResult {
   const invariant: Record<string, number | boolean> =
@@ -115,16 +115,18 @@ describe("agent concurrency benchmark", () => {
     expect(summary).toMatchObject({ count: 20, p50: 10, p95: 19, p99: 20, max: 20 });
   });
 
-  it("drains detached gateway root work before the next spawn sample", async () => {
+  it("drains detached gateway active work before the next spawn sample", async () => {
     resetGatewayWorkAdmission();
     const deferred = createDeferred();
     const rootWork = runWithGatewayIndependentRootWorkAdmission(() => deferred.promise);
     try {
-      const drain = workerTesting.drainSpawnSampleRootWork();
+      const drain = workerTesting.drainSpawnSampleActiveWork();
       await expect(
         Promise.race([
           drain.then(() => "drained"),
-          new Promise<string>((resolve) => setImmediate(() => resolve("pending"))),
+          new Promise<string>((resolve) => {
+            setImmediate(() => resolve("pending"));
+          }),
         ]),
       ).resolves.toBe("pending");
 
@@ -137,13 +139,13 @@ describe("agent concurrency benchmark", () => {
     }
   });
 
-  it("rejects a spawn sample when detached gateway root work does not drain", async () => {
+  it("rejects a spawn sample when detached gateway active work does not drain", async () => {
     await expect(
-      workerTesting.drainSpawnSampleRootWork(async (timeoutMs) => {
+      workerTesting.drainSpawnSampleActiveWork(async (timeoutMs) => {
         expect(timeoutMs).toBe(30_000);
-        return { drained: false, active: 2 };
+        return { drained: false, snapshot: { counts: { totalActive: 2 } } };
       }),
-    ).rejects.toThrow("spawn sample left 2 active gateway root work items");
+    ).rejects.toThrow("spawn sample left 2 active gateway work items");
   });
 
   it("aggregates synthetic worker results into schema version 2", () => {

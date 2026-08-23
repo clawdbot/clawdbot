@@ -8,8 +8,7 @@ import {
  * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import type { GatewayMessageChannel } from "../utils/message-channel.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import { modelKey } from "./model-ref-shared.js";
@@ -19,7 +18,8 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 /** Options provided by agent runtime callers when invoking OpenClaw plugin tools. */
 export type OpenClawPluginToolOptions = {
   agentSessionKey?: string;
-  agentChannel?: GatewayMessageChannel;
+  runId?: string;
+  agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
   /** Routable target for the current conversation when it differs from the native channel ID. */
@@ -28,6 +28,8 @@ export type OpenClawPluginToolOptions = {
   currentChannelId?: string;
   agentThreadId?: string | number;
   nativeChannelId?: string;
+  /** Opaque host-issued capability for current-turn channel message actions. */
+  messageActionTurnCapability?: string;
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;

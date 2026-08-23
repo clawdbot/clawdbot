@@ -37,14 +37,10 @@ function resolveMetadataSnapshotForSetupCliBackends(
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const snapshot = resolvePluginMetadataSnapshot({
-    config: params.config ?? {},
+    ...(params.config ? { config: params.config } : {}),
     env,
-    ...(workspaceDir !== undefined
-      ? {
-          workspaceDir,
-          allowWorkspaceScopedCurrent: true,
-        }
-      : {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
+    allowWorkspaceScopedCurrent: true,
   });
   return {
     snapshot,

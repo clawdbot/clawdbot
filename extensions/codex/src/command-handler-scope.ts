@@ -84,7 +84,9 @@ export async function resolveCommandAppServerScope(
   };
 }
 
-export function conversationBindingIdentity(bindingId: string): CodexAppServerBindingIdentity {
+export function conversationBindingIdentity(
+  bindingId: string,
+): Extract<CodexAppServerBindingIdentity, { kind: "conversation" }> {
   return { kind: "conversation", bindingId };
 }
 

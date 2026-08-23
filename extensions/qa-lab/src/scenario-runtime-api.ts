@@ -67,6 +67,7 @@ export type QaScenarioRuntimeDeps = {
   assertNoGatewayLogSentinels: QaScenarioRuntimeFunction;
   readSessionTranscriptSummary: QaScenarioRuntimeFunction;
   runQaCli: QaScenarioRuntimeFunction;
+  inspectQaExecutionIdentityStorage: QaScenarioRuntimeFunction;
   extractMediaPathFromText: QaScenarioRuntimeFunction;
   resolveGeneratedImagePath: QaScenarioRuntimeFunction;
   startAgentRun: QaScenarioRuntimeFunction;
@@ -94,6 +95,7 @@ export type QaScenarioRuntimeDeps = {
   formatErrorMessage: QaScenarioRuntimeFunction;
   liveTurnTimeoutMs: QaScenarioRuntimeFunction;
   resolveQaLiveTurnTimeoutMs: QaScenarioRuntimeFunction;
+  normalizeModelRef: QaScenarioRuntimeFunction;
   splitModelRef: QaScenarioRuntimeFunction;
   hasDiscoveryLabels: QaScenarioRuntimeFunction;
   reportsDiscoveryScopeLeak: QaScenarioRuntimeFunction;

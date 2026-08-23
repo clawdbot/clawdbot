@@ -1,13 +1,12 @@
 // Persists short-lived gateway restart handoff metadata.
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -136,7 +135,7 @@ export function formatGatewayRestartHandoffDiagnostic(
 }
 
 function normalizePid(pid: number | undefined): number | null {
-  return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+  return asPositiveSafeInteger(pid) ?? null;
 }
 
 function normalizeText(value: unknown, maxLength: number): string | undefined {
@@ -305,8 +304,12 @@ function selectGatewayRestartHandoffRowSync(
 
 function readGatewayRestartHandoffRowSync(env: NodeJS.ProcessEnv) {
   try {
-    const { db } = openOpenClawStateDatabase({ env });
-    return selectGatewayRestartHandoffRowSync(db);
+    return (
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => selectGatewayRestartHandoffRowSync(db),
+        { env },
+      ) ?? null
+    );
   } catch {
     return null;
   }

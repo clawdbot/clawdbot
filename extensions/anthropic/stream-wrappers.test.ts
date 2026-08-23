@@ -141,6 +141,41 @@ function runNativeFastModeWrapper(params?: {
   return captured;
 }
 
+function runCompactionProviderWrapper(params?: {
+  apiKey?: string;
+  provider?: string;
+  api?: string;
+  baseUrl?: string;
+  extraParams?: Record<string, unknown>;
+  headers?: Record<string, string>;
+  payload?: Record<string, unknown>;
+}) {
+  const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
+  const wrapped = wrapAnthropicProviderStream({
+    streamFn: createPayloadCapturingBaseStream(captured),
+    modelId: "claude-sonnet-4-6",
+    extraParams: params?.extraParams ?? { anthropicServerCompaction: true },
+  } as never);
+  const payload = params?.payload ?? {};
+  void wrapped?.(
+    {
+      provider: params?.provider ?? "anthropic",
+      api: params?.api ?? "anthropic-messages",
+      baseUrl: params?.baseUrl ?? "https://api.anthropic.com/v1",
+      id: "claude-sonnet-4-6",
+      contextWindow: 200_000,
+    } as never,
+    {} as never,
+    {
+      apiKey: params?.apiKey ?? "sk-ant-api03-test-key",
+      headers: params?.headers,
+      onPayload: (generated: unknown) =>
+        Object.assign(generated as Record<string, unknown>, payload),
+    } as never,
+  );
+  return captured;
+}
+
 describe("anthropic stream wrappers", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -179,6 +214,53 @@ describe("anthropic stream wrappers", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-api-123");
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
     expect(captured.payload).toMatchObject({ service_tier: "auto" });
+  });
+
+  it("injects opt-in server compaction for direct API-key requests", () => {
+    const captured = runCompactionProviderWrapper({
+      headers: { "Anthropic-Beta": "files-api-2025-04-14" },
+    });
+
+    expect(captured.headers?.["Anthropic-Beta"]).toBe("files-api-2025-04-14,compact-2026-01-12");
+    expect(captured.payload?.context_management).toEqual({
+      edits: [
+        {
+          type: "compact_20260112",
+          trigger: { type: "input_tokens", value: 140_000 },
+        },
+      ],
+    });
+  });
+
+  it("preserves existing context management under the compaction wrapper", () => {
+    const existing = { edits: [{ type: "clear_tool_uses_20250919" }] };
+    const captured = runCompactionProviderWrapper({ payload: { context_management: existing } });
+
+    expect(captured.payload?.context_management).toBe(existing);
+  });
+
+  it.each([
+    {
+      name: "the feature is not enabled",
+      extraParams: {},
+    },
+    {
+      name: "OAuth auth is used",
+      apiKey: "sk-ant-oat01-test-token",
+    },
+    {
+      name: "a proxy endpoint is used",
+      baseUrl: "https://proxy.example.test/v1",
+    },
+    {
+      name: "a non-Anthropic API is used",
+      api: "openai-completions",
+    },
+  ])("skips server compaction when $name", (params) => {
+    const captured = runCompactionProviderWrapper(params);
+
+    expect(captured.headers?.["anthropic-beta"] ?? "").not.toContain("compact-2026-01-12");
+    expect(captured.payload).not.toHaveProperty("context_management");
   });
 
   it("does not emit the legacy context-1m beta from context1m or explicit config", () => {

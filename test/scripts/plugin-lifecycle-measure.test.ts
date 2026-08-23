@@ -1,26 +1,12 @@
 // Plugin Lifecycle Measure tests cover plugin lifecycle measure script behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs";
-
-function makeTempDir(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-lifecycle-measure-"));
-  tempDirs.push(dir);
-  return dir;
-}
 
 function writeFakeGetconf(dir: string, body: string): string {
   const binDir = path.join(dir, "bin");
@@ -90,17 +76,11 @@ function waitForChildClose(
   });
 }
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "derives proc units from getconf when overrides are absent",
     () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const logPath = path.join(dir, "getconf.log");
       const binDir = writeFakeGetconf(
@@ -132,7 +112,7 @@ describe("plugin lifecycle resource sampler", () => {
   );
 
   it("rejects loose numeric env values instead of parsing prefixes", () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
     const summary = path.join(dir, "summary.tsv");
     const result = spawnSync("node", [scriptPath, summary, "invalid-env", "--", "node", "-e", ""], {
       cwd: process.cwd(),
@@ -151,7 +131,7 @@ describe("plugin lifecycle resource sampler", () => {
   });
 
   it("rejects zero lifecycle timeouts instead of disabling the guard", () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
     const summary = path.join(dir, "summary.tsv");
     const result = spawnSync("node", [scriptPath, summary, "invalid-env", "--", "node", "-e", ""], {
       cwd: process.cwd(),
@@ -170,7 +150,7 @@ describe("plugin lifecycle resource sampler", () => {
   });
 
   it("rejects loose resource ceiling env values instead of parsing prefixes", () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
     const summary = path.join(dir, "summary.tsv");
     const result = spawnSync("node", [scriptPath, summary, "invalid-env", "--", "node", "-e", ""], {
       cwd: process.cwd(),
@@ -206,7 +186,7 @@ describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "fails successful phases that exceed wall ceilings",
     () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const result = spawnSync(
         "node",
@@ -233,7 +213,7 @@ describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "times out wedged phases and records the timeout signal",
     () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const result = spawnSync(
         "node",
@@ -259,7 +239,7 @@ describe("plugin lifecycle resource sampler", () => {
   );
 
   it.runIf(process.platform === "linux")("clamps oversized timer env values", () => {
-    const dir = makeTempDir();
+    const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
     const summary = path.join(dir, "summary.tsv");
     const oversizedTimerMs = "2147000001";
     const result = spawnSync(
@@ -296,7 +276,7 @@ describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "kills stubborn descendants after the timeout grace period",
     () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const pidFile = path.join(dir, "descendant.pid");
       let descendantPid: number | undefined;
@@ -348,7 +328,7 @@ describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "forwards external termination to the measured process group",
     async () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const pidFile = path.join(dir, "descendant.pid");
       let descendantPid: number | undefined;
@@ -394,7 +374,7 @@ describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "exits promptly when externally terminated phases stop during grace",
     async () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const readyFile = path.join(dir, "ready.pid");
       const result = spawn(
@@ -439,7 +419,7 @@ describe("plugin lifecycle resource sampler", () => {
   it.runIf(process.platform === "linux")(
     "exits promptly when shell descendants drain during termination grace",
     async () => {
-      const dir = makeTempDir();
+      const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const readyFile = path.join(dir, "ready.pid");
       const result = spawn(

@@ -1,9 +1,11 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 const CHAT_RUN_PROGRESS_MAX_EVENTS = 50;
 const CHAT_RUN_PROGRESS_MAX_BYTES = 128 * 1024;
 const CHAT_RUN_PROGRESS_MAX_EVENT_BYTES = 64 * 1024;
+const CHAT_RUN_PROGRESS_MAX_REVIEWS_PER_TOOL = 16;
 
 export type ChatRunProgressSnapshot = {
   events: AgentEventPayload[];
@@ -18,6 +20,8 @@ export function updateChatRunProgressSnapshot(
   const data = event.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
+  const review = asNullableRecord(data.review) ?? undefined;
+  const reviewId = typeof review?.id === "string" ? review.id.trim() : "";
   const preambleItemId =
     typeof data.itemId === "string" && data.itemId.trim()
       ? data.itemId.trim()
@@ -25,9 +29,17 @@ export function updateChatRunProgressSnapshot(
         ? data.id.trim()
         : "";
   const isTool =
-    event.stream === "tool" && Boolean(toolCallId) && ["start", "update", "result"].includes(phase);
+    event.stream === "tool" &&
+    Boolean(toolCallId) &&
+    ["start", "input_delta", "update", "review", "result"].includes(phase) &&
+    (phase !== "review" || Boolean(reviewId));
   const isPreamble = event.stream === "item" && data.kind === "preamble";
-  if (!isTool && !isPreamble) {
+  const guardianTargetItemId =
+    typeof data.targetItemId === "string" ? data.targetItemId.trim() : "";
+  const isStandaloneGuardian =
+    event.stream === "codex_app_server.guardian" &&
+    (phase === "warning" || (phase === "completed" && !guardianTargetItemId));
+  if (!isTool && !isPreamble && !isStandaloneGuardian) {
     return snapshot;
   }
 
@@ -38,15 +50,15 @@ export function updateChatRunProgressSnapshot(
     return next;
   }
   next.lastSeq = event.seq;
+  const matchesPreamble = (candidate: AgentEventPayload) =>
+    candidate.stream === "item" &&
+    candidate.data?.kind === "preamble" &&
+    (candidate.data.itemId ?? "") === preambleItemId;
+  const previousPreamble = preambleItemId ? next.events.find(matchesPreamble) : undefined;
 
   const removeWhere = (predicate: (candidate: AgentEventPayload) => boolean) => {
-    next.events = next.events.filter((candidate) => {
-      if (!predicate(candidate)) {
-        return true;
-      }
-      next.byteLength -= jsonUtf8Bytes(candidate);
-      return false;
-    });
+    next.events = next.events.filter((candidate) => !predicate(candidate));
+    next.byteLength = next.events.reduce((total, candidate) => total + jsonUtf8Bytes(candidate), 0);
   };
 
   if (isTool) {
@@ -54,47 +66,59 @@ export function updateChatRunProgressSnapshot(
       if (candidate.stream !== "tool" || candidate.data?.toolCallId !== toolCallId) {
         return false;
       }
-      return phase !== "update" || candidate.data?.phase === "update";
-    });
-    if (phase === "result") {
-      return next;
-    }
-  } else {
-    const progressText = typeof data.progressText === "string" ? data.progressText.trim() : "";
-    if (!progressText) {
-      if (preambleItemId) {
-        removeWhere((candidate) => {
-          if (candidate.stream !== "item" || candidate.data?.kind !== "preamble") {
-            return false;
-          }
-          return candidate.data.itemId === preambleItemId;
-        });
+      if (phase === "start") {
+        return true;
       }
+      if (phase === "result") {
+        return candidate.data?.phase === "result";
+      }
+      if (phase !== "review" || candidate.data?.phase !== "review") {
+        return candidate.data?.phase === phase;
+      }
+      // One command can own parallel reviews; replace only the matching
+      // review ID so reconnect restores every still-relevant decision.
+      return asNullableRecord(candidate.data.review)?.id === reviewId;
+    });
+  } else if (isPreamble) {
+    const progressText = typeof data.progressText === "string" ? data.progressText.trim() : "";
+    removeWhere(matchesPreamble);
+    if (!progressText) {
       return next;
     }
-    removeWhere((candidate) => candidate.stream === "item" && candidate.data?.kind === "preamble");
   }
 
   const storedData: Record<string, unknown> = isTool
     ? {
         phase,
-        ...(typeof data.name === "string" ? { name: data.name } : {}),
+        name: typeof data.name === "string" ? data.name : undefined,
         toolCallId,
-        ...(phase === "start" && Object.hasOwn(data, "args") ? { args: data.args } : {}),
-        ...(phase === "update" && Object.hasOwn(data, "partialResult")
-          ? { partialResult: data.partialResult }
-          : {}),
+        args: phase === "start" ? data.args : undefined,
+        partialResult: phase === "update" ? data.partialResult : undefined,
+        diff: phase === "input_delta" ? data.diff : undefined,
+        review: phase === "review" ? data.review : undefined,
+        approvalReviewOutcome:
+          phase === "review" || phase === "result" ? data.approvalReviewOutcome : undefined,
+        isError: phase === "result" ? data.isError : undefined,
+        result: phase === "result" ? data.result : undefined,
       }
-    : {
-        kind: "preamble",
-        ...(preambleItemId ? { itemId: preambleItemId } : {}),
-        progressText: data.progressText,
-      };
+    : isPreamble
+      ? {
+          kind: "preamble",
+          itemId: preambleItemId || undefined,
+          progressText: data.progressText,
+        }
+      : { ...data };
+  for (const key of Object.keys(storedData)) {
+    if (storedData[key] === undefined) {
+      delete storedData[key];
+    }
+  }
   let storedEvent: AgentEventPayload = {
     runId: event.runId,
     seq: event.seq,
     stream: event.stream,
-    ts: event.ts,
+    // Keep first-seen time so reload cannot move updated commentary across a later steer.
+    ts: previousPreamble?.ts ?? event.ts,
     data: storedData,
     ...(event.sessionKey ? { sessionKey: event.sessionKey } : {}),
     ...(event.agentId ? { agentId: event.agentId } : {}),
@@ -103,6 +127,8 @@ export function updateChatRunProgressSnapshot(
   if (eventBytes > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES && isTool) {
     delete storedData.args;
     delete storedData.partialResult;
+    delete storedData.diff;
+    delete storedData.result;
     storedEvent = { ...storedEvent, data: storedData };
     eventBytes = jsonUtf8Bytes(storedEvent);
   }
@@ -111,15 +137,37 @@ export function updateChatRunProgressSnapshot(
   }
   next.events.push(storedEvent);
   next.byteLength += eventBytes;
+  if (phase === "review") {
+    const reviews = next.events.filter(
+      (candidate) =>
+        candidate.stream === "tool" &&
+        candidate.data?.toolCallId === toolCallId &&
+        candidate.data?.phase === "review",
+    );
+    const overflow = reviews.length - CHAT_RUN_PROGRESS_MAX_REVIEWS_PER_TOOL;
+    if (overflow > 0) {
+      const evicted = new Set(reviews.slice(0, overflow));
+      removeWhere((candidate) => evicted.has(candidate));
+    }
+  }
   while (
     next.events.length > CHAT_RUN_PROGRESS_MAX_EVENTS ||
     next.byteLength > CHAT_RUN_PROGRESS_MAX_BYTES
   ) {
-    const removed = next.events.shift();
-    if (!removed) {
+    const oldest = next.events[0];
+    if (!oldest) {
       break;
     }
-    next.byteLength -= jsonUtf8Bytes(removed);
+    const oldestToolCallId =
+      oldest.stream === "tool" && typeof oldest.data?.toolCallId === "string"
+        ? oldest.data.toolCallId
+        : "";
+    // Review/update events depend on their start. Evict the complete owner group.
+    removeWhere((candidate) =>
+      oldestToolCallId
+        ? candidate.stream === "tool" && candidate.data?.toolCallId === oldestToolCallId
+        : candidate === oldest,
+    );
   }
   return next;
 }

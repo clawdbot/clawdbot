@@ -1,4 +1,5 @@
 // Diagnostic stability helpers compare diagnostic outputs across runs.
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
@@ -801,9 +802,15 @@ function parseOptionalNonNegativeInteger(value: unknown, field: string): number 
   if (value === undefined || value === null || value === "") {
     return undefined;
   }
-  const parsed =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  if (typeof value === "string") {
+    // Gate on strict decimal digits before parsing so non-decimal forms such as
+    // "0x2", "1e2", "0b101", "+5", or " 5 " are rejected instead of coerced.
+    if (!/^\d+$/.test(value)) {
+      throw new Error(`${field} must be a non-negative integer`);
+    }
+  }
+  const parsed = parseStrictNonNegativeInteger(value);
+  if (parsed === undefined) {
     throw new Error(`${field} must be a non-negative integer`);
   }
   return parsed;
@@ -848,15 +855,22 @@ export function startDiagnosticStabilityRecorder(): void {
   if (state.unsubscribe) {
     return;
   }
-  state.unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
-    if (event.type === "telemetry.exporter") {
-      return;
-    }
-    if (metadata.trusted || event.type === "log.record") {
-      return;
-    }
-    appendRecord(sanitizeDiagnosticEvent(event));
-  });
+  state.unsubscribe = onInternalDiagnosticEvent(
+    (event, metadata) => {
+      // Model-call instrumentation is trusted core telemetry required by recovery.
+      // Other trusted events retain their dedicated owners outside this ring.
+      if (
+        metadata.trusted &&
+        event.type !== "model.call.started" &&
+        event.type !== "model.call.completed" &&
+        event.type !== "model.call.error"
+      ) {
+        return;
+      }
+      appendRecord(sanitizeDiagnosticEvent(event));
+    },
+    { exclude: ["log.record", "telemetry.exporter"] },
+  );
 }
 
 /** Stops the process-wide diagnostic event recorder. */

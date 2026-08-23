@@ -73,7 +73,7 @@ async function captureProof(page: Page, name: string, locator?: Locator) {
 }
 
 suite.define(() => {
-  it("persists engine, backend, and dreaming resets and reloads inherited defaults", async () => {
+  it("persists engine and dreaming resets and reloads inherited defaults", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -84,7 +84,6 @@ suite.define(() => {
       async ({ page }) => {
         const config = {
           agents: { defaults: { userTimezone: "Asia/Singapore" } },
-          memory: { backend: "qmd" },
           plugins: {
             slots: { memory: "memory-core" },
             entries: {
@@ -121,23 +120,19 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
 
         const engineRow = settingsRow(page, "Memory engine");
-        const backendRow = settingsRow(page, "Retrieval backend");
         const frequencyRow = settingsRow(page, "Dreaming frequency");
         await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");
-        await expect.poll(() => backendRow.textContent()).toContain("Default: Built-in");
         await expect.poll(() => frequencyRow.textContent()).toContain("Default: 0 3 * * *");
         await expect.poll(() => frequencyRow.getByRole("textbox").inputValue()).toBe("0 6 * * *");
 
-        await captureProof(page, "01-explicit-engine-backend.png");
+        await captureProof(page, "01-explicit-engine.png");
         await captureProof(page, "02-explicit-dreaming.png", scheduleSection(page));
 
         await engineRow.getByRole("button", { name: "Reset to default" }).click();
-        await backendRow.getByRole("button", { name: "Reset to default" }).click();
         await frequencyRow.getByRole("button", { name: "Reset to default" }).click();
 
         const saved = requestRaw(await gateway.waitForRequest("config.set"));
         expect(saved).not.toHaveProperty("plugins.slots.memory");
-        expect(saved).not.toHaveProperty("memory.backend");
         expect(saved).not.toHaveProperty("plugins.entries.memory-core.config.dreaming.frequency");
         expect(saved).toHaveProperty(
           "plugins.entries.memory-core.config.dreaming.verboseLogging",
@@ -149,14 +144,10 @@ suite.define(() => {
 
         await page.reload();
         const reloadedEngineRow = settingsRow(page, "Memory engine");
-        const reloadedBackendRow = settingsRow(page, "Retrieval backend");
         const reloadedFrequencyRow = settingsRow(page, "Dreaming frequency");
         await expect
           .poll(() => reloadedEngineRow.textContent())
           .toContain("Using default: OpenClaw Memory");
-        await expect
-          .poll(() => reloadedBackendRow.textContent())
-          .toContain("Using default: Built-in");
         await expect
           .poll(() => reloadedFrequencyRow.textContent())
           .toContain("Using default: 0 3 * * *");
@@ -168,7 +159,7 @@ suite.define(() => {
           .poll(() => page.getByRole("button", { name: "Reset to default" }).count())
           .toBe(1);
 
-        await captureProof(page, "03-inherited-engine-backend.png");
+        await captureProof(page, "03-inherited-engine.png");
         await captureProof(page, "04-inherited-dreaming.png", scheduleSection(page));
       },
     );

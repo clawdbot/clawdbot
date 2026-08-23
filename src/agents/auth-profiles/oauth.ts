@@ -27,8 +27,8 @@ import {
   SecretSurfaceUnavailableError,
 } from "../../secrets/runtime-degraded-state.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
-import { refreshChutesTokens } from "../chutes-oauth.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { authProfilesLog } from "./constants.js";
 import {
   evaluateStoredCredentialEligibility,
   resolveTokenExpiryState,
@@ -41,7 +41,7 @@ import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import {
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore,
   hasRuntimeAuthProfileStoreSnapshot,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
@@ -204,12 +204,6 @@ async function refreshOAuthCredential(
     throw new OAuthProviderConfiguredUnavailableError(credential.provider);
   }
 
-  if (credential.provider === "chutes") {
-    // Chutes refresh shipped before provider hooks and still covers registry-load
-    // windows where the synchronous hook resolver intentionally returns no owner.
-    return await refreshChutesTokens({ credential });
-  }
-
   const oauthProvider = resolveOAuthProvider(credential.provider);
   if (!oauthProvider || typeof getOAuthApiKey !== "function") {
     return null;
@@ -318,7 +312,7 @@ function resolveRuntimeAuthProfile(params: {
   profile: AuthProfileCredential;
   defaults: SecretDefaults | undefined;
 }): { profile: AuthProfileCredential; published: boolean } {
-  const runtimeProfile = getRuntimeAuthProfileStoreSnapshot(params.agentDir)?.profiles[
+  const runtimeProfile = getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)?.profiles[
     params.profileId
   ];
   const inputRefKey = authProfileSecretRefKey(params.profile, params.defaults);
@@ -512,16 +506,25 @@ export async function resolveApiKeyForProfile(
         agentDir: params.agentDir,
         profileId,
       });
-      await clearLastGoodProfileWithLock({
-        provider: cred.provider,
-        profileId,
-        agentDir: ownerAgentDir,
-      });
+      let clearedLastGood = false;
+      try {
+        await clearLastGoodProfileWithLock({
+          provider: cred.provider,
+          profileId,
+          agentDir: ownerAgentDir,
+        });
+        clearedLastGood = true;
+      } catch (cleanupError) {
+        // The refresh failure owns the operator diagnosis; stale last-good cleanup is secondary.
+        authProfilesLog.warn("failed to clear stale OAuth last-good state after refresh failure", {
+          error: formatErrorMessage(cleanupError),
+        });
+      }
       if (
         params.agentDir !== ownerAgentDir &&
         hasRuntimeAuthProfileStoreSnapshot(params.agentDir)
       ) {
-        const snapshot = getRuntimeAuthProfileStoreSnapshot(params.agentDir);
+        const snapshot = getRuntimeAuthProfileStoreSnapshotCore(params.agentDir);
         const providerKey = resolveProviderIdForAuth(cred.provider);
         if (snapshot?.lastGood?.[providerKey] === profileId) {
           delete snapshot.lastGood[providerKey];
@@ -531,7 +534,9 @@ export async function resolveApiKeyForProfile(
           setRuntimeAuthProfileStoreSnapshot(snapshot, params.agentDir);
         }
       }
-      refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+      if (clearedLastGood) {
+        refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+      }
     }
     const fallbackProfileId =
       params.allowProfileFallback === false

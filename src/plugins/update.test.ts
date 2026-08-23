@@ -1571,7 +1571,7 @@ describe("updateNpmInstalledPlugins", () => {
           status: "updated",
           currentVersion: "2026.5.28-beta.4",
           nextVersion: "2026.5.28-beta.3",
-          message: "Updated msteams: 2026.5.28-beta.4 -> 2026.5.28-beta.3.",
+          message: "Downgraded msteams: 2026.5.28-beta.4 -> 2026.5.28-beta.3.",
         },
       ]);
     }
@@ -2374,10 +2374,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
     expect(result.config.plugins?.allow).toEqual(["lossless-claw", "keep"]);
     expect(result.config.plugins?.deny).toEqual(["lossless-claw", "blocked"]);
-    expect(result.config.plugins?.slots).toEqual({
-      memory: "memory-core",
-      contextEngine: "legacy",
-    });
+    expect(result.config.plugins?.slots).toBeUndefined();
     expect(result.outcomes).toEqual([
       {
         pluginId: "lossless-claw",
@@ -2474,7 +2471,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
     expect(result.config.plugins?.allow).toEqual(["demo", "other"]);
     expect(result.config.plugins?.deny).toEqual(["demo", "blocked"]);
-    expect(result.config.plugins?.slots?.memory).toBe("memory-core");
+    expect(result.config.plugins?.slots?.memory).toBeUndefined();
     expect(result.outcomes).toEqual([
       {
         pluginId: "demo",
@@ -2761,6 +2758,12 @@ describe("updateNpmInstalledPlugins", () => {
       status: "unchanged",
       message: "demo is up to date (1.2.3).",
     },
+    {
+      name: "reports exact npm dry-runs that move backwards as downgrades",
+      targetVersion: "1.2.2",
+      status: "updated",
+      message: "Would downgrade demo: 1.2.3 -> 1.2.2.",
+    },
   ] as const)("$name", async ({ targetVersion, status, message }) => {
     const installPath = createInstalledPackageDir({
       name: "@acme/demo",
@@ -3002,10 +3005,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
     expect(result.config.plugins?.allow).toEqual(["demo", "other"]);
     expect(result.config.plugins?.deny).toEqual(["blocked"]);
-    expect(result.config.plugins?.slots).toEqual({
-      memory: "memory-core",
-      contextEngine: "legacy",
-    });
+    expect(result.config.plugins?.slots).toBeUndefined();
     expect(result.config.plugins?.installs?.demo).toEqual(config.plugins.installs.demo);
     expect(result.outcomes).toEqual([
       {
@@ -3140,7 +3140,7 @@ describe("updateNpmInstalledPlugins", () => {
       config: { preserved: true },
     });
     expect(result.config.plugins?.allow).toEqual(["demo"]);
-    expect(result.config.plugins?.slots?.memory).toBe("memory-core");
+    expect(result.config.plugins?.slots?.memory).toBeUndefined();
     expect(result.outcomes).toEqual([
       {
         pluginId: "demo",
@@ -3173,9 +3173,7 @@ describe("updateNpmInstalledPlugins", () => {
       config: { preserved: true },
     });
     expect(result.config.plugins?.allow).toEqual(["demo"]);
-    expect(result.config.plugins?.slots).toEqual({
-      memory: "memory-core",
-    });
+    expect(result.config.plugins?.slots).toBeUndefined();
     const message =
       'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: ClawHub blocked this release; update was not started. (ClawHub clawhub:demo).';
     expect(warn).toHaveBeenCalledWith(message);
@@ -3637,6 +3635,29 @@ describe("updateNpmInstalledPlugins", () => {
       message: "plugin channel fallback: openclaw-codex-app-server used @latest after @beta failed",
     });
   });
+
+  it.each(["security_scan_blocked", "security_scan_failed"] as const)(
+    "does not bypass %s with the beta npm fallback",
+    async (code) => {
+      installPluginFromNpmSpecMock.mockResolvedValueOnce({
+        ok: false,
+        code,
+        error: `install policy returned ${code}`,
+      });
+
+      const result = await updatePlugin(
+        createCodexAppServerInstallConfig({ spec: "openclaw-codex-app-server" }),
+        "openclaw-codex-app-server",
+        { updateChannel: "beta" },
+      );
+
+      expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+      expect(result.outcomes[0]).toMatchObject({
+        status: "error",
+        message: `Failed to update openclaw-codex-app-server: install policy returned ${code}`,
+      });
+    },
+  );
 
   it.each([
     {
@@ -4934,6 +4955,57 @@ describe("syncPluginsForUpdateChannel", () => {
       resolvedName: "@openclaw/legacy-chat",
       resolvedVersion: "2.0.0",
       resolvedSpec: "@openclaw/legacy-chat@2.0.0",
+    });
+  });
+
+  it("installs an externalized bundled plugin under its renamed package id", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-qqbot",
+        targetDir: "/tmp/openclaw-plugins/openclaw-qqbot",
+        version: "2.0.1",
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "qqbot",
+          pluginId: "openclaw-qqbot",
+          npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+          expectedIntegrity: "sha512-qqbot-catalog-pin",
+          channelIds: ["qqbot"],
+        },
+      ],
+      config: {
+        channels: { qqbot: { enabled: true } },
+        plugins: {
+          entries: { qqbot: { enabled: true } },
+          load: { paths: [appBundledPluginRoot("qqbot")] },
+          installs: {
+            qqbot: {
+              source: "path",
+              sourcePath: appBundledPluginRoot("qqbot"),
+              installPath: appBundledPluginRoot("qqbot"),
+            },
+          },
+        },
+      },
+    });
+
+    expect(npmInstallCall()?.expectedPluginId).toBe("openclaw-qqbot");
+    expect(npmInstallCall()?.expectedIntegrity).toBe("sha512-qqbot-catalog-pin");
+    expect(result.summary.switchedToNpm).toEqual(["openclaw-qqbot"]);
+    expect(result.config.plugins?.entries?.qqbot).toBeUndefined();
+    expect(result.config.plugins?.entries?.["openclaw-qqbot"]).toEqual({ enabled: true });
+    expect(result.config.plugins?.installs?.qqbot).toBeUndefined();
+    expectRecordFields(result.config.plugins?.installs?.["openclaw-qqbot"], {
+      source: "npm",
+      spec: "@tencent-connect/openclaw-qqbot@2.0.1",
+      installPath: "/tmp/openclaw-plugins/openclaw-qqbot",
+      version: "2.0.1",
     });
   });
 

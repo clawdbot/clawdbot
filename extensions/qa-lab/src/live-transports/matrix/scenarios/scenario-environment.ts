@@ -4,8 +4,8 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
-import type { MatrixQaProvisionResult } from "../substrate/client.js";
-import type { MatrixQaRoomObserver } from "../substrate/client.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MatrixQaProvisionResult, MatrixQaRoomObserver } from "../substrate/client.js";
 import { buildMatrixQaConfig, type MatrixQaConfigOverrides } from "../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import type { startMatrixQaHarness } from "../substrate/harness.runtime.js";
@@ -20,6 +20,8 @@ type MatrixQaGateway = FlowPreparationInput["gateway"];
 type MatrixQaHarness = Awaited<ReturnType<typeof startMatrixQaHarness>>;
 
 const MATRIX_QA_PREPARATION_TIMEOUT_MS = 60_000;
+const MATRIX_QA_PATCH_BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const MATRIX_QA_PATCH_UNCHANGED = Symbol("matrix-qa-patch-unchanged");
 
 type MatrixQaScenarioEnvironmentParams = {
   accountId: string;
@@ -66,26 +68,79 @@ function readMatrixConfigOverrides(
     : undefined;
 }
 
-function resolveMatrixQaReplacePaths(params: {
-  accountId: string;
-  overrides: MatrixQaConfigOverrides | undefined;
-}) {
-  // Scenario topology rebuilds groupAllowFrom and may shrink it. The Gateway
-  // requires the exact array path so a parent replacement cannot bypass its guard.
-  const replacePaths = [
-    "channels.matrix",
-    `channels.matrix.accounts.${params.accountId}.groupAllowFrom`,
-    "messages",
-  ];
-  // Replacing an untouched root drops config.get-omitted runtime policy and can
-  // invalidate lifecycle-owned state while the Matrix account is restarting.
-  if (params.overrides?.agentDefaults) {
-    replacePaths.push("agents.defaults");
+function arrayPreservesBaseEntries(base: unknown[], merged: unknown[]): boolean {
+  const unmatchedMerged = [...merged];
+  for (const baseEntry of base) {
+    const matchIndex = unmatchedMerged.findIndex((mergedEntry) =>
+      isDeepStrictEqual(mergedEntry, baseEntry),
+    );
+    if (matchIndex === -1) {
+      return false;
+    }
+    unmatchedMerged.splice(matchIndex, 1);
   }
-  if (params.overrides?.toolProfile || params.overrides?.audio) {
-    replacePaths.push("tools");
-  }
-  return replacePaths;
+  return true;
+}
+
+function createMatrixQaConfigPatch(
+  current: OpenClawConfig,
+  target: OpenClawConfig,
+  accountId: string,
+) {
+  const accountPath = `channels.matrix.accounts.${accountId}`;
+  const replacePaths = new Set<string>();
+  const isReplacePath = (path: string) =>
+    /^(?:account\.(?:autoJoinAllowlist|dm\.allowFrom|execApprovals\.(?:agentFilter|approvers|sessionFilter)|groupAllowFrom|groups\..+\.tools\.(?:allow|deny))|messages\.groupChat\.mentionPatterns|tools\.media\.(?:models|audio\.scope\.rules))$/u.test(
+      path.startsWith(accountPath) ? `account${path.slice(accountPath.length)}` : path,
+    );
+  const diff = (before: unknown, after: unknown, path: string): unknown => {
+    if (isDeepStrictEqual(before, after)) {
+      return MATRIX_QA_PATCH_UNCHANGED;
+    }
+    if (!isRecord(after)) {
+      // Gateway validates exact array intent below parent tombstones, so walk
+      // removed objects while admitting only Matrix QA-owned array leaves.
+      if (after === null && isRecord(before)) {
+        for (const key of Object.keys(before)) {
+          if (MATRIX_QA_PATCH_BLOCKED_KEYS.has(key)) {
+            continue;
+          }
+          diff(before[key], null, path ? `${path}.${key}` : key);
+        }
+      }
+      if (
+        Array.isArray(before) &&
+        (!Array.isArray(after) || !arrayPreservesBaseEntries(before, after)) &&
+        isReplacePath(path)
+      ) {
+        replacePaths.add(path);
+      }
+      return structuredClone(after);
+    }
+    const source = isRecord(before) ? before : {};
+    const patch: Record<string, unknown> = {};
+    for (const key of new Set([...Object.keys(source), ...Object.keys(after)])) {
+      if (MATRIX_QA_PATCH_BLOCKED_KEYS.has(key)) {
+        continue;
+      }
+      const childPath = path ? `${path}.${key}` : key;
+      if (!Object.hasOwn(after, key)) {
+        patch[key] = null;
+        diff(source[key], null, childPath);
+        continue;
+      }
+      const value = diff(source[key], after[key], childPath);
+      if (value !== MATRIX_QA_PATCH_UNCHANGED) {
+        patch[key] = value;
+      }
+    }
+    return patch;
+  };
+  const patch = diff(current, target, "");
+  return {
+    patch: patch === MATRIX_QA_PATCH_UNCHANGED ? {} : (patch as Record<string, unknown>),
+    replacePaths: [...replacePaths].toSorted(),
+  };
 }
 
 function isStaleConfigPatchError(error: unknown) {
@@ -235,6 +290,7 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
   const syncState = {};
   const syncStreams: Partial<Record<"driver" | "observer", MatrixQaRoomObserver>> = {};
   let canary: MatrixQaCanaryArtifact | undefined;
+  let baselineConfig: OpenClawConfig | undefined;
 
   const prepareFlow = async (input: FlowPreparationInput) => {
     const preparationDeadline =
@@ -253,7 +309,9 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
     if (!configSnapshot.config) {
       throw new Error("Matrix QA scenario requires config.get config");
     }
-    const gatewayConfig = buildMatrixQaConfig(configSnapshot.config, {
+    baselineConfig ??= structuredClone(configSnapshot.config);
+    const gatewayConfig = buildMatrixQaConfig(baselineConfig, {
+      currentConfig: configSnapshot.config,
       driverAccessToken: params.provisioning.driver.accessToken,
       driverUserId: params.provisioning.driver.userId,
       homeserver: params.harness.baseUrl,
@@ -266,6 +324,11 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       sutUserId: params.provisioning.sut.userId,
       topology: params.provisioning.topology,
     });
+    const gatewayPatch = createMatrixQaConfigPatch(
+      configSnapshot.config,
+      gatewayConfig,
+      params.accountId,
+    );
     const matrixConfigChanged = !isDeepStrictEqual(
       configSnapshot.config.channels?.matrix,
       gatewayConfig.channels?.matrix,
@@ -277,11 +340,8 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
     const patchResult = await patchGatewayConfig({
       deadlineMs: preparationDeadline,
       gateway: input.gateway,
-      patch: gatewayConfig as Record<string, unknown>,
-      replacePaths: resolveMatrixQaReplacePaths({
-        accountId: params.accountId,
-        overrides: configOverrides,
-      }),
+      patch: gatewayPatch.patch,
+      replacePaths: gatewayPatch.replacePaths,
     });
     if (!patchResult.hash) {
       throw new Error("Matrix QA config patch returned no persisted hash");
@@ -355,9 +415,15 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         if (!restart) {
           throw new Error("Matrix persisted-state scenario requires Gateway restart support");
         }
+        const waitAccountId = opts?.waitAccountId ?? params.accountId;
+        const beforeRestartAt = (
+          await readMatrixAccountStatuses(input.gateway).catch(() => [])
+        ).find((account) => account.accountId === waitAccountId)?.lastStartAt;
+        const restartStartedAt = Date.now();
         await restart(async ({ stateDir }) => await mutateState({ stateDir }));
         await waitForMatrixAccountReady({
-          accountId: opts?.waitAccountId ?? params.accountId,
+          afterStartAt: beforeRestartAt ?? restartStartedAt,
+          accountId: waitAccountId,
           deadline: Date.now() + (opts?.timeoutMs ?? input.timeoutMs),
           gateway: input.gateway,
         });

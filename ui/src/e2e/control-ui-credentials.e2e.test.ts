@@ -1,11 +1,13 @@
 // Control UI tests cover browser credential submission and visible recovery.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -29,12 +31,7 @@ let browser: Browser;
 let server: ControlUiE2eServer;
 const openContexts = new Set<BrowserContext>();
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function readConnectAuth(request: MockGatewayRequest): Record<string, unknown> | undefined {
   const auth = requireRecord(request.params).auth;
@@ -55,7 +52,7 @@ async function createCredentialPage(): Promise<{
   });
   openContexts.add(context);
   const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
+  page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
   const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
   const response = await page.goto(server.baseUrl);
   expect(response?.status()).toBe(200);

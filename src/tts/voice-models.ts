@@ -1,5 +1,6 @@
 // Voice model catalog helpers shared by TTS and realtime voice plugins.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 
 type VoiceModelCapability = "tts" | "realtime_transcription" | "realtime_voice";
 
@@ -47,10 +48,6 @@ type VoiceModelConfig =
       fallbacks?: unknown;
       timeoutMs?: unknown;
     };
-
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function normalizeLowercaseString(value: unknown): string | undefined {
   return normalizeString(value)?.toLowerCase();

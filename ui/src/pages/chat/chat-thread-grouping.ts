@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -7,22 +8,21 @@ import type { ChatItem, MessageGroup, ToolCard } from "../../lib/chat/chat-types
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
-import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { isContextCompactionActivity } from "./chat-progress.ts";
+import { resolveMessageToolUseId, resolveToolBlockId } from "./chat-thread-items.ts";
 import {
-  resolveMessageToolUseId,
-  resolveToolBlockId,
+  isKeyedAssistantStreamFallbackMessage,
+  streamPartBoundaryId,
+  streamPartRunId,
+  transcriptRunId,
+} from "./chat-thread-run-identity.ts";
+import {
+  assistantGroupIsForwardedBoundary,
+  chatItemStartsUserTurn,
   safeNormalizeMessage,
-} from "./chat-thread-items.ts";
-
-export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
-  const record = asRecord(message);
-  if (normalizeLowercaseStringOrEmpty(record?.role) !== "assistant") {
-    return false;
-  }
-  const fallback = asRecord(record?.openclawStreamFallback);
-  return typeof fallback?.itemId === "string" && fallback.itemId.trim().length > 0;
-}
+} from "./chat-turn-boundary.ts";
+import { indexTurnContinuations } from "./stream-causal-boundary.ts";
 
 function stampReplyAttribution(
   items: Array<ChatItem | MessageGroup>,
@@ -76,6 +76,8 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;
     const timestamp = normalized.timestamp || Date.now();
+    const runId =
+      role === "assistant" || role === "tool" ? transcriptRunId(item.message) : undefined;
     const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
@@ -84,12 +86,19 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       currentGroup?.role === "assistant" &&
       isKeyedAssistantStreamFallbackMessage(currentGroup.messages[0]?.message) !==
         isKeyedAssistantStreamFallbackMessage(item.message);
+    const splitsRuntimeActivity =
+      role === "assistant" &&
+      currentGroup?.role === "assistant" &&
+      isContextCompactionActivity(currentGroup.messages[0]?.message) !==
+        isContextCompactionActivity(item.message);
 
     if (
       !currentGroup ||
       startsProjectedTurn ||
       currentGroup.role !== role ||
+      currentGroup.runId !== runId ||
       splitsAssistantCommentary ||
+      splitsRuntimeActivity ||
       (shouldSplitBySender &&
         (currentGroup.senderLabel !== senderLabel ||
           senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
@@ -106,6 +115,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
         messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
         timestamp,
         isStreaming: false,
+        ...(runId ? { runId } : {}),
       };
     } else {
       currentGroup.messages.push({
@@ -121,7 +131,6 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
   }
   return stampReplyAttribution(result);
 }
-
 function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): ChatItem | null {
   if (callItem.kind !== "message" || resultItem.kind !== "message") {
     return null;
@@ -347,10 +356,8 @@ function resolveToolResultCallId(item: ChatItem): string | undefined {
       }
     }
   }
-  if (resultIds.size > 1) {
-    return undefined;
-  }
-  return resultIds.values().next().value ?? resolveMessageToolUseId(message);
+  const resultId = resultIds.values().next().value;
+  return resultIds.size > 1 ? undefined : (resultId ?? resolveMessageToolUseId(message));
 }
 
 function refreshOpenCallIds(
@@ -363,24 +370,23 @@ function refreshOpenCallIds(
       openCallIndexes.delete(callId);
     }
   }
-  const item = coalesced[callIndex];
-  if (!item) {
-    return;
-  }
-  for (const callId of unresolvedToolCallIds(item)) {
+  for (const callId of unresolvedToolCallIds(coalesced[callIndex]!)) {
     openCallIndexes.set(callId, callIndex);
   }
 }
 
 export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
   const coalesced: ChatItem[] = [];
+  // Defer backward-pair removal so all call-id indexes stay stable.
+  const suppressedIndexes = new Set<number>();
   // Parallel calls can outnumber any fixed lookback window, so each unresolved
   // call id owns its current transcript item until a non-tool boundary.
   const openCallIndexes = new Map<string, number>();
+  // Keep earlier result slots by call id so later calls can restore complete cards.
+  const openResultIndexes = new Map<string, number>();
   for (const item of items) {
     const resultItems = splitBundledToolResultItems(item);
     const unmatchedResultItems: ChatItem[] = [];
-    let mergedResult = false;
     for (const resultItem of resultItems) {
       const callId = resolveToolResultCallId(resultItem);
       const callIndex = callId ? openCallIndexes.get(callId) : undefined;
@@ -393,16 +399,41 @@ export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
       }
       coalesced[callIndex] = merged;
       refreshOpenCallIds(openCallIndexes, coalesced, callIndex);
-      mergedResult = true;
     }
-    if (mergedResult) {
-      for (const unmatched of unmatchedResultItems) {
-        coalesced.push(unmatched);
+    const hasMergedResult = unmatchedResultItems.length < resultItems.length;
+    if (hasMergedResult || resultItems.length > 1) {
+      const orphanResults = hasMergedResult ? unmatchedResultItems : resultItems;
+      for (const orphanResult of orphanResults) {
+        const callId = resolveToolResultCallId(orphanResult);
+        if (callId) {
+          openResultIndexes.set(callId, openResultIndexes.get(callId) ?? coalesced.length);
+        }
+        coalesced.push(orphanResult);
       }
       continue;
     }
 
     const unresolvedCallIds = unresolvedToolCallIds(item);
+    let backwardMerged = item;
+    const matchedResultIndexes: number[] = [];
+    for (const callId of unresolvedCallIds) {
+      const resultIndex = openResultIndexes.get(callId);
+      const orphanResult = resultIndex === undefined ? undefined : coalesced[resultIndex];
+      const merged = orphanResult ? mergeToolCallResultPair(backwardMerged, orphanResult) : null;
+      if (merged && resultIndex !== undefined) {
+        backwardMerged = merged;
+        matchedResultIndexes.push(resultIndex);
+        openResultIndexes.delete(callId);
+      }
+    }
+    if (matchedResultIndexes.length > 0) {
+      const resultIndex = Math.min(...matchedResultIndexes);
+      coalesced[resultIndex] = backwardMerged;
+      matchedResultIndexes.forEach((index) => suppressedIndexes.add(index));
+      suppressedIndexes.delete(resultIndex);
+      refreshOpenCallIds(openCallIndexes, coalesced, resultIndex);
+      continue;
+    }
     if (unresolvedCallIds.size === 1) {
       const callId = unresolvedCallIds.values().next().value;
       const previousIndex = callId ? openCallIndexes.get(callId) : undefined;
@@ -424,96 +455,56 @@ export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
     }
     if (isToolTimelineItem(item)) {
       // Orphan results keep the window open for later siblings.
+      const callId = resolveToolResultCallId(item);
+      if (callId) {
+        openResultIndexes.set(callId, openResultIndexes.get(callId) ?? coalesced.length - 1);
+      }
       continue;
     }
     // Any other content (user text, assistant reply, dividers) closes the run.
     openCallIndexes.clear();
+    openResultIndexes.clear();
   }
-  return coalesced;
-}
-
-function assistantGroupHasReplyText(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    if (extractTextCached(message)?.trim()) {
-      return true;
-    }
-    return safeNormalizeMessage(message)?.content.some((block) => block.type === "canvas") ?? false;
-  });
-}
-
-function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
-  return group.messages.some(({ message }) => {
-    const provenance = asRecord(asRecord(message)?.provenance);
-    return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
-  });
-}
-
-function groupStartsProjectedTurnBoundary(group: MessageGroup): boolean {
-  return asRecord(asRecord(group.messages[0]?.message)?.["__openclaw"])?.turnBoundary === true;
-}
-
-export function annotateToolTurnOutcome(
-  items: Array<ChatItem | MessageGroup>,
-): Array<ChatItem | MessageGroup> {
-  let sawAssistantReply = false;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (!item || item.kind !== "group") {
-      continue;
-    }
-    const role = item.role.toLowerCase();
-    const forwardedBoundary = role === "assistant" && assistantGroupIsForwardedBoundary(item);
-    const projectedBoundary = groupStartsProjectedTurnBoundary(item);
-    if (role === "user") {
-      sawAssistantReply = false;
-    } else if (role === "assistant") {
-      if (forwardedBoundary) {
-        // Gateway preserves sessions_send provenance when projecting inputs as assistant groups.
-        // Those groups start a new autonomous turn; they are not replies to an earlier tool.
-        sawAssistantReply = false;
-      } else if (assistantGroupHasReplyText(item)) {
-        sawAssistantReply = true;
-      }
-    } else if (role === "tool") {
-      item.turnSucceeded = sawAssistantReply;
-    }
-    if (role !== "user" && !forwardedBoundary && projectedBoundary) {
-      // This group belongs to the new hidden-input turn. Reset only after
-      // processing it so replies from this turn cannot classify older tools.
-      sawAssistantReply = false;
-    }
-  }
-  return items;
+  return coalesced.filter((_, index) => !suppressedIndexes.has(index));
 }
 
 type RenderChatItem = ChatItem | MessageGroup;
-type StreamRunRenderItem = {
+export type StreamRunRenderItem = {
   kind: "stream-run";
   key: string;
-  parts: Array<
-    Extract<
-      ChatItem,
-      { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" } | { kind: "plan" }
-    >
-  >;
+  runId?: string;
+  boundaryId?: string;
+  parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" | "question" }>>;
 };
-
 export function coalesceStreamRuns(
   items: RenderChatItem[],
 ): Array<RenderChatItem | StreamRunRenderItem> {
   const result: Array<RenderChatItem | StreamRunRenderItem> = [];
   let run: StreamRunRenderItem["parts"] = [];
-  // Contiguous in-flight stream, plan, and reading-indicator items render under one
-  // assistant avatar; messages, groups, and dividers intentionally break the run.
   const flush = () => {
     const [first] = run;
     if (first) {
-      result.push({ kind: "stream-run", key: `stream-run:${first.key}`, parts: run });
+      const runId = streamPartRunId(first);
+      const boundaryId = streamPartBoundaryId(first);
+      result.push({
+        kind: "stream-run",
+        key: `stream-run:${first.key}`,
+        parts: run,
+        ...(runId ? { runId } : {}),
+        ...(boundaryId ? { boundaryId } : {}),
+      });
       run = [];
     }
   };
   for (const item of items) {
-    if (item.kind === "stream" || item.kind === "reading-indicator" || item.kind === "plan") {
+    if (item.kind === "stream" || item.kind === "reading-indicator") {
+      const first = run[0];
+      if (
+        first &&
+        (streamPartRunId(first) !== item.runId || streamPartBoundaryId(first) !== item.boundaryId)
+      ) {
+        flush();
+      }
       run.push(item);
       continue;
     }
@@ -523,28 +514,25 @@ export function coalesceStreamRuns(
   flush();
   return result;
 }
+
 /** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
-type WorkGroupRenderItem = {
+export type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
   groups: MessageGroup[];
   durationMs: number | null;
-  hasError: boolean;
+};
+
+export type ActivityRunRenderItem = {
+  kind: "activity-run";
+  key: string;
+  groups: MessageGroup[];
 };
 
 type TurnRenderItem = RenderChatItem | StreamRunRenderItem;
 
-function isTurnBoundaryGroup(item: TurnRenderItem): boolean {
-  if (item.kind !== "group") {
-    return false;
-  }
-  // sessions_send projections start a new autonomous turn, same contract as
-  // annotateToolTurnOutcome; they are inputs, not work produced by this turn.
-  return messageGroupStartsTurnBoundary(item);
-}
-
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
-  if (item.kind !== "group" || item.isStreaming) {
+  if (item.kind !== "group" || item.isStreaming || groupHasVisibleReplyContent(item, false)) {
     return false;
   }
   const role = item.role.toLowerCase();
@@ -555,15 +543,15 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
 // visible outcome; they must never fold into the work rollup. Normalized
 // content passes unknown block types through (e.g. raw image blocks), so
 // anything that is not a tool block counts as visible reply content.
-function assistantGroupHasVisibleReplyContent(group: MessageGroup): boolean {
+function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
   return group.messages.some(({ message }) => {
-    if (extractTextCached(message)?.trim()) {
+    if (includeText && extractTextCached(message)?.trim()) {
       return true;
     }
     const content = safeNormalizeMessage(message)?.content ?? [];
     return content.some((block) => {
       if (block.type === "text") {
-        return Boolean(block.text?.trim());
+        return includeText && Boolean(block.text?.trim());
       }
       return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
     });
@@ -574,16 +562,8 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
   return (
     group.role.toLowerCase() === "assistant" &&
     !assistantGroupIsForwardedBoundary(group) &&
-    assistantGroupHasVisibleReplyContent(group)
-  );
-}
-
-function messageGroupStartsTurnBoundary(group: MessageGroup): boolean {
-  const role = group.role.toLowerCase();
-  return (
-    role === "user" ||
-    groupStartsProjectedTurnBoundary(group) ||
-    (role === "assistant" && assistantGroupIsForwardedBoundary(group))
+    !group.messages.every(({ message }) => isContextCompactionActivity(message)) &&
+    groupHasVisibleReplyContent(group)
   );
 }
 
@@ -592,22 +572,20 @@ function messageGroupStartsTurnBoundary(group: MessageGroup): boolean {
 // stands in for the final reply. Turns whose last content is commentary
 // merely collapse less; the visible reply is never folded away.
 function isFinalReplyGroup(item: TurnRenderItem): boolean {
-  return (
-    isCollapsibleWorkGroup(item) &&
-    item.role.toLowerCase() === "assistant" &&
-    assistantGroupHasVisibleReplyContent(item)
-  );
+  return item.kind === "group" && !item.isStreaming && assistantGroupCanOwnActiveRunStatus(item);
 }
 
-function workGroupHasError(groups: MessageGroup[]): boolean {
-  return groups.some(
-    (group) =>
-      group.role.toLowerCase() === "tool" &&
-      group.turnSucceeded !== true &&
-      group.messages.some((entry) =>
-        extractToolCardsCached(entry.message, entry.key).some(isToolCardError),
-      ),
-  );
+function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
+  const boundary = turn[0];
+  if (!boundary || boundary.kind === "stream-run") {
+    return [];
+  }
+  if (boundary.kind === "group") {
+    return boundary.role.toLowerCase() === "user"
+      ? boundary.messages.map(({ message }) => message)
+      : [];
+  }
+  return boundary.kind === "message" && chatItemStartsUserTurn(boundary) ? [boundary.message] : [];
 }
 
 /**
@@ -637,7 +615,7 @@ export function collapseCompletedTurnWork(
   const turns: TurnRenderItem[][] = [];
   let currentTurn: TurnRenderItem[] = [];
   for (const item of items) {
-    if (isTurnBoundaryGroup(item) && currentTurn.length > 0) {
+    if (item.kind !== "stream-run" && chatItemStartsUserTurn(item) && currentTurn.length > 0) {
       turns.push(currentTurn);
       currentTurn = [];
     }
@@ -647,13 +625,52 @@ export function collapseCompletedTurnWork(
     turns.push(currentTurn);
   }
 
+  const { continuationTurnIndexes, precedingContinuationTurnIndexes } = indexTurnContinuations(
+    turns,
+    turnUserMessages,
+  );
+  const finalReplyIndexes = turns.map((turn, turnIndex) => {
+    if (continuationTurnIndexes.has(turnIndex)) {
+      return -1;
+    }
+    for (let index = turn.length - 1; index >= 0; index -= 1) {
+      const candidate = turn[index];
+      if (candidate && isFinalReplyGroup(candidate)) {
+        return index;
+      }
+    }
+    return -1;
+  });
+  const terminalReplies = finalReplyIndexes.map((index, turnIndex) =>
+    index >= 0 ? (turns[turnIndex]?.[index] as MessageGroup) : undefined,
+  );
+  for (let turnIndex = turns.length - 2; turnIndex >= 0; turnIndex -= 1) {
+    const continuationTurnIndex = continuationTurnIndexes.get(turnIndex);
+    if (!terminalReplies[turnIndex] && continuationTurnIndex !== undefined) {
+      terminalReplies[turnIndex] = terminalReplies[continuationTurnIndex];
+    }
+  }
+  const liveTurnIndexes = new Set<number>();
+  if (opts.runWorking) {
+    let liveTurnIndex = turns.length - 1;
+    liveTurnIndexes.add(liveTurnIndex);
+    for (;;) {
+      const precedingTurnIndex = precedingContinuationTurnIndexes.get(liveTurnIndex);
+      if (precedingTurnIndex === undefined) {
+        break;
+      }
+      liveTurnIndex = precedingTurnIndex;
+      liveTurnIndexes.add(liveTurnIndex);
+    }
+  }
+
   const result: Array<TurnRenderItem | WorkGroupRenderItem> = [];
   for (const [turnIndex, turn] of turns.entries()) {
     // In-flight content (stream runs, streaming groups) marks the turn live.
     // While the run works, the trailing turn also stays expanded so activity
     // is watchable until the terminal rebuild collapses it.
     const isLive =
-      (opts.runWorking && turnIndex === turns.length - 1) ||
+      liveTurnIndexes.has(turnIndex) ||
       turn.some(
         (item) => item.kind === "stream-run" || (item.kind === "group" && item.isStreaming),
       );
@@ -661,21 +678,15 @@ export function collapseCompletedTurnWork(
       result.push(...turn);
       continue;
     }
-    let finalReplyIndex = -1;
-    for (let index = turn.length - 1; index >= 0; index -= 1) {
-      const candidate = turn[index];
-      if (candidate && isFinalReplyGroup(candidate)) {
-        finalReplyIndex = index;
-        break;
-      }
-    }
+    const finalReplyIndex = finalReplyIndexes[turnIndex] ?? -1;
+    const terminalReply = terminalReplies[turnIndex];
     // Without a final reply, the tool rows are the turn's only visible result.
     // Keep them exposed instead of replacing the result with an opaque rollup.
-    if (finalReplyIndex === -1) {
+    if (!terminalReply) {
       result.push(...turn);
       continue;
     }
-    const segmentEnd = finalReplyIndex - 1;
+    const segmentEnd = finalReplyIndex >= 0 ? finalReplyIndex - 1 : turn.length - 1;
     let segmentStart = segmentEnd + 1;
     for (let index = segmentEnd; index >= 0; index -= 1) {
       const candidate = turn[index];
@@ -691,23 +702,65 @@ export function collapseCompletedTurnWork(
       continue;
     }
     const boundary = turn[0];
-    const startTimestamp =
-      boundary && boundary.kind === "group" && isTurnBoundaryGroup(boundary)
+    const boundaryTimestamp =
+      boundary &&
+      boundary.kind !== "stream-run" &&
+      chatItemStartsUserTurn(boundary) &&
+      "timestamp" in boundary
         ? boundary.timestamp
-        : firstGroup.timestamp;
-    const finalReply = turn[finalReplyIndex] as MessageGroup;
-    const endTimestamp = finalReply.timestamp;
+        : null;
+    const startTimestamp = boundaryTimestamp == null ? firstGroup.timestamp : boundaryTimestamp;
+    const endTimestamp = terminalReply.timestamp;
     const durationMs = endTimestamp > startTimestamp ? endTimestamp - startTimestamp : null;
+    const continuationBoundary = turns[continuationTurnIndexes.get(turnIndex) ?? -1]?.[0];
     result.push(...turn.slice(0, segmentStart));
     result.push({
       kind: "work-group",
       // The final reply survives older-history prepends; the first work row does not.
-      key: `work:${finalReply.key}`,
+      key: `work:${
+        finalReplyIndex >= 0 || !continuationBoundary ? terminalReply.key : continuationBoundary.key
+      }`,
       groups,
       durationMs,
-      hasError: workGroupHasError(groups),
     });
     result.push(...turn.slice(segmentEnd + 1));
   }
+  return result;
+}
+
+export type CompletedTurnRenderItem = TurnRenderItem | WorkGroupRenderItem;
+
+/** Presentation-only rollup for tool groups separated by projected turn boundaries. */
+export function coalesceActivityRuns(
+  items: CompletedTurnRenderItem[],
+  opts: { searchActive?: boolean } = {},
+): Array<CompletedTurnRenderItem | ActivityRunRenderItem> {
+  if (opts.searchActive) {
+    return items;
+  }
+  const result: Array<CompletedTurnRenderItem | ActivityRunRenderItem> = [];
+  let groups: MessageGroup[] = [];
+  const flush = () => {
+    const [first] = groups;
+    if (!first) {
+      return;
+    }
+    result.push(
+      groups.length === 1 ? first : { kind: "activity-run", key: `activity:${first.key}`, groups },
+    );
+    groups = [];
+  };
+  for (const item of items) {
+    if (item.kind === "group" && item.role.toLowerCase() === "tool") {
+      if (groups.length > 0 && groups[0]?.runId !== item.runId) {
+        flush();
+      }
+      groups.push(item);
+      continue;
+    }
+    flush();
+    result.push(item);
+  }
+  flush();
   return result;
 }

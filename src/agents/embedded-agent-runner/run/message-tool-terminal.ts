@@ -1,9 +1,14 @@
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
+import { readEmbeddedMessageDeliveryFact } from "../../embedded-agent-message-delivery.js";
 /**
  * Detects message-tool-only sends that delivered a visible source reply.
  */
-import { isDeliveredMessageToolOnlySourceReplyResult } from "../../embedded-agent-message-tool-source-reply.js";
+import {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  resolveMessageToolSourceReplyFinal,
+} from "../../embedded-agent-message-tool-source-reply.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
+import { readToolResultDetails } from "../../tool-result-error.js";
 
 function argsRecordForToolCall(context: AfterToolCallContext): Record<string, unknown> {
   if (context.args && typeof context.args === "object" && !Array.isArray(context.args)) {
@@ -25,13 +30,23 @@ function isDeliveredMessageToolOnlySourceReply(params: {
   context: AfterToolCallContext;
   hookResult?: AfterToolCallResult;
 }): boolean {
+  const deliveryFact = readEmbeddedMessageDeliveryFact(
+    readToolResultDetails(params.context.result)?.messageDelivery,
+  );
+  const isError = params.hookResult?.isError ?? params.context.isError;
   return isDeliveredMessageToolOnlySourceReplyResult({
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     toolName: params.context.toolCall.name,
     args: argsRecordForToolCall(params.context),
     result: params.context.result,
     hookResult: params.hookResult,
-    isError: params.hookResult?.isError ?? params.context.isError,
+    isError,
+    ...(deliveryFact
+      ? {
+          deliveryConfirmed:
+            deliveryFact.status === "settled" && (!isError || deliveryFact.partialDelivery),
+        }
+      : {}),
   });
 }
 
@@ -55,7 +70,9 @@ export function installMessageToolOnlyTerminalHook(params: {
       })
     ) {
       params.onDeliveredSourceReply?.();
-      return hookResult;
+      if (resolveMessageToolSourceReplyFinal(argsRecordForToolCall(context))) {
+        return { ...hookResult, terminate: true };
+      }
     }
     return hookResult;
   };

@@ -204,7 +204,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let client: MatrixClient | null = null;
   let clientLease: SharedMatrixClientLease | null = null;
   let monitorLifecycleSignal = opts.abortSignal;
-  let threadBindingManager: { accountId: string; stop: () => void } | null = null;
+  let threadBindingManager: { accountId: string; stop: () => Promise<void> } | null = null;
   const monitorTaskRunner = createMatrixMonitorTaskRunner({
     logger,
     logVerboseMessage,
@@ -444,7 +444,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       logVerboseMessage,
     });
     if (monitorSetupClosed) {
-      createdThreadBindingManager.stop();
+      await createdThreadBindingManager.stop();
       await cleanup("stop");
       return;
     }

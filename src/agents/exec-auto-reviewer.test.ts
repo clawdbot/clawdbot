@@ -784,7 +784,6 @@ describe("createModelExecAutoReviewer", () => {
       Array.from({ length: 24 }, () => Promise.resolve(reviewer(input))),
     );
 
-    expect(decisions).toHaveLength(24);
     expect(decisions).toEqual(
       Array.from({ length: 24 }, () =>
         expect.objectContaining({ decision: "allow-once", risk: "low" }),

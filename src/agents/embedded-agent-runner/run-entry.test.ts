@@ -243,7 +243,7 @@ describe("runEmbeddedAgentEntry", () => {
       const result = await runEmbeddedAgentEntry({
         selection: { cfg, provider: "primary-provider", model: "primary-model" },
         identity: {
-          runId: `run-${behavior}`,
+          runId: "run-shared-fallback",
           agentId: "main",
           sessionId: "session-1",
         },
@@ -278,6 +278,39 @@ describe("runEmbeddedAgentEntry", () => {
             provider,
             model,
             classification: options.isFallbackRetry ? undefined : "empty",
+            meta: options.isFallbackRetry
+              ? {
+                  executionTrace: {
+                    winnerProvider: provider,
+                    winnerModel: model,
+                    attempts: [
+                      {
+                        provider,
+                        model,
+                        result: "same_model_rate_limit",
+                        reason: "rate_limit",
+                      },
+                      { provider, model, result: "success" },
+                    ],
+                    fallbackUsed: false,
+                    runner: "embedded",
+                  },
+                  agentMeta: {
+                    sessionId: "session-1",
+                    provider,
+                    model,
+                    terminalReceipt: {
+                      runId: "run-shared-fallback",
+                      sessionId: "session-1",
+                      turnId: "turn-1",
+                      requested: { provider, model },
+                      effective: { provider, model, responseModel: model },
+                      successfulToolNames: [],
+                      rerouted: false,
+                    },
+                  },
+                }
+              : undefined,
           });
         },
       });
@@ -295,6 +328,38 @@ describe("runEmbeddedAgentEntry", () => {
     expect(channel.result.model).toBe("fallback-model");
     expect(channel.result.attempts).toEqual(command.result.attempts);
     expect(channel.result.terminal).toEqual(command.result.terminal);
+    expect(channel.result.result.meta.executionTrace).toEqual({
+      winnerProvider: "fallback-provider",
+      winnerModel: "fallback-model",
+      attempts: [
+        {
+          provider: "primary-provider",
+          model: "primary-model",
+          result: "candidate_failed",
+          reason: "format",
+        },
+        {
+          provider: "fallback-provider",
+          model: "fallback-model",
+          result: "same_model_rate_limit",
+          reason: "rate_limit",
+        },
+        { provider: "fallback-provider", model: "fallback-model", result: "success" },
+      ],
+      fallbackUsed: true,
+      runner: "embedded",
+    });
+    expect(channel.result.result.meta.agentMeta?.terminalReceipt).toMatchObject({
+      requested: { provider: "primary-provider", model: "primary-model" },
+      effective: { provider: "fallback-provider", model: "fallback-model" },
+      rerouted: true,
+    });
+    expect(channel.result.terminal.metadata.terminalReceipt).toMatchObject({
+      requested: { provider: "primary-provider", model: "primary-model" },
+      effective: { provider: "fallback-provider", model: "fallback-model" },
+      rerouted: true,
+      terminalDisposition: "not-visible",
+    });
     expect(channel.candidateLeases[0]).toBe(channel.candidateLeases[1]);
     expect(state.selectAgentHarness).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -775,11 +840,17 @@ describe("runEmbeddedAgentEntry", () => {
       expected: { disposition: "silent" },
     },
     {
+      name: "normalized silence without raw text",
+      meta: { finalAssistantVisibleText: "no_reply" },
+      expected: { disposition: "silent" },
+    },
+    {
       name: "clean empty reply",
       meta: {},
       expected: { disposition: "empty" },
     },
   ])("records the producer-owned terminal snapshot for $name", async ({ name, meta, expected }) => {
+    const runId = `terminal-${name}`;
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: "completed" as const,
       result: await params.run(params.provider, params.model),
@@ -790,7 +861,7 @@ describe("runEmbeddedAgentEntry", () => {
     const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     const result = await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
-      identity: { runId: `terminal-${name}`, agentId: "main", sessionId: "session-1" },
+      identity: { runId, agentId: "main", sessionId: "session-1" },
       harness: {
         workspaceDir: "/tmp/workspace",
         preparation: { kind: "direct" },
@@ -800,10 +871,35 @@ describe("runEmbeddedAgentEntry", () => {
       sessionOverride: { kind: "preserve" },
       runCandidate: async (provider, model) => ({
         ...makeResult({ provider, model }),
-        meta: { ...makeResult({ provider, model }).meta, ...meta },
+        meta: {
+          ...makeResult({ provider, model }).meta,
+          ...meta,
+          agentMeta: Object.assign(
+            {
+              sessionId: "session-1",
+              provider,
+              model,
+            },
+            {
+              terminalReceipt: {
+                runId,
+                sessionId: "session-1",
+                turnId: "turn-1",
+                requested: { provider, model },
+                effective: { provider, model, responseModel: model },
+                successfulToolNames: ["read"],
+                rerouted: false,
+              },
+            },
+          ),
+        },
       }),
     });
 
     expect(result.terminal.metadata.terminalReply).toEqual(expected);
+    expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+      runId,
+      terminalDisposition: expected.disposition === "visible" ? "visible" : "not-visible",
+    });
   });
 });

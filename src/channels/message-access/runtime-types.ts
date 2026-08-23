@@ -4,6 +4,7 @@
  * Defines identity descriptors, resolver inputs, route access, and resolved access results.
  */
 import type { AccessGroupConfig } from "../../config/types.access-groups.js";
+import type { InboundEventKind } from "../inbound-event/kind.js";
 import type {
   AccessGroupMembershipFact,
   AccessGraphGate,
@@ -132,6 +133,20 @@ export type ChannelIngressEventPresetInput = Partial<ChannelIngressEventInput> &
   isGroup?: boolean;
 };
 
+/** Final host-context identity that an ingress result is eligible to enter once. */
+export type ChannelIngressContextBinding = {
+  /** Final routed agent selected by the channel producer. */
+  agentId: string;
+  /** Final dispatch or route session selected by the channel producer. */
+  sessionKey: string;
+  /** Stable transport message id when the event has one. */
+  messageId?: string;
+  /** Native transport conversation id when it differs from the canonical conversation id. */
+  nativeChannelId?: string;
+  /** Final inbound event classification used by the host context. */
+  inboundEventKind: InboundEventKind;
+};
+
 /** Optional route gate, such as a room, thread, topic, guild, or group route. */
 export type ChannelIngressRouteDescriptor = {
   /** Stable route id used in diagnostics. */
@@ -183,6 +198,8 @@ export type ResolveChannelMessageIngressParams = {
   conversation: ChannelIngressStateInput["conversation"];
   /** Event auth mode and pairing/origin-subject facts. */
   event: ChannelIngressEventInput;
+  /** Exact finalized host context this result may enter; omit for decision-only checks. */
+  contextBinding?: ChannelIngressContextBinding;
   /** Sender, command, event, route, and activation policy. */
   policy: ChannelIngressPolicyInput;
   /** Raw direct-message allowlist entries. */

@@ -30,7 +30,7 @@ export {
   resolveIdentityNamePrefix,
 } from "../agents/identity.js";
 
-export { resolveApiKeyForProvider } from "../agents/model-auth.js";
+export { resolveApiKeyForProviderCore as resolveApiKeyForProvider } from "../agents/model-auth.js";
 export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
 export type { ModelCatalogEntry } from "../agents/model-catalog.js";
 export { getPreparedModelCatalogSnapshot, loadPreparedModelCatalog };
@@ -116,9 +116,9 @@ export type {
 } from "../agents/auth-profiles.js";
 
 export { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
-export { extractAssistantText } from "../agents/embedded-agent-utils.js";
+export { extractEmbeddedAssistantText as extractAssistantText } from "../agents/embedded-agent-utils.js";
 export { jsonResult } from "../agents/tools/tool-results.js";
-export { readStringParam } from "../agents/tools/common.js";
+export { readToolStringParam as readStringParam } from "../agents/tools/common.js";
 export {
   resolveAgentConfig,
   resolveAgentDir,

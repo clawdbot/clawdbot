@@ -1,5 +1,12 @@
+import path from "node:path";
 import type { IPty } from "@lydell/node-pty";
-import { signalProcessTree } from "./kill-tree.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsExecutablePath,
+  resolveWindowsSpawnProgram,
+} from "../plugin-sdk/windows-spawn.js";
+import { signalPtySessionTree } from "./kill-tree.js";
 import {
   readPtyTerminalName,
   resolvePtyTerminalName,
@@ -23,15 +30,47 @@ type TerminalPtyHandle = {
   kill(signal?: string): void;
 };
 
+function resolveTerminalNodeExecutable(env: NodeJS.ProcessEnv): string {
+  // Packaged OpenClaw/Bun hosts cannot interpret npm's JavaScript entrypoint.
+  // Use the running binary only when it is Node; otherwise require PATH node.exe.
+  const candidate =
+    path.win32.basename(process.execPath).toLowerCase() === "node.exe"
+      ? process.execPath
+      : resolveWindowsExecutablePath("node", env);
+  if (path.win32.basename(candidate).toLowerCase() === "node.exe") {
+    return candidate;
+  }
+  throw new Error(
+    "A Node executable is required to launch this Windows npm wrapper; add node.exe to PATH.",
+  );
+}
+
 function resolveTerminalPtyInvocation(params: {
   file: string;
   args: string[];
   platform?: NodeJS.Platform;
   comSpec?: string;
+  env: NodeJS.ProcessEnv;
 }): { file: string; args: string[] } {
   const platform = params.platform ?? process.platform;
   if (!isWindowsBatchCommand(params.file, platform)) {
     return { file: params.file, args: params.args };
+  }
+  const program = resolveWindowsSpawnProgram({
+    command: params.file,
+    platform,
+    env: params.env,
+    execPath: process.execPath,
+    allowShellFallback: true,
+  });
+  if (program.resolution !== "shell-fallback") {
+    const invocation = materializeWindowsSpawnProgram(
+      program.resolution === "node-entrypoint"
+        ? { ...program, command: resolveTerminalNodeExecutable(params.env) }
+        : program,
+      params.args,
+    );
+    return { file: invocation.command, args: invocation.argv };
   }
   return {
     file: params.comSpec?.trim() || resolveTrustedWindowsCmdExe(platform),
@@ -53,10 +92,11 @@ export async function spawnTerminalPty(params: {
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
   const terminalName = resolvePtyTerminalName(readPtyTerminalName(env, process.platform));
   setPtyTerminalName({ env, name: terminalName, platform: process.platform });
-  const comSpec = env.ComSpec ?? env.COMSPEC;
+  const comSpec = resolveEnvironmentValue(env, "COMSPEC");
   const invocation = resolveTerminalPtyInvocation({
     file: params.file,
     args: params.args,
+    env,
     ...(comSpec ? { comSpec } : {}),
   });
   const pty = spawn(invocation.file, invocation.args, {
@@ -92,7 +132,7 @@ function killPtyTree(pty: Pick<IPty, "pid" | "kill">, signal?: string): void {
     if ((sig === "SIGKILL" || sig === "SIGTERM") && typeof pty.pid === "number" && pty.pid > 0) {
       // forkpty creates a new session/process group; retain descendant cleanup
       // after the shell exits and only its group remains.
-      signalProcessTree(pty.pid, sig, { detached: true });
+      signalPtySessionTree(pty.pid, sig);
     } else if (process.platform === "win32") {
       pty.kill();
     } else {

@@ -129,7 +129,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
 }
 
 /** Resolves a configured binding for a conversation and ensures its ACP session exists. */
-export async function ensureConfiguredAcpBindingReady(params: {
+export async function ensureConfiguredAcpBindingReadyCore(params: {
   cfg: OpenClawConfig;
   configuredBinding: ResolvedConfiguredAcpBinding | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {

@@ -98,7 +98,7 @@ function assertMaintainerAdminAuth(token: string | null) {
   throw new BrokerHttpError(401, "AUTH_INVALID", "Credential broker secret is invalid.");
 }
 
-function asObject(value: unknown) {
+function readJsonObject(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -112,7 +112,7 @@ async function parseJsonObject(request: Request) {
   } catch {
     throw new BrokerHttpError(400, "INVALID_JSON", "Request body must be valid JSON.");
   }
-  const body = asObject(parsed);
+  const body = readJsonObject(parsed);
   if (!body) {
     throw new BrokerHttpError(400, "INVALID_BODY", "Request body must be a JSON object.");
   }
@@ -131,7 +131,7 @@ function requireString(body: Record<string, unknown>, key: string) {
   return value;
 }
 
-function optionalString(body: Record<string, unknown>, key: string) {
+function readOptionalHttpString(body: Record<string, unknown>, key: string) {
   if (!(key in body) || body[key] === undefined || body[key] === null) {
     return undefined;
   }
@@ -145,7 +145,7 @@ function optionalString(body: Record<string, unknown>, key: string) {
 
 function requireObject(body: Record<string, unknown>, key: string) {
   const raw = body[key];
-  const parsed = asObject(raw);
+  const parsed = readJsonObject(raw);
   if (!parsed) {
     throw new BrokerHttpError(400, "INVALID_BODY", `Expected "${key}" to be a JSON object.`);
   }
@@ -189,7 +189,7 @@ function optionalBoolean(body: Record<string, unknown>, key: string) {
 }
 
 function optionalCredentialStatus(body: Record<string, unknown>, key: string) {
-  const value = optionalString(body, key);
+  const value = readOptionalHttpString(body, key);
   if (!value) {
     return undefined;
   }
@@ -204,7 +204,7 @@ function optionalCredentialStatus(body: Record<string, unknown>, key: string) {
 }
 
 function optionalListStatus(body: Record<string, unknown>, key: string) {
-  const value = optionalString(body, key);
+  const value = readOptionalHttpString(body, key);
   if (!value) {
     return undefined;
   }
@@ -406,8 +406,8 @@ http.route({
       const result = await ctx.runMutation(internal.credentials.addCredentialSet, {
         kind,
         payload,
-        note: optionalString(body, "note"),
-        actorId: optionalString(body, "actorId"),
+        note: readOptionalHttpString(body, "note"),
+        actorId: readOptionalHttpString(body, "actorId"),
         status: optionalCredentialStatus(body, "status"),
       });
       return jsonResponse(200, result);
@@ -429,7 +429,7 @@ http.route({
         credentialId: normalizeCredentialId(
           requireString(body, "credentialId"),
         ) as Id<"credential_sets">,
-        actorId: optionalString(body, "actorId"),
+        actorId: readOptionalHttpString(body, "actorId"),
       });
       return jsonResponse(200, result);
     } catch (error) {
@@ -447,7 +447,7 @@ http.route({
       assertMaintainerAdminAuth(parseBearerToken(request));
       const body = await parseJsonObject(request);
       const result = await ctx.runQuery(internal.credentials.listCredentialSets, {
-        kind: optionalString(body, "kind"),
+        kind: readOptionalHttpString(body, "kind"),
         status: optionalListStatus(body, "status"),
         includePayload: optionalBoolean(body, "includePayload"),
         limit: optionalPositiveInteger(body, "limit"),

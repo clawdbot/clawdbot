@@ -37,7 +37,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
 
 jobs:
   publish_signed_android_apk:
@@ -165,12 +165,14 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           install-bun: "true"
           install-deps: "false"
-          use-actions-cache: "false"
 
       - name: Setup Android toolchain
         uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: read-write
 
       - name: Create apps-signing read token
         if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}

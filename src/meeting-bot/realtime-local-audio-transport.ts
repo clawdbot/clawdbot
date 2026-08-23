@@ -74,8 +74,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   const input = splitCommand(params.inputCommand);
   const output = splitCommand(params.outputCommand);
   const spawnFn: MeetingRealtimeAudioSpawn =
-    params.spawn ??
-    ((command, args, options) => spawn(command, args, options) as unknown as BridgeProcess);
+    params.spawn ?? ((command, args, options) => spawn(command, args, options));
   const spawnOutputProcess = () =>
     spawnFn(output.command, output.args, { stdio: ["pipe", "ignore", "pipe"] });
   let outputProcess = spawnOutputProcess();

@@ -29,7 +29,7 @@ import {
 import { isAuthModeAllowedForModel } from "./model-auth-openai.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import {
-  resolveApiKeyForProvider,
+  resolveApiKeyForProviderCore,
   resolveScopedAuthProfileStore,
   type ProviderCredentialPrecedence,
 } from "./model-auth-provider.js";
@@ -232,7 +232,7 @@ export async function hasAvailableAuthForProvider(params: {
 }
 
 /** Resolves request credentials from the provider attached to a model descriptor. */
-export async function getApiKeyForModel(params: {
+export async function getApiKeyForModelCore(params: {
   model: Model;
   cfg?: OpenClawConfig;
   profileId?: string;
@@ -246,7 +246,7 @@ export async function getApiKeyForModel(params: {
   skipSetupProviderFallback?: boolean;
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
-  return resolveApiKeyForProvider({
+  return resolveApiKeyForProviderCore({
     provider: params.model.provider,
     cfg: params.cfg,
     profileId: params.profileId,

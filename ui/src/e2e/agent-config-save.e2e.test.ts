@@ -1,6 +1,7 @@
 // Control UI E2E proves per-agent config writes use the canonical keyed shape.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -14,12 +15,7 @@ const suite = createControlUiE2eSuite({
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "agent-config-save");
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected object value");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-object-value");
 
 suite.define(() => {
   it("submits keyed entries and surfaces Gateway validation failures", async () => {
@@ -132,6 +128,92 @@ suite.define(() => {
             path: path.join(proofDir, "01-save-error.png"),
           });
         }
+      },
+    );
+  });
+
+  it("stages skill changes from the inherited allowlist", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+      async ({ page }) => {
+        const config = {
+          agents: {
+            defaults: { skills: ["github"] },
+            entries: { main: { default: true } },
+          },
+        };
+        const skill = (name: string, blockedByAgentFilter: boolean) => ({
+          name,
+          description: `${name} skill`,
+          source: "openclaw-managed",
+          bundled: false,
+          filePath: `/tmp/skills/${name}/SKILL.md`,
+          baseDir: `/tmp/skills/${name}`,
+          skillKey: name,
+          always: false,
+          disabled: false,
+          blockedByAllowlist: false,
+          blockedByAgentFilter,
+          eligible: true,
+          requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
+          missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+          configChecks: [],
+          install: [],
+        });
+        const gateway = await installMockGateway(page, {
+          assistantName: "Main agent",
+          defaultAgentId: "main",
+          methodResponses: {
+            "agents.list": {
+              agents: [{ id: "main", name: "Main agent" }],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
+            "config.get": {
+              config,
+              sourceConfig: config,
+              runtimeConfig: config,
+              hash: "agent-config-hash-1",
+              issues: [],
+              raw: JSON.stringify(config),
+              valid: true,
+            },
+            "skills.status": {
+              agentId: "main",
+              agentSkillFilter: ["github"],
+              workspaceDir: "/tmp/workspace",
+              managedSkillsDir: "/tmp/skills",
+              skills: [skill("github", false), skill("weather", true)],
+            },
+          },
+        });
+
+        const response = await page.goto(`${suite.server.baseUrl}settings/agents/main/skills`);
+        expect(response?.status()).toBe(200);
+        await gateway.waitForRequest("config.get");
+        await gateway.waitForRequest("skills.status");
+
+        await gateway.deferNext("config.set");
+        await page
+          .locator(".agent-skill-row", { hasText: "github skill" })
+          .locator("wa-switch")
+          .click();
+
+        const request = await gateway.waitForRequest("config.set");
+        const params = requireRecord(request.params);
+        expect(JSON.parse(String(params.raw))).toEqual({
+          agents: {
+            defaults: { skills: ["github"] },
+            entries: { main: { default: true, skills: [] } },
+          },
+        });
+        expect(params.baseHash).toBe("agent-config-hash-1");
+        await gateway.resolveDeferred("config.set", { hash: "agent-config-hash-2" });
       },
     );
   });

@@ -3,187 +3,183 @@ import {
   configureExecutionIdentityAdmissionSink,
   type ExecutionIdentityAdmissionWork,
 } from "../audit/execution-identity-admission.js";
+import { attachAgentCommandAdmissionFacts } from "./agent-command-admission-facts.js";
 import {
-  getAgentRunContext,
-  getAgentRunLifecycleGeneration,
-  resetAgentRunRegistryForTest,
-} from "../infra/agent-run-registry.js";
-import { executionIdentity } from "./agent-command-execution-identity.js";
-import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
+  readAgentCommandExecutionIdentitySpawnFacts,
+  withAgentCommandExecutionIdentitySpawnFacts,
+} from "./agent-command-execution-identity-spawn.js";
+import {
+  prepareAgentCommandExecutionIdentity,
+  sanitizePublicAgentCommandIngressOpts,
+} from "./agent-command-execution-identity.js";
+import type { AgentCommandIngressOpts } from "./command/types.js";
 
-describe("agent command execution identity", () => {
-  let restoreSink: (() => void) | undefined;
+let cleanupSink: (() => void) | undefined;
 
-  afterEach(() => {
-    restoreSink?.();
-    restoreSink = undefined;
-    resetAgentRunRegistryForTest();
+afterEach(() => {
+  cleanupSink?.();
+  cleanupSink = undefined;
+});
+
+describe("sanitizePublicAgentCommandIngressOpts", () => {
+  it("removes a forged cron creator authority capability from plain-JavaScript ingress", () => {
+    const forgedCapability = {
+      active: true,
+      runId: "forged-run",
+      signal: new AbortController().signal,
+      grantTokens: new Set<string>(),
+      abort: () => undefined,
+    };
+    const opts = {
+      prompt: "create an automation",
+      cronCreatorAuthorityCapability: forgedCapability,
+    } as unknown as AgentCommandIngressOpts;
+
+    expect(sanitizePublicAgentCommandIngressOpts(opts)).toMatchObject({
+      prompt: "create an automation",
+      cronCreatorAuthorityCapability: undefined,
+    });
+  });
+});
+
+describe("Gateway agent command execution identity", () => {
+  it("preserves trusted spawn facts across internal option preparation", () => {
+    const facts = {
+      ingress: {
+        kind: "api" as const,
+        boundary: "sessions_spawn.subagent",
+        state: "present" as const,
+      },
+      invoker: { state: "present" as const, kind: "agent" as const, rawPrincipalRef: "main" },
+      applicableGrants: [{ rawGrantRef: "tool:sessions_spawn", state: "present" as const }],
+      assurance: [],
+      spawnAdmission: "[null,[]]",
+    };
+    const prepared = {
+      ...withAgentCommandExecutionIdentitySpawnFacts(
+        { message: "spawn", allowModelOverride: false },
+        facts,
+      ),
+      lifecycleGeneration: "generation-1",
+    };
+
+    expect(readAgentCommandExecutionIdentitySpawnFacts(prepared)).toBe(facts);
   });
 
-  it("records the runtime correlation without requiring an audit admission token", () => {
-    const work: ExecutionIdentityAdmissionWork[] = [];
-    restoreSink = configureExecutionIdentityAdmissionSink((item) => {
-      work.push(item);
+  it("carries only the prepared bounded, redacted label into opt-in run admission", async () => {
+    let work: ExecutionIdentityAdmissionWork | undefined;
+    const displayLabel = "Operator OPENAI_API_KEY=***".padEnd(128, "x");
+    cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
+      work = candidate;
       return true;
     });
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-1",
+
+    const opts: AgentCommandIngressOpts = {
+      message: "attribute this run",
+      allowModelOverride: false,
+    };
+    attachAgentCommandAdmissionFacts(opts, {
+      ingress: {
+        kind: "gateway-client",
+        boundary: "gateway.ws.authenticated-connect",
+        state: "present",
+        rawSourceRef: "profile-ada",
+      },
+      invoker: {
+        state: "present",
+        kind: "person",
+        rawPrincipalRef: "profile-ada",
+        displayLabel,
+      },
+      assurance: [
+        {
+          kind: "durable-profile",
+          rawEvidenceRef: "profile-ada",
+          strength: "boundary-verified",
+        },
+      ],
+    });
+    const prepared = prepareAgentCommandExecutionIdentity({
+      opts,
+      prepared: {
+        cfg: { logging: { audit: { enabled: true, executionIdentity: true } } },
+        runId: "run-profiled",
+        sessionAgentId: "main",
+        sessionId: "session-profiled",
+      },
+      ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
       lifecycleGeneration: "generation-1",
     });
 
-    executionIdentity.record({
-      attribution,
-      agentId: "main",
-      cfg: { logging: { audit: { enabled: true, executionIdentity: true } } },
-      ingress: executionIdentity.localIngress,
-      runId: attribution.runId,
-      runtimeKind: "embedded",
-    });
+    await prepared.admit("embedded");
 
-    expect(work).toHaveLength(1);
-    expect(work[0]).toMatchObject({
+    expect(work).toMatchObject({
       kind: "capture",
       envelope: {
-        contextId: attribution.contextId,
-        executionId: attribution.executionId,
-        createdAt: attribution.createdAt,
+        ingress: {
+          kind: "gateway-client",
+          boundary: "gateway.ws.authenticated-connect",
+          state: "present",
+        },
+        invoker: {
+          state: "present",
+          kind: "person",
+          rawPrincipalRef: "profile-ada",
+          displayLabel: "Operator OPENAI_API_KEY=***",
+        },
+        assurance: [
+          {
+            kind: "durable-profile",
+            rawEvidenceRef: "profile-ada",
+            strength: "boundary-verified",
+          },
+        ],
       },
     });
-    expect(attribution).not.toHaveProperty("executionIdentityAdmission");
+    if (work?.kind !== "capture" || work.envelope.invoker?.state !== "present") {
+      throw new Error("expected captured present invoker");
+    }
+    expect(work.envelope.invoker.displayLabel).toBe("Operator OPENAI_API_KEY=***");
   });
 
-  it("uses exact attribution as the lifecycle authority", () => {
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-1",
-      lifecycleGeneration: "generation-attribution",
+  it("does not offer the prepared profile label to storage without execution audit opt-in", async () => {
+    let work: ExecutionIdentityAdmissionWork | undefined;
+    cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
+      work = candidate;
+      return true;
     });
 
-    expect(
-      executionIdentity.resolveAttribution(
-        {
-          executionAttribution: attribution,
-          lifecycleGeneration: "generation-flat",
-        } as never,
-        { runId: attribution.runId },
-      ),
-    ).toEqual({
-      attribution,
-      lifecycleGeneration: "generation-attribution",
-    });
-  });
-
-  it("rejects attribution captured for a different run", () => {
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-attribution",
-      lifecycleGeneration: "generation-attribution",
-    });
-
-    expect(() =>
-      executionIdentity.resolveAttribution(
-        {
-          executionAttribution: attribution,
-        } as never,
-        { runId: "run-command" },
-      ),
-    ).toThrow("Agent command execution attribution runId does not match the command runId.");
-  });
-
-  it("allocates private attribution for direct command admission", () => {
-    const resolved = executionIdentity.resolveAttribution(
-      { lifecycleGeneration: "generation-local" } as never,
-      {
-        runId: "run-local",
-        sessionKey: "agent:main:local",
-        sessionId: "session-local",
-        sessionAgentId: "main",
-      },
-    );
-
-    expect(resolved.attribution).toMatchObject({
-      runId: "run-local",
-      lifecycleGeneration: "generation-local",
-      sessionKey: "agent:main:local",
-      sessionId: "session-local",
-      agentId: "main",
-    });
-    expect(resolved.attribution).not.toHaveProperty("executionIdentityAdmission");
-  });
-
-  it("atomically reserves one attribution for concurrent cross-session admission", () => {
-    const lifecycleGeneration = getAgentRunLifecycleGeneration();
-    const runId = "run-shared";
-    const first = executionIdentity.resolveAttribution({ lifecycleGeneration } as never, {
-      runId,
-      sessionKey: "agent:main:first-session",
-      sessionId: "first-session",
-      sessionAgentId: "main",
-    });
-
-    expect(getAgentRunContext(runId)?.attribution).toBe(first.attribution);
-    expect(() =>
-      executionIdentity.resolveAttribution({ lifecycleGeneration } as never, {
-        runId,
-        sessionKey: "agent:main:second-session",
-        sessionId: "second-session",
-        sessionAgentId: "main",
-      }),
-    ).toThrow("Agent run ID is already bound to different execution attribution.");
-    expect(getAgentRunContext(runId)?.attribution).toBe(first.attribution);
-  });
-
-  it("replaces attribution only after lifecycle rebound", () => {
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-1",
-      lifecycleGeneration: "generation-1",
-    });
-    const opts = { executionAttribution: attribution } as never;
-
-    expect(executionIdentity.replaceAttribution(opts, attribution)).toBe(opts);
-    expect(
-      executionIdentity.replaceAttribution(
-        opts,
-        createAgentExecutionAttribution({
-          ...attribution,
-          lifecycleGeneration: "generation-2",
-        }),
-      ),
-    ).not.toBe(opts);
-  });
-
-  it("strips untrusted ingress attribution and preserves trusted gateway attribution", () => {
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-1",
-      lifecycleGeneration: "generation-1",
-    });
-    const opts = {
+    const opts: AgentCommandIngressOpts = {
+      message: "do not retain this label",
       allowModelOverride: false,
-      executionAttribution: attribution,
-      lifecycleGeneration: "generation-flat",
-      runId: attribution.runId,
-    } as never;
-
-    expect(executionIdentity.prepareIngress(opts, false)).toEqual({
-      lifecycleGeneration: "generation-flat",
-      opts: {
-        allowModelOverride: false,
-        executionAttribution: undefined,
-        lifecycleGeneration: "generation-flat",
-        runId: attribution.runId,
+    };
+    attachAgentCommandAdmissionFacts(opts, {
+      ingress: {
+        kind: "gateway-client",
+        boundary: "gateway.ws.authenticated-connect",
+        state: "present",
+      },
+      invoker: {
+        state: "present",
+        kind: "person",
+        rawPrincipalRef: "profile-ada",
+        displayLabel: "Ada",
       },
     });
-    expect(executionIdentity.prepareIngress(opts, true)).toEqual({
-      lifecycleGeneration: "generation-flat",
+    const prepared = prepareAgentCommandExecutionIdentity({
       opts,
+      prepared: {
+        cfg: { logging: { audit: { enabled: true, executionIdentity: false } } },
+        runId: "run-profiled-disabled",
+        sessionAgentId: "main",
+        sessionId: "session-profiled-disabled",
+      },
+      ingress: { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+      lifecycleGeneration: "generation-1",
     });
 
-    const inheritedOpts = Object.assign(Object.create({ executionAttribution: attribution }), {
-      allowModelOverride: false,
-      lifecycleGeneration: "generation-flat",
-      runId: attribution.runId,
-    }) as never;
-    expect(executionIdentity.prepareIngress(inheritedOpts, false).opts).toHaveProperty(
-      "executionAttribution",
-      undefined,
-    );
+    await prepared.admit("embedded");
+
+    expect(work).toBeUndefined();
   });
 });

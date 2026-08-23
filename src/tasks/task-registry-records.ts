@@ -20,14 +20,14 @@ export function normalizeTaskTimestamps(task: TaskRecord): TaskRecord {
 
   const startedAt =
     typeof task.startedAt === "number" ? Math.max(task.startedAt, createdAt) : task.startedAt;
-  const lastEventAt =
-    typeof task.lastEventAt === "number"
-      ? Math.max(task.lastEventAt, startedAt ?? createdAt)
-      : task.lastEventAt;
   const endedAt =
     typeof task.endedAt === "number"
       ? Math.max(task.endedAt, startedAt ?? createdAt)
       : task.endedAt;
+  const lastEventAt =
+    typeof task.lastEventAt === "number"
+      ? Math.max(task.lastEventAt, endedAt ?? startedAt ?? createdAt)
+      : task.lastEventAt;
 
   if (
     createdAt === task.createdAt &&

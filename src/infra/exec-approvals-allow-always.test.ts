@@ -8,7 +8,7 @@ import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
   makePathEnv,
-  makeTempDir,
+  makeExecApprovalsTempDir,
 } from "./exec-approvals-test-helpers.js";
 import {
   analyzeArgvCommand,
@@ -95,7 +95,7 @@ describe("resolveAllowAlwaysPatterns", () => {
   }
 
   function createShellScriptFixture() {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const scriptsDir = path.join(dir, "scripts");
     fs.mkdirSync(scriptsDir, { recursive: true });
     const script = path.join(scriptsDir, "save_crystal.sh");
@@ -161,7 +161,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     expectAllowlisted?: boolean;
     changedCommand?: string;
   }) {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const touch = makeExecutable(dir, "touch");
     const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
     const safeBins = resolveSafeBins(undefined);
@@ -282,7 +282,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const curl = makeExecutable(dir, "curl");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
@@ -345,7 +345,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const awk = makeExecutable(dir, "awk");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
@@ -377,7 +377,7 @@ describe("resolveAllowAlwaysPatterns", () => {
         return;
       }
 
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       const bash = makeExecutable(dir, "bash");
       const scriptsDir = path.join(dir, "scripts");
       fs.mkdirSync(scriptsDir, { recursive: true });
@@ -490,41 +490,37 @@ describe("resolveAllowAlwaysPatterns", () => {
   ])(
     "persists allow-always patterns for $name",
     ({ argvPrefix, fileFlag, scriptArgs, expectedArgPattern }) => {
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       makeExecutable(dir, "env");
       makeExecutable(dir, "pwsh");
       const scriptPath = path.join(dir, "script.ps1");
       fs.writeFileSync(scriptPath, "");
       fs.chmodSync(scriptPath, 0o755);
-      try {
-        const env = makePathEnv(dir);
-        const analysis = analyzeArgvCommand({
-          argv: [...argvPrefix, "pwsh", fileFlag, scriptPath, ...scriptArgs],
-          cwd: dir,
-          env,
-        });
-        expect(analysis.ok).toBe(true);
+      const env = makePathEnv(dir);
+      const analysis = analyzeArgvCommand({
+        argv: [...argvPrefix, "pwsh", fileFlag, scriptPath, ...scriptArgs],
+        cwd: dir,
+        env,
+      });
+      expect(analysis.ok).toBe(true);
 
-        const entries = resolveAllowAlwaysPatternEntries({
-          segments: analysis.segments,
-          cwd: dir,
-          env,
-          platform: "win32",
-        });
-        expect(entries).toEqual([{ pattern: scriptPath, argPattern: expectedArgPattern }]);
+      const entries = resolveAllowAlwaysPatternEntries({
+        segments: analysis.segments,
+        cwd: dir,
+        env,
+        platform: "win32",
+      });
+      expect(entries).toEqual([{ pattern: scriptPath, argPattern: expectedArgPattern }]);
 
-        const result = evaluateExecAllowlist({
-          analysis,
-          allowlist: [...entries],
-          safeBins: new Set(),
-          cwd: dir,
-          env,
-          platform: "win32",
-        });
-        expect(result.allowlistSatisfied).toBe(true);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
+      const result = evaluateExecAllowlist({
+        analysis,
+        allowlist: [...entries],
+        safeBins: new Set(),
+        cwd: dir,
+        env,
+        platform: "win32",
+      });
+      expect(result.allowlistSatisfied).toBe(true);
     },
   );
 
@@ -532,7 +528,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "awk");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
@@ -551,7 +547,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "zsh");
     const whoami = makeExecutable(dir, "whoami");
     const { persisted } = await resolvePersistedPatterns({
@@ -567,7 +563,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "zsh");
     const whoami = makeExecutable(dir, "whoami");
     const ls = makeExecutable(dir, "ls");
@@ -650,7 +646,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const tool = makeExecutable(dir, "openclaw-ok");
     makeExecutable(dir, "yash");
     const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
@@ -711,7 +707,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const touch = makeExecutable(dir, "touch");
     makeExecutable(dir, "sh");
     const env = makePathEnv(dir);
@@ -767,7 +763,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "touch");
     makeExecutable(dir, "sh");
     const env = makePathEnv(dir);
@@ -815,7 +811,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const touch = makeExecutable(dir, "touch");
     const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
     const safeBins = resolveSafeBins(undefined);
@@ -892,7 +888,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const patterns = resolveAllowAlwaysPatterns({
       segments: [
         {
@@ -918,7 +914,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "nice");
     makeExecutable(dir, "zsh");
     makeExecutable(dir, "whoami");
@@ -935,7 +931,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "time");
     makeExecutable(dir, "zsh");
     makeExecutable(dir, "whoami");
@@ -952,7 +948,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "busybox");
     makeExecutable(dir, "toybox");
     makeExecutable(dir, "sh");
@@ -971,7 +967,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const busybox = makeExecutable(dir, "busybox");
     const patterns = resolveAllowAlwaysPatterns({
       segments: [
@@ -1018,7 +1014,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const busybox = makeExecutable(dir, "busybox");
     const echo = makeExecutable(dir, "echo");
     makeExecutable(dir, "id");
@@ -1039,7 +1035,7 @@ $0 \\"$1\\"" touch {marker}`,
       if (process.platform === "win32") {
         return;
       }
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       const shell = makeExecutable(dir, shellName);
       makeExecutable(dir, "id");
       const env = makePathEnv(dir);
@@ -1071,7 +1067,7 @@ $0 \\"$1\\"" touch {marker}`,
   );
 
   it("prevents Windows fallback from allowlisting opaque shell inline payloads", () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const shell = makeExecutable(dir, "nu.exe");
     const safeTool = makeExecutable(dir, "safe-tool.exe");
     const env = makePathEnv(dir);
@@ -1118,7 +1114,7 @@ $0 \\"$1\\"" touch {marker}`,
       if (process.platform === "win32") {
         return;
       }
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       const shell = makeExecutable(dir, "nu");
       makeExecutable(dir, "id");
       const env = makePathEnv(dir);
@@ -1150,7 +1146,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const shell = makeExecutable(dir, "nu");
     const config = path.join(dir, "allowed.nu");
     fs.writeFileSync(config, "");
@@ -1180,7 +1176,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const shell = makeExecutable(dir, "xonsh");
     const rcFile = path.join(dir, "allowed.xsh");
     fs.writeFileSync(rcFile, "");
@@ -1210,7 +1206,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const shell = makeExecutable(dir, "nu");
     const pluginList = path.join(dir, "allowed-plugins.nuon");
     fs.writeFileSync(pluginList, "");
@@ -1253,7 +1249,7 @@ $0 \\"$1\\"" touch {marker}`,
       decoyName: "pipefail",
     },
   ])("does not bind option values as shell script allowlist targets for $name", (testCase) => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, testCase.argv[0] ?? "sh");
     const script = path.join(dir, "run.sh");
     fs.writeFileSync(script, "#!/bin/sh\necho ok\n");
@@ -1329,7 +1325,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const echo = makeExecutable(dir, "echo");
     makeExecutable(dir, "id");
     const env = makePathEnv(dir);
@@ -1347,7 +1343,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "pnpm");
     makeExecutable(dir, "sh");
     const echo = makeExecutable(dir, "echo");
@@ -1368,7 +1364,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const pnpmPath = makeExecutable(dir, "pnpm");
     makeExecutable(dir, "sh");
     makeExecutable(dir, "id");
@@ -1402,7 +1398,7 @@ $0 \\"$1\\"" touch {marker}`,
       if (process.platform === "win32") {
         return;
       }
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       const npmPath = makeExecutable(dir, "npm");
       makeExecutable(dir, "sh");
       makeExecutable(dir, "id");
@@ -1435,7 +1431,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const pnpmPath = makeExecutable(dir, "pnpm");
     makeExecutable(dir, "sh");
     makeExecutable(dir, "id");
@@ -1467,7 +1463,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const npmPath = makeExecutable(dir, "npm");
     makeExecutable(dir, "sh");
     makeExecutable(dir, "id");
@@ -1499,7 +1495,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const pnpmPath = makeExecutable(dir, "pnpm");
     const npmPath = makeExecutable(dir, "npm");
     makeExecutable(dir, "sh");
@@ -1535,7 +1531,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const yarnPath = makeExecutable(dir, "yarn");
     makeExecutable(dir, "sh");
     makeExecutable(dir, "id");
@@ -1575,7 +1571,7 @@ $0 \\"$1\\"" touch {marker}`,
       if (process.platform === "win32") {
         return;
       }
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       const executablePath = makeExecutable(dir, executable);
       const env = makePathEnv(dir);
       const safeBins = resolveSafeBins(undefined);
@@ -1615,7 +1611,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const pnpmPath = makeExecutable(dir, "pnpm");
     makeExecutable(dir, "eslint");
     const env = makePathEnv(dir);
@@ -1646,7 +1642,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const pnpmPath = makeExecutable(dir, "pnpm");
     makeExecutable(dir, "eslint");
     const env = makePathEnv(dir);
@@ -1679,7 +1675,7 @@ $0 \\"$1\\"" touch {marker}`,
       if (process.platform === "win32") {
         return;
       }
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       const yarnPath = makeExecutable(dir, "yarn");
       makeExecutable(dir, "eslint");
       const env = makePathEnv(dir);
@@ -1844,7 +1840,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const pnpmPath = makeExecutable(dir, "pnpm");
     const tsxPath = makeExecutable(dir, "tsx");
     const env = makePathEnv(dir);
@@ -2010,7 +2006,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const echo = makeExecutable(dir, "echo");
     makeExecutable(dir, "id");
     const env = makePathEnv(dir);
@@ -2029,7 +2025,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "command");
     const echo = makeExecutable(dir, "echo");
     makeExecutable(dir, "id");
@@ -2047,7 +2043,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "command");
     const echo = makeExecutable(dir, "echo");
     const env = makePathEnv(dir);
@@ -2076,7 +2072,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "echo");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
@@ -2093,7 +2089,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform !== "darwin") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const echo = makeExecutable(dir, "echo");
     makeExecutable(dir, "id");
     const env = makePathEnv(dir);
@@ -2119,7 +2115,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "awk");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
@@ -2323,7 +2319,7 @@ $0 \\"$1\\"" touch {marker}`,
       if (process.platform === "win32") {
         return;
       }
-      const dir = makeTempDir();
+      const dir = makeExecApprovalsTempDir();
       makeExecutable(dir, executable);
       const env = makePathEnv(dir);
       const marker = path.join(dir, `${executable}-marker`);
@@ -2342,7 +2338,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "awk");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
@@ -2370,7 +2366,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform !== "darwin" && process.platform !== "freebsd") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     makeExecutable(dir, "echo");
     makeExecutable(dir, "id");
     const env = makePathEnv(dir);
@@ -2406,7 +2402,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const benign = makeExecutable(dir, "benign");
     makeExecutable(dir, "payload");
     const env = makePathEnv(dir);
@@ -2423,7 +2419,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const envPath = makeExecutable(dir, "env");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
@@ -2451,7 +2447,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const bashPath = makeExecutable(dir, "bash");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);
@@ -2479,7 +2475,7 @@ $0 \\"$1\\"" touch {marker}`,
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const xargsPath = makeExecutable(dir, "xargs");
     const env = makePathEnv(dir);
     const safeBins = resolveSafeBins(undefined);

@@ -2,12 +2,12 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseArgs } from "../../scripts/check-release-metadata-only.mjs";
+import { parseArgs } from "../../scripts/check-release-metadata-only.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const scriptPath = path.resolve(
   import.meta.dirname,
-  "../../scripts/check-release-metadata-only.mjs",
+  "../../scripts/check-release-metadata-only.mts",
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itUnix = process.platform === "win32" ? it.skip : it;
@@ -68,7 +68,7 @@ if (process.argv.includes("diff")) {
     );
     chmodSync(gitPath, 0o755);
 
-    const result = spawnSync(process.execPath, [scriptPath], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       cwd: path.resolve(import.meta.dirname, "../.."),
       env: {
         ...process.env,
@@ -84,7 +84,7 @@ if (process.argv.includes("diff")) {
       "release metadata guard: git diff --name-only --diff-filter=ACMR origin/main...HEAD timed out after 500ms.",
     );
 
-    const fractionalResult = spawnSync(process.execPath, [scriptPath], {
+    const fractionalResult = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       cwd: path.resolve(import.meta.dirname, "../.."),
       env: {
         ...process.env,

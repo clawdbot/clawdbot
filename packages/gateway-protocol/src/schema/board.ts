@@ -95,6 +95,7 @@ export const BoardWidgetSchema = closedObject({
   sandboxUrl: Type.Optional(Type.String()),
   sandboxPort: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
   sandboxOrigin: Type.Optional(Type.String()),
+  kindLabel: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
 });
 export type BoardWidget = Static<typeof BoardWidgetSchema>;
 
@@ -157,11 +158,15 @@ export const BoardOpSchema = Type.Union([
 ]);
 export type BoardOp = Static<typeof BoardOpSchema>;
 
-export const BoardGetParamsSchema = closedObject({ sessionKey: NonEmptyString });
+export const BoardGetParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
 export type BoardGetParams = Static<typeof BoardGetParamsSchema>;
 
 export const BoardUpdateParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   ops: Type.Array(BoardOpSchema),
 });
 export type BoardUpdateParams = Static<typeof BoardUpdateParamsSchema>;
@@ -191,16 +196,25 @@ export const BoardWidgetPluginContentSchema = closedObject({
   pluginKind: BoardWidgetPluginKindSchema,
   props: Type.Optional(BoardWidgetPluginPropsSchema),
 });
+export const BoardWidgetRegisteredContentSchema = closedObject({
+  kind: Type.Literal("registered"),
+  contentKind: Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" }),
+  source: Type.String({ maxLength: 262_144 }),
+});
 export const BoardWidgetContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppContentSchema,
   BoardWidgetPluginContentSchema,
+  BoardWidgetRegisteredContentSchema,
 ]);
 export type BoardWidgetContent = Static<typeof BoardWidgetContentSchema>;
 export type BoardWidgetMaterializedContent =
   | Static<typeof BoardWidgetHtmlContentSchema>
   | (Static<typeof BoardWidgetMcpAppContentSchema> & { interactive: boolean })
   | Static<typeof BoardWidgetPluginContentSchema>;
+export type BoardWidgetRegisteredMaterializedContent = Static<
+  typeof BoardWidgetRegisteredContentSchema
+> & { pluginKind: string };
 
 export const BoardCanvasDocumentSourceSchema = closedObject({
   kind: Type.Literal("canvas-doc"),
@@ -212,12 +226,14 @@ export const BoardWidgetPutContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppPutContentSchema,
   BoardWidgetPluginContentSchema,
+  BoardWidgetRegisteredContentSchema,
   BoardCanvasDocumentSourceSchema,
 ]);
 export type BoardWidgetPutContent = Static<typeof BoardWidgetPutContentSchema>;
 
 export const BoardWidgetPutParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   name: BoardWidgetNameSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   content: BoardWidgetPutContentSchema,
@@ -236,7 +252,7 @@ export const BoardWidgetPutParamsSchema = closedObject({
 export type BoardWidgetPutParams = Static<typeof BoardWidgetPutParamsSchema>;
 /** Materialized input accepted by the board store after gateway source resolution. */
 export type BoardWidgetMaterializedPutParams = Omit<BoardWidgetPutParams, "content"> & {
-  content: BoardWidgetMaterializedContent;
+  content: BoardWidgetMaterializedContent | BoardWidgetRegisteredMaterializedContent;
 };
 export const BoardWidgetPutResultSchema = closedObject({
   ...BoardSnapshotFields,
@@ -246,6 +262,7 @@ export type BoardWidgetPutResult = Static<typeof BoardWidgetPutResultSchema>;
 
 export const BoardWidgetGrantParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   name: BoardWidgetNameSchema,
   decision: Type.Union([Type.Literal("granted"), Type.Literal("rejected")]),
   revision: Type.Integer({ minimum: 1 }),
@@ -255,6 +272,7 @@ export type BoardWidgetGrantParams = Static<typeof BoardWidgetGrantParamsSchema>
 
 export const BoardWidgetAppViewParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   name: BoardWidgetNameSchema,
   revision: Type.Integer({ minimum: 1 }),
   instanceId: NonEmptyString,
@@ -271,6 +289,7 @@ export const BoardViewTicketSchema = Type.String({ minLength: 1, maxLength: 2048
 
 export const BoardLegacyEventParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   widget: BoardWidgetNameSchema,
   payload: Type.Unknown(),
 });

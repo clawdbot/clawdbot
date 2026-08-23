@@ -29,8 +29,37 @@ server.tool(
   {
     id: z.string().describe("Fixture note id to look up."),
   },
+  async ({ id }) => {
+    const note = notes.get(id);
+    return {
+      content: [{
+        type: "text",
+        text: note ?? "missing-note",
+        annotations: { audience: ["assistant"] },
+        _meta: { proof: "fixture-content-metadata" },
+      }],
+      structuredContent: { id, note: note ?? "missing-note" },
+      isError: note === undefined,
+      _meta: { private: "fixture-private-metadata" },
+    };
+  },
+);
+
+server.registerResource(
+  "fixture_note",
+  "memo://fixture/alpha",
+  { description: "Fixture alpha note", mimeType: "text/plain" },
+  async (uri) => ({
+    contents: [{ uri: uri.href, mimeType: "text/plain", text: notes.get("alpha") }],
+  }),
+);
+
+server.registerPrompt(
+  "fixture_brief",
+  { description: "A fixture note briefing", argsSchema: { id: z.string() } },
   async ({ id }) => ({
-    content: [{ type: "text", text: notes.get(id) ?? "missing-note" }],
+    description: "A fixture note briefing",
+    messages: [{ role: "user", content: { type: "text", text: notes.get(id) ?? "missing-note" } }],
   }),
 );
 

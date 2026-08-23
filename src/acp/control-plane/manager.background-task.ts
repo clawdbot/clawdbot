@@ -9,7 +9,10 @@ import {
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
-import { deliveryContextFromSession, type DeliveryContext } from "../../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  type DeliveryContext,
+} from "../../utils/delivery-context.shared.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "./manager.turn-timeout.js";
 import type { AcpSessionManagerDeps } from "./manager.types.js";

@@ -1,6 +1,6 @@
 // Active process cancellation must keep one canonical terminal reason.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test-utils/deferred.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createProcessSupervisor } from "./supervisor.js";
 import type {
   ProcessSupervisor,

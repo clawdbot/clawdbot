@@ -242,6 +242,7 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
       config: params.cfg,
     });
   return {
+    approvalKind: "exec",
     id: "diagnostics-private-route",
     request: {
       command: buildGatewayDiagnosticsExportJsonCommand(),
@@ -313,7 +314,7 @@ async function requestGatewayDiagnosticsExportApproval(
       security: "allowlist",
       ask: "always",
       background: true,
-      timeout: timeoutSec,
+      timeoutSeconds: timeoutSec,
     });
     if (result.details?.status === "approval-pending") {
       return { status: "pending" };

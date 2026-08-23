@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 
@@ -26,9 +27,10 @@ function makeLog() {
 }
 
 function makeCfg() {
-  return { agents: { defaults: {} }, session: {} } as Parameters<
-    typeof runStartupSessionMigration
-  >[0]["cfg"];
+  return {
+    agents: { defaults: {} },
+    session: { store: "/tmp/{agentId}/sessions.json" },
+  } as Parameters<typeof runStartupSessionMigration>[0]["cfg"];
 }
 
 // Every test injects store-target and sweep mocks so startup never scans the
@@ -43,6 +45,7 @@ function makeDeps(
 ) {
   return {
     migrateOrphanedSessionKeys: migrate,
+    prepareLegacySessionSurfaces: vi.fn(() => EMPTY_LEGACY_SESSION_SURFACES),
     resolveAllAgentSessionStoreTargetsSync: vi.fn<ResolveStoreTargets>().mockReturnValue([
       { agentId: "main", storePath: "/tmp/main/sessions.json" },
       { agentId: "ops", storePath: "/tmp/ops/sessions.json" },
@@ -95,6 +98,38 @@ function makeSessionSqliteImport(
 }
 
 describe("runStartupSessionMigration", () => {
+  it("skips legacy migration imports when no session stores exist", async () => {
+    const log = makeLog();
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+    const deps = makeDeps(migrate);
+    deps.sessionSqliteDatabaseExists.mockReturnValue(false);
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-empty-session-startup-"));
+    const env = { OPENCLAW_STATE_DIR: path.join(stateDir, "missing") };
+
+    try {
+      await runStartupSessionMigration({ cfg: { session: {} }, env, log, deps });
+    } finally {
+      fs.rmSync(stateDir, { force: true, recursive: true });
+    }
+
+    expect(deps.resolveAllAgentSessionStoreTargetsSync).not.toHaveBeenCalled();
+    expect(migrate).not.toHaveBeenCalled();
+    expect(deps.prepareLegacySessionSurfaces).not.toHaveBeenCalled();
+    expect(deps.runDoctorSessionSqlite).not.toHaveBeenCalled();
+    expect(deps.reconcileSessionTranscriptIndexes).not.toHaveBeenCalled();
+  });
+
+  it("keeps custom stores on the migration path when discovery is inconclusive", async () => {
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+    const deps = makeDeps(migrate);
+    deps.resolveAllAgentSessionStoreTargetsSync.mockReturnValue([]);
+
+    await runStartupSessionMigration({ cfg: makeCfg(), log: makeLog(), deps });
+
+    expect(migrate).toHaveBeenCalledOnce();
+    expect(deps.runDoctorSessionSqlite).toHaveBeenCalledOnce();
+  });
+
   it("logs changes when orphaned keys are canonicalized", async () => {
     const log = makeLog();
     const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({
@@ -170,6 +205,8 @@ describe("runStartupSessionMigration", () => {
 
     await runStartupSessionMigration({ cfg: makeCfg(), log, deps });
 
+    expect(migrate).toHaveBeenCalledOnce();
+    expect(deps.runDoctorSessionSqlite).toHaveBeenCalledOnce();
     expect(log.warn).toHaveBeenCalledOnce();
     const warning = firstLogMessage(log.warn, "startup cleanup failure warning");
     expect(warning).toContain("temp cleanup failed during startup");
@@ -179,7 +216,8 @@ describe("runStartupSessionMigration", () => {
   it("imports legacy session metadata and transcripts into SQLite during startup", async () => {
     const log = makeLog();
     const cfg = makeCfg();
-    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" };
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-import-startup-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
     const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
     const runDoctorSessionSqlite = makeSessionSqliteImport({
       totals: {
@@ -197,12 +235,16 @@ describe("runStartupSessionMigration", () => {
       },
     });
 
-    await runStartupSessionMigration({
-      cfg,
-      env,
-      log,
-      deps: makeDeps(migrate, 0, runDoctorSessionSqlite),
-    });
+    try {
+      await runStartupSessionMigration({
+        cfg,
+        env,
+        log,
+        deps: makeDeps(migrate, 0, runDoctorSessionSqlite),
+      });
+    } finally {
+      fs.rmSync(stateDir, { force: true, recursive: true });
+    }
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
       allAgents: true,

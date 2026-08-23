@@ -4,9 +4,11 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
+import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
+import { gzip } from "pako";
 import type { Plugin, UserConfig } from "vite";
 import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
+import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
@@ -14,6 +16,7 @@ import type { ControlUiBuildInfo } from "./src/build-info.ts";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const outDir = path.resolve(here, "../dist/control-ui");
+const CONTROL_UI_GIT_READ_TIMEOUT_MS = 2_000;
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
 type ControlUiViteAlias = {
@@ -69,7 +72,8 @@ export function createControlUiPrecompressedAssetVariants(
     },
     {
       fileName: `${fileName}.gz`,
-      source: gzipSync(body, { level: 9 }),
+      // Host zlib is byte-unstable across supported runtimes; pako's classic hash is canonical.
+      source: Buffer.from(gzip(body, { level: 9, legacyHash: true })),
     },
   ];
 }
@@ -100,12 +104,19 @@ function readPackageVersion(): string | null {
   }
 }
 
+function readGit(args: string[]): string {
+  return execFileSync("git", ["--no-optional-locks", "-C", repoRoot, ...args], {
+    encoding: "utf8",
+    // Metadata reads need no index lock; disabling it makes the hard startup deadline safe.
+    killSignal: "SIGKILL",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: CONTROL_UI_GIT_READ_TIMEOUT_MS,
+  });
+}
+
 function readGitCommit(): string | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const raw = readGit(["rev-parse", "HEAD"]);
     return raw.trim() || null;
   } catch {
     return null;
@@ -114,10 +125,7 @@ function readGitCommit(): string | null {
 
 function readGitBranch(): string | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--abbrev-ref", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const raw = readGit(["rev-parse", "--abbrev-ref", "HEAD"]);
     return raw.trim() || null;
   } catch {
     return null;
@@ -126,10 +134,7 @@ function readGitBranch(): string | null {
 
 function readGitCommitTimestamp(commit: string): string | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "show", "-s", "--format=%ct", commit], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const raw = readGit(["show", "-s", "--format=%ct", commit]);
     const seconds = Number.parseInt(raw.trim(), 10);
     const date = new Date(seconds * 1000);
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
@@ -140,10 +145,7 @@ function readGitCommitTimestamp(commit: string): string | null {
 
 function readGitDirty(): boolean | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const raw = readGit(["status", "--porcelain"]);
     return Boolean(raw.trim());
   } catch {
     return null;
@@ -152,7 +154,6 @@ function readGitDirty(): boolean | null {
 
 type ControlUiBuildInfoSources = {
   env?: NodeJS.ProcessEnv;
-  now?: () => Date;
   readPackageVersion?: () => string | null;
   readGitCommit?: () => string | null;
   readGitCommitTimestamp?: (commit: string) => string | null;
@@ -160,19 +161,16 @@ type ControlUiBuildInfoSources = {
   readGitDirty?: () => boolean | null;
 };
 
-function normalizeBuildTimestamp(value: string | undefined, now: () => Date): string | null {
+function normalizeBuildTimestamp(value: string | undefined): string | null {
   const explicit = value?.trim();
-  if (explicit) {
-    const timestamp = normalizeControlUiBuildInfo({ builtAt: explicit }).builtAt;
-    if (!timestamp) {
-      throw new Error(
-        "OPENCLAW_BUILD_TIMESTAMP must be a valid UTC ISO-8601 timestamp ending in Z",
-      );
-    }
-    return timestamp;
+  if (!explicit) {
+    return null;
   }
-  const candidate = now();
-  return Number.isNaN(candidate.getTime()) ? null : candidate.toISOString();
+  const timestamp = normalizeControlUiBuildInfo({ builtAt: explicit }).builtAt;
+  if (!timestamp) {
+    throw new Error("OPENCLAW_BUILD_TIMESTAMP must be a valid UTC ISO-8601 timestamp ending in Z");
+  }
+  return timestamp;
 }
 
 export function resolveControlUiBuildInfo(
@@ -206,15 +204,17 @@ export function resolveControlUiBuildInfo(
   // Commit time is advisory identity like branch/dirty: read from the local
   // object store for the exact embedded commit, null when no checkout has it
   // (e.g. GITHUB_SHA-only builds). It must never block a build.
+  const readCommitTimestamp =
+    sources.readGitCommitTimestamp ??
+    // A caller-provided commit reader can return synthetic or remote identity.
+    // Do not combine it with a filesystem-bound reader from this checkout.
+    (sources.readGitCommit ? () => null : readGitCommitTimestamp);
   const commitAt = commit
     ? normalizeControlUiBuildInfo({
-        commitAt: (sources.readGitCommitTimestamp ?? readGitCommitTimestamp)(commit),
+        commitAt: readCommitTimestamp(commit),
       }).commitAt
     : null;
-  const builtAt = normalizeBuildTimestamp(
-    env.OPENCLAW_BUILD_TIMESTAMP,
-    sources.now ?? (() => new Date()),
-  );
+  const builtAt = normalizeBuildTimestamp(env.OPENCLAW_BUILD_TIMESTAMP);
   // Branch/dirty identity is advisory: the readers return null instead of
   // throwing, so malformed environment or Git state never blocks a build.
   // Tags must not be presented as branches in GitHub-built artifacts.
@@ -306,10 +306,13 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
+    sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "json-schema"),
+    sourcePackageAlias("normalization-core", "markdown-plain-text"),
     sourcePackageAlias("normalization-core", "number-coercion"),
     sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
+    sourcePackageAlias("normalization-core", "result"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
@@ -433,6 +436,11 @@ export default function controlUiViteConfig(options: { outDir?: string } = {}): 
       "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo),
     },
     publicDir: path.resolve(here, "public"),
+    css: {
+      postcss: {
+        plugins: [controlUiHoverGuardPlugin()],
+      },
+    },
     optimizeDeps: {
       include: [
         "ipaddr.js",

@@ -10,7 +10,7 @@ import {
 
 export function createUnitFastVitestConfig(
   env: Record<string, string | undefined> = process.env,
-  options: { argv?: string[] } = {},
+  options: { argv?: string[]; runner?: string } = {},
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
   const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
@@ -27,7 +27,7 @@ export function createUnitFastVitestConfig(
       ...sharedTest,
       name: "unit-fast",
       isolate: false,
-      runner: undefined,
+      runner: options.runner,
       // Env isolation only (no shared-setup mocks): membership is auto-curated,
       // so tests must never read the developer's real config/state.
       setupFiles: [resolveRepoRootPath("test/setup.env.ts")],

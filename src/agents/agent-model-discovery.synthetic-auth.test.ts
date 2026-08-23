@@ -38,7 +38,7 @@ vi.mock("./agent-auth-discovery-core.js", () => ({
   addEnvBackedAgentCredentials: (credentials: Record<string, unknown>) => ({ ...credentials }),
 }));
 
-let resolveAgentCredentialsForDiscovery: typeof import("./agent-auth-discovery.js").resolveAgentCredentialsForDiscovery;
+let resolveAgentDiscoveryAuthFacts: typeof import("./agent-auth-discovery.js").resolveAgentDiscoveryAuthFacts;
 
 async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<void> {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-synthetic-auth-"));
@@ -51,7 +51,7 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<v
 
 describe("agent model discovery synthetic auth", () => {
   beforeAll(async () => {
-    ({ resolveAgentCredentialsForDiscovery } = await import("./agent-auth-discovery.js"));
+    ({ resolveAgentDiscoveryAuthFacts } = await import("./agent-auth-discovery.js"));
   });
 
   beforeEach(() => {
@@ -67,7 +67,7 @@ describe("agent model discovery synthetic auth", () => {
 
   it("mirrors plugin-owned synthetic cli auth into credential discovery", async () => {
     await withAgentDir(async (agentDir) => {
-      const credentials = resolveAgentCredentialsForDiscovery(agentDir, { readOnly: true });
+      const { credentials } = resolveAgentDiscoveryAuthFacts(agentDir, { readOnly: true });
 
       expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalledTimes(1);
       expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalledWith();

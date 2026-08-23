@@ -1,13 +1,13 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import type { ZoomMeetingsConfig, ZoomMeetingsMode } from "./config.js";
-import { assertBlackHole2chAvailable } from "./transports/chrome.js";
+import { assertZoomMeetingsAudioAvailable } from "./transports/chrome.js";
 import { ZOOM_MEETINGS_BROWSER_NODE_ADAPTER } from "./transports/zoom-meetings-platform-constants.js";
 
 export const getZoomMeetingsSetupStatus = MeetingPlatformAdapter.createRuntimeSetup<
   ZoomMeetingsConfig,
   ZoomMeetingsMode
 >({
-  assertAudioDeviceAvailable: assertBlackHole2chAvailable,
+  assertAudioDeviceAvailable: assertZoomMeetingsAudioAvailable,
   captionsMessage: (mode) =>
     mode === "transcribe"
       ? "Zoom live-caption capture is enabled and ready"

@@ -20,13 +20,23 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.12.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
-        .package(url: "https://github.com/steipete/Peekaboo.git", exact: "3.9.8"),
+        .package(
+            url: "https://github.com/openclaw/Peekaboo.git",
+            revision: "028cd9eb2d7b413c26f02f169c5f6224b2fcb3e0"),
         .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.3.1"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),
         .package(path: "../swabble"),
     ],
     targets: [
+        .target(
+            name: "OpenClawCameraPTZNative",
+            path: "Sources/OpenClawCameraPTZNative",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("CoreFoundation"),
+                .linkedFramework("IOKit"),
+            ]),
         .target(
             name: "OpenClawIPC",
             dependencies: [],
@@ -48,6 +58,7 @@ let package = Package(
             dependencies: [
                 "OpenClawIPC",
                 "OpenClawDiscovery",
+                "OpenClawCameraPTZNative",
                 .product(name: "OpenClawNativeState", package: "OpenClawKit"),
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawChatUI", package: "OpenClawKit"),

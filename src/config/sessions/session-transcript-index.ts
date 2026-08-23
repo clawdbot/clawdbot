@@ -7,6 +7,7 @@
 // marks the session dirty for its write or maintenance owner to rebuild from
 // the canonical visible-path resolver.
 import type { DatabaseSync } from "node:sqlite";
+import type { ColumnType } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -27,14 +28,24 @@ import {
   isSessionTranscriptSideAppendEntry,
   parseSessionTranscriptTreeEntry,
 } from "./transcript-tree.js";
-type TranscriptIndexDatabase = Pick<
-  OpenClawAgentKyselyDatabase,
-  | "session_windows"
-  | "session_transcript_active_events"
-  | "session_transcript_fts"
-  | "session_transcript_index_state"
-  | "transcript_events"
->;
+type TranscriptIndexDatabase = Omit<
+  Pick<
+    OpenClawAgentKyselyDatabase,
+    | "session_windows"
+    | "session_transcript_active_events"
+    | "session_transcript_fts"
+    | "session_transcript_index_state"
+    | "transcript_events"
+  >,
+  "session_transcript_fts"
+> & {
+  session_transcript_fts: Omit<
+    OpenClawAgentKyselyDatabase["session_transcript_fts"],
+    "timestamp"
+  > & {
+    timestamp: ColumnType<string | null, number | string | null, number | string | null>;
+  };
+};
 
 export type SessionTranscriptProjectionState = {
   activeEventCount: number;
@@ -75,6 +86,23 @@ function readSessionTranscriptProjectionState(
     leafEventId: row.leaf_event_id,
     needsRebuild: row.needs_rebuild !== 0,
   };
+}
+
+export function sessionTranscriptIndexNeedsReconcile(db: DatabaseSync, sessionId: string): boolean {
+  const latest = executeSqliteQueryTakeFirstSync(
+    db,
+    getIndexKysely(db)
+      .selectFrom("transcript_events")
+      .select("seq")
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "desc")
+      .limit(1),
+  );
+  if (!latest) {
+    return false;
+  }
+  const state = readSessionTranscriptProjectionState(db, sessionId);
+  return !state || state.needsRebuild || state.indexedSeq !== latest.seq;
 }
 
 function writeWatermark(
@@ -141,17 +169,15 @@ function deleteActiveEventRows(db: DatabaseSync, sessionId: string): void {
 function insertFtsRow(db: DatabaseSync, sessionId: string, entry: TranscriptIndexEntry): void {
   executeSqliteQuerySync(
     db,
-    getIndexKysely(db)
-      .insertInto("session_transcript_fts")
-      .values({
-        text: entry.text,
-        session_id: sessionId,
-        message_id: entry.messageId,
-        role: entry.role,
-        // FTS5 aux columns are typeless, so codegen types them as string;
-        // SQLite stores the numeric timestamp natively and readers normalize.
-        timestamp: entry.timestamp as unknown as string,
-      }),
+    getIndexKysely(db).insertInto("session_transcript_fts").values({
+      text: entry.text,
+      session_id: sessionId,
+      message_id: entry.messageId,
+      role: entry.role,
+      // FTS5 aux columns are typeless; the local insert type preserves the
+      // numeric timestamp SQLite stores while generated readers stay strings.
+      timestamp: entry.timestamp,
+    }),
   );
 }
 
@@ -371,8 +397,7 @@ export function reconcileSessionTranscriptIndexInTransaction(
     deleteSessionTranscriptIndexInTransaction(db, sessionId);
     return false;
   }
-  const state = readSessionTranscriptProjectionState(db, sessionId);
-  if (state && !state.needsRebuild && state.indexedSeq === latest.seq) {
+  if (!sessionTranscriptIndexNeedsReconcile(db, sessionId)) {
     return false;
   }
   const rows = executeSqliteQuerySync(

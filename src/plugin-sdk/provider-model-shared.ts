@@ -4,6 +4,7 @@ import {
   normalizeAntigravityPreviewModelId as normalizeAntigravityPreviewModelIdCore,
   normalizeGooglePreviewModelId as normalizeGooglePreviewModelIdCore,
 } from "@openclaw/model-catalog-core/provider-model-id-normalize";
+import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -156,6 +157,7 @@ export type {
   UnifiedModelCatalogSource,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 export { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+export { parseModelRef } from "../agents/model-selection-normalize.js";
 export type {
   BedrockDiscoveryConfig,
   ModelCompatConfig,
@@ -286,7 +288,6 @@ export {
   matchesExactOrPrefix,
   resolveFamilyForwardCompatModel,
 } from "../plugins/provider-model-helpers.js";
-import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 
 export {
   isClaudeAdaptiveThinkingDefaultModelId,
@@ -406,13 +407,13 @@ export function buildProviderReplayFamilyHooks(
     }
     case "anthropic-by-model":
       return {
-        buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
-          buildAnthropicReplayPolicyForModel(modelId),
+        buildReplayPolicy: ({ modelId, model }: ProviderReplayPolicyContext) =>
+          buildAnthropicReplayPolicyForModel(modelId, model),
       };
     case "native-anthropic-by-model":
       return {
-        buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
-          buildNativeAnthropicReplayPolicyForModel(modelId),
+        buildReplayPolicy: ({ modelId, model }: ProviderReplayPolicyContext) =>
+          buildNativeAnthropicReplayPolicyForModel(modelId, model),
       };
     case "google-gemini":
       return {

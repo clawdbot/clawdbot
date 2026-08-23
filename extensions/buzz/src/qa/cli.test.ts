@@ -48,4 +48,28 @@ describe("Buzz QA CLI", () => {
       }),
     ).toEqual(["channel-canary", "channel-mention-gating"]);
   });
+
+  it("forwards an explicitly selected thread follow-up scenario", async () => {
+    const qa = new Command();
+    buzzQaCliRegistration.register(qa);
+
+    await qa.parseAsync([
+      "node",
+      "openclaw",
+      "buzz",
+      "--credential-file",
+      "/secure/buzz-qa.json",
+      "--scenario",
+      "thread-follow-up",
+    ]);
+
+    const params = runLiveTransportQaSuiteCommand.mock.calls[0]?.[0];
+    expect(
+      params?.selectScenarioIds({
+        primaryModel: "openai/gpt-5.4",
+        providerMode: "mock-openai",
+        scenarioIds: ["thread-follow-up"],
+      }),
+    ).toEqual(["thread-follow-up"]);
+  });
 });

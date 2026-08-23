@@ -377,9 +377,9 @@ Use `agents.entries.*.runtime` to define ACP defaults once per agent:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "codex",
+    ownership: "explicit",
+    entries: {
+      codex: {
         runtime: {
           type: "acp",
           acp: {
@@ -390,14 +390,13 @@ Use `agents.entries.*.runtime` to define ACP defaults once per agent:
           },
         },
       },
-      {
-        id: "claude",
+      claude: {
         runtime: {
           type: "acp",
           acp: { agent: "claude", backend: "acpx", mode: "persistent" },
         },
       },
-    ],
+    },
   },
   bindings: [
     {
@@ -550,10 +549,10 @@ Two ways to start an ACP session:
   session as system events. OpenClaw records the full relay history in the
   child agent's SQLite state and removes it with the child session. Parent
   progress streams show assistant commentary and ACP status progress by default unless
-  `streaming.progress.commentary=false`. Discord also defaults parent
-  previews to progress mode when no stream mode is configured. Status
-  progress still honors `acp.stream.tagVisibility`, so tags such as `plan`
-  remain hidden unless explicitly enabled.
+  `streaming.progress.commentary=false`. Discord parent progress requires an
+  explicit `streaming.mode: "progress"`; unset Discord streaming stays quiet.
+  Status progress still honors `acp.stream.tagVisibility`, so tags such as
+  `plan` remain hidden unless explicitly enabled.
 </ParamField>
 
 ACP `sessions_spawn` runs use `agents.defaults.subagents.runTimeoutSeconds`
@@ -631,6 +630,15 @@ work. The delivery path depends on that shape.
     Follow-up messages in the bound conversation route directly to the ACP
     session, and ACP output is delivered back to that same
     channel/thread/topic.
+
+    When an ACP agent requests structured input during a delivered turn,
+    OpenClaw presents supported form fields as transient Gateway questions in
+    batches of up to three. Single- and multi-select fields support up to four
+    choices. URL requests show the literal HTTP(S) URL with explicit Continue
+    and Decline choices; OpenClaw does not fetch or open it. Explicitly secret
+    fields use a warned, ephemeral text-reply prompt and are never stored in a
+    Gateway question record. Malformed or unsupported requests produce a
+    visible explanation and are declined instead of returning empty answers.
 
     What OpenClaw sends to the harness:
 
@@ -841,6 +849,7 @@ see [ACP agents - setup](/tools/acp-agents-setup).
 | `sessions_spawn sandbox="require" is unsupported for runtime="acp" ...`                   | `sandbox="require"` requested for ACP runtime.                                                                         | Use `runtime="subagent"` for required sandboxing, or use ACP with `sandbox="inherit"` from a non-sandboxed session.                                                      |
 | `Cannot apply --model ... did not advertise model support`                                | The target harness does not expose generic ACP model switching.                                                        | Use a harness that advertises ACP `models`/`session/set_model`, use Codex ACP model refs, or configure the model directly in the harness if it has its own startup flag. |
 | Missing ACP metadata for bound session                                                    | Stale/deleted ACP session metadata.                                                                                    | Recreate with `/acp spawn`, then rebind/focus thread.                                                                                                                    |
+| ACP input request is declined or cancelled                                                | The form/URL is malformed, exceeds field/choice limits, uses unsupported constraints, or the owning turn ended.        | Read the visible decline reason, retry with a standard primitive form or valid HTTP(S) URL, and keep the originating turn active while answering.                        |
 | `PermissionPromptUnavailableError: Permission prompt unavailable in non-interactive mode` | `permissionMode` blocks writes/exec in non-interactive ACP session.                                                    | Set `plugins.entries.acpx.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](/tools/acp-agents-setup#permission-configuration). |
 | ACP session fails early with little output                                                | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`.                                        | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`.        |
 | ACP session stalls indefinitely after completing work                                     | Harness process finished but ACP session did not report completion.                                                    | Update OpenClaw; current acpx cleanup reaps OpenClaw-owned stale wrapper and adapter processes on close and Gateway startup.                                             |

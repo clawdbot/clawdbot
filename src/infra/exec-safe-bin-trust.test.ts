@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   getTrustedSafeBinDirs,
@@ -73,7 +73,7 @@ describe("exec safe bin trust", () => {
   });
 
   it("matches trusted dirs through path-local case folding on case-insensitive filesystems", async () => {
-    await withTempDir({ prefix: "OpenClaw-Safe-Bin-" }, async (dir) => {
+    await withTestDir({ prefix: "OpenClaw-Safe-Bin-" }, async (dir) => {
       const swapped = swapAsciiCase(dir);
       if (swapped === dir) {
         return;
@@ -105,7 +105,7 @@ describe("exec safe bin trust", () => {
   });
 
   it("keeps case-distinct trusted dirs separate on case-sensitive filesystems", async () => {
-    await withTempDir({ prefix: "openclaw-safe-bin-case-" }, async (parent) => {
+    await withTestDir({ prefix: "openclaw-safe-bin-case-" }, async (parent) => {
       const trustedDir = path.join(parent, "ToolBin");
       const untrustedDir = path.join(parent, "toolbin");
       await fs.mkdir(trustedDir);
@@ -143,7 +143,7 @@ describe("exec safe bin trust", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withTempDir({ prefix: "openclaw-safe-bin-trust-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-safe-bin-trust-" }, async (dir) => {
       try {
         await fs.chmod(dir, 0o777);
         const hits = listWritableExplicitTrustedSafeBinDirs([dir]);

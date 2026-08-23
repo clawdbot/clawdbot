@@ -194,11 +194,10 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
     });
 
     expect(snapshot.hideThinkingBlock).toBe(true);
-    expect(pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible).toHaveBeenCalledOnce();
     expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it("falls back to a fresh plugin metadata load for an incompatible snapshot", async () => {
+  it("treats a supplied lifecycle snapshot as authoritative across workspaces", async () => {
     const workspaceDir = await tempDirs.make("openclaw-workspace-");
     const pluginRoot = await createWorkspaceBundle({ workspaceDir });
     await fs.writeFile(
@@ -207,7 +206,7 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
       "utf-8",
     );
 
-    pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible.mockReturnValueOnce(false);
+    pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockClear();
     pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
 
     const snapshot = loadEnabledBundleAgentSettingsSnapshot({
@@ -220,7 +219,20 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
         },
       },
       pluginMetadataSnapshot: {
-        manifestRegistry: { diagnostics: [], plugins: [] },
+        workspaceDir: "/tmp/gateway-plugin-workspace",
+        manifestRegistry: {
+          diagnostics: [],
+          plugins: [
+            {
+              id: "claude-bundle",
+              format: "bundle",
+              origin: "global",
+              enabledByDefault: true,
+              settingsFiles: ["settings.json"],
+              rootDir: pluginRoot,
+            },
+          ],
+        },
         normalizePluginId: (id: string) => id.trim(),
       } as unknown as Parameters<
         typeof loadEnabledBundleAgentSettingsSnapshot
@@ -228,145 +240,8 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
     });
 
     expect(snapshot.hideThinkingBlock).toBe(true);
-    expect(pluginMetadataSnapshotMocks.isPluginMetadataSnapshotCompatible).toHaveBeenCalledOnce();
-    expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
-  });
-
-  it("reuses the current plugin metadata snapshot for bundle settings", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await createWorkspaceBundle({ workspaceDir });
-    const resolvedPluginRoot = await fs.realpath(pluginRoot);
-    await fs.writeFile(
-      path.join(pluginRoot, "settings.json"),
-      JSON.stringify({ hideThinkingBlock: true }),
-      "utf-8",
-    );
-
-    pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockReturnValueOnce({
-      manifestRegistry: {
-        diagnostics: [],
-        plugins: [
-          {
-            id: "claude-bundle",
-            origin: "workspace",
-            format: "bundle",
-            bundleFormat: "claude",
-            settingsFiles: ["settings.json"],
-            rootDir: resolvedPluginRoot,
-          },
-        ],
-      },
-      normalizePluginId: (id: string) => id.trim(),
-    });
-    pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
-
-    const snapshot = loadEnabledBundleAgentSettingsSnapshot({
-      cwd: workspaceDir,
-      cfg: {
-        plugins: {
-          entries: {
-            "claude-bundle": { enabled: true },
-          },
-        },
-      },
-    });
-
-    expect(snapshot.hideThinkingBlock).toBe(true);
+    expect(pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
     expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("does not reuse an unscoped current snapshot when plugin load paths change", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await createWorkspaceBundle({ workspaceDir });
-    await fs.writeFile(
-      path.join(pluginRoot, "settings.json"),
-      JSON.stringify({ hideThinkingBlock: true }),
-      "utf-8",
-    );
-
-    pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockReturnValueOnce(undefined);
-    pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
-
-    const snapshot = loadEnabledBundleAgentSettingsSnapshot({
-      cwd: workspaceDir,
-      cfg: {
-        plugins: {
-          load: { paths: ["/tmp/changed-plugin-root"] },
-          entries: {
-            "claude-bundle": { enabled: true },
-          },
-        },
-      },
-    });
-
-    expect(snapshot.hideThinkingBlock).toBe(true);
-    expect(pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledOnce();
-    const [snapshotLookup] =
-      pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mock.calls[0] ?? [];
-    expect(snapshotLookup?.config?.plugins?.load).toEqual({
-      paths: ["/tmp/changed-plugin-root"],
-    });
-    expect(snapshotLookup?.env).toBe(process.env);
-    expect(snapshotLookup?.workspaceDir).toBe(workspaceDir);
-    expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
-  });
-
-  it("does not reuse a load-path current snapshot for a config with default load paths", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await createWorkspaceBundle({ workspaceDir });
-    const resolvedPluginRoot = await fs.realpath(pluginRoot);
-    await fs.writeFile(
-      path.join(pluginRoot, "settings.json"),
-      JSON.stringify({ hideThinkingBlock: true }),
-      "utf-8",
-    );
-    const staleSnapshot = {
-      policyHash: "policy",
-      manifestRegistry: {
-        diagnostics: [],
-        plugins: [
-          {
-            id: "claude-bundle",
-            origin: "workspace",
-            format: "bundle",
-            bundleFormat: "claude",
-            settingsFiles: ["settings.json"],
-            rootDir: resolvedPluginRoot,
-          },
-        ],
-      },
-      normalizePluginId: (id: string) => id.trim(),
-    };
-    pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockImplementation(
-      (params: { config?: unknown; requireDefaultDiscoveryContext?: boolean }) => {
-        if (params.config || params.requireDefaultDiscoveryContext) {
-          return undefined;
-        }
-        return staleSnapshot;
-      },
-    );
-    pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
-
-    const snapshot = loadEnabledBundleAgentSettingsSnapshot({
-      cwd: workspaceDir,
-      cfg: {
-        plugins: {
-          entries: {
-            "claude-bundle": { enabled: true },
-          },
-        },
-      },
-    });
-
-    expect(snapshot.hideThinkingBlock).toBe(true);
-    expect(pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
-    expect(pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot).toHaveBeenLastCalledWith({
-      env: process.env,
-      workspaceDir,
-      allowWorkspaceScopedSnapshot: true,
-      requireDefaultDiscoveryContext: true,
-    });
-    expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
   });
 
   it("loads sanitized settings and MCP defaults from enabled bundle plugins", async () => {

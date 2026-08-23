@@ -18,10 +18,10 @@ vi.mock("../commands/agent.js", () => ({
 const { runBootOnce } = await import("./boot.js");
 const { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey, resolveMainSessionKey } =
   await import("../config/sessions/main-session.js");
-const { resolveStorePath } = await import("../config/sessions/paths.js");
+const { resolveSessionStorePathCore } = await import("../config/sessions/paths.js");
 const {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntry,
 } = await import("../config/sessions/session-accessor.js");
@@ -46,7 +46,7 @@ describe("runBootOnce", () => {
   const resolveMainStore = (cfg: OpenClawConfig = testConfig()) => {
     const sessionKey = resolveMainSessionKey(cfg);
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const bootSessionKey = `agent:${agentId}:boot`;
     return { sessionKey, bootSessionKey, storePath };
   };
@@ -55,7 +55,9 @@ describe("runBootOnce", () => {
     vi.clearAllMocks();
     const { storePath } = resolveMainStore();
     await fs.rm(storePath, { force: true });
-    const removals = listSessionEntries({ storePath }).map(({ sessionKey }) => ({ sessionKey }));
+    const removals = listSessionEntriesCore({ storePath }).map(({ sessionKey }) => ({
+      sessionKey,
+    }));
     await applySessionEntryLifecycleMutation({ storePath, removals, skipMaintenance: true });
   });
 

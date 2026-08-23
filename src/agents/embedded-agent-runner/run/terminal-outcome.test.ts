@@ -1,6 +1,9 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { createAgentRunRestartAbortError } from "../../run-termination.js";
+import {
+  createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError,
+} from "../../run-termination.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -110,6 +113,31 @@ describe("embedded run attempt terminal outcome", () => {
     expect(isEmbeddedRunTerminalAbort(outcome)).toBe(true);
     expect(isEmbeddedRunTerminalTimeout(outcome)).toBe(false);
     expect(isEmbeddedRunTerminalInterrupted(outcome)).toBe(true);
+  });
+
+  it("projects the typed writer takeover abort as superseded", () => {
+    const error = createAgentRunSupersededAbortError();
+    const controller = new AbortController();
+    controller.abort(error);
+
+    const outcome = resolveEmbeddedRunAttemptTerminalOutcome({
+      attempt: makeAttempt({
+        terminal: {
+          kind: "aborted",
+          source: "external",
+          failure: { source: "prompt", error },
+        },
+      }),
+      assistant: undefined,
+      abortSignal: controller.signal,
+    });
+
+    expect(outcome).toMatchObject({
+      reason: "superseded",
+      status: "error",
+      stopReason: "superseded",
+    });
+    expect(isEmbeddedRunTerminalAbort(outcome)).toBe(true);
   });
 
   it("captures signal ownership before a later cancellation can reclassify completion", () => {

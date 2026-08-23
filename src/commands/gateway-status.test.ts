@@ -257,6 +257,8 @@ type ProbeGatewayCall = {
     token?: string;
   };
   preauthHandshakeTimeoutMs?: number;
+  originScopedDeviceAuth?: boolean;
+  suppressStoredDeviceAuth?: boolean;
   timeoutMs?: number;
   tlsFingerprint?: string;
   url?: string;
@@ -786,8 +788,8 @@ describe("gateway-status command", () => {
     expect(unresolvedWarning.message).not.toContain("missing or empty");
   });
 
-  it("does not resolve local token SecretRef when OPENCLAW_GATEWAY_TOKEN is set", async () => {
-    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+  it("does not replace an unresolved local token SecretRef with OPENCLAW_GATEWAY_TOKEN", async () => {
+    const { runtime, runtimeErrors } = createRuntimeCapture();
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_TOKEN: "env-token",
@@ -802,16 +804,7 @@ describe("gateway-status command", () => {
 
     expect(runtimeErrors).toHaveLength(0);
     const localProbeCall = requireProbeCall("ws://127.0.0.1:18789");
-    expect(localProbeCall.auth?.token).toBe("env-token");
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings?: Array<{ code?: string; message?: string }>;
-    };
-    const unresolvedWarning = parsed.warnings?.find(
-      (warning) =>
-        warning.code === "auth_secretref_unresolved" &&
-        warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
-    );
-    expect(unresolvedWarning).toBeUndefined();
+    expect(localProbeCall.auth?.token).toBeUndefined();
   });
 
   it("does not resolve local password SecretRef in token mode", async () => {
@@ -934,7 +927,7 @@ describe("gateway-status command", () => {
         config: {
           ...createSecretRefGatewayConfig({ gatewayMode: "remote" }),
           discovery: {
-            wideArea: { enabled: true },
+            wideArea: { domain: "openclaw.internal" },
           },
         },
         issues: [],
@@ -998,8 +991,16 @@ describe("gateway-status command", () => {
     expect(probeGateway).toHaveBeenCalled();
     const tunnelCall = probeGateway.mock.calls.find(
       (call) => typeof call?.[0]?.url === "string" && call[0].url.startsWith("ws://127.0.0.1:"),
-    )?.[0] as { auth?: { token?: string } } | undefined;
+    )?.[0] as
+      | {
+          auth?: { token?: string };
+          originScopedDeviceAuth?: boolean;
+          suppressStoredDeviceAuth?: boolean;
+        }
+      | undefined;
     expect(tunnelCall?.auth?.token).toBe("rtok");
+    expect(tunnelCall?.originScopedDeviceAuth).toBeUndefined();
+    expect(tunnelCall?.suppressStoredDeviceAuth).toBe(true);
     expect(sshStop).toHaveBeenCalledTimes(1);
 
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
@@ -1024,6 +1025,7 @@ describe("gateway-status command", () => {
 
     expect(loadGatewayTlsRuntime).toHaveBeenCalledTimes(1);
     const localProbeCall = requireProbeCall("wss://127.0.0.1:18789");
+    expect(localProbeCall.originScopedDeviceAuth).toBeUndefined();
     expect(localProbeCall.tlsFingerprint).toBe("sha256:local-fingerprint");
     expect(localProbeCall.timeoutMs).toBe(15_000);
   });
@@ -1142,7 +1144,9 @@ describe("gateway-status command", () => {
 
     await runGatewayStatus(runtime, { timeout: "15000", json: true });
 
-    expect(requireProbeCall("wss://remote.example:18789").timeoutMs).toBe(15_000);
+    const remoteProbeCall = requireProbeCall("wss://remote.example:18789");
+    expect(remoteProbeCall.timeoutMs).toBe(15_000);
+    expect(remoteProbeCall.originScopedDeviceAuth).toBe(true);
   });
 
   it("keeps inactive local loopback probes on the short timeout in remote mode", async () => {

@@ -4,13 +4,13 @@ import {
   type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
 import { parseGeminiAuth } from "./gemini-auth.js";
-export { parseGeminiAuth };
-export { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./onboard.js";
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
   normalizeGoogleGenerativeAiBaseUrl,
 } from "./provider-policy.js";
+export { parseGeminiAuth };
+export { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./onboard.js";
 export { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
 export {
   createGoogleThinkingPayloadWrapper,

@@ -3,6 +3,7 @@ import {
   collectErrorGraphCandidates,
   extractErrorCode,
   formatErrorMessage,
+  PlatformMessageNotDispatchedError,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -10,6 +11,27 @@ import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-run
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
+
+export class TelegramRequestNotStartedError extends Error {
+  constructor(message = "Telegram request did not start") {
+    super(message);
+    this.name = "TelegramRequestNotStartedError";
+  }
+}
+
+function isTelegramRequestNotStartedError(err: unknown): boolean {
+  return (
+    err instanceof TelegramRequestNotStartedError ||
+    (readErrorName(err) === "HttpError" &&
+      (err as { error?: unknown }).error instanceof TelegramRequestNotStartedError)
+  );
+}
+
+export function rethrowTelegramSendError(err: unknown): never {
+  throw isTelegramRequestNotStartedError(err)
+    ? new PlatformMessageNotDispatchedError("Telegram request not started", { cause: err })
+    : err;
+}
 
 const TELEGRAM_ADDITIONAL_TRANSIENT_ERROR_CODES = new Set([
   "ENETDOWN",
@@ -20,16 +42,9 @@ const TELEGRAM_ADDITIONAL_TRANSIENT_ERROR_CODES = new Set([
   "ERR_NETWORK",
 ]);
 
-/**
- * Error codes that are safe to retry for non-idempotent send operations (e.g. sendMessage).
- *
- * These represent failures that occur *before* the request reaches Telegram's servers,
- * meaning the message was definitely not delivered and it is safe to retry.
- *
- * Contrast with the full transient set, which includes codes like ECONNRESET and ETIMEDOUT
- * that can fire *after* Telegram has already received and delivered a message — retrying
- * those would cause duplicate messages.
- */
+// These exact local codes fail before request publication and are safe for
+// non-idempotent sends. Resets and timeouts can occur after delivery, so
+// retrying them could duplicate a visible message.
 const TELEGRAM_ADDITIONAL_PRE_CONNECT_ERROR_CODES = new Set([
   "ENETDOWN", // Local network interface is down before connect completes (never sent)
   "EHOSTUNREACH", // Host unreachable (never sent)
@@ -194,19 +209,15 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
   return getTelegramNetworkErrorOrigin(err)?.method === "getupdates";
 }
 
-/**
- * Returns true if the error is safe to retry for a non-idempotent Telegram send operation
- * (e.g. sendMessage). Only matches errors that are guaranteed to have occurred *before*
- * the request reached Telegram's servers, preventing duplicate message delivery.
- *
- * Use this instead of isRecoverableTelegramNetworkError for sendMessage/sendPhoto/etc.
- * calls where a retry would create a duplicate visible message.
- */
+/** True only for channel-owned no-send proof or proven pre-connect failures. */
 export function isSafeToRetrySendError(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  if (isTelegramMisdirectedRequestError(err)) {
+  if (err instanceof PlatformMessageNotDispatchedError) {
+    return err.retryable;
+  }
+  if (isTelegramRequestNotStartedError(err)) {
     return true;
   }
   for (const candidate of collectTelegramErrorCandidates(err)) {
@@ -215,6 +226,10 @@ export function isSafeToRetrySendError(err: unknown): boolean {
     }
   }
   return false;
+}
+
+export function shouldRetryTelegramSendError(err: unknown): boolean {
+  return isSafeToRetrySendError(err) || isTelegramRateLimitError(err);
 }
 
 function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {
@@ -315,6 +330,9 @@ export function isRecoverableTelegramNetworkError(
 ): boolean {
   if (!err) {
     return false;
+  }
+  if (isTelegramRequestNotStartedError(err)) {
+    return true;
   }
   const allowMessageMatch =
     typeof options.allowMessageMatch === "boolean"

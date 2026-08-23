@@ -1,3 +1,4 @@
+import type { ReactiveControllerHost } from "lit";
 import type {
   SessionCatalog,
   SessionsCatalogListResult,
@@ -326,4 +327,3 @@ function isCurrentSessionCatalogRequest(
     client === owner.sessionCatalogGatewayClient()
   );
 }
-import type { ReactiveControllerHost } from "lit";

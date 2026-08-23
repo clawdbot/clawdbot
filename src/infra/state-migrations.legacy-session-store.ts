@@ -8,7 +8,10 @@ import {
   hydrateSessionStoreSkillPromptRefs,
   projectSessionStoreForPersistence,
 } from "../config/sessions/skill-prompt-blobs.js";
-import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
+import {
+  normalizePersistedSessionEntryShape,
+  stripRuntimeOnlySessionSkillsFields,
+} from "../config/sessions/store-entry-shape.js";
 import {
   applyFileBackedSessionStoreMaintenance,
   type SessionMaintenanceApplyReport,
@@ -16,6 +19,7 @@ import {
 import { collectSessionMaintenancePreserveKeysForStore } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import {
+  archiveStaleDashboardEntries,
   capEntryCount,
   pruneStaleEntries,
   pruneStaleModelRunEntries,
@@ -57,7 +61,7 @@ import {
 import { writeTextAtomic } from "./json-files.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 
-export type LegacySessionStoreLoadOptions = {
+type LegacySessionStoreLoadOptions = {
   skipCache?: boolean;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   runMaintenance?: boolean;
@@ -67,7 +71,6 @@ export type LegacySessionStoreLoadOptions = {
 
 export type LegacySessionStoreSaveOptions = {
   skipMaintenance?: boolean;
-  skipSerializeForUnchangedStore?: boolean;
   takeCacheOwnership?: boolean;
   activeSessionKey?: string;
   onWarn?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
@@ -216,15 +219,6 @@ function normalizePluginExtensionSlotKeys(entry: SessionEntry): SessionEntry {
   });
 }
 
-function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
-  const snapshot = entry.skillsSnapshot;
-  if (!snapshot || snapshot.resolvedSkills === undefined) {
-    return entry;
-  }
-  const { resolvedSkills: _drop, ...rest } = snapshot;
-  return { ...entry, skillsSnapshot: rest };
-}
-
 function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void {
   applySessionStoreMigrations(store);
   for (const [key, entry] of Object.entries(store)) {
@@ -241,7 +235,7 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
     if (modelSelectionLocked && runtimeFields !== shaped) {
       throw new Error(`Invalid model-selection-locked session entry: ${key}`);
     }
-    store[key] = stripPersistedSkillsCache(
+    store[key] = stripRuntimeOnlySessionSkillsFields(
       normalizePluginExtensionSlotKeys(
         normalizePluginExtensions(
           normalizeRestartRecoveryFields(
@@ -275,16 +269,22 @@ export function loadLegacySessionStore(
         storePath,
         store: sessionStore,
       });
+      archiveStaleDashboardEntries(sessionStore, maintenance.archiveDashboardAfterMs, {
+        log: false,
+        preserveKeys: preserveSessionKeys,
+      });
       if (shouldRunModelRunPrune({ maintenance, entryCount: beforeCount })) {
         pruneStaleModelRunEntries(sessionStore, maintenance.modelRunPruneAfterMs, {
           log: false,
           preserveKeys: preserveSessionKeys,
+          preserveRecentMs: maintenance.preserveRecentMs,
         });
       }
       if (Object.keys(sessionStore).length > maintenance.maxEntries) {
         pruneStaleEntries(sessionStore, maintenance.pruneAfterMs, {
           log: false,
           preserveKeys: preserveSessionKeys,
+          preserveRecentMs: maintenance.preserveRecentMs,
         });
         if (
           shouldRunSessionEntryMaintenance({
@@ -295,6 +295,7 @@ export function loadLegacySessionStore(
           capEntryCount(sessionStore, maintenance.maxEntries, {
             log: false,
             preserveKeys: preserveSessionKeys,
+            preserveRecentMs: maintenance.preserveRecentMs,
           });
         }
       }
@@ -332,17 +333,6 @@ function assertLegacySessionStoreWriteIsValid(params: {
   }
 }
 
-function stripRuntimeOnlySkillState(
-  store: Record<string, SessionEntry>,
-): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    Object.entries(store).map(([sessionKey, entry]) => [
-      sessionKey,
-      stripPersistedSkillsCache(entry),
-    ]),
-  );
-}
-
 async function archiveRemovedSessionTranscripts(params: {
   removedSessionFiles: Iterable<[string, string | undefined]>;
   referencedSessionIds: ReadonlySet<string>;
@@ -376,7 +366,7 @@ async function persistLegacySessionStore(
 ): Promise<void> {
   const persisted = projectSessionStoreForPersistence({
     storePath,
-    store: stripRuntimeOnlySkillState(store),
+    store,
   });
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   await writeTextAtomic(storePath, JSON.stringify(persisted.store, null, 2), {

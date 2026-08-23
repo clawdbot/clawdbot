@@ -8,7 +8,7 @@ import {
   resolveArchiveSourcePath,
   resolveNpmPackArchiveMetadata,
   resolveNpmSpecMetadata,
-  withTempDir,
+  withInstallWorkspace,
 } from "./install-source-utils.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
@@ -132,12 +132,12 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-describe("withTempDir", () => {
+describe("withInstallWorkspace", () => {
   it("creates a temp dir and always removes it after callback", async () => {
     let observedDir = "";
     const markerFile = "marker.txt";
 
-    const value = await withTempDir("openclaw-install-source-utils-", async (tmpDir) => {
+    const value = await withInstallWorkspace("openclaw-install-source-utils-", async (tmpDir) => {
       observedDir = tmpDir;
       await fs.writeFile(path.join(tmpDir, markerFile), "ok", "utf-8");
       await expect(fs.readFile(path.join(tmpDir, markerFile), "utf8")).resolves.toBe("ok");
@@ -378,7 +378,13 @@ describe("packNpmSpecToArchive", () => {
       ]),
     });
 
-    const result = await runPack("openclaw-plugin@1.2.3", cwd);
+    const signal = new AbortController().signal;
+    const result = await packNpmSpecToArchive({
+      spec: "openclaw-plugin@1.2.3",
+      timeoutMs: 1000,
+      cwd,
+      signal,
+    });
 
     expect(result).toEqual({
       ok: true,
@@ -396,6 +402,8 @@ describe("packNpmSpecToArchive", () => {
       {
         cwd,
         timeoutMs: 300_000,
+        signal,
+        killProcessTree: true,
         env: {
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
           NPM_CONFIG_IGNORE_SCRIPTS: "true",

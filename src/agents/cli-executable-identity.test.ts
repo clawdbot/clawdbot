@@ -60,6 +60,40 @@ describe("CLI executable implementation identity", () => {
     );
   });
 
+  it.runIf(process.platform === "win32")(
+    "rejects mixed-case relative PATH entries and accepts mixed-case absolute entries",
+    async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-path-case-"));
+      tempDirs.push(root);
+      const binDir = path.join(root, "bin");
+      const executable = path.join(binDir, "mixed-identity.exe");
+      fs.mkdirSync(binDir);
+      fs.linkSync(process.execPath, executable);
+      const relativeBinDir = path.relative(process.cwd(), binDir);
+      const runtimeArtifact: CliBackendRuntimeArtifactPolicy = {
+        ...commandPackagePolicy,
+        nativeExecutableNames: ["mixed-identity.exe"],
+      };
+
+      expect(path.isAbsolute(relativeBinDir)).toBe(false);
+      await expect(
+        resolveCliExecutableIdentity({
+          command: "mixed-identity",
+          env: { pAtH: relativeBinDir, pAtHeXt: ".EXE" },
+          runtimeArtifact,
+        }),
+      ).resolves.toBeUndefined();
+
+      const identity = await resolveCliExecutableIdentity({
+        command: "mixed-identity",
+        env: { pAtH: binDir, pAtHeXt: ".EXE" },
+        runtimeArtifact,
+      });
+      expect(identity?.resolvedPath).toBe(fs.realpathSync(executable));
+      expect(identity?.runtimeArtifact).toEqual({ kind: "self-contained-executable" });
+    },
+  );
+
   it("does not depend on host locale collation when ordering package files", async () => {
     const fixture = makePackage();
     fs.writeFileSync(path.join(fixture.root, "dist", "z.js"), "z\n");

@@ -92,6 +92,28 @@ export function buildPersistedMediaImageLayout(params: {
   };
 }
 
+/**
+ * Marks prompt-media facts whose original ctx positions are unresolved so every
+ * downstream runner skips them instead of attempting (and failing) hydration.
+ * Uses position identity, not path/URL, so distinct facts sharing the same path
+ * are not conflated.
+ */
+export function suppressUnresolvedPromptMedia(params: {
+  promptMedia: readonly MediaFact[];
+  inboundMediaIndexes: readonly number[];
+  unresolvedSourceIndexes: ReadonlySet<number>;
+}): MediaFact[] {
+  if (params.unresolvedSourceIndexes.size === 0) {
+    return [...params.promptMedia];
+  }
+  return params.promptMedia.map((fact, promptIndex) =>
+    params.inboundMediaIndexes[promptIndex] !== undefined &&
+    params.unresolvedSourceIndexes.has(params.inboundMediaIndexes[promptIndex])
+      ? { ...fact, hydrationSuppressed: true }
+      : fact,
+  );
+}
+
 export function routeThreadIdsMatch(
   activeThreadId: string | number | undefined,
   currentThreadId: string | number | undefined,
@@ -273,6 +295,14 @@ const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-ru
 const sessionUpdatesRuntimeLoader = createLazyImportLoader(
   () => import("./session-updates.runtime.js"),
 );
+
+export async function prewarmReplyRunRuntimes(): Promise<void> {
+  await Promise.all([
+    sessionUpdatesRuntimeLoader.load(),
+    embeddedAgentRuntimeLoader.load(),
+    agentRunnerRuntimeLoader.load(),
+  ]);
+}
 
 export function loadEmbeddedAgentRuntime() {
   return embeddedAgentRuntimeLoader.load();

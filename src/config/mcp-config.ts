@@ -1,6 +1,5 @@
-import { expectDefined } from "@openclaw/normalization-core";
 // Normalizes MCP server config for runtime launch and validation.
-import { stableStringify } from "@openclaw/normalization-core";
+import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
@@ -11,7 +10,8 @@ import {
 import { replaceConfigFile } from "./mutate.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "./redact-snapshot.js";
-import { buildConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore } from "./schema.js";
+import type { McpServerToolFilterConfig } from "./types.mcp.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -33,12 +33,12 @@ type ConfigMcpWriteResult =
   | ConfigMcpFailure;
 
 type LoadedConfigMcpServers = Extract<ConfigMcpReadResult, { ok: true }>;
-
-/** Include/exclude tool selection stored for a configured MCP server. */
-type McpServerToolSelection = {
-  include?: string[];
-  exclude?: string[];
+type McpConfigMutation = {
+  name: string;
+  previous?: Record<string, unknown>;
+  next?: Record<string, unknown>;
 };
+type McpConfigMutationHook = (mutation: McpConfigMutation) => Promise<void>;
 
 function normalizeToolSelectionList(value: readonly string[] | undefined): string[] | undefined {
   if (!value) {
@@ -118,6 +118,7 @@ async function commitConfiguredMcpServers(params: {
   errorLabel: string;
   success?: { removed?: boolean; updated?: boolean };
   independentlyOwnedName?: string;
+  mutation?: { name: string; onCommitted?: McpConfigMutationHook };
 }): Promise<ConfigMcpWriteResult> {
   const next = structuredClone(params.loaded.config);
   if (Object.keys(params.servers).length > 0) {
@@ -142,6 +143,15 @@ async function commitConfiguredMcpServers(params: {
     nextConfig: validated.config,
     baseHash: params.loaded.baseHash,
   });
+  if (params.mutation?.onCommitted) {
+    const previous = params.loaded.mcpServers[params.mutation.name];
+    const nextServer = params.servers[params.mutation.name];
+    await params.mutation.onCommitted({
+      name: params.mutation.name,
+      ...(previous ? { previous } : {}),
+      ...(nextServer ? { next: nextServer } : {}),
+    });
+  }
   if (params.independentlyOwnedName) {
     markClawMcpServerIndependentlyOwned(params.independentlyOwnedName);
   }
@@ -159,6 +169,7 @@ async function updateConfiguredMcpServerConfig(params: {
   update: (server: Record<string, unknown>) => Record<string, unknown>;
   errorLabel: string;
   recordIndependentOwner?: boolean;
+  onCommitted?: McpConfigMutationHook;
 }): Promise<ConfigMcpWriteResult> {
   const name = params.name.trim();
   if (!name) {
@@ -182,18 +193,23 @@ async function updateConfiguredMcpServerConfig(params: {
     errorLabel: params.errorLabel,
     success: { updated: true },
     independentlyOwnedName: params.recordIndependentOwner === false ? undefined : name,
+    mutation: { name, onCommitted: params.onCommitted },
   });
 }
 
-export async function updateConfiguredMcpServerTools(params: {
-  name: string;
-  tools: McpServerToolSelection | null;
-  recordIndependentOwner?: boolean;
-}): Promise<ConfigMcpWriteResult> {
+async function updateConfiguredMcpServerTools(
+  params: {
+    name: string;
+    tools: McpServerToolFilterConfig | null;
+    recordIndependentOwner?: boolean;
+  },
+  onCommitted?: McpConfigMutationHook,
+): Promise<ConfigMcpWriteResult> {
   return updateConfiguredMcpServerConfig({
     name: params.name,
     recordIndependentOwner: params.recordIndependentOwner,
     errorLabel: "tool selection update",
+    onCommitted,
     update: (server) => {
       if (params.tools === null) {
         delete server.toolFilter;
@@ -214,26 +230,33 @@ export async function updateConfiguredMcpServerTools(params: {
   });
 }
 
-export async function updateConfiguredMcpServer(params: {
-  name: string;
-  update: (server: Record<string, unknown>) => Record<string, unknown>;
-  recordIndependentOwner?: boolean;
-}): Promise<ConfigMcpWriteResult> {
+async function updateConfiguredMcpServer(
+  params: {
+    name: string;
+    update: (server: Record<string, unknown>) => Record<string, unknown>;
+    recordIndependentOwner?: boolean;
+  },
+  onCommitted?: McpConfigMutationHook,
+): Promise<ConfigMcpWriteResult> {
   return updateConfiguredMcpServerConfig({
     name: params.name,
     recordIndependentOwner: params.recordIndependentOwner,
     errorLabel: "configure",
+    onCommitted,
     update: (server) => canonicalizeConfiguredMcpServer(params.update(server)),
   });
 }
 
-export async function setConfiguredMcpServer(params: {
-  name: string;
-  server: unknown;
-  createOnly?: boolean;
-  recordIndependentOwner?: boolean;
-  expectedServer?: Record<string, unknown>;
-}): Promise<ConfigMcpWriteResult> {
+async function setConfiguredMcpServer(
+  params: {
+    name: string;
+    server: unknown;
+    createOnly?: boolean;
+    recordIndependentOwner?: boolean;
+    expectedServer?: Record<string, unknown>;
+  },
+  onCommitted?: McpConfigMutationHook,
+): Promise<ConfigMcpWriteResult> {
   const name = params.name.trim();
   if (!name) {
     return { ok: false, path: "", error: "MCP server name is required." };
@@ -285,7 +308,7 @@ export async function setConfiguredMcpServer(params: {
   const restored = restoreRedactedValues(
     { mcp: { servers: { [name]: argvRestored.server } } },
     { mcp: { servers: loaded.mcpServers } },
-    buildConfigSchema().uiHints,
+    buildConfigSchemaCore().uiHints,
   );
   if (!restored.ok) {
     return {
@@ -309,13 +332,17 @@ export async function setConfiguredMcpServer(params: {
     servers,
     errorLabel: "set",
     independentlyOwnedName: params.recordIndependentOwner === false ? undefined : name,
+    mutation: { name, onCommitted },
   });
 }
 
-export async function unsetConfiguredMcpServer(params: {
-  name: string;
-  expectedServer?: Record<string, unknown>;
-}): Promise<ConfigMcpWriteResult> {
+async function unsetConfiguredMcpServer(
+  params: {
+    name: string;
+    expectedServer?: Record<string, unknown>;
+  },
+  onCommitted?: McpConfigMutationHook,
+): Promise<ConfigMcpWriteResult> {
   const name = params.name.trim();
   if (!name) {
     return { ok: false, path: "", error: "MCP server name is required." };
@@ -350,5 +377,14 @@ export async function unsetConfiguredMcpServer(params: {
     servers,
     errorLabel: "unset",
     success: { removed: true },
+    mutation: { name, onCommitted },
   });
 }
+
+/** Low-level config writers; production mutations must use the agents-owned lifecycle facade. */
+export const mcpConfigInternal = {
+  set: setConfiguredMcpServer,
+  unset: unsetConfiguredMcpServer,
+  update: updateConfiguredMcpServer,
+  updateTools: updateConfiguredMcpServerTools,
+};

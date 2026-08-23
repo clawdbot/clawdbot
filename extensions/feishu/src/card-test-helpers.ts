@@ -1,3 +1,4 @@
+import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Feishu helper module supports card test helpers behavior.
 import { expect } from "vitest";
 
@@ -5,12 +6,12 @@ type MockCalls = {
   mock: { calls: unknown[][] };
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+function readFeishuObjectRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" ? asRecord(value) : undefined;
 }
 
 export function expectFirstSentCardUsesFillWidthOnly(sendCardMock: {
@@ -36,17 +37,17 @@ export function expectFirstSentCardUsesFillWidthOnly(sendCardMock: {
 
 export function expectSentCardHasP2pAction(sendCardMock: MockCalls) {
   const hasP2pAction = sendCardMock.mock.calls.some(([arg]) => {
-    const card = asRecord(asRecord(arg)?.card);
-    const body = asRecord(card?.body);
+    const card = readFeishuObjectRecord(readFeishuObjectRecord(arg)?.card);
+    const body = readFeishuObjectRecord(card?.body);
     return asArray(body?.elements).some((element) => {
-      const elementRecord = asRecord(element);
+      const elementRecord = readFeishuObjectRecord(element);
       if (elementRecord?.tag !== "action") {
         return false;
       }
       return asArray(elementRecord.actions).some((action) => {
-        const actionRecord = asRecord(action);
-        const value = asRecord(actionRecord?.value);
-        const command = asRecord(value?.c);
+        const actionRecord = readFeishuObjectRecord(action);
+        const value = readFeishuObjectRecord(actionRecord?.value);
+        const command = readFeishuObjectRecord(value?.c);
         return command?.t === "p2p";
       });
     });

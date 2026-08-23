@@ -78,7 +78,7 @@ export const handleNameCommand: CommandHandler = defineAuthorizedTextCommand(
     const result = await applySessionPatchProjection<{ ok: false; error: string }>({
       storePath,
       resolveTarget: () => ({ primaryKey: sessionKey, candidateKeys: [sessionKey] }),
-      project: ({ entries, existingEntry }) => {
+      project: ({ existingEntry, isLabelInUse }) => {
         // Native slash may invoke `/name` before the fast path persists the entry.
         // Seed a copy under the canonical key without mutating params on failed writes.
         const entry =
@@ -90,10 +90,8 @@ export const handleNameCommand: CommandHandler = defineAuthorizedTextCommand(
         if (!validated.ok) {
           return { ok: false, error: validated.error };
         }
-        for (const other of entries) {
-          if (other.sessionKey !== sessionKey && other.entry.label === validated.label) {
-            return { ok: false, error: `label already in use: ${validated.label}` };
-          }
+        if (isLabelInUse(validated.label)) {
+          return { ok: false, error: `label already in use: ${validated.label}` };
         }
         entry.label = validated.label;
         entry.updatedAt = Math.max(entry.updatedAt ?? 0, Date.now());

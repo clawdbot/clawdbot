@@ -511,108 +511,92 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(onRoomMessage).toHaveBeenCalledWith("!room:example.org", event);
   });
 
-  it("blocks verification request notices when dmPolicy pairing would block the sender", async () => {
-    const { onRoomMessage, sendMessage, roomMessageListener, logVerboseMessage, flushTasks } =
-      createHarness({
-        dmPolicy: "pairing",
+  it.each<{
+    name: string;
+    eventId: string;
+    options: NonNullable<Parameters<typeof createHarness>[0]>;
+    accepted: boolean;
+    storeConsulted?: boolean;
+    blockedLog?: string;
+    expectNoRoomDispatch?: boolean;
+  }>([
+    {
+      name: "blocks verification request notices when dmPolicy pairing would block the sender",
+      eventId: "$req-pairing-blocked",
+      options: { dmPolicy: "pairing" },
+      accepted: false,
+      blockedLog: "matrix: blocked verification sender @alice:example.org (dmPolicy=pairing)",
+      expectNoRoomDispatch: true,
+    },
+    {
+      name: "allows verification notices for pairing-authorized DM senders from the allow store",
+      eventId: "$req-pairing-allowed",
+      options: { dmPolicy: "pairing", storeAllowFrom: ["@alice:example.org"] },
+      accepted: true,
+      storeConsulted: true,
+    },
+    {
+      name: "does not consult the allow store when dmPolicy is open",
+      eventId: "$req-open-policy",
+      options: { dmPolicy: "open" },
+      accepted: true,
+      storeConsulted: false,
+    },
+    {
+      name: "blocks verification notices when Matrix DMs are disabled",
+      eventId: "$req-dm-disabled",
+      options: { dmEnabled: false },
+      accepted: false,
+      blockedLog:
+        "matrix: blocked verification sender @alice:example.org (dmPolicy=open, dmEnabled=false)",
+    },
+  ])(
+    "$name",
+    async ({ eventId, options, accepted, storeConsulted, blockedLog, expectNoRoomDispatch }) => {
+      const {
+        onRoomMessage,
+        sendMessage,
+        roomMessageListener,
+        logVerboseMessage,
+        readStoreAllowFrom,
+        flushTasks,
+      } = createHarness(options);
+      if (!roomMessageListener) {
+        throw new Error("room.message listener was not registered");
+      }
+
+      roomMessageListener("!room:example.org", {
+        event_id: eventId,
+        sender: "@alice:example.org",
+        type: EventType.RoomMessage,
+        origin_server_ts: Date.now(),
+        content: {
+          msgtype: "m.key.verification.request",
+          body: "verification request",
+        },
       });
-    if (!roomMessageListener) {
-      throw new Error("room.message listener was not registered");
-    }
 
-    roomMessageListener("!room:example.org", {
-      event_id: "$req-pairing-blocked",
-      sender: "@alice:example.org",
-      type: EventType.RoomMessage,
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.key.verification.request",
-        body: "verification request",
-      },
-    });
-
-    await flushTasks();
-    expect(logVerboseMessage).toHaveBeenCalledWith(
-      "matrix: blocked verification sender @alice:example.org (dmPolicy=pairing)",
-    );
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(onRoomMessage).not.toHaveBeenCalled();
-  });
-
-  it("allows verification notices for pairing-authorized DM senders from the allow store", async () => {
-    const { sendMessage, roomMessageListener, readStoreAllowFrom, flushTasks } = createHarness({
-      dmPolicy: "pairing",
-      storeAllowFrom: ["@alice:example.org"],
-    });
-    if (!roomMessageListener) {
-      throw new Error("room.message listener was not registered");
-    }
-
-    roomMessageListener("!room:example.org", {
-      event_id: "$req-pairing-allowed",
-      sender: "@alice:example.org",
-      type: EventType.RoomMessage,
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.key.verification.request",
-        body: "verification request",
-      },
-    });
-
-    await flushTasks();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(readStoreAllowFrom).toHaveBeenCalled();
-  });
-
-  it("does not consult the allow store when dmPolicy is open", async () => {
-    const { sendMessage, roomMessageListener, readStoreAllowFrom, flushTasks } = createHarness({
-      dmPolicy: "open",
-    });
-    if (!roomMessageListener) {
-      throw new Error("room.message listener was not registered");
-    }
-
-    roomMessageListener("!room:example.org", {
-      event_id: "$req-open-policy",
-      sender: "@alice:example.org",
-      type: EventType.RoomMessage,
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.key.verification.request",
-        body: "verification request",
-      },
-    });
-
-    await flushTasks();
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(readStoreAllowFrom).not.toHaveBeenCalled();
-  });
-
-  it("blocks verification notices when Matrix DMs are disabled", async () => {
-    const { sendMessage, roomMessageListener, logVerboseMessage, flushTasks } = createHarness({
-      dmEnabled: false,
-    });
-    if (!roomMessageListener) {
-      throw new Error("room.message listener was not registered");
-    }
-
-    roomMessageListener("!room:example.org", {
-      event_id: "$req-dm-disabled",
-      sender: "@alice:example.org",
-      type: EventType.RoomMessage,
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.key.verification.request",
-        body: "verification request",
-      },
-    });
-
-    await flushTasks();
-    expect(logVerboseMessage).toHaveBeenCalledWith(
-      "matrix: blocked verification sender @alice:example.org (dmPolicy=open, dmEnabled=false)",
-    );
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
+      await flushTasks();
+      if (blockedLog) {
+        expect(logVerboseMessage).toHaveBeenCalledWith(blockedLog);
+      }
+      if (storeConsulted !== undefined) {
+        if (storeConsulted) {
+          expect(readStoreAllowFrom).toHaveBeenCalled();
+        } else {
+          expect(readStoreAllowFrom).not.toHaveBeenCalled();
+        }
+      }
+      if (!accepted) {
+        expect(sendMessage).not.toHaveBeenCalled();
+        if (expectNoRoomDispatch) {
+          expect(onRoomMessage).not.toHaveBeenCalled();
+        }
+        return;
+      }
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("posts ready-stage guidance for emoji verification", async () => {
     const { sendMessage, roomEventListener, flushTasks } = createHarness();

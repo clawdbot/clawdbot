@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { extractMessagingToolSend } from "./embedded-agent-subscribe.tools.js";
+import { extractMessagingToolSend } from "./embedded-agent-messaging-extraction.js";
 
 function normalizeTelegramMessagingTargetForTest(raw: string): string | undefined {
   // Test normalizer mirrors channel plugins that canonicalize human targets

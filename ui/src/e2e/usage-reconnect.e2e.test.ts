@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -52,7 +53,10 @@ function costSummary(cacheStatus?: {
   };
 }
 
-function sessionsUsage(cacheStatus?: ReturnType<typeof costSummary>["cacheStatus"]) {
+function sessionsUsage(
+  cacheStatus?: ReturnType<typeof costSummary>["cacheStatus"],
+  label = "Proxy proof",
+) {
   return {
     updatedAt: Date.now(),
     startDate: today(),
@@ -60,7 +64,7 @@ function sessionsUsage(cacheStatus?: ReturnType<typeof costSummary>["cacheStatus
     sessions: [
       {
         key: "agent:main:proxy-proof",
-        label: "Proxy proof",
+        label,
         agentId: "main",
         modelProvider: "openai",
         model: "gpt-5.5",
@@ -133,7 +137,8 @@ async function proxyReconnect(
 ): Promise<void> {
   await gateway.closeLatest(1001, "proxy idle timeout");
   await expect.poll(() => gateway.getSocketCount(), { timeout: 10_000 }).toBe(expectedSocketCount);
-  expect(await page.locator(".sidebar-identity-card__subtitle").count()).toBe(0);
+  await waitForControlUiGatewayReady(page);
+  expect(await page.locator(".sidebar-identity-card__status").textContent()).toBe("");
 }
 
 async function captureProof(page: Page, name: string): Promise<void> {
@@ -141,6 +146,14 @@ async function captureProof(page: Page, name: string): Promise<void> {
     return;
   }
   await page.screenshot({ fullPage: true, path: path.join(proofDir, name) });
+}
+
+async function captureResultProof(page: Page, name: string, resultLabel: string): Promise<void> {
+  if (!proofDir) {
+    return;
+  }
+  await page.getByText(resultLabel, { exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(proofDir, name) });
 }
 
 async function usageBadges(page: Page): Promise<string[]> {
@@ -228,6 +241,66 @@ suite.define(() => {
       await page.locator(".daily-chart-compact").waitFor({ timeout: 10_000 });
       await expect.poll(() => usageBadges(page)).toEqual(["120 Tokens", "$0.01 Cost", "1 session"]);
       await captureProof(page, "usage-after-interrupted-retry.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps results aligned when scope changes during a refresh", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    const staleFamilyResult = sessionsUsage(undefined, "Family stale result");
+    const currentInstanceResult = sessionsUsage(undefined, "Current instance result");
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.usage": staleFamilyResult,
+        "usage.cost": costSummary(),
+        "usage.status": { updatedAt: Date.now(), providers: [] },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${suite.server.baseUrl}usage`);
+      expect(response?.status()).toBe(200);
+      await waitForRequestCount(gateway, "sessions.usage", 1);
+      await page.getByText("Family stale result", { exact: true }).waitFor();
+
+      await gateway.deferNext("sessions.usage");
+      await gateway.deferNext("usage.cost");
+      await page
+        .locator("openclaw-usage-page")
+        .getByRole("button", { name: "Refresh", exact: true })
+        .click();
+      await waitForRequestCount(gateway, "sessions.usage", 2);
+      await waitForRequestCount(gateway, "usage.cost", 2);
+
+      await gateway.setMethodResponse("sessions.usage", currentInstanceResult);
+      await page.getByRole("button", { name: "Current instance", exact: true }).click();
+      await gateway.resolveDeferred("sessions.usage", staleFamilyResult);
+      await gateway.resolveDeferred("usage.cost", costSummary());
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-usage-page")
+            .getByRole("button", { name: "Refresh", exact: true })
+            .isEnabled(),
+        )
+        .toBe(true);
+      await captureProof(page, "usage-filter-during-refresh.png");
+
+      const requests = await gateway.getRequests("sessions.usage");
+      const currentResult = page.getByText("Current instance result", { exact: true });
+      const staleResult = page.getByText("Family stale result", { exact: true });
+      await expect
+        .poll(async () => (await currentResult.count()) + (await staleResult.count()))
+        .toBe(1);
+      const visibleResultLabel =
+        (await currentResult.count()) === 1 ? "Current instance result" : "Family stale result";
+      await captureResultProof(page, "usage-filter-during-refresh-result.png", visibleResultLabel);
+      expect(requests).toHaveLength(3);
+      expect(requests[2]?.params).toMatchObject({ groupBy: "instance" });
+      expect(await currentResult.count()).toBe(1);
+      expect(await staleResult.count()).toBe(0);
     } finally {
       await context.close();
     }

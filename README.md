@@ -36,15 +36,27 @@ iwr -useb https://openclaw.ai/install.ps1 | iex
 Already manage Node.js? Install the published package instead (Node 22.22.3+, 24.15+, or 25.9+):
 
 ```bash
-npm install -g openclaw@latest
+npm install -g openclaw@latest --allow-scripts=openclaw
 ```
 
-See the [installation guide](https://docs.openclaw.ai/install) for npm 12 lifecycle-script requirements, Docker, Nix, and other deployment paths.
+That command is for npm 12 or npm 11.16+. On npm 11.15 and earlier, omit
+`--allow-scripts=openclaw`. See the
+[installation guide](https://docs.openclaw.ai/install) for the lifecycle script
+contract, Docker, Nix, and other deployment paths.
 
 ## Quick start
 
+On a fresh install, the installer scripts start onboarding automatically.
+Complete the wizard they open. If you installed the package directly with npm,
+pnpm, or Bun, run:
+
 ```bash
 openclaw onboard --install-daemon
+```
+
+After onboarding:
+
+```bash
 openclaw gateway status
 openclaw dashboard
 ```

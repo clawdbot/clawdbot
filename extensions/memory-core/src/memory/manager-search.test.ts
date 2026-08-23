@@ -9,6 +9,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
 import { searchKeyword, searchPathKeyword, searchVector } from "./manager-search.js";
+import { runMemorySearchWithDeadline } from "./search-deadline.js";
 import { vectorToBlob } from "./vector-blob.js";
 
 function insertKeywordFixture(
@@ -1125,6 +1126,57 @@ describe("searchVector sqlite-vec KNN", () => {
       } finally {
         clearInterval(heartbeatInterval);
       }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("stops fallback scanning when the caller aborts and keeps later searches healthy", async () => {
+    const db = createFallbackDb();
+    try {
+      for (let index = 0; index < 4096; index += 1) {
+        insertFallbackChunk(db, {
+          id: `chunk-${index}`,
+          model: "target-model",
+          vector: index === 4095 ? [1, 0] : [0, 1],
+        });
+      }
+
+      let scannedBatches = 0;
+      const countedDb = {
+        prepare: (sql: string) => {
+          const statement = db.prepare(sql);
+          if (!sql.includes("SELECT rowid, id, path")) {
+            return statement;
+          }
+          return {
+            all: (...args: Parameters<typeof statement.all>) => {
+              scannedBatches += 1;
+              return statement.all(...args);
+            },
+          };
+        },
+      } as unknown as DatabaseSync;
+      const caller = new AbortController();
+      const abortReason = new Error("caller stopped memory search");
+      const pending = runMemorySearchWithDeadline({
+        timeoutMs: 5_000,
+        parentSignal: caller.signal,
+        run: async (signal) => await searchVectorFixture(countedDb, { signal }),
+      });
+      setImmediate(() => caller.abort(abortReason));
+
+      await expect(pending).rejects.toBe(abortReason);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(scannedBatches).toBe(1);
+
+      const healthyResults = await searchVectorFixture(db, { limit: 1 });
+      expect(healthyResults.map((result) => result.id)).toEqual(["chunk-4095"]);
     } finally {
       db.close();
     }

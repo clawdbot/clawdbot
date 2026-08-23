@@ -417,6 +417,10 @@ describe("resolveToolCallView", () => {
     });
 
     expect(view.target).toBe("2 files");
+    expect(view.fileOperations).toEqual([
+      { operation: "update", path: "src/a.ts" },
+      { operation: "add", path: "src/b.ts" },
+    ]);
     expect(view.stat).toEqual({ added: 2, removed: 1 });
     expect(view.diff).toContainEqual({ kind: "file", text: "Update src/a.ts" });
     expect(view.diff).toContainEqual({ kind: "file", text: "Add src/b.ts" });
@@ -493,6 +497,7 @@ describe("resolveToolCallView", () => {
 
     expect(view.kind).toBe("edit");
     expect(view.target).toBe("notes.md");
+    expect(view.fileOperations).toEqual([{ operation: "add", path: "notes.md" }]);
     expect(view.stat).toEqual({ added: 1, removed: 0 });
   });
 

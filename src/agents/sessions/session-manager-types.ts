@@ -1,4 +1,3 @@
-import type { OwnedSessionTranscriptPublishedEntry } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -131,24 +130,6 @@ export interface SessionContext {
   thinkingLevel: string;
   model: { provider: string; modelId: string } | null;
 }
-
-interface PromptReleasedOpaqueEntry {
-  type: "prompt_released_opaque";
-  record: unknown;
-  preserveActiveLeaf?: true;
-}
-
-export type PromptReleasedSessionEntry =
-  | SessionMessageEntry
-  | CustomEntry
-  | LabelEntry
-  | SessionInfoEntry
-  | PromptReleasedOpaqueEntry;
-
-export type PromptReleasedSessionMergeResult = {
-  publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
-  requiresReload?: true;
-};
 
 export type PreservedOpaqueFileEntry = {
   index: number;

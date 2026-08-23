@@ -96,9 +96,11 @@ enum WatchChatPresentation {
 
     private nonisolated static func decodeMessage(_ raw: OpenClawKit.AnyCodable) -> MessageEntry? {
         guard let data = try? JSONEncoder().encode(raw),
-              let message = try? JSONDecoder().decode(OpenClawChatMessage.self, from: data),
-              let text = nonEmptyText(messageText(message))
+              let message = try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
         else { return nil }
+        let text = ChatMessageVisibleText.visibleText(in: message)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
         let metadata = try? JSONDecoder().decode(MetadataEnvelope.self, from: data)
         return MessageEntry(
             message: message,
@@ -114,29 +116,6 @@ enum WatchChatPresentation {
             .map { String(format: "%02x", $0) }
             .joined()
         return "\(entry.message.role)-\(digest)"
-    }
-
-    private nonisolated static func messageText(_ message: OpenClawChatMessage) -> String {
-        let parts = message.content.compactMap { content -> String? in
-            let kind = (content.type ?? "text").lowercased()
-            guard kind.isEmpty || kind == "text" || kind == "output_text" else { return nil }
-            if let text = Self.nonEmptyText(content.text) { return text }
-            if let text = Self.nonEmptyText(content.content?.value as? String) { return text }
-            if let values = content.content?.value as? [String: OpenClawKit.AnyCodable] {
-                return Self.nonEmptyText(values["text"]?.value as? String)
-            }
-            return nil
-        }
-        let contentText = parts.joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return contentText.isEmpty
-            ? message.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            : contentText
-    }
-
-    private nonisolated static func nonEmptyText(_ text: String?) -> String? {
-        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private nonisolated static func truncatedText(_ text: String) -> String {

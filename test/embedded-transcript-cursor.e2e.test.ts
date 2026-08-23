@@ -4,7 +4,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listSessionEntries, loadSessionEntry } from "../src/config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+} from "../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import {
@@ -40,7 +43,10 @@ describe("embedded transcript cursor settlement", () => {
       const instance = await createOpenClawTestInstance({
         name: "embedded-transcript-cursor",
         config: createTestConfig(modelServer.baseUrl),
-        env: { OPENCLAW_SKIP_PROVIDERS: undefined },
+        env: {
+          OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        },
       });
       instances.push(instance);
       await instance.startGateway();
@@ -56,7 +62,7 @@ describe("embedded transcript cursor settlement", () => {
         const storePath = path.join(instance.state.sessionsDir("main"), "sessions.json");
         const sessionId = await waitForSessionId(storePath);
         expect(
-          listSessionEntries({ agentId: "main", storePath }).map((entry) => entry.sessionKey),
+          listSessionEntriesCore({ agentId: "main", storePath }).map((entry) => entry.sessionKey),
           instance.logs(),
         ).toEqual([SESSION_KEY]);
         const target = { agentId: "main", sessionId, sessionKey: SESSION_KEY, storePath };

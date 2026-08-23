@@ -1,10 +1,50 @@
 /**
  * Gateway WebSocket log formatting tests.
  */
-import { describe, expect, test } from "vitest";
-import { formatForLog, summarizeAgentEventForWsLog } from "./ws-log.js";
+import { afterEach, describe, expect, test } from "vitest";
+import { setVerbose } from "../global-state.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { formatForLog, logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
+
+function shouldLogWs(direction: "in" | "out", kind: string): boolean {
+  let admitted = false;
+  logWs(direction, kind, () => {
+    admitted = true;
+    return { connId: "matrix", id: `matrix-${kind}`, ok: true };
+  });
+  return admitted;
+}
+
+afterEach(() => {
+  setVerbose(false);
+  setLoggerOverride(null);
+  resetLogger();
+});
 
 describe("gateway ws log helpers", () => {
+  test("admits only useful optimized-mode frames and honors console info enablement", () => {
+    setVerbose(false);
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+
+    expect(shouldLogWs("out", "event")).toBe(false);
+    expect(shouldLogWs("in", "req")).toBe(true);
+    expect(shouldLogWs("out", "res")).toBe(true);
+    expect(shouldLogWs("out", "parse-error")).toBe(true);
+
+    setVerbose(true);
+    expect(shouldLogWs("out", "event")).toBe(true);
+
+    setVerbose(false);
+    setLoggerOverride({ level: "info", consoleLevel: "warn" });
+    expect(shouldLogWs("in", "req")).toBe(true);
+    expect(shouldLogWs("out", "res")).toBe(true);
+    expect(shouldLogWs("out", "parse-error")).toBe(true);
+    expect(shouldLogWs("out", "event")).toBe(false);
+
+    setVerbose(true);
+    expect(shouldLogWs("out", "event")).toBe(true);
+  });
+
   test.each([
     {
       name: "run ID prefix boundary",
