@@ -49,6 +49,51 @@ suite.define(() => {
     }
   });
 
+  it("shows retryable model setup when first-run detection stays unavailable", async () => {
+    const context = await suite.browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      agentModel: null,
+      deferredMethods: ["openclaw.setup.detect"],
+      featureMethods: ["openclaw.setup.detect"],
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("openclaw.setup.detect");
+      await gateway.deferNext("openclaw.setup.detect");
+      await gateway.rejectDeferred("openclaw.setup.detect", {
+        code: "UNAVAILABLE",
+        message: "temporary setup detection failure",
+      });
+
+      await gateway.waitForRequest("openclaw.setup.detect", { after: 1 });
+      await gateway.deferNext("openclaw.setup.detect");
+      await gateway.rejectDeferred("openclaw.setup.detect", {
+        code: "UNAVAILABLE",
+        message: "setup detection still unavailable",
+      });
+
+      await gateway.waitForRequest("openclaw.setup.detect", { after: 2 });
+      await gateway.rejectDeferred("openclaw.setup.detect", {
+        code: "UNAVAILABLE",
+        message: "setup detection unavailable on recovery page",
+      });
+
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await page.getByRole("alert").waitFor();
+      await expect.poll(() => page.getByRole("button", { name: "Retry" }).count()).toBe(1);
+      await captureProof(page, "first-run-detection-recovery.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("blocks the new-session composer until a model is connected", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",

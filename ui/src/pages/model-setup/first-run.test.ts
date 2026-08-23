@@ -221,7 +221,7 @@ describe("model setup first-run redirect", () => {
     expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
   });
 
-  it("stops after the same connection rejects detection twice", async () => {
+  it("opens visible recovery after the same connection rejects detection twice", async () => {
     const request = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
     const client = { request } as unknown as GatewayBrowserClient;
     type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
@@ -234,6 +234,7 @@ describe("model setup first-run redirect", () => {
         features: { methods: ["openclaw.setup.detect"] },
       },
     };
+    const replace = vi.fn();
     const context = {
       gateway: {
         snapshot,
@@ -246,15 +247,16 @@ describe("model setup first-run redirect", () => {
         state: { selectedId: "main" },
         subscribe: () => () => undefined,
       },
-      replace: vi.fn(),
+      replace,
     } as unknown as ApplicationContext<RouteId>;
 
     await startRedirect(context);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     listener!(snapshot as Parameters<GatewayListener>[0]);
-    await Promise.resolve();
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
 
     expect(request).toHaveBeenCalledTimes(2);
+    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
   });
 
   it("does not redirect after the operator leaves the default landing", async () => {

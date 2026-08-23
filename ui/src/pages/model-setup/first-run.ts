@@ -152,11 +152,16 @@ function startModelSetupFirstRunRedirect(params: {
           return;
         }
         // One same-generation retry absorbs a transient startup race without
-        // turning first-run guidance into a background retry loop.
+        // turning first-run guidance into a background retry loop. Route an
+        // exhausted first-run check to the page that owns visible retry UI.
         detection = { ...attempt, phase: attempt.attempts < 2 ? "retry-ready" : "settled" };
         if (detection.phase === "retry-ready" && params.isStillDefaultLanding()) {
           handleSnapshot(params.context.gateway.snapshot);
         } else {
+          if (detection.phase === "settled" && params.isStillDefaultLanding()) {
+            redirected = true;
+            params.redirect();
+          }
           settleInitialDecision();
         }
       });
