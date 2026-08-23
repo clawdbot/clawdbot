@@ -66,7 +66,7 @@ on:
         default: false
         type: boolean
       fail_fast:
-        description: Cancel only an exact active child after its first blocking job; false drains all children to completion
+        description: Cancel only an exact active child after its first blocking job; false drains all children and is required for continuation recovery
         required: false
         default: false
         type: boolean
@@ -261,6 +261,7 @@ jobs:
         env:
           CONTINUATION_PLAN_JSON: ${{ inputs.continuation_plan_json }}
           DISPATCH_RELEASE_EVIDENCE: ${{ inputs.dispatch_release_evidence }}
+          FAIL_FAST: ${{ inputs.fail_fast }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -278,8 +279,9 @@ jobs:
           if [[ -n "${CONTINUATION_PLAN_JSON:-}" && -n "${CONTINUATION_PLAN_JSON// }" ]]; then
             if [[ "$RERUN_GROUP" != "all" ||
                   "$DISPATCH_RELEASE_EVIDENCE" != "false" ||
-                  "$REUSE_EVIDENCE" != "false" ]]; then
-              echo "continuation_plan_json requires rerun_group=all, reuse_evidence=false, and dispatch_release_evidence=false." >&2
+                  "$REUSE_EVIDENCE" != "false" ||
+                  "$FAIL_FAST" != "false" ]]; then
+              echo "continuation_plan_json requires rerun_group=all, reuse_evidence=false, dispatch_release_evidence=false, and fail_fast=false." >&2
               exit 1
             fi
             jq -e \
@@ -1414,7 +1416,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-          FAIL_FAST: ${{ inputs.fail_fast }}
+          FAIL_FAST: ${{ inputs.continuation_plan_json == '' && inputs.fail_fast }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}

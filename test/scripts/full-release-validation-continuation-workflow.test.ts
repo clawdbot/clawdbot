@@ -58,12 +58,21 @@ describe("full release continuation workflow", () => {
   });
 
   it("requires nonpublishing all-group continuation dispatch", () => {
-    const validate = String(step("resolve_target", "Validate release inputs").run);
+    const validateStep = step("resolve_target", "Validate release inputs");
+    expect(validateStep.env).toMatchObject({
+      FAIL_FAST: "${{ inputs.fail_fast }}",
+    });
+    const validate = String(validateStep.run);
     expect(validate).toContain('"$RERUN_GROUP" != "all"');
     expect(validate).toContain('"$DISPATCH_RELEASE_EVIDENCE" != "false"');
     expect(validate).toContain('"$REUSE_EVIDENCE" != "false"');
+    expect(validate).toContain('"$FAIL_FAST" != "false"');
+    expect(validate).toContain("fail_fast=false");
     expect(validate).toContain("(.publicationEnabled == false)");
     expect(validate).toContain('(.sourceEvent == "workflow_dispatch")');
+    expect(step("release_decision", "Evaluate release decision").env).toMatchObject({
+      FAIL_FAST: "${{ inputs.continuation_plan_json == '' && inputs.fail_fast }}",
+    });
   });
 
   it("keeps every historical continuation input visible in one source job log", () => {

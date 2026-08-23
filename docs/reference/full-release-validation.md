@@ -43,6 +43,8 @@ independent failures together. In that mode, the parent makes no child
 cancellation calls. Pass `-f fail_fast=true` only when the shorter
 first-failure path is preferable; Release Decision then cancels only the exact
 still-active child that owns the blocking failure.
+Continuation recovery requires `fail_fast=false`, and Release Decision masks it
+off whenever a continuation payload is present.
 
 After dispatch, the parent writes one immutable
 `full-release-execution-plan-<run-id>` artifact and preserves the same bytes in

@@ -905,7 +905,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
     expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
       description:
-        "Cancel only an exact active child after its first blocking job; false drains all children to completion",
+        "Cancel only an exact active child after its first blocking job; false drains all children and is required for continuation recovery",
       required: false,
       default: false,
       type: "boolean",

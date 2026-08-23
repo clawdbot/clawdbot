@@ -55,6 +55,8 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   access. With
   `fail_fast=true`, Release Decision may cancel only the exact still-active
   child that owns a blocking failure.
+- Continuation recovery requires `fail_fast=false`; Release Decision masks it
+  off whenever a continuation payload is present.
 - After dispatch, one immutable execution-plan artifact records the original
   parent attempt, exact child tuples and titles, selected coverage, gates, and
   reuse identity. The same bytes are saved under an exact run-ID cache key.
