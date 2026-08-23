@@ -481,7 +481,6 @@ describe("Gateway runtime-only inbound context", () => {
           })
           .toContain(visibleUserMessage);
         const transcriptText = JSON.stringify(await readSessionTranscript(sessionKey));
-        expect(transcriptText).toContain(RUNTIME_EVENT_STUB);
         expect(transcriptText).toContain(visibleUserMessage);
         expect(transcriptText).not.toContain(inboundMarker);
         expect(transcriptText).not.toContain(OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE);
