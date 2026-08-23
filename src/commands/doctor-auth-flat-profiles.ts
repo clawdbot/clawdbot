@@ -13,6 +13,7 @@ import {
   listLegacyAuthProfileArchives,
   resolveLegacyOAuthPath,
 } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { inspectLegacyAuthProfileSourceEntry } from "../agents/auth-profiles/legacy-source-files.js";
 import {
   areOAuthCredentialsEquivalent,
   hasMatchingOAuthIdentity,
@@ -605,11 +606,24 @@ function hasImportableAuthProfileStore(store: AuthProfileStore | null): store is
   return Boolean(store && (Object.keys(store.profiles).length > 0 || hasAuthProfileState(store)));
 }
 
+function removeDanglingLegacyAuthSourceLinks(
+  sourcePaths: readonly string[],
+  result: LegacyFlatAuthProfileRepairResult,
+): void {
+  for (const pathname of sourcePaths) {
+    if (inspectLegacyAuthProfileSourceEntry(pathname) !== "dangling-link") {
+      continue;
+    }
+    fs.unlinkSync(pathname);
+    result.changes.push(
+      `Removed dangling legacy auth source link ${shortenHomePath(pathname)}; its target was unavailable.`,
+    );
+  }
+}
+
 function hasLegacyAuthProfileSource(candidate: AuthProfileSqliteMigrationCandidate): boolean {
-  return (
-    fs.existsSync(candidate.authPath) ||
-    fs.existsSync(candidate.statePath) ||
-    fs.existsSync(candidate.legacyPath)
+  return [candidate.authPath, candidate.statePath, candidate.legacyPath].some(
+    (pathname) => inspectLegacyAuthProfileSourceEntry(pathname) !== "missing",
   );
 }
 
@@ -656,7 +670,7 @@ function assertAuthProfileMigrationSourcesUnchanged(
   const receiptByPath = new Map(receipts.map((receipt) => [receipt.sourcePath, receipt]));
   for (const pathname of [candidate.authPath, candidate.statePath, candidate.legacyPath]) {
     const receipt = receiptByPath.get(path.resolve(pathname));
-    if (fs.existsSync(pathname) !== Boolean(receipt)) {
+    if ((inspectLegacyAuthProfileSourceEntry(pathname) !== "missing") !== Boolean(receipt)) {
       throw new Error("legacy auth source set changed during migration; retry Doctor");
     }
     if (!receipt) {
@@ -912,7 +926,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   const candidates = listAuthProfileSqliteMigrationCandidates(params.cfg, env);
   const configStore = coerceLegacyConfigAuthProfileStore(params.cfg);
   const oauthPath = resolveLegacyOAuthPath(env);
-  const hasLegacyOAuth = fs.existsSync(oauthPath);
+  const hasLegacyOAuth = inspectLegacyAuthProfileSourceEntry(oauthPath) !== "missing";
   const detected = candidates.filter(
     (candidate) =>
       hasLegacyAuthProfileSource(candidate) ||
@@ -932,7 +946,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           .filter((pathname, index, entries) => entries.indexOf(pathname) === index)
           .filter(
             (pathname) =>
-              fs.existsSync(pathname) ||
+              inspectLegacyAuthProfileSourceEntry(pathname) !== "missing" ||
               (configStore &&
                 isDefaultAgentCandidate(candidate, params.cfg, env) &&
                 pathname === candidate.authPath),
@@ -985,6 +999,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         fs.mkdirSync(path.dirname(pathname), { recursive: true });
       }
       releaseSources = acquireAuthProfileMigrationSourceLocks(candidateSourcePaths);
+      removeDanglingLegacyAuthSourceLinks(candidateSourcePaths, result);
       const targetDatabasePath = resolveMigrationTargetDatabasePath(candidate.agentDir, env);
       const sharedStateTarget =
         candidate.agentDir === undefined &&
@@ -996,21 +1011,23 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         sharedStateTarget || candidate.agentDir !== undefined
           ? candidate.agentDir
           : resolveSharedMainAuthAgentDir(env);
-      let sourceReceipts = candidateSourcePaths.filter(fs.existsSync).map((pathname) =>
-        prepareAuthProfileSourceReceipt({
-          pathname,
-          targetDatabasePath,
-          targetTable:
-            pathname === candidate.statePath
-              ? "auth_profile_state"
-              : sharedStateTarget
-                ? "auth_profile_stores"
-                : "auth_profile_store",
-          targetStoreKey: sharedStateTarget ? "shared" : "primary",
-          now,
-          env,
-        }),
-      );
+      let sourceReceipts = candidateSourcePaths
+        .filter((pathname) => inspectLegacyAuthProfileSourceEntry(pathname) === "present")
+        .map((pathname) =>
+          prepareAuthProfileSourceReceipt({
+            pathname,
+            targetDatabasePath,
+            targetTable:
+              pathname === candidate.statePath
+                ? "auth_profile_state"
+                : sharedStateTarget
+                  ? "auth_profile_stores"
+                  : "auth_profile_store",
+            targetStoreKey: sharedStateTarget ? "shared" : "primary",
+            now,
+            env,
+          }),
+        );
       sourceReceipts = sourceReceipts.filter(
         (receipt) => !archivePreviouslyMigratedAuthProfileSource(receipt, result),
       );
@@ -1321,7 +1338,15 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   const sharedMainCredentialSourceRemains = [
     resolveAuthStorePath(sharedMainAgentDir),
     resolveLegacyAuthStorePath(sharedMainAgentDir),
-  ].some((pathname) => fs.existsSync(pathname));
+  ].some((pathname) => inspectLegacyAuthProfileSourceEntry(pathname) !== "missing");
+  if (hasLegacyOAuth && inspectLegacyAuthProfileSourceEntry(oauthPath) === "dangling-link") {
+    const releaseSource = acquireAuthProfileMigrationSourceLocks([oauthPath]);
+    try {
+      removeDanglingLegacyAuthSourceLinks([oauthPath], result);
+    } finally {
+      releaseSource();
+    }
+  }
   if (hasLegacyOAuth && sharedMainCredentialSourceRemains) {
     result.warnings.push(
       `Deferred shared legacy OAuth migration until higher-priority shared-main credential sources are resolved by ${formatCliCommand("openclaw doctor --fix")}.`,

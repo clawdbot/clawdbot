@@ -185,6 +185,43 @@ afterEach(async () => {
 });
 
 describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
+  it.skipIf(process.platform === "win32")(
+    "removes a dangling legacy auth profile link so startup can proceed",
+    async () => {
+      const state = await makeTestState();
+      const authPath = path.join(state.agentDir(), "auth-profiles.json");
+      fs.mkdirSync(path.dirname(authPath), { recursive: true });
+      fs.symlinkSync("missing-auth-profiles.json", authPath);
+
+      expect(fs.lstatSync(authPath).isSymbolicLink()).toBe(true);
+      expect(
+        listAuthProfileStoresRequiringMigration({
+          agentDirs: [state.agentDir()],
+          env: state.env,
+        }),
+      ).toHaveLength(1);
+
+      const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+        cfg: {},
+        prompter: makePrompter(true),
+        env: state.env,
+      });
+
+      expect(result.detected).toContain(authPath);
+      expect(result.changes).toEqual([
+        expect.stringContaining("Removed dangling legacy auth source link"),
+      ]);
+      expect(result.warnings).toEqual([]);
+      expect(() => fs.lstatSync(authPath)).toThrow(expect.objectContaining({ code: "ENOENT" }));
+      expect(
+        listAuthProfileStoresRequiringMigration({
+          agentDirs: [state.agentDir()],
+          env: state.env,
+        }),
+      ).toEqual([]);
+    },
+  );
+
   it("keeps JSON-era ownership through shared writes until Doctor imports the credential", async () => {
     const state = await makeTestState();
     const authPath = await writeLegacyAuthProfilesJson(state, {

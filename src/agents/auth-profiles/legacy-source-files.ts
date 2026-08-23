@@ -15,6 +15,8 @@ export type LegacyAuthProfileSource = {
   path: string;
 };
 
+export type LegacyAuthProfileSourceEntryState = "missing" | "present" | "dangling-link";
+
 export class LegacyAuthProfileSourceInspectionError extends Error {
   readonly code = "AUTH_PROFILE_MIGRATION_REQUIRED" as const;
   readonly action = "openclaw doctor --fix" as const;
@@ -41,18 +43,32 @@ function resolveLegacySourceAgentDir(
   return agentDir ? resolveUserPath(agentDir) : resolveSharedMainAuthAgentDir(env);
 }
 
-function hasLegacySourceEntry(sourcePath: string): boolean {
+export function inspectLegacyAuthProfileSourceEntry(
+  sourcePath: string,
+): LegacyAuthProfileSourceEntryState {
   let entry: fs.Stats;
   try {
     entry = fs.lstatSync(sourcePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return false;
+      return "missing";
     }
     throw new LegacyAuthProfileSourceInspectionError(sourcePath, error);
   }
-  if (entry.isFile() || entry.isSymbolicLink()) {
-    return true;
+  if (entry.isFile()) {
+    return "present";
+  }
+  if (entry.isSymbolicLink()) {
+    try {
+      fs.statSync(sourcePath);
+      return "present";
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ELOOP") {
+        return "dangling-link";
+      }
+      throw new LegacyAuthProfileSourceInspectionError(sourcePath, error);
+    }
   }
   throw new LegacyAuthProfileSourceInspectionError(
     sourcePath,
@@ -75,7 +91,9 @@ export function listLegacyAuthProfileSources(params: {
   if (path.resolve(agentDir) === path.resolve(sharedMainDir)) {
     candidates.push({ kind: "legacy-oauth", path: resolveLegacyOAuthPath(params.env) });
   }
-  return candidates.filter((candidate) => hasLegacySourceEntry(candidate.path));
+  return candidates.filter(
+    (candidate) => inspectLegacyAuthProfileSourceEntry(candidate.path) !== "missing",
+  );
 }
 
 export function listLegacyAuthProfileArchives(params: {
