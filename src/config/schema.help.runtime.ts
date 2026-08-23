@@ -284,6 +284,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Opt in to full OpenClaw worker session hosting from Gateway-managed bundles. Disabled by default.",
   "nodeHost.workerRuns.enabled":
     "Allow this paired node to host sessions from exact bundles installed by its Gateway (default: false).",
+  "nodeHost.workerRuns.capacity":
+    "Maximum concurrent worker sessions hosted by this node (default: the number of available CPU cores). Must be an integer from 1 through 1024.",
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":
