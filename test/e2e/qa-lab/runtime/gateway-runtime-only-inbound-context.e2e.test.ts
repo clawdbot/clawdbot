@@ -454,7 +454,7 @@ describe("Gateway runtime-only inbound context", () => {
         expect(transcriptText).not.toContain(OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE);
         expect(transcriptText).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
 
-        console.log(
+        process.stdout.write(
           `gateway-runtime-only-inbound-context-proof ${JSON.stringify({
             gateway: "ephemeral",
             channel: "mock",
@@ -463,7 +463,7 @@ describe("Gateway runtime-only inbound context", () => {
             inboundContextCarrierSeparated: inboundMarkerIndexes[0] !== runtimeStubIndexes[0],
             carrierRemovedBeforeNextTurn: !secondInputText.includes(inboundMarker),
             carrierAbsentFromTranscript: !transcriptText.includes(inboundMarker),
-          })}`,
+          })}\n`,
         );
       } finally {
         if (gateway) {
