@@ -225,3 +225,80 @@ describe("GatewayClient rejected-upgrade diagnostics", () => {
     );
   }, 30_000);
 });
+
+const UPGRADE_JSON_CREDENTIAL = "AKIAUPGRADEJSONCREDENTIAL";
+const UPGRADE_JSON_SIGNATURE = "UPGRADEJSONSIGNATUREVALUE";
+// The same rejection expressed as JSON. `readUpgradeErrorBody` accepts an
+// arbitrary peer body, so a proxy is free to answer in this shape; the
+// equals-only redactor left these values in the clear.
+const UPGRADE_JSON_REJECTION_BODY = JSON.stringify({
+  "X-Amz-Credential": UPGRADE_JSON_CREDENTIAL,
+  "X-Amz-Signature": UPGRADE_JSON_SIGNATURE,
+  "X-Amz-Date": "20260813T000000Z",
+});
+
+describe("GatewayClient structured rejected-upgrade diagnostics", () => {
+  const servers: http.Server[] = [];
+  const clients: GatewayClient[] = [];
+
+  afterEach(async () => {
+    for (const client of clients.splice(0)) {
+      client.stop();
+    }
+    await Promise.all(
+      servers.splice(0).map(
+        async (server) =>
+          await new Promise<void>((resolve) => {
+            server.closeAllConnections();
+            server.close(() => resolve());
+          }),
+      ),
+    );
+  });
+
+  it("redacts signed fields of a JSON rejected-upgrade body before hosts see the error", async () => {
+    // Real loopback server again, this time answering with a JSON body.
+    const server = http.createServer((_req, res) => {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(UPGRADE_JSON_REJECTION_BODY);
+    });
+    servers.push(server);
+    const port = await new Promise<number>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        resolve((server.address() as AddressInfo).port);
+      });
+    });
+
+    const loggedLines: string[] = [];
+    const connectErrorMessage = await new Promise<string>((resolve) => {
+      const client = new GatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        onConnectError: (error) => resolve(error.message),
+        hostDeps: {
+          logDebug: (message) => loggedLines.push(message),
+          logError: (message) => loggedLines.push(message),
+        },
+      });
+      clients.push(client);
+      client.start();
+    });
+
+    expect(connectErrorMessage).toContain("gateway rejected websocket upgrade (HTTP 403)");
+    // The non-credential field stays readable for diagnostics.
+    expect(connectErrorMessage).toContain("20260813T000000Z");
+
+    const everythingSurfaced = [connectErrorMessage, ...loggedLines].join("\n");
+    for (const secret of [UPGRADE_JSON_CREDENTIAL, UPGRADE_JSON_SIGNATURE]) {
+      expect(everythingSurfaced).not.toContain(secret);
+    }
+
+    console.log(
+      `[gateway-client json-upgrade-body redaction proof] head=${resolveHeadSha()} ` +
+        "json_credential=redacted json_signature=redacted non_credential_field=preserved " +
+        `secret-output=${everythingSurfaced.includes(UPGRADE_JSON_CREDENTIAL)}\n` +
+        `[gateway-client json-upgrade-body redaction proof] server_sent=${UPGRADE_JSON_REJECTION_BODY}\n` +
+        `[gateway-client json-upgrade-body redaction proof] host_saw=${connectErrorMessage}\n` +
+        "proof_marker_verified=true",
+    );
+  }, 30_000);
+});
