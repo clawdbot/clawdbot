@@ -1,10 +1,10 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Internal runtime event prompt formatting.
  * Sanitizes background task completion events into protected runtime-context
  * blocks or plain prompt text.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   formatGeneratedAttachmentLines,
   mediaUrlsFromGeneratedAttachments,
