@@ -1,5 +1,6 @@
 // Control Ui Mock Dev script supports OpenClaw repository automation.
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
@@ -54,6 +55,8 @@ type CliOptions = {
   host: string;
   operatorScopes?: string[];
   port: number;
+  title?: string;
+  titleFile?: string;
 };
 
 type SessionListOptions = {
@@ -90,6 +93,9 @@ const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
 const PLAN_DEMO_RUN_ID = "mock-plan-run";
 const CUSTODIAN_CHAT_REPLY_DELAY_MS = 600;
 const CHAT_SEND_REPLY_DELAY_MS = 200;
+const MOCK_TITLE_PATH = "/__mock/title";
+const MOCK_TITLE_POLL_INTERVAL_MS = 2_000;
+const DEFAULT_MOCK_TITLE = "OpenClaw Control";
 
 type UpdateFixture = {
   available: UpdateAvailable;
@@ -336,9 +342,21 @@ function parseArgs(args: string[]): CliOptions {
       options.operatorScopes = parseOperatorScopes(args[++i]);
     } else if (arg.startsWith("--operator-scopes=")) {
       options.operatorScopes = parseOperatorScopes(arg.slice("--operator-scopes=".length));
+    } else if (arg === "--title") {
+      options.title = parseTitle(args[++i]);
+    } else if (arg.startsWith("--title=")) {
+      options.title = parseTitle(arg.slice("--title=".length));
+    } else if (arg === "--title-file") {
+      options.titleFile = args[++i]?.trim() || undefined;
+    } else if (arg.startsWith("--title-file=")) {
+      options.titleFile = arg.slice("--title-file=".length).trim() || undefined;
     }
   }
   return options;
+}
+
+function parseTitle(value: string | undefined): string | undefined {
+  return value?.trim() || undefined;
 }
 
 function parseFixture(value: string | undefined): CliOptions["fixture"] {
@@ -3144,16 +3162,76 @@ function createStatefulMockInitScript(): string {
   return `(() => { const __name = (target) => target; (${installControlUiStatefulMocks.toString()})(${CUSTODIAN_CHAT_REPLY_DELAY_MS}, ${CHAT_SEND_REPLY_DELAY_MS}); })();`;
 }
 
-function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin {
+function installMockTitlePolling(endpoint: string, intervalMs: number): void {
+  const updateTitle = async (): Promise<void> => {
+    try {
+      const response = await fetch(endpoint, { cache: "no-store" });
+      if (!response.ok) {
+        return;
+      }
+      const title = await response.text();
+      if (title && document.title !== title) {
+        document.title = title;
+      }
+    } catch {
+      // Keep the mock usable while its title source is temporarily unavailable.
+    }
+  };
+  void updateTitle();
+  window.setInterval(() => void updateTitle(), intervalMs);
+}
+
+function createMockTitleInitScript(): string {
+  return `(() => { const __name = (target) => target; (${installMockTitlePolling.toString()})(${JSON.stringify(MOCK_TITLE_PATH)}, ${MOCK_TITLE_POLL_INTERVAL_MS}); })();`;
+}
+
+function readHtmlTitle(html: string): string | undefined {
+  return parseTitle(html.match(/<title>([^<]*)<\/title>/i)?.[1]);
+}
+
+async function readMockTitle(options: CliOptions, currentTitle: string): Promise<string> {
+  if (options.titleFile) {
+    try {
+      const fileTitle = parseTitle(await readFile(options.titleFile, "utf8"));
+      if (fileTitle) {
+        return fileTitle;
+      }
+    } catch {
+      // A missing or transiently replaced file falls through to the stable title.
+    }
+  }
+  return options.title ?? currentTitle;
+}
+
+function createMockGatewayPlugin(
+  scenario: ControlUiMockGatewayScenario,
+  options: CliOptions,
+): Plugin {
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
   const statefulInitScript = escapeScriptContent(createStatefulMockInitScript());
+  const titleInitScript = escapeScriptContent(createMockTitleInitScript());
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
+  let currentTitle = DEFAULT_MOCK_TITLE;
   return {
     configureServer(server) {
       server.middlewares.use(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, (_req, res) => {
         res.statusCode = 200;
         res.setHeader("content-type", "application/json");
         res.end(bootstrapBody);
+      });
+      server.middlewares.use(MOCK_TITLE_PATH, (req, res, next) => {
+        if (req.method !== "GET") {
+          next();
+          return;
+        }
+        void readMockTitle(options, currentTitle)
+          .then((title) => {
+            res.statusCode = 200;
+            res.setHeader("cache-control", "no-store");
+            res.setHeader("content-type", "text/plain; charset=utf-8");
+            res.end(title);
+          })
+          .catch(next);
       });
     },
     // ui/vite.config.ts registers a placeholder bootstrap-config middleware and
@@ -3162,9 +3240,10 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
     enforce: "pre",
     name: "openclaw-control-ui-mock-gateway",
     transformIndexHtml(html) {
+      currentTitle = readHtmlTitle(html) ?? currentTitle;
       return html.replace(
         "</head>",
-        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
+        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n${titleInitScript}\n    </script>\n  </head>`,
       );
     },
   };
@@ -3244,7 +3323,7 @@ const server = await createServer({
       : {}),
     include: ["lit/directives/repeat.js"],
   },
-  plugins: [createMockGatewayPlugin(scenario), createBoardFixturePlugin()],
+  plugins: [createMockGatewayPlugin(scenario, options), createBoardFixturePlugin()],
   publicDir: path.join(uiRoot, "public"),
   resolve: {
     alias: [
