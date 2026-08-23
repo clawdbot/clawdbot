@@ -19,12 +19,19 @@ export function hasOnlyAssistantReasoningContent(message: AssistantTurnLike): bo
     if (!block || typeof block !== "object") {
       return false;
     }
-    const record = block as { type?: unknown; text?: unknown };
-    if (record.type === "thinking" || record.type === "redacted_thinking") {
+    if (!("type" in block)) {
+      return false;
+    }
+    if (block.type === "thinking" || block.type === "redacted_thinking") {
       hasThinking = true;
       continue;
     }
-    if (record.type === "text" && typeof record.text === "string" && !record.text.trim()) {
+    if (
+      block.type === "text" &&
+      "text" in block &&
+      typeof block.text === "string" &&
+      !block.text.trim()
+    ) {
       continue;
     }
     return false;
@@ -63,7 +70,10 @@ export function failedAssistantHasToolCalls(message: AssistantTurnLike): boolean
     message.role === "assistant" &&
     (message.stopReason === "error" || message.stopReason === "aborted") &&
     Array.isArray(message.content) &&
-    message.content.some((block) => (block as { type?: unknown }).type === "toolCall")
+    message.content.some(
+      (block) =>
+        typeof block === "object" && block !== null && "type" in block && block.type === "toolCall",
+    )
   );
 }
 
