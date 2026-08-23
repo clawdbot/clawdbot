@@ -122,6 +122,22 @@ describe("name command", () => {
     expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
   });
 
+  it("keeps the legacy updatedAt=0 pending-reset marker when renaming", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntryCore(
+      { storePath, sessionKey },
+      { sessionId: "sess-main", updatedAt: 0, totalTokens: 0, totalTokensFresh: true },
+    );
+
+    const params = buildNameParams("/name Billing rework", storePath);
+    const result = await handleNameCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    const persisted = loadSessionEntry({ storePath, sessionKey });
+    expect(persisted?.label).toBe("Billing rework");
+    expect(persisted?.updatedAt).toBe(0);
+  });
+
   it("rejects a label already used by another session", async () => {
     const storePath = await createStorePath();
     const now = Date.now();

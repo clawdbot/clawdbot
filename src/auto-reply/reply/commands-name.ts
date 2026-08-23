@@ -2,6 +2,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import {
   applySessionPatchProjection,
   loadSessionEntryReadOnly,
@@ -94,7 +95,9 @@ export const handleNameCommand: CommandHandler = defineAuthorizedTextCommand(
           return { ok: false, error: `label already in use: ${validated.label}` };
         }
         entry.label = validated.label;
-        entry.updatedAt = Math.max(entry.updatedAt ?? 0, Date.now());
+        // Renaming is bookkeeping: it must not consume the legacy updatedAt=0
+        // pending-reset marker while a rollover is deferred.
+        entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt);
         return {
           ok: true,
           entry,
