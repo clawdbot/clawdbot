@@ -10,8 +10,8 @@ import type { RunExit } from "../../process/supervisor/types.js";
 import type { CliOutput } from "../cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
+import type { FailoverError } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { runClaudeTurn } from "./claude-live-session.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import {
@@ -76,6 +76,7 @@ export async function executeCliProcess(params: {
   nodeClearEnv?: string[];
   useManagedClaudeLiveSession: boolean;
   usePluginOwnedExecution: boolean;
+  initialGatewayCaptureKey?: string;
   useResume: boolean;
   cliSessionIdToUse?: string;
   resolvedSessionId?: string;
@@ -90,8 +91,7 @@ export async function executeCliProcess(params: {
   outputMode: CliBackendConfig["output"];
   logOutputText: boolean;
   cliTurnStartedAt: number;
-  fallbackCleanup?: () => Promise<void>;
-  claimFallbackCleanup: () => void;
+  claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
   observeForkSuccessor: (sessionId: string) => void;
   options?: ExecuteCliProcessOptions;
 }): Promise<CliOutput> {
@@ -105,65 +105,6 @@ export async function executeCliProcess(params: {
   };
   const outputErrorContext = { ...failoverContext, runId: runParams.runId };
   const hasJsonlOutput = params.outputMode === "jsonl";
-  if (params.useManagedClaudeLiveSession) {
-    if (!hasJsonlOutput) {
-      throw new Error("Claude live session requires JSONL streaming parser");
-    }
-    runParams.onExecutionPhase?.({
-      phase: "process_spawned",
-      provider: runParams.provider,
-      model: context.modelId,
-      backend: context.backendResolved.id,
-    });
-    params.claimFallbackCleanup();
-    const liveResult = await runClaudeTurn({
-      context,
-      args: params.executionArgs,
-      executableCommand: params.executionCommand,
-      executableLeadingArgv: params.executionLeadingArgv,
-      env: params.env,
-      prompt: params.prompt,
-      useResume: params.useResume,
-      forceNewSession:
-        params.cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
-      requiredSessionGeneration: params.cliSessionIdToUse
-        ? context.requiredClaudeLiveSessionGeneration
-        : undefined,
-      noOutputTimeoutMs: params.noOutputTimeoutMs,
-      getProcessSupervisor: params.deps.getProcessSupervisor,
-      onAssistantDelta: params.events.emitCliAssistantDelta,
-      onThinkingDelta: params.events.emitCliThinkingDelta,
-      onThinkingProgress: params.events.emitCliThinkingProgress,
-      onToolUseStart: params.events.emitCliToolUseStart,
-      onToolResult: params.events.emitCliToolResult,
-      resolveToolResultTerminalOutcome: (event) => {
-        const outcome = params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId);
-        return outcome?.outcome === "completed" ? undefined : outcome;
-      },
-      onCommentaryText:
-        params.events.emitLiveEvents && runParams.emitCommentaryText
-          ? params.events.emitCliCommentaryText
-          : undefined,
-      onMcpCaptureReady: params.toolTracking.beginGatewayCapture,
-      cleanup: async () => {
-        await params.fallbackCleanup?.();
-      },
-      onSessionId: params.observeForkSuccessor,
-      onAssistantMessage: params.diagnostics?.observeAssistantMessage,
-      onUsage: params.diagnostics?.observeUsage,
-      onCliOutput: params.diagnostics?.observeCliOutput,
-      onRequestPayload: params.diagnostics?.observeRequestPayload,
-      onPhase: params.options?.onPhase,
-    });
-    params.options?.onPhase?.("resolve");
-    const rawText = liveResult.output.text;
-    return {
-      ...liveResult.output,
-      rawText,
-      finalPromptText: params.prompt,
-      text: applyPluginTextReplacements(rawText, context.backendResolved.textTransforms?.output),
-    };
-  }
 
   const streamingParser = hasJsonlOutput
     ? createCliJsonlStreamingParser({
@@ -230,6 +171,7 @@ export async function executeCliProcess(params: {
   let managedRunPid: number | undefined;
   let nodeRunAbortSignal: AbortSignal | undefined;
   let nodeRunTruncated = false;
+  const pluginTimeout: { error?: FailoverError } = {};
   let result: RunExit;
   params.diagnostics?.observeRequestPayload(params.stdin ?? params.argsPrompt ?? "");
   if (params.nodePlacement) {
@@ -260,9 +202,27 @@ export async function executeCliProcess(params: {
       env: params.env,
       prompt: params.prompt,
       useResume: params.useResume,
+      forceNewSession:
+        params.cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
       sessionId: params.resolvedSessionId,
       noOutputTimeoutMs: params.noOutputTimeoutMs,
       consumeStdout,
+      activeToolCount: params.events.activeParsedToolCount,
+      onNoOutputTimeout: (error) => {
+        pluginTimeout.error = error;
+      },
+      ...(params.useManagedClaudeLiveSession
+        ? {
+            liveSession: {
+              captureKey: params.initialGatewayCaptureKey,
+              beginCapture: params.toolTracking.beginGatewayCapture,
+              requiredGeneration: params.cliSessionIdToUse
+                ? context.requiredClaudeLiveSessionGeneration
+                : undefined,
+              claimResources: params.claimLiveSessionResources,
+            },
+          }
+        : {}),
     });
   } else {
     const supervisor = params.deps.getProcessSupervisor();
@@ -414,21 +374,23 @@ export async function executeCliProcess(params: {
         `cli watchdog timeout: provider=${runParams.provider} model=${context.modelId} session=${params.resolvedSessionId ?? runParams.sessionId} noOutputTimeoutMs=${params.noOutputTimeoutMs} pid=${managedRunPid ?? "node"}`,
       );
       const observedActivity = params.events.hasObservedCliActivity();
-      const timeoutDecision = resolveCliNoOutputTimeoutDecision({
-        context: failoverContext,
-        timeoutMs: params.noOutputTimeoutMs,
-        quietDurationMs: params.noOutputTimeoutMs,
-        cliTimeout: {
-          mode: "no-output",
-          timeoutSeconds,
-          observedActivity,
-          activeToolCount: params.events.activeParsedToolCount(),
-          backgroundTaskCount: 0,
-        },
-        hasOutputText: Boolean(stdoutDiagnostic || stderrDiagnostic),
-        useResume: params.useResume,
-        hasReplayUnsafeActivity: observedActivity,
-      });
+      const timeoutDecision = pluginTimeout.error
+        ? { error: pluginTimeout.error }
+        : resolveCliNoOutputTimeoutDecision({
+            context: failoverContext,
+            timeoutMs: params.noOutputTimeoutMs,
+            quietDurationMs: params.noOutputTimeoutMs,
+            cliTimeout: {
+              mode: "no-output",
+              timeoutSeconds,
+              observedActivity,
+              activeToolCount: params.events.activeParsedToolCount(),
+              backgroundTaskCount: 0,
+            },
+            hasOutputText: Boolean(stdoutDiagnostic || stderrDiagnostic),
+            useResume: params.useResume,
+            hasReplayUnsafeActivity: observedActivity,
+          });
       const retryable = timeoutDecision.error.code === "cli_no_output_timeout";
       const deferNotice =
         retryable &&

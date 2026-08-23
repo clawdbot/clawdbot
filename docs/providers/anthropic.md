@@ -27,7 +27,8 @@ Anthropic's official Agent SDK to run the installed Claude Code executable.
 Claude Code keeps ownership of its existing login and subscription; OpenClaw
 does not need to extract that login or synthesize Anthropic API requests.
 Explicit non-native API-key and token credentials continue to use the existing
-protected CLI credential-forwarding path for compatibility. Imported native
+protected, per-invocation CLI credential-forwarding path for compatibility.
+Imported native
 OAuth profiles reuse the matching, identity-verified Claude Code login instead.
 Anthropic's June 15, 2026
 support update paused the announced separate Agent SDK billing change: Claude
@@ -96,18 +97,15 @@ OpenClaw release:
 
     <Steps>
       <Step title="Ensure Claude CLI is installed and logged in">
-        OpenClaw's streamed session correlation requires the
-        `msg_lifecycle_v1` capability. Claude Code 2.1.206 is the first
-        published build known to advertise it. Verify the installed version:
+        OpenClaw runs the installed Claude Code executable through Anthropic's
+        official Agent SDK. Verify that Claude Code is installed and up to date:
 
         ```bash
         claude --version
         ```
 
-        A lower-version compatible backport or wrapper remains selectable;
-        OpenClaw verifies the capability at runtime. If the runtime rejects the
-        installed build, update Claude Code and restart OpenClaw so the gateway
-        launches the new binary:
+        If the installed build is incompatible, update Claude Code and restart
+        OpenClaw so the gateway launches the new binary:
 
         ```bash
         claude update
@@ -122,12 +120,13 @@ OpenClaw release:
         OpenClaw detects the existing Claude CLI login. Normal agent turns use
         the official Agent SDK with the installed, authenticated Claude Code
         executable. Imported native OAuth profiles reuse the verified Claude
-        Code login; non-native API-key and token profiles retain protected
-        credential forwarding.
+        Code login; non-native API-key and token profiles retain protected,
+        per-invocation credential forwarding.
 
-        Agent SDK turns resume the persisted Claude session, but currently
-        start a new Claude Code subprocess for each turn. Existing
-        credential-forwarding CLI sessions retain their warm-process reuse.
+        Consecutive agent turns reuse the same warm Agent SDK query and Claude
+        Code subprocess when their authenticated session and execution policy
+        match. If that process ends or the gateway restarts, the next turn
+        resumes the persisted Claude Code session.
       </Step>
       <Step title="Verify the model is available">
         ```bash
@@ -138,8 +137,6 @@ OpenClaw release:
 
     <Note>
     Setup and runtime details for the Claude CLI backend are in [CLI Backends](/gateway/cli-backends).
-    `openclaw doctor` also reports advisory guidance for an installed Claude
-    Code version below the first-known compatible release.
     </Note>
 
     <Warning>

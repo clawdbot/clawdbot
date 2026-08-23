@@ -1,10 +1,19 @@
+import { randomUUID } from "node:crypto";
+import { PassThrough } from "node:stream";
 import type {
   Options as ClaudeAgentSdkOptions,
   PermissionMode as ClaudeAgentSdkPermissionMode,
   PermissionResult as ClaudeAgentSdkPermissionResult,
+  Query as ClaudeAgentSdkQuery,
   SDKUserMessage as ClaudeAgentSdkUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { CliBackendExecute, CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import type {
+  CliBackendExecute,
+  CliBackendExecuteContext,
+  CliBackendLiveSessionCapability,
+  CliBackendLiveSessionCloseReason,
+  CliBackendLiveSessionHandle,
+} from "openclaw/plugin-sdk/cli-backend";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CLAUDE_PERMISSION_MODES = new Set<ClaudeAgentSdkPermissionMode>([
@@ -50,6 +59,32 @@ const CLAUDE_VALUE_FLAGS = new Set([
   "--plugin-dir",
   "--plugin-dir-no-mcp",
 ]);
+const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
+const RESULT_HOLDING_BACKGROUND_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
+
+type ClaudeAgentSdkTurn = {
+  context: CliBackendExecuteContext;
+  controller: AbortController;
+  events: PassThrough;
+  sawTerminalResult: boolean;
+  error?: Error;
+};
+
+type ClaudeAgentSdkSession = {
+  handle: CliBackendLiveSessionHandle;
+  capability: CliBackendLiveSessionCapability;
+  controller: AbortController;
+  prompts: PassThrough;
+  currentTurn?: ClaudeAgentSdkTurn;
+  query?: ClaudeAgentSdkQuery;
+  idleTimer?: ReturnType<typeof setTimeout>;
+  outstandingBackgroundTaskIds: Set<string>;
+  closed: boolean;
+  resolveExit: () => void;
+  exited: Promise<void>;
+};
+
+const claudeAgentSdkSessions = new WeakMap<CliBackendLiveSessionHandle, ClaudeAgentSdkSession>();
 
 function splitClaudeToolNames(value: string): string[] {
   return value
@@ -75,24 +110,24 @@ function consumeClaudeOptionValue(params: {
 }
 
 async function authorizeClaudeAgentSdkTool(params: {
-  context: CliBackendExecuteContext;
-  controller: AbortController;
+  currentTurn: () => ClaudeAgentSdkTurn | undefined;
   toolName: string;
   input: Record<string, unknown>;
   signal: AbortSignal;
   toolUseId?: string;
 }): Promise<ClaudeAgentSdkPermissionResult> {
-  if (params.signal.aborted || params.controller.signal.aborted) {
+  const turn = params.currentTurn();
+  if (!turn || params.signal.aborted || turn.controller.signal.aborted) {
     return { behavior: "deny", message: "The OpenClaw run is no longer active." };
   }
   try {
-    const decision = await params.context.requestToolPermission({
+    const decision = await turn.context.requestToolPermission({
       toolName: params.toolName,
       toolInput: params.input,
       ...(params.toolUseId ? { toolCallId: params.toolUseId } : {}),
       abortSignal: params.signal,
     });
-    if (params.signal.aborted || params.controller.signal.aborted) {
+    if (params.currentTurn() !== turn || params.signal.aborted || turn.controller.signal.aborted) {
       return { behavior: "deny", message: "The OpenClaw run is no longer active." };
     }
     return decision.behavior === "allow"
@@ -106,6 +141,7 @@ async function authorizeClaudeAgentSdkTool(params: {
 function resolveClaudeAgentSdkOptions(
   context: CliBackendExecuteContext,
   abortController: AbortController,
+  currentTurn: () => ClaudeAgentSdkTurn | undefined,
 ): ClaudeAgentSdkOptions {
   const options: ClaudeAgentSdkOptions = {
     abortController,
@@ -123,8 +159,7 @@ function resolveClaudeAgentSdkOptions(
     },
     canUseTool: (toolName, input, request) =>
       authorizeClaudeAgentSdkTool({
-        context,
-        controller: abortController,
+        currentTurn,
         toolName,
         input,
         signal: request.signal,
@@ -153,8 +188,7 @@ function resolveClaudeAgentSdkOptions(
               // Settings-level allow rules run before canUseTool. A native
               // pre-tool hook keeps every action under its admitted run owner.
               const decision = await authorizeClaudeAgentSdkTool({
-                context,
-                controller: abortController,
+                currentTurn,
                 toolName: input.tool_name,
                 input: input.tool_input,
                 signal: request.signal,
@@ -346,39 +380,269 @@ function resolveClaudeAgentSdkOptions(
   return options;
 }
 
+function createClaudeAgentSdkUserMessage(
+  context: CliBackendExecuteContext,
+): ClaudeAgentSdkUserMessage {
+  return {
+    type: "user",
+    message: { role: "user", content: context.prompt },
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+    ...(context.sessionId ? { session_id: context.sessionId } : {}),
+  };
+}
+
+function closeClaudeAgentSdkSession(
+  session: ClaudeAgentSdkSession,
+  _reason: CliBackendLiveSessionCloseReason,
+  error?: unknown,
+): void {
+  if (session.closed) {
+    return;
+  }
+  session.closed = true;
+  clearTimeout(session.idleTimer);
+  session.capability.remove(session.handle);
+
+  const turn = session.currentTurn;
+  session.currentTurn = undefined;
+  if (turn) {
+    turn.error =
+      error instanceof Error ? error : new Error("Claude Agent SDK live session closed.");
+    turn.controller.abort();
+    turn.events.end();
+  }
+  session.controller.abort();
+  session.prompts.end();
+  session.query?.close();
+  if (!session.query) {
+    session.resolveExit();
+  }
+}
+
+function completeClaudeAgentSdkTurn(session: ClaudeAgentSdkSession): void {
+  const turn = session.currentTurn;
+  if (!turn) {
+    return;
+  }
+  session.currentTurn = undefined;
+  turn.controller.abort();
+  turn.events.end();
+  session.idleTimer = setTimeout(() => {
+    session.handle.close("idle");
+  }, CLAUDE_LIVE_IDLE_TIMEOUT_MS);
+  session.idleTimer.unref();
+}
+
+function acceptClaudeAgentSdkMessage(
+  session: ClaudeAgentSdkSession,
+  message: Record<string, unknown>,
+): void {
+  const turn = session.currentTurn;
+  if (!turn) {
+    return;
+  }
+  if (message.type === "system" && message.subtype === "background_tasks_changed") {
+    session.outstandingBackgroundTaskIds.clear();
+    for (const task of Array.isArray(message.tasks) ? message.tasks : []) {
+      if (
+        isRecord(task) &&
+        typeof task.task_type === "string" &&
+        RESULT_HOLDING_BACKGROUND_TASK_TYPES.has(task.task_type) &&
+        typeof task.task_id === "string" &&
+        task.task_id
+      ) {
+        session.outstandingBackgroundTaskIds.add(task.task_id);
+      }
+    }
+  }
+  turn.events.write(message);
+  if (message.type === "result") {
+    turn.sawTerminalResult = true;
+    // Local agents/workflows emit an interim result before their final
+    // answer; keep the turn and capture grant alive until its final result.
+    if (session.outstandingBackgroundTaskIds.size === 0) {
+      completeClaudeAgentSdkTurn(session);
+    }
+  }
+}
+
+async function consumeClaudeAgentSdkSession(session: ClaudeAgentSdkSession): Promise<void> {
+  try {
+    if (!session.query) {
+      throw new Error("Claude Agent SDK live session started without a query.");
+    }
+    for await (const message of session.query) {
+      acceptClaudeAgentSdkMessage(session, { ...message });
+    }
+    if (!session.closed) {
+      const error = new Error("Claude Agent SDK live session exited unexpectedly.");
+      session.handle.close("abort", error);
+    }
+  } catch (error) {
+    if (!session.closed) {
+      session.handle.close("abort", error);
+    }
+  } finally {
+    session.resolveExit();
+  }
+}
+
+function createClaudeAgentSdkSession(params: {
+  context: CliBackendExecuteContext;
+  capability: CliBackendLiveSessionCapability;
+}): ClaudeAgentSdkSession {
+  let resolveExit: () => void = () => {};
+  const exited = new Promise<void>((resolve) => {
+    resolveExit = resolve;
+  });
+  const session: ClaudeAgentSdkSession = {
+    capability: params.capability,
+    controller: new AbortController(),
+    prompts: new PassThrough({ objectMode: true }),
+    outstandingBackgroundTaskIds: new Set(),
+    closed: false,
+    resolveExit,
+    exited,
+    handle: {
+      key: params.capability.ownerKey,
+      generation: randomUUID(),
+      fingerprint: params.capability.fingerprint,
+      providerId: params.capability.ownerKey.split(":", 1)[0] ?? "claude-cli",
+      modelId: params.context.modelId,
+      isIdle: () => !session.closed && !session.currentTurn,
+      close: (reason, error) => closeClaudeAgentSdkSession(session, reason, error),
+      waitForExit: () => session.exited,
+      cleanupResources: async () => {},
+    },
+  };
+  claudeAgentSdkSessions.set(session.handle, session);
+  params.capability.register(session.handle);
+  return session;
+}
+
+async function* executeClaudeAgentSdkLiveTurn(
+  context: CliBackendExecuteContext,
+  capability: CliBackendLiveSessionCapability,
+): AsyncIterable<Record<string, unknown>> {
+  const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  let existingHandle = capability.current();
+  if (existingHandle && existingHandle.fingerprint !== capability.fingerprint) {
+    existingHandle.close("restart");
+    await existingHandle.waitForExit();
+    existingHandle = capability.current();
+  }
+
+  let session = existingHandle ? claudeAgentSdkSessions.get(existingHandle) : undefined;
+  if (existingHandle && (!session || session.closed)) {
+    existingHandle.close("restart");
+    await existingHandle.waitForExit();
+    existingHandle = capability.current();
+    session = undefined;
+  }
+  session ??= createClaudeAgentSdkSession({ context, capability });
+  session.capability = capability;
+  if (session.currentTurn) {
+    throw new Error("Claude Agent SDK live session is already handling another turn.");
+  }
+  clearTimeout(session.idleTimer);
+
+  const turn: ClaudeAgentSdkTurn = {
+    context,
+    controller: new AbortController(),
+    events: new PassThrough({ objectMode: true }),
+    sawTerminalResult: false,
+  };
+  session.currentTurn = turn;
+  const abort = () => session.handle.close("abort", context.abortSignal?.reason);
+  context.abortSignal?.addEventListener("abort", abort, { once: true });
+
+  try {
+    if (context.abortSignal?.aborted) {
+      abort();
+      throw context.abortSignal.reason ?? new Error("Claude Agent SDK live turn was aborted.");
+    }
+    // Capture activation adopts this admitted turn onto the exact registered
+    // process bearer before either its prompt or any tool call can execute.
+    capability.activate(session.handle);
+
+    if (!session.query) {
+      const options = resolveClaudeAgentSdkOptions(
+        context,
+        session.controller,
+        () => session.currentTurn,
+      );
+      session.query = query({ prompt: session.prompts, options });
+      void consumeClaudeAgentSdkSession(session);
+    }
+    if (session.closed || session.currentTurn !== turn) {
+      throw new Error("Claude Agent SDK live session closed before its prompt was accepted.");
+    }
+    session.prompts.write(createClaudeAgentSdkUserMessage(context));
+
+    for await (const record of turn.events) {
+      if (!isRecord(record)) {
+        throw new Error("Claude Agent SDK live session returned an invalid stream record.");
+      }
+      yield record;
+    }
+    if (turn.error) {
+      throw turn.error;
+    }
+    if (!turn.sawTerminalResult) {
+      throw new Error("Claude Agent SDK live turn exited without a terminal result.");
+    }
+  } catch (error) {
+    if (!session.closed) {
+      session.handle.close("abort", error);
+    }
+    throw error;
+  } finally {
+    turn.controller.abort();
+    context.abortSignal?.removeEventListener("abort", abort);
+  }
+}
+
 /** Execute an ambient Claude Code login through Anthropic's maintained SDK transport. */
 export const executeClaudeAgentSdk: CliBackendExecute = async function* (context) {
+  if (context.liveSession) {
+    yield* executeClaudeAgentSdkLiveTurn(context, context.liveSession);
+    return;
+  }
+
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
-  const abortController = new AbortController();
-  const abort = () => abortController.abort();
+  const controller = new AbortController();
+  const turn: ClaudeAgentSdkTurn = {
+    context,
+    controller,
+    events: new PassThrough({ objectMode: true }),
+    sawTerminalResult: false,
+  };
+  let activeTurn: ClaudeAgentSdkTurn | undefined = turn;
+  const abort = () => controller.abort();
   context.abortSignal?.addEventListener("abort", abort, { once: true });
   if (context.abortSignal?.aborted) {
     abort();
   }
 
-  let sawTerminalResult = false;
   try {
-    const options = resolveClaudeAgentSdkOptions(context, abortController);
+    const options = resolveClaudeAgentSdkOptions(context, controller, () => activeTurn);
     const prompt = (async function* (): AsyncIterable<ClaudeAgentSdkUserMessage> {
-      yield {
-        type: "user",
-        message: { role: "user", content: context.prompt },
-        parent_tool_use_id: null,
-        ...(context.sessionId ? { session_id: context.sessionId } : {}),
-      };
+      yield createClaudeAgentSdkUserMessage(context);
     })();
     for await (const message of query({ prompt, options })) {
       if (message.type === "result") {
-        sawTerminalResult = true;
+        turn.sawTerminalResult = true;
       }
       yield { ...message };
     }
-    if (!sawTerminalResult && !abortController.signal.aborted) {
+    if (!turn.sawTerminalResult && !controller.signal.aborted) {
       throw new Error("Claude Agent SDK exited without a terminal result.");
     }
   } finally {
-    if (!abortController.signal.aborted) {
-      abortController.abort();
+    activeTurn = undefined;
+    if (!controller.signal.aborted) {
+      controller.abort();
     }
     context.abortSignal?.removeEventListener("abort", abort);
   }

@@ -181,8 +181,8 @@ export async function settlePreparedCliRun(params: {
   };
   if (runParams.cleanupCliLiveSessionOnRunEnd === true) {
     try {
-      const { closeClaudeSession } = await import("./claude-live-registry.js");
-      await closeClaudeSession(context, "restart");
+      const { closeCliLiveSession } = await import("./cli-live-session-registry.js");
+      await closeCliLiveSession(context, "restart");
     } catch (error) {
       recordCleanupError(error);
     }

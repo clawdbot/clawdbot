@@ -177,6 +177,37 @@ export type CliBackendToolPermissionResult =
   | { behavior: "allow"; updatedInput: Record<string, unknown> }
   | { behavior: "deny"; message: string };
 
+/** Lifecycle reasons accepted by a plugin-owned reusable execution process. */
+export type CliBackendLiveSessionCloseReason =
+  | "idle"
+  | "restart"
+  | "abort"
+  | "mcp-capture-rotation";
+
+/** Plugin-owned process lifecycle registered with the generic host owner. */
+export type CliBackendLiveSessionHandle = {
+  key: string;
+  generation: string;
+  fingerprint: string;
+  providerId: string;
+  modelId: string;
+  isIdle(): boolean;
+  close(reason: CliBackendLiveSessionCloseReason, error?: unknown): void;
+  waitForExit(): Promise<void>;
+  cleanupResources(): Promise<void>;
+};
+
+/** Closure-bound host capability for one admitted reusable-runtime turn. */
+export type CliBackendLiveSessionCapability = {
+  ownerKey: string;
+  fingerprint: string;
+  current(): CliBackendLiveSessionHandle | undefined;
+  register(handle: CliBackendLiveSessionHandle): void;
+  /** Rebinds this exact admitted turn to the registered process's stable capture. */
+  activate(handle: CliBackendLiveSessionHandle): void;
+  remove(handle: CliBackendLiveSessionHandle): void;
+};
+
 /** Exact prepared local process facts consumed by a plugin-owned execution transport. */
 export type CliBackendExecuteContext = {
   command: string;
@@ -192,6 +223,8 @@ export type CliBackendExecuteContext = {
   timeoutMs: number;
   executionMode?: CliBackendExecutionMode;
   toolAvailability?: CliBackendToolAvailability;
+  /** Exact host-owned reusable process lifecycle and current-turn admission. */
+  liveSession?: CliBackendLiveSessionCapability;
   /** Closure-bound approval capability; retained copies fail after the run closes. */
   requestToolPermission: (
     request: CliBackendToolPermissionRequest,

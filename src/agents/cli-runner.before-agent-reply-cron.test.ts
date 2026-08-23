@@ -81,14 +81,11 @@ vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: executePreparedCliRunMock,
 }));
 
-vi.mock("./cli-runner/claude-live-registry.js", () => ({
-  closeClaudeSession: closeClaudeSessionMock,
-  getClaudeGeneration: vi.fn(() => undefined),
-  hasClaudeSession: vi.fn(() => false),
-}));
-
-vi.mock("./cli-runner/claude-live-session-policy.js", () => ({
-  acceptsClaudeLive: vi.fn(() => false),
+vi.mock("./cli-runner/cli-live-session-registry.js", () => ({
+  closeCliLiveSession: closeClaudeSessionMock,
+  getCliLiveSessionGeneration: vi.fn(() => undefined),
+  hasCliLiveSession: vi.fn(() => false),
+  acceptsCliLiveSession: vi.fn(() => false),
 }));
 
 vi.mock("../gateway/mcp-http.js", () => ({

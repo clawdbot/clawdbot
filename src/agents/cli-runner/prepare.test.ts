@@ -455,7 +455,7 @@ describe("prepareCliRunContext", () => {
         args: [],
         cleanup: vi.fn(async () => undefined),
       })),
-      getClaudeGeneration: vi.fn(() => undefined),
+      getCliLiveSessionGeneration: vi.fn(() => undefined),
       readExternalCliBootstrapCredential: readExternalCliBootstrapCredentialImpl,
       resolveApiKeyForProfile: resolveApiKeyForProfileImpl,
       // Keep preparation off the real plugin-metadata snapshot; catalog-driven
@@ -4455,7 +4455,7 @@ describe("prepareCliRunContext", () => {
     setCliRunnerPrepareTestDeps({
       claudeCliSessionTranscriptHasContent: transcriptCheck,
       claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-      getClaudeGeneration: getLiveSessionGeneration,
+      getCliLiveSessionGeneration: getLiveSessionGeneration,
     });
 
     const context = await fixture.prepare({

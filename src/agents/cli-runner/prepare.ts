@@ -129,12 +129,12 @@ import {
 } from "../workspace.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
-import { getClaudeGeneration } from "./claude-live-registry.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
   resolveBundledCliBackendAuthPolicy,
   type BundledCliBackendAuthPolicy,
 } from "./cli-backend-auth-policy.js";
+import { getCliLiveSessionGeneration } from "./cli-live-session-registry.js";
 import { buildCliAgentSystemPrompt, isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import { buildCliMcpGrantContext, normalizeOptionalMcpContextValue } from "./mcp-grant-context.js";
@@ -199,7 +199,7 @@ const defaultPrepareDeps = {
   prepareClaudeCliSkillsPlugin,
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
-  getClaudeGeneration,
+  getCliLiveSessionGeneration,
   readExternalCliBootstrapCredential,
   resolveApiKeyForProfile,
   loadManifestModelCatalog,
@@ -1558,7 +1558,7 @@ export async function prepareCliRunContext(
       preparedBackendFinal.backend.liveSession === "claude-stdio" &&
       preparedBackendFinal.backend.output === "jsonl" &&
       preparedBackendFinal.backend.input === "stdin" &&
-      prepareDeps.getClaudeGeneration({
+      prepareDeps.getCliLiveSessionGeneration({
         backendId: backendResolved.id,
         agentAccountId: params.agentAccountId,
         agentId: workspaceResolution.agentId,

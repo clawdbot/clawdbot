@@ -23,9 +23,12 @@ import {
 import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
-import { buildClaudeOwnerKey, closeClaudeSession } from "./claude-live-registry.js";
-import { acceptsClaudeLive } from "./claude-live-session-policy.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import {
+  acceptsCliLiveSession,
+  buildCliLiveOwnerKey,
+  closeCliLiveSession,
+} from "./cli-live-session-registry.js";
 import { executeDeps } from "./execute-deps.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import {
@@ -263,7 +266,7 @@ export async function executePreparedCliRun(
     sendSystemPromptOnResume: resendSystemPromptForSoftResume,
   });
 
-  const claudeOwnerKey = buildClaudeOwnerKey({
+  const cliLiveOwnerKey = buildCliLiveOwnerKey({
     agentAccountId: params.agentAccountId,
     agentId: params.agentId,
     authProfileId: context.effectiveAuthProfileId,
@@ -277,7 +280,7 @@ export async function executePreparedCliRun(
     runId: params.runId,
     workspaceDir: context.workspaceDir,
     cliSessionId: useResume ? resolvedSessionId : undefined,
-    ownerKey: claudeOwnerKey,
+    ownerKey: cliLiveOwnerKey,
   });
   // Plugin-owned transports own their child/session lifecycle; their MCP grant
   // still needs the per-turn capture key used by other non-live executions.
@@ -288,7 +291,7 @@ export async function executePreparedCliRun(
     params.controlOperation !== "compact",
   );
   const useManagedClaudeLiveSession =
-    !usePluginOwnedExecution && acceptsClaudeLive(context) && !params.onSuccessfulAuthBinding;
+    usePluginOwnedExecution && acceptsCliLiveSession(context) && !params.onSuccessfulAuthBinding;
   // Fresh-session retries invoke this function again. Keep one helper per
   // observable CLI attempt so every started call retains its own terminal event.
   const diagnostics = createClaudeCliModelCallDiagnostics({
@@ -395,9 +398,7 @@ export async function executePreparedCliRun(
         isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
       const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
       const initialGatewayCaptureKey =
-        useManagedClaudeLiveSession || nodePlacement || !context.mcpDeliveryCapture
-          ? undefined
-          : crypto.randomUUID();
+        nodePlacement || !context.mcpDeliveryCapture ? undefined : crypto.randomUUID();
       const mcpCaptureAttempt = nodePlacement
         ? { env: {}, cleanup: undefined }
         : await prepareCliBundleMcpCaptureAttempt({
@@ -546,7 +547,9 @@ export async function executePreparedCliRun(
         useResume,
         trigger: params.trigger,
       });
-      toolTracking.beginGatewayCapture(initialGatewayCaptureKey);
+      if (!useManagedClaudeLiveSession) {
+        toolTracking.beginGatewayCapture(initialGatewayCaptureKey);
+      }
       runOutput = await executeCliProcess({
         context,
         backend,
@@ -560,6 +563,7 @@ export async function executePreparedCliRun(
         nodeClearEnv: nodeClearEnv.length > 0 ? nodeClearEnv : undefined,
         useManagedClaudeLiveSession,
         usePluginOwnedExecution,
+        initialGatewayCaptureKey,
         useResume,
         cliSessionIdToUse,
         resolvedSessionId,
@@ -574,10 +578,12 @@ export async function executePreparedCliRun(
         outputMode,
         logOutputText,
         cliTurnStartedAt,
-        fallbackCleanup: fallbackClaudeSkillsPlugin?.cleanup,
-        claimFallbackCleanup: () => {
-          fallbackClaudeSkillsPluginCleanupOwned = fallbackClaudeSkillsPlugin !== undefined;
-        },
+        claimLiveSessionResources: fallbackClaudeSkillsPlugin?.cleanup
+          ? () => {
+              fallbackClaudeSkillsPluginCleanupOwned = true;
+              return fallbackClaudeSkillsPlugin.cleanup;
+            }
+          : undefined,
         observeForkSuccessor,
         options,
       });
@@ -630,7 +636,7 @@ export async function executePreparedCliRun(
         }
         // The fork argument only applies at process startup; a cached warm child
         // would run inside the source session. Force a fresh spawn.
-        await closeClaudeSession(context, "restart");
+        await closeCliLiveSession(context, "restart");
       }
       return await executeAttempt();
     });

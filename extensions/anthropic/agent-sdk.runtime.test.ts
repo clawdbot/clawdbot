@@ -1,4 +1,9 @@
-import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import { PassThrough } from "node:stream";
+import type {
+  CliBackendExecuteContext,
+  CliBackendLiveSessionCapability,
+  CliBackendLiveSessionHandle,
+} from "openclaw/plugin-sdk/cli-backend";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { executeClaudeAgentSdk } from "./agent-sdk.runtime.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
@@ -19,6 +24,7 @@ const SUCCESS_RESULT = {
   result: "ok",
   session_id: SESSION_ID,
 };
+const liveCapabilities = new Set<CliBackendLiveSessionCapability>();
 
 function createContext(
   overrides: Partial<CliBackendExecuteContext> = {},
@@ -88,7 +94,54 @@ function sdkOptions(): Record<string, unknown> {
   return call?.options ?? {};
 }
 
-afterEach(() => {
+function createLiveCapability(
+  fingerprint = "matching-session-policy",
+  state: { current?: CliBackendLiveSessionHandle } = {},
+): CliBackendLiveSessionCapability {
+  const capability: CliBackendLiveSessionCapability = {
+    ownerKey: "claude-cli:authenticated-owner",
+    fingerprint,
+    current: () => state.current,
+    register: vi.fn((handle) => {
+      state.current = handle;
+    }),
+    activate: vi.fn(),
+    remove: vi.fn((handle) => {
+      if (state.current === handle) {
+        state.current = undefined;
+      }
+    }),
+  };
+  liveCapabilities.add(capability);
+  return capability;
+}
+
+function useLiveSdkStreams() {
+  const streams: PassThrough[] = [];
+  const prompts: Array<Record<string, unknown>[]> = [];
+  const closes: ReturnType<typeof vi.fn>[] = [];
+  queryMock.mockImplementation(({ prompt }: { prompt: PassThrough }) => {
+    const stream = new PassThrough({ objectMode: true });
+    const messages: Record<string, unknown>[] = [];
+    const close = vi.fn(() => stream.end());
+    prompt.on("data", (message: Record<string, unknown>) => messages.push(message));
+    streams.push(stream);
+    prompts.push(messages);
+    closes.push(close);
+    return Object.assign(stream, { close });
+  });
+  return { streams, prompts, closes };
+}
+
+afterEach(async () => {
+  for (const capability of liveCapabilities) {
+    const session = capability.current();
+    if (session) {
+      session.close("restart");
+      await session.waitForExit();
+    }
+  }
+  liveCapabilities.clear();
   queryMock.mockReset();
   vi.restoreAllMocks();
 });
@@ -191,6 +244,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         type: "user",
         message: { role: "user", content: "Remember the launch code." },
         parent_tool_use_id: null,
+        uuid: expect.any(String),
         session_id: SESSION_ID,
       },
     ]);
@@ -207,6 +261,185 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     await collect(createContext({ useResume: true }));
     expect(sdkOptions()).toEqual(expect.objectContaining({ resume: SESSION_ID }));
     expect(sdkOptions()).not.toHaveProperty("sessionId");
+  });
+
+  it("reuses one official SDK query and Claude process across compatible agent turns", async () => {
+    const live = useLiveSdkStreams();
+    const capability = createLiveCapability();
+    const first = collect(createContext({ prompt: "Remember orange.", liveSession: capability }));
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
+    live.streams[0]?.write({ ...SUCCESS_RESULT, result: "Remembered orange." });
+
+    await expect(first).resolves.toContainEqual(
+      expect.objectContaining({ result: "Remembered orange." }),
+    );
+    const firstHandle = capability.current();
+    expect(firstHandle?.isIdle()).toBe(true);
+
+    const second = collect(
+      createContext({
+        prompt: "Which color did I mention?",
+        useResume: true,
+        liveSession: capability,
+      }),
+    );
+    await vi.waitFor(() => expect(live.prompts[0]).toHaveLength(2));
+    live.streams[0]?.write({ ...SUCCESS_RESULT, result: "Orange." });
+
+    await expect(second).resolves.toContainEqual(expect.objectContaining({ result: "Orange." }));
+    expect(queryMock).toHaveBeenCalledOnce();
+    expect(capability.current()).toBe(firstHandle);
+    expect(capability.activate).toHaveBeenCalledTimes(2);
+    expect(live.prompts[0]?.map((message) => message.message)).toEqual([
+      { role: "user", content: "Remember orange." },
+      { role: "user", content: "Which color did I mention?" },
+    ]);
+  });
+
+  it("restarts the warm SDK query when its system prompt or execution fingerprint changes", async () => {
+    const live = useLiveSdkStreams();
+    const shared: { current?: CliBackendLiveSessionHandle } = {};
+    const originalCapability = createLiveCapability("original-system-prompt", shared);
+    const original = collect(createContext({ liveSession: originalCapability }));
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
+    live.streams[0]?.write(SUCCESS_RESULT);
+    await original;
+    const originalSession = originalCapability.current();
+
+    const changedCapability = createLiveCapability("changed-system-prompt", shared);
+    const changed = collect(
+      createContext({
+        systemPrompt: "A changed authoritative OpenClaw system prompt.",
+        useResume: true,
+        liveSession: changedCapability,
+      }),
+    );
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledTimes(2));
+    live.streams[1]?.write({ ...SUCCESS_RESULT, result: "new system prompt" });
+
+    await expect(changed).resolves.toContainEqual(
+      expect.objectContaining({ result: "new system prompt" }),
+    );
+    expect(live.closes[0]).toHaveBeenCalledOnce();
+    expect(changedCapability.current()?.generation).not.toBe(originalSession?.generation);
+    expect(queryMock.mock.calls[1]?.[0]?.options).toEqual(
+      expect.objectContaining({
+        resume: SESSION_ID,
+        systemPrompt: expect.objectContaining({
+          append: "A changed authoritative OpenClaw system prompt.",
+        }),
+      }),
+    );
+  });
+
+  it("rebinds a persistent SDK approval callback to only the active admitted turn", async () => {
+    const live = useLiveSdkStreams();
+    const capability = createLiveCapability();
+    const firstApproval = vi.fn(async () => ({
+      behavior: "allow" as const,
+      updatedInput: { command: "echo first" },
+    }));
+    const secondApproval = vi.fn(async () => ({
+      behavior: "deny" as const,
+      message: "The second admitted turn denied native execution.",
+    }));
+    const first = collect(
+      createContext({ requestToolPermission: firstApproval, liveSession: capability }),
+    );
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
+    const canUseTool = sdkOptions().canUseTool as (
+      toolName: string,
+      input: Record<string, unknown>,
+      details: { signal: AbortSignal; toolUseID: string },
+    ) => Promise<unknown>;
+    const firstRequest = {
+      signal: new AbortController().signal,
+      toolUseID: "native-turn-first",
+    };
+
+    await expect(canUseTool("Bash", { command: "echo first" }, firstRequest)).resolves.toEqual({
+      behavior: "allow",
+      updatedInput: { command: "echo first" },
+    });
+    live.streams[0]?.write(SUCCESS_RESULT);
+    await first;
+
+    await expect(canUseTool("Bash", { command: "echo stale" }, firstRequest)).resolves.toEqual({
+      behavior: "deny",
+      message: "The OpenClaw run is no longer active.",
+    });
+
+    const second = collect(
+      createContext({
+        prompt: "second",
+        requestToolPermission: secondApproval,
+        liveSession: capability,
+      }),
+    );
+    await vi.waitFor(() => expect(live.prompts[0]).toHaveLength(2));
+    await expect(
+      canUseTool(
+        "Bash",
+        { command: "echo second" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "native-turn-second",
+        },
+      ),
+    ).resolves.toEqual({
+      behavior: "deny",
+      message: "The second admitted turn denied native execution.",
+    });
+    live.streams[0]?.write(SUCCESS_RESULT);
+    await second;
+
+    expect(firstApproval).toHaveBeenCalledOnce();
+    expect(secondApproval).toHaveBeenCalledOnce();
+    expect(queryMock).toHaveBeenCalledOnce();
+  });
+
+  it("holds provisional synthetic results until the real background-agent answer arrives", async () => {
+    const live = useLiveSdkStreams();
+    const capability = createLiveCapability();
+    const observed: Record<string, unknown>[] = [];
+    let settled = false;
+    const result = (async () => {
+      for await (const event of executeClaudeAgentSdk(createContext({ liveSession: capability }))) {
+        observed.push(event);
+      }
+      settled = true;
+      return observed;
+    })();
+    await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
+    const stream = live.streams[0];
+    expect(stream).toBeDefined();
+
+    stream?.write({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{ task_id: "background-agent", task_type: "local_agent" }],
+    });
+    stream?.write({
+      type: "assistant",
+      message: {
+        model: "<synthetic>",
+        content: [{ type: "text", text: "No response requested." }],
+      },
+    });
+    stream?.write({ ...SUCCESS_RESULT, result: "" });
+    await vi.waitFor(() => expect(observed).toHaveLength(3));
+    expect(settled).toBe(false);
+
+    stream?.write({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+    stream?.write({ ...SUCCESS_RESULT, result: "background answer" });
+
+    await expect(result).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "result", result: "background answer" }),
+      ]),
+    );
+    expect(observed.at(-1)).toEqual(expect.objectContaining({ result: "background answer" }));
+    expect(live.closes[0]).not.toHaveBeenCalled();
   });
 
   it("keeps restricted native tools and MCP grants inside the exact host-owned surface", async () => {
