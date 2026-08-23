@@ -2209,14 +2209,14 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("treats deferred validation-loop terminal summaries as aborted chat events", async () => {
-    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const { EmbeddedTuiBackend: DeferredTerminalBackend } = await import("./embedded-backend.js");
     const pending = deferred<{
       payloads: Array<{ text: string }>;
       meta: Record<string, unknown>;
     }>();
     agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
 
-    const backend = new EmbeddedTuiBackend();
+    const backend = new DeferredTerminalBackend();
     const events: Array<{ event: string; payload: unknown }> = [];
     backend.onEvent = (evt) => {
       events.push({ event: evt.event, payload: evt.payload });
@@ -2287,14 +2287,14 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("allows deferred validation candidates to recover through fallback", async () => {
-    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const { EmbeddedTuiBackend: FallbackRecoveryBackend } = await import("./embedded-backend.js");
     const pending = deferred<{
       payloads: Array<{ text: string }>;
       meta: Record<string, unknown>;
     }>();
     agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
 
-    const backend = new EmbeddedTuiBackend();
+    const backend = new FallbackRecoveryBackend();
     const events: Array<{ event: string; payload: unknown }> = [];
     backend.onEvent = (evt) => {
       events.push({ event: evt.event, payload: evt.payload });
@@ -2365,14 +2365,14 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("retains validation summaries across summary-less lifecycle errors", async () => {
-    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const { EmbeddedTuiBackend: SummaryRetentionBackend } = await import("./embedded-backend.js");
     const pending = deferred<{
       payloads: Array<{ text: string }>;
       meta: Record<string, unknown>;
     }>();
     agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
 
-    const backend = new EmbeddedTuiBackend();
+    const backend = new SummaryRetentionBackend();
     const events: Array<{ event: string; payload: unknown }> = [];
     backend.onEvent = (evt) => {
       events.push({ event: evt.event, payload: evt.payload });

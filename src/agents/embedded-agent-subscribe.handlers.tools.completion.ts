@@ -11,7 +11,6 @@ import {
   type AgentPatchSummaryEventData,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
-import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
@@ -44,6 +43,7 @@ import {
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
+import { scheduleEmbeddedAfterToolCallHook } from "./embedded-agent-subscribe.handlers.tools.after-call.js";
 import {
   applyCurrentMessageProvider,
   applyToolSendReceiptForExtraction,
@@ -704,27 +704,22 @@ export async function handleToolExecutionEnd(
   }
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
-    const hookEvent: PluginHookAfterToolCallEvent = {
-      toolName,
-      params: startArgs,
-      runId,
-      toolCallId,
-      result: sanitizedResult,
-      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
-      durationMs,
-    };
-    void hookRunnerAfter
-      .runAfterToolCall(hookEvent, {
+    scheduleEmbeddedAfterToolCallHook({
+      ctx,
+      hookRunner: hookRunnerAfter,
+      event: {
         toolName,
-        agentId: ctx.params.agentId,
-        sessionKey: ctx.params.sessionKey,
-        sessionId: ctx.params.sessionId,
+        params: startArgs,
         runId,
         toolCallId,
-      })
-      .catch((err: unknown) => {
-        ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
-      });
+        result: sanitizedResult,
+        error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+        durationMs,
+      },
+      toolName,
+      toolCallId,
+      runId,
+    });
   }
   return { status: "completed", executionStarted: terminal.executionStarted };
 }
