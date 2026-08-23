@@ -7,9 +7,7 @@ import {
 } from "../app-navigation.ts";
 import { isRouteId, isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
-import { hasNativeUpdateBridge } from "../app/native-link-routing.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
-import { confirmAndStartUpdate } from "../app/update-confirmation.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
@@ -51,7 +49,6 @@ import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
   activeWorkboardBoardId: string;
-  nativeUpdateDeclined: boolean;
   offline: boolean;
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
@@ -370,16 +367,8 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     : gateway
       ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
       : buildSubtitle;
-  const availableUpdate = host.updateAvailable;
-  const showUpdate = availableUpdate !== null;
-  const updateBusy = host.updateBusy || host.updateSchedule?.campaign?.state === "applying";
-  const showInbox = true;
   return html`
-    <div
-      class="sidebar-footer-bar ${showInbox && showUpdate
-        ? "sidebar-footer-bar--two-actions"
-        : "sidebar-footer-bar--one-action"}"
-    >
+    <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
       <button
         type="button"
         class="sidebar-identity-card"
@@ -422,37 +411,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
       <span class="sidebar-identity-card__status" role="status" aria-live="polite"
         >${host.offline ? t("connection.reconnecting") : ""}</span
       >
-      ${showInbox || showUpdate
-        ? html`<span class="sidebar-footer-actions">
-            ${showInbox ? renderAppSidebarAttention(host) : nothing}
-            ${showUpdate
-              ? html`<span class="sidebar-footer-update-slot">
-                  <button
-                    type="button"
-                    class="sidebar-footer-update"
-                    aria-label=${t("updates.sidebar.availableTitle")}
-                    ?disabled=${updateBusy || !host.canUpdate}
-                    @click=${() => {
-                      void confirmAndStartUpdate({
-                        updateAvailable: availableUpdate,
-                        updateSchedule: host.updateSchedule,
-                        viaNativeApp: !host.nativeUpdateDeclined && hasNativeUpdateBridge(),
-                        startGatewayUpdate: host.onUpdate,
-                        ...(host.watchUpdateProgress
-                          ? { watchUpdateProgress: host.watchUpdateProgress }
-                          : {}),
-                      });
-                    }}
-                  >
-                    <span class="sidebar-footer-update__icon" aria-hidden="true"
-                      >${icons.download}</span
-                    >
-                    <span class="sidebar-footer-update__label">${t("updates.sidebar.action")}</span>
-                  </button>
-                </span>`
-              : nothing}
-          </span>`
-        : nothing}
+      <span class="sidebar-footer-actions">${renderAppSidebarAttention(host)}</span>
     </div>
   `;
 }

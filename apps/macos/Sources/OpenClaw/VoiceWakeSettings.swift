@@ -182,6 +182,8 @@ struct VoiceWakeSettings: View {
                             subtitle: "Start listening while you hold the key and show the preview overlay.",
                             binding: self.$state.voicePushToTalkEnabled)
 
+                        self.realtimeRelayToggle
+
                         if self.state.voicePushToTalkEnabled, self.state.talkEnabled {
                             SettingsCardRow(
                                 title: "Push-to-talk paused",
@@ -927,6 +929,18 @@ private struct TriggerPhraseHelpRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
+    }
+}
+
+extension VoiceWakeSettings {
+    private var realtimeRelayToggle: some View {
+        SettingsCardToggleRow(
+            title: "Use realtime Gateway relay",
+            subtitle: """
+            Use the Gateway's configured realtime voice session on this Mac. \
+            Requires realtime, gateway-relay, and agent-consult in Talk settings.
+            """,
+            binding: self.$state.talkRealtimeRelayEnabled)
     }
 }
 

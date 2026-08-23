@@ -2366,6 +2366,7 @@ describe("sqlite session normalization", () => {
     const sourceEntry: InternalSessionEntry = {
       label: "Source",
       lifecycleRunId: "source-run",
+      lastRunId: "settled-source-run",
       sessionId: "source-session",
       updatedAt: 10,
       compactionCheckpoints: [checkpoint],
@@ -2409,6 +2410,7 @@ describe("sqlite session normalization", () => {
       }),
     );
     expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
+    expect((result.entry as InternalSessionEntry).lastRunId).toBeUndefined();
     await expect(loadTranscriptEvents(branchScope)).resolves.toEqual([
       expect.objectContaining({ type: "session", id: result.entry.sessionId }),
       expect.objectContaining({ id: "pre-msg", type: "message" }),

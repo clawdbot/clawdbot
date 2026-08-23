@@ -121,8 +121,17 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     }
   };
 
-  const reconcile = async (): Promise<void> => {
-    await environments.reconcileOnce();
+  const reconcile = async (mode?: "startup"): Promise<void> => {
+    if (mode === "startup") {
+      // Readiness fences live owners; unowned teardown remains in the service-owned sweep.
+      for (const { environmentId, state } of placements.listForReconcile()) {
+        if (environmentId && state !== "failed" && state !== "reclaimed") {
+          await environments.reconcileEnvironment(environmentId);
+        }
+      }
+    } else {
+      await environments.reconcileOnce();
+    }
     const pendingResultOwners = await recoverPendingWorkspaceResults(deps, true);
     const journalOwners = blockingWorkspaceJournalSessions(placements);
     const moveOwners = (await deps.recoverPlacementMoves?.()) ?? new Set<string>();
@@ -172,7 +181,10 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         continue;
       }
       if (isFailedPlacement(placement)) {
-        await failure.retryFailedTeardown(placement);
+        // Terminal cleanup never gates readiness; tracked post-start owners resume it safely.
+        if (mode !== "startup") {
+          await failure.retryFailedTeardown(placement);
+        }
         continue;
       }
       const error = new Error(`Worker dispatch interrupted in ${placement.state}`);

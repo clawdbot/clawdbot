@@ -763,18 +763,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         acceptedChunks.push(chunk);
         markVisibleReplySent();
       } catch (error: unknown) {
-        if (isChannelPartialDeliveryError(error)) {
+        const acceptedChunk = isChannelPartialDeliveryError(error)
+          ? error.deliveryResult
+          : undefined;
+        if (acceptedChunk) {
+          acceptedChunks.push(acceptedChunk.content ?? chunk);
           markVisibleReplySent();
         }
-        throw createFeishuPartialReplyDeliveryError(
-          error,
-          createFeishuReplyDeliveryResult({
+        throw createFeishuPartialReplyDeliveryError(error, {
+          ...acceptedChunk,
+          ...createFeishuReplyDeliveryResult({
             results,
-            visibleReplySent: results.length > 0,
+            visibleReplySent: results.length > 0 || acceptedChunk !== undefined,
             content: acceptedChunks.join(""),
             kind: paramsLocal.useCard ? "card" : "text",
           }),
-        );
+        });
       }
     }
     if (paramsLocal.infoKind === "final") {

@@ -21,7 +21,10 @@ import type {
   MainSessionRecoveryTransitionResult,
   MainSessionRecoveryView,
 } from "./main-session-recovery-types.js";
-import { MAX_RECOVERY_RETRIES } from "./main-session-restart-recovery-shared.js";
+import {
+  MAX_RECOVERY_RETRIES,
+  resolveRestartRecoveryTerminalClientRunId,
+} from "./main-session-restart-recovery-shared.js";
 
 export type {
   MainSessionRecoveryCommand,
@@ -334,6 +337,7 @@ export function transitionMainSessionRecovery(
       }
       entry.status = "running";
       entry.lifecycleRunId = undefined;
+      entry.lastRunId = undefined;
       entry.abortedLastRun = true;
       if (command.resetRuntime) {
         entry.startedAt = undefined;
@@ -517,6 +521,7 @@ export function transitionMainSessionRecovery(
       });
       entry.abortedLastRun = false;
       entry.lifecycleRunId = command.runId;
+      entry.lastRunId = undefined;
       recordLifecycleFence(entry, {
         runId: command.runId,
         lifecycleGeneration: command.lifecycleGeneration,
@@ -548,6 +553,7 @@ export function transitionMainSessionRecovery(
       }
       entry.status = "running";
       entry.lifecycleRunId = undefined;
+      entry.lastRunId = undefined;
       entry.abortedLastRun = true;
       entry.startedAt = undefined;
       entry.endedAt = undefined;
@@ -699,6 +705,7 @@ export function transitionMainSessionRecovery(
       entry.abortedLastRun = false;
       entry.status = "failed";
       entry.lifecycleRunId = undefined;
+      entry.lastRunId = resolveRestartRecoveryTerminalClientRunId(entry);
       entry.endedAt = command.now;
       entry.runtimeMs = Math.max(0, command.now - (entry.startedAt ?? command.now));
       entry.updatedAt = command.now;

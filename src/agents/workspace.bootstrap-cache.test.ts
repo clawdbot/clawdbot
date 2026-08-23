@@ -4,7 +4,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { loadWorkspaceBootstrapFiles, DEFAULT_AGENTS_FILENAME } from "./workspace.js";
@@ -164,9 +164,16 @@ describe("workspace bootstrap file caching", () => {
     const agentsFile1 = await loadAgentsFile(workspaceDir);
     expectAgentsContent(agentsFile1, content1);
 
-    // In-place edit: same path, same size, restore mtime — only ctime changes.
-    await fs.writeFile(filePath, content2, "utf-8");
-    await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
+    // A loaded runner can complete both writes within one ctime tick. Wait for the
+    // fixture's cache identity to change before asserting the production reload.
+    await vi.waitFor(
+      async () => {
+        await fs.writeFile(filePath, content2, "utf-8");
+        await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
+        expect((await fs.stat(filePath)).ctimeMs).not.toBe(originalStat.ctimeMs);
+      },
+      { interval: 1, timeout: 1_000 },
+    );
 
     const agentsFile2 = await loadAgentsFile(workspaceDir);
     expectAgentsContent(agentsFile2, content2);

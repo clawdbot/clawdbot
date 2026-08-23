@@ -1638,7 +1638,14 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         .deliver({ text }, { kind: "final" })
         .catch((caught: unknown) => caught);
 
-      expect(isChannelPartialDeliveryError(error)).toBe(true);
+      expect(error).toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        deliveryResult: {
+          content: text,
+          messageIds: [],
+          visibleReplySent: true,
+        },
+      });
       expect(provider).toHaveBeenCalledOnce();
       await Promise.resolve(options.onError?.(error, { kind: "final" }));
       expect(result.getVisibleReplyState().visibleReplySent).toBe(true);
@@ -1647,6 +1654,50 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       if (provider !== sendMessageFeishuMock) {
         expect(sendMessageFeishuMock).not.toHaveBeenCalled();
       }
+    },
+  );
+
+  it.each([
+    { kind: "text", provider: sendMessageFeishuMock, acceptedBeforeReceiptLoss: 0 },
+    { kind: "text", provider: sendMessageFeishuMock, acceptedBeforeReceiptLoss: 1 },
+    { kind: "card", provider: sendStructuredCardFeishuMock, acceptedBeforeReceiptLoss: 0 },
+    { kind: "card", provider: sendStructuredCardFeishuMock, acceptedBeforeReceiptLoss: 1 },
+  ])(
+    "retains accepted $kind chunk content after receipt loss with $acceptedBeforeReceiptLoss prior receipts",
+    async ({ kind, provider, acceptedBeforeReceiptLoss }) => {
+      useNonStreamingAutoAccount();
+      const runtime = getFeishuRuntimeMock();
+      runtime.channel.text.resolveTextChunkLimit.mockReturnValue(6);
+      runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["first", "second", "third"]);
+
+      if (acceptedBeforeReceiptLoss > 0) {
+        provider.mockResolvedValueOnce({ messageId: "om-first" });
+      }
+      provider.mockRejectedValueOnce(
+        createChannelPartialDeliveryError(
+          new Error("Feishu reply failed: no message_id returned"),
+          {
+            messageIds: [],
+            visibleReplySent: true,
+          },
+        ),
+      );
+      const { options } = createDispatcherHarness();
+      const text = kind === "card" ? "| first | second |\n| - | - |" : "firstsecondthird";
+
+      const error = await options
+        .deliver({ text }, { kind: "final" })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        deliveryResult: {
+          content: acceptedBeforeReceiptLoss > 0 ? "firstsecond" : "first",
+          messageIds: acceptedBeforeReceiptLoss > 0 ? ["om-first"] : [],
+          visibleReplySent: true,
+        },
+      });
+      expect(provider).toHaveBeenCalledTimes(acceptedBeforeReceiptLoss + 1);
     },
   );
 

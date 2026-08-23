@@ -53,8 +53,10 @@ function cronListResponse(jobs: CronJob[]): CronJobsListResult {
 }
 
 type SidebarAttentionElement = HTMLElement & {
+  context: ApplicationContext;
   updateComplete: Promise<boolean>;
   cronJobs: CronJob[];
+  hasUpdateSurface(): boolean;
   modelAuthStatus: ModelAuthStatusResult | null;
   loadedAtMs: number;
 };
@@ -474,6 +476,55 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() =>
       expect(element.querySelector('[data-attention-kind="cronFailed"]')).toBeNull(),
     );
+  });
+});
+
+describe("update attention", () => {
+  it("hides an unhydrated campaign only while update status can be polled", () => {
+    const overlaySnapshot = {
+      updateAvailable: {
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.1",
+        channel: "dev",
+        commitsBehind: 2,
+      },
+      updateSchedule: {
+        channel: "dev",
+        autoEnabled: true,
+        campaign: {
+          id: "campaign-1",
+          state: "waiting-for-idle",
+          announcedAtMs: 1_000,
+          forceAtMs: 901_000,
+          updatedAtMs: 1_000,
+        },
+      },
+      updateCampaignStatusHydrated: false,
+      updateRunning: false,
+      updateStatusBanner: null,
+    };
+    const gatewaySnapshot = {
+      client: {} as GatewayBrowserClient,
+      phase: "connected" as const,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["update.status"] },
+      },
+    };
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    element.context = {
+      gateway: { snapshot: gatewaySnapshot },
+      overlays: { snapshot: overlaySnapshot },
+    } as unknown as ApplicationContext;
+
+    expect(element.hasUpdateSurface()).toBe(false);
+
+    gatewaySnapshot.hello.auth.scopes = ["operator.read"];
+    expect(element.hasUpdateSurface()).toBe(true);
+
+    gatewaySnapshot.hello.auth.scopes = ["operator.admin"];
+    overlaySnapshot.updateCampaignStatusHydrated = true;
+    expect(element.hasUpdateSurface()).toBe(true);
   });
 });
 

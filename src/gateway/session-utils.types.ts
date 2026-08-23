@@ -164,6 +164,8 @@ export type GatewaySessionRow = {
   status?: SessionRunStatus;
   /** Compact user-facing reason for the latest failed or timed-out run. */
   lastRunError?: string;
+  /** Exact run that produced the latest terminal lifecycle projection. */
+  lastRunId?: string;
   hasActiveRun?: boolean;
   /** Complete exact active set when present; omitted for active owners without exact identities. */
   activeRunIds?: string[];

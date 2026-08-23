@@ -424,7 +424,7 @@ describe("OpenClaw native shell", () => {
 });
 
 describe("OpenClaw shell update affordance", () => {
-  it("renders floating attention and loud update states only while navigation is collapsed", async () => {
+  it("renders floating attention while keeping update actions in navigation", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     const shared = {
@@ -448,21 +448,10 @@ describe("OpenClaw shell update affordance", () => {
       mobileNavLayout: false,
     });
     render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden: collapsed }), container);
-    const card = container.querySelector<
-      HTMLElement & {
-        canUpdate: boolean;
-        onRefresh: () => void;
-        refreshRequired: boolean;
-        updateComplete: Promise<boolean>;
-      }
-    >("openclaw-sidebar-update-card");
-    expect(card).not.toBeNull();
     expect(
       container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating"),
     ).not.toBeNull();
-    await card?.updateComplete;
-    expect(card?.canUpdate).toBe(true);
-    expect(card?.querySelector(".sidebar-update-card")).toBeNull();
+    expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
 
     render(
       renderFloatingUpdateCard({
@@ -473,8 +462,11 @@ describe("OpenClaw shell update affordance", () => {
       }),
       container,
     );
-    expect(card?.refreshRequired).toBe(true);
-    card?.onRefresh();
+    const refreshCard = container.querySelector<
+      HTMLElement & { onRefresh: () => void; refreshRequired: boolean }
+    >("openclaw-sidebar-update-card");
+    expect(refreshCard?.refreshRequired).toBe(true);
+    refreshCard?.onRefresh();
     expect(shared.onRefresh).toHaveBeenCalledOnce();
     expect(shared.onUpdate).not.toHaveBeenCalled();
 

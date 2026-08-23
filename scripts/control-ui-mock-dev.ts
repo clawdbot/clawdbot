@@ -17,7 +17,9 @@ import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
-import type { UpdateScheduleState } from "../ui/src/api/types.ts";
+import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
+import type { UpdateRunResult } from "../src/infra/update-runner.js";
+import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
 import {
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
@@ -40,7 +42,15 @@ import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
-  fixture?: "approval" | "board" | "code-fences" | "swarm" | "workboard";
+  fixture?:
+    | "approval"
+    | "board"
+    | "code-fences"
+    | "swarm"
+    | "update-available"
+    | "update-blocked"
+    | "update-failed"
+    | "workboard";
   host: string;
   operatorScopes?: string[];
   port: number;
@@ -80,6 +90,171 @@ const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
 const PLAN_DEMO_RUN_ID = "mock-plan-run";
 const CUSTODIAN_CHAT_REPLY_DELAY_MS = 600;
 const CHAT_SEND_REPLY_DELAY_MS = 200;
+
+type UpdateFixture = {
+  available: UpdateAvailable;
+  runResponse: unknown;
+  schedule: UpdateScheduleState;
+  statusResponse: unknown;
+};
+
+function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): UpdateFixture | null {
+  if (
+    fixture !== "update-available" &&
+    fixture !== "update-blocked" &&
+    fixture !== "update-failed"
+  ) {
+    return null;
+  }
+
+  if (fixture === "update-available") {
+    const available: UpdateAvailable = {
+      currentVersion: "2026.8.1",
+      latestVersion: "2026.8.2",
+      channel: "latest",
+    };
+    const schedule: UpdateScheduleState = {
+      channel: "stable",
+      autoEnabled: false,
+      install: { kind: "package" },
+      target: { kind: "package", version: available.latestVersion },
+    };
+    return {
+      available,
+      schedule,
+      statusResponse: {
+        sentinel: null,
+        updateAvailable: available,
+        effectiveChannel: "stable",
+        schedule,
+      },
+      runResponse: {
+        ok: true,
+        result: {
+          status: "ok",
+          mode: "global",
+          before: { version: available.currentVersion },
+          after: { version: available.latestVersion },
+          steps: [],
+          durationMs: 12_000,
+        },
+      },
+    };
+  }
+
+  const currentSha = "83b321ba7d31c04cc6f7a38c87932ec0172b5461";
+  const upstreamSha = "ea2ab707d3ab6f9351dcdb2f3c05054097fbfa62";
+  const available: UpdateAvailable = {
+    currentVersion: "2026.8.1",
+    latestVersion: "2026.8.1",
+    channel: "dev",
+    currentSha,
+    upstreamRef: "origin/main",
+    upstreamSha,
+    commitsBehind: 2,
+    commits: [
+      { sha: "f6c71c4", subject: "Keep update status authoritative" },
+      { sha: "ea2ab70", subject: "Move update actions into Inbox" },
+    ],
+  };
+  const baseSchedule: UpdateScheduleState = {
+    channel: "dev",
+    autoEnabled: true,
+    install: {
+      kind: "git",
+      git: {
+        status: "behind",
+        currentSha,
+        commitsBehind: 2,
+        commitAtMs: nowMs - 2 * 86_400_000,
+        installedAtMs: nowMs - 7 * 86_400_000,
+      },
+    },
+    target: {
+      kind: "git",
+      upstreamRef: available.upstreamRef ?? "origin/main",
+      upstreamSha,
+      commitsBehind: 2,
+    },
+  };
+
+  if (fixture === "update-blocked") {
+    const schedule: UpdateScheduleState = {
+      ...baseSchedule,
+      campaign: {
+        id: "mock-update-waiting-for-idle",
+        state: "waiting-for-idle",
+        announcedAtMs: nowMs - 2 * 60_000,
+        forceAtMs: nowMs + 13 * 60_000,
+        updatedAtMs: nowMs,
+      },
+    };
+    return {
+      available,
+      schedule,
+      statusResponse: {
+        sentinel: null,
+        updateAvailable: available,
+        effectiveChannel: "dev",
+        schedule,
+      },
+      runResponse: {
+        ok: true,
+        result: {
+          status: "skipped",
+          mode: "git",
+          reason: "managed-service-handoff-started",
+          before: { version: available.currentVersion, sha: currentSha },
+          steps: [],
+          durationMs: 0,
+        },
+        handoff: { status: "started" },
+      },
+    };
+  }
+
+  const schedule: UpdateScheduleState = {
+    ...baseSchedule,
+    campaign: {
+      id: "mock-update-before-failure",
+      state: "waiting-for-idle",
+      announcedAtMs: nowMs - 2 * 60_000,
+      forceAtMs: nowMs + 13 * 60_000,
+      updatedAtMs: nowMs,
+    },
+  };
+  const result: UpdateRunResult = {
+    status: "error",
+    mode: "git",
+    root: "/mock/openclaw",
+    reason: "build-failed",
+    before: { version: available.currentVersion, sha: currentSha },
+    after: { version: available.latestVersion, sha: upstreamSha },
+    steps: [
+      {
+        name: "build",
+        command: "pnpm build",
+        cwd: "/mock/openclaw",
+        durationMs: 8_420,
+        stdoutTail: "",
+        stderrTail: "tsc: error TS2345",
+        exitCode: 1,
+      },
+    ],
+    durationMs: 11_640,
+  };
+  return {
+    available,
+    schedule,
+    runResponse: { ok: false, result },
+    statusResponse: {
+      sentinel: buildUpdateRestartSentinelPayload({ result, meta: {}, nowMs }),
+      updateAvailable: available,
+      effectiveChannel: "dev",
+      schedule: baseSchedule,
+    },
+  };
+}
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
@@ -175,6 +350,9 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "board" &&
     value !== "code-fences" &&
     value !== "swarm" &&
+    value !== "update-available" &&
+    value !== "update-blocked" &&
+    value !== "update-failed" &&
     value !== "workboard"
   ) {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
@@ -1645,30 +1823,8 @@ async function createChatPickerScenario(
   const richAttention = fixture === "approval";
   const cronMocks = buildCronMocks(Date.now(), { richAttention });
   const updateFixtureNow = Date.now();
-  const updateSchedule: UpdateScheduleState | null = richAttention
-    ? {
-        channel: "dev",
-        autoEnabled: true,
-        install: {
-          kind: "git",
-          git: { status: "behind", commitsBehind: 2 },
-        },
-        target: {
-          kind: "git",
-          upstreamRef: "origin/main",
-          upstreamSha: "a".repeat(40),
-          commitsBehind: 2,
-        },
-        campaign: {
-          id: "mock-update-campaign",
-          state: "waiting-for-idle",
-          announcedAtMs: updateFixtureNow - 2 * 60_000,
-          applyAtMs: updateFixtureNow + 15 * 60_000,
-          forceAtMs: updateFixtureNow + 60 * 60_000,
-          updatedAtMs: updateFixtureNow,
-        },
-      }
-    : null;
+  const updateFixture = buildUpdateFixture(fixture, updateFixtureNow);
+  const updateSchedule = updateFixture?.schedule ?? null;
   const heldUpdateSchedule: UpdateScheduleState | null = updateSchedule?.campaign
     ? {
         ...updateSchedule,
@@ -1793,20 +1949,7 @@ async function createChatPickerScenario(
     defaultAgentId: "main",
     serverBuildId: "mock",
     updateSchedule,
-    updateAvailable:
-      fixture === "approval"
-        ? {
-            channel: "dev",
-            currentVersion: "2026.8.1",
-            latestVersion: "2026.8.1",
-            upstreamSha: "a".repeat(40),
-            commitsBehind: 2,
-            commits: [
-              { sha: "abcdef1234567", subject: "Unify sidebar notifications" },
-              { sha: "fedcba7654321", subject: "Keep the footer identity compact" },
-            ],
-          }
-        : null,
+    updateAvailable: updateFixture?.available ?? null,
     // Advertised Gateway methods gate session actions (see
     // ui/src/lib/session-method-access.ts). Omitting the mutation methods left
     // every session context-menu row disabled, so the harness could not show
@@ -1839,7 +1982,7 @@ async function createChatPickerScenario(
       "sessions.create",
       "system.info",
       "terminal.open",
-      ...(richAttention ? ["update.hold", "update.run", "update.status"] : []),
+      ...(updateFixture ? ["update.hold", "update.run", "update.status"] : []),
       ...(fixture === "workboard"
         ? [
             "board.get",
@@ -2358,31 +2501,8 @@ async function createChatPickerScenario(
       "update.hold": heldUpdateSchedule
         ? { ok: true, schedule: heldUpdateSchedule }
         : { ok: false },
-      "update.run": updateSchedule
-        ? { ok: false, result: { status: "error", reason: "build-dirty" } }
-        : {},
-      "update.status": updateSchedule
-        ? {
-            sentinel: {
-              kind: "update",
-              status: "error",
-              ts: updateFixtureNow,
-              stats: {
-                reason: "build-dirty",
-                steps: [
-                  {
-                    name: "build",
-                    log: {
-                      exitCode: 1,
-                      stderrTail:
-                        "generated artifacts differ from the selected revision after the build completed; preserve the checkout and retry only after reconciling the generated files and verifying the target revision",
-                    },
-                  },
-                ],
-              },
-            },
-          }
-        : {},
+      "update.run": updateFixture?.runResponse ?? {},
+      "update.status": updateFixture?.statusResponse ?? {},
       "usage.status": modelProviders.usageStatus,
       "device.pair.list": {
         paired: [

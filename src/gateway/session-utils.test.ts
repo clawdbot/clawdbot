@@ -1009,6 +1009,29 @@ describe("gateway session utils", () => {
     expect(buildGatewaySessionEventFields({ sessionRow: cleared }).lastRunError).toBeNull();
   });
 
+  test("session rows and update events project the exact settled run identity", () => {
+    const settled = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:settled",
+      lightweightListRow: true,
+      skipTranscriptUsageFallback: true,
+      entry: {
+        sessionId: "session-settled",
+        updatedAt: 1,
+        status: "done",
+        lastRunId: "run-settled",
+      },
+    });
+
+    expect(settled.lastRunId).toBe("run-settled");
+    expect(buildGatewaySessionEventFields({ sessionRow: settled }).lastRunId).toBe("run-settled");
+
+    const running = { ...settled, status: "running" as const, lastRunId: undefined };
+    expect(buildGatewaySessionEventFields({ sessionRow: running }).lastRunId).toBeNull();
+  });
+
   test("session rows ignore malformed compaction checkpoints", () => {
     const row = buildGatewaySessionRow({
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),

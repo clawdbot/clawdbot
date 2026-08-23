@@ -348,7 +348,7 @@ export async function prepareGatewayLifecycle(params: {
   runtimeState.sessionViewerPresence = createSessionViewerPresenceDeclarations({
     isConnectionActive,
     onReplace: (connId, sessionKeys) => {
-      const client = [...clients].find((candidate) => candidate.connId === connId);
+      const client = clients.getByConnectionId(connId);
       if (!client?.presenceKey) {
         return;
       }
