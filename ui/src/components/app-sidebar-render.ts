@@ -426,31 +426,36 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
             ${showInbox ? renderAppSidebarAttention(host) : nothing}
             ${availableUpdate
               ? html`<span class="sidebar-footer-update-slot">
-                  <button
-                    type="button"
-                    class="sidebar-footer-update"
-                    aria-label=${t("updates.sidebar.availableTitle")}
-                    title=${host.canUpdate
-                      ? t("updates.sidebar.availableTitle")
+                  <openclaw-tooltip
+                    .content=${host.canUpdate
+                      ? t("updates.sidebar.action")
                       : t("updates.adminRequired")}
-                    ?disabled=${updateBusy || !host.canUpdate}
-                    @click=${() => {
-                      void confirmAndStartUpdate({
-                        updateAvailable: availableUpdate,
-                        updateSchedule: host.updateSchedule,
-                        viaNativeApp: false,
-                        startGatewayUpdate: host.onUpdate,
-                        ...(host.watchUpdateProgress
-                          ? { watchUpdateProgress: host.watchUpdateProgress }
-                          : {}),
-                      });
-                    }}
                   >
-                    <span class="sidebar-footer-update__icon" aria-hidden="true"
-                      >${icons.download}</span
+                    <button
+                      type="button"
+                      class="sidebar-footer-update"
+                      aria-label=${t("updates.sidebar.availableTitle")}
+                      ?disabled=${updateBusy || !host.canUpdate}
+                      @click=${() => {
+                        void confirmAndStartUpdate({
+                          updateAvailable: availableUpdate,
+                          updateSchedule: host.updateSchedule,
+                          viaNativeApp: false,
+                          startGatewayUpdate: host.onUpdate,
+                          ...(host.watchUpdateProgress
+                            ? { watchUpdateProgress: host.watchUpdateProgress }
+                            : {}),
+                        });
+                      }}
                     >
-                    <span class="sidebar-footer-update__label">${t("updates.sidebar.action")}</span>
-                  </button>
+                      <span class="sidebar-footer-update__icon" aria-hidden="true"
+                        >${icons.download}</span
+                      >
+                      <span class="sidebar-footer-update__label"
+                        >${t("updates.sidebar.action")}</span
+                      >
+                    </button>
+                  </openclaw-tooltip>
                 </span>`
               : nothing}
           </span>`

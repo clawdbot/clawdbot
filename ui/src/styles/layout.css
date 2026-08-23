@@ -4400,7 +4400,12 @@ openclaw-sidebar-attention {
     flex-basis var(--duration-fast) ease;
 }
 
-.sidebar-footer-update-slot:hover,
+.sidebar-footer-update-slot:has(.sidebar-footer-update:hover:not(:disabled)) {
+  width: 76px;
+  flex-basis: 76px;
+  transition-delay: var(--duration-slow);
+}
+
 .sidebar-footer-update-slot:focus-within {
   width: 76px;
   flex-basis: 76px;
@@ -4419,7 +4424,11 @@ openclaw-sidebar-attention {
   transition: opacity var(--duration-fast) ease;
 }
 
-.sidebar-footer-update-slot:hover::before,
+.sidebar-footer-update-slot:has(.sidebar-footer-update:hover:not(:disabled))::before {
+  opacity: 1;
+  transition-delay: var(--duration-slow);
+}
+
 .sidebar-footer-update-slot:focus-within::before {
   opacity: 1;
 }
@@ -4447,7 +4456,12 @@ openclaw-sidebar-attention {
     background var(--duration-fast) ease;
 }
 
-.sidebar-footer-update:hover:not(:disabled),
+.sidebar-footer-update:hover:not(:disabled) {
+  width: 76px;
+  background: color-mix(in srgb, var(--inbox-attention) 88%, black);
+  transition-delay: var(--duration-slow);
+}
+
 .sidebar-footer-update:focus-visible {
   width: 76px;
   background: color-mix(in srgb, var(--inbox-attention) 88%, black);
@@ -4481,7 +4495,11 @@ openclaw-sidebar-attention {
   transition: opacity var(--duration-fast) ease;
 }
 
-.sidebar-footer-update:hover:not(:disabled) .sidebar-footer-update__label,
+.sidebar-footer-update:hover:not(:disabled) .sidebar-footer-update__label {
+  opacity: 1;
+  transition-delay: var(--duration-slow);
+}
+
 .sidebar-footer-update:focus-visible .sidebar-footer-update__label {
   opacity: 1;
 }
