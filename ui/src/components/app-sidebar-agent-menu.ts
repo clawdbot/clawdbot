@@ -505,7 +505,10 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
           style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
         ${profileName
-          ? html`<wa-dropdown-item class="sidebar-identity-menu__header" value="command:profile">
+          ? html`<wa-dropdown-item
+                class="sidebar-customize-menu__item sidebar-identity-menu__header"
+                value="command:profile"
+              >
                 <span slot="icon" class="sidebar-identity-menu__avatar" aria-hidden="true">
                   <openclaw-viewer-avatar
                     .user=${params.profileViewer}
