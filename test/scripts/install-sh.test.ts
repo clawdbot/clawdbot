@@ -1798,7 +1798,7 @@ NODE
       [
         "#!/usr/bin/env bash",
         'if [[ "$1" == "prefix" && "$2" == "-g" ]]; then',
-        "  sleep 2",
+        "  sleep 3",
         "  exit 0",
         "fi",
         'if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then',
@@ -1815,7 +1815,7 @@ NODE
       const result = runInstallShell(
         [`source ${JSON.stringify(SCRIPT_PATH)}`, "npm_global_bin_dir"].join("\n"),
         {
-          OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "0.1",
+          OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "1",
           PATH: `${tmp}:${process.env.PATH ?? ""}`,
         },
       );
