@@ -338,8 +338,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   async delete(sessionKey: string): Promise<void> {
-    this.pending.delete(sessionKey);
-    this.savedAtBySession.delete(sessionKey);
+    this.forget(sessionKey);
     await deleteStoredChatSnapshot(sessionKey);
   }
 
@@ -356,6 +355,9 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       this.writeTimer = null;
     }
     const pending = [...this.pending.entries()];
+    const pendingRevisions = new Map(
+      pending.map(([sessionKey]) => [sessionKey, this.revisions.get(sessionKey) ?? 0]),
+    );
     this.pending.clear();
     const records: SessionSnapshotRecord[] = [];
     for (const [sessionKey, state] of pending) {
@@ -368,7 +370,11 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
     const generation = snapshotStoreGeneration;
     this.writeChain = this.writeChain.then(async () => {
-      const evicted = await writeSnapshotRecords(records, generation);
+      const currentRecords = records.filter(
+        ({ sessionKey }) =>
+          pendingRevisions.get(sessionKey) === (this.revisions.get(sessionKey) ?? 0),
+      );
+      const evicted = await writeSnapshotRecords(currentRecords, generation);
       if (evicted === null) {
         this.resetSavedAtIndex();
         return;
@@ -416,6 +422,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 
   private async seedSavedAtIndex(): Promise<void> {
     const generation = snapshotStoreGeneration;
+    const revisions = new Map(this.revisions);
     const records = await readSnapshotRecords();
     if (generation !== snapshotStoreGeneration) {
       return;
@@ -425,6 +432,11 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       return;
     }
     for (const record of records) {
+      if (
+        (revisions.get(record.sessionKey) ?? 0) !== (this.revisions.get(record.sessionKey) ?? 0)
+      ) {
+        continue;
+      }
       const current = this.savedAtBySession.get(record.sessionKey) ?? 0;
       this.savedAtBySession.set(record.sessionKey, Math.max(current, record.savedAt));
     }
@@ -439,7 +451,10 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 }
 
 subscribeSnapshotInvalidation(async ({ sessionKey }) => {
-  snapshotStoreGeneration += 1;
+  // Scoped deletes fence only their session; whole-cache clears retire every pending operation.
+  if (!sessionKey) {
+    snapshotStoreGeneration += 1;
+  }
   for (const store of activeStores) {
     if (sessionKey) {
       store.forget(sessionKey);
