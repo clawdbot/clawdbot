@@ -231,6 +231,16 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     onDeliveredSourceReply: markSourceReplyDelivered,
+    config: attempt.config,
+    currentProvider: attempt.messageChannel ?? attempt.messageProvider,
+    currentAccountId: attempt.agentAccountId,
+    currentChannelId: attempt.currentChannelId,
+    currentMessagingTarget: attempt.currentMessagingTarget,
+    currentThreadId: attempt.currentThreadTs,
+    currentMessageId: attempt.currentMessageId,
+    replyToMode: attempt.replyToMode,
+    hasRepliedRef: attempt.hasRepliedRef,
+    sessionKey: attempt.sessionKey,
   });
   if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
     installCodeModeRepairHook({
