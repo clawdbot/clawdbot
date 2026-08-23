@@ -17,6 +17,7 @@ export async function upsertAuthProfileWithLock(params: {
   const credential = normalizeAuthProfileCredential(params.credential);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    sharedStoreWrite: true,
     stateDir: params.stateDir,
     saveOptions: {
       filterExternalAuthProfiles: false,

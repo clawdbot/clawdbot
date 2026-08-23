@@ -963,7 +963,8 @@ describe("promoteAuthProfileInOrder", () => {
   it("normalizes copied secrets when using the locked upsert path", async () => {
     await withAuthProfileTestState(
       "openclaw-auth-profile-upsert-",
-      async ({ agentDir }) => {
+      async ({ agentDirFor }) => {
+        const agentDir = agentDirFor("work");
         fs.mkdirSync(agentDir, { recursive: true });
 
         await upsertAuthProfileWithLock({

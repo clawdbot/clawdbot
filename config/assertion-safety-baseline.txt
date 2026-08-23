@@ -3371,7 +3371,7 @@ src/infra/state-migrations.meeting-transcripts.ts	2
 src/infra/state-migrations.node-host.ts	2
 src/infra/state-migrations.runtime-state.ts	7
 src/infra/state-migrations.session-store.ts	12
-src/infra/state-migrations.shared-auth-store.ts	2
+src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.source-snapshot.ts	1
 src/infra/state-migrations.state-dir.ts	1
 src/infra/state-migrations.storage.ts	21
