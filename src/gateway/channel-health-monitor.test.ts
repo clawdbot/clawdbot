@@ -521,13 +521,14 @@ describe("channel-health-monitor", () => {
     await expectNoRestart(manager);
   });
 
-  it("restarts a disconnected starting channel dated after the current clock", async () => {
+  it.each([false, true])("restarts stale future channels (connected: %s)", async (connected) => {
     const now = Date.now();
-    const manager = createSnapshotManager({
-      discord: {
-        default: disconnectedAccount(now + 60_000, { lifecycle: "starting" }),
-      },
+    const account = disconnectedAccount(now + 60_000, {
+      connected,
+      lifecycle: connected ? "ready" : "starting",
+      lastTransportActivityAt: connected ? now - 300_000 : undefined,
     });
+    const manager = createSnapshotManager({ discord: { default: account } });
 
     await expectRestartedChannel(manager, "discord");
   });

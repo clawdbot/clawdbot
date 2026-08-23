@@ -201,8 +201,7 @@ export function evaluateChannelHealth(
   const shouldCheckStaleSocket = snapshot.connected === true && lastTransportActivityAt != null;
   if (shouldCheckStaleSocket) {
     if (lastStartAt != null && lastTransportActivityAt < lastStartAt) {
-      const lifecycleEventGap = Math.max(0, policy.now - lastStartAt);
-      if (lifecycleEventGap <= policy.staleEventThresholdMs) {
+      if (currentLifecycleStarted && policy.now - lastStartAt <= policy.staleEventThresholdMs) {
         return { healthy: true, reason: "healthy" };
       }
       return { healthy: false, reason: "stale-socket" };

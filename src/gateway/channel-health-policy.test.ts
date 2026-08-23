@@ -158,6 +158,15 @@ describe("evaluateChannelHealth", () => {
       }),
       expected: { healthy: false, reason: "disconnected" },
     },
+    {
+      name: "stale transport inherited before a future lifecycle",
+      account: connectedAccount({
+        lifecycle: "ready",
+        lastStartAt: 101_000,
+        lastTransportActivityAt: 0,
+      }),
+      expected: { healthy: false, reason: "stale-socket" },
+    },
   ])("does not trust future activity for $name", ({ account, expected }) => {
     expect(evaluateHealth(account)).toEqual(expected);
   });
