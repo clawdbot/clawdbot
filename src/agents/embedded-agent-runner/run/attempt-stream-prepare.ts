@@ -322,6 +322,7 @@ export function prepareEmbeddedAttemptStream(input: {
     sessionKey: attempt.sessionKey,
     currentChannelId: attempt.currentChannelId,
     currentMessagingTarget: attempt.currentMessagingTarget,
+    currentAccountId: attempt.agentAccountId,
     currentThreadId: attempt.currentThreadTs,
     currentMessageId: attempt.currentMessageId,
     replyToMode: attempt.replyToMode,

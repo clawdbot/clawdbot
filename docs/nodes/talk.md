@@ -268,8 +268,10 @@ to waitlist-enabled Platform access.
 
 ## macOS UI
 
-- Menu bar toggle: **Talk**
-- Config tab: **Talk Mode** group (voice id + interrupt toggle)
+- Menu bar: **Voice & Talk Settings…** opens the native **Voice & Talk** settings page.
+- Native settings: **Use realtime Gateway relay** is a local, default-off opt-in for this Mac.
+- **Open in Dashboard** hands provider, model, voice, and transport setup to Control UI **Settings → Talk** under **Connections**.
+- Menu bar: **Talk Mode** starts or stops the current Talk session.
 - Overlay: the orb renders the universal talk waveform (shared with iOS, watchOS, and Android). Listening follows the live mic level, Speaking follows the actual TTS playback envelope, Thinking breathes softly. Click the orb to pause/resume, double-click to stop speaking, click X to exit Talk mode.
 
 ## Android UI

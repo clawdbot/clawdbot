@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 // Ollama tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -125,7 +126,7 @@ function registerProvidersWithPluginConfig(pluginConfig: Record<string, unknown>
       source: "test",
       config: {},
       pluginConfig,
-      runtime: {} as never,
+      runtime: createPluginRuntimeMock(),
       registerProvider: registerProviderMock,
     }),
   );
@@ -461,6 +462,7 @@ describe("ollama plugin", () => {
         id: "ollama",
         name: "Ollama",
         source: "test",
+        runtime: createPluginRuntimeMock(),
         registerNodeHostCommand,
         registerNodeInvokePolicy,
         registerTool,
@@ -491,6 +493,7 @@ describe("ollama plugin", () => {
         name: "Ollama",
         source: "test",
         pluginConfig: { nodeInference: { enabled: false } },
+        runtime: createPluginRuntimeMock(),
         registerNodeHostCommand,
         registerNodeInvokePolicy,
         registerTool,
@@ -2450,6 +2453,37 @@ describe("ollama plugin", () => {
     expect(requireConfiguredStreamParams().providerBaseUrl).toBe(expectedBaseUrl);
   });
 
+  it("preserves the configured provider key for local-service acquisition", () => {
+    const provider = registerProvider();
+    provider.createStreamFn?.({
+      config: {
+        models: {
+          providers: {
+            "Ollama-GPU": {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11435",
+              models: [],
+            },
+          },
+        },
+      },
+      model: {
+        id: "llama3.2",
+        provider: "ollama-gpu",
+        api: "ollama",
+      },
+      provider: "ollama-gpu",
+    } as never);
+
+    expect(requireConfiguredStreamParams()).toMatchObject({
+      providerBaseUrl: "http://127.0.0.1:11435",
+      localService: {
+        providerId: "Ollama-GPU",
+        acquire: expect.any(Function),
+      },
+    });
+  });
+
   it.each([
     {
       name: "wraps native Ollama payloads with top-level think=false when thinking is off",
@@ -2531,7 +2565,7 @@ describe("ollama plugin", () => {
         source: "test",
         config: {},
         pluginConfig: {},
-        runtime: {} as never,
+        runtime: createPluginRuntimeMock(),
         registerProvider() {},
         registerMediaUnderstandingProvider(provider) {
           mediaProviders.push(provider);

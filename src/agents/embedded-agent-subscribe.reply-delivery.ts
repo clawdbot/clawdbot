@@ -10,6 +10,7 @@ import {
   consumePendingToolMediaIntoReply,
   hasAssistantVisibleReply,
   readPendingToolMediaReply,
+  restorePendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type {
   EmbeddedAgentSubscribeContext,
@@ -91,11 +92,14 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   const clearDeferredAssistantEvents = () => {
     state.deferredAssistantEvents.length = 0;
   };
-  const deferredToolMediaReplies = new WeakSet<BlockReplyPayload>();
+  const deferredToolMediaReplies = new WeakMap<BlockReplyPayload, BlockReplyPayload>();
   const deferredBlockReplyCallbacks = new WeakMap<BlockReplyPayload, () => void>();
   const failedBlockReplies: Array<{
     payload: BlockReplyPayload;
-    options?: { assistantMessageIndex?: number };
+    options?: {
+      assistantMessageIndex?: number;
+      pendingToolMedia?: BlockReplyPayload | null;
+    };
     onDelivered?: () => void;
     deliveryGeneration: number;
     deliveryKey: string;
@@ -160,7 +164,10 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   };
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>>[0],
-    options?: { assistantMessageIndex?: number },
+    options?: {
+      assistantMessageIndex?: number;
+      pendingToolMedia?: BlockReplyPayload | null;
+    },
     onDelivered?: () => void,
     retrying = false,
     deliveryGeneration = blockReplyDeliveryGeneration,
@@ -177,6 +184,12 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       log.warn("block reply callback retry already exhausted");
       return false;
     }
+    const recordDeliveryFailure = (error: unknown) => {
+      if (options?.pendingToolMedia) {
+        restorePendingToolMediaReply(state, options.pendingToolMedia);
+      }
+      log.warn(`block reply callback failed: ${String(error)}`);
+    };
     try {
       const taggedPayload =
         options?.assistantMessageIndex !== undefined
@@ -206,8 +219,11 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
           }
         },
         (err: unknown) => {
-          log.warn(`block reply callback failed: ${String(err)}`);
+          recordDeliveryFailure(err);
           if (deliveryGeneration !== blockReplyDeliveryGeneration) {
+            return;
+          }
+          if (options?.pendingToolMedia) {
             return;
           }
           if (!retrying) {
@@ -228,10 +244,12 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       void task.finally(() => {
         pendingBlockReplyTasks.delete(task);
       });
-      return true;
     } catch (err) {
-      log.warn(`block reply callback failed: ${String(err)}`);
+      recordDeliveryFailure(err);
       if (deliveryGeneration !== blockReplyDeliveryGeneration) {
+        return false;
+      }
+      if (options?.pendingToolMedia) {
         return false;
       }
       if (!retrying) {
@@ -258,8 +276,10 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     },
   ) => {
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
-    const consumesPendingToolMedia =
-      options?.consumePendingToolMedia !== false && readPendingToolMediaReply(state) !== null;
+    const pendingToolMedia =
+      payload.isReasoning || options?.consumePendingToolMedia === false
+        ? null
+        : readPendingToolMediaReply(state);
     const withToolMedia =
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
@@ -273,8 +293,8 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
           })
         : withToolMedia;
     if (state.deferBlockReplyDelivery) {
-      if (consumesPendingToolMedia) {
-        deferredToolMediaReplies.add(taggedPayload);
+      if (pendingToolMedia) {
+        deferredToolMediaReplies.set(taggedPayload, pendingToolMedia);
       }
       if (!taggedPayload.isReasoning) {
         recordDeferredAssistantReplyDirectives(taggedPayload);
@@ -288,11 +308,12 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       state.deferredBlockReplies.push(taggedPayload);
       return;
     }
-    emitBlockReplySafely(taggedPayload, options, () => {
+    emitBlockReplySafely(taggedPayload, { ...options, pendingToolMedia }, () => {
       if (!taggedPayload.isReasoning && hasAssistantVisibleReply(taggedPayload)) {
         recordDeliveredAssistantReplyDirectives(taggedPayload);
         state.visibleBlockReplyCount += 1;
-        if (consumesPendingToolMedia) {
+        if (pendingToolMedia) {
+          state.pendingToolMediaDeliveryFailed = false;
           state.hasToolMediaBlockReply = true;
         }
       }
@@ -306,11 +327,13 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     const deferred = state.deferredBlockReplies.splice(0);
     for (const payload of deferred) {
       const onDelivered = deferredBlockReplyCallbacks.get(payload);
-      emitBlockReplySafely(payload, undefined, () => {
+      const pendingToolMedia = deferredToolMediaReplies.get(payload);
+      emitBlockReplySafely(payload, { pendingToolMedia }, () => {
         if (!payload.isReasoning && hasAssistantVisibleReply(payload)) {
           recordDeliveredAssistantReplyDirectives(payload);
           state.visibleBlockReplyCount += 1;
-          if (deferredToolMediaReplies.has(payload)) {
+          if (pendingToolMedia) {
+            state.pendingToolMediaDeliveryFailed = false;
             state.hasToolMediaBlockReply = true;
           }
         }

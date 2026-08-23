@@ -137,7 +137,7 @@ suite.define(() => {
     await inboxPanel.locator('[data-approval-id="approval-inline"]').waitFor();
     await inboxPanel.locator('[data-approval-id="approval-other"]').waitFor();
     await expect.poll(() => inboxPanel.locator("[data-approval-id]").count()).toBe(2);
-    await inboxPanel.getByRole("tab", { name: "Approvals, 2 inbox items" }).waitFor();
+    await inboxPanel.getByRole("tab", { name: "Approvals 2" }).waitFor();
     if (captureUiProof) {
       await currentPage.screenshot({ path: path.join(proofDir, "02-open-queue.png") });
     }

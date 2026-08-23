@@ -94,8 +94,24 @@ extension OnboardingView {
         }
     }
 
+    static func shouldResolveInstallPromptForRunningGateway(
+        gatewayStatus: GatewayProcessManager.Status,
+        isLocal: Bool,
+        phase: CLIInstallPhase) -> Bool
+    {
+        guard isLocal, phase == .choosingTarget else { return false }
+        return switch gatewayStatus {
+        case .running, .attachedExisting: true
+        case .stopped, .starting, .failed: false
+        }
+    }
+
     func reviseCLIActivationFailureIfGatewayReady(_ status: GatewayProcessManager.Status) {
-        guard Self.shouldReviseCLIActivationFailure(
+        let resolvesInstallPrompt = Self.shouldResolveInstallPromptForRunningGateway(
+            gatewayStatus: status,
+            isLocal: state.connectionMode == .local,
+            phase: cliInstallPhase)
+        guard resolvesInstallPrompt || Self.shouldReviseCLIActivationFailure(
             gatewayStatus: status,
             isLocal: state.connectionMode == .local,
             executableReady: cliExecutableReady,
@@ -104,6 +120,10 @@ extension OnboardingView {
         cliInstalled = true
         cliStatusKnown = true
         cliStatus = nil
+        if resolvesInstallPrompt {
+            // A running local gateway already fulfills the pending install prompt.
+            OnboardingController.shared.dismissAttachedSheet()
+        }
     }
 
     /// LocalGatewayActivation.failed carries the reason bound to that specific activation
@@ -167,6 +187,8 @@ extension OnboardingView {
         guard let target = await CLIInstallPrompter.shared.installTargetForCurrentBuild(
             presentingSheetOn: OnboardingController.shared.sheetPresentationWindow)
         else {
+            // Gateway readiness can resolve onboarding while this sheet is open.
+            guard !cliInstalled else { return }
             cliStatus = "CLI installation cancelled."
             return
         }

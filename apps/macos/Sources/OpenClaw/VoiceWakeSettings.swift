@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Observation
+import OpenClawKit
 import Speech
 import SwabbleKit
 import SwiftUI
@@ -183,6 +184,19 @@ struct VoiceWakeSettings: View {
                             binding: self.$state.voicePushToTalkEnabled)
 
                         self.realtimeRelayToggle
+
+                        SettingsCardRow(
+                            title: "Talk configuration",
+                            subtitle: "Choose the realtime provider, model, voice, and transport in the Control UI.")
+                        {
+                            Button("Open in Dashboard") {
+                                Task {
+                                    await DashboardManager.shared.show(
+                                        atPath: DashboardRouteMap.talkSettingsPath)
+                                }
+                            }
+                            .buttonStyle(.link)
+                        }
 
                         if self.state.voicePushToTalkEnabled, self.state.talkEnabled {
                             SettingsCardRow(

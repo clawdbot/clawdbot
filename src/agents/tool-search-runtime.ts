@@ -743,7 +743,8 @@ export function formatToolSearchControlResult<T>(
   const terminal =
     terminalBatchStatus !== "waiting" &&
     runtime?.takeTerminalTargetBatch(parentToolCallId) === true;
-  return terminalBatchStatus !== "failed" && terminal ? { ...result, terminate: true } : result;
+  // A failed guest cannot revoke an already completed tool's explicit terminal outcome.
+  return terminal ? { ...result, terminate: true } : result;
 }
 
 /** Keep dynamic failures rejected without exposing network-controlled error text. */

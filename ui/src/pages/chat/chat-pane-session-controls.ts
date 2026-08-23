@@ -1,12 +1,15 @@
 import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { showToast } from "../../lib/toast.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import {
   switchChatContextWindow,
@@ -84,6 +87,7 @@ export function renderChatPaneComposerControls(params: {
   effortAccess: SessionMethodAccess;
   permissionAccess: SessionMethodAccess;
   canSelectFull: boolean;
+  toastAnchor: Element;
   onModelSetup: () => void;
 }): {
   composerControls: NonNullable<ChatProps["composerControls"]>;
@@ -97,6 +101,7 @@ export function renderChatPaneComposerControls(params: {
     effortAccess,
     permissionAccess,
     canSelectFull,
+    toastAnchor,
     onModelSetup,
   } = params;
   const modelCatalogState = resolveChatModelCatalogState(state);
@@ -154,6 +159,9 @@ export function renderChatPaneComposerControls(params: {
         if (!permissionAccess.allowed) {
           return;
         }
+        const runWasActive =
+          Boolean(state.chatRunId) ||
+          Boolean(selectedSession && isSessionRunActive(selectedSession));
         try {
           state.chatError = null;
           await state.sessions.patch(
@@ -161,6 +169,18 @@ export function renderChatPaneComposerControls(params: {
             { permissionMode },
             scopedAgentParamsForSession(state, state.sessionKey),
           );
+          if (runWasActive) {
+            const topbarHeight = toastAnchor
+              .querySelector(".chat-pane__header")
+              ?.getBoundingClientRect().height;
+            showToast({
+              anchor: toastAnchor,
+              anchorTopOffset: (topbarHeight ?? 0) + 12,
+              durationMs: 5_000,
+              icon: icons.shieldCheck,
+              message: t("chat.permissionControls.nextRun"),
+            });
+          }
         } catch (error) {
           state.chatError = t("chat.permissionControls.updateFailed", {
             error: String(error),

@@ -194,6 +194,7 @@ type SidebarIdentityMenuParams = {
   canPairDevice: boolean;
   basePath: string;
   gatewayVersion: string | null;
+  updateAttentionDismissed: boolean;
   profileViewer?: PresenceViewer;
   offline: boolean;
   themeMode: ThemeMode;
@@ -572,6 +573,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
             .variant=${"identity"}
             .basePath=${params.basePath}
             .gatewayVersion=${params.gatewayVersion}
+            .updateAttentionDismissed=${params.updateAttentionDismissed}
             .onNavigate=${(routeId: "about") => {
               params.onClose();
               params.onNavigate(routeId);

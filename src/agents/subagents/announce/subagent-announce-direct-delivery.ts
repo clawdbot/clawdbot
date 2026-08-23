@@ -440,6 +440,7 @@ export async function sendSubagentAnnounceDirectly(params: {
     const completionPayloadVisibility = {
       includeErrorPayloads: false,
       includeReasoningPayloads: false,
+      requireTerminalContent: true,
     };
     const hasVisibleGatewayPayload = Boolean(
       directAnnounceResult &&
@@ -451,7 +452,6 @@ export async function sendSubagentAnnounceDirectly(params: {
       hasVisibleAgentPayload(directAnnounceResult, {
         ...completionPayloadVisibility,
         includeSilentReplyPayloads: false,
-        requireTerminalContent: true,
       }),
     );
     const hasIntentionalSilentCompletionReply = Boolean(

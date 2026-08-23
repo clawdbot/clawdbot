@@ -2,6 +2,7 @@
  * Integration coverage for workspace bootstrap cache reads.
  * Uses temp workspaces to verify real file loading through the cache layer.
  */
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -175,8 +176,25 @@ describe("workspace bootstrap file caching", () => {
       { interval: 1, timeout: 1_000 },
     );
 
-    const agentsFile2 = await loadAgentsFile(workspaceDir);
-    expectAgentsContent(agentsFile2, content2);
+    const editedStat = await fs.stat(filePath);
+    expect(editedStat.dev).toBe(originalStat.dev);
+    expect(editedStat.ino).toBe(originalStat.ino);
+    expect(editedStat.size).toBe(originalStat.size);
+    expect(editedStat.mtimeMs).toBe(originalStat.mtimeMs);
+
+    const originalFstatSync = fsSync.fstatSync;
+    const fstatSync = vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
+      const stat = originalFstatSync(fd);
+      // Filesystems may coalesce rapid ctime updates; isolate the identity contract.
+      stat.ctimeMs = originalStat.ctimeMs + 1;
+      return stat;
+    });
+    try {
+      const agentsFile2 = await loadAgentsFile(workspaceDir);
+      expectAgentsContent(agentsFile2, content2);
+    } finally {
+      fstatSync.mockRestore();
+    }
   });
 
   it("replaces a session snapshot when inode changes with identical bytes", async () => {

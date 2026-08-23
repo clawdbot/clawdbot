@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
@@ -24,6 +25,16 @@ export async function startGatewayServerCore(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  // Direct embedders have no CLI lifecycle row, so the server start boundary
+  // still owns an exact generation instead of making clients infer one.
+  const suppliedBootId = opts.bootId;
+  if (
+    suppliedBootId !== undefined &&
+    (suppliedBootId.trim() !== suppliedBootId || !suppliedBootId || suppliedBootId.length > 96)
+  ) {
+    throw new Error("Gateway boot ID must contain 1 to 96 characters");
+  }
+  const bootId = suppliedBootId ?? randomUUID();
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;
@@ -68,6 +79,7 @@ export async function startGatewayServerCore(
       kernelRuntime: { ...gatewayKernel, ...transport },
       port,
       opts,
+      bootId,
       log,
       logHealth,
       logWsControl,

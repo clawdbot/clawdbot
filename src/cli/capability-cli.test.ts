@@ -972,6 +972,53 @@ describe("capability cli", () => {
     expect(mocks.loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { position: "parent", systemAgent: undefined },
+    { position: "leaf", systemAgent: undefined },
+    { position: "parent", systemAgent: "alpha" },
+    { position: "leaf", systemAgent: "alpha" },
+  ])(
+    "scopes audio providers to the $position-level agent with system owner $systemAgent",
+    async ({ position, systemAgent }) => {
+      const cfg = {
+        agents: {
+          ownership: "explicit" as const,
+          ...(systemAgent ? { defaults: { systemAgent: { agentId: systemAgent } } } : {}),
+          entries: { alpha: {}, beta: {} },
+        },
+      };
+      mocks.loadConfig.mockReturnValue(cfg);
+      mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+        new Map([["openai", { id: "openai", capabilities: ["audio"] }]]),
+      );
+      mocks.loadAuthProfileStoreForRuntime.mockImplementation(
+        (agentDir) =>
+          ({
+            version: 1,
+            profiles:
+              agentDir === "/tmp/agent-beta" ? { "openai:beta": { provider: "openai" } } : {},
+            order: {},
+          }) as never,
+      );
+      mocks.listProfilesForProvider.mockImplementation((store, provider) =>
+        Object.entries(store.profiles as Record<string, { provider: string }>)
+          .filter(([, profile]) => profile.provider === provider)
+          .map(([id]) => id),
+      );
+
+      if (position === "parent") {
+        await runCapabilityWithParentAgent("audio", "providers", "beta", "--json");
+      } else {
+        await runCapability("audio", "providers", "--agent", "beta", "--json");
+      }
+
+      expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/agent-beta");
+      expect(firstJsonOutput()).toEqual([
+        expect.objectContaining({ id: "openai", configured: true }),
+      ]);
+    },
+  );
+
   it("scopes web search auth inspection to the selected agent", async () => {
     mocks.loadConfig.mockReturnValue({
       agents: {
