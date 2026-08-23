@@ -75,10 +75,18 @@ type StreamPerfProbe = {
   hostUpdatesInsideFrame: number;
 };
 
+type ToolProjectionProbe = {
+  beforeThrottleCardCount: number | null;
+  afterThrottleCardCount: number | null;
+  afterThrottleText: string | null;
+  ready: boolean;
+};
+
 type ScopedWindow = Window & {
   ocStreamPerf?: StreamPerfProbe;
   ocIdleProbe?: { longTasks: number; longTaskMs: number };
   ocBurstDone?: boolean;
+  ocToolProjectionProbe?: ToolProjectionProbe;
   openclawControlUiE2eGateway?: {
     emit: (event: string, payload?: unknown) => void;
   };
@@ -258,7 +266,106 @@ async function openStreamingTurn(
   return runId;
 }
 
-async function emitToolLifecycleFlood(
+async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): Promise<void> {
+  await page.evaluate(
+    ({ runId: targetRunId, seqSeed }) => {
+      const scope = window as ScopedWindow;
+      const gateway = scope.openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("mock gateway handle missing");
+      }
+      const probe: ToolProjectionProbe = {
+        beforeThrottleCardCount: null,
+        afterThrottleCardCount: null,
+        afterThrottleText: null,
+        ready: false,
+      };
+      scope.ocToolProjectionProbe = probe;
+      let seq = seqSeed;
+      const emitToolPhase = (phase: string, data: Record<string, unknown>) => {
+        gateway.emit("agent", {
+          data: { name: "edit", phase, toolCallId: "call-1", ...data },
+          runId: targetRunId,
+          seq: ++seq,
+          sessionKey: "main",
+          stream: "tool",
+          ts: Date.now(),
+        });
+      };
+      const cardSelector = '[data-message-id^="tool:assistant:call-1:"]';
+      gateway.emit("chat", {
+        deltaText: " working on step 1",
+        message: {
+          content: [{ text: " working on step 1", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId: targetRunId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      emitToolPhase("start", { args: { path: "src/file-1.ts" } });
+      setTimeout(() => emitToolPhase("update", { partialResult: "partial output 1" }), 10);
+      setTimeout(() => emitToolPhase("input_delta", { diff: { added: 1, removed: 1 } }), 20);
+      // Sample before the 80ms owner timer. An eager non-terminal projection
+      // makes the card visible here and fails the absence contract.
+      setTimeout(() => {
+        probe.beforeThrottleCardCount = document.querySelectorAll(cardSelector).length;
+      }, 50);
+      // Leave result un-emitted. After the owner timer and two render frames,
+      // the running card must expose the latest update/input_delta projection.
+      setTimeout(() => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const cards = document.querySelectorAll(cardSelector);
+            probe.afterThrottleCardCount = cards.length;
+            probe.afterThrottleText = cards[0]?.textContent ?? null;
+            probe.ready = true;
+          });
+        });
+      }, 120);
+    },
+    { runId, seqSeed: TOOL_FLOOD_SEQ_SEED },
+  );
+  await page.waitForFunction(
+    () => (window as ScopedWindow).ocToolProjectionProbe?.ready === true,
+    undefined,
+    { timeout: 10_000, polling: 20 },
+  );
+}
+
+async function completeFirstToolLifecycle(page: ChatFlowPage, runId: string): Promise<void> {
+  await page.evaluate(
+    ({ runId: targetRunId, seq }) => {
+      const gateway = (window as ScopedWindow).openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("mock gateway handle missing");
+      }
+      gateway.emit("agent", {
+        data: {
+          name: "edit",
+          phase: "result",
+          result: "tool output 1",
+          toolCallId: "call-1",
+        },
+        runId: targetRunId,
+        seq,
+        sessionKey: "main",
+        stream: "tool",
+        ts: Date.now(),
+      });
+    },
+    { runId, seq: TOOL_FLOOD_SEQ_SEED + 4 },
+  );
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+}
+
+async function emitRemainingToolLifecycleFlood(
   page: ChatFlowPage,
   runId: string,
   pairCount: number,
@@ -274,8 +381,8 @@ async function emitToolLifecycleFlood(
         throw new Error("mock gateway handle missing");
       }
       scope.ocBurstDone = false;
-      let emitted = 0;
-      let seq = seqSeed;
+      let emitted = 1;
+      let seq = seqSeed + 4;
       const emitToolPhase = (phase: string, data: Record<string, unknown>) => {
         gateway.emit("agent", {
           data: {
@@ -321,7 +428,7 @@ async function emitToolLifecycleFlood(
           }, phaseIntervalMs);
         }, phaseIntervalMs);
       };
-      setTimeout(emitCall, 0);
+      setTimeout(emitCall, phaseIntervalMs);
     },
     {
       runId,
@@ -424,7 +531,22 @@ suite.define(() => {
         await gateway.waitForRequest("chat.startup");
         const runId = await openStreamingTurn(page, gateway, "tool flood probe");
 
-        await emitToolLifecycleFlood(page, runId, TOOL_FLOOD_PAIR_COUNT);
+        await probeDeferredToolProjection(page, runId);
+        const projection = await page.evaluate(
+          () => (window as ScopedWindow).ocToolProjectionProbe!,
+        );
+        expect(projection.beforeThrottleCardCount).toBe(0);
+        expect(projection.afterThrottleCardCount).toBe(1);
+        expect(projection.afterThrottleText).toContain("Editing");
+        expect(projection.afterThrottleText).toContain("+1");
+        expect(projection.afterThrottleText).toContain("-1");
+
+        await completeFirstToolLifecycle(page, runId);
+        const firstCard = page.locator('[data-message-id^="tool:assistant:call-1:"]');
+        expect(await firstCard.count()).toBe(1);
+        expect(await firstCard.textContent()).toContain("Edited");
+
+        await emitRemainingToolLifecycleFlood(page, runId, TOOL_FLOOD_PAIR_COUNT);
         const floodCards = page.locator('[data-message-id^="tool:assistant:call-"]');
         // Eviction drops the oldest entries and keeps the freshest ones.
         await expect
