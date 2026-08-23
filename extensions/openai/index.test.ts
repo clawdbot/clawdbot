@@ -502,6 +502,13 @@ describe("openai plugin", () => {
       expected: true,
     },
     {
+      name: "ChatGPT OAuth",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      compat: undefined,
+      expected: true,
+    },
+    {
       name: "custom proxy",
       baseUrl: "https://openai-proxy.example/v1",
       compat: undefined,
@@ -519,7 +526,7 @@ describe("openai plugin", () => {
       compat: { supportsPromptCacheKey: false },
       expected: false,
     },
-  ])("registers $name cache-TTL eligibility", async ({ baseUrl, compat, expected }) => {
+  ])("registers $name cache-TTL eligibility", async ({ api, baseUrl, compat, expected }) => {
     const { providers } = await registerOpenAIPluginWithHook();
     const openaiProvider = requireRegisteredProvider(providers, "openai");
 
@@ -527,7 +534,7 @@ describe("openai plugin", () => {
       openaiProvider.isCacheTtlEligible?.({
         provider: "openai",
         modelId: "gpt-4o",
-        modelApi: "openai-responses",
+        modelApi: api ?? "openai-responses",
         baseUrl,
         supportsPromptCacheKey: compat?.supportsPromptCacheKey,
       }),

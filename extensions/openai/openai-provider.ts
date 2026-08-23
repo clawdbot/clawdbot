@@ -1096,10 +1096,11 @@ export function buildOpenAIProvider(): ProviderPlugin {
         : null,
     isModernModelRef: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_PROVIDER_MODERN_MODEL_IDS),
-    // Direct OpenAI caching is automatic; proxies must explicitly opt in.
+    // Official OpenAI caching is automatic; proxies must explicitly opt in.
     isCacheTtlEligible: ({ baseUrl, provider, supportsPromptCacheKey }) =>
       normalizeProviderId(provider) === PROVIDER_ID &&
-      (supportsPromptCacheKey ?? classifyOpenAIBaseUrl(baseUrl) === "platform"),
+      (supportsPromptCacheKey ??
+        (classifyOpenAIBaseUrl(baseUrl) === "platform" || isOpenAICodexBaseUrl(baseUrl))),
     augmentModelCatalog: (ctx) => {
       const openAiGpt55ProTemplate = findCatalogTemplate({
         entries: ctx.entries,

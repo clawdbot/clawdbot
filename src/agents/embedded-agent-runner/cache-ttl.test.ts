@@ -24,7 +24,8 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
       if (params.context.provider === "openai") {
         return (
           params.context.supportsPromptCacheKey ??
-          params.context.baseUrl === "https://api.openai.com/v1"
+          (params.context.baseUrl === "https://api.openai.com/v1" ||
+            params.context.baseUrl === "https://chatgpt.com/backend-api/codex")
         );
       }
       if (params.context.provider === "moonshot" || params.context.provider === "zai") {
@@ -73,6 +74,13 @@ describe("isCacheTtlEligibleProvider", () => {
       expected: true,
     },
     {
+      name: "ChatGPT OAuth",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      compat: undefined,
+      expected: true,
+    },
+    {
       name: "custom proxy",
       baseUrl: "https://openai-proxy.example/v1",
       compat: undefined,
@@ -90,17 +98,20 @@ describe("isCacheTtlEligibleProvider", () => {
       compat: { supportsPromptCacheKey: false },
       expected: false,
     },
-  ])("passes the resolved route to the $name provider hook", ({ baseUrl, compat, expected }) => {
-    expect(
-      isCacheTtlEligibleProvider("openai", "gpt-4o", {
-        provider: "openai",
-        id: "gpt-4o",
-        api: "openai-responses",
-        baseUrl,
-        compat,
-      } as never),
-    ).toBe(expected);
-  });
+  ])(
+    "passes the resolved route to the $name provider hook",
+    ({ api, baseUrl, compat, expected }) => {
+      expect(
+        isCacheTtlEligibleProvider("openai", "gpt-4o", {
+          provider: "openai",
+          id: "gpt-4o",
+          api: api ?? "openai-responses",
+          baseUrl,
+          compat,
+        } as never),
+      ).toBe(expected);
+    },
+  );
 
   it("does not widen OpenRouter while consulting provider hooks", () => {
     expect(isCacheTtlEligibleProvider("openrouter", "openai/gpt-4o")).toBe(false);
