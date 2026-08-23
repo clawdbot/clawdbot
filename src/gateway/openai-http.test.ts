@@ -234,6 +234,34 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(scopedResolver?.()).toBeTruthy();
   });
 
+  it("fails closed for retired Gateway instances in the ingress resolver scope", async () => {
+    testState.agentsConfig = { list: [{ id: "main" }] };
+    resetConfigRuntimeState();
+    const port = await getGatewayTestPort();
+    const server = await startServer(port);
+    let scopedResolver: (() => unknown) | undefined;
+    try {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce(async () => {
+        scopedResolver = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+        return { payloads: [{ text: "hello" }] } as never;
+      });
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      await res.text();
+      expect(scopedResolver?.()).toBeTruthy();
+    } finally {
+      await server.close({ reason: "retired-instance custody test done" });
+    }
+    // The raw holder outlives shutdown; the fence must reject the retired
+    // instance so a late completion announce fails closed instead of
+    // dispatching against a dead Gateway generation.
+    expect(scopedResolver?.()).toBeUndefined();
+  });
+
   it("handles request validation and routing", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {

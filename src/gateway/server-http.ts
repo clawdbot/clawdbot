@@ -60,6 +60,7 @@ import {
   type ResolvePluginNodeCapabilityRoute,
 } from "./server-http-plugin-auth.js";
 import { handleGatewayProbeRequest } from "./server-http-probes.js";
+import { fenceScheduledGatewayContextResolver } from "./scheduled-run-gateway-context.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { runWithGatewayHttpWorkAdmission } from "./server/http-work-admission.js";
 import {
@@ -209,6 +210,11 @@ export function createGatewayHttpServer(opts: {
     getStartup,
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
+  // The raw holder outlives shutdown; the context's own lifecycle resolver is
+  // the fence, so compat ingress runs fail closed once the instance retires.
+  const resolveCompatGatewayContext = fenceScheduledGatewayContextResolver(
+    opts.getGatewayRequestContext,
+  );
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
   const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const controlUiRouteBasePath =
@@ -454,7 +460,7 @@ export function createGatewayHttpServer(opts: {
         (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {
           ...routeAuth,
           config: openResponsesConfig,
-          resolveGatewayContext: opts.getGatewayRequestContext,
+          resolveGatewayContext: resolveCompatGatewayContext,
         }),
       );
       addAdmittedStage(
@@ -463,7 +469,7 @@ export function createGatewayHttpServer(opts: {
           (await getOpenAiHttpModule()).handleOpenAiHttpRequest(req, res, {
             ...routeAuth,
             config: openAiChatCompletionsConfig,
-            resolveGatewayContext: opts.getGatewayRequestContext,
+            resolveGatewayContext: resolveCompatGatewayContext,
           }),
       );
       const approvalDocument = isControlUiApprovalDocumentPath({
