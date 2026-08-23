@@ -309,7 +309,7 @@ describe("chat transcript invalidation", () => {
     expect(isChatMediaResourceCurrent(restoredResource)).toBe(true);
     expect(restoredResource.subscribers.size).toBe(1);
     expect(
-      container.querySelector(".chat-assistant-attachment-card__download")?.getAttribute("href"),
+      container.querySelector(".chat-assistant-attachment-card__link")?.getAttribute("href"),
     ).toContain("mediaTicket=root-restored-ticket");
 
     releaseChatMediaResourceSubscriber(renderPane);

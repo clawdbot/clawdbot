@@ -404,8 +404,12 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.handleOpenSidebar = (content) => {
-    const targetSlot = "detail";
-    let opened = openSlot(state.sidebarLayout, targetSlot);
+    const attachmentPreview = content?.kind === "attachment";
+    let opened = openSlot(state.sidebarLayout, "detail");
+    if (attachmentPreview) {
+      opened = openSlot(opened, "workspace");
+    }
+    const targetSlot = attachmentPreview ? "workspace" : "detail";
     const targetPanel = opened.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === targetSlot);

@@ -3,7 +3,7 @@ import { styleMap } from "lit/directives/style-map.js";
 import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 
-type AttachmentFileIconFamily =
+export type AttachmentFileIconFamily =
   | "unknown"
   | "pdf"
   | "document"
@@ -185,12 +185,7 @@ const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
     family: "json",
     accent: "#F2A93B",
     extensions: ["json", "jsonl", "geojson"],
-    mimeTypes: [
-      "application/json",
-      "application/ld+json",
-      "application/x-ndjson",
-      "application/geo+json",
-    ],
+    mimeTypes: ["application/json", "application/ld+json", "application/x-ndjson", "application/geo+json"],
     compact: "json",
   },
   {
@@ -218,7 +213,7 @@ const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
 
 const UNKNOWN_FILE_ICON = FILE_ICON_FAMILIES[0]!;
 
-type ResolvedAttachmentFileIcon = {
+export type ResolvedAttachmentFileIcon = {
   family: AttachmentFileIconFamily;
   accent: string;
   extension?: string;
@@ -279,7 +274,9 @@ export function renderAttachmentFileIcon(options: {
     class="chat-attachment-file-icon ${options.unavailable
       ? "chat-attachment-file-icon--unavailable"
       : ""}"
+    data-family=${resolved.family}
     data-mode=${options.mode}
+    data-accent=${resolved.accent}
     aria-hidden="true"
     style=${styleMap({
       "--chat-file-icon-shell-light": `url("${fileIconAssetPath("large/shell-light")}")`,

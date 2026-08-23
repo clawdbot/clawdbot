@@ -1,10 +1,10 @@
-import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 import {
   isChatMediaResourceCurrent,
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
   type AttachmentItem,
 } from "./chat-message-media.ts";
+import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 
 const DOCUMENT_PREVIEW_MAX_BYTES = 256 * 1024;
 const DOCUMENT_PREVIEW_MAX_CHARS = 16 * 1024;
@@ -48,7 +48,7 @@ export function isTextyDocumentAttachment(
   return [...TEXTY_DOCUMENT_EXTENSIONS].some((extension) => label.endsWith(extension));
 }
 
-type AttachmentDocumentPreviewKind = "html" | "table" | "text" | null;
+export type AttachmentDocumentPreviewKind = "html" | "page" | "table" | null;
 
 export function resolveDocumentPreviewKind(
   attachment: Pick<AttachmentItem["attachment"], "label" | "mimeType">,
@@ -67,9 +67,9 @@ export function resolveDocumentPreviewKind(
     return "table";
   }
   if (extension === "pdf" || mimeType === "application/pdf") {
-    return null;
+    return "page";
   }
-  return isTextyDocumentAttachment(attachment) ? "text" : null;
+  return null;
 }
 
 export function parseDelimitedPreview(text: string): string[][] {

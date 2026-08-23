@@ -30,6 +30,8 @@ import {
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
+import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import "./chat-audio-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
@@ -37,6 +39,61 @@ import "./session-diff-panel.ts";
 
 type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 
+function renderSidebarAttachment(
+  content: Extract<SidebarContent, { kind: "attachment" }>,
+) {
+  const src = safeAttachmentHref(content.src);
+  const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  const extension = content.title.split(".").pop()?.toLowerCase() ?? "";
+  if (!src) {
+    return html`<div class="sidebar-attachment-preview__unavailable">
+      ${t("chat.attachments.previewUnavailable")}
+    </div>`;
+  }
+  if (mimeType.startsWith("video/")) {
+    return html`<video class="sidebar-attachment-preview__media" src=${src} controls></video>`;
+  }
+  if (mimeType.startsWith("audio/")) {
+    return html`<openclaw-chat-audio-player
+      .src=${src}
+      .sourceIdentity=${content.sourceIdentity ?? content.src}
+      .label=${content.title}
+      .mimeType=${content.mimeType ?? ""}
+      .playback=${content.playback ?? "native"}
+      .authToken=${content.authToken ?? null}
+      .sizeBytes=${content.sizeBytes}
+      .serverDurationMs=${content.durationMs}
+      .voiceNote=${content.voiceNote === true}
+    ></openclaw-chat-audio-player>`;
+  }
+  if (mimeType.startsWith("image/")) {
+    return html`<img class="sidebar-attachment-preview__image" src=${src} alt=${content.title} />`;
+  }
+  const canFrame =
+    mimeType.startsWith("text/") ||
+    mimeType === "application/json" ||
+    mimeType === "application/pdf" ||
+    ["csv", "htm", "html", "js", "json", "md", "pdf", "txt"].includes(extension);
+  if (canFrame) {
+    return html`<iframe
+      class="sidebar-attachment-preview__frame"
+      src=${src}
+      title=${content.title}
+      sandbox
+    ></iframe>`;
+  }
+  return html`
+    <div class="sidebar-attachment-preview__unavailable">
+      <span>${t("chat.attachments.previewUnavailable")}</span>
+      <a
+        class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__download"
+        href=${src}
+        download=${content.title}
+        >${icons.download} ${t("chat.attachments.download")}</a
+      >
+    </div>
+  `;
+}
 function toPlainTextCodeFence(value: string, language = ""): string {
   const fenceHeader = language ? `\`\`\`${language}` : "```";
   return `${fenceHeader}\n${value}\n\`\`\``;
@@ -128,6 +185,8 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
       ? content.title?.trim() || t("chat.detailPanel.renderPreview")
       : content?.kind === "image"
         ? content.title.trim() || t("chat.detailPanel.imagePreview")
+        : content?.kind === "attachment"
+          ? content.title.trim() || t("chat.detailPanel.file")
         : content?.kind === "file"
           ? content.name.trim() || t("chat.detailPanel.file")
           : content?.kind === "session-diff"
@@ -243,6 +302,10 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                             : nothing}
                         </div>
                       `
+                    : content.kind === "attachment"
+                      ? html`<div class="sidebar-attachment-preview">
+                          ${renderSidebarAttachment(content)}
+                        </div>`
                     : html`
                         <section class="sidebar-markdown-shell">
                           <div class="sidebar-markdown-shell__toolbar">
@@ -292,6 +355,7 @@ export function renderSidebarPanel(
   const fillHost =
     props.content?.kind === "file" ||
     props.content?.kind === "markdown" ||
+    props.content?.kind === "attachment" ||
     props.content?.kind === "session-diff";
   return html`
     <div

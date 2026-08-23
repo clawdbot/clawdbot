@@ -17,7 +17,6 @@ export type ImageBlock = {
   url: string;
   artifactId?: string;
   fileName?: string;
-  mimeType?: string;
   openUrl?: string;
   alt?: string;
   sizeBytes?: number;
@@ -414,12 +413,6 @@ export function extractImages(message: unknown): ImageBlock[] {
           artifactId: typeof b.artifactId === "string" ? b.artifactId : undefined,
           alt: typeof b.alt === "string" ? b.alt : undefined,
           fileName: typeof b.fileName === "string" ? b.fileName : undefined,
-          mimeType:
-            typeof b.mimeType === "string"
-              ? b.mimeType
-              : typeof source?.media_type === "string"
-                ? source.media_type
-                : undefined,
           openUrl: typeof b.openUrl === "string" ? b.openUrl : undefined,
           sizeBytes: asFiniteNumber(b.sizeBytes),
           width: typeof b.width === "number" ? b.width : undefined,
@@ -487,18 +480,16 @@ export function extractImages(message: unknown): ImageBlock[] {
     }
   }
 
-  for (const { path: mediaPath, mediaType, fileName, sizeBytes } of readTranscriptMediaEntries(
-    message,
-  )) {
+  for (const {
+    path: mediaPath,
+    mediaType,
+    fileName,
+    sizeBytes,
+  } of readTranscriptMediaEntries(message)) {
     if (!isImageTranscriptMediaPath(mediaPath, mediaType)) {
       continue;
     }
-    appendImageBlock(images, {
-      url: mediaPath,
-      fileName,
-      mimeType: typeof mediaType === "string" ? mediaType : undefined,
-      sizeBytes,
-    });
+    appendImageBlock(images, { url: mediaPath, fileName, sizeBytes });
   }
 
   return images;

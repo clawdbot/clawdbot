@@ -1,4 +1,5 @@
 import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
+import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
 type DetailFullMessageResult = {
@@ -42,6 +43,19 @@ type ImageSidebarContent = {
   rawText?: string | null;
 };
 
+type AttachmentSidebarContent = {
+  kind: "attachment";
+  title: string;
+  src: string;
+  mimeType?: string | null;
+  sourceIdentity?: string;
+  playback?: ChatMediaPlaybackMode;
+  authToken?: string | null;
+  sizeBytes?: number;
+  durationMs?: number;
+  voiceNote?: boolean;
+};
+
 type SessionDiffSidebarContent = {
   kind: "session-diff";
   /** Fetches a fresh sessions.diff snapshot; the panel refetches on refresh. */
@@ -81,6 +95,7 @@ export type SidebarContent =
   | MarkdownSidebarContent
   | CanvasSidebarContent
   | ImageSidebarContent
+  | AttachmentSidebarContent
   | FileSidebarContent
   | SessionDiffSidebarContent
   | { kind: "task"; taskId: string };
