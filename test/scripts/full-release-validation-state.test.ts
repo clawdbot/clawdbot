@@ -15,6 +15,7 @@ import {
   classifyReleaseGhTransportError,
   classifyReleaseSnapshot,
   formatReleaseStateOutcome,
+  releaseStateChildEvidence,
   selectReleaseStateArtifacts,
   validateChildBinding,
   validateReleaseExecutionPlanArtifact,
@@ -585,6 +586,112 @@ describe("release state artifacts", () => {
       }),
     ).toThrow("release decision and diagnostic drain child evidence differ");
   });
+
+  it("includes terminal status and conclusion in canonical child evidence", () => {
+    const base = {
+      compositeJobsSha256: "a".repeat(64),
+      conclusion: "success",
+      dispatchActor: "github-actions[bot]",
+      observedRunAttempts: [1],
+      plannedRunAttempt: 1,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      runId: "101",
+      status: "completed",
+      timing: { jobs: [] },
+      triggeringActor: "vincentkoc",
+      workflow: "ci.yml",
+      workflowRef: "release-ci/tooling",
+      workflowSha: SHA,
+    };
+    expect(releaseStateChildEvidence(base)).not.toEqual(
+      releaseStateChildEvidence({ ...base, conclusion: "failure" }),
+    );
+    expect(releaseStateChildEvidence(base)).not.toEqual(
+      releaseStateChildEvidence({ ...base, status: "in_progress" }),
+    );
+  });
+
+  it.each([
+    [
+      "beta performance",
+      "performance",
+      "productPerformance",
+      [
+        {
+          conclusion: "failure",
+          name: "benchmark",
+          status: "completed",
+        },
+      ],
+    ],
+    [
+      "beta release-check advisory",
+      "qa-parity",
+      "releaseChecks",
+      [
+        {
+          conclusion: "failure",
+          name: "Run QA Lab runtime-pair lane (core)",
+          status: "completed",
+        },
+        {
+          conclusion: "success",
+          name: "Verify release checks",
+          status: "completed",
+        },
+      ],
+    ],
+  ])(
+    "rejects divergent terminal conclusions on the $0 surface",
+    (_label, rerunGroup, key, jobs) => {
+      const sealedPlan = executionPlan({ rerunGroup }, { releaseProfile: "beta", rerunGroup });
+      const plannedChild = sealedPlan.children.find(
+        (entry: Record<string, any>) => entry.key === key,
+      );
+      const makeArtifact = (mode: "decision" | "drain", conclusion: string) =>
+        buildReleaseStateArtifact({
+          children: [
+            child(key, {
+              ...plannedChild,
+              conclusion,
+              createdAt: "2026-08-21T00:00:00Z",
+              jobs,
+              status: "completed",
+              updatedAt: "2026-08-21T00:01:00Z",
+            }),
+          ],
+          decision: { activeRunIds: [], blockers: [], errors: [], state: "passed" },
+          executionPlan: sealedPlan,
+          expected: {
+            parentRunAttempt: 2,
+            parentRunId: "77",
+            targetSha: TARGET_SHA,
+            workflowRef: "release-ci/tooling",
+            workflowSha: SHA,
+          },
+          mode,
+          releaseProfile: "beta",
+          rerunGroup,
+        });
+      expect(() =>
+        verifyReleaseStateArtifacts(
+          sealedPlan,
+          makeArtifact("decision", "success"),
+          makeArtifact("drain", "failure"),
+          {
+            maxParentRunAttempt: 2,
+            parentRunId: "77",
+            releaseProfile: "beta",
+            rerunGroup,
+            targetSha: TARGET_SHA,
+            workflowRef: "release-ci/tooling",
+            workflowSha: SHA,
+          },
+        ),
+      ).toThrow("release decision and diagnostic drain child evidence differ");
+    },
+  );
 
   it.each([
     [

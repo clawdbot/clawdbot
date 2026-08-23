@@ -16,6 +16,7 @@ import {
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
 } from "./full-release-validation-policy.mjs";
+import { verifyTrustedWorkflowRef } from "./full-release-validation-workflow-trust.mjs";
 import { plainGhAuthenticatedEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -546,7 +547,7 @@ export async function inspectContinuation(plan, client) {
 }
 
 export function continuationBranchName(sourceRunId, toolingSha) {
-  return `release-ci/${toolingSha.slice(0, 12)}-frv-${sourceRunId}`;
+  return `release-ci/${toolingSha.slice(0, 12)}-${positiveInteger(sourceRunId, "source run ID")}`;
 }
 
 function continuationPlanIdentity(plan) {
@@ -590,6 +591,24 @@ function githubNotFound(error) {
   return /HTTP 404\b|Not Found/iu.test(error instanceof Error ? error.message : String(error));
 }
 
+function githubRepositoryFromRemote(remote) {
+  const normalized = String(remote)
+    .trim()
+    .replace(/\.git$/u, "");
+  const match =
+    /^https:\/\/github\.com\/([^/]+\/[^/]+)$/iu.exec(normalized) ??
+    /^git@github\.com:([^/]+\/[^/]+)$/iu.exec(normalized) ??
+    /^ssh:\/\/git@github\.com\/([^/]+\/[^/]+)$/iu.exec(normalized);
+  return match?.[1] ?? "";
+}
+
+function continuationParentPlanError(run, options) {
+  return new Error(
+    `exact continuation parent ${run.id} terminated with conclusion ${run.conclusion ?? "<missing>"} without a valid immutable execution plan`,
+    options,
+  );
+}
+
 export function createClient(repository, dependencies = {}) {
   const apiJson = dependencies.apiJson ?? ((path) => ghJson(repository, path));
   const apiText =
@@ -601,6 +620,8 @@ export function createClient(repository, dependencies = {}) {
           : ["api", `repos/${repository}/${path}`],
       ));
   const mutate = dependencies.mutate ?? ((args) => execGh(args));
+  const git = dependencies.git ?? ((args) => execCommand("git", args));
+  const report = dependencies.report ?? ((message) => console.error(message));
   const loadExecutionPlan =
     dependencies.loadExecutionPlan ?? ((runId) => downloadExecutionPlan(repository, runId));
   const attemptJobs =
@@ -608,6 +629,22 @@ export function createClient(repository, dependencies = {}) {
     ((runId, runAttempt) => ghAttemptJobs(repository, runId, runAttempt));
   const client = {
     repository,
+    async verifyTrustedToolingSha(workflowSha) {
+      const comparison = await apiJson(`compare/${workflowSha}...main`);
+      try {
+        verifyTrustedWorkflowRef(
+          workflowSha,
+          "main",
+          () => "",
+          () => comparison.status === "ahead" || comparison.status === "identical",
+        );
+      } catch (error) {
+        throw new Error(
+          `Tooling SHA ${workflowSha} is not reachable from protected main in ${repository}`,
+          { cause: error },
+        );
+      }
+    },
     async findContinuationParent(plan, branch, workflowSha) {
       const response = await apiJson(
         `actions/workflows/full-release-validation.yml/runs?event=workflow_dispatch&branch=${encodeURIComponent(branch)}&per_page=100`,
@@ -701,6 +738,7 @@ export function createClient(repository, dependencies = {}) {
     },
     async dispatchContinuation(plan) {
       const workflowSha = plan.continuation.toolingSha;
+      await client.verifyTrustedToolingSha(workflowSha);
       const file = await apiJson(
         `contents/.github/workflows/full-release-validation.yml?ref=${workflowSha}`,
       );
@@ -714,7 +752,11 @@ export function createClient(repository, dependencies = {}) {
       const branch = continuationBranchName(plan.continuation.sourceRunId, workflowSha);
       await client.ensureWorkflowRef(branch, workflowSha);
       let existing = await client.findContinuationParent(plan, branch, workflowSha);
-      if (existing && !existing.pending) {
+      if (existing) {
+        if (existing.pending && existing.run.status === "completed") {
+          throw continuationParentPlanError(existing.run);
+        }
+        report(`adopting exact continuation parent ${existing.run.id} on ${branch}`);
         return { branch, runId: String(existing.run.id), workflowSha };
       }
       const validation = plan.continuation.validationInputs;
@@ -775,11 +817,14 @@ export function createClient(repository, dependencies = {}) {
         }
       }
       const deadline =
-        Date.now() +
-        Number(process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS || DEFAULT_RECONCILE_TIMEOUT_MS);
+        Date.now() + Number(process.env.OPENCLAW_FRV_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
       while (Date.now() < deadline) {
         existing = await client.findContinuationParent(plan, branch, workflowSha);
-        if (existing && !existing.pending) {
+        if (existing) {
+          if (existing.pending && existing.run.status === "completed") {
+            throw continuationParentPlanError(existing.run);
+          }
+          report(`adopting exact continuation parent ${existing.run.id} on ${branch}`);
           return { branch, runId: String(existing.run.id), workflowSha };
         }
         await sleep(Number(process.env.OPENCLAW_FRV_POLL_MS || DEFAULT_POLL_MS));
@@ -799,34 +844,38 @@ export function createClient(repository, dependencies = {}) {
       throw new Error("could not resolve continuation parent run ID");
     },
     async deleteWorkflowRef(branch, workflowSha) {
-      const existing = await apiJson(refApiPath(branch));
-      if (existing.object?.sha !== workflowSha) {
-        throw new Error("continuation tooling ref moved before cleanup");
-      }
-      const endpoint = `repos/${repository}/${refApiPath(branch).replace(
-        /^git\/ref\//u,
-        "git/refs/",
-      )}`;
+      let origin;
       try {
-        await mutate(["api", "--method", "DELETE", endpoint]);
+        origin = await git(["remote", "get-url", "origin"]);
       } catch (error) {
-        try {
-          const reconciled = await apiJson(refApiPath(branch));
-          if (reconciled.object?.sha !== workflowSha) {
-            throw new Error("continuation tooling ref moved during cleanup", { cause: error });
-          }
-        } catch (readError) {
-          if (githubNotFound(readError)) {
-            return;
-          }
-          throw readError;
-        }
-        throw new Error(
-          `continuation tooling ref deletion failed and the exact ref remains: ${
+        report(
+          `warning: leaving continuation tooling ref ${branch}; local origin could not be verified: ${
             error instanceof Error ? error.message : String(error)
           }`,
-          { cause: error },
         );
+        return { deleted: false };
+      }
+      if (githubRepositoryFromRemote(origin).toLowerCase() !== repository.toLowerCase()) {
+        report(
+          `warning: leaving continuation tooling ref ${branch}; local origin does not map to ${repository}`,
+        );
+        return { deleted: false };
+      }
+      try {
+        await git([
+          "push",
+          `--force-with-lease=refs/heads/${branch}:${workflowSha}`,
+          "origin",
+          `:refs/heads/${branch}`,
+        ]);
+        return { deleted: true };
+      } catch (error) {
+        report(
+          `warning: leaving continuation tooling ref ${branch}; atomic lease deletion failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        return { deleted: false };
       }
     },
     getAttemptJobs(runId, runAttempt) {
@@ -940,8 +989,62 @@ async function reconcileAttemptStarts(minimumAttempts, client, mutationResults) 
   }
 }
 
+function exactTerminalRunState(run, runId) {
+  const state = {
+    displayTitle: String(run.display_title ?? ""),
+    conclusion: run.conclusion ?? null,
+    event: String(run.event ?? ""),
+    headBranch: String(run.head_branch ?? ""),
+    headSha: String(run.head_sha ?? ""),
+    id: String(run.id),
+    path: String(run.path ?? ""),
+    repository: String(run.repository?.full_name ?? run.repository ?? ""),
+    runAttempt: positiveInteger(run.run_attempt, `${runId} run attempt`),
+    status: String(run.status ?? ""),
+    triggeringActor: String(run.triggering_actor?.login ?? ""),
+  };
+  if (state.id !== runId || state.status !== "completed") {
+    throw new Error(`rerun source ${runId} is no longer the exact terminal run`);
+  }
+  return state;
+}
+
+async function rerunWithTransientRetry(runId, priorRun, mutation, client) {
+  const prior = exactTerminalRunState(priorRun, runId);
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      await mutation(runId);
+      return;
+    } catch (error) {
+      if (classifyReleaseGhTransportError(error) !== "transient") {
+        throw error;
+      }
+      const observedRun = await client.getRun(runId);
+      const observedAttempt = positiveInteger(observedRun.run_attempt, `${runId} run attempt`);
+      if (observedAttempt > prior.runAttempt) {
+        return;
+      }
+      const observed = exactTerminalRunState(observedRun, runId);
+      if (JSON.stringify(observed) !== JSON.stringify(prior)) {
+        throw new Error(`rerun source ${runId} changed after a rejected mutation`, {
+          cause: error,
+        });
+      }
+      if (attempt === 2) {
+        throw error;
+      }
+    }
+  }
+}
+
 export async function continueFailed(plan, rootRunId, client, options = {}) {
   await preflightContinuation(plan, rootRunId, client, client.repository ?? DEFAULT_REPOSITORY);
+  if (plan.legacy) {
+    if (typeof client.verifyTrustedToolingSha !== "function") {
+      throw new Error("legacy continuation client cannot verify its frozen Tooling SHA");
+    }
+    await client.verifyTrustedToolingSha(plan.continuation.toolingSha);
+  }
   let status = await inspectContinuation(plan, client);
   if (status.active.length > 0) {
     await waitForTerminal(
@@ -954,11 +1057,33 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     if (options.dryRun) {
       return { action: "would-rerun", status };
     }
+    const priorRuns = new Map(
+      await Promise.all(
+        status.failed.map(async (child) => {
+          const run = await client.getRun(child.runId);
+          const terminal = exactTerminalRunState(run, child.runId);
+          if (
+            terminal.runAttempt !== child.effectiveRunAttempt ||
+            terminal.conclusion !== child.conclusion
+          ) {
+            throw new Error(`failed child ${child.runId} changed before rerun dispatch`);
+          }
+          return [child.runId, run];
+        }),
+      ),
+    );
     const minimumAttempts = new Map(
       status.failed.map((child) => [child.runId, child.effectiveRunAttempt + 1]),
     );
     const mutationResults = await Promise.allSettled(
-      status.failed.map((child) => client.rerunFailed(child.runId)),
+      status.failed.map((child) =>
+        rerunWithTransientRetry(
+          child.runId,
+          priorRuns.get(child.runId),
+          client.rerunFailed.bind(client),
+          client,
+        ),
+      ),
     );
     await reconcileAttemptStarts(minimumAttempts, client, mutationResults);
     await waitForTerminal(
@@ -978,13 +1103,18 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     const dispatched = await client.dispatchContinuation(plan);
     await waitForTerminal([dispatched.runId], client);
     const run = await client.getRun(dispatched.runId);
+    const finalPlanPayload = await options.loadExecutionPlan(dispatched.runId);
+    let finalPlan;
+    try {
+      finalPlan = validateReleaseExecutionPlanArtifact(finalPlanPayload, {
+        parentRunId: dispatched.runId,
+      });
+    } catch (error) {
+      throw continuationParentPlanError(run, { cause: error });
+    }
     if (run.conclusion !== "success") {
       throw new Error(`continuation parent failed: ${dispatched.runId}`);
     }
-    const finalPlanPayload = await options.loadExecutionPlan(dispatched.runId);
-    const finalPlan = validateReleaseExecutionPlanArtifact(finalPlanPayload, {
-      parentRunId: dispatched.runId,
-    });
     if (
       JSON.stringify(continuationPlanIdentity(finalPlan)) !==
       JSON.stringify(continuationPlanIdentity(plan))
@@ -1005,7 +1135,9 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
     const minimumAttempts = new Map([
       [rootRunId, positiveInteger(completedParent.run_attempt, "parent run attempt") + 1],
     ]);
-    const mutationResults = await Promise.allSettled([client.rerunParent(rootRunId)]);
+    const mutationResults = await Promise.allSettled([
+      rerunWithTransientRetry(rootRunId, completedParent, client.rerunParent.bind(client), client),
+    ]);
     await reconcileAttemptStarts(minimumAttempts, client, mutationResults);
     parentReran = true;
     await waitForTerminal([rootRunId], client, minimumAttempts);

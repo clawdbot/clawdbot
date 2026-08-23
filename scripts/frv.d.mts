@@ -26,6 +26,7 @@ export interface FrvClient {
   getRunAttempt: (runId: string, runAttempt: number) => Promise<Record<string, unknown>>;
   rerunFailed?: (runId: string) => Promise<unknown>;
   rerunParent?: (runId: string) => Promise<unknown>;
+  verifyTrustedToolingSha?: (workflowSha: string) => Promise<void>;
   verify?: (runId: string, plan: Record<string, unknown>) => Promise<unknown>;
 }
 
@@ -33,7 +34,12 @@ export type FrvConcreteClient = FrvClient &
   Required<
     Pick<
       FrvClient,
-      "deleteWorkflowRef" | "dispatchContinuation" | "rerunFailed" | "rerunParent" | "verify"
+      | "deleteWorkflowRef"
+      | "dispatchContinuation"
+      | "rerunFailed"
+      | "rerunParent"
+      | "verify"
+      | "verifyTrustedToolingSha"
     >
   >;
 

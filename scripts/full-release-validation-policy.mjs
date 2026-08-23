@@ -1337,6 +1337,7 @@ export function releasePlanGateFailures(gates) {
 export function releaseStateChildEvidence(child) {
   return canonicalValue({
     compositeJobsSha256: child.compositeJobsSha256,
+    conclusion: child.conclusion,
     dispatchActor: child.dispatchActor,
     effectiveRunAttempt: child.runAttempt,
     jobs: child.timing.jobs.map((job) => ({
@@ -1352,6 +1353,7 @@ export function releaseStateChildEvidence(child) {
     plannedRunAttempt: child.plannedRunAttempt,
     repository: child.repository,
     runId: child.runId,
+    status: child.status,
     triggeringActor: child.triggeringActor,
     workflow: child.workflow,
     workflowRef: child.workflowRef,
@@ -1521,14 +1523,6 @@ function verifyReleaseStatePair(planPayload, decisionPayload, drainPayload, expe
   verifyStateStructure(decision, executionPlan, "release decision");
   verifyStateStructure(drain, executionPlan, "diagnostic drain");
   verifyStateTransition(decision, drain);
-  for (const child of executionPlan.children.filter((entry) => entry.selected)) {
-    if (
-      JSON.stringify(releaseStateChildEvidence(decision.children[child.key])) !==
-      JSON.stringify(releaseStateChildEvidence(drain.children[child.key]))
-    ) {
-      throw new Error(`release decision and diagnostic drain child evidence differ: ${child.key}`);
-    }
-  }
   return {
     decision,
     drain,
@@ -1546,6 +1540,14 @@ export function verifyReleaseStateArtifacts(plan, decision, drain, expected = {}
   if (verified.decision.state !== "passed" || verified.drain.state !== "passed") {
     const outcome = verified.drain.state === "passed" ? verified.decision : verified.drain;
     throw new Error(formatReleaseStateOutcome(outcome));
+  }
+  for (const child of verified.executionPlan.children.filter((entry) => entry.selected)) {
+    if (
+      JSON.stringify(releaseStateChildEvidence(verified.decision.children[child.key])) !==
+      JSON.stringify(releaseStateChildEvidence(verified.drain.children[child.key]))
+    ) {
+      throw new Error(`release decision and diagnostic drain child evidence differ: ${child.key}`);
+    }
   }
   return verified;
 }

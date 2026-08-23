@@ -15,6 +15,8 @@ import {
   releaseChildSpec,
   releaseCompositeJobsSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { resolveReleaseToolingIdentity } from "../../scripts/release-tooling-identity.mjs";
+import { validateFullReleaseValidationEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SHA = "a".repeat(40);
@@ -227,6 +229,58 @@ function preflightMethods(
 }
 
 describe("frv continuation controller", () => {
+  it("uses the canonical release-ci identity accepted by tooling and evidence validators", () => {
+    const branch = continuationBranchName("77", SHA);
+    const requestedIdentityJson = JSON.stringify({
+      fullRef: "refs/heads/main",
+      ref: "main",
+      sha: SHA,
+    });
+    expect(branch).toBe(`release-ci/${SHA.slice(0, 12)}-77`);
+    expect(
+      resolveReleaseToolingIdentity({
+        requestedIdentityJson,
+        workflowContract: "2",
+        workflowFullRef: `refs/heads/${branch}`,
+        workflowRef: branch,
+        workflowSha: SHA,
+      }),
+    ).toEqual(JSON.parse(requestedIdentityJson));
+    expect(
+      validateFullReleaseValidationEvidence({
+        run: {
+          conclusion: "success",
+          event: "workflow_dispatch",
+          head_branch: branch,
+          head_sha: SHA,
+          id: 88,
+          name: "Full Release Validation",
+          path: ".github/workflows/full-release-validation.yml",
+          repository: { full_name: "openclaw/openclaw" },
+          run_attempt: 1,
+          status: "completed",
+        },
+        manifest: {
+          runAttempt: "1",
+          runId: "88",
+          targetRef: TARGET_SHA,
+          targetSha: TARGET_SHA,
+          version: 3,
+          workflowFullRef: `refs/heads/${branch}`,
+          workflowName: "Full Release Validation",
+          workflowRef: branch,
+          workflowRefType: "branch",
+          workflowSha: SHA,
+        },
+        expectedRepository: "openclaw/openclaw",
+        expectedRunId: "88",
+        expectedTargetSha: TARGET_SHA,
+        expectedWorkflowBranch: "main",
+        isTrustedMainAncestor: () => true,
+      }),
+    ).toMatchObject({ source: "sha-pinned-main" });
+  });
+
   it("adopts an active newer attempt without rerunning it", async () => {
     const selected = child("normalCi", "101");
     let reads = 0;
@@ -322,7 +376,7 @@ describe("frv continuation controller", () => {
     expect(events.at(-1)).toBe("verify");
   });
 
-  it("dispatches a zero-child continuation parent for an explicit legacy source", async () => {
+  it("dispatches a zero-child legacy parent and requires its final immutable plan", async () => {
     const selected = child("normalCi", "101");
     const legacyContinuation = {
       candidate: candidate(),
@@ -368,6 +422,7 @@ describe("frv continuation controller", () => {
     let dispatched = 0;
     let deletedBranch = "";
     let parentReruns = 0;
+    let finalPlanPayload: Record<string, unknown> | undefined = finalPlan;
     const client = {
       ...preflightMethods([selected], (entry) => runFor(entry, 1, "success"), candidate()),
       deleteWorkflowRef: async (branch: string) => {
@@ -386,6 +441,7 @@ describe("frv continuation controller", () => {
       rerunParent: async () => {
         parentReruns += 1;
       },
+      verifyTrustedToolingSha: async () => {},
       verify: async () => "{}",
       repository: "openclaw/openclaw",
     };
@@ -400,11 +456,30 @@ describe("frv continuation controller", () => {
       },
       "77",
       client,
-      { loadExecutionPlan: async () => finalPlan },
+      { loadExecutionPlan: async () => finalPlanPayload },
     );
     expect(dispatched).toBe(1);
     expect(deletedBranch).toBe("release-ci/current");
     expect(parentReruns).toBe(0);
+    finalPlanPayload = undefined;
+    await expect(
+      continueFailed(
+        {
+          children: { normalCi: selected },
+          continuation: legacyContinuation,
+          legacy: true,
+          releaseProfile: "beta",
+          rerunGroup: "all",
+          targetSha: TARGET_SHA,
+        },
+        "77",
+        client,
+        { loadExecutionPlan: async () => finalPlanPayload },
+      ),
+    ).rejects.toThrow(
+      "exact continuation parent 88 terminated with conclusion success without a valid immutable execution plan",
+    );
+    expect(dispatched).toBe(2);
   });
 
   it("rejects incomplete or drifted legacy child inventories", () => {
@@ -670,6 +745,73 @@ describe("frv continuation controller", () => {
     expect(calls.toSorted()).toEqual(["101", "202"]);
   });
 
+  it("retries a transient rejected rerun only while the prior terminal attempt is unchanged", async () => {
+    const selected = child("normalCi", "101");
+    let attempt = 1;
+    let conclusion = "failure";
+    let reruns = 0;
+    const client = {
+      ...preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
+      getAttemptJobs: async (_runId: string, runAttempt: number) => [
+        job("test", runAttempt === 1 ? "failure" : "success"),
+      ],
+      getRun: async (runId: string) =>
+        runId === "77"
+          ? { conclusion: "success", id: 77, run_attempt: 1, status: "completed" }
+          : runFor(selected, attempt, conclusion),
+      repository: "openclaw/openclaw",
+      rerunFailed: async () => {
+        reruns += 1;
+        if (reruns === 1) {
+          throw new Error("HTTP 502 before dispatch");
+        }
+        attempt = 2;
+        conclusion = "success";
+      },
+      rerunParent: async () => {},
+      verify: async () => "{}",
+    };
+    process.env.OPENCLAW_FRV_POLL_MS = "1";
+    process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS = "100";
+    await expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
+      action: "verified-parent",
+    });
+    expect(reruns).toBe(2);
+  });
+
+  it("does not retry when a rejected rerun reread changes the prior run provenance", async () => {
+    const selected = child("normalCi", "101");
+    let drifted = false;
+    let reruns = 0;
+    const client = {
+      ...preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
+      getAttemptJobs: async () => [job("test", "failure")],
+      getRun: async (runId: string) => {
+        if (runId === "77") {
+          return { conclusion: "success", id: 77, run_attempt: 1, status: "completed" };
+        }
+        return {
+          ...runFor(selected, 1, "failure"),
+          head_sha: drifted ? "f".repeat(40) : SHA,
+        };
+      },
+      repository: "openclaw/openclaw",
+      rerunFailed: async () => {
+        reruns += 1;
+        drifted = true;
+        throw new Error("HTTP 502 before dispatch");
+      },
+      rerunParent: async () => {},
+      verify: async () => "{}",
+    };
+    process.env.OPENCLAW_FRV_POLL_MS = "1";
+    process.env.OPENCLAW_FRV_RECONCILE_TIMEOUT_MS = "5";
+    await expect(continueFailed(plan([selected]), "77", client)).rejects.toThrow(
+      "rerun source 101 changed after a rejected mutation",
+    );
+    expect(reruns).toBe(1);
+  });
+
   it("uses frozen tooling, adopts the same parent on restart, and never reselects main", async () => {
     const reviewed = {
       children: { normalCi: child("normalCi", "101") },
@@ -686,6 +828,9 @@ describe("frv continuation controller", () => {
     const client = createClient("openclaw/openclaw", {
       apiJson: async (path: string) => {
         reads.push(path);
+        if (path === `compare/${SHA}...main`) {
+          return { status: "ahead" };
+        }
         if (path.startsWith("contents/")) {
           return { content: Buffer.from("continuation_plan_json:").toString("base64") };
         }
@@ -732,19 +877,201 @@ describe("frv continuation controller", () => {
     ).toBe(true);
   });
 
-  it("refuses to delete a deterministic ref whose OID changed", async () => {
+  it("adopts an exact active continuation parent before its plan artifact exists", async () => {
+    const reviewed = {
+      children: { normalCi: child("normalCi", "101") },
+      continuation: continuation(),
+      legacy: true,
+      releaseProfile: "beta",
+      rerunGroup: "all",
+      targetSha: TARGET_SHA,
+    };
+    const branch = continuationBranchName("77", SHA);
+    const mutations: string[][] = [];
+    const reports: string[] = [];
+    const client = createClient("openclaw/openclaw", {
+      apiJson: async (path: string) => {
+        if (path === `compare/${SHA}...main`) {
+          return { status: "ahead" };
+        }
+        if (path.startsWith("contents/")) {
+          return { content: Buffer.from("continuation_plan_json:").toString("base64") };
+        }
+        if (path.startsWith("git/ref/")) {
+          return { object: { sha: SHA } };
+        }
+        if (path.startsWith("actions/workflows/")) {
+          return {
+            workflow_runs: [
+              {
+                event: "workflow_dispatch",
+                head_branch: branch,
+                head_sha: SHA,
+                id: 88,
+              },
+            ],
+          };
+        }
+        if (path === "actions/runs/88") {
+          return {
+            conclusion: null,
+            event: "workflow_dispatch",
+            head_branch: branch,
+            head_sha: SHA,
+            id: 88,
+            path: ".github/workflows/full-release-validation.yml",
+            repository: { full_name: "openclaw/openclaw" },
+            status: "in_progress",
+          };
+        }
+        throw new Error(`unexpected read: ${path}`);
+      },
+      loadExecutionPlan: async () => undefined,
+      mutate: async (args: string[]) => {
+        mutations.push(args);
+        return "";
+      },
+      report: (message: string) => reports.push(message),
+    });
+    await expect(client.dispatchContinuation(reviewed)).resolves.toMatchObject({
+      branch,
+      runId: "88",
+    });
+    expect(mutations).toEqual([]);
+    expect(reports).toEqual([expect.stringContaining("adopting exact continuation parent 88")]);
+  });
+
+  it("fails precisely when an exact continuation parent terminates without a valid plan", async () => {
+    const reviewed = {
+      children: { normalCi: child("normalCi", "101") },
+      continuation: continuation(),
+      legacy: true,
+      releaseProfile: "beta",
+      rerunGroup: "all",
+      targetSha: TARGET_SHA,
+    };
+    const branch = continuationBranchName("77", SHA);
+    const client = createClient("openclaw/openclaw", {
+      apiJson: async (path: string) => {
+        if (path === `compare/${SHA}...main`) {
+          return { status: "ahead" };
+        }
+        if (path.startsWith("contents/")) {
+          return { content: Buffer.from("continuation_plan_json:").toString("base64") };
+        }
+        if (path.startsWith("git/ref/")) {
+          return { object: { sha: SHA } };
+        }
+        if (path.startsWith("actions/workflows/")) {
+          return {
+            workflow_runs: [
+              {
+                event: "workflow_dispatch",
+                head_branch: branch,
+                head_sha: SHA,
+                id: 88,
+              },
+            ],
+          };
+        }
+        if (path === "actions/runs/88") {
+          return {
+            conclusion: "failure",
+            event: "workflow_dispatch",
+            head_branch: branch,
+            head_sha: SHA,
+            id: 88,
+            path: ".github/workflows/full-release-validation.yml",
+            repository: { full_name: "openclaw/openclaw" },
+            status: "completed",
+          };
+        }
+        throw new Error(`unexpected read: ${path}`);
+      },
+      loadExecutionPlan: async () => undefined,
+    });
+    await expect(client.dispatchContinuation(reviewed)).rejects.toThrow(
+      "exact continuation parent 88 terminated with conclusion failure without a valid immutable execution plan",
+    );
+  });
+
+  it("rejects untrusted frozen tooling before ref or workflow mutation", async () => {
     const mutations: string[][] = [];
     const client = createClient("openclaw/openclaw", {
-      apiJson: async () => ({ object: { sha: "f".repeat(40) } }),
+      apiJson: async (path: string) => {
+        if (path === `compare/${SHA}...main`) {
+          return { status: "behind" };
+        }
+        throw new Error(`unexpected read after trust rejection: ${path}`);
+      },
       mutate: async (args: string[]) => {
         mutations.push(args);
         return "";
       },
     });
-    await expect(client.deleteWorkflowRef(continuationBranchName("77", SHA), SHA)).rejects.toThrow(
-      "moved before cleanup",
-    );
+    await expect(
+      client.dispatchContinuation({
+        children: { normalCi: child("normalCi", "101") },
+        continuation: continuation(),
+        legacy: true,
+        releaseProfile: "beta",
+        rerunGroup: "all",
+        targetSha: TARGET_SHA,
+      }),
+    ).rejects.toThrow(`not reachable from protected main in openclaw/openclaw`);
     expect(mutations).toEqual([]);
+  });
+
+  it("uses an atomic exact-OID lease to delete the deterministic ref", async () => {
+    const gitCalls: string[][] = [];
+    const client = createClient("openclaw/openclaw", {
+      git: async (args: string[]) => {
+        gitCalls.push(args);
+        return args[0] === "remote" ? "https://github.com/openclaw/openclaw.git" : "";
+      },
+    });
+    const branch = continuationBranchName("77", SHA);
+    await expect(client.deleteWorkflowRef(branch, SHA)).resolves.toEqual({ deleted: true });
+    expect(gitCalls).toEqual([
+      ["remote", "get-url", "origin"],
+      ["push", `--force-with-lease=refs/heads/${branch}:${SHA}`, "origin", `:refs/heads/${branch}`],
+    ]);
+  });
+
+  it("leaves the deterministic ref when local origin is not the selected repository", async () => {
+    const gitCalls: string[][] = [];
+    const reports: string[] = [];
+    const client = createClient("openclaw/openclaw", {
+      git: async (args: string[]) => {
+        gitCalls.push(args);
+        return "https://github.com/someone/else.git";
+      },
+      report: (message: string) => reports.push(message),
+    });
+    await expect(client.deleteWorkflowRef(continuationBranchName("77", SHA), SHA)).resolves.toEqual(
+      { deleted: false },
+    );
+    expect(gitCalls).toEqual([["remote", "get-url", "origin"]]);
+    expect(reports).toEqual([
+      expect.stringContaining("local origin does not map to openclaw/openclaw"),
+    ]);
+  });
+
+  it("leaves the deterministic ref when the exact-OID lease is rejected", async () => {
+    const reports: string[] = [];
+    const client = createClient("openclaw/openclaw", {
+      git: async (args: string[]) => {
+        if (args[0] === "remote") {
+          return "git@github.com:openclaw/openclaw.git";
+        }
+        throw new Error("stale info");
+      },
+      report: (message: string) => reports.push(message),
+    });
+    await expect(client.deleteWorkflowRef(continuationBranchName("77", SHA), SHA)).resolves.toEqual(
+      { deleted: false },
+    );
+    expect(reports).toEqual([expect.stringContaining("atomic lease deletion failed: stale info")]);
   });
 
   it("rejects a supplied child not emitted by the source parent", async () => {
