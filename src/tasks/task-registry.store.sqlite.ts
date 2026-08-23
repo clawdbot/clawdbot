@@ -1,18 +1,33 @@
 // Persists task registry records and events through the OpenClaw SQLite state database.
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
+import {
+  classifyExecutionOwnerBinding,
+  executionOwnerBindingFromAdmission,
+  type ExecutionOwnerBindingResult,
+} from "../audit/execution-owner-binding.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { tableExists, tableHasColumns } from "../state/openclaw-state-db-schema-helpers.js";
+import {
+  ensureColumn,
+  tableExists,
+  tableHasColumns,
+} from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { parseDeliveryContextJson, parseSqliteJsonValue } from "./task-registry.sqlite.shared.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
@@ -36,7 +51,7 @@ type TaskRegistryStoreDatabase = Pick<
   "task_delivery_state" | "task_runs"
 >;
 
-type TaskRegistryRow = Selectable<TaskRunsTable> & {
+type TaskRegistryRow = Omit<Selectable<TaskRunsTable>, "context_id" | "execution_id"> & {
   runtime: string;
   scope_kind: string;
   status: string;
@@ -469,6 +484,54 @@ export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
   withWriteTransaction((database) => {
     upsertTaskRunRowInDatabase(database, bindTaskRecord(task));
   });
+}
+
+/** Binds only the exact task row selected before admission; runId is never a join key. */
+export function bindTaskRunExecution(params: {
+  admitted: AdmittedRunContext;
+  taskId: string;
+  options?: OpenClawStateDatabaseOptions;
+}): ExecutionOwnerBindingResult {
+  const binding = executionOwnerBindingFromAdmission(params.admitted);
+  if (!binding) {
+    return "disabled";
+  }
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      ensureColumn(db, "task_runs", "context_id TEXT");
+      ensureColumn(db, "task_runs", "execution_id TEXT");
+      const kysely = getTaskRegistryKysely(db);
+      const current = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("task_runs")
+          .select(["context_id", "execution_id"])
+          .where("task_id", "=", params.taskId),
+      );
+      if (!current) {
+        return "missing";
+      }
+      const state = classifyExecutionOwnerBinding(
+        { contextId: current.context_id, executionId: current.execution_id },
+        binding,
+      );
+      if (state !== "unbound") {
+        return state;
+      }
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .updateTable("task_runs")
+          .set({ context_id: binding.contextId, execution_id: binding.executionId })
+          .where("task_id", "=", params.taskId)
+          .where("context_id", "is", null)
+          .where("execution_id", "is", null),
+      );
+      return "bound";
+    },
+    params.options,
+    { operationLabel: "task.run.execution-binding" },
+  );
 }
 
 export function upsertTaskWithDeliveryStateToSqlite(params: {

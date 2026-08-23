@@ -1,12 +1,19 @@
 import crypto from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
+import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
+import {
+  classifyExecutionOwnerBinding,
+  executionOwnerBindingFromAdmission,
+  type ExecutionOwnerBindingResult,
+} from "../../audit/execution-owner-binding.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { ensureColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -174,6 +181,55 @@ function withReceiptWrite<T>(
     initializedDatabases.add(initializedDatabase);
   }
   return result;
+}
+
+/** Binds the exact admitted execution to its authoritative receipt without changing lifecycle. */
+export function bindCronRunReceiptExecution(params: {
+  admitted: AdmittedRunContext;
+  handle: CronRunReceiptHandle;
+  options?: OpenClawStateDatabaseOptions;
+}): ExecutionOwnerBindingResult {
+  const binding = executionOwnerBindingFromAdmission(params.admitted);
+  if (!binding) {
+    return "disabled";
+  }
+  return withReceiptWrite(
+    "cron.run-receipt.execution-binding",
+    params.options ?? {},
+    (database) => {
+      ensureColumn(database, "cron_run_receipts", "context_id TEXT");
+      ensureColumn(database, "cron_run_receipts", "execution_id TEXT");
+      const current = executeSqliteQueryTakeFirstSync(
+        database,
+        query(database)
+          .selectFrom("cron_run_receipts")
+          .select(["context_id", "execution_id"])
+          .where("receipt_id", "=", params.handle.receiptId)
+          .where("store_key", "=", params.handle.storeKey)
+          .where("job_id", "=", params.handle.jobId),
+      );
+      if (!current) {
+        return "missing";
+      }
+      const state = classifyExecutionOwnerBinding(
+        { contextId: current.context_id, executionId: current.execution_id },
+        binding,
+      );
+      if (state !== "unbound") {
+        return state;
+      }
+      executeSqliteQuerySync(
+        database,
+        query(database)
+          .updateTable("cron_run_receipts")
+          .set({ context_id: binding.contextId, execution_id: binding.executionId })
+          .where("receipt_id", "=", params.handle.receiptId)
+          .where("context_id", "is", null)
+          .where("execution_id", "is", null),
+      );
+      return "bound";
+    },
+  );
 }
 
 function isReceiptStatus(value: string): value is CronRunReceiptStatus {

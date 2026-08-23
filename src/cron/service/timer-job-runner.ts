@@ -51,6 +51,7 @@ type CronCoreRunOptions = {
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
   runReceipt?: import("../store/run-receipt-store.js").CronRunReceiptHandle;
+  executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
 };
 
 async function deliverPrimaryWebhook(
@@ -274,6 +275,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
         onExecutionStarted: noteExecutionStarted,
         onExecutionPhase: accumulateExecution,
         assertRunCurrent,
+        executionIdentity: opts?.executionIdentity,
       };
       const corePromise = withCronTaskRunId(opts?.runId, () =>
         executeJobCore(state, job, runAbortController.signal, coreOptions),
@@ -361,6 +363,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
       assertRunCurrent,
+      executionIdentity: opts?.executionIdentity,
     };
     const corePromise = withCronTaskRunId(opts?.runId, () =>
       executeJobCore(state, job, runAbortController.signal, coreOptions),

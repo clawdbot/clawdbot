@@ -256,6 +256,80 @@ describe("execution decision facts", () => {
     expect(receiptSearch).not.toContain(encodeURIComponent(messageReceipt?.receiptId ?? ""));
   });
 
+  it("projects exact-bound cron, task, and flow owner rows without generic facts", () => {
+    const database = databaseOptions();
+    const context = seedExecutionContext(database);
+    const db = openOpenClawStateDatabase(database).db;
+    db.prepare(
+      `INSERT INTO cron_run_receipts (
+         receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
+         status, owner_pid, started_at_ms, finished_at_ms, context_id, execution_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "cron-receipt-1",
+      "default",
+      "job-1",
+      "revision-1",
+      "main",
+      context.runId,
+      "ok",
+      1,
+      60,
+      70,
+      context.contextId,
+      context.executionId,
+    );
+    db.prepare(
+      `INSERT INTO task_runs (
+         task_id, runtime, owner_key, scope_kind, task, status, delivery_status,
+         notify_policy, created_at, context_id, execution_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "task-1",
+      "cron",
+      "owner-1",
+      "session",
+      "private task text",
+      "succeeded",
+      "not-requested",
+      "never",
+      61,
+      context.contextId,
+      context.executionId,
+    );
+    db.prepare(
+      `INSERT INTO flow_runs (
+         flow_id, owner_key, status, notify_policy, goal, created_at, updated_at,
+         context_id, execution_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "flow-1",
+      "owner-1",
+      "succeeded",
+      "never",
+      "private flow goal",
+      62,
+      70,
+      context.contextId,
+      context.executionId,
+    );
+
+    const result = presentExecutionDecisionReceipts({
+      context,
+      decisionLimit: 10,
+      options: { ...database, now: 100 },
+    });
+    expect(result.decisions.map((item) => item.source.owner)).toEqual([
+      "agent-command",
+      "cron_run_receipts",
+      "task_runs",
+      "flow_runs",
+    ]);
+    expect(JSON.stringify(result.decisions)).not.toContain("private task text");
+    expect(JSON.stringify(result.decisions)).not.toContain("private flow goal");
+    expect(tableExists(db, "execution_decision_facts")).toBe(false);
+  });
+
   it("does not assign run-only delivery evidence to either exact execution sharing a run id", () => {
     const database = databaseOptions();
     const first = seedExecutionContext(database, {

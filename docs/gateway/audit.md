@@ -43,6 +43,15 @@ platform-send start use a lazy progress companion, while terminal message rows
 remain in the activity ledger. Run inspection merges both sources directly;
 neither is copied into the generic decision-fact table.
 
+Scheduled runs, background tasks, and task flows are owner-native sources too.
+After exact run admission, their existing `cron_run_receipts`, `task_runs`, and
+`flow_runs` rows retain the admitted context and execution ids. Inspection
+adapts those rows directly and preserves their owner status, including skipped,
+failed, timed-out, cancelled, blocked, and lost outcomes. A `runId` alone never
+joins one of these rows to an execution. Legacy, missing, deleted, corrupt, or
+mismatched bindings remain unknown or absent; they never change task behavior
+and are never copied into `execution_decision_facts`.
+
 ## Run identity inspection
 
 Execution identity recording is off by default, including on fresh installs
@@ -160,6 +169,15 @@ this boundary. A run becomes
 `attribution-only` only when an authoritative ingress supplies an invoker fact.
 Neither state means that identity affected an allow or deny decision.
 
+Configured webhook mapping ids identify only the matched ingress source. They
+do not authenticate a person, service, or invoker. Shared hook authentication
+and direct `/hooks/agent` requests therefore remain unattributed unless another
+authoritative principal producer exists. A mapping transform that suppresses a
+request before admission returns its normal HTTP response but creates no run,
+execution identity, task, or decision receipt. Restart recovery records system
+attribution only after the current durable recovery owner admits the exact
+attempt.
+
 Authenticated Gateway attach records immutable audit facts once. Session
 creation separately reads the live canonical durable profile id so a profile
 link performed after attach cannot orphan session ownership. Ordinary session
@@ -199,6 +217,12 @@ The binding remains diagnostic provenance. Only an exact target-validation,
 message-policy, or turn-capability denial that changed the result is
 `enforced`. Portable actions and early suppressions without a durable owner
 record use the generic fact owner on the same audit-writer FIFO.
+
+Cron, task, and flow lifecycle receipts are `attribution-only` and have a
+`not-applicable` decision outcome. They report what the authoritative lifecycle
+owner retained; they do not claim an authorization decision. Their cursors are
+opaque and source-specific. Existing numeric cursors and `a:`, `m:`, and `g:`
+cursors remain accepted; newer owner stages use `c:`, `t:`, and `f:`.
 
 When the same `runId` has a retained terminal row in `operator_approvals`, the
 inspector also reads its owner-local `operator_approval_execution_identities`

@@ -188,6 +188,12 @@ describe("OpenClaw database maintenance schema validation", () => {
       "installed_plugin_index.workspace_dir TEXT",
       "secret_store_entries.allowed_hosts TEXT",
       "skill_workshop_proposals.claim_released_time INTEGER",
+      "cron_run_receipts.context_id TEXT",
+      "cron_run_receipts.execution_id TEXT",
+      "task_runs.context_id TEXT",
+      "task_runs.execution_id TEXT",
+      "flow_runs.context_id TEXT",
+      "flow_runs.execution_id TEXT",
     ]);
 
     const database = createGlobalDatabase();

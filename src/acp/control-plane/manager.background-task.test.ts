@@ -1,9 +1,23 @@
 /** Regression coverage for ACP background-task summary truncation boundaries. */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { findTaskByRunId } from "../../tasks/task-registry.js";
+import {
+  resetTaskRegistryForTests,
+  resetTaskFlowRegistryForTests,
+} from "../../tasks/task-runtime.test-helpers.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import {
   appendBackgroundTaskProgressSummary,
+  bindBackgroundTaskExecution,
+  createBackgroundTaskRecord,
   resolveBackgroundTaskContext,
   resolveBackgroundTaskFailureStatus,
 } from "./manager.background-task.js";
@@ -12,6 +26,12 @@ import type { AcpSessionManagerDeps } from "./manager.types.js";
 
 // U+1F99E (🦞) is a surrogate pair in UTF-16; a raw .slice() boundary can split it.
 const LOBSTER = "🦞";
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
+});
 
 const HIGH_SURROGATE_WITHOUT_LOW = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
 
@@ -83,5 +103,61 @@ describe("resolveBackgroundTaskFailureStatus", () => {
         new AcpRuntimeError("ACP_TURN_FAILED", "backend said the request timed out"),
       ),
     ).toBe("failed");
+  });
+});
+
+describe("ACP background task execution binding", () => {
+  it("binds the exact admitted execution only at prompt submission", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-acp-execution-binding-" },
+      async () => {
+        resetTaskRegistryForTests();
+        resetTaskFlowRegistryForTests();
+        const admitted: AdmittedRunContext = {
+          operationalRunInstance: { instanceId: "instance-acp", runId: "run-acp" },
+          executionIdentityToken: createExecutionIdentityAdmissionToken("run-acp", {
+            contextId: "context-acp",
+            executionId: "execution-acp",
+          }),
+        };
+        const record = createBackgroundTaskRecord(
+          {
+            requesterSessionKey: "agent:main:main",
+            childSessionKey: "agent:qa:child",
+            runId: "run-acp",
+            task: "private",
+          },
+          100,
+        );
+        const task = findTaskByRunId("run-acp");
+        if (!record || !task?.parentFlowId) {
+          throw new Error("expected ACP task and owner flow");
+        }
+        const db = openOpenClawStateDatabase().db;
+        expect(
+          db
+            .prepare("SELECT context_id, execution_id FROM task_runs WHERE task_id = ?")
+            .get(task.taskId),
+        ).toEqual({ context_id: null, execution_id: null });
+        expect(
+          db
+            .prepare("SELECT context_id, execution_id FROM flow_runs WHERE flow_id = ?")
+            .get(task.parentFlowId),
+        ).toEqual({ context_id: null, execution_id: null });
+
+        bindBackgroundTaskExecution(record, admitted);
+
+        expect(
+          db
+            .prepare("SELECT context_id, execution_id FROM task_runs WHERE task_id = ?")
+            .get(task.taskId),
+        ).toEqual({ context_id: "context-acp", execution_id: "execution-acp" });
+        expect(
+          db
+            .prepare("SELECT context_id, execution_id FROM flow_runs WHERE flow_id = ?")
+            .get(task.parentFlowId),
+        ).toEqual({ context_id: "context-acp", execution_id: "execution-acp" });
+      },
+    );
   });
 });
