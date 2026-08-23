@@ -3501,7 +3501,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .sidebar-footer-bar--two-actions {
-  padding-inline-end: 80px;
+  padding-inline-end: 88px;
 }
 
 .sidebar-footer-actions {
@@ -3511,7 +3511,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   display: flex;
   height: 32px;
   align-items: center;
-  gap: 4px;
+  gap: 12px;
   transform: translateY(-50%);
 }
 
