@@ -570,6 +570,16 @@ function applyConfigForOpenClawTarget(
     );
     setPathCreateStrict(config, ["models", "providers", wildcardToken, "models"], []);
   }
+  if (entry.id === "mcp.servers.*.env.*") {
+    setPathCreateStrict(config, ["mcp", "servers", wildcardToken, "command"], "example-mcp");
+  }
+  if (entry.id === "mcp.servers.*.headers.*") {
+    setPathCreateStrict(
+      config,
+      ["mcp", "servers", wildcardToken, "url"],
+      "https://mcp.example.test",
+    );
+  }
   if (entry.id.startsWith("plugins.entries.")) {
     const pluginId = entry.id.split(".")[2];
     if (pluginId) {

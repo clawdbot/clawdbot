@@ -14,6 +14,7 @@ const {
   lookupMock,
   runtimeFetchMock,
   oauthBearerMock,
+  authProfileBearerMock,
   streamableTransportConstructorMock,
   sseTransportConstructorMock,
 } = vi.hoisted(() => ({
@@ -22,8 +23,23 @@ const {
   oauthBearerMock: vi.fn(
     (params: { fetchFn: unknown; identity: McpOAuthIdentity }) => params.fetchFn,
   ),
+  authProfileBearerMock: vi.fn((params: { fetchFn: unknown }) => params.fetchFn),
   streamableTransportConstructorMock: vi.fn(),
   sseTransportConstructorMock: vi.fn(),
+}));
+
+vi.mock("./mcp-auth-profile.js", () => ({
+  resolveMcpAuthProfileId: (rawServer: unknown) => {
+    if (!rawServer || typeof rawServer !== "object") {
+      return undefined;
+    }
+    const server = rawServer as { auth?: unknown; oauth?: { authProfileId?: unknown } };
+    const authProfileId = server.oauth?.authProfileId;
+    return server.auth === "oauth" && typeof authProfileId === "string" && authProfileId.trim()
+      ? authProfileId.trim()
+      : undefined;
+  },
+  withMcpAuthProfileBearer: authProfileBearerMock,
 }));
 
 vi.mock("./mcp-oauth-fetch.js", () => ({
@@ -127,6 +143,7 @@ describe("resolveMcpTransport", () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     runtimeFetchMock.mockReset();
     oauthBearerMock.mockClear();
+    authProfileBearerMock.mockClear();
     streamableTransportConstructorMock.mockClear();
     sseTransportConstructorMock.mockClear();
   });
@@ -328,6 +345,26 @@ describe("resolveMcpTransport", () => {
           serverName: "probe",
           serverUrl: "https://mcp.example.com/mcp",
         }),
+      }),
+    );
+  });
+
+  it("strips configured Authorization before projecting an OAuth auth profile", () => {
+    resolveMcpTransport("profile", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      auth: "oauth",
+      oauth: { authProfileId: "work" },
+      headers: {
+        Authorization: "Bearer stale",
+        "X-Tenant": "docs",
+      },
+    });
+
+    expect(authProfileBearerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: "work",
+        headers: { "X-Tenant": "docs" },
       }),
     );
   });

@@ -53,6 +53,25 @@ describe("secrets configure plan helpers", () => {
     });
   });
 
+  it("includes credential-like MCP values and excludes benign literals", () => {
+    const candidates = buildConfigureCandidatesForScope({
+      config: {
+        mcp: {
+          servers: {
+            local: {
+              command: "example-mcp",
+              env: { API_TOKEN: "plain-secret", MODE: "debug", LITERAL: "$UNCHANGED" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(candidates.map((entry) => entry.path)).toContain("mcp.servers.local.env.API_TOKEN");
+    expect(candidates.map((entry) => entry.path)).not.toContain("mcp.servers.local.env.MODE");
+    expect(candidates.map((entry) => entry.path)).not.toContain("mcp.servers.local.env.LITERAL");
+  });
+
   it("collects provider upserts and deletes", () => {
     const original = {
       secrets: {

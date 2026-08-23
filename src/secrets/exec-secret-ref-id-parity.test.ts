@@ -195,6 +195,9 @@ describe("exec SecretRef id parity", () => {
     if (id.startsWith("memory.search.")) {
       return "memory";
     }
+    if (id.startsWith("mcp.servers.")) {
+      return "mcp";
+    }
     if (id.startsWith("models.providers.") && id.includes(".headers.")) {
       return "models.headers";
     }

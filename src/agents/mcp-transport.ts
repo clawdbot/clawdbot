@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
+import { mcpUsesManagedAuthorization } from "./mcp-config-shared.js";
 import {
   buildMcpHttpFetch,
   withoutMcpAuthorizationHeader,
@@ -142,10 +143,9 @@ export function resolveMcpTransport(
     clientKey: resolved.clientKey,
     resourceUrl: resolved.url,
   });
-  const headers =
-    resolved.auth === "oauth" || authProfileId
-      ? withoutMcpAuthorizationHeader(resolved.headers)
-      : resolved.headers;
+  const headers = mcpUsesManagedAuthorization(rawServer, authProfileId)
+    ? withoutMcpAuthorizationHeader(resolved.headers)
+    : resolved.headers;
   const resourceFetch = withSameOriginMcpHttpHeaders({
     fetchFn: baseFetch,
     headers,

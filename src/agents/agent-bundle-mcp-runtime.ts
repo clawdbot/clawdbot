@@ -16,6 +16,7 @@ import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { mergeMcpToolCatalogs } from "./agent-bundle-mcp-combined.js";
 import {
@@ -595,6 +596,12 @@ export function createSessionMcpRuntime(params: {
 
       try {
         // Safe names come from the full declared set (precomputed), not from who resolved.
+        type ServerResult = {
+          serverName: string;
+          serverEntry: McpServerCatalog | null;
+          toolEntries: McpCatalogTool[];
+          diagnostics: McpToolCatalogDiagnostic[];
+        };
         const preparedEntries: Array<{
           serverName: string;
           rawServer: (typeof loaded.mcpServers)[string];
@@ -602,12 +609,41 @@ export function createSessionMcpRuntime(params: {
           safeServerName: string;
           launchDescription: string;
         }> = [];
+        const unavailableServerResults: ServerResult[] = [];
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
           if (retryServerNames && !retryServerNames.has(serverName)) {
             continue;
           }
+          const safeServerName =
+            safeServerNamesByServer.get(serverName) ??
+            sanitizeServerName(serverName, usedServerNames);
+          if (safeServerName !== serverName) {
+            logWarn(
+              `bundle-mcp: server key "${serverName}" registered as "${safeServerName}" for provider-safe tool names.`,
+            );
+          }
           const override = params.connectionOverrides?.get(serverName);
+          if (!override) {
+            try {
+              assertSecretOwnerAvailable("capability", `mcp:${serverName}`);
+            } catch (error) {
+              unavailableServerResults.push({
+                serverName,
+                serverEntry: null,
+                toolEntries: [],
+                diagnostics: [
+                  {
+                    serverName,
+                    safeServerName,
+                    launchSummary: "MCP SecretRef unavailable",
+                    message: redactMcpDiagnosticError(error),
+                  },
+                ],
+              });
+              continue;
+            }
+          }
           // Overrides supply per-requester transport only; never write them back to config.
           const transportSource = override
             ? applyMcpConnectionOverride(rawServer, override)
@@ -624,14 +660,6 @@ export function createSessionMcpRuntime(params: {
           if (!resolved) {
             continue;
           }
-          const safeServerName =
-            safeServerNamesByServer.get(serverName) ??
-            sanitizeServerName(serverName, usedServerNames);
-          if (safeServerName !== serverName) {
-            logWarn(
-              `bundle-mcp: server key "${serverName}" registered as "${safeServerName}" for provider-safe tool names.`,
-            );
-          }
           // Never put per-user resolved URLs into catalog/diagnostics/model text.
           const launchDescription = override
             ? `${serverName}: requester-scoped connection`
@@ -647,13 +675,6 @@ export function createSessionMcpRuntime(params: {
 
         // Bounded fan-out keeps common 4-5 server setups parallel without letting
         // large configs spawn/connect every MCP transport at once.
-        type ServerResult = {
-          serverName: string;
-          serverEntry: McpServerCatalog | null;
-          toolEntries: McpCatalogTool[];
-          diagnostics: McpToolCatalogDiagnostic[];
-        };
-
         const tasks = preparedEntries.map(
           ({ serverName, rawServer, resolved, safeServerName, launchDescription }) =>
             async (): Promise<ServerResult> => {
@@ -887,7 +908,7 @@ export function createSessionMcpRuntime(params: {
           throw firstError;
         }
 
-        for (const result of results) {
+        for (const result of [...unavailableServerResults, ...results]) {
           if (!result) {
             continue;
           }

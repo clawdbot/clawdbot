@@ -5,6 +5,7 @@ import {
   getScopedChannelsCommandSecretTargets,
 } from "../cli/command-secret-targets.js";
 import { getRuntimeConfig, readConfigFileSnapshotForWrite } from "../config/io.js";
+import { hasUnresolvedConfigPathInSubtree } from "../config/resolution-facts.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
@@ -154,6 +155,12 @@ function hasAgentRuntimeSecretRefs(params: {
     return true;
   }
   if (hasNestedSecretRef(config.skills?.entries)) {
+    return true;
+  }
+  if (
+    hasNestedSecretRef(config.mcp?.servers) ||
+    hasUnresolvedConfigPathInSubtree(config, "mcp.servers")
+  ) {
     return true;
   }
   if (hasNestedSecretRef(config.tools?.web?.search)) {

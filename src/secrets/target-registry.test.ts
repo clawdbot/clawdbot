@@ -17,6 +17,30 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 describe("secret target registry", () => {
+  it("discovers core MCP env and header targets", () => {
+    const config = {
+      mcp: {
+        servers: {
+          local: { command: "example-mcp", env: { API_TOKEN: "plain" } },
+          remote: {
+            url: "https://mcp.example.test",
+            headers: { Authorization: "Bearer plain" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const targets = discoverConfigSecretTargetsByIds(
+      config,
+      new Set(["mcp.servers.*.env.*", "mcp.servers.*.headers.*"]),
+    );
+
+    expect(targets.map((target) => target.path).toSorted()).toEqual([
+      "mcp.servers.local.env.API_TOKEN",
+      "mcp.servers.remote.headers.Authorization",
+    ]);
+  });
+
   it("supports filtered discovery by target ids", () => {
     const config = {
       ...buildTalkTestProviderConfig({ source: "env", provider: "default", id: "TALK_API_KEY" }),

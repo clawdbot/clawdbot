@@ -18,6 +18,7 @@ import {
   updateConfiguredMcpServer,
   updateConfiguredMcpServerTools,
 } from "../agents/mcp-config-mutation.js";
+import { isMcpSecretRefCandidate } from "../agents/mcp-config-shared.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { readMcpOAuthStoreReadOnly } from "../agents/mcp-oauth-store.js";
 import {
@@ -31,6 +32,7 @@ import {
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -41,8 +43,12 @@ import {
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
+import { shouldAuditPlaintextMcpValue } from "../secrets/mcp-target-sensitivity.js";
+import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
 import { formatCliCommand } from "./command-format.js";
+import { getMcpCommandSecretTargetIds } from "./command-secret-targets.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -180,27 +186,8 @@ const MCP_DOCTOR_CONCURRENCY = 4;
 const MCP_CODEX_APPROVAL_ANNOTATION_HINT =
   "tools have no safety annotations; calls will require interactive approval";
 
-const SENSITIVE_HEADER_NAMES = new Set([
-  "authorization",
-  "proxy-authorization",
-  "x-api-key",
-  "api-key",
-  "api_key",
-]);
-
-const SENSITIVE_KEY_PATTERN =
-  /(?:^|[_-])(api[_-]?key|authorization|bearer|password|secret|token)$/i;
-
 function issue(level: McpDoctorIssue["level"], message: string): McpDoctorIssue {
   return { level, message };
-}
-
-function hasSensitiveKey(name: string): boolean {
-  return SENSITIVE_HEADER_NAMES.has(name.trim().toLowerCase()) || SENSITIVE_KEY_PATTERN.test(name);
-}
-
-function hasLiteralSensitiveValue(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0 && !value.trim().startsWith("$");
 }
 
 function resolveConfiguredPath(filePath: string, cwd: unknown): string {
@@ -289,7 +276,7 @@ async function collectMcpDoctorIssues(params: {
 }): Promise<McpDoctorIssue[]> {
   const issues: McpDoctorIssue[] = [];
   const { name, server } = params;
-  const resolved = resolveMcpTransportConfig(name, server);
+  const resolved = resolveMcpTransportConfig(name, server, { logWarnings: false });
   const disabled = server.enabled === false;
   if (server.enabled === false) {
     issues.push(issue("warning", "server is disabled"));
@@ -361,11 +348,11 @@ async function collectMcpDoctorIssues(params: {
     ["env", asRecord(server.env)],
   ] as const) {
     for (const [key, value] of Object.entries(values ?? {})) {
-      if (hasSensitiveKey(key) && hasLiteralSensitiveValue(value)) {
+      if (shouldAuditPlaintextMcpValue({ name: key, value })) {
         issues.push(
           issue(
             "warning",
-            `${field}.${key} contains a literal sensitive value; prefer an environment-backed value outside committed config`,
+            `${field}.${key} contains a literal sensitive value; prefer a structured SecretRef`,
           ),
         );
       }
@@ -395,14 +382,12 @@ async function probeMcpServerIssues(params: {
   name: string;
   server: Record<string, unknown>;
 }): Promise<McpDoctorIssue[]> {
-  const runtime = createSessionMcpRuntime({
+  const runtime = await createMcpProbeRuntime({
+    commandName: "mcp doctor --probe",
     sessionId: "openclaw-cli-mcp-doctor",
-    workspaceDir: process.cwd(),
-    cfg: buildMcpProbeConfig({
-      config: params.config,
-      servers: { [params.name]: params.server },
-    }),
-    manifestRegistry: { plugins: [] },
+    config: params.config,
+    servers: { [params.name]: params.server },
+    preserveSourceResolutionFacts: true,
   });
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
@@ -559,14 +544,61 @@ function formatMcpProbeResult(
 function buildMcpProbeConfig(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
+  preserveSourceResolutionFacts: boolean;
 }): OpenClawConfig {
-  return {
+  const probeConfig = {
     ...params.config,
     mcp: {
       ...params.config.mcp,
       servers: params.servers,
     },
   };
+  if (params.preserveSourceResolutionFacts) {
+    copyConfigResolutionFacts(params.config, probeConfig);
+  }
+  return probeConfig;
+}
+
+async function createMcpProbeRuntime(params: {
+  commandName: string;
+  sessionId: string;
+  config: OpenClawConfig;
+  servers: Record<string, Record<string, unknown>>;
+  preserveSourceResolutionFacts: boolean;
+}) {
+  const probeConfig = buildMcpProbeConfig({
+    config: params.config,
+    servers: params.servers,
+    preserveSourceResolutionFacts: params.preserveSourceResolutionFacts,
+  });
+  const targetIds = getMcpCommandSecretTargetIds();
+  const scopedTargets = {
+    targetIds,
+    allowedPaths: new Set(
+      discoverConfigSecretTargetsByIds(probeConfig, targetIds)
+        .filter((target) =>
+          isMcpSecretRefCandidate({
+            config: probeConfig,
+            path: target.path,
+            value: target.value,
+          }),
+        )
+        .map((target) => target.path),
+    ),
+  };
+  const { resolvedConfig } = await resolveCommandConfigWithSecrets({
+    config: probeConfig,
+    commandName: params.commandName,
+    targetIds: scopedTargets.targetIds,
+    allowedPaths: scopedTargets.allowedPaths,
+    runtime: defaultRuntime,
+  });
+  return createSessionMcpRuntime({
+    sessionId: params.sessionId,
+    workspaceDir: process.cwd(),
+    cfg: resolvedConfig,
+    manifestRegistry: { plugins: [] },
+  });
 }
 
 const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
@@ -610,9 +642,11 @@ function failOnMcpProbeIssues(params: Parameters<typeof resolveMcpProbeIssue>[0]
 }
 
 async function probeMcpServersOrFail(params: {
+  commandName: string;
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
+  preserveSourceResolutionFacts: boolean;
 }): Promise<ReturnType<typeof formatMcpProbeResult>> {
   const probeServers = Object.fromEntries(
     Object.entries(params.servers).map(([name, server]) => [
@@ -620,11 +654,12 @@ async function probeMcpServersOrFail(params: {
       applyMcpProbeInitializeTimeout(server),
     ]),
   );
-  const runtime = createSessionMcpRuntime({
+  const runtime = await createMcpProbeRuntime({
+    commandName: params.commandName,
     sessionId: "openclaw-cli-mcp-probe",
-    workspaceDir: process.cwd(),
-    cfg: buildMcpProbeConfig({ config: params.config, servers: probeServers }),
-    manifestRegistry: { plugins: [] },
+    config: params.config,
+    servers: probeServers,
+    preserveSourceResolutionFacts: params.preserveSourceResolutionFacts,
   });
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
@@ -839,11 +874,12 @@ export function registerMcpCli(program: Command) {
         );
         return;
       }
-      const runtime = createSessionMcpRuntime({
+      const runtime = await createMcpProbeRuntime({
+        commandName: "mcp probe",
         sessionId: "openclaw-cli-mcp-probe",
-        workspaceDir: process.cwd(),
-        cfg: buildMcpProbeConfig({ config: loaded.config, servers }),
-        manifestRegistry: { plugins: [] },
+        config: loaded.config,
+        servers,
+        preserveSourceResolutionFacts: true,
       });
       try {
         const result = formatMcpProbeResult(await runtime.getCatalog());
@@ -1105,9 +1141,11 @@ export function registerMcpCli(program: Command) {
           opts.probe !== false && server.enabled !== false && server.auth !== "oauth";
         if (shouldProbe) {
           await probeMcpServersOrFail({
+            commandName: "mcp add",
             config: loaded.config,
             path: loaded.path,
             servers: { [name]: server },
+            preserveSourceResolutionFacts: false,
           });
         }
         const result = await setConfiguredMcpServer({ name, server, createOnly: true });
@@ -1326,9 +1364,11 @@ export function registerMcpCli(program: Command) {
         setOptionalField(next, "clientKey", normalizeStringifiedOptionalString(opts.clientKey));
         if (opts.probe && next.enabled !== false && next.auth !== "oauth") {
           await probeMcpServersOrFail({
+            commandName: "mcp configure --probe",
             config: loaded.config,
             path: loaded.path,
             servers: { [name]: next },
+            preserveSourceResolutionFacts: true,
           });
         }
         if (opts.enable && Object.keys(next).length === 0) {

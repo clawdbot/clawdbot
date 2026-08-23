@@ -134,15 +134,60 @@ async function collectRuntimeToolSchemaFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
   const runtime = await loadDoctorCoreChecksRuntimeModule();
+  const cfg = await resolveDoctorRuntimeToolSchemaConfig(ctx);
   const runWithPluginMetadataSnapshot = (
     ctx as HealthCheckContext & {
       runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
     }
   ).runWithPluginMetadataSnapshot;
   return runtime.collectRuntimeToolSchemaFindings(
-    ctx.cfg,
+    cfg,
     runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : undefined,
   );
+}
+
+type DoctorRuntimeToolSchemaSecretDeps = {
+  getMcpCommandSecretTargetIds: () => Set<string>;
+  resolveCommandSecretRefsViaGateway: (params: {
+    config: OpenClawConfig;
+    commandName: string;
+    targetIds: Set<string>;
+    mode: "read_only_status";
+    allowLocalExecSecretRefs: boolean;
+    scrubUnresolvedSecretRefs: boolean;
+  }) => Promise<{ resolvedConfig: OpenClawConfig; diagnostics: string[] }>;
+};
+
+/** Materializes only MCP credentials when Doctor explicitly permits exec SecretRefs. */
+export async function resolveDoctorRuntimeToolSchemaConfig(
+  ctx: HealthCheckContext,
+  deps?: DoctorRuntimeToolSchemaSecretDeps,
+): Promise<OpenClawConfig> {
+  if (ctx.allowExecSecretRefs !== true) {
+    return ctx.cfg;
+  }
+  const resolvedDeps =
+    deps ??
+    (await (async (): Promise<DoctorRuntimeToolSchemaSecretDeps> => {
+      const [{ getMcpCommandSecretTargetIds }, { resolveCommandSecretRefsViaGateway }] =
+        await Promise.all([
+          import("../cli/command-secret-targets.js"),
+          import("../cli/command-secret-gateway.js"),
+        ]);
+      return { getMcpCommandSecretTargetIds, resolveCommandSecretRefsViaGateway };
+    })());
+  const resolved = await resolvedDeps.resolveCommandSecretRefsViaGateway({
+    config: ctx.cfg,
+    commandName: "doctor runtime tool schemas",
+    targetIds: resolvedDeps.getMcpCommandSecretTargetIds(),
+    mode: "read_only_status",
+    allowLocalExecSecretRefs: true,
+    scrubUnresolvedSecretRefs: false,
+  });
+  for (const diagnostic of resolved.diagnostics) {
+    ctx.runtime.error(`[secrets] ${diagnostic}`);
+  }
+  return resolved.resolvedConfig;
 }
 
 async function collectProviderCatalogProjectionFindingsWithRuntime(

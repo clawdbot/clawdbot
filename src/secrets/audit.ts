@@ -24,6 +24,7 @@ import type { PlaintextAssignment } from "./audit-store.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { listAuthProfileStoreTargets, type AuthProfileStoreTarget } from "./auth-store-paths.js";
 import { createSecretsConfigIO } from "./config-io.js";
+import { evaluateConfigTargetAuditPolicy } from "./config-target-audit-policy.js";
 import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
 import { isLikelySensitiveModelProviderHeaderName } from "./model-provider-header-policy.js";
 import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
@@ -34,10 +35,7 @@ import {
   resolveSecretRefValues,
   type SecretRefResolveCache,
 } from "./resolve.js";
-import {
-  hasConfiguredPlaintextSecretValue,
-  isExpectedResolvedSecretValue,
-} from "./secret-value.js";
+import { isExpectedResolvedSecretValue } from "./secret-value.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
@@ -196,23 +194,11 @@ function collectConfigSecrets(params: {
     if (!target.entry.includeInAudit) {
       continue;
     }
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
+    const { ref, hasPlaintext, skipPlaintext } = evaluateConfigTargetAuditPolicy({
+      target,
       defaults,
     });
-    const hasPlaintext = hasConfiguredPlaintextSecretValue(
-      target.value,
-      target.entry.expectedResolvedValue,
-    );
-    const isNonSecretHeader =
-      target.entry.id === "models.providers.*.headers.*" &&
-      !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "");
-    const isModelMarker =
-      target.entry.id === "models.providers.*.apiKey" &&
-      typeof target.value === "string" &&
-      isNonSecretApiKeyMarker(target.value);
-    if (hasPlaintext && !isNonSecretHeader && !isModelMarker && typeof target.value === "string") {
+    if (hasPlaintext && !skipPlaintext && typeof target.value === "string") {
       params.collector.configPlaintextAssignments.push({
         file: params.configPath,
         path: target.path,
@@ -232,7 +218,7 @@ function collectConfigSecrets(params: {
       }
       continue;
     }
-    if (isNonSecretHeader || isModelMarker || !hasPlaintext) {
+    if (skipPlaintext || !hasPlaintext) {
       continue;
     }
     addFinding(params.collector, {

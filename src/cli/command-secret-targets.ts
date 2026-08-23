@@ -37,6 +37,7 @@ const STATIC_MODEL_TARGET_IDS = [
   "models.providers.*.request.tls.key",
   "models.providers.*.request.tls.passphrase",
 ] as const;
+const STATIC_MCP_TARGET_IDS = ["mcp.servers.*.env.*", "mcp.servers.*.headers.*"] as const;
 const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
   "memory.search.remote.apiKey",
@@ -44,6 +45,7 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "agents.entries.*.tts.providers.*.apiKey",
   "tts.providers.*.apiKey",
   "skills.entries.*.apiKey",
+  ...STATIC_MCP_TARGET_IDS,
 ] as const;
 const STATIC_MEMORY_EMBEDDING_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
@@ -820,6 +822,11 @@ export function getMemoryEmbeddingCommandSecretTargetIds(): Set<string> {
 /** Credential targets required by text-to-speech flows. */
 export function getTtsCommandSecretTargetIds(): Set<string> {
   return toTargetIdSet(STATIC_TTS_TARGET_IDS);
+}
+
+/** Credential targets required to validate configured MCP server runtimes. */
+export function getMcpCommandSecretTargetIds(): Set<string> {
+  return toTargetIdSet(STATIC_MCP_TARGET_IDS);
 }
 
 /** Agent runtime credential targets, optionally including all channel credential targets. */

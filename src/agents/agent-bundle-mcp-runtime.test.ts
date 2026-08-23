@@ -13,6 +13,7 @@ import {
   makeTempDir,
   useAutoCleanupTempDirTracker,
 } from "../../test/helpers/temp-dir.js";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
@@ -582,6 +583,7 @@ function makeRuntime(
 
 afterEach(async () => {
   cleanupTempDirs(tempDirs);
+  setActiveDegradedSecretOwners([]);
   await testing.resetSessionMcpRuntimeManager();
 });
 
@@ -595,6 +597,107 @@ describe("session MCP runtime", () => {
         },
       },
     });
+  });
+
+  it("fences only an unavailable MCP SecretRef owner before transport launch", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-unavailable-secret-owner-");
+    const isolatedServerPath = path.join(tempDir, "isolated.mjs");
+    const isolatedLogPath = path.join(tempDir, "isolated.log");
+    const healthyServerPath = path.join(tempDir, "healthy.mjs");
+    const healthyLogPath = path.join(tempDir, "healthy.log");
+    await Promise.all([
+      writeListToolsMcpServer({ filePath: isolatedServerPath, logPath: isolatedLogPath }),
+      writeListToolsMcpServer({ filePath: healthyServerPath, logPath: healthyLogPath }),
+    ]);
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "mcp:isolated",
+        state: "unavailable",
+        paths: ["mcp.servers.isolated.env.API_TOKEN"],
+        refKeys: ["env:default:MISSING_MCP_TOKEN"],
+        reason: "secret reference was not found",
+      },
+    ]);
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-unavailable-secret-owner",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            isolated: { command: process.execPath, args: [isolatedServerPath] },
+            healthy: { command: process.execPath, args: [healthyServerPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.tools.map((tool) => tool.serverName)).toEqual(["healthy"]);
+      expect(catalog.diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            serverName: "isolated",
+            message: expect.stringContaining("configured but unavailable"),
+          }),
+        ]),
+      );
+      await waitForFileText(healthyLogPath, "recv initialize", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await expect(fs.access(isolatedLogPath)).rejects.toThrow();
+    } finally {
+      await runtime.dispose();
+      setActiveDegradedSecretOwners([]);
+    }
+  });
+
+  it("does not fence a requester override for an unused static MCP secret", async () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "mcp:requester",
+        state: "unavailable",
+        paths: ["mcp.servers.requester.env.API_TOKEN"],
+        refKeys: ["env:default:MISSING_STATIC_MCP_TOKEN"],
+        reason: "secret reference was not found",
+      },
+    ]);
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-requester-override-secret-owner",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            requester: {
+              command: "unused-static-command",
+              env: { API_TOKEN: { source: "env", provider: "default", id: "MISSING" } },
+              connectionTimeoutMs: 250,
+              requestTimeoutMs: 250,
+            },
+          },
+        },
+      },
+      requesterScope: {
+        requesterSenderId: "sender",
+        agentAccountId: "bot",
+        messageChannel: "telegram",
+      },
+      connectionOverrides: new Map([
+        ["requester", { url: "http://127.0.0.1:1/mcp", headers: { "X-Tenant": "sender" } }],
+      ]),
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      const diagnostic = catalog.diagnostics?.find((entry) => entry.serverName === "requester");
+
+      expect(diagnostic?.launchSummary).toBe("requester: requester-scoped connection");
+      expect(diagnostic?.message).not.toContain("configured but unavailable");
+    } finally {
+      await runtime.dispose();
+      setActiveDegradedSecretOwners([]);
+    }
   });
 
   it("catalogs canonical and deprecated MCP App tool metadata", async () => {
@@ -3033,9 +3136,13 @@ process.on("SIGINT", shutdown);`,
 
   it("recreates the session runtime when MCP config changes", async () => {
     const createRuntime: RuntimeFactory = (params) => {
-      const probeText = String(
-        params.cfg?.mcp?.servers?.configuredProbe?.env?.BUNDLE_PROBE_TEXT ?? "FROM-CONFIG",
-      );
+      const configuredProbeText = params.cfg?.mcp?.servers?.configuredProbe?.env?.BUNDLE_PROBE_TEXT;
+      const probeText =
+        typeof configuredProbeText === "string" ||
+        typeof configuredProbeText === "number" ||
+        typeof configuredProbeText === "boolean"
+          ? String(configuredProbeText)
+          : "FROM-CONFIG";
       return {
         ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
         sessionId: params.sessionId,

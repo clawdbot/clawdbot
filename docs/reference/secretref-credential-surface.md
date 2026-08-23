@@ -67,6 +67,8 @@ The lists below are generated from the source target registry and checked agains
 - `gateway.auth.token`
 - `gateway.remote.token`
 - `gateway.remote.password`
+- `mcp.servers.*.env.*`
+- `mcp.servers.*.headers.*`
 - `cron.webhookToken`
 - `channels.telegram.botToken`
 - `channels.telegram.webhookSecret`

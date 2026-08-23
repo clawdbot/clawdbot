@@ -10,6 +10,7 @@ import {
 import { replaceConfigFile } from "./mutate.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "./redact-snapshot.js";
+import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
 import { buildConfigSchemaCore } from "./schema.js";
 import type { McpServerToolFilterConfig } from "./types.mcp.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -106,7 +107,7 @@ export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
   return {
     ok: true,
     path: snapshot.path,
-    config: structuredClone(sourceConfig),
+    config: cloneConfigWithResolutionFacts(sourceConfig),
     mcpServers: normalizeConfiguredMcpServers(sourceConfig.mcp?.servers),
     baseHash: snapshot.hash,
   };

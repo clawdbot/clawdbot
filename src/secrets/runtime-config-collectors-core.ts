@@ -14,6 +14,7 @@ import {
 } from "../media-understanding/entry-capabilities.js";
 import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
 import { resolveVoiceModelRefs } from "../tts/voice-models.js";
+import { collectMcpAssignments } from "./runtime-config-collectors-mcp.js";
 import { collectAgentMemorySearchAssignments } from "./runtime-config-collectors-memory.js";
 import { collectAgentSandboxAssignments } from "./runtime-config-collectors-sandbox.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
@@ -671,6 +672,7 @@ export function collectCoreConfigAssignments(params: {
     });
   }
 
+  collectMcpAssignments(params);
   collectAgentMemorySearchAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);
