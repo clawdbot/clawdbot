@@ -10,7 +10,7 @@ lost_marker_path="$1"
 shift 2
 
 # The marker records broker-confirmed loss of the shared-account lease; continuing
-# Telegram I/O would violate broker serialization. The <=10s poll window is accepted
+# Telegram I/O would violate broker serialization. The <=1s poll window is accepted
 # against the 20-minute lease TTL.
 # <&0: a backgrounded command's stdin defaults to /dev/null, which silently
 # swallowed the piped agent prompt. The explicit redirect keeps the caller's stdin.
@@ -48,10 +48,5 @@ while true; do
     exit 97
   fi
 
-  for _ in {1..10}; do
-    sleep 1
-    if ! kill -0 "$command_pid" 2>/dev/null; then
-      command_exit
-    fi
-  done
+  sleep 1
 done
