@@ -3764,6 +3764,9 @@ openclaw-sidebar-attention {
 .sidebar-issues-panel__list > [data-attention-kind] {
   box-sizing: border-box;
   margin-inline: -6px;
+}
+
+.sidebar-issues-panel__list > [data-attention-kind]:not(.sidebar-approval-row) {
   padding-inline: 0;
 }
 
