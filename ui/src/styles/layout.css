@@ -10,19 +10,11 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
-  --shell-chrome-controls-access-width: 0px;
-  /* Four controls: the admin-gated Ask OpenClaw fallback joins the strip only
-     while the nav is collapsed, which is exactly when this width applies. */
-  --shell-chrome-controls-collapsed-width: calc(
-    var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
-      var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
-      var(--shell-chrome-controls-gap) + var(--shell-chrome-controls-gap) +
-      var(--shell-chrome-controls-gap) + var(--shell-chrome-controls-access-width)
-  );
-  --shell-chrome-safe-area-left: calc(
-    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) -
-      var(--shell-chrome-control-size) - var(--shell-chrome-controls-gap) + 8px
-  );
+  --shell-access-width: 0px;
+  /* Collapsed navigation adds new-thread to the two persistent controls.
+     Optional controls contribute only while they are actually mounted. */
+  --shell-controls-width: calc(104px + var(--shell-access-width));
+  --shell-chrome-safe-area-left: calc(var(--shell-controls-width) - 18px);
   /* Desktop has no topbar row — the sidebar owns navigation. Narrow viewports
      (layout.mobile.css) and the chat split toolbar restore the row height. */
   --shell-topbar-height: 0px;
@@ -100,9 +92,9 @@
 .shell--nav-collapsed {
   grid-template-columns: 0 minmax(0, 1fr);
   --shell-nav-width: 0px;
-  --shell-chrome-safe-area-left: calc(
-    var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) + 8px
-  );
+  /* The collapsed strip shows all three base controls, so unlike the expanded
+     safe edge this keeps the complete collapsed width. */
+  --shell-chrome-safe-area-left: calc(var(--shell-controls-width) + 18px);
 }
 
 /* Drawer shells keep the nav mounted offscreen; desktop collapse removes it. */
@@ -181,9 +173,11 @@
 }
 
 .shell:has(.scope-upgrade-shell-status) {
-  --shell-chrome-controls-access-width: calc(
-    var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap)
-  );
+  --shell-access-width: 36px;
+}
+
+.shell:has(.shell-chrome-controls__custodian) {
+  --shell-controls-width: calc(140px + var(--shell-access-width));
 }
 
 .scope-upgrade-shell-status {
