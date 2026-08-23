@@ -375,7 +375,7 @@ export function createMcpServers(params: {
   stdioEnv: Record<string, string>;
   fixturePath: string;
   repoRoot: string;
-}): Record<string, McpServerConfig> {
+}): Record<string, McpServerConfig<string | number | boolean>> {
   const common = {
     connectionTimeoutMs: WAIT_TIMEOUT_MS,
     requestTimeoutMs: WAIT_TIMEOUT_MS,

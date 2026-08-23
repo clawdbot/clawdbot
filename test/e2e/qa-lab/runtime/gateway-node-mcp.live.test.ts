@@ -29,7 +29,7 @@ function stdioServer(
   fixturePath: string,
   repoRoot: string,
   env: Record<string, string>,
-): Record<string, McpServerConfig> {
+): Record<string, McpServerConfig<string | number | boolean>> {
   return {
     [name]: {
       transport: "stdio",
