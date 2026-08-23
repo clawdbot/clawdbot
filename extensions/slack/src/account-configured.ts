@@ -1,26 +1,52 @@
 // Slack helper module supports account configured behavior.
 import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-resolution";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { ResolvedSlackAccount } from "./accounts.js";
 
-export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): boolean {
-  const mode = account.config.mode ?? "socket";
-  const hasIdentityToken =
-    account.identity === "user"
-      ? Boolean(account.userToken?.trim())
-      : Boolean(account.botToken?.trim());
-  if (!hasIdentityToken) {
+export function hasSlackAccountCredentials(params: {
+  config: ResolvedSlackAccount["config"];
+  identityTokenConfigured: boolean;
+  appTokenConfigured: boolean;
+}): boolean {
+  if (!params.identityTokenConfigured) {
     return false;
   }
+  const mode = params.config.mode ?? "socket";
   if (mode === "http") {
-    return hasConfiguredAccountValue(account.config.signingSecret);
+    return hasConfiguredAccountValue(params.config.signingSecret);
   }
   if (mode === "relay") {
-    const relay = account.config.relay;
+    const relay = params.config.relay;
     return (
       hasConfiguredAccountValue(relay?.url) &&
       hasConfiguredAccountValue(relay?.authToken) &&
       hasConfiguredAccountValue(relay?.gatewayId)
     );
   }
-  return Boolean(account.appToken?.trim());
+  return params.appTokenConfigured;
+}
+
+export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): boolean {
+  const identityToken = account.identity === "user" ? account.userToken : account.botToken;
+  return hasSlackAccountCredentials({
+    config: account.config,
+    identityTokenConfigured: Boolean(identityToken?.trim()),
+    appTokenConfigured: Boolean(account.appToken?.trim()),
+  });
+}
+
+export function isSlackSetupAccountConfigured(account: ResolvedSlackAccount): boolean {
+  if (account.config.mode === "relay") {
+    return isSlackPluginAccountConfigured(account);
+  }
+  const identityToken = account.identity === "user" ? account.userToken : account.botToken;
+  const configuredIdentityToken =
+    account.identity === "user" ? account.config.userToken : account.config.botToken;
+  return hasSlackAccountCredentials({
+    config: account.config,
+    identityTokenConfigured:
+      Boolean(identityToken?.trim()) || hasConfiguredSecretInput(configuredIdentityToken),
+    appTokenConfigured:
+      Boolean(account.appToken?.trim()) || hasConfiguredSecretInput(account.config.appToken),
+  });
 }
