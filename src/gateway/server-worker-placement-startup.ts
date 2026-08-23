@@ -646,7 +646,6 @@ export function createGatewayWorkerPlacementRuntime(
       if (hooks.isClosePreludeStarted()) {
         return await stopBeforeReady();
       }
-      void reconcileActivePlacements();
       void sweepDiskSpace();
       placementReconcileInterval = setInterval(
         sweepActivePlacements,

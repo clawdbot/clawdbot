@@ -212,8 +212,7 @@ describe("worker placement startup health lifetime", () => {
       });
 
       expect(sidecar).not.toBeNull();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(reconcileActive).toHaveBeenCalledOnce();
+      expect(reconcileActive).not.toHaveBeenCalled();
       expect(diskSpace.sweep).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(60_000);
       expect(reconcileActive).toHaveBeenCalledOnce();
@@ -315,7 +314,7 @@ describe("worker placement startup health lifetime", () => {
     },
   );
 
-  it("drains post-readiness session evidence before stopping environments", async () => {
+  it("drains periodic post-readiness session evidence before stopping environments", async () => {
     const evidence = createDeferredCore<"current">();
     runtimeFactoryMocks.resolveSessionEvidence.mockImplementation(async () => evidence.promise);
     runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(
@@ -375,38 +374,41 @@ describe("worker placement startup health lifetime", () => {
       revokeSessionAuthority: vi.fn(),
       warn: vi.fn(),
     });
-    let closeStarted = false;
     let sidecar: { stop: () => Promise<void> } | undefined;
     const unregisterSidecar = vi.fn();
-    const starting = runtime.startRuntime({
-      isClosePreludeStarted: () => closeStarted,
-      registerSidecar: (registered) => {
-        sidecar = registered;
-      },
-      unregisterSidecar,
-    });
-    await vi.waitFor(() => expect(runtimeFactoryMocks.resolveSessionEvidence).toHaveBeenCalled());
-    await expect(starting).resolves.toBe(sidecar);
-    closeStarted = true;
-    const stopping = sidecar?.stop();
-    const repeatedStop = sidecar?.stop();
-    if (!stopping || !repeatedStop) {
-      throw new Error("startup did not register its placement sidecar");
-    }
-    let repeatedStopSettled = false;
-    void repeatedStop.then(() => {
-      repeatedStopSettled = true;
-    });
+    vi.useFakeTimers();
+    try {
+      const starting = runtime.startRuntime({
+        isClosePreludeStarted: () => false,
+        registerSidecar: (registered) => {
+          sidecar = registered;
+        },
+        unregisterSidecar,
+      });
+      await expect(starting).resolves.toBe(sidecar);
+      expect(runtimeFactoryMocks.resolveSessionEvidence).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runtimeFactoryMocks.resolveSessionEvidence).toHaveBeenCalledOnce();
 
-    await Promise.resolve();
-    expect(repeatedStop).toBe(stopping);
-    expect(repeatedStopSettled).toBe(false);
-    expect(environments.stopNodeEnrollmentWaits).toHaveBeenCalledOnce();
-    expect(environments.stop).not.toHaveBeenCalled();
-    evidence.resolve("current");
-    await Promise.all([stopping, repeatedStop]);
-    expect(environments.stop).toHaveBeenCalledOnce();
-    expect(unregisterSidecar).not.toHaveBeenCalled();
+      const stopping = sidecar?.stop();
+      const repeatedStop = sidecar?.stop();
+      if (!stopping || !repeatedStop) {
+        throw new Error("startup did not register its placement sidecar");
+      }
+
+      await Promise.resolve();
+      expect(repeatedStop).toBe(stopping);
+      expect(environments.stopNodeEnrollmentWaits).toHaveBeenCalledOnce();
+      expect(environments.stop).not.toHaveBeenCalled();
+      evidence.resolve("current");
+      await Promise.all([stopping, repeatedStop]);
+      expect(environments.stop).toHaveBeenCalledOnce();
+      expect(unregisterSidecar).not.toHaveBeenCalled();
+    } finally {
+      evidence.resolve("current");
+      await sidecar?.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("retries worker environment cleanup after a failed stop attempt", async () => {
@@ -570,7 +572,6 @@ describe("worker placement startup health lifetime", () => {
     const releaseRecovery = createDeferredCore();
     const environmentStopStarted = createDeferredCore();
     const events: string[] = [];
-    const reconcileActive = vi.fn().mockResolvedValue(undefined);
     let installedGuard: ReconcileGuard | undefined;
     const placement = {
       sessionId: "session-close-guard",
@@ -587,7 +588,7 @@ describe("worker placement startup health lifetime", () => {
       forceDestroyEnvironment: vi.fn(),
       reclaim: vi.fn(),
       reconcile: vi.fn().mockResolvedValue(undefined),
-      reconcileActive,
+      reconcileActive: vi.fn().mockResolvedValue(undefined),
       resumeProvisioning: vi.fn(async (_placement, reconcileCore) => {
         events.push("recovery:start");
         recoveryStarted.resolve();
@@ -636,8 +637,6 @@ describe("worker placement startup health lifetime", () => {
     if (!sidecar || !guard) {
       throw new Error("worker placement reconcile guard was not installed");
     }
-    await vi.waitFor(() => expect(reconcileActive).toHaveBeenCalledOnce());
-    await runtime.dispatchService.reconcileActive();
     const reconcileCore = vi.fn(async () => {
       events.push("reconcile:core");
     });

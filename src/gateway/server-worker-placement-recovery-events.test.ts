@@ -98,6 +98,7 @@ describe("worker placement recovery session events", () => {
         }
 
         await vi.advanceTimersByTimeAsync(60_000);
+        await vi.dynamicImportSettled();
         expect(context.broadcastToConnIds).not.toHaveBeenCalled();
         expect(readSessionsMutationVersion(context)).toBe(initialMutationVersion);
 
