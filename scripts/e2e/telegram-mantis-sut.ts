@@ -25,7 +25,7 @@ type JsonObject = Record<string, unknown>;
 type MantisSutLane = "baseline" | "candidate";
 type SpawnedDaemon = { child: ReturnType<typeof spawn>; error?: Error };
 
-export type MantisSutExecResult = {
+type MantisSutExecResult = {
   exitCode: number;
   stderr: string;
   stderrBytes: number;
