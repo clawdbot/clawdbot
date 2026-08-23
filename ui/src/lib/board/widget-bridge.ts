@@ -20,6 +20,10 @@ const STATE_COALESCE_WINDOW_MS = 5_000;
 const STATE_RATE_WINDOW_MS = 60_000;
 const STATE_RATE_MAX_ATTEMPTS = 12;
 
+function openWidgetUrl(url: string): boolean {
+  return window.open(url, "_blank", "noopener,noreferrer") !== null;
+}
+
 export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidgetBridgeRequest {
   if (!value || typeof value !== "object") {
     return false;
@@ -58,6 +62,7 @@ export class BoardWidgetBridgeController {
   private readonly confirmPrompt: (text: string) => boolean;
   private readonly dispatchPrompt: PromptDispatcher;
   private readonly now: () => number;
+  private readonly openUrl: (url: string) => boolean;
   private readonly recentStatePayloads = new Map<string, number>();
   private readonly pendingStates = new Map<string, Promise<unknown>>();
   private stateAttemptTimes: number[] = [];
@@ -70,6 +75,7 @@ export class BoardWidgetBridgeController {
     confirmPrompt: (text: string) => boolean;
     dispatchPrompt?: PromptDispatcher;
     now?: () => number;
+    openUrl?: (url: string) => boolean;
   }) {
     this.frame = options.frame;
     this.ticket = options.ticket;
@@ -78,6 +84,7 @@ export class BoardWidgetBridgeController {
     this.confirmPrompt = options.confirmPrompt;
     this.dispatchPrompt = options.dispatchPrompt ?? dispatchWidgetPrompt;
     this.now = options.now ?? Date.now;
+    this.openUrl = options.openUrl ?? openWidgetUrl;
   }
 
   updateIdentity(frame: HTMLIFrameElement, ticket: string): void {
@@ -136,6 +143,26 @@ export class BoardWidgetBridgeController {
     }
     const params = assertWidgetRequestRecord(request.params);
     switch (request.method) {
+      // Opening a link the user clicked is navigation, not a granted capability,
+      // so this stays outside the tool-grant checks. The host owns the scheme
+      // filter and always applies noopener/noreferrer, so a widget cannot reach
+      // another scheme or retain a handle by omitting `rel` in its own markup.
+      case "host.open": {
+        const url = requiredString(params, "url");
+        let parsed: URL;
+        try {
+          parsed = new URL(url);
+        } catch {
+          throw new Error("widget link url is invalid");
+        }
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          throw new Error("widget link url is invalid");
+        }
+        if (!this.openUrl(url)) {
+          throw new Error("widget link could not be opened");
+        }
+        return { ok: true };
+      }
       case "prompt.send": {
         if (options.promptUserActivated !== true) {
           throw new Error("widget prompt requires active user interaction");

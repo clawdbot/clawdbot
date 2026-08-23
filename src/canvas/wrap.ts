@@ -108,12 +108,19 @@ export function buildWidgetDocument(
   // This bridge precedes widget code and snapshots every authority-bearing
   // primitive. Inline chat keeps its private prompt port; board hosting adopts
   // the view ticket and routes every host API over one request channel.
+  // The click listener is that channel's navigation half: the frame sandbox
+  // grants no popups, so only a trusted user click on a ticketed board widget's
+  // http(s) `target="_blank"` anchor reaches the host. Widening any of those
+  // three gates hands ungranted widgets an outbound channel that the
+  // `connect-src` CSP in board-sandbox.ts otherwise denies.
   const widgetBridge =
     '<script>(()=>{if(!window.parent||window.parent===window||Object.prototype.hasOwnProperty.call(window,"openclaw"))return;' +
     "const parent=window.parent;const post=parent.postMessage.bind(parent);" +
     "const P=Promise;const then=P.prototype.then;const ErrorCtor=Error;" +
     "const stringify=String;const freeze=Object.freeze;const define=Object.defineProperty;" +
     "const push=Array.prototype.push;const shift=Array.prototype.shift;" +
+    "const listen=window.addEventListener.bind(window);const path=Event.prototype.composedPath;" +
+    "const prevent=Event.prototype.preventDefault;const test=RegExp.prototype.test;" +
     "const later=setTimeout.bind(window);const cancel=clearTimeout.bind(window);" +
     "const c=new MessageChannel();" +
     "const promptPost=c.port1.postMessage.bind(c.port1);" +
@@ -145,6 +152,10 @@ export function buildWidgetDocument(
     "catch(error){pending.delete(id);reject(error);}};" +
     'if(ticket)send();else if(hostInitExpired)reject(new ErrorCtor("widget host capabilities unavailable"));' +
     "else push.call(waiting,{send,reject});});" +
+    'listen("click",event=>{if(event.isTrusted!==true||!ticket||event.defaultPrevented||event.button!==0)return;' +
+    'for(let index=0,entries=path.call(event);index<entries.length;index++){const anchor=entries[index];if(anchor?.tagName!=="A")continue;' +
+    'const url=anchor.href;if(!url)continue;if(anchor.target!=="_blank"||!test.call(/^https?:\\/\\//i,url))return;' +
+    'prevent.call(event);then.call(request("host.open",{url}),()=>{},()=>{});return;}},{capture:true});' +
     "const sendPrompt=text=>{if(!act||act()!==true)return P.resolve(false);const value=stringify(text);" +
     'if(ticket)return request("prompt.send",{text:value});return new P((resolve,reject)=>{' +
     'const send=()=>{const result=request("prompt.send",{text:value});then.call(result,resolve,reject);};' +

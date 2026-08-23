@@ -88,4 +88,16 @@ describe("board widget sandbox CSP", () => {
     expect(genericProxy).toContain("const blockDescendantFrames = false");
     expect(genericProxy).not.toContain('lock(Document.prototype,\\"createElement\\"');
   });
+
+  it("blocks scripted popups regardless of whether descendant-frame hardening is enabled", () => {
+    const path = buildBoardWidgetSandboxPath(document("pending"));
+    const encoded = new URL(path, "https://sandbox.example").searchParams.get("csp");
+    const csp = decodeSandboxHostCsp(encoded);
+
+    expect(csp?.blockDescendantFrames).toBe(true);
+    for (const proxy of [buildSandboxHostProxyHtml(csp), buildSandboxHostProxyHtml()]) {
+      expect(proxy).toContain('frame.setAttribute("sandbox", "allow-scripts allow-forms")');
+      expect(proxy).not.toContain("allow-popups");
+    }
+  });
 });

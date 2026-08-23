@@ -18,6 +18,7 @@ function setup(
     confirmationRequired?: boolean;
     omitPromptDecision?: boolean;
     now?: () => number;
+    openUrl?: (url: string) => boolean;
   } = {},
 ) {
   const client = {
@@ -40,11 +41,58 @@ function setup(
     confirmPrompt,
     dispatchPrompt,
     now: options.now,
+    openUrl: options.openUrl,
   });
   return { client, confirmPrompt, dispatchPrompt, controller };
 }
 
 describe("board widget bridge", () => {
+  it("opens HTTPS widget links in a new tab without opener or referrer access", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    const { controller, client } = setup();
+
+    await expect(
+      controller.handle(request("host.open", { url: "https://example.com/path" })),
+    ).resolves.toEqual({ ok: true });
+
+    expect(open).toHaveBeenCalledWith("https://example.com/path", "_blank", "noopener,noreferrer");
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("opens HTTP widget links through the injected host opener", async () => {
+    const openUrl = vi.fn(() => true);
+    const { controller } = setup({ openUrl });
+
+    await expect(
+      controller.handle(request("host.open", { url: "http://example.com/path" })),
+    ).resolves.toEqual({ ok: true });
+
+    expect(openUrl).toHaveBeenCalledWith("http://example.com/path");
+  });
+
+  it.each(["javascript:alert(1)", "data:text/html,x", "/relative"])(
+    "rejects unsafe widget link destinations without opening %s",
+    async (url) => {
+      const openUrl = vi.fn(() => true);
+      const { controller } = setup({ openUrl });
+
+      await expect(controller.handle(request("host.open", { url }))).rejects.toThrow(
+        "widget link url is invalid",
+      );
+      expect(openUrl).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports when the browser blocks a widget link", async () => {
+    const openUrl = vi.fn(() => false);
+    const { controller } = setup({ openUrl });
+
+    await expect(
+      controller.handle(request("host.open", { url: "https://example.com/path" })),
+    ).rejects.toThrow("widget link could not be opened");
+    expect(openUrl).toHaveBeenCalledOnce();
+  });
+
   it("asks for per-click confirmation when prompt is not granted", async () => {
     const { controller, confirmPrompt, dispatchPrompt } = setup({ confirmationRequired: true });
 

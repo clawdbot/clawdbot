@@ -17,8 +17,6 @@ const TICKET_REFRESH_LEAD_MS = 15_000;
 const TICKET_REFRESH_MIN_DELAY_MS = 1_000;
 const TICKET_REFRESH_RETRY_MS = 1_000;
 const TICKET_REFRESH_MAX_RETRY_MS = 30_000;
-const WIDGET_SANDBOX =
-  "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox";
 
 function documentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
@@ -239,10 +237,12 @@ export class BoardWidgetFrameLifecycle {
     this.lastFrameUrl = src;
     const sandboxSrc = this.resolveSandboxFrameUrl(widget);
     if (sandboxSrc) {
+      // Never grant popups: host.open handles user-clicked links so ungranted
+      // widgets cannot escape network containment through navigation.
       return html`
         <iframe
           class="board-widget__frame"
-          sandbox=${WIDGET_SANDBOX}
+          sandbox="allow-scripts allow-same-origin allow-forms"
           referrerpolicy="origin"
           loading="eager"
           title=${widget.title || widget.name}

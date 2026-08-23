@@ -176,14 +176,16 @@ Shared infrastructure underneath (this is where the simplification lands):
   `pending` on the board: a placeholder card lists them human-readably with
   one-tap **Allow**/**Reject**. Grants are per widget name; for `html` widgets
   they are byte-frozen (sha256), and changed bytes keep the grant only if the
-  declaration shrank. User-clicked links are ordinary navigation rather than a
-  grant capability and open in a new tab for every rendered widget.
+  declaration shrank. Wrapper-authored board widgets forward user-clicked
+  `http`/`https` new-tab links to the Control UI host; this ordinary navigation
+  needs no grant and never grants iframe popup permissions.
 - **Authoring shim.** The document wrapper injects `window.openclaw.prompt`,
   `window.openclaw.state`, `window.openclaw.data`, `window.openclaw.action`,
   `window.openclaw.cron`, and the host-provided
   `window.openclaw.host.controlUiBaseUrl` as the stable author API. Dashboard
-  calls share one view-ticket-bound request channel; size reporting and theme
-  tokens remain separate host notifications.
+  calls and trusted new-tab link clicks share one view-ticket-bound request
+  channel. The host opens links with `noopener,noreferrer`; size reporting and
+  theme tokens remain separate host notifications.
 
 ### Plugin capability declarations
 
