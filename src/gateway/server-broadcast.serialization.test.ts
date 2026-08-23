@@ -3,6 +3,7 @@
 // cause a synchronized reconnect storm) and must leave a server-side record.
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { setVerbose } from "../global-state.js";
@@ -100,7 +101,7 @@ describe("broadcast serialization failures", () => {
     const healthy = await connectPeer();
     const delivered: Array<{ event: string; seq: number }> = [];
     healthy.peer.on("message", (data: RawData) => {
-      delivered.push(JSON.parse(data.toString()) as { event: string; seq: number });
+      delivered.push(JSON.parse(rawDataToString(data)) as { event: string; seq: number });
     });
     const makeRealClient = (connId: string, socket: WebSocket): GatewayWsClient => ({
       connId,

@@ -1,4 +1,3 @@
-import { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -32,7 +31,7 @@ import type {
   GatewayPluginEventScope,
 } from "./server-broadcast-types.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
-import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
@@ -271,7 +270,7 @@ export function createGatewayBroadcaster(params: {
     let sessionSubscriberConnIdsByKey: Array<ReadonlySet<string> | undefined> | undefined;
     for (const c of params.clients) {
       // Closing nodes remain discoverable until their owner drains admitted lifecycle work.
-      if (c.invalidated === true || c.socket.readyState !== WebSocket.OPEN) {
+      if (c.invalidated === true || c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
         continue;
       }
       if (targetConnIds && !targetConnIds.has(c.connId)) {
