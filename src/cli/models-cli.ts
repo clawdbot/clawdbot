@@ -376,6 +376,7 @@ export function registerModelsCli(program: Command) {
     .option("--device-code", "Use the provider device-code auth method", false)
     .option("--profile-id <id>", "Auth profile id override for single-profile login methods")
     .option("--set-default", "Apply the provider's default model recommendation", false)
+    .option("--json-events", "Emit machine-readable device-code login events", false)
     .option(
       "--force",
       "Remove existing profiles for the provider before logging in (use when a cached OAuth profile is stuck or you want to switch accounts)",
@@ -397,6 +398,7 @@ export function registerModelsCli(program: Command) {
             profileId: opts.profileId as string | undefined,
             setDefault: Boolean(opts.setDefault),
             force: Boolean(opts.force),
+            jsonEvents: Boolean(opts.jsonEvents),
             agent,
           },
           defaultRuntime,
