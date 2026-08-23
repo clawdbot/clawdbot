@@ -400,14 +400,14 @@ suite.define(() => {
         expect(
           await card
             .locator(
-              ".session-progress-card__step--in_progress .session-progress-card__step-marker circle",
+              ".session-progress-card__step--in_progress .session-progress-card__step-marker .session-run-spinner",
             )
             .count(),
         ).toBe(1);
         expect(
           await card
             .locator(
-              ".session-progress-card__step--pending .session-progress-card__step-marker circle",
+              ".session-progress-card__step--pending .session-progress-card__step-marker polyline",
             )
             .count(),
         ).toBe(1);
@@ -417,10 +417,22 @@ suite.define(() => {
             markers.slice(1).map((marker) => ({
               color: getComputedStyle(marker).color,
               dot: getComputedStyle(marker, "::after").content,
+              spinnerAnimation:
+                marker.querySelector(".session-run-spinner") instanceof HTMLElement
+                  ? getComputedStyle(marker.querySelector(".session-run-spinner") as HTMLElement)
+                      .animationName
+                  : null,
+              spinnerColor:
+                marker.querySelector(".session-run-spinner") instanceof HTMLElement
+                  ? getComputedStyle(marker.querySelector(".session-run-spinner") as HTMLElement)
+                      .borderTopColor
+                  : null,
             })),
           );
-        expect(markerPresentation[0]?.dot).not.toBe("none");
-        expect(markerPresentation[0]?.dot).not.toBe(markerPresentation[1]?.dot);
+        expect(markerPresentation[0]?.dot).toBe("none");
+        expect(markerPresentation[0]?.spinnerAnimation).toBe("session-run-spin");
+        expect(markerPresentation[0]?.spinnerColor).toBe(markerPresentation[1]?.color);
+        expect(markerPresentation[1]?.dot).toBe("none");
         expect(await card.locator(".session-hovercard__progress-footer:last-child").count()).toBe(
           1,
         );

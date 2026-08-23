@@ -478,12 +478,12 @@
 .session-progress-card__step-marker {
   display: inline-flex;
   box-sizing: border-box;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  min-height: 16px;
-  max-width: 16px;
-  max-height: 16px;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  max-width: 14px;
+  max-height: 14px;
   align-items: center;
   justify-content: center;
   align-self: start;
@@ -497,12 +497,12 @@
 
 .session-progress-card__current-marker svg,
 .session-progress-card__step-marker svg {
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  min-height: 16px;
-  max-width: 16px;
-  max-height: 16px;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  max-width: 14px;
+  max-height: 14px;
   margin: 0;
   transform: none;
   stroke-width: 1.5px;
@@ -516,6 +516,8 @@
 
 .session-progress-card__current-marker > .session-run-spinner,
 .session-progress-card__step-marker > .session-run-spinner {
+  width: 14px;
+  height: 14px;
   border-color: color-mix(in srgb, var(--session-progress-neutral) 28%, transparent);
   border-top-color: var(--session-progress-neutral);
 }
@@ -596,7 +598,7 @@
 
 .session-progress-card__step {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
+  grid-template-columns: 14px minmax(0, 1fr);
   align-items: start;
   gap: var(--space-2);
   color: var(--muted);
