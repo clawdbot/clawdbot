@@ -2143,6 +2143,47 @@ describe("compaction-safeguard recent-turn preservation", () => {
     mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
 
     const sessionManager = stubSessionManager();
+    // Keep the model output limit below the staged-summary cap so this case still
+    // proves the model-limit clamp rather than the safeguard's own ceiling.
+    const model = createAnthropicModelFixture({
+      contextWindow: 1_000_000,
+      maxTokens: 4_000,
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "large history", timestamp: 1 } as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 250_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 8_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    await compactionHandler(event, mockContext);
+
+    const call = requireRecord(mockCallArg(mockSummarizeInStages));
+    expect(call?.reserveTokens).toBe(4_000);
+  });
+
+  it("caps a raised reserve before safeguard staged summaries", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
+
+    const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture({
       contextWindow: 1_000_000,
       maxTokens: 128_000,
@@ -2163,7 +2204,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
         firstKeptEntryId: "entry-1",
         tokensBefore: 250_000,
         fileOps: { read: [], edited: [], written: [] },
-        settings: { reserveTokens: 240_000 },
+        settings: { reserveTokens: 80_000 },
         previousSummary: undefined,
         isSplitTurn: false,
       },
@@ -2174,7 +2215,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     await compactionHandler(event, mockContext);
 
     const call = requireRecord(mockCallArg(mockSummarizeInStages));
-    expect(call?.reserveTokens).toBe(128_000);
+    expect(call?.reserveTokens).toBe(20_000);
   });
 
   it("preserves provider-prepared Copilot headers in built-in compaction summarization", async () => {
@@ -2314,6 +2355,70 @@ describe("compaction-safeguard recent-turn preservation", () => {
       }
     },
   );
+
+  it("runs raised-reserve safeguard compaction with capped output and recovery", async () => {
+    testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      api: "test-api" as never,
+      baseUrl: "",
+      maxTokens: 128_000,
+      reasoning: true,
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const providerPrompts: string[] = [];
+    const authorizedOutputTokens: number[] = [];
+    const streamFn: StreamFn = (_activeModel, context, options) => {
+      expect(options?.reasoning).toBe("high");
+      if (options?.maxTokens === undefined) {
+        throw new Error("Expected safeguard compaction to authorize output tokens.");
+      }
+      authorizedOutputTokens.push(options.maxTokens);
+      providerPrompts.push(JSON.stringify(context));
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "provider summary" }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: createZeroUsageFixture(),
+          stopReason: "stop",
+          timestamp: 1,
+        },
+      });
+      stream.end();
+      return stream;
+    };
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" }),
+    });
+    const compactionHandler = createCompactionHandler();
+    const event = {
+      ...createCompactionEvent({ messageText: "summarize me", tokensBefore: 1_000 }),
+      thinkingLevel: "high" as const,
+      streamFn,
+    };
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 80_000,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction?.summary).toContain("provider summary");
+    expect(authorizedOutputTokens).toEqual([16_000]);
+    expect(providerPrompts).toHaveLength(1);
+    expect(providerPrompts[0]).toContain("[User]: summarize me");
+  });
 
   it("surfaces a total provider failure and leaves the safeguard transcript unchanged", async () => {
     testing.setSummarizeInStagesForTest(actualCompactionModule.summarizeInStages);
