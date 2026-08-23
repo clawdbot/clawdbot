@@ -30,6 +30,7 @@ import * as suiteRuntimeAgent from "./suite-runtime-agent.js";
 import * as suiteRuntimeGateway from "./suite-runtime-gateway.js";
 import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 import * as webRuntime from "./web-runtime.js";
 
 type QaSuiteScenarioFlowEnv = {
@@ -255,13 +256,12 @@ function createQaSuiteScenarioFlowApi(
   };
 }
 
-const QA_SCENARIO_LIFECYCLE_GRACE_MS = 5_000;
-
 function createQaScenarioDeadline(timeoutMs?: number) {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadlineTimeoutMs = resolveQaGatewayTimeoutWithGraceMs(timeoutMs);
   const deadline =
-    timeoutMs === undefined
+    deadlineTimeoutMs === undefined
       ? undefined
       : new Promise<never>((_resolve, reject) => {
           const timeoutError = new Error(`QA scenario flow timed out after ${timeoutMs}ms`);
@@ -270,7 +270,7 @@ function createQaScenarioDeadline(timeoutMs?: number) {
           timer = setTimeout(() => {
             controller.abort(timeoutError);
             reject(timeoutError);
-          }, timeoutMs + QA_SCENARIO_LIFECYCLE_GRACE_MS);
+          }, deadlineTimeoutMs);
         });
   return {
     signal: controller.signal,
