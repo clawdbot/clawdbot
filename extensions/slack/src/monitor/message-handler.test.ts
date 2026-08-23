@@ -17,6 +17,8 @@ const onFlushCallbacks: Array<
     createFlush: typeof createTestInboundDebounceFlush,
   ) => InboundDebounceFlush
 > = [];
+const buildKeyCallbacks: Array<(entry: Record<string, unknown>) => string | null | undefined> = [];
+const shouldDebounceCallbacks: Array<(entry: Record<string, unknown>) => boolean> = [];
 const prepareSlackMessageMock = vi.fn(
   async (_params?: {
     ctx: Parameters<typeof createSlackMessageHandler>[0]["ctx"];
@@ -36,11 +38,15 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   return {
     ...actual,
     createChannelInboundDebouncer: (params: {
+      buildKey: (entry: Record<string, unknown>) => string | null | undefined;
+      shouldDebounce: (entry: Record<string, unknown>) => boolean;
       onFlush: (
         entries: Array<Record<string, unknown>>,
         createFlush: typeof createTestInboundDebounceFlush,
       ) => InboundDebounceFlush;
     }) => {
+      buildKeyCallbacks.push(params.buildKey);
+      shouldDebounceCallbacks.push(params.shouldDebounce);
       onFlushCallbacks.push(params.onFlush);
       return {
         debounceMs: 10,
@@ -131,6 +137,8 @@ describe("createSlackMessageHandler", () => {
     enqueueMock.mockClear();
     flushKeyMock.mockClear();
     onFlushCallbacks.length = 0;
+    buildKeyCallbacks.length = 0;
+    shouldDebounceCallbacks.length = 0;
     prepareSlackMessageMock.mockClear();
     dispatchPreparedSlackMessageMock.mockClear();
     resolveThreadTsMock.mockClear();
@@ -563,6 +571,90 @@ describe("createSlackMessageHandler", () => {
     expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
   });
 
+  it("batches enterprise messages and settles every durable ingress claim", async () => {
+    const firstLifecycle = {
+      admission: "exclusive" as const,
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => undefined),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(async () => undefined),
+    };
+    const secondLifecycle = {
+      admission: "exclusive" as const,
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => undefined),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(async () => undefined),
+    };
+    const eventScope = { teamId: "T111", client: {} as never };
+    const { handler } = createHandlerWithTracker();
+    const firstHandled = handler(
+      {
+        type: "message",
+        channel: "D111",
+        user: "U111",
+        ts: "1709000000.000410",
+        text: "first enterprise message",
+      } as never,
+      {
+        source: "message",
+        eventScope,
+        awaitDispatch: true,
+        turnAdoptionLifecycle: firstLifecycle,
+      },
+    );
+    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
+    expect(firstLifecycle.onDeferred).toHaveBeenCalledOnce();
+    const firstEntry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(shouldDebounceCallbacks[0]?.(firstEntry)).toBe(true);
+    const secondWorkspaceEntry = {
+      ...firstEntry,
+      opts: {
+        ...(firstEntry.opts as Record<string, unknown>),
+        eventScope: { teamId: "T222", client: {} as never },
+      },
+    };
+    expect(buildKeyCallbacks[0]?.(firstEntry)).not.toBe(
+      buildKeyCallbacks[0]?.(secondWorkspaceEntry),
+    );
+
+    const secondHandled = handler(
+      {
+        type: "message",
+        channel: "D111",
+        user: "U111",
+        ts: "1709000000.000420",
+        text: "second enterprise message",
+      } as never,
+      {
+        source: "message",
+        eventScope,
+        awaitDispatch: true,
+        turnAdoptionLifecycle: secondLifecycle,
+      },
+    );
+    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
+    expect(secondLifecycle.onDeferred).toHaveBeenCalledOnce();
+
+    const entries = enqueueMock.mock.calls.map((call) => call[0]) as Array<Record<string, unknown>>;
+    await runOnFlush(entries);
+    await expect(Promise.all([firstHandled, secondHandled])).resolves.toEqual([
+      undefined,
+      undefined,
+    ]);
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          text: "first enterprise message\nsecond enterprise message",
+        }),
+        opts: expect.objectContaining({ eventScope }),
+      }),
+    );
+    expect(firstLifecycle.onAdopted).toHaveBeenCalledOnce();
+    expect(secondLifecycle.onAdopted).toHaveBeenCalledOnce();
+  });
+
   it("waits for debounced dispatch completion when requested by relay delivery", async () => {
     const { handler } = createHandlerWithTracker();
     const handled = handler(
@@ -628,9 +720,7 @@ describe("createSlackMessageHandler", () => {
     };
     expect(prepared.turnAdoptionLifecycle?.admission).toBe("exclusive");
     expect(prepared.turnAdoptionLifecycle?.abortSignal).toBe(turnAdoptionLifecycle.abortSignal);
-    await prepared.turnAdoptionLifecycle?.onAdopted();
     expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledTimes(1);
-    prepared.turnAdoptionLifecycle?.onDeferred();
     expect(turnAdoptionLifecycle.onDeferred).toHaveBeenCalledTimes(1);
   });
 
@@ -894,7 +984,7 @@ describe("createSlackMessageHandler", () => {
     }
   });
 
-  it("leaves relay session conflict retries to unacknowledged redelivery", async () => {
+  it("leaves enterprise session conflict retries to durable ingress redelivery", async () => {
     dispatchPreparedSlackMessageMock.mockRejectedValueOnce(
       new Error("Slack dispatch failed", {
         cause: new Error(
@@ -903,15 +993,27 @@ describe("createSlackMessageHandler", () => {
       }),
     );
     const { handler } = createHandlerWithTracker();
+    const turnAdoptionLifecycle = {
+      admission: "exclusive" as const,
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => undefined),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(async () => undefined),
+    };
     const handled = handler(
       {
         type: "message",
         channel: "C111",
         user: "U111",
         ts: "1709000000.000800",
-        text: "relay message",
+        text: "enterprise message",
       } as never,
-      { source: "message", awaitDispatch: true },
+      {
+        source: "message",
+        eventScope: { teamId: "T111", client: {} as never },
+        awaitDispatch: true,
+        turnAdoptionLifecycle,
+      },
     );
 
     await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));

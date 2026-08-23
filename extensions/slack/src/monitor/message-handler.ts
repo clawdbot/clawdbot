@@ -63,6 +63,8 @@ type IngressSlackMessageOptions = Parameters<SlackMessageHandler>[1] & {
 
 type QueuedSlackMessageOptions = IngressSlackMessageOptions & {
   dispatchCompletion?: Omit<SlackDispatchCompletion, "promise">;
+  /** Durable ingress released its lane while this entry waits in the debounce buffer. */
+  deferredForDebounce?: boolean;
 };
 
 function createSlackDispatchCompletion(): SlackDispatchCompletion {
@@ -154,22 +156,30 @@ export function createSlackMessageHandler(params: {
     channel: "slack",
     buildKey: (entry) =>
       buildSlackDebounceKey(entry.message, ctx.accountId, entry.opts.eventScope?.teamId),
-    shouldDebounce: (entry) =>
-      !entry.opts.eventScope && shouldDebounceSlackMessage(entry.message, ctx.cfg),
+    shouldDebounce: (entry) => shouldDebounceSlackMessage(entry.message, ctx.cfg),
     onFlush: (entries, createFlush) =>
       createFlush({
         dispatch: async (admissionLifecycle) => {
+          const turnAdoptionLifecycle = combineSlackIngressTurnLifecycles(
+            entries.map((entry) => entry.opts.turnAdoptionLifecycle),
+          );
+          const deferredForDebounce = entries.some((entry) => entry.opts.deferredForDebounce);
+          const settleDeferredIngress = async () => {
+            if (deferredForDebounce) {
+              await turnAdoptionLifecycle?.onAdopted();
+            }
+          };
           const retryEntries = (sourceError: unknown): boolean => {
             if (
               !isRetryableSlackInboundError(sourceError) ||
-              entries.some((entry) => entry.opts.eventScope)
+              entries.some((entry) => entry.opts.turnAdoptionLifecycle)
             ) {
               return false;
             }
             const nextEntries = entries
               .map((entry) => {
-                // Relay delivery owns retry until its dispatch completion is acknowledged.
-                // Scheduling here as well can race the router redelivery and duplicate a reply.
+                // Awaited delivery owns retry outside this in-memory queue. Scheduling here as
+                // well can race durable ingress redelivery and duplicate a reply.
                 if (entry.opts.dispatchCompletion) {
                   return null;
                 }
@@ -269,6 +279,7 @@ export function createSlackMessageHandler(params: {
               const last = latestSurviving;
               if (!last) {
                 releaseClaims();
+                await settleDeferredIngress();
                 return;
               }
               const teamId = last.opts.eventScope?.teamId;
@@ -304,7 +315,8 @@ export function createSlackMessageHandler(params: {
               const {
                 dispatchCompletion: _completion,
                 awaitDispatch: _awaitDispatch,
-                turnAdoptionLifecycle,
+                turnAdoptionLifecycle: _lastTurnAdoptionLifecycle,
+                deferredForDebounce: _deferredForDebounce,
                 ...lastOpts
               } = last.opts;
               let prepared: Awaited<ReturnType<typeof prepareSlackMessage>>;
@@ -329,11 +341,13 @@ export function createSlackMessageHandler(params: {
                     // The gate already produced a sender-visible notice. Commit the
                     // logical claim so a later message/app_mention twin cannot repeat it.
                     await commitClaims();
+                    await settleDeferredIngress();
                     return;
                   }
                   // Gated before dispatch: release so the surviving twin can run the
                   // same gate; nothing visible was produced, so no duplicate risk.
                   releaseClaims();
+                  await settleDeferredIngress();
                   return;
                 }
                 // Commit at adoption (durable turn ownership), release on abandonment;
@@ -383,6 +397,7 @@ export function createSlackMessageHandler(params: {
                   // Dispatch finished without adoption or deferral (skip/no-reply):
                   // deliberate terminal handling, release for gate-idempotent twins.
                   releaseClaims();
+                  await settleDeferredIngress();
                 }
               } catch (error) {
                 releaseClaims(error);
@@ -444,8 +459,7 @@ export function createSlackMessageHandler(params: {
       ctx.accountId,
       teamId,
     );
-    const canDebounce =
-      !opts.eventScope && debounceMs > 0 && shouldDebounceSlackMessage(resolvedMessage, ctx.cfg);
+    const canDebounce = debounceMs > 0 && shouldDebounceSlackMessage(resolvedMessage, ctx.cfg);
     if (!canDebounce && conversationKey) {
       const pendingKeys = pendingTopLevelDebounceKeys.get(conversationKey);
       if (pendingKeys && pendingKeys.size > 0) {
@@ -461,10 +475,17 @@ export function createSlackMessageHandler(params: {
       pendingTopLevelDebounceKeys.set(conversationKey, pendingKeys);
     }
     const dispatchCompletion = opts.awaitDispatch ? createSlackDispatchCompletion() : undefined;
+    const deferredForDebounce = canDebounce && Boolean(opts.turnAdoptionLifecycle);
+    if (deferredForDebounce) {
+      // Durable ingress keeps the claim but releases its conversation lane so another event can
+      // join this batch. The combined flush lifecycle settles every retained claim together.
+      opts.turnAdoptionLifecycle?.onDeferred();
+    }
     await debouncer.enqueue({
       message: resolvedMessage,
       opts: {
         ...opts,
+        ...(deferredForDebounce ? { deferredForDebounce: true } : {}),
         ...(dispatchCompletion
           ? {
               dispatchCompletion: {
@@ -481,5 +502,35 @@ export function createSlackMessageHandler(params: {
   return async (message, opts) => {
     const dispatchCompletion = await enqueueSlackMessage(message, opts);
     await dispatchCompletion?.promise;
+  };
+}
+
+function combineSlackIngressTurnLifecycles(
+  candidates: Array<SlackIngressTurnLifecycle | undefined>,
+): SlackIngressTurnLifecycle | undefined {
+  const lifecycles = Array.from(new Set(candidates.filter((candidate) => candidate !== undefined)));
+  if (lifecycles.length === 0) {
+    return undefined;
+  }
+  if (lifecycles.length === 1) {
+    return lifecycles[0];
+  }
+  return {
+    admission: "exclusive",
+    abortSignal: AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
+    onAdopted: async () => {
+      await Promise.all(lifecycles.map((lifecycle) => lifecycle.onAdopted()));
+    },
+    onDeferred: () => {
+      for (const lifecycle of lifecycles) {
+        lifecycle.onDeferred();
+      }
+    },
+    onFailed: async (error) => {
+      await Promise.all(lifecycles.map((lifecycle) => lifecycle.onFailed?.(error)));
+    },
+    onAbandoned: async () => {
+      await Promise.all(lifecycles.map((lifecycle) => lifecycle.onAbandoned()));
+    },
   };
 }
