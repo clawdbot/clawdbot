@@ -9,48 +9,45 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 const SESSION_ESTABLISHING_METHODS = new Set(["session/load", "session/resume"]);
 
 /**
- * Every collection here is filled by the peer, so every one is bounded and every
- * overflow fails open by writing the update through in arrival order. Dropping an
- * update loses session content permanently, while emitting one early only restores
- * the ordering that existed before this boundary.
+ * Every collection here is filled by the peer, so every one is bounded, and every
+ * bound fails open by writing updates through in arrival order. Dropping an update
+ * loses session content permanently, while emitting one early only restores the
+ * ordering that existed before this boundary.
  */
-const MAX_BUFFERED_SESSIONS = 64;
-const MAX_BUFFERED_UPDATES_PER_SESSION = 256;
+const MAX_QUEUED_SESSIONS = 64;
+const MAX_QUEUED_UPDATES_PER_SESSION = 256;
 const MAX_PENDING_NEW_SESSION_REQUESTS = 64;
 const MAX_ESTABLISHED_SESSIONS = 1024;
 
-/** Keeps initial session updates behind the response that introduces their session ID. */
+type QueuedUpdate = { sessionId: string; message: AnyMessage };
+
+/**
+ * Keeps initial session updates behind the response that introduces their session ID.
+ *
+ * Two invariants carry the whole design:
+ *
+ * 1. An update is queued only while some `session/new` response can still release
+ *    it. Nothing else introduces a session ID, so queuing outside that window would
+ *    strand the update for the life of the process.
+ * 2. The queue drains strictly from the front. An update is never emitted ahead of
+ *    one that arrived earlier and is still blocked, so releasing never reorders
+ *    updates against each other.
+ */
 export class AcpSessionNewOrdering {
   /** Session IDs the protocol established, either by client assertion or by a `session/new` result. */
   private readonly establishedSessionIds = new Set<string>();
-  /**
-   * Set once a session could not be recorded. Established and not-yet-established
-   * are no longer distinguishable, so buffering stops rather than holding updates
-   * that might never be released.
-   */
-  private establishedTrackingSaturated = false;
-  /**
-   * Buffered updates in arrival order across every session. Order lives here and
-   * nowhere else: grouping by session instead would reorder updates from different
-   * sessions against each other when they are released together.
-   */
-  private readonly bufferedUpdates: { sessionId: string; message: AnyMessage }[] = [];
-  /** Per-session counts, used only to enforce the bounds above — never for ordering. */
-  private readonly bufferedCounts = new Map<string, number>();
+  /** Queued updates in arrival order across all sessions; the only ordering authority. */
+  private readonly queue: QueuedUpdate[] = [];
+  /** Per-session queue depth, used only to enforce the bounds — never for ordering. */
+  private readonly queuedPerSession = new Map<string, number>();
   /** JSON-RPC IDs of in-flight `session/new` requests, used to correlate the establishing response. */
   private readonly pendingNewSessionRequestIds = new Set<string>();
   /**
-   * Set when a `session/new` arrived that could not be correlated. Some response we
-   * will not recognize is then in flight, so buffering stops until the tracked
-   * correlations drain: holding an update we cannot prove is releasable is what
-   * strands it. Cleared when the pending set empties.
+   * Set when a `session/new` arrived that could not be correlated, meaning a response
+   * this boundary will not recognize is in flight. Cleared once the tracked
+   * correlations drain, which is the first point where recognition is provable again.
    */
   private correlationSaturated = false;
-  /**
-   * Updates released by an inbound message, which has no transform controller to
-   * write to. The next outbound message drains them, so they are never dropped.
-   */
-  private readonly releasedUpdates: AnyMessage[] = [];
 
   observeInbound(message: AnyMessage): void {
     const messageObject = asOptionalRecord(message);
@@ -66,12 +63,10 @@ export class AcpSessionNewOrdering {
       }
       if (this.pendingNewSessionRequestIds.size >= MAX_PENDING_NEW_SESSION_REQUESTS) {
         // A correlation is never evicted: its response is the only thing that can
-        // release the updates already buffered for that session, so discarding one
-        // would recreate the stall this boundary exists to prevent. Past the cap the
-        // request is simply not correlated, and the boundary fails open until the
-        // tracked correlations drain. Matching such a response by anything other
-        // than its own request ID — a count, a shape — lets unrelated RPC traffic
-        // claim it, which reintroduces the ordering failure from the other side.
+        // release the updates already queued for that session. Past the cap the
+        // request is left uncorrelated and the boundary fails open instead. Matching
+        // such a response by anything but its own request ID lets unrelated traffic
+        // claim it, which is the same ordering failure from the other side.
         this.correlationSaturated = true;
         return;
       }
@@ -89,16 +84,15 @@ export class AcpSessionNewOrdering {
     // peer grow this set for the lifetime of the process.
     if (SESSION_ESTABLISHING_METHODS.has(method)) {
       this.establish(sessionId);
-      this.flushBufferedUpdates(sessionId);
       return;
     }
 
     if (method === "session/close") {
-      // The session is over, so release both its ID and anything still buffered for
-      // it. Retaining the ID is what would let a long-lived bridge grow this set
-      // without bound; a late update now passes through on the rule below instead.
+      // Releasing the ID is what keeps this set bounded across a long-lived bridge,
+      // and it frees capacity so later sessions can be tracked again. Anything still
+      // queued for the session is released by the ordinary drain once no creation is
+      // outstanding, so nothing needs to be special-cased here.
       this.establishedSessionIds.delete(sessionId);
-      this.flushBufferedUpdates(sessionId);
     }
   }
 
@@ -106,142 +100,128 @@ export class AcpSessionNewOrdering {
     message: AnyMessage,
     controller: TransformStreamDefaultController<AnyMessage>,
   ): void {
+    const emit = (queued: AnyMessage) => controller.enqueue(queued);
+    // Inbound events cannot write to the stream, so anything they unblocked is
+    // released here, ahead of this message, which is where it arrived.
+    this.drain(emit);
+
     const messageObject = asOptionalRecord(message);
-
-    if (this.releasedUpdates.length > 0) {
-      for (const released of this.releasedUpdates.splice(0)) {
-        controller.enqueue(released);
+    const responseId = isJsonRpcResponse(messageObject)
+      ? readRequestId(messageObject?.id)
+      : undefined;
+    if (responseId !== undefined && this.pendingNewSessionRequestIds.delete(responseId)) {
+      if (this.pendingNewSessionRequestIds.size === 0) {
+        this.correlationSaturated = false;
       }
-    }
-
-    const responseId = readRequestId(messageObject?.id);
-    if (responseId !== undefined) {
-      if (this.pendingNewSessionRequestIds.delete(responseId)) {
-        // The response to `session/new` always goes out first; it is what introduces
-        // the session ID to the client. A failed creation carries no ID to establish.
-        controller.enqueue(message);
-        const sessionIdFromResult = readSessionId(messageObject?.result);
-        if (sessionIdFromResult) {
-          this.establish(sessionIdFromResult);
-          this.drainBufferedUpdates(sessionIdFromResult, controller);
-        }
-        if (this.pendingNewSessionRequestIds.size === 0) {
-          this.correlationSaturated = false;
-        }
-        this.releaseUnreachableUpdates(controller);
-        return;
+      // The response to `session/new` always goes out first; it is what introduces
+      // the session ID to the client. A failed creation carries no ID to establish.
+      emit(message);
+      const establishedSessionId = readSessionId(messageObject?.result);
+      if (establishedSessionId) {
+        this.establish(establishedSessionId);
       }
+      this.drain(emit);
+      return;
     }
 
     const sessionId = readSessionId(messageObject?.params);
     if (
       messageObject?.method === "session/update" &&
       sessionId &&
-      this.shouldBuffer(sessionId) &&
-      this.bufferUpdate(sessionId, message)
+      this.shouldQueue(sessionId) &&
+      this.enqueue(sessionId, message)
     ) {
       return;
     }
 
-    controller.enqueue(message);
+    emit(message);
   }
 
-  /**
-   * An update may only be held while some `session/new` response can still release
-   * it. Nothing else introduces a session ID to the client, so buffering outside
-   * that window would strand the update for the life of the process.
-   */
-  private shouldBuffer(sessionId: string): boolean {
-    if (
-      this.correlationSaturated ||
-      this.establishedTrackingSaturated ||
-      this.establishedSessionIds.has(sessionId)
-    ) {
+  private shouldQueue(sessionId: string): boolean {
+    if (this.establishedSessionIds.has(sessionId) || this.isTrackingSaturated()) {
+      return false;
+    }
+    if (this.correlationSaturated) {
       return false;
     }
     return this.pendingNewSessionRequestIds.size > 0;
   }
 
+  /**
+   * Recomputed rather than latched: `session/close` frees capacity, and a bridge that
+   * recovers room must recover ordering with it instead of failing open forever.
+   */
+  private isTrackingSaturated(): boolean {
+    return this.establishedSessionIds.size >= MAX_ESTABLISHED_SESSIONS;
+  }
+
   private establish(sessionId: string): void {
-    if (
-      !this.establishedSessionIds.has(sessionId) &&
-      this.establishedSessionIds.size >= MAX_ESTABLISHED_SESSIONS
-    ) {
-      this.establishedTrackingSaturated = true;
+    if (!this.establishedSessionIds.has(sessionId) && this.isTrackingSaturated()) {
       return;
     }
     this.establishedSessionIds.add(sessionId);
   }
 
-  /** @returns false when the buffer is full and the caller must write the message through. */
-  private bufferUpdate(sessionId: string, message: AnyMessage): boolean {
-    const buffered = this.bufferedCounts.get(sessionId);
-    if (buffered === undefined) {
-      if (this.bufferedCounts.size >= MAX_BUFFERED_SESSIONS) {
+  /** @returns false when a bound is reached and the caller must write the update through. */
+  private enqueue(sessionId: string, message: AnyMessage): boolean {
+    const queued = this.queuedPerSession.get(sessionId);
+    if (queued === undefined) {
+      if (this.queuedPerSession.size >= MAX_QUEUED_SESSIONS) {
         return false;
       }
-    } else if (buffered >= MAX_BUFFERED_UPDATES_PER_SESSION) {
+    } else if (queued >= MAX_QUEUED_UPDATES_PER_SESSION) {
       return false;
     }
-    this.bufferedUpdates.push({ sessionId, message });
-    this.bufferedCounts.set(sessionId, (buffered ?? 0) + 1);
+    this.queue.push({ sessionId, message });
+    this.queuedPerSession.set(sessionId, (queued ?? 0) + 1);
     return true;
   }
 
-  /** Removes one session's updates, preserving their order relative to each other. */
-  private takeBufferedUpdates(sessionId: string): AnyMessage[] {
-    if (!this.bufferedCounts.delete(sessionId)) {
-      return [];
-    }
-    const taken: AnyMessage[] = [];
-    let kept = 0;
-    for (const entry of this.bufferedUpdates) {
-      if (entry.sessionId === sessionId) {
-        taken.push(entry.message);
-        continue;
-      }
-      this.bufferedUpdates[kept] = entry;
-      kept += 1;
-    }
-    this.bufferedUpdates.length = kept;
-    return taken;
-  }
-
-  private drainBufferedUpdates(
-    sessionId: string,
-    controller: TransformStreamDefaultController<AnyMessage>,
-  ): void {
-    for (const message of this.takeBufferedUpdates(sessionId)) {
-      controller.enqueue(message);
-    }
-  }
-
   /**
-   * With no `session/new` correlation left in flight, nothing can introduce the
-   * session IDs still buffered here, so they are written through in arrival order
-   * rather than held for the life of the process.
+   * Emits from the front of the queue and stops at the first update that is still
+   * blocked. A later update is never taken out of the middle, so updates keep their
+   * arrival order relative to each other no matter which session settles first.
+   *
+   * With no creation outstanding, nothing can introduce the remaining session IDs,
+   * so the rest is written through rather than held for the life of the process.
    */
-  private releaseUnreachableUpdates(
-    controller: TransformStreamDefaultController<AnyMessage>,
-  ): void {
-    if (this.pendingNewSessionRequestIds.size > 0) {
+  private drain(emit: (message: AnyMessage) => void): void {
+    if (this.queue.length === 0) {
       return;
     }
-    for (const entry of this.bufferedUpdates) {
-      controller.enqueue(entry.message);
+    const nothingOutstanding = this.pendingNewSessionRequestIds.size === 0;
+    let released = 0;
+    while (released < this.queue.length) {
+      const entry = this.queue[released];
+      if (!nothingOutstanding && !this.establishedSessionIds.has(entry.sessionId)) {
+        break;
+      }
+      emit(entry.message);
+      const remaining = this.queuedPerSession.get(entry.sessionId) ?? 1;
+      if (remaining <= 1) {
+        this.queuedPerSession.delete(entry.sessionId);
+      } else {
+        this.queuedPerSession.set(entry.sessionId, remaining - 1);
+      }
+      released += 1;
     }
-    this.bufferedUpdates.length = 0;
-    this.bufferedCounts.clear();
+    if (released > 0) {
+      this.queue.splice(0, released);
+    }
   }
+}
 
-  /**
-   * Releases buffered updates from an inbound callback, where no controller exists.
-   * They move to `releasedUpdates` rather than being discarded, and the next outbound
-   * message drains them; FIFO order within the session is preserved throughout.
-   */
-  private flushBufferedUpdates(sessionId: string): void {
-    this.releasedUpdates.push(...this.takeBufferedUpdates(sessionId));
+/**
+ * A response carries `result` or `error` and no `method`. The outbound stream also
+ * carries agent-initiated requests such as `requestPermission`, and a client-chosen
+ * ID can collide with an in-flight `session/new`, so settling a correlation on the
+ * ID alone would release a session's updates before its result.
+ */
+function isJsonRpcResponse(value: Record<string, unknown> | undefined): boolean {
+  if (value === undefined || value.method !== undefined) {
+    return false;
   }
+  return value.result !== undefined || value.error !== undefined;
 }
 
 /** Normalizes a JSON-RPC ID, keeping the number `2` distinct from the string `"2"`. */

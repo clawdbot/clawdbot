@@ -320,6 +320,82 @@ describe("AcpSessionNewOrdering", () => {
     expect(output).toEqual([failA, failB, a1, b1, a2]);
   });
 
+  it("does not settle a correlation on an agent-initiated request that reuses the id", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const update = sessionUpdate("s");
+    // The outbound stream also carries agent-to-client requests. A client-chosen id
+    // can collide with an in-flight session/new, and settling on the id alone would
+    // release this session's update before the result that introduces it.
+    const permission = {
+      jsonrpc: "2.0",
+      id: 5,
+      method: "session/request_permission",
+      params: { options: [] },
+    } as AnyMessage;
+    const created = newSessionResponse(5, "s");
+
+    await expect(
+      runSteps(ordering, [
+        { inbound: newSessionRequest(5) },
+        { outbound: update },
+        { outbound: permission },
+        { outbound: created },
+      ]),
+    ).resolves.toEqual([permission, created, update]);
+  });
+
+  it("keeps arrival order across sessions when each creation settles in turn", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const a1 = sessionUpdate("sa", "a1");
+    const b1 = sessionUpdate("sb", "b1");
+    const a2 = sessionUpdate("sa", "a2");
+    const resultA = newSessionResponse(1, "sa");
+    const resultB = newSessionResponse(2, "sb");
+
+    const output = await runSteps(ordering, [
+      { inbound: newSessionRequest(1) },
+      { inbound: newSessionRequest(2) },
+      { outbound: a1 },
+      { outbound: b1 },
+      { outbound: a2 },
+      { outbound: resultA },
+      { outbound: resultB },
+    ]);
+
+    // Draining a2 alongside a1 would put it ahead of b1, which arrived first. The
+    // queue drains from the front only, so a2 waits behind b1 until sb settles.
+    expect(output).toEqual([resultA, a1, resultB, b1, a2]);
+  });
+
+  it("restores ordering after session/close frees tracking capacity", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const steps: Step[] = [];
+    // One past the bound, so tracking is genuinely saturated before capacity returns.
+    for (let id = 1; id <= 1025; id += 1) {
+      steps.push(
+        { inbound: newSessionRequest(id) },
+        { outbound: newSessionResponse(id, `s${id}`) },
+      );
+    }
+    // Capacity comes back, so the boundary must resume ordering rather than stay
+    // failed open for the rest of the process.
+    steps.push({
+      inbound: {
+        jsonrpc: "2.0",
+        id: 9000,
+        method: "session/close",
+        params: { sessionId: "s1" },
+      } as AnyMessage,
+    });
+    const update = sessionUpdate("after-capacity");
+    const created = newSessionResponse(2000, "after-capacity");
+    steps.push({ inbound: newSessionRequest(2000) }, { outbound: update }, { outbound: created });
+
+    const output = await runSteps(ordering, steps);
+
+    expect(output.slice(-2)).toEqual([created, update]);
+  });
+
   it("stops buffering once established tracking is saturated", async () => {
     const ordering = new AcpSessionNewOrdering();
     const steps: Step[] = [];
