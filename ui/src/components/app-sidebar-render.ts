@@ -370,6 +370,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     : gateway
       ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
       : buildSubtitle;
+  const availableUpdate = host.updateAvailable;
   const updateBusy = host.updateBusy || host.updateSchedule?.campaign?.state === "applying";
   return html`
     <div class="sidebar-footer-bar">
@@ -415,7 +416,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
       <span class="sidebar-identity-card__status" role="status" aria-live="polite"
         >${host.offline ? t("connection.reconnecting") : ""}</span
       >
-      ${host.updateAvailable
+      ${availableUpdate
         ? html`<span class="sidebar-footer-update-slot">
             <button
               type="button"
@@ -427,7 +428,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
               ?disabled=${updateBusy || !host.canUpdate}
               @click=${() => {
                 void confirmAndStartUpdate({
-                  updateAvailable: host.updateAvailable,
+                  updateAvailable: availableUpdate,
                   updateSchedule: host.updateSchedule,
                   viaNativeApp: false,
                   startGatewayUpdate: host.onUpdate,
