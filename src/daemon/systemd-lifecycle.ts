@@ -109,11 +109,10 @@ export async function stopSystemdService({
 export async function parkCurrentSystemdServiceForMaintenance(
   env: GatewayServiceEnv = process.env,
 ): Promise<void> {
-  const currentUnit = env.OPENCLAW_SYSTEMD_UNIT?.trim();
-  if (!currentUnit) {
+  if (!env.OPENCLAW_SYSTEMD_UNIT?.trim()) {
     throw new Error("current systemd unit is unavailable");
   }
-  const unitName = currentUnit.endsWith(".service") ? currentUnit : `${currentUnit}.service`;
+  const unitName = `${resolveSystemdServiceName(env)}.service`;
   const timeoutMs = 5_000;
   const ownership = await execSystemctlUser(
     env,

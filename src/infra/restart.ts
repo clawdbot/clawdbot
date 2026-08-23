@@ -98,7 +98,6 @@ function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
   pendingRestartTimer = setTimeout(
     () => {
       const scheduledReason = pendingRestartReason;
-      const scheduledSuccessorOwner = pendingRestartSuccessorOwner;
       const scheduledSkipDeferral = pendingRestartSkipDeferral;
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
@@ -107,10 +106,7 @@ function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
       pendingRestartPreparing = true;
       const pendingCheck = preRestartCheck;
       if (scheduledSkipDeferral || !pendingCheck) {
-        const intent = scheduledSuccessorOwner
-          ? { reason: scheduledReason, successorOwner: scheduledSuccessorOwner }
-          : undefined;
-        void emitPreparedGatewayRestart(undefined, scheduledReason, intent);
+        void emitPreparedGatewayRestart(undefined, scheduledReason);
         return;
       }
       const deferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs();
@@ -597,7 +593,7 @@ async function emitPreparedGatewayRestartUnderAdmission(
     preferredReason || successorOwner
       ? {
           ...intent,
-          ...(preferredReason ? { reason: preferredReason } : {}),
+          ...(resolvedReason ? { reason: resolvedReason } : {}),
           ...(successorOwner ? { successorOwner } : {}),
         }
       : intent;
@@ -1104,10 +1100,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         pendingRestartEmitHooks = opts?.emitHooks;
         pendingRestartSessionKey = opts?.sessionKey;
       }
-      const intent = pendingRestartSuccessorOwner
-        ? { reason, successorOwner: pendingRestartSuccessorOwner }
-        : undefined;
-      void emitPreparedGatewayRestart(undefined, reason, intent);
+      void emitPreparedGatewayRestart(undefined, reason);
       return {
         ok: true,
         pid: process.pid,
