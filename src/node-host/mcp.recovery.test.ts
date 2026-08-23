@@ -83,7 +83,8 @@ describe("node host MCP live lifecycle", () => {
           notifyToolsChanged = options.onToolsChanged;
           return client;
         },
-        resolveTransport: () => stdioTransport,
+        // This test deliberately holds both list calls; request timeout is not its contract.
+        resolveTransport: () => ({ ...stdioTransport, requestTimeoutMs: 5_000 }),
         warn: vi.fn(),
       },
     );
