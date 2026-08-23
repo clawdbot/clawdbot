@@ -107,29 +107,38 @@ function readCronOwnerRows(
   try {
     if (
       !hasSqliteColumns(db, "execution_identity_contexts", ["context_id", "execution_id"]) ||
-      !hasSqliteColumns(db, "cron_run_receipts", ["context_id", "execution_id"]) ||
-      !hasSqliteColumns(db, "task_runs", ["context_id", "execution_id"])
+      !hasSqliteColumns(db, "execution_owner_lifecycle_bindings", [
+        "owner_kind",
+        "owner_id",
+        "context_id",
+        "execution_id",
+      ]) ||
+      !hasSqliteColumns(db, "task_runs", ["task_id"])
     ) {
       return undefined;
     }
     const cron = db
       .prepare(
-        `SELECT receipt.context_id, receipt.execution_id, context.run_id, receipt.status
+        `SELECT binding.context_id, binding.execution_id, context.run_id, receipt.status
          FROM cron_run_receipts AS receipt
+         JOIN execution_owner_lifecycle_bindings AS binding
+           ON binding.owner_kind = 'cron' AND binding.owner_id = receipt.receipt_id
          JOIN execution_identity_contexts AS context
-           ON context.context_id = receipt.context_id
-          AND context.execution_id = receipt.execution_id
+           ON context.context_id = binding.context_id
+          AND context.execution_id = binding.execution_id
          WHERE receipt.job_id = ? AND receipt.status != 'running'
          ORDER BY receipt.started_at_ms DESC LIMIT 1`,
       )
       .get(jobId) as ExactOwnerRow | undefined;
     const task = db
       .prepare(
-        `SELECT task.context_id, task.execution_id, context.run_id, task.status
+        `SELECT binding.context_id, binding.execution_id, context.run_id, task.status
          FROM task_runs AS task
+         JOIN execution_owner_lifecycle_bindings AS binding
+           ON binding.owner_kind = 'task' AND binding.owner_id = task.task_id
          JOIN execution_identity_contexts AS context
-           ON context.context_id = task.context_id
-          AND context.execution_id = task.execution_id
+           ON context.context_id = binding.context_id
+          AND context.execution_id = binding.execution_id
          WHERE task.runtime = 'cron' AND task.source_id = ? AND task.ended_at IS NOT NULL
          ORDER BY task.created_at DESC LIMIT 1`,
       )
@@ -149,12 +158,22 @@ function readCronOwnerBindingDiagnostic(
     return {
       cron: db
         .prepare(
-          "SELECT context_id, execution_id, status FROM cron_run_receipts WHERE job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
+          `SELECT binding.context_id, binding.execution_id, receipt.status
+           FROM cron_run_receipts AS receipt
+           JOIN execution_owner_lifecycle_bindings AS binding
+             ON binding.owner_kind = 'cron' AND binding.owner_id = receipt.receipt_id
+           WHERE receipt.job_id = ?
+           ORDER BY receipt.started_at_ms DESC LIMIT 1`,
         )
         .get(jobId),
       task: db
         .prepare(
-          "SELECT context_id, execution_id, status FROM task_runs WHERE runtime = 'cron' AND source_id = ? ORDER BY created_at DESC LIMIT 1",
+          `SELECT binding.context_id, binding.execution_id, task.status
+           FROM task_runs AS task
+           JOIN execution_owner_lifecycle_bindings AS binding
+             ON binding.owner_kind = 'task' AND binding.owner_id = task.task_id
+           WHERE task.runtime = 'cron' AND task.source_id = ?
+           ORDER BY task.created_at DESC LIMIT 1`,
         )
         .get(jobId),
     };
@@ -171,17 +190,25 @@ function readCliOwnerRows(
   try {
     if (
       !hasSqliteColumns(db, "execution_identity_contexts", ["context_id", "execution_id"]) ||
-      !hasSqliteColumns(db, "task_runs", ["context_id", "execution_id"])
+      !hasSqliteColumns(db, "execution_owner_lifecycle_bindings", [
+        "owner_kind",
+        "owner_id",
+        "context_id",
+        "execution_id",
+      ]) ||
+      !hasSqliteColumns(db, "task_runs", ["task_id"])
     ) {
       return undefined;
     }
     const task = db
       .prepare(
-        `SELECT task.context_id, task.execution_id, context.run_id, task.status
+        `SELECT binding.context_id, binding.execution_id, context.run_id, task.status
          FROM task_runs AS task
+         JOIN execution_owner_lifecycle_bindings AS binding
+           ON binding.owner_kind = 'task' AND binding.owner_id = task.task_id
          JOIN execution_identity_contexts AS context
-           ON context.context_id = task.context_id
-          AND context.execution_id = task.execution_id
+           ON context.context_id = binding.context_id
+          AND context.execution_id = binding.execution_id
          WHERE task.runtime = 'cli' AND task.run_id = ? AND task.ended_at IS NOT NULL
          LIMIT 1`,
       )

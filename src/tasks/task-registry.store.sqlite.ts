@@ -3,10 +3,14 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import {
-  classifyExecutionOwnerBinding,
   executionOwnerBindingFromAdmission,
   type ExecutionOwnerBindingResult,
 } from "../audit/execution-owner-binding.js";
+import {
+  bindExecutionOwnerLifecycleMetadata,
+  deleteExecutionOwnerLifecycleMetadata,
+  pruneOrphanedExecutionOwnerLifecycleMetadata,
+} from "../audit/execution-owner-lifecycle-binding-store.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -16,11 +20,7 @@ import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import {
-  ensureColumn,
-  tableExists,
-  tableHasColumns,
-} from "../state/openclaw-state-db-schema-helpers.js";
+import { tableExists, tableHasColumns } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -51,7 +51,7 @@ type TaskRegistryStoreDatabase = Pick<
   "task_delivery_state" | "task_runs"
 >;
 
-type TaskRegistryRow = Omit<Selectable<TaskRunsTable>, "context_id" | "execution_id"> & {
+type TaskRegistryRow = Selectable<TaskRunsTable> & {
   runtime: string;
   scope_kind: string;
   status: string;
@@ -344,6 +344,7 @@ function deleteTaskRowsWithDeliveryState(db: DatabaseSync, taskId: string): void
     kysely.deleteFrom("task_delivery_state").where("task_id", "=", taskId),
   );
   executeSqliteQuerySync(db, kysely.deleteFrom("task_runs").where("task_id", "=", taskId));
+  deleteExecutionOwnerLifecycleMetadata({ db, ownerKind: "task", ownerIds: [taskId] });
 }
 
 function openTaskRegistryDatabase(): TaskRegistryDatabase {
@@ -450,6 +451,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
     if (taskIds.length === 0) {
       executeSqliteQuerySync(db, kysely.deleteFrom("task_delivery_state"));
       executeSqliteQuerySync(db, kysely.deleteFrom("task_runs"));
+      pruneOrphanedExecutionOwnerLifecycleMetadata(db, "task");
       return;
     }
     pruneRowsNotInSnapshot({
@@ -477,6 +479,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
     for (const state of snapshot.deliveryStates.values()) {
       replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(state));
     }
+    pruneOrphanedExecutionOwnerLifecycleMetadata(db, "task");
   });
 }
 
@@ -498,36 +501,20 @@ export function bindTaskRunExecution(params: {
   }
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      ensureColumn(db, "task_runs", "context_id TEXT");
-      ensureColumn(db, "task_runs", "execution_id TEXT");
       const kysely = getTaskRegistryKysely(db);
       const current = executeSqliteQueryTakeFirstSync(
         db,
-        kysely
-          .selectFrom("task_runs")
-          .select(["context_id", "execution_id"])
-          .where("task_id", "=", params.taskId),
+        kysely.selectFrom("task_runs").select("task_id").where("task_id", "=", params.taskId),
       );
       if (!current) {
         return "missing";
       }
-      const state = classifyExecutionOwnerBinding(
-        { contextId: current.context_id, executionId: current.execution_id },
-        binding,
-      );
-      if (state !== "unbound") {
-        return state;
-      }
-      executeSqliteQuerySync(
+      return bindExecutionOwnerLifecycleMetadata({
         db,
-        kysely
-          .updateTable("task_runs")
-          .set({ context_id: binding.contextId, execution_id: binding.executionId })
-          .where("task_id", "=", params.taskId)
-          .where("context_id", "is", null)
-          .where("execution_id", "is", null),
-      );
-      return "bound";
+        ownerKind: "task",
+        ownerId: current.task_id,
+        binding,
+      });
     },
     params.options,
     { operationLabel: "task.run.execution-binding" },

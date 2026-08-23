@@ -1,6 +1,5 @@
 /** Static owner-native cron/task/flow lifecycle projection for run inspection. */
 import type { DatabaseSync } from "node:sqlite";
-import { sql } from "kysely";
 import type {
   DecisionReceiptV1,
   ExecutionIdentityContextV1,
@@ -11,14 +10,18 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { tableHasColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE } from "./execution-owner-lifecycle-binding-store.js";
 
-type OwnerLifecycleDatabase = Pick<
-  OpenClawStateDatabase,
-  "cron_run_receipts" | "flow_runs" | "task_runs"
->;
+type WithSqliteRowId<Row> = Row & { rowid: number };
+type OwnerLifecycleDatabase = {
+  cron_run_receipts: WithSqliteRowId<OpenClawStateDatabase["cron_run_receipts"]>;
+  execution_owner_lifecycle_bindings: OpenClawStateDatabase["execution_owner_lifecycle_bindings"];
+  flow_runs: WithSqliteRowId<OpenClawStateDatabase["flow_runs"]>;
+  task_runs: WithSqliteRowId<OpenClawStateDatabase["task_runs"]>;
+};
 export type OwnerLifecycleStage = "cron" | "task" | "flow";
 export type OwnerLifecycleCursor = { occurredAt: number; rowId: number };
 type OwnerLifecycleDisplayProducer = "cron-lifecycle" | "task-lifecycle" | "flow-lifecycle";
@@ -60,14 +63,6 @@ const KNOWN_STATUSES: Record<OwnerLifecycleStage, ReadonlySet<string>> = {
   ]),
 };
 
-function hasBindingColumns(db: DatabaseSync, tableName: string): boolean {
-  return (
-    tableExists(db, tableName) &&
-    tableHasColumn(db, tableName, "context_id") &&
-    tableHasColumn(db, tableName, "execution_id")
-  );
-}
-
 function ownerName(stage: OwnerLifecycleStage): OwnerLifecycleRow["owner"] {
   return stage === "cron" ? "cron_run_receipts" : stage === "task" ? "task_runs" : "flow_runs";
 }
@@ -89,31 +84,39 @@ function readRows(params: {
   limit: number;
 }): OwnerLifecycleRow[] {
   const owner = ownerName(params.stage);
-  if (!hasBindingColumns(params.db, owner)) {
+  if (
+    !tableExists(params.db, owner) ||
+    !tableExists(params.db, EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE)
+  ) {
     return [];
   }
   const kysely = getNodeSqliteKysely<OwnerLifecycleDatabase>(params.db);
   if (params.stage === "cron") {
     let query = kysely
       .selectFrom("cron_run_receipts")
+      .innerJoin(EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE, (join) =>
+        join
+          .onRef("execution_owner_lifecycle_bindings.owner_id", "=", "cron_run_receipts.receipt_id")
+          .on("execution_owner_lifecycle_bindings.owner_kind", "=", "cron"),
+      )
       .select([
-        "receipt_id as recordId",
-        "execution_id as executionId",
-        "started_at_ms as occurredAt",
-        "status",
-        sql<number>`rowid`.as("rowId"),
+        "cron_run_receipts.receipt_id as recordId",
+        "execution_owner_lifecycle_bindings.execution_id as executionId",
+        "cron_run_receipts.started_at_ms as occurredAt",
+        "cron_run_receipts.status",
+        "cron_run_receipts.rowid as rowId",
       ])
-      .where("context_id", "=", params.contextId)
-      .orderBy("started_at_ms", "asc")
-      .orderBy(sql`rowid`, "asc")
+      .where("execution_owner_lifecycle_bindings.context_id", "=", params.contextId)
+      .orderBy("cron_run_receipts.started_at_ms", "asc")
+      .orderBy("cron_run_receipts.rowid", "asc")
       .limit(params.limit);
     if (params.after) {
       query = query.where((eb) =>
         eb.or([
-          eb("started_at_ms", ">", params.after!.occurredAt),
+          eb("cron_run_receipts.started_at_ms", ">", params.after!.occurredAt),
           eb.and([
-            eb("started_at_ms", "=", params.after!.occurredAt),
-            eb(sql<number>`rowid`, ">", params.after!.rowId),
+            eb("cron_run_receipts.started_at_ms", "=", params.after!.occurredAt),
+            eb("cron_run_receipts.rowid", ">", params.after!.rowId),
           ]),
         ]),
       );
@@ -127,25 +130,30 @@ function readRows(params: {
   if (params.stage === "task") {
     let query = kysely
       .selectFrom("task_runs")
+      .innerJoin(EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE, (join) =>
+        join
+          .onRef("execution_owner_lifecycle_bindings.owner_id", "=", "task_runs.task_id")
+          .on("execution_owner_lifecycle_bindings.owner_kind", "=", "task"),
+      )
       .select([
-        "task_id as recordId",
-        "execution_id as executionId",
-        "created_at as occurredAt",
-        "status",
-        "terminal_outcome as terminalOutcome",
-        sql<number>`rowid`.as("rowId"),
+        "task_runs.task_id as recordId",
+        "execution_owner_lifecycle_bindings.execution_id as executionId",
+        "task_runs.created_at as occurredAt",
+        "task_runs.status",
+        "task_runs.terminal_outcome as terminalOutcome",
+        "task_runs.rowid as rowId",
       ])
-      .where("context_id", "=", params.contextId)
-      .orderBy("created_at", "asc")
-      .orderBy(sql`rowid`, "asc")
+      .where("execution_owner_lifecycle_bindings.context_id", "=", params.contextId)
+      .orderBy("task_runs.created_at", "asc")
+      .orderBy("task_runs.rowid", "asc")
       .limit(params.limit);
     if (params.after) {
       query = query.where((eb) =>
         eb.or([
-          eb("created_at", ">", params.after!.occurredAt),
+          eb("task_runs.created_at", ">", params.after!.occurredAt),
           eb.and([
-            eb("created_at", "=", params.after!.occurredAt),
-            eb(sql<number>`rowid`, ">", params.after!.rowId),
+            eb("task_runs.created_at", "=", params.after!.occurredAt),
+            eb("task_runs.rowid", ">", params.after!.rowId),
           ]),
         ]),
       );
@@ -161,24 +169,29 @@ function readRows(params: {
   }
   let query = kysely
     .selectFrom("flow_runs")
+    .innerJoin(EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE, (join) =>
+      join
+        .onRef("execution_owner_lifecycle_bindings.owner_id", "=", "flow_runs.flow_id")
+        .on("execution_owner_lifecycle_bindings.owner_kind", "=", "flow"),
+    )
     .select([
-      "flow_id as recordId",
-      "execution_id as executionId",
-      "created_at as occurredAt",
-      "status",
-      sql<number>`rowid`.as("rowId"),
+      "flow_runs.flow_id as recordId",
+      "execution_owner_lifecycle_bindings.execution_id as executionId",
+      "flow_runs.created_at as occurredAt",
+      "flow_runs.status",
+      "flow_runs.rowid as rowId",
     ])
-    .where("context_id", "=", params.contextId)
-    .orderBy("created_at", "asc")
-    .orderBy(sql`rowid`, "asc")
+    .where("execution_owner_lifecycle_bindings.context_id", "=", params.contextId)
+    .orderBy("flow_runs.created_at", "asc")
+    .orderBy("flow_runs.rowid", "asc")
     .limit(params.limit);
   if (params.after) {
     query = query.where((eb) =>
       eb.or([
-        eb("created_at", ">", params.after!.occurredAt),
+        eb("flow_runs.created_at", ">", params.after!.occurredAt),
         eb.and([
-          eb("created_at", "=", params.after!.occurredAt),
-          eb(sql<number>`rowid`, ">", params.after!.rowId),
+          eb("flow_runs.created_at", "=", params.after!.occurredAt),
+          eb("flow_runs.rowid", ">", params.after!.rowId),
         ]),
       ]),
     );
@@ -195,7 +208,10 @@ function countRows(params: {
   executionId?: string;
 }): number {
   const owner = ownerName(params.stage);
-  if (!hasBindingColumns(params.db, owner)) {
+  if (
+    !tableExists(params.db, owner) ||
+    !tableExists(params.db, EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE)
+  ) {
     return 0;
   }
   const kysely = getNodeSqliteKysely<OwnerLifecycleDatabase>(params.db);
@@ -203,25 +219,44 @@ function countRows(params: {
     params.stage === "cron"
       ? kysely
           .selectFrom("cron_run_receipts")
+          .innerJoin(EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE, (join) =>
+            join
+              .onRef(
+                "execution_owner_lifecycle_bindings.owner_id",
+                "=",
+                "cron_run_receipts.receipt_id",
+              )
+              .on("execution_owner_lifecycle_bindings.owner_kind", "=", "cron"),
+          )
           .select((eb) => eb.fn.countAll<number>().as("count"))
-          .where("context_id", "=", params.contextId)
+          .where("execution_owner_lifecycle_bindings.context_id", "=", params.contextId)
           .$if(params.executionId !== undefined, (qb) =>
-            qb.where("execution_id", "=", params.executionId!),
+            qb.where("execution_owner_lifecycle_bindings.execution_id", "=", params.executionId!),
           )
       : params.stage === "task"
         ? kysely
             .selectFrom("task_runs")
+            .innerJoin(EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE, (join) =>
+              join
+                .onRef("execution_owner_lifecycle_bindings.owner_id", "=", "task_runs.task_id")
+                .on("execution_owner_lifecycle_bindings.owner_kind", "=", "task"),
+            )
             .select((eb) => eb.fn.countAll<number>().as("count"))
-            .where("context_id", "=", params.contextId)
+            .where("execution_owner_lifecycle_bindings.context_id", "=", params.contextId)
             .$if(params.executionId !== undefined, (qb) =>
-              qb.where("execution_id", "=", params.executionId!),
+              qb.where("execution_owner_lifecycle_bindings.execution_id", "=", params.executionId!),
             )
         : kysely
             .selectFrom("flow_runs")
+            .innerJoin(EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE, (join) =>
+              join
+                .onRef("execution_owner_lifecycle_bindings.owner_id", "=", "flow_runs.flow_id")
+                .on("execution_owner_lifecycle_bindings.owner_kind", "=", "flow"),
+            )
             .select((eb) => eb.fn.countAll<number>().as("count"))
-            .where("context_id", "=", params.contextId)
+            .where("execution_owner_lifecycle_bindings.context_id", "=", params.contextId)
             .$if(params.executionId !== undefined, (qb) =>
-              qb.where("execution_id", "=", params.executionId!),
+              qb.where("execution_owner_lifecycle_bindings.execution_id", "=", params.executionId!),
             );
   return executeSqliteQueryTakeFirstSync(params.db, query)?.count ?? 0;
 }

@@ -127,10 +127,11 @@ ingress, an absent invoker, and
 identity-aware policy or grant evaluation was proven.
 
 Lifecycle rows from `cron_run_receipts`, `task_runs`, and `flow_runs` appear as
-owner-native, attribution-only receipts when they carry the exact inspected
-context and execution ids. They contain status and bounded record references,
-not prompts, task goals, hook payloads, paths, or raw errors. Their decision is
-`not-applicable` because lifecycle attribution does not prove authorization.
+owner-native, attribution-only receipts when their keyed lifecycle metadata
+carries the exact inspected context and execution ids. They contain status and
+bounded record references, not prompts, task goals, hook payloads, paths, or raw
+errors. Their decision is `not-applicable` because lifecycle attribution does
+not prove authorization.
 Treat every decision cursor as opaque: numeric and `a:`, `m:`, and `g:` values
 remain compatible, while cron/task/flow pages may return `c:`, `t:`, or `f:`.
 

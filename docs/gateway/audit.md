@@ -44,13 +44,14 @@ remain in the activity ledger. Run inspection merges both sources directly;
 neither is copied into the generic decision-fact table.
 
 Scheduled runs, background tasks, and task flows are owner-native sources too.
-After exact run admission, their existing `cron_run_receipts`, `task_runs`, and
-`flow_runs` rows retain the admitted context and execution ids. Inspection
-adapts those rows directly and preserves their owner status, including skipped,
-failed, timed-out, cancelled, blocked, and lost outcomes. A `runId` alone never
-joins one of these rows to an execution. Legacy, missing, deleted, corrupt, or
-mismatched bindings remain unknown or absent; they never change task behavior
-and are never copied into `execution_decision_facts`.
+After exact run admission, a lazy lifecycle metadata table binds the admitted
+context and execution ids to the canonical `cron_run_receipts`, `task_runs`, or
+`flow_runs` row. Inspection joins that metadata to the owner row directly and
+preserves its status, including skipped, failed, timed-out, cancelled, blocked,
+and lost outcomes. A `runId` alone never joins one of these rows to an
+execution. Legacy, missing, deleted, corrupt, or mismatched bindings remain
+unknown or absent; they never change task behavior and are never copied into
+`execution_decision_facts`.
 
 ## Run identity inspection
 

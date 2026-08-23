@@ -2,6 +2,8 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -14,6 +16,7 @@ import {
   setFlowWaiting,
 } from "./task-flow-registry.js";
 import {
+  bindTaskFlowExecution,
   loadTaskFlowRegistryStateFromSqlite,
   loadTaskFlowRegistryStateFromSqliteReadOnly,
   saveTaskFlowRegistryStateToSqlite,
@@ -314,6 +317,15 @@ describe("task-flow-registry store runtime", () => {
       }
 
       saveTaskFlowRegistryStateToSqlite({ flows });
+      const admitted: AdmittedRunContext = {
+        operationalRunInstance: { instanceId: "instance-flow-prune", runId: "run-flow-prune" },
+        executionIdentityToken: createExecutionIdentityAdmissionToken("run-flow-prune", {
+          contextId: "context-flow-prune",
+          executionId: "execution-flow-prune",
+        }),
+      };
+      expect(bindTaskFlowExecution({ admitted, flowId: "flow-large-0" })).toBe("bound");
+      expect(bindTaskFlowExecution({ admitted, flowId: "flow-large-1199" })).toBe("bound");
       const retainedFlows = new Map([...flows].slice(100));
       saveTaskFlowRegistryStateToSqlite({ flows: retainedFlows });
 
@@ -321,6 +333,16 @@ describe("task-flow-registry store runtime", () => {
       expect(restored.flows.size).toBe(1_100);
       expect(restored.flows.has("flow-large-0")).toBe(false);
       expect(restored.flows.has("flow-large-1199")).toBe(true);
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare(
+            `SELECT owner_id
+             FROM execution_owner_lifecycle_bindings
+             WHERE owner_kind = 'flow'
+             ORDER BY owner_id`,
+          )
+          .all(),
+      ).toEqual([{ owner_id: "flow-large-1199" }]);
     });
   });
 

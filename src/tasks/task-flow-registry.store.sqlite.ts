@@ -3,10 +3,14 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import {
-  classifyExecutionOwnerBinding,
   executionOwnerBindingFromAdmission,
   type ExecutionOwnerBindingResult,
 } from "../audit/execution-owner-binding.js";
+import {
+  bindExecutionOwnerLifecycleMetadata,
+  deleteExecutionOwnerLifecycleMetadata,
+  pruneOrphanedExecutionOwnerLifecycleMetadata,
+} from "../audit/execution-owner-lifecycle-binding-store.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -14,7 +18,6 @@ import {
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -36,7 +39,7 @@ import { parseTaskNotifyPolicy } from "./task-registry.types.js";
 type FlowRunsTable = OpenClawStateKyselyDatabase["flow_runs"];
 type FlowRegistryStoreDatabase = Pick<OpenClawStateKyselyDatabase, "flow_runs">;
 
-type FlowRegistryRow = Omit<Selectable<FlowRunsTable>, "context_id" | "execution_id"> & {
+type FlowRegistryRow = Selectable<FlowRunsTable> & {
   sync_mode: string | null;
   status: string;
   notify_policy: string;
@@ -245,12 +248,14 @@ export function saveTaskFlowRegistryStateToSqlite(snapshot: TaskFlowRegistryStor
     const flowIds = [...snapshot.flows.keys()];
     if (flowIds.length === 0) {
       executeSqliteQuerySync(db, kysely.deleteFrom("flow_runs"));
+      pruneOrphanedExecutionOwnerLifecycleMetadata(db, "flow");
       return;
     }
     pruneFlowsNotInSnapshot({ db, ids: flowIds });
     for (const flow of snapshot.flows.values()) {
       upsertFlowRow(db, bindFlowRecord(flow));
     }
+    pruneOrphanedExecutionOwnerLifecycleMetadata(db, "flow");
   });
 }
 
@@ -272,36 +277,20 @@ export function bindTaskFlowExecution(params: {
   }
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      ensureColumn(db, "flow_runs", "context_id TEXT");
-      ensureColumn(db, "flow_runs", "execution_id TEXT");
       const kysely = getFlowRegistryKysely(db);
       const current = executeSqliteQueryTakeFirstSync(
         db,
-        kysely
-          .selectFrom("flow_runs")
-          .select(["context_id", "execution_id"])
-          .where("flow_id", "=", params.flowId),
+        kysely.selectFrom("flow_runs").select("flow_id").where("flow_id", "=", params.flowId),
       );
       if (!current) {
         return "missing";
       }
-      const state = classifyExecutionOwnerBinding(
-        { contextId: current.context_id, executionId: current.execution_id },
-        binding,
-      );
-      if (state !== "unbound") {
-        return state;
-      }
-      executeSqliteQuerySync(
+      return bindExecutionOwnerLifecycleMetadata({
         db,
-        kysely
-          .updateTable("flow_runs")
-          .set({ context_id: binding.contextId, execution_id: binding.executionId })
-          .where("flow_id", "=", params.flowId)
-          .where("context_id", "is", null)
-          .where("execution_id", "is", null),
-      );
-      return "bound";
+        ownerKind: "flow",
+        ownerId: current.flow_id,
+        binding,
+      });
     },
     params.options,
     { operationLabel: "task.flow.execution-binding" },
@@ -314,6 +303,7 @@ export function deleteTaskFlowRegistryRecordFromSqlite(flowId: string) {
       db,
       getFlowRegistryKysely(db).deleteFrom("flow_runs").where("flow_id", "=", flowId),
     );
+    deleteExecutionOwnerLifecycleMetadata({ db, ownerKind: "flow", ownerIds: [flowId] });
   });
 }
 

@@ -22,18 +22,15 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function oldSchemaSql(): string {
-  return OPENCLAW_STATE_SCHEMA_SQL.replace(
-    "  context_id TEXT,\n  execution_id TEXT,\n  error_text TEXT,",
-    "  error_text TEXT,",
-  )
-    .replace(
-      "  terminal_outcome TEXT,\n  context_id TEXT,\n  execution_id TEXT,\n  detail_json TEXT",
-      "  terminal_outcome TEXT,\n  detail_json TEXT",
-    )
-    .replace(
-      "  ended_at INTEGER,\n  context_id TEXT,\n  execution_id TEXT\n) STRICT;",
-      "  ended_at INTEGER\n) STRICT;",
-    );
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS execution_owner_lifecycle_bindings (",
+  );
+  const endMarker = ") STRICT;";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start);
+  if (start < 0 || end < start) {
+    throw new Error("owner lifecycle binding schema marker is missing");
+  }
+  return `${OPENCLAW_STATE_SCHEMA_SQL.slice(0, start)}${OPENCLAW_STATE_SCHEMA_SQL.slice(end + endMarker.length)}`;
 }
 
 function createOldOwnerDatabase() {
@@ -111,6 +108,7 @@ describe("owner-native execution lifecycle receipts", () => {
   it("lazily binds exact owner rows while disabled collection allocates nothing", () => {
     const options = createOldOwnerDatabase();
     const current = openOpenClawStateDatabase(options).db;
+    expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(false);
     for (const table of ["cron_run_receipts", "task_runs", "flow_runs"]) {
       expect(tableHasColumn(current, table, "context_id")).toBe(false);
       expect(tableHasColumn(current, table, "execution_id")).toBe(false);
@@ -128,6 +126,7 @@ describe("owner-native execution lifecycle receipts", () => {
     expect(bindTaskFlowExecution({ admitted: disabled, flowId: "flow-1", options })).toBe(
       "disabled",
     );
+    expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(false);
     for (const table of ["cron_run_receipts", "task_runs", "flow_runs"]) {
       expect(tableHasColumn(current, table, "context_id")).toBe(false);
       expect(tableHasColumn(current, table, "execution_id")).toBe(false);
@@ -140,6 +139,11 @@ describe("owner-native execution lifecycle receipts", () => {
     expect(bindTaskFlowExecution({ admitted: admitted(), flowId: "flow-1", options })).toBe(
       "bound",
     );
+    expect(tableExists(current, "execution_owner_lifecycle_bindings")).toBe(true);
+    for (const table of ["cron_run_receipts", "task_runs", "flow_runs"]) {
+      expect(tableHasColumn(current, table, "context_id")).toBe(false);
+      expect(tableHasColumn(current, table, "execution_id")).toBe(false);
+    }
     expect(bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options })).toBe(
       "already-bound",
     );
@@ -167,9 +171,43 @@ describe("owner-native execution lifecycle receipts", () => {
     });
     expect(
       reopened
-        .prepare("SELECT context_id, execution_id, status FROM task_runs WHERE task_id = ?")
+        .prepare(
+          `SELECT binding.context_id, binding.execution_id, task.status
+           FROM task_runs AS task
+           JOIN execution_owner_lifecycle_bindings AS binding
+             ON binding.owner_kind = 'task' AND binding.owner_id = task.task_id
+           WHERE task.task_id = ?`,
+        )
         .get("task-1"),
     ).toEqual({ context_id: "context-1", execution_id: "execution-1", status: "failed" });
+    expect(
+      reopened
+        .prepare(
+          `SELECT owner_kind, owner_id, context_id, execution_id
+           FROM execution_owner_lifecycle_bindings
+           ORDER BY owner_kind`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        owner_kind: "cron",
+        owner_id: "cron-1",
+        context_id: "context-1",
+        execution_id: "execution-1",
+      },
+      {
+        owner_kind: "flow",
+        owner_id: "flow-1",
+        context_id: "context-1",
+        execution_id: "execution-1",
+      },
+      {
+        owner_kind: "task",
+        owner_id: "task-1",
+        context_id: "context-1",
+        execution_id: "execution-1",
+      },
+    ]);
     expect(tableExists(reopened, "execution_decision_facts")).toBe(true);
     expect(
       reopened.prepare("SELECT COUNT(*) AS count FROM execution_decision_facts").get(),
@@ -185,22 +223,14 @@ describe("owner-native execution lifecycle receipts", () => {
     db.prepare(
       `INSERT INTO cron_run_receipts (
          receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms, context_id, execution_id
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      "cron-2",
-      "default",
-      "job-2",
-      "revision-1",
-      "main",
-      "run-1",
-      "skipped",
-      1,
-      60,
-      70,
-      "context-1",
-      "execution-other",
-    );
+         status, owner_pid, started_at_ms, finished_at_ms
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("cron-2", "default", "job-2", "revision-1", "main", "run-1", "skipped", 1, 60, 70);
+    db.prepare(
+      `INSERT INTO execution_owner_lifecycle_bindings (
+         owner_kind, owner_id, context_id, execution_id
+       ) VALUES (?, ?, ?, ?)`,
+    ).run("cron", "cron-2", "context-1", "execution-other");
     const context: ExecutionIdentityContextV1 = {
       schemaVersion: 1,
       contextId: "context-1",

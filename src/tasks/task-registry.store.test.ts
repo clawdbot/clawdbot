@@ -3,6 +3,8 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   executeSqliteQuerySync,
@@ -42,6 +44,7 @@ import {
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
 import {
+  bindTaskRunExecution,
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryStateFromSqliteReadOnly,
   loadTaskRegistryStateFromSqliteReadOnlyResult,
@@ -1249,6 +1252,15 @@ describe("task-registry store runtime", () => {
         }
 
         saveTaskRegistryStateToSqlite({ tasks, deliveryStates });
+        const admitted: AdmittedRunContext = {
+          operationalRunInstance: { instanceId: "instance-task-prune", runId: "run-task-prune" },
+          executionIdentityToken: createExecutionIdentityAdmissionToken("run-task-prune", {
+            contextId: "context-task-prune",
+            executionId: "execution-task-prune",
+          }),
+        };
+        expect(bindTaskRunExecution({ admitted, taskId: "task-large-0" })).toBe("bound");
+        expect(bindTaskRunExecution({ admitted, taskId: "task-large-1199" })).toBe("bound");
         const retainedTasks = new Map([...tasks].slice(100));
         const retainedDeliveryStates = new Map([...deliveryStates].slice(100));
         saveTaskRegistryStateToSqlite({
@@ -1261,6 +1273,16 @@ describe("task-registry store runtime", () => {
         expect(restored.deliveryStates.size).toBe(1_100);
         expect(restored.tasks.has("task-large-0")).toBe(false);
         expect(restored.tasks.has("task-large-1199")).toBe(true);
+        expect(
+          openOpenClawStateDatabase()
+            .db.prepare(
+              `SELECT owner_id
+               FROM execution_owner_lifecycle_bindings
+               WHERE owner_kind = 'task'
+               ORDER BY owner_id`,
+            )
+            .all(),
+        ).toEqual([{ owner_id: "task-large-1199" }]);
       },
     );
   });
