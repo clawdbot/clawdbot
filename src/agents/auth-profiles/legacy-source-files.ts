@@ -15,9 +15,9 @@ export type LegacyAuthProfileSource = {
   path: string;
 };
 
-export type LegacyAuthProfileSourceEntryState = "missing" | "present" | "dangling-link";
+type LegacyAuthProfileSourceEntryState = "missing" | "present" | "dangling-link";
 
-export class LegacyAuthProfileSourceInspectionError extends Error {
+class LegacyAuthProfileSourceInspectionError extends Error {
   readonly code = "AUTH_PROFILE_MIGRATION_REQUIRED" as const;
   readonly action = "openclaw doctor --fix" as const;
   readonly sourcePath: string;

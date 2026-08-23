@@ -364,13 +364,17 @@ describe("auth.test boot call", () => {
     let dispatchedContext: Record<string, unknown> | undefined;
     useSlackChannelInboundDispatchOnce(async (params) => {
       dispatchedContext = params.ctxPayload;
+      const deliver = params.delivery?.deliver;
+      if (!deliver) {
+        throw new Error("expected Slack reply delivery callback");
+      }
       const reply = await params.replyResolver?.(
         params.ctxPayload,
         params.replyOptions,
         params.cfg,
       );
       for (const payload of Array.isArray(reply) ? reply : reply ? [reply] : []) {
-        await params.delivery.deliver(payload, { kind: "final" });
+        await deliver(payload, { kind: "final" });
       }
       return {
         admission: { kind: "dispatch" },
