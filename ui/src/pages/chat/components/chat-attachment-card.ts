@@ -24,7 +24,6 @@ export type AttachmentCardHeaderOptions = {
   onDownload?: () => void;
   showExpandAction?: boolean;
   onExpand?: () => void;
-  showExtensionLabel?: boolean;
   visualMode?: AttachmentFileVisualMode;
   voiceNote?: boolean;
 };
@@ -78,7 +77,6 @@ export function renderAttachmentCardIcon(options: {
   kind: AttachmentCardKind;
   label: string;
   mimeType?: string;
-  showExtensionLabel?: boolean;
   visualMode?: AttachmentFileVisualMode;
   unavailable?: boolean;
 }) {
@@ -86,7 +84,6 @@ export function renderAttachmentCardIcon(options: {
     filename: options.label,
     mimeType: options.mimeType,
     mode: options.visualMode ?? "large-placeholder",
-    showExtensionLabel: options.showExtensionLabel,
     unavailable: options.unavailable,
   });
 }
@@ -134,7 +131,6 @@ export function renderAttachmentCardHeader(
           kind: options.kind,
           label: options.label,
           mimeType: options.mimeType,
-          showExtensionLabel: options.showExtensionLabel,
           visualMode: options.visualMode,
         })}
         <span
@@ -178,15 +174,11 @@ export function renderAttachmentCardHeader(
         ${hasOpenAction
           ? html`<button
               type="button"
-              class="chat-assistant-attachment-card__action ${compactPreview
-                ? "chat-assistant-attachment-card__expand--icon"
-                : "chat-assistant-attachment-card__action--labeled"} chat-assistant-attachment-card__expand"
+              class="chat-assistant-attachment-card__action chat-assistant-attachment-card__expand"
               aria-label=${t("chat.attachments.expand", { filename: options.label })}
               title=${t("chat.attachments.expand", { filename: options.label })}
               @click=${options.onExpand}
-              >${compactPreview
-                ? icons.arrowUpRight
-                : html`<span>${t("chat.attachments.open")}</span>`}</button
+              >${icons.arrowUpRight}</button
             >`
           : null}
       </span>

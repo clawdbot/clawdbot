@@ -3183,8 +3183,6 @@ function createMockGatewayPlugin(
       .control-ui-mock-theme-toggle { position: fixed; right: 16px; bottom: 16px; z-index: 1000; display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--card); box-shadow: var(--shadow-md); }
       .control-ui-mock-theme-toggle button { min-height: 28px; padding: 0 10px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
       .control-ui-mock-theme-toggle button[aria-pressed="true"] { color: var(--text); background: var(--bg-hover); }
-      .chat-assistant-attachments:has(.chat-assistant-attachment-card__title[title="label-on.zip"]) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      @media (max-width: 560px) { .chat-assistant-attachments:has(.chat-assistant-attachment-card__title[title="label-on.zip"]) { grid-template-columns: 1fr; } }
     </style>
     <script data-openclaw-control-ui-mock-theme-toggle>
       addEventListener("DOMContentLoaded", () => {
@@ -3212,12 +3210,6 @@ function createMockGatewayPlugin(
         }
         document.body.append(control);
         apply(document.documentElement.dataset.themeMode === "light" ? "light" : "dark");
-        const syncExtensionLabelVariant = () => {
-          const title = document.querySelector('.chat-assistant-attachment-card__title[title="label-on.zip"]');
-          title?.closest('.chat-assistant-attachment-card')?.querySelector('.chat-attachment-file-icon')?.setAttribute('data-extension-label', '');
-        };
-        new MutationObserver(syncExtensionLabelVariant).observe(document.body, { childList: true, subtree: true });
-        syncExtensionLabelVariant();
       });
     </script>
 `

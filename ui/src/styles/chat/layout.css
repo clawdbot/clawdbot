@@ -1930,27 +1930,6 @@ openclaw-chat-video-player {
   mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
 }
 
-.chat-attachment-file-icon__label {
-  position: absolute;
-  right: 6px;
-  bottom: 5px;
-  left: 6px;
-  display: none;
-  overflow: hidden;
-  color: currentColor;
-  font-size: 6px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  line-height: 1;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-attachment-file-icon[data-extension-label] .chat-attachment-file-icon__label {
-  display: block;
-}
-
 .chat-attachment-file-icon--unavailable
   :is(.chat-attachment-file-icon__large, .chat-attachment-file-icon__compact) {
   opacity: 0.42;

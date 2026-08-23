@@ -261,7 +261,6 @@ export function renderAttachmentFileIcon(options: {
   filename: string;
   mimeType?: string;
   mode: AttachmentFileVisualMode;
-  showExtensionLabel?: boolean;
   unavailable?: boolean;
 }) {
   const resolved = resolveAttachmentFileIcon(options.filename, options.mimeType);
@@ -278,7 +277,6 @@ export function renderAttachmentFileIcon(options: {
     data-family=${resolved.family}
     data-mode=${options.mode}
     data-accent=${resolved.accent}
-    ?data-extension-label=${options.showExtensionLabel}
     aria-hidden="true"
     style=${styleMap({
       "--chat-file-icon-shell-light": `url("${fileIconAssetPath("large/shell-light")}")`,
@@ -291,7 +289,6 @@ export function renderAttachmentFileIcon(options: {
   >
     <span class="chat-attachment-file-icon__large">
       <span class="chat-attachment-file-icon__overlay"></span>
-      <span class="chat-attachment-file-icon__label">${resolved.extensionLabel}</span>
     </span>
     <span class="chat-attachment-file-icon__compact"></span>
   </span>`;
