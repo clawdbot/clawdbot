@@ -4,6 +4,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import type { ConversationRouteContext } from "./conversation-route-context.js";
 import {
   cloneSessionEntries,
   mergeConcurrentReplySessionMetadata,
@@ -156,6 +157,8 @@ export async function commitReplySessionInitialization(params: {
     context: ReplySessionInitializationCommitContext,
   ) => Promise<SessionEntry> | SessionEntry;
   resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
+  /** Authoritative contextual route facts observed by the admitted inbound turn. */
+  routeContext?: ConversationRouteContext | null;
   previousEntry?: SessionEntry;
   retiredEntry?: SessionEntryRetirement;
   sessionEntry: SessionEntry;
@@ -207,6 +210,7 @@ export async function commitReplySessionInitialization(params: {
   const upserts: SessionEntryLifecycleUpsert[] = [
     {
       sessionKey: resolved.normalizedKey,
+      ...(params.routeContext !== undefined ? { routeContext: params.routeContext } : {}),
       ...(params.resetBoundaryReason ? { resetBoundaryReason: params.resetBoundaryReason } : {}),
       buildEntry: async ({ store: currentStore }) => {
         const commitResolved = resolveSessionEntryFromStore({

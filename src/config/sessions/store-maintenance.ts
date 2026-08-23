@@ -298,6 +298,9 @@ export function pruneStaleEntries(
   } = {},
 ): number {
   const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfigFromInput().pruneAfterMs;
+  if (maxAgeMs <= 0) {
+    return 0;
+  }
   const cutoffMs = Date.now() - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {

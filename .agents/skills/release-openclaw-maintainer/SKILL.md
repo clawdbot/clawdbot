@@ -1028,7 +1028,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
    `false` for beta. Let it run in parallel with Code SHA validation.
 8. Run the deterministic source preflight, then Full Release Validation against
    the exact Code SHA with
-   `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`.
+   `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH --workflow-sha <tooling-sha>`.
+   Reuse the recorded full Tooling SHA for every later release validation; do
+   not refresh it from moving `main`.
    For beta-publish, keep `release_profile=beta` and
    `run_release_soak=false`. Record the Validation SHA + Tooling SHA tuple
    (Validation SHA is the Code SHA in this phase) and use one transition

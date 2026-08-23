@@ -170,6 +170,8 @@ describe("ClickClack account resolution", () => {
       requireMention: false,
       systemPrompt: undefined,
       token: "test-token-placeholder",
+      tokenSource: "config",
+      tokenStatus: "available",
       toolsAllow: undefined,
       workspace: "wsp_1",
     });
@@ -219,6 +221,90 @@ describe("ClickClack account resolution", () => {
       expect(listClickClackAccountIds(cfg)).toEqual(["default", "work"]);
       expect(resolveClickClackAccount({ cfg }).token).toBe("file-token");
       expect(resolveClickClackAccount({ cfg, accountId: "work" }).token).toBe("work-token");
+    });
+  });
+
+  it("isolates unavailable root and account token files without falling back", async () => {
+    await withTempDir("clickclack-unavailable-token-", async (tempDir) => {
+      const missingRootFile = path.join(tempDir, "missing-root-token");
+      const missingAccountFile = path.join(tempDir, "missing-account-token");
+      const missingDefaultFile = path.join(tempDir, "missing-default-token");
+      const cfg = {
+        channels: {
+          clickclack: {
+            baseUrl: "https://app.clickclack.chat",
+            workspace: "wsp_1",
+            token: "lower-priority-config-token",
+            tokenFile: missingRootFile,
+            accounts: {
+              default: { tokenFile: missingDefaultFile },
+              inherited: {},
+              work: { tokenFile: missingAccountFile },
+            },
+          },
+        },
+      } satisfies CoreConfig;
+      const env = { CLICKCLACK_BOT_TOKEN: "lower-priority-env-token" };
+
+      for (const [accountId, filePath, configPath] of [
+        ["default", missingDefaultFile, "channels.clickclack.accounts.default.tokenFile"],
+        ["inherited", missingRootFile, "channels.clickclack.tokenFile"],
+        ["work", missingAccountFile, "channels.clickclack.accounts.work.tokenFile"],
+      ] as const) {
+        const account = resolveClickClackAccount({ cfg, accountId, env });
+        expect(account).toMatchObject({
+          configured: true,
+          token: "",
+          tokenSource: "tokenFile",
+          tokenStatus: "configured_unavailable",
+          credentialDiagnostics: [
+            { code: "CREDENTIAL_FILE_UNAVAILABLE", path: configPath, reason: "not-found" },
+          ],
+        });
+        expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(filePath);
+      }
+    });
+  });
+
+  it("degrades empty and unsafe token files without exposing their filesystem paths", async () => {
+    await withTempDir("clickclack-invalid-token-", async (tempDir) => {
+      const emptyFile = path.join(tempDir, "empty-token");
+      fs.writeFileSync(emptyFile, "  \n", "utf8");
+      const invalidFiles: Array<[string, "invalid-path" | "symlink"]> = [
+        [emptyFile, "invalid-path"],
+      ];
+      if (process.platform !== "win32") {
+        const tokenFile = path.join(tempDir, "valid-token");
+        const symlink = path.join(tempDir, "token-link");
+        fs.writeFileSync(tokenFile, "file-token", "utf8");
+        fs.symlinkSync(tokenFile, symlink);
+        invalidFiles.push([symlink, "symlink"]);
+      }
+
+      for (const [selectedFile, reason] of invalidFiles) {
+        const account = resolveClickClackAccount({
+          cfg: {
+            channels: {
+              clickclack: {
+                baseUrl: "https://app.clickclack.chat",
+                workspace: "wsp_1",
+                token: "lower-priority-token",
+                tokenFile: selectedFile,
+              },
+            },
+          },
+        });
+
+        expect(account).toMatchObject({
+          token: "",
+          tokenSource: "tokenFile",
+          tokenStatus: "configured_unavailable",
+          credentialDiagnostics: [
+            { code: "CREDENTIAL_FILE_UNAVAILABLE", path: "channels.clickclack.tokenFile", reason },
+          ],
+        });
+        expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(selectedFile);
+      }
     });
   });
 
@@ -283,6 +369,8 @@ describe("ClickClack account resolution", () => {
       requireMention: false,
       systemPrompt: undefined,
       token: "token-oversized",
+      tokenSource: "config",
+      tokenStatus: "available",
       toolsAllow: ["web_search"],
       workspace: "wsp_1",
     });

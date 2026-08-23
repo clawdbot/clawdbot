@@ -136,7 +136,9 @@ describe("scripts/mantis/build-telegram-evidence", () => {
 
     expect(readFileSync(result.transcriptPath, "utf8")).toContain("Telegram status command reply");
     const manifest = loadEvidenceManifest(result.manifestPath);
+    expect(manifest.schemaVersion).toBe(2);
     expect(manifest.comparison.pass).toBe(true);
+    expect(manifest.comparison.candidate.expectationMet).toBe(true);
     expect(manifest.comparison.candidate.sha).toBe("abc123");
     expect(manifest.artifacts.map((artifact) => artifact.targetPath)).toEqual([
       "summary.json",
@@ -237,6 +239,7 @@ describe("scripts/mantis/build-telegram-evidence", () => {
     });
 
     expect(manifest.comparison.pass).toBe(false);
+    expect(manifest.comparison.candidate.expectationMet).toBe(false);
     expect(manifest.comparison.candidate.status).toBe("fail");
   });
 });

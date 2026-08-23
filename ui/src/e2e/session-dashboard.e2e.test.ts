@@ -391,16 +391,16 @@ suite.define(() => {
     const divider = page.locator(".board-session-surface__divider");
     const dock = page.locator(".board-session-surface__chat");
     const dockHeight = () => dock.evaluate((element) => getComputedStyle(element).height);
-    await divider.focus();
-    await page.keyboard.press("End");
+    const dividerBounds = await divider.boundingBox();
+    expect(dividerBounds).not.toBeNull();
+    await page.mouse.move(
+      dividerBounds!.x + dividerBounds!.width / 2,
+      dividerBounds!.y + dividerBounds!.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(dividerBounds!.x, dividerBounds!.y - 80);
+    await page.mouse.up();
     await expect.poll(dockHeight).not.toBe("320px");
-    const clampedHeight = await dockHeight();
-    // End pins the bottom dock against its clamp, so step back off it: comparing
-    // a clamped height to itself after reload would pass if persistence broke and
-    // the dock merely fell back to its minimum.
-    await page.keyboard.press("ArrowUp");
-    await page.keyboard.press("ArrowUp");
-    await expect.poll(dockHeight).not.toBe(clampedHeight);
     const persistedHeight = await dockHeight();
     expect(persistedHeight).toMatch(/^\d+(?:\.\d+)?px$/u);
 

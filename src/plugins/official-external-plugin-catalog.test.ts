@@ -2602,6 +2602,24 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("keeps the shared OpenRouter onboarding flag with its provider", () => {
+    const arceeChoices = expectCatalogEntry("arcee").openclaw?.providers?.find(
+      (provider) => provider.id === "arcee",
+    )?.authChoices;
+    const directChoice = arceeChoices?.find((choice) => choice.choiceId === "arceeai-api-key");
+    const openRouterChoice = arceeChoices?.find(
+      (choice) => choice.choiceId === "arceeai-openrouter",
+    );
+
+    expect(directChoice).toMatchObject({
+      optionKey: "arceeaiApiKey",
+      cliFlag: "--arceeai-api-key",
+    });
+    expect(openRouterChoice).toMatchObject({ optionKey: "openrouterApiKey" });
+    expect(openRouterChoice).not.toHaveProperty("cliFlag");
+    expect(openRouterChoice).not.toHaveProperty("cliOption");
+  });
+
   it("keeps Groq available through the cold-install auth catalog", () => {
     const groq = expectCatalogEntry("groq");
     const authChoice = groq.openclaw?.providers?.find((provider) => provider.id === "groq")

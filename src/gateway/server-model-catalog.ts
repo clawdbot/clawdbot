@@ -9,7 +9,7 @@ import {
   type PreparedModelRuntimeAuthScope,
 } from "../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
-import { isPreparedModelCatalogFull } from "../agents/prepared-model-runtime.facts.js";
+import { isPreparedModelCatalogFull } from "../agents/prepared-model-runtime.full-catalog.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "./server-model-catalog-auth.js";
@@ -167,13 +167,14 @@ export async function loadGatewayModelCatalog(
   return (await loadGatewayModelCatalogSnapshot(params)).entries;
 }
 
-/** Reads the already-published startup catalog without starting provider discovery. */
+/** Reads the newest completed published catalog without starting provider discovery. */
 export async function readPreparedGatewayModelCatalog(
   params?: LoadGatewayModelCatalogParams,
 ): Promise<GatewayModelChoice[] | undefined> {
-  const { getPreparedModelCatalogSnapshot } = await import("../agents/prepared-model-catalog.js");
+  const { getAvailablePreparedModelCatalogSnapshot } =
+    await import("../agents/prepared-model-catalog.js");
   const config = (params?.getConfig ?? getRuntimeConfig)();
-  return getPreparedModelCatalogSnapshot({
+  return getAvailablePreparedModelCatalogSnapshot({
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentDir ? { agentDir: params.agentDir } : {}),
     config,

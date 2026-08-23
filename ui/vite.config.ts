@@ -4,7 +4,8 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
+import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
+import { gzip } from "pako";
 import type { Plugin, UserConfig } from "vite";
 import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
@@ -71,7 +72,8 @@ export function createControlUiPrecompressedAssetVariants(
     },
     {
       fileName: `${fileName}.gz`,
-      source: gzipSync(body, { level: 9 }),
+      // Host zlib is byte-unstable across supported runtimes; pako's classic hash is canonical.
+      source: Buffer.from(gzip(body, { level: 9, legacyHash: true })),
     },
   ];
 }
@@ -310,6 +312,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "number-coercion"),
     sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
+    sourcePackageAlias("normalization-core", "result"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),

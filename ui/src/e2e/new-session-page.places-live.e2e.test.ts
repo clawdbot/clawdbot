@@ -69,6 +69,51 @@ suite.define(() => {
     }
   });
 
+  it("disables cloud profiles whose execution mode does not match the selected runtime", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      agentModel: "openai/gpt-5.6-luna",
+      models: [
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          agentRuntime: {
+            id: "codex",
+            cloudPlacementSupported: true,
+            cloudPlacementExecutionMode: "remote-exec",
+            source: "model",
+          },
+        },
+      ],
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "environments.list": {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox", executionMode: "worker-turn" }],
+        },
+        "worktrees.branches": { branches: [], repositoryStatus: "git" },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      await gateway.waitForRequest("chat.metadata");
+      await page.locator("#new-session-where-trigger").click();
+
+      const profile = page.locator('[data-value="cloud:aws"]');
+      await profile.waitFor();
+      await expect.poll(() => profile.isDisabled()).toBe(true);
+      expect(await profile.getAttribute("title")).toBe(
+        "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
   it("refreshes authoritative device capacity from Gateway topology events", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();

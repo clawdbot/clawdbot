@@ -14,6 +14,10 @@ import {
   responsesPromptObserver,
   type ResponsesPromptObservation,
 } from "./openai-responses-contracts.js";
+import {
+  withProviderAcceptanceObserver,
+  type ProviderAcceptance,
+} from "./transport-stream-shared.js";
 
 type StreamMessage =
   | { type: "open" }
@@ -268,6 +272,7 @@ async function run(
     headers?: Record<string, string>;
     observations?: ResponsesPromptObservation[];
     onCompactionRejected?: () => void;
+    acceptanceObserver?: (acceptance: ProviderAcceptance) => void;
   } = {},
 ): Promise<AssistantMessage> {
   const options = {
@@ -279,6 +284,9 @@ async function run(
     headers: overrides.headers,
     onCompactionRejected: overrides.onCompactionRejected,
   };
+  if (overrides.acceptanceObserver) {
+    withProviderAcceptanceObserver(options, overrides.acceptanceObserver);
+  }
   if (overrides.observations) {
     responsesPromptObserver.set(options, (observation) =>
       overrides.observations?.push(observation),
@@ -339,6 +347,39 @@ describe("native OpenAI Responses WebSocket client integration", () => {
   afterEach(() => {
     cleanupSessionResources();
     configureAiTransportHost(initialHost);
+  });
+
+  it("reports WebSocket acceptance without fabricated HTTP metadata", async () => {
+    transportState.responseBatches.push([message(completedEvent("resp_accepted", "ok"))]);
+    const acceptanceObserver = vi.fn();
+
+    const result = await run(
+      { messages: [userMessage("hello", 1)], tools: [] },
+      { acceptanceObserver },
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
+  });
+
+  it("closes the WebSocket when acceptance observation fails", async () => {
+    transportState.responseBatches.push([message(completedEvent("resp_rejected", "ignored"))]);
+    const hookError = new Error("acceptance observer failed");
+
+    const result = await run(
+      { messages: [userMessage("hello", 1)], tools: [] },
+      {
+        acceptanceObserver: () => {
+          throw hookError;
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "acceptance observer failed",
+    });
+    expect(transportState.websocketCloseCount).toBe(1);
   });
 
   it("continues past provider-only output metadata with one socket and only new input", async () => {

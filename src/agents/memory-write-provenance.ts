@@ -2,7 +2,11 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { isMissingPathError } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
-import type { MemoryFlushPlan } from "../plugins/memory-state.js";
+import {
+  clearMemoryArtifactProvenance,
+  normalizeMemoryArtifactRelativePath,
+  recordMemoryArtifactWriteProvenance,
+} from "../memory/memory-artifact-provenance.js";
 
 export type MemoryWriteProvenanceObserver = {
   classifies: (absolutePath: string) => boolean;
@@ -12,7 +16,7 @@ export type MemoryWriteProvenanceObserver = {
     contentAfter: string;
     commit: () => Promise<void>;
   }) => Promise<void>;
-  clearAfterDelete: (absolutePath: string) => Promise<void>;
+  clearAfterDelete: (absolutePath: string, contentBefore: string) => Promise<void>;
 };
 
 type ProvenanceWriteOperations = {
@@ -55,8 +59,19 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
     ...(remove
       ? {
           remove: async (absolutePath: string) => {
+            const contentBefore = observer.classifies(absolutePath)
+              ? await operations
+                  .readFile(absolutePath)
+                  .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
+                  .catch((error: unknown) => {
+                    if (!isMissingPathError(error)) {
+                      throw error;
+                    }
+                    return "";
+                  })
+              : "";
             await remove(absolutePath);
-            await observer.clearAfterDelete(absolutePath);
+            await observer.clearAfterDelete(absolutePath, contentBefore);
           },
         }
       : {}),
@@ -80,23 +95,15 @@ function resolveMemoryRelativePath(root: string, absolutePath: string): string |
   ) {
     return undefined;
   }
-  const normalized = relativePath.replaceAll(path.sep, "/");
-  if (["MEMORY.md", "memory.md", "USER.md"].includes(normalized)) {
-    return normalized;
-  }
-  return normalized.startsWith("memory/") && normalized.endsWith(".md") ? normalized : undefined;
+  return normalizeMemoryArtifactRelativePath(relativePath.replaceAll(path.sep, "/"));
 }
 
 export function createMemoryWriteProvenanceObserver(params: {
   mutationRoot: string;
   workspaceDir: string;
-  plan: Pick<MemoryFlushPlan, "recordWriteProvenance" | "clearWriteProvenance">;
   resolveOriginClass: () => "agent" | "untrusted";
   now?: () => number;
-}): MemoryWriteProvenanceObserver | undefined {
-  if (!params.plan.recordWriteProvenance) {
-    return undefined;
-  }
+}): MemoryWriteProvenanceObserver {
   const now = params.now ?? Date.now;
   return {
     classifies: (absolutePath) =>
@@ -107,7 +114,7 @@ export function createMemoryWriteProvenanceObserver(params: {
         await commit();
         return;
       }
-      const rollback = await params.plan.recordWriteProvenance?.({
+      const rollback = await recordMemoryArtifactWriteProvenance({
         workspaceDir: params.workspaceDir,
         relativePath,
         contentBefore,
@@ -129,15 +136,16 @@ export function createMemoryWriteProvenanceObserver(params: {
         throw error;
       }
     },
-    clearAfterDelete: async (absolutePath) => {
+    clearAfterDelete: async (absolutePath, contentBefore) => {
       const relativePath = resolveMemoryRelativePath(params.mutationRoot, absolutePath);
       if (!relativePath) {
         return;
       }
       try {
-        await params.plan.clearWriteProvenance?.({
+        await clearMemoryArtifactProvenance({
           workspaceDir: params.workspaceDir,
           relativePath,
+          contentBefore,
         });
       } catch (error) {
         // The file is already gone. Retaining stale quarantine is safer than

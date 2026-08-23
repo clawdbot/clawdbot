@@ -187,7 +187,7 @@ function buildDiscordThreadStarterPayload(params: {
 
 function resolveDiscordThreadStarterText(starter: DiscordThreadStarterRestMessage): string {
   const content = normalizeOptionalString(starter.content) ?? "";
-  const embedText = resolveDiscordEmbedText(starter.embeds?.[0]);
+  const embedText = resolveDiscordEmbedText(starter.embeds);
   const forwardedText = resolveDiscordForwardedMessagesTextFromSnapshots(starter.message_snapshots);
   const text = content || embedText || forwardedText;
   const mediaText = formatDiscordMediaText({

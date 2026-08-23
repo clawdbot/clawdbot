@@ -19,6 +19,7 @@ import {
 import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { normalizeCodexResponseTokenUsage } from "./event-projector-usage.js";
 import { readModelListResult } from "./models.js";
 import { readCodexNotificationTurnId } from "./notification-correlation.js";
@@ -460,7 +461,9 @@ function createCodexBoundedApprovalHandler(taskLabel: string) {
       };
     }
     if (request.method === "mcpServer/elicitation/request") {
-      return { action: "decline" };
+      return createCodexElicitationResponse("decline", null, {
+        message: `OpenClaw Codex ${taskLabel} does not support interactive input.`,
+      });
     }
     return undefined;
   };

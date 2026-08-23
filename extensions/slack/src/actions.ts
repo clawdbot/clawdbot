@@ -7,6 +7,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { resolveSlackAccount } from "./accounts.js";
+import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
@@ -353,6 +354,10 @@ export async function sendSlackMessage(
     textIsSlackPlainText?: boolean;
   },
 ) {
+  const onDeliveryResult = Object.getOwnPropertyDescriptor(
+    opts,
+    SLACK_PRIVATE_ACTION_DELIVERY_RESULT,
+  )?.value;
   return await sendMessageSlack(to, content, {
     accountId: opts.accountId,
     cfg: opts.cfg,
@@ -373,6 +378,7 @@ export async function sendSlackMessage(
       : {}),
     ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
     ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
+    ...(typeof onDeliveryResult === "function" ? { onDeliveryResult } : {}),
     blocks: opts.blocks,
   });
 }

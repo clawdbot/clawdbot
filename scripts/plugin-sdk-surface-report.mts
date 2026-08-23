@@ -148,8 +148,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
   // deprecated while external harnesses migrate to required-capability V2 contracts.
+  // +1: bounded structured-input compiler/executor for native harness protocol adapters.
   "agent-harness": 2,
-  "agent-harness-runtime": 9,
+  "agent-harness-runtime": 10,
   "command-auth": 78,
   discord: 47,
   // +4: deprecated media projection type, builder, and turn aliases.
@@ -169,7 +170,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "reply-runtime": 1,
   "security-runtime": 1,
   "session-store-runtime": 4,
-  "setup-runtime": 0,
+  // +2: shipped Slack and Discord setup helpers retained through their package migration window.
+  "setup-runtime": 2,
   "reply-history": 6,
   "provider-auth": 19,
   "telegram-account": 3,
@@ -195,7 +197,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical Computer Use wire contract and node-host provider seam.
       // -1: retire the deprecated messaging-targets subpath.
       // +2: bounded provider streams and read-only SecretRef resolution.
-      146,
+      // +1: read-only authoritative conversation-binding inspection for route-owner plugins.
+      147,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -303,7 +306,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared harness visible-source-reply guidance.
       // +1: typed guarded-fetch redirect error for direct-only plugin delivery.
       // -1: remove the test-only channel activity reset export.
-      4335,
+      // +1: named bounded structured-input surface for native harness protocol adapters.
+      // +1: OpenAI-compatible video execution in the existing media-understanding owner.
+      // -2: retire the uncalled secret-plan target resolver and its result type.
+      // +2: conversation-binding inspection result and runtime inspector.
+      // +2: restore shipped channel setup helpers until stable packages migrate.
+      // +1: canonical untrusted audio-transcript formatter for channel plugins.
+      4340,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -390,7 +399,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     runtimes render the same guidance instead of diverging prompt copies.
       // +1: shared harness visible-source-reply guidance.
       // -1: remove the test-only channel activity reset export.
-      2577,
+      // +1: OpenAI-compatible video execution in the existing media-understanding owner.
+      // -1: retire the uncalled secret-plan target resolver.
+      // +1: read-only authoritative conversation-binding inspector.
+      // +2: restore shipped channel setup helpers until stable packages migrate.
+      // +1: canonical untrusted audio-transcript formatter for channel plugins.
+      2581,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

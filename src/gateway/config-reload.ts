@@ -265,6 +265,11 @@ export function startGatewayConfigReloader(opts: {
   const activeReloads = new Set<Promise<void>>();
   let missingConfigRetries = 0;
   let configWriteEpoch = 0;
+  // Signaled metadata changes clear the process snapshot slot before the diff
+  // pass runs; the counters keep that pass honest when config bytes are
+  // unchanged, and stay pending until a plugin reload or restart commits.
+  let pluginMetadataRefreshRequests = 0;
+  let pluginMetadataRefreshApplied = 0;
   let pendingInProcessConfig: InProcessConfigCandidate | null = null;
   let activeInProcessConfig: InProcessConfigCandidate | null = null;
   let watcherIntentCandidate: InProcessConfigCandidate | null = null;
@@ -644,7 +649,16 @@ export function startGatewayConfigReloader(opts: {
       }
       notifyCommitted();
     };
-    if (changedPaths.length === 0) {
+    // A signaled metadata change emptied the process snapshot slot. An
+    // unchanged config diff must still replace the plugin runtime generation so
+    // the slot republishes instead of leaving configless readers cold-scanning
+    // against a registry that diverged from the live runtime owners.
+    const pluginMetadataRefreshToken = pluginMetadataRefreshRequests;
+    const forcePluginMetadataReload = pluginMetadataRefreshToken !== pluginMetadataRefreshApplied;
+    const markPluginMetadataRefreshApplied = () => {
+      pluginMetadataRefreshApplied = pluginMetadataRefreshToken;
+    };
+    if (changedPaths.length === 0 && !forcePluginMetadataReload) {
       let publishedSource: { rollback: () => Promise<void>; commit?: () => void } | undefined;
       let publishedSourceRollback: (() => Promise<void>) | undefined;
       let publishedSourceRolledBack = false;
@@ -681,7 +695,11 @@ export function startGatewayConfigReloader(opts: {
     }
 
     const followUp = resolveConfigWriteFollowUp(afterWrite);
-    opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
+    opts.log.info(
+      changedPaths.length > 0
+        ? `config change detected; evaluating reload (${changedPaths.join(", ")})`
+        : "plugin metadata changed with identical config; replacing plugin runtime generation",
+    );
     if (followUp.mode === "none") {
       opts.log.info(`config reload skipped by writer intent (${followUp.reason})`);
       await commitReloadBaseline({ runtimeApplied: false });
@@ -692,6 +710,12 @@ export function startGatewayConfigReloader(opts: {
       forceChangedPaths: pluginInstallWholeRecordPaths,
       candidateConfig: nextConfig,
     });
+    if (forcePluginMetadataReload && !plan.restartGateway && !plan.reloadPlugins) {
+      // Mirror the `plugins.*` hot rule pairing: a replaced plugin registry
+      // also invalidates MCP runtimes assembled from the previous generation.
+      plan.reloadPlugins = true;
+      plan.disposeMcpRuntimes = true;
+    }
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
       await commitReloadBaseline({ runtimeApplied: false });
@@ -716,12 +740,15 @@ export function startGatewayConfigReloader(opts: {
       await opts.onConfigChange?.(restartPlan, nextConfig);
       await prepareRestart(restartPlan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
+      // The accepted restart owns snapshot republication at next startup.
+      markPluginMetadataRefreshApplied();
       return;
     }
     if (plan.restartGateway) {
       await opts.onConfigChange?.(plan, nextConfig);
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
+      markPluginMetadataRefreshApplied();
       return;
     }
 
@@ -735,6 +762,10 @@ export function startGatewayConfigReloader(opts: {
     assertCurrent();
     await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
     await commitReloadBaseline();
+    if (plan.reloadPlugins) {
+      // The committed reload republished the metadata snapshot generation.
+      markPluginMetadataRefreshApplied();
+    }
   };
 
   const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {
@@ -1271,6 +1302,7 @@ export function startGatewayConfigReloader(opts: {
     notifyPluginMetadataChanged: () => {
       // The signal carries a metadata change while config bytes stay identical.
       // Clear both metadata and config-echo caches before scheduling the shared diff path.
+      pluginMetadataRefreshRequests += 1;
       clearLoadInstalledPluginIndexInstallRecordsCache();
       clearPluginMetadataLifecycleCaches();
       startupInternalWriteHash = null;

@@ -787,6 +787,22 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   return { deletedRecordCount, deletedFileCount, retainedCount };
 }
 
+export async function removeManagedOutgoingMediaBlocks(params: {
+  blocks: readonly Record<string, unknown>[];
+  messageId: string;
+  stateDir?: string;
+}): Promise<void> {
+  const stateDir = params.stateDir ?? resolveStateDir();
+  await Promise.all(
+    collectManagedOutgoingAttachmentRefs(params.blocks).map(async ({ attachmentId }) => {
+      const record = readManagedImageRecord(attachmentId, stateDir);
+      if (record?.messageId === params.messageId) {
+        await deleteManagedImageRecordArtifacts(record, stateDir);
+      }
+    }),
+  );
+}
+
 function resolveManagedSessionOwnerAgentId(
   sessionKey: string,
   explicitAgentId?: string,

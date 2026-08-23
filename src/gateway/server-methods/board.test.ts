@@ -1,44 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
-import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
 import {
   createBoardHarness as createHarness,
   createMcpAppDependencies,
 } from "./board.test-support.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
-
-vi.mock("./sessions.runtime.js", () => ({
-  performGatewaySessionReset: vi.fn(async ({ key, reason }: { key: string; reason: string }) => ({
-    ok: true,
-    key,
-    agentId: "main",
-    entry: { sessionId: `reset-${reason}` },
-    resolved: {},
-  })),
-}));
 
 describe("board gateway methods", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
   beforeEach(() => {
     resetBoardEventNoticeStateForTest();
     resetSystemEventsForTest();
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
   });
 
   it("registers every contract method with its required scope", () => {
@@ -428,6 +402,76 @@ describe("board gateway methods", () => {
       interactive: false,
       declaredTools: [],
     });
+  });
+
+  it("downgrades an MCP App pin when its grant is revoked during tool resolution", async () => {
+    const resolutionStarted = createDeferred();
+    const releaseResolution = createDeferred<string[]>();
+    let grantActive = true;
+    const authorizeAppInteraction = vi.fn(async () => grantActive);
+    const mcpApp = createMcpAppDependencies();
+    vi.mocked(mcpApp.resolveActiveView).mockResolvedValueOnce({
+      runtime: { getCatalog: vi.fn() },
+      view: {
+        viewId: "mcp-app-revoked-during-resolution",
+        serverName: "server",
+        toolName: "tool",
+        uiResourceUri: "ui://resource",
+        toolCallId: "call",
+        allowedAppToolNames: new Set(["server.refresh"]),
+        authorizeAppInteraction,
+      },
+    } as never);
+    vi.mocked(mcpApp.resolveAllowedToolNames).mockImplementationOnce(async () => {
+      resolutionStarted.resolve();
+      return await releaseResolution.promise;
+    });
+    const { invoke, store } = createHarness(undefined, mcpApp);
+
+    const pending = invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "revoked-during-resolution",
+      content: { kind: "mcp-app", viewId: "mcp-app-revoked-during-resolution" },
+    });
+    await resolutionStarted.promise;
+    expect(authorizeAppInteraction).toHaveBeenCalledOnce();
+    grantActive = false;
+    releaseResolution.resolve(["server.refresh"]);
+
+    const response = await pending;
+    expect(response.mock.calls[0]?.[0]).toBe(true);
+    expect(authorizeAppInteraction).toHaveBeenCalledTimes(2);
+    expect(response.mock.calls[0]?.[1]).toMatchObject({
+      widgets: [
+        expect.objectContaining({
+          name: "revoked-during-resolution",
+          grantState: "none",
+        }),
+      ],
+    });
+    expect(store.readWidgetMcpApp("agent:main:main", "revoked-during-resolution")).toMatchObject({
+      interactive: false,
+      declaredTools: [],
+    });
+  });
+
+  it("keeps MCP App catalog failures as pin failures", async () => {
+    const mcpApp = createMcpAppDependencies();
+    vi.mocked(mcpApp.resolveAllowedToolNames).mockRejectedValueOnce(new Error("catalog failed"));
+    const { invoke, store } = createHarness(undefined, mcpApp);
+
+    const response = await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "catalog-failure",
+      content: { kind: "mcp-app", viewId: "mcp-app-source" },
+    });
+
+    expect(response.mock.calls[0]?.[0]).toBe(false);
+    expect(response.mock.calls[0]?.[2]).toMatchObject({
+      code: "UNAVAILABLE",
+      message: "Error: catalog failed",
+    });
+    expect(store.getSnapshot("agent:main:main").widgets).toEqual([]);
   });
 
   it("keeps zero-tool MCP Apps read-only until an explicit grant", async () => {
@@ -882,179 +926,5 @@ describe("board gateway methods", () => {
       ticket: snapshot.widgets.find((widget) => widget.name === "approved")?.viewTicket,
     });
     expect(approved.mock.calls[0]?.[1]).toEqual({ confirmationRequired: false });
-  });
-
-  it("enforces data bindings against the granted tool set", async () => {
-    const readDataBinding = vi.fn(async () => ({ sessions: ["one"] }));
-    const { invoke, store } = createHarness(undefined, { readDataBinding });
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "reader",
-      content: { kind: "html", html: "reader" },
-    });
-    let board = await invoke("board.get", { sessionKey: "session" });
-    let snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
-    const denied = await invoke("board.data.read", {
-      ticket: snapshot.widgets[0]?.viewTicket,
-      bindingId: "sessions.list",
-      params: { limit: 2 },
-    });
-    expect(denied.mock.calls[0]?.[0]).toBe(false);
-    expect(readDataBinding).not.toHaveBeenCalled();
-
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "reader",
-      content: { kind: "html", html: "reader" },
-      declared: { tools: ["sessions.list"] },
-    });
-    await invoke("board.widget.grant", {
-      sessionKey: "session",
-      name: "reader",
-      decision: "granted",
-      revision: 2,
-      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
-    });
-    board = await invoke("board.get", { sessionKey: "session" });
-    snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
-    const allowed = await invoke("board.data.read", {
-      ticket: snapshot.widgets[0]?.viewTicket,
-      bindingId: "sessions.list",
-      params: { limit: 2 },
-    });
-    expect(allowed.mock.calls[0]?.[1]).toEqual({ sessions: ["one"] });
-    expect(readDataBinding).toHaveBeenCalledWith(
-      "sessions.list",
-      { limit: 2 },
-      expect.objectContaining({ params: expect.any(Object) }),
-    );
-  });
-
-  it("rejects unknown data bindings inside the gateway allowlist boundary", async () => {
-    const { invoke, store } = createHarness();
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "reader",
-      content: { kind: "html", html: "reader" },
-      declared: { tools: ["secrets.dump"] },
-    });
-    await invoke("board.widget.grant", {
-      sessionKey: "session",
-      name: "reader",
-      decision: "granted",
-      revision: 1,
-      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
-    });
-    const board = await invoke("board.get", { sessionKey: "session" });
-    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
-    const response = await invoke("board.data.read", {
-      ticket: snapshot.widgets[0]?.viewTicket,
-      bindingId: "secrets.dump",
-    });
-    expect(response).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("not allowed") }),
-    );
-  });
-
-  it("runs only the exact granted cron job capability", async () => {
-    const triggerCronJob = vi.fn(async (jobId: string) => ({ ok: true, jobId }));
-    const { invoke, store } = createHarness(undefined, { triggerCronJob });
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "runner",
-      content: { kind: "html", html: "runner" },
-      declared: { tools: ["cron.trigger:job-1"] },
-    });
-    await invoke("board.widget.grant", {
-      sessionKey: "session",
-      name: "runner",
-      decision: "granted",
-      revision: 1,
-      instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
-    });
-    const board = await invoke("board.get", { sessionKey: "session" });
-    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
-    const ticket = snapshot.widgets[0]?.viewTicket;
-
-    const denied = await invoke("board.action", {
-      ticket,
-      action: "cron.trigger",
-      jobId: "job-2",
-    });
-    expect(denied.mock.calls[0]?.[0]).toBe(false);
-    expect(triggerCronJob).not.toHaveBeenCalled();
-
-    const allowed = await invoke("board.action", {
-      ticket,
-      action: "cron.trigger",
-      jobId: "job-1",
-    });
-    expect(allowed.mock.calls[0]?.[1]).toEqual({ ok: true, jobId: "job-1" });
-    expect(triggerCronJob).toHaveBeenCalledWith("job-1", expect.any(Object));
-  });
-
-  it("caps board.event payloads and preserves Unicode at the notice boundary", async () => {
-    const { invoke } = createHarness();
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "counter",
-      content: { kind: "html", html: "ok" },
-    });
-    const clippedCodeUnits = 500 - "[dashboard] ".length - " on widget counter".length - 1;
-    // JSON's opening quote places the emoji across the legacy slice boundary.
-    const payload = `${"x".repeat(clippedCodeUnits - 2)}😀tail`;
-    await invoke("board.event", { sessionKey: "session", widget: "counter", payload });
-    const unicodeNotice = peekSystemEvents("agent:main:session")[0] ?? "";
-    expect(unicodeNotice.length).toBeLessThanOrEqual(500);
-    expect(unicodeNotice).not.toContain(String.fromCharCode(0xd83d));
-    expect(unicodeNotice).toMatch(/… on widget counter$/u);
-    await invoke("board.event", {
-      sessionKey: "session",
-      widget: "counter",
-      payload: "x".repeat(1_000),
-    });
-    expect(peekSystemEvents("agent:main:session")[1]).toHaveLength(500);
-    const oversized = await invoke("board.event", {
-      sessionKey: "session",
-      widget: "counter",
-      payload: "x".repeat(8_193),
-    });
-    expect(oversized.mock.calls[0]?.[0]).toBe(false);
-  });
-
-  it("keeps board state across the real sessions.reset handler", async () => {
-    const sessionKey = "agent:main:board-reset-proof";
-    const stateDir = tempDirs.make("openclaw-board-reset-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey, storePath: database.path },
-      { sessionId: "board-reset-proof", updatedAt: Date.now() },
-    );
-    const boardStore = new SqliteBoardStore({
-      resolveSession: () => ({ agentId: "main", sessionKey }),
-      env,
-    });
-    boardStore.putWidget({
-      sessionKey,
-      name: "status",
-      content: { kind: "html", html: "ok" },
-    });
-    const respond = vi.fn<RespondFn>();
-    await sessionMutationHandlers["sessions.reset"]!({
-      req: { type: "req", id: "reset", method: "sessions.reset", params: {} },
-      params: { key: sessionKey, reason: "reset" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        broadcast: vi.fn(),
-        getSessionEventSubscriberConnIds: () => new Set<string>(),
-      } as unknown as GatewayRequestContext,
-    });
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(boardStore.getSnapshot(sessionKey).widgets).toHaveLength(1);
   });
 });

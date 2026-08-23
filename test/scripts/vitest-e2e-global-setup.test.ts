@@ -7,12 +7,7 @@ import {
   forceKillVitestProcessGroup,
   forwardSignalToVitestProcessGroup,
 } from "../../scripts/vitest-process-group.mts";
-import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
+import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { runE2eGlobalSetup } from "../vitest/vitest.e2e.global-setup.js";
 
 type SetupCommandRunner = NonNullable<Parameters<typeof runE2eGlobalSetup>[0]>;
@@ -127,8 +122,12 @@ await runE2eSetupCommand([${JSON.stringify(fixturePath)}], process.env);`;
     } finally {
       forceKillVitestProcessGroup(runner);
       for (const pid of pids) {
-        if (isProcessAlive(pid)) {
+        try {
           process.kill(pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            throw error;
+          }
         }
       }
       fs.rmSync(fixtureDir, { force: true, recursive: true });

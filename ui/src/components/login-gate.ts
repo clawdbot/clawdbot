@@ -28,12 +28,24 @@ type LoginFailureKind =
   | "protocol-mismatch"
   | "network";
 
+type LoginFailureStep = {
+  text: string;
+  commands: string[];
+};
+
+type LoginFailureStepDefinition =
+  | string
+  | {
+      key: string;
+      commands: string[];
+    };
+
 type LoginFailureFeedback = {
   kind: LoginFailureKind;
   title: string;
   summary: string;
   refreshAction?: { label: string };
-  steps: string[];
+  steps: LoginFailureStep[];
   docsHref: string;
   docsLabel: string;
   rawError: string;
@@ -98,7 +110,7 @@ function buildFeedback(params: {
   docsHref?: string;
   titleKey: string;
   summaryKey: string;
-  stepKeys: string[];
+  stepKeys: LoginFailureStepDefinition[];
   stepParams?: Record<string, string>;
   refreshAction?: { label: string };
 }): LoginFailureFeedback {
@@ -108,7 +120,11 @@ function buildFeedback(params: {
     title: t(params.titleKey, params.stepParams),
     summary: t(params.summaryKey, params.stepParams),
     refreshAction: params.refreshAction,
-    steps: params.stepKeys.map((key) => t(key, params.stepParams)),
+    steps: params.stepKeys.map((step) =>
+      typeof step === "string"
+        ? { text: t(step, params.stepParams), commands: [] }
+        : { text: t(step.key, params.stepParams), commands: step.commands },
+    ),
     docsHref,
     docsLabel: resolveDocsLabel(docsHref),
     rawError: redactLoginFailureError(params.rawError),
@@ -140,6 +156,9 @@ function resolveLoginFailureFeedback(
 
   const pairing = resolvePairingHint(false, rawError, lastErrorCode);
   if (pairing) {
+    const approvalCommand = pairing.requestId
+      ? `openclaw devices approve ${pairing.requestId}`
+      : null;
     return buildFeedback({
       kind: "pairing-required",
       rawError,
@@ -157,10 +176,16 @@ function resolveLoginFailureFeedback(
           ? "login.failure.pairing.summary"
           : "login.failure.pairing.upgradeSummary",
       stepKeys: [
-        "login.failure.pairing.stepDashboard",
-        "login.failure.pairing.stepList",
-        pairing.requestId
-          ? "login.failure.pairing.stepApproveId"
+        {
+          key: "login.failure.pairing.stepDashboard",
+          commands: ["openclaw dashboard"],
+        },
+        {
+          key: "login.failure.pairing.stepList",
+          commands: ["openclaw devices list"],
+        },
+        approvalCommand
+          ? { key: "login.failure.pairing.stepApproveId", commands: [approvalCommand] }
           : "login.failure.pairing.stepApprove",
         "login.failure.pairing.stepReconnect",
       ],
@@ -226,8 +251,14 @@ function resolveLoginFailureFeedback(
       summaryKey: "login.failure.protocol.summary",
       refreshAction: { label: t("login.failure.protocol.refresh") },
       stepKeys: [
-        "login.failure.protocol.stepDashboard",
-        "login.failure.protocol.stepDevUi",
+        {
+          key: "login.failure.protocol.stepDashboard",
+          commands: ["openclaw dashboard"],
+        },
+        {
+          key: "login.failure.protocol.stepDevUi",
+          commands: ["pnpm ui:dev"],
+        },
         "login.failure.protocol.stepRestart",
       ],
     });
@@ -247,8 +278,14 @@ function resolveLoginFailureFeedback(
       titleKey: "login.failure.authRequired.title",
       summaryKey: "login.failure.authRequired.summary",
       stepKeys: [
-        "login.failure.authRequired.stepPaste",
-        "login.failure.authRequired.stepGenerate",
+        {
+          key: "login.failure.authRequired.stepPaste",
+          commands: ["openclaw gateway auth-token --show"],
+        },
+        {
+          key: "login.failure.authRequired.stepGenerate",
+          commands: ["openclaw doctor --generate-gateway-token"],
+        },
         "login.failure.authRequired.stepConnect",
       ],
     });
@@ -260,7 +297,10 @@ function resolveLoginFailureFeedback(
       titleKey: "login.failure.authFailed.title",
       summaryKey: "login.failure.authFailed.summary",
       stepKeys: [
-        "login.failure.authFailed.stepDashboard",
+        {
+          key: "login.failure.authFailed.stepDashboard",
+          commands: ["openclaw dashboard --no-open", "openclaw gateway auth-token --show"],
+        },
         "login.failure.authFailed.stepReplace",
         "login.failure.authFailed.stepMode",
       ],
@@ -273,9 +313,15 @@ function resolveLoginFailureFeedback(
     titleKey: "login.failure.network.title",
     summaryKey: "login.failure.network.summary",
     stepKeys: [
-      "login.failure.network.stepGateway",
+      {
+        key: "login.failure.network.stepGateway",
+        commands: ["openclaw status", "openclaw gateway run"],
+      },
       "login.failure.network.stepUrl",
-      "login.failure.network.stepDashboard",
+      {
+        key: "login.failure.network.stepDashboard",
+        commands: ["openclaw dashboard --no-open"],
+      },
     ],
   });
 }
@@ -283,6 +329,49 @@ function resolveLoginFailureFeedback(
 function refreshLoginGatePage() {
   // The login gate blocks before the composer mounts, so there is no draft to preserve.
   window.location.reload();
+}
+
+type LoginFailureStepSegment = { kind: "text"; value: string } | { kind: "command"; value: string };
+
+function segmentLoginFailureStep(text: string, commands: string[]): LoginFailureStepSegment[] {
+  const unmatchedCommands = new Set(commands);
+  const matches = [...unmatchedCommands]
+    .map((command) => ({ command, index: text.indexOf(command) }))
+    .filter((match) => match.index >= 0)
+    .toSorted(
+      (left, right) => left.index - right.index || right.command.length - left.command.length,
+    );
+  const segments: LoginFailureStepSegment[] = [];
+  let cursor = 0;
+
+  for (const match of matches) {
+    if (match.index < cursor) {
+      continue;
+    }
+    if (match.index > cursor) {
+      segments.push({ kind: "text", value: text.slice(cursor, match.index) });
+    }
+    segments.push({ kind: "command", value: match.command });
+    unmatchedCommands.delete(match.command);
+    cursor = match.index + match.command.length;
+  }
+
+  if (cursor < text.length || !segments.length) {
+    segments.push({ kind: "text", value: text.slice(cursor) });
+  }
+  for (const command of unmatchedCommands) {
+    if (segments.length) {
+      segments.push({ kind: "text", value: " " });
+    }
+    segments.push({ kind: "command", value: command });
+  }
+  return segments;
+}
+
+function renderLoginFailureStep(step: LoginFailureStep) {
+  return segmentLoginFailureStep(step.text, step.commands).map((segment) =>
+    segment.kind === "command" ? renderConnectCommand(segment.value) : segment.value,
+  );
 }
 
 function renderLoginFailure(feedback: LoginFailureFeedback) {
@@ -307,7 +396,7 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
           `
         : nothing}
       <ol class="login-gate__failure-steps">
-        ${feedback.steps.map((step) => html`<li>${step}</li>`)}
+        ${feedback.steps.map((step) => html`<li>${renderLoginFailureStep(step)}</li>`)}
       </ol>
       <details class="login-gate__failure-detail">
         <summary>${t("login.failure.rawError")}</summary>

@@ -672,6 +672,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     this.typingActors.set(event.actor.id, {
       label: event.actor.label ?? event.actor.id,
       expiresAt,
+      ...(event.preview ? { preview: event.preview } : {}),
     });
     this.typingTimers.set(
       event.actor.id,
@@ -702,13 +703,13 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     }
   }
 
-  protected typingActorViews(): { id: string; label: string }[] {
+  protected typingActorViews(): { id: string; label: string; preview?: string }[] {
     return [...this.typingActors]
-      .map(([id, actor]) => ({ id, label: actor.label }))
+      .map(([id, { label, preview }]) => (preview ? { id, label, preview } : { id, label }))
       .toSorted((left, right) => left.label.localeCompare(right.label));
   }
 
-  protected sendTypingState(typing: boolean): void {
+  protected sendTypingState(typing: boolean, preview?: string): void {
     const scope = this.captureConnectionScope();
     if (!scope || !this.hasMultipleIdentities()) {
       return;
@@ -720,11 +721,14 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     if (!sessionId) {
       return;
     }
+    const draft = typing ? preview?.trim() : undefined;
+    const draftPreview = draft ? Array.from(draft).slice(-300).join("") : undefined;
     void scope.client
       .request("session.typing", {
         sessionKey,
         sessionId,
         typing,
+        ...(draftPreview ? { preview: draftPreview } : {}),
         ...scopedAgentParamsForSession(scope.state, sessionKey),
       })
       .catch(() => undefined);

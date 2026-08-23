@@ -11,7 +11,8 @@ import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   countActiveDescendantRuns,
@@ -44,10 +45,10 @@ import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import {
-  buildControlUiAvatarUrl,
   buildControlUiChannelAvatarUrl,
-  normalizeControlUiBasePath,
-} from "./control-ui-shared.js";
+  buildControlUiResourcePath,
+} from "./control-ui-contract.js";
+import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
@@ -81,7 +82,7 @@ import {
   resolveTranscriptUsageFallback,
 } from "./session-utils-projection.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 /** Adds current actor display data without persisting rename-prone metadata. */
@@ -105,7 +106,11 @@ export function projectSessionActor(
     const avatar = normalizeOptionalString(identity?.avatar);
     const avatarUrl =
       avatar && looksLikeAvatarPath(avatar)
-        ? buildControlUiAvatarUrl(normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath), id)
+        ? buildControlUiResourcePath(
+            "agentAvatar",
+            normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath),
+            id,
+          )
         : undefined;
     return {
       type: actor.type,
@@ -204,8 +209,8 @@ export function buildGatewaySessionRow(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   key: string;
-  entry?: SessionEntry;
-  modelCatalog?: ModelCatalogEntry[];
+  entry?: InternalSessionEntry;
+  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
@@ -453,10 +458,16 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
+  // A per-agent catalog map keeps unscoped listings owner-scoped: each row uses
+  // its own agent's completed catalog instead of a shared default-agent catalog.
+  const rowModelCatalog =
+    params.modelCatalog instanceof Map
+      ? params.modelCatalog.get(sessionAgentId)
+      : params.modelCatalog;
   // Event/list rows must not rediscover plugin-backed configured catalog metadata.
   // Lightweight projections may use an already-active provider policy, but must
   // not fall through to public artifacts that reload the manifest registry.
-  const thinkingModelCatalog = params.modelCatalog ?? (lightweight ? [] : undefined);
+  const thinkingModelCatalog = rowModelCatalog ?? (lightweight ? [] : undefined);
   const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId: sessionAgentId,
@@ -468,14 +479,33 @@ export function buildGatewaySessionRow(params: {
     rowContext,
     providerPolicySource: lightweight ? "active" : undefined,
   });
-  const resolvedCurrentContextTokens = resolvePositiveNumber(
+  const catalogEntry =
+    rowModelCatalog && rowModelProvider && rowModel
+      ? findModelCatalogEntry(rowModelCatalog, {
+          provider: rowModelProvider,
+          modelId: rowModel,
+        })
+      : undefined;
+  const contextWindowProfile = resolveModelContextWindowProfile({
+    catalogEntry,
+    selected: entry?.contextWindow,
+  });
+  const resolvedModelContextTokens = resolvePositiveNumber(
     resolveContextTokensForModel({
       cfg,
       provider: rowModelProvider,
       model: rowModel,
+      modelContextTokens: catalogEntry?.contextTokens,
+      modelContextWindow: contextWindowProfile.contextTokens,
       allowAsyncLoad: false,
     }),
   );
+  const resolvedCurrentContextTokens = contextWindowProfile.contextTokens
+    ? Math.min(
+        resolvedModelContextTokens ?? contextWindowProfile.contextTokens,
+        contextWindowProfile.contextTokens,
+      )
+    : resolvedModelContextTokens;
   const authoredContextTokens = resolvePositiveNumber(
     resolveAuthoredModelContextTokens({
       cfg,
@@ -589,6 +619,9 @@ export function buildGatewaySessionRow(params: {
       ? "tombstoned"
       : undefined,
     thinkingLevel: thinkingProjection.thinkingLevel,
+    contextWindow: contextWindowProfile.contextWindow,
+    contextWindows: contextWindowProfile.contextWindows,
+    contextWindowDefault: contextWindowProfile.contextWindowDefault,
     thinkingLevels: thinkingProjection.thinkingLevels,
     thinkingOptions: thinkingProjection.thinkingOptions,
     thinkingDefault: thinkingProjection.thinkingDefault,
@@ -610,6 +643,7 @@ export function buildGatewaySessionRow(params: {
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     lastRunError: entry?.lastRunError,
+    lastRunId: entry?.lastRunId,
     hasAutomation: sessionHasAutomation(key, cfg, sessionAgentId) ? true : undefined,
     subagentRunState,
     hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
