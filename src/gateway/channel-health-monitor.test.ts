@@ -521,6 +521,17 @@ describe("channel-health-monitor", () => {
     await expectNoRestart(manager);
   });
 
+  it("restarts a disconnected starting channel dated after the current clock", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: disconnectedAccount(now + 60_000, { lifecycle: "starting" }),
+      },
+    });
+
+    await expectRestartedChannel(manager, "discord");
+  });
+
   it("does not restart a long-running channel during fresh reconnect grace", async () => {
     const now = Date.now();
     const manager = createSlackSnapshotManager(
