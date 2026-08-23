@@ -1162,7 +1162,6 @@ openclaw-settings-save-indicator:empty {
 .sidebar-shell__footer {
   flex-shrink: 0;
   padding: 4px 0 0;
-  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
 .sidebar-update-card {
