@@ -38,13 +38,17 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 COPY scripts/lib/docker-plugin-selection.mjs /tmp/docker-plugin-selection.mjs
 COPY packages /tmp/packages
 COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}
+# ── FIX: previously used `for manifest in /tmp/packages/*/package.json`,
+# which only matched one directory level and silently dropped scoped
+# workspace packages (e.g. packages/@openclaw/foo/package.json). Now uses
+# `find` to walk the tree and preserves the relative (possibly scoped) path
+# under /out/packages so pnpm-workspace.yaml resolution stays correct.
 RUN mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
-    for manifest in /tmp/packages/*/package.json; do \
-      [ -f "$manifest" ] || continue; \
-      pkg_dir="${manifest%/package.json}"; \
-      pkg_name="${pkg_dir##*/}"; \
-      mkdir -p "/out/packages/$pkg_name" && \
-      cp "$manifest" "/out/packages/$pkg_name/package.json"; \
+    find /tmp/packages -mindepth 2 -maxdepth 4 -name package.json | while IFS= read -r manifest; do \
+      rel_dir="${manifest#/tmp/packages/}"; \
+      rel_dir="${rel_dir%/package.json}"; \
+      mkdir -p "/out/packages/$rel_dir" && \
+      cp "$manifest" "/out/packages/$rel_dir/package.json"; \
     done && \
     node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS" \
       > /out/openclaw-selected-plugin-dirs && \
@@ -243,8 +247,6 @@ RUN npm install --global npm@latest && \
     npm update --prefix "$npm_dir" --omit=dev --ignore-scripts --no-audit --no-fund && \
     mv /tmp/npm-package.json "$npm_dir/package.json" && \
     npm cache clean --force
-
-RUN chown node:node /app
 
 COPY --from=runtime-assets --chown=node:node /app/dist ./dist
 COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
