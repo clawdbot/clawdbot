@@ -67,25 +67,41 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
     ).toBe("high");
   });
 
-  it("inherits the session level and otherwise defaults to off", () => {
+  it("defaults compaction to low without inheriting the session level", () => {
     expect(
       resolveEmbeddedCompactionThinkingLevel({
         provider: "demo",
         modelId: "demo-model",
         inheritedLevel: "medium",
       }),
-    ).toBe("medium");
+    ).toBe("low");
     expect(
       resolveEmbeddedCompactionThinkingLevel({
         provider: "demo",
         modelId: "demo-model",
       }),
-    ).toBe("off");
+    ).toBe("low");
+  });
+
+  it("inherits the session level only when explicitly configured", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        config: {
+          agents: { defaults: { compaction: { thinkingLevel: "inherit" } } },
+        } as unknown as OpenClawConfig,
+        provider: "demo",
+        modelId: "demo-model",
+        inheritedLevel: "medium",
+      }),
+    ).toBe("medium");
   });
 
   it("preserves thinking when the resolved Ollama model reports reasoning support", () => {
     expect(
       resolveEmbeddedCompactionThinkingLevel({
+        config: {
+          agents: { defaults: { compaction: { thinkingLevel: "inherit" } } },
+        },
         provider: "ollama",
         modelId: "qwen3.5:4b",
         inheritedLevel: "high",
@@ -269,6 +285,25 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps same-timestamp process references newest-first in compaction context", () => {
+    for (const id of ["z-oldest", "a-middle", "m-newest"]) {
+      const session = createProcessSessionFixture({ id, startedAt: 1_000, backgrounded: true });
+      session.scopeKey = "agent:main:thread:1";
+      addSession(session);
+    }
+
+    const result = buildEmbeddedCompactionRuntimeContext({
+      sessionKey: "agent:main:thread:1",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.activeProcessSessions?.map(({ sessionId }) => sessionId)).toEqual([
+      "m-newest",
+      "a-middle",
+      "z-oldest",
+    ]);
   });
 
   it("omits active process session references when no safe scope is available", () => {

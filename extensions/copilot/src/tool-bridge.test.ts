@@ -17,11 +17,7 @@ import {
   textToolResult,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  clearMemoryPluginState,
-  type MemoryFlushPlan,
-  registerMemoryCapability,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   loadPluginManifestRegistryCore,
   resetPluginRuntimeStateForTest,
@@ -977,21 +973,6 @@ describe("createCopilotToolBridge", () => {
     it("quarantines owner memory writes, edits, and patches after a network tool", async () => {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-copilot-memory-"));
       await fs.mkdir(path.join(workspaceDir, "memory"));
-      const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
-        async () => undefined,
-      );
-      registerMemoryCapability("memory-core", {
-        flushPlanResolver: () => ({
-          softThresholdTokens: 1,
-          forceFlushTranscriptBytes: 1,
-          reserveTokensFloor: 1,
-          prompt: "flush",
-          systemPrompt: "flush",
-          relativePath: "memory/day.md",
-          recordWriteProvenance,
-        }),
-      });
-
       try {
         let turnTainted = false;
         const onToolOutcome = vi.fn<
@@ -1107,12 +1088,17 @@ describe("createCopilotToolBridge", () => {
           { path: "memory/fresh.md", content: "fresh owner note\n" },
         );
 
-        expect(recordWriteProvenance.mock.calls.map(([entry]) => entry.originClass)).toEqual([
-          "agent",
-          "untrusted",
-          "untrusted",
-          "untrusted",
-          "agent",
+        await expect(
+          Promise.all(
+            ["memory/trusted.md", "memory/network.md", "memory/patched.md", "memory/fresh.md"].map(
+              (relativePath) => readMemoryArtifactProvenance({ workspaceDir, relativePath }),
+            ),
+          ),
+        ).resolves.toEqual([
+          expect.objectContaining({ originClass: "untrusted" }),
+          expect.objectContaining({ originClass: "untrusted" }),
+          expect.objectContaining({ originClass: "untrusted" }),
+          expect.objectContaining({ originClass: "agent" }),
         ]);
         await expect(
           fs.readFile(path.join(workspaceDir, "memory/trusted.md"), "utf8"),
@@ -1121,7 +1107,6 @@ describe("createCopilotToolBridge", () => {
           fs.readFile(path.join(workspaceDir, "memory/patched.md"), "utf8"),
         ).resolves.toBe("network patch\n");
       } finally {
-        clearMemoryPluginState();
         await fs.rm(workspaceDir, { recursive: true, force: true });
       }
     });
@@ -2261,13 +2246,10 @@ describe("createCopilotToolBridge tool conversion", () => {
     });
 
     expect(lastToolError).toMatchObject({
-      ownerKey: '["memory-lancedb","memory_forget"]',
       mutatingAction: true,
-      actionFingerprint: expect.stringContaining('owner=["memory-lancedb","memory_forget"]|args='),
     });
-    expect(payloads).toHaveLength(2);
+    expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toContain("I forgot");
-    expect(payloads[1]).toMatchObject({ isError: true });
     expect(JSON.stringify(result)).not.toContain("memory-lancedb");
     expect(JSON.stringify(payloads)).not.toContain("memory-lancedb");
 
@@ -2302,7 +2284,6 @@ describe("createCopilotToolBridge tool conversion", () => {
     await runSdkTool(sdkTool, { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" });
 
     expect(lastToolError).toMatchObject({
-      ownerKey: '["memory-lancedb","memory_forget"]',
       mutatingAction: false,
     });
     expect(tool.execute).not.toHaveBeenCalled();

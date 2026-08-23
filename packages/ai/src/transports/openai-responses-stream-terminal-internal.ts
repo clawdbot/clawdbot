@@ -23,7 +23,6 @@ import type {
   ToolCall,
   Usage,
 } from "../types.js";
-import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE,
@@ -31,6 +30,7 @@ import {
   type OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
+import { parseTerminalToolCallArguments } from "./transport-stream-shared.js";
 
 export type ResponsesEventSink = { push(event: AssistantMessageEvent): void };
 export type TextBlockReference = {
@@ -97,12 +97,10 @@ export function resolveCompletedResponsesToolCall(
   if (!name) {
     throw new Error("Responses stream completed tool call without a function name");
   }
-  const argumentsValue = parseJsonObjectPreservingUnsafeIntegers(
+  const argumentsValue = parseTerminalToolCallArguments(
     streamed?.arguments ?? item.arguments,
+    "Responses stream completed tool call with invalid JSON arguments",
   );
-  if (!argumentsValue) {
-    throw new Error("Responses stream completed tool call with invalid JSON arguments");
-  }
   return { name, arguments: argumentsValue };
 }
 

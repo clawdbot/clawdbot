@@ -1,32 +1,14 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { VerboseLevel } from "../../../auto-reply/thinking.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import { formatInlineCodeSpan } from "../../../shared/markdown-code.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
-import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
 type ToolErrorWarningPolicy = {
   showWarning: boolean;
   includeDetails: boolean;
 };
 
-const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
-  "required",
-  "missing",
-  "invalid",
-  "must be",
-  "must have",
-  "needs",
-  "requires",
-] as const;
-
-function isRecoverableToolError(error: string | undefined): boolean {
-  const errorLower = normalizeOptionalLowercaseString(error) ?? "";
-  return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
-}
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "full";
 }
@@ -304,67 +286,19 @@ function formatConciseExecExitSuffix(error: string | undefined): string {
 function maybeWrapInlineCode(value: string, markdown: boolean): string {
   return markdown ? formatInlineCodeSpan(value) : value;
 }
-/**
- * Chooses whether a tool failure needs a separate user-visible warning and
- * whether to include raw details. Mutating failures are stricter because a
- * silent failed write/send/delete can make the assistant look successful.
- */
+/** Warn only when a tool failure would otherwise leave the user with no reply. */
 function resolveToolErrorWarningPolicy(params: {
-  lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
-  hasUserFacingErrorReply: boolean;
-  hasUserFacingFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
-  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+  suppressToolErrorWarnings?: boolean;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
-  const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
-  let toolErrorWarningOverride: boolean | undefined;
-  let dynamicToolErrorWarningsDisabled = false;
-  if (typeof params.suppressToolErrorWarnings === "function") {
-    toolErrorWarningOverride = params.suppressToolErrorWarnings();
-    dynamicToolErrorWarningsDisabled = toolErrorWarningOverride === false;
-  } else {
-    toolErrorWarningOverride = params.suppressToolErrorWarnings;
-  }
-  const includeDetails =
-    !dynamicToolErrorWarningsDisabled && isVerboseToolDetailEnabled(params.verboseLevel);
-  const suppressToolErrorWarnings = toolErrorWarningOverride === true;
-  if (suppressToolErrorWarnings) {
-    return { showWarning: false, includeDetails };
-  }
-  // sessions_send timeouts and errors are transient inter-session communication
-  // issues — the message may still have been delivered. Suppress warnings to
-  // prevent raw error text from leaking into the chat surface (#23989).
-  if (normalizedToolName === "sessions_send") {
-    return { showWarning: false, includeDetails };
-  }
-  if (params.suppressToolErrors) {
-    return { showWarning: false, includeDetails };
-  }
-  // Mutating branch protects "assistant claims success while a user-visible mutation
-  // silently failed". Shell/exec are the agent's own workspace actions: the model sees
-  // the exit code in-context, and a successful final reply is recovery proof (#103574).
-  // Deliberately ignores mutatingAction for exec: codex marks every commandExecution
-  // mutating fail-closed (replay metadata, not display signal).
-  if (isExecLikeToolName(params.lastToolError.toolName)) {
-    // No recoverable-keyword suppression here: with no reply at all, the exec
-    // warning may be the run's only failure signal.
-    return { showWarning: !params.hasUserFacingReply, includeDetails };
-  }
-  if (params.lastToolError.terminalDiagnostic?.kind === "process") {
-    return { showWarning: !params.hasUserFacingReply, includeDetails };
-  }
-  const isMutatingToolError =
-    params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
-  if (isMutatingToolError) {
-    return {
-      showWarning: !params.hasUserFacingErrorReply && !params.hasUserFacingFailureAcknowledgement,
-      includeDetails,
-    };
-  }
+  const includeDetails = isVerboseToolDetailEnabled(params.verboseLevel);
   return {
-    showWarning: !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error),
+    showWarning:
+      !params.hasUserFacingReply &&
+      !params.suppressToolErrors &&
+      params.suppressToolErrorWarnings !== true,
     includeDetails,
   };
 }
@@ -372,10 +306,8 @@ function resolveToolErrorWarningPolicy(params: {
 export function buildFailureWarning(params: {
   lastToolError: ToolErrorSummary;
   hasUserFacingReply: boolean;
-  hasUserFacingErrorReply: boolean;
-  hasUserFacingFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
-  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+  suppressToolErrorWarnings?: boolean;
   verboseLevel?: VerboseLevel;
   useMarkdown: boolean;
 }): { text: string; nonTerminalToolErrorWarning: boolean } | undefined {

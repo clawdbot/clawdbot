@@ -68,14 +68,14 @@ describe("resolveModelProviderRouteOverridePresence", () => {
       resolveModelProviderRouteOverridePresence({
         provider: "openai",
         modelId: "gpt-5.5",
-        config,
+        authoredConfig: config,
       }),
     ).toBe("present");
     expect(
       resolveModelProviderRouteOverridePresence({
         provider: "openai",
         modelId: "gpt-5.5-empty",
-        config,
+        authoredConfig: config,
       }),
     ).toBe("none");
   });
@@ -85,7 +85,7 @@ describe("resolveModelProviderRouteOverridePresence", () => {
       resolveModelProviderRouteOverridePresence({
         provider: "openai",
         modelId: "gpt-5.5",
-        config: {
+        authoredConfig: {
           models: {
             providers: {
               openai: { baseUrl: "", timeoutSeconds: 90, models: [model("gpt-5.5")] },

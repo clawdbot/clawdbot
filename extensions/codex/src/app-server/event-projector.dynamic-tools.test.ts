@@ -400,7 +400,7 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
   });
 
-  it("keeps a blocked dynamic mutation until the same action succeeds", async () => {
+  it("keeps the latest dynamic failure until the same tool succeeds", async () => {
     const observeToolTerminal = createCodexTestToolTerminalObserver();
     const projector = await createProjector({ ...(await createParams()), observeToolTerminal });
     const messageArgs = {
@@ -431,7 +431,6 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
       toolName: "message",
       error: "cross-context messaging denied",
       mutatingAction: true,
-      actionFingerprint: expect.stringContaining("tool=message|action=send|to=channel:123"),
     });
 
     projector.recordDynamicToolResult({
@@ -451,8 +450,8 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
-      toolName: "message",
-      mutatingAction: true,
+      toolName: "read",
+      mutatingAction: false,
     });
 
     projector.recordDynamicToolResult({
@@ -471,8 +470,8 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
-      toolName: "message",
-      mutatingAction: true,
+      toolName: "read",
+      mutatingAction: false,
     });
 
     projector.recordDynamicToolResult({
@@ -489,6 +488,23 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
       success: true,
       terminalType: "completed",
       contentItems: [{ type: "inputText", text: "sent" }],
+    });
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError?.toolName).toBe("read");
+
+    projector.recordDynamicToolResult({
+      callId: "call-read-retry",
+      tool: "read",
+      terminalResolution: observeToolTerminal({
+        toolCallId: "call-read-retry",
+        toolName: "read",
+        arguments: { path: "/tmp/available" },
+        executionStarted: true,
+        outcome: "success",
+      }),
+      success: true,
+      terminalType: "completed",
+      contentItems: [{ type: "inputText", text: "ok" }],
     });
 
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();

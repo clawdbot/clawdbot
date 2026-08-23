@@ -15,6 +15,7 @@ export type {
 
 const SIDEBAR_DEFAULT_WIDTH_PX = 480;
 const SIDEBAR_DEFAULT_HEIGHT_PX = 360;
+export const SIDEBAR_GEOMETRY_COMMIT_EVENT = "openclaw-sidebar-geometry-commit";
 export const SIDEBAR_MIN_WIDTH_PX = 260;
 export const SIDEBAR_MIN_HEIGHT_PX = 220;
 const SIDEBAR_MAX_WIDTH_PX = 1_200;

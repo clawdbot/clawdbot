@@ -1,7 +1,7 @@
 /** Shared loader state for plugin doctor contracts and test fixtures. */
-import { clearNativeRequireJavaScriptModuleCache } from "./native-module-require.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
+  clearPluginModuleLoaderLifecycleCache,
   createPluginModuleLoaderCache,
   type PluginModuleLoaderFactory,
 } from "./plugin-module-loader-cache.js";
@@ -13,12 +13,6 @@ export const pluginDoctorContractRegistryLoaderState = {
   moduleLoaderFactory: undefined as PluginModuleLoaderFactory | undefined,
 };
 
-function clearPluginDoctorContractRegistryLoaderState(): void {
-  pluginDoctorContractRegistryLoaderState.moduleLoaders.clear();
-  for (const [modulePath, rootDir] of pluginDoctorContractRegistryLoaderState.moduleRoots) {
-    clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot: rootDir });
-  }
-  pluginDoctorContractRegistryLoaderState.moduleRoots.clear();
-}
-
-registerPluginMetadataProcessMemoLifecycleClear(clearPluginDoctorContractRegistryLoaderState);
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  clearPluginModuleLoaderLifecycleCache(pluginDoctorContractRegistryLoaderState);
+});

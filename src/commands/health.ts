@@ -34,7 +34,7 @@ import {
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   buildRateLimitedHealthDiagnostic,
@@ -561,6 +561,23 @@ export async function healthCommand(
       }
     }
   }
+}
+
+/**
+ * Runs `healthCommand` inside a host flow (wizard/onboard/doctor). The command's
+ * CLI-style `runtime.exit(1)` diagnostic paths surface as a thrown `ExitError`,
+ * so the host reports the failure and keeps running instead of dying mid-flow.
+ */
+export async function healthCommandNonExiting(
+  opts: Parameters<typeof healthCommand>[0],
+  runtime: RuntimeEnv,
+): Promise<void> {
+  await healthCommand(opts, {
+    ...runtime,
+    exit: (code) => {
+      throw new ExitError(code);
+    },
+  });
 }
 
 export async function readNonObservingHealthConfig(): Promise<OpenClawConfig> {

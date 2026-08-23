@@ -27,6 +27,25 @@ const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let stateDir = "";
 
+async function proposalArtifactPath(
+  proposalId: string,
+  relativePath: string,
+  options: { stateDir?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<string> {
+  const record = await readSkillProposalRecord(proposalId, options.env ? { env: options.env } : {});
+  if (!record) {
+    throw new Error(`expected stored proposal ${proposalId}`);
+  }
+  return path.join(
+    options.stateDir ?? stateDir,
+    "skill-workshop",
+    "proposals",
+    proposalId,
+    path.dirname(record.draftFile),
+    relativePath,
+  );
+}
+
 beforeEach(async () => {
   testState = await createOpenClawTestState({
     layout: "state-only",
@@ -312,7 +331,10 @@ describe("skill_workshop tool", () => {
 
     await expect(
       fs.access(
-        path.join(isolatedStateDir, "skill-workshop", "proposals", proposalId, "PROPOSAL.md"),
+        await proposalArtifactPath(proposalId, "PROPOSAL.md", {
+          stateDir: isolatedStateDir,
+          env,
+        }),
       ),
     ).resolves.toBeUndefined();
     await expect(
@@ -521,6 +543,7 @@ describe("skill_workshop tool", () => {
       status: "pending",
       kind: "create",
       skillKey: "weather-planner",
+      proposalFile: "PROPOSAL.md",
       scanState: "clean",
       supportFileCount: 1,
     });
@@ -529,27 +552,13 @@ describe("skill_workshop tool", () => {
     );
     await expect(
       fs.readFile(
-        path.join(
-          stateDir,
-          "skill-workshop",
-          "proposals",
-          (result.details as { id: string }).id,
-          "PROPOSAL.md",
-        ),
+        await proposalArtifactPath((result.details as { id: string }).id, "PROPOSAL.md"),
         "utf8",
       ),
     ).resolves.toContain("status: proposal");
     await expect(
       fs
-        .readFile(
-          path.join(
-            stateDir,
-            "skill-workshop",
-            "proposals",
-            (result.details as { id: string }).id,
-            "PROPOSAL.md",
-          ),
-        )
+        .readFile(await proposalArtifactPath((result.details as { id: string }).id, "PROPOSAL.md"))
         .then((buffer) => buffer.at(-1)),
     ).resolves.toBe(0x0a);
     await expect(
@@ -563,14 +572,7 @@ describe("skill_workshop tool", () => {
     });
     await expect(
       fs.readFile(
-        path.join(
-          stateDir,
-          "skill-workshop",
-          "proposals",
-          (result.details as { id: string }).id,
-          "references",
-          "weather.md",
-        ),
+        await proposalArtifactPath((result.details as { id: string }).id, "references/weather.md"),
         "utf8",
       ),
     ).resolves.toContain("Use weather API details.");
@@ -615,13 +617,7 @@ describe("skill_workshop tool", () => {
     );
     await expect(
       fs.readFile(
-        path.join(
-          stateDir,
-          "skill-workshop",
-          "proposals",
-          (result.details as { id: string }).id,
-          "PROPOSAL.md",
-        ),
+        await proposalArtifactPath((result.details as { id: string }).id, "PROPOSAL.md"),
         "utf8",
       ),
     ).resolves.toContain('version: "v2"');
@@ -733,15 +729,7 @@ describe("skill_workshop tool", () => {
 
     await expect(
       fs
-        .readFile(
-          path.join(
-            stateDir,
-            "skill-workshop",
-            "proposals",
-            (result.details as { id: string }).id,
-            "PROPOSAL.md",
-          ),
-        )
+        .readFile(await proposalArtifactPath((result.details as { id: string }).id, "PROPOSAL.md"))
         .then((buffer) => buffer.at(-1)),
     ).resolves.toBe(0x0a);
   });

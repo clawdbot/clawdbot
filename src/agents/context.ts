@@ -4,7 +4,6 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
-import { resolveAgentDir, resolveDefaultAgentId } from "./agent-scope.js";
 import {
   applyConfiguredContextWindows,
   type ContextWindowCatalog,
@@ -120,11 +119,8 @@ function ensureContextWindowCacheLoadedFromOwner(params: {
           : await (async () => {
               const { loadPreparedModelCatalogOwnerSnapshot } =
                 await loadPreparedModelCatalogRuntime();
-              const defaultAgentId = resolveDefaultAgentId(cfg);
               return await loadPreparedModelCatalogOwnerSnapshot({
                 config: cfg,
-                agentId: defaultAgentId,
-                agentDir: resolveAgentDir(cfg, defaultAgentId),
                 readOnly: true,
               }).then(
                 (value) => ({ status: "fulfilled" as const, value }),
@@ -187,11 +183,8 @@ export async function prewarmContextWindowCacheAfterReady(params: {
     if (shouldStop()) {
       return;
     }
-    const defaultAgentId = resolveDefaultAgentId(params.config);
     const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
       config: params.config,
-      agentId: defaultAgentId,
-      agentDir: resolveAgentDir(params.config, defaultAgentId),
       allowGatewaySubagentBinding: true,
     });
     if (!owner) {

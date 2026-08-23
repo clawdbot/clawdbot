@@ -205,5 +205,6 @@ describe("dispatchInboundDirectDm", () => {
       to: "reef:bot-1",
       originatingTo: "reef:peer-1",
     });
+    expect(contextParams?.conversation.routePeer).toEqual({ kind: "direct", id: "peer-1" });
   });
 });

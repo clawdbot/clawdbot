@@ -26,6 +26,48 @@ const state = setupAgentRunnerExecutionTestState();
 afterEach(resetGeneratedMediaTaskActivityForTests);
 
 describe("executeAgentTurn: CLI session routing", () => {
+  it("carries prepared model context facts into CLI execution", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-sonnet-4-6"),
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {},
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-sonnet-4-6";
+    followupRun.run.thinkingCatalog = [
+      {
+        provider: "claude-cli",
+        id: "claude-sonnet-4-6",
+        contextWindow: 400_000,
+        contextTokens: 321_000,
+      },
+    ];
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "telegram",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      modelContextWindow: 400_000,
+      modelContextTokens: 321_000,
+    });
+  });
+
   it("preserves queued image fields from runs created before the prepared marker", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({

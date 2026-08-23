@@ -642,6 +642,9 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
     {
         let inputPipe = Pipe()
         let outputPipe = Pipe()
+        // The helper child can exit at any time; without this a racing
+        // send() to its stdin raises SIGPIPE and kills the app.
+        inputPipe.fileHandleForWriting.disableSIGPIPE()
 
         let output = outputPipe.fileHandleForReading
         let (stream, continuation) = AsyncStream<Data>.makeStream()

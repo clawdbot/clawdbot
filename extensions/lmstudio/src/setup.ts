@@ -2,7 +2,6 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderAppGuidedSetupContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  removeProviderAuthProfilesWithLock,
   buildApiKeyCredential,
   ensureApiKeyFromEnvOrPrompt,
   hasConfiguredSecretInput,
@@ -11,6 +10,7 @@ import {
   type SecretInput,
   type SecretInputMode,
 } from "openclaw/plugin-sdk/provider-auth";
+import { removeProviderAuthProfilesWithLock } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   selectPreferredLocalModelId,
   type ModelDefinitionConfig,
@@ -502,6 +502,41 @@ export async function prepareAppGuidedLmstudioSetup(
       },
     },
   };
+}
+
+/** Read-only reachability probe for app-guided setup when no loaded model qualifies. */
+export async function detectAppGuidedLmstudioAvailability(
+  ctx: ProviderAppGuidedSetupContext,
+): Promise<boolean> {
+  const existingProvider = ctx.config.models?.providers?.[PROVIDER_ID];
+  const baseUrl = resolveLmstudioInferenceBase(
+    existingProvider?.baseUrl ?? resolveLmstudioSetupDefaultInferenceBaseUrl(ctx.env),
+  );
+  let headers: Record<string, string> | undefined;
+  let configuredValue: string | undefined;
+  try {
+    headers = await resolveLmstudioProviderHeaders({
+      config: ctx.config,
+      env: ctx.env,
+      headers: existingProvider?.headers,
+    });
+    configuredValue = await resolveLmstudioConfiguredApiKey({
+      config: ctx.config,
+      env: ctx.env,
+      allowUnresolved: true,
+    });
+  } catch {
+    return false;
+  }
+  const environmentValue = ctx.env[LMSTUDIO_DEFAULT_API_KEY_ENV_VAR]?.trim();
+  const accessValue = configuredValue ?? environmentValue;
+  const discovery = await fetchLmstudioModels({
+    baseUrl,
+    apiKey: accessValue ?? LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
+    ...(headers ? { headers } : {}),
+    timeoutMs: 5000,
+  });
+  return discovery.reachable;
 }
 
 /** Interactive LM Studio setup with connectivity and model-availability checks. */
@@ -1011,9 +1046,9 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
   };
 }
 
-export async function prepareLmstudioDynamicModels(
+export async function prepareLmstudioDynamicModel(
   ctx: ProviderPrepareDynamicModelContext,
-): Promise<ProviderRuntimeModel[]> {
+): Promise<ProviderRuntimeModel | undefined> {
   const baseUrl = resolveLmstudioInferenceBase(ctx.providerConfig?.baseUrl);
   const { apiKey, headers } = await resolveLmstudioRequestContext({
     config: ctx.config,
@@ -1027,15 +1062,18 @@ export async function prepareLmstudioDynamicModels(
     headers,
     quiet: true,
   });
-  return discoveredModels.map((model) =>
-    Object.assign({}, model, {
-      provider: PROVIDER_ID,
-      api: ctx.providerConfig?.api ?? `openai-completions`,
-      baseUrl,
-      input: model.input.filter(
-        (entry): entry is "text" | "image" => entry === "text" || entry === "image",
-      ),
-    }),
-  );
+  const model = discoveredModels.find((candidate) => candidate.id === ctx.modelId);
+  if (!model) {
+    return undefined;
+  }
+  return {
+    ...model,
+    provider: PROVIDER_ID,
+    api: ctx.providerConfig?.api ?? "openai-completions",
+    baseUrl,
+    input: model.input.filter(
+      (entry): entry is "text" | "image" => entry === "text" || entry === "image",
+    ),
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

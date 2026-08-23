@@ -85,8 +85,21 @@ format above, then read its body and use the worksheet between
 `<!-- validation-worksheet:end -->`. Keep its release priorities and template
 unchanged. Those exact bytes are the canonical campaign template for this run.
 
-In **Initialize campaign**, reuse the current issue unchanged when it already
-exists. When it does not exist, generate it:
+In **Initialize campaign**, first ensure the repository has a
+`release-validation` label. Check for the exact label with
+`gh label list --search release-validation --json name --jq
+'any(.[]; .name == "release-validation")'`; create it only when that exact-name
+check returns `false` with `gh label create release-validation --color 0E8A16 --description
+"OpenClaw release-validation campaign"`. Do not use `--force` or alter an
+existing label. Apply `release-validation` with `gh issue edit <number>
+--add-label release-validation` to the canonical issue whether it is reused or
+newly created, then verify the label through `gh issue view <number> --json
+labels`. This makes active campaigns discoverable with `gh issue list --state
+open --label release-validation` while the exact hidden marker remains the
+canonical matching rule.
+
+Reuse the current issue's body unchanged when it already exists. When it does
+not exist, generate it:
 
 1. Read the GitHub release notes for the exact tag. If they are empty or
    incomplete, also read that tag's section of `CHANGELOG.md`.
@@ -158,11 +171,11 @@ exists. When it does not exist, generate it:
    priority reflects release change volume, size, impact, upgrade risk, and
    maturity expectations. Remove the campaign-creator comment and ensure no
    template placeholder remains except `{{TEST_ENV}}` inside OCM commands.
-8. Create the issue with the stable marker, a short participation note, and the
-   completed worksheet verbatim between the worksheet markers. Read it back and
-   require the marker contents to equal the rendered worksheet before treating
-   campaign initialization as complete. Re-query open issues for the marker
-   after creation and fail on duplicates.
+8. Create the issue with the stable marker, a short participation note, the
+   `release-validation` label, and the completed worksheet verbatim between the
+   worksheet markers. Read it back and require the marker contents to equal the
+   rendered worksheet before treating campaign initialization as complete.
+   Re-query open issues for the marker after creation and fail on duplicates.
 
 After the current issue exists, find open campaign issues whose marker names a
 release published before the current candidate. Comment on each with the current
@@ -216,22 +229,28 @@ or other gateway internals. Ask which gateway the tester wants to copy. Never
 silently select or modify the personal gateway.
 
 After selection, inspect only that gateway and record its version and commit.
-Import its `.openclaw` state with OCM so sessions and other real user state are
-preserved in the fixture:
+Preview the disposable target, then import its `.openclaw` state with OCM so
+sessions and other real user state are preserved in the fixture:
 
 ```sh
+ocm adopt plan --name <test-env> <selected-state-dir> --json
 ocm adopt import --name <test-env> <selected-state-dir> --json
 ```
 
 Use the `stateDir` returned by `ocm env list --json` for an OCM environment and
 `~/.openclaw` for the plain gateway. Let OCM create the stopped, disposable
 environment and assign a non-conflicting port; do not make an additional staged
-copy. The returned environment name is the test environment; use that actual
-name in every tester-facing command rather than the `<test-env>` placeholder.
-Keep the source unchanged. Before activating copied channel credentials,
-stop the current credential owner and restore it when validation ends. For an
-OCM source, use `ocm service stop <source-env>`; for the plain source, use
-`openclaw gateway stop`. There is no `ocm stop` command.
+copy. OCM copies a configured repo-backed or symlinked workspace into the
+disposable environment and rewrites the fixture config to that copy; it never
+changes the source repository or workspace. The returned environment name is
+the test environment; use that actual name in every tester-facing command
+rather than the `<test-env>` placeholder. If OCM cannot isolate a config include
+or source path, pause and report that setup blocker conversationally—never make
+a manual state copy or put it in the campaign worksheet. Keep the source
+unchanged. Before activating copied channel credentials, stop the current
+credential owner and restore it when validation ends. For an OCM source, use
+`ocm service stop <source-env>`; for the plain source, use `openclaw gateway
+stop`. There is no `ocm stop` command.
 
 ## 3. Upgrade and report errors
 
@@ -349,6 +368,23 @@ When the tester says `finish validation`:
    the source of observed results; do not report the other table rows as evidence.
 4. Remove local paths, gateway names, secrets, user identifiers, raw logs, OCM
    notes, setup details, and cleanup details from the comment.
-5. Post the comment once with `gh` and show the tester its URL.
+5. Read and apply the [structured report contract](references/structured-report.md).
+   Append its hidden v1 payload to the visible Markdown, validate it, then create
+   or update this GitHub user's one report comment for the release. Show the
+   tester the resulting comment URL.
+6. Give the tester this concise copy-ready Discord summary, populated only from
+   the same release-facing worksheet evidence and final comment:
+
+   ```md
+   **Release validation — <tag>**
+   Tested: <surfaces with non-empty Testing notes, or "No manual surface testing completed">
+   Key findings: <concise release findings, or "None reported">
+   Recommendation: <yes / no>
+   Details: <GitHub comment URL>
+   ```
+
+   Keep it to these five lines. Exclude source gateway details, local paths,
+   OCM/setup information, cleanup, credentials, and untested surface guidance.
+   This is a copy/paste handoff for the tester; do not post it automatically.
 
 The skill collects release feedback; it does not make the go/no-go decision.

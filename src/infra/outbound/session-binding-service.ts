@@ -7,6 +7,7 @@ import {
   bindGenericCurrentConversation,
   getGenericCurrentConversationBindingCapabilities,
   listGenericCurrentConversationBindingsBySession,
+  requiresRegisteredSessionBindingAdapter,
   resolveGenericCurrentConversationBinding,
   touchGenericCurrentConversationBinding,
   unbindGenericCurrentConversationBindings,
@@ -207,6 +208,28 @@ function dedupeBindings(records: SessionBindingRecord[]): SessionBindingRecord[]
   return [...byId.values()];
 }
 
+export function inspectSessionBindingByConversation(
+  ref: ConversationRef,
+): { status: "available"; binding: SessionBindingRecord | null } | { status: "unavailable" } {
+  const normalized = normalizeConversationRef(ref);
+  if (!normalized.channel || !normalized.conversationId) {
+    return { status: "available", binding: null };
+  }
+  const adapter = resolveAdapterForChannelAccount(normalized);
+  if (adapter) {
+    return { status: "available", binding: adapter.resolveByConversation(normalized) };
+  }
+  // A channel-owned adapter may disappear briefly during restart. That gap is not an
+  // authoritative empty result and must not let callers fall through to another owner.
+  if (requiresRegisteredSessionBindingAdapter(normalized)) {
+    return { status: "unavailable" };
+  }
+  return {
+    status: "available",
+    binding: resolveGenericCurrentConversationBinding(normalized),
+  };
+}
+
 function createDefaultSessionBindingService(): SessionBindingService {
   return {
     bind: async (input) => {
@@ -344,9 +367,7 @@ export function getSessionBindingService(): SessionBindingService {
 export const testing = {
   resetSessionBindingAdaptersForTests() {
     ADAPTERS_BY_CHANNEL_ACCOUNT.clear();
-    genericCurrentConversationBindingTesting.resetCurrentConversationBindingsForTests({
-      deletePersistedFile: true,
-    });
+    genericCurrentConversationBindingTesting.clearPersistedCurrentConversationBindingsForTests();
   },
   getRegisteredAdapterKeys() {
     return [...ADAPTERS_BY_CHANNEL_ACCOUNT.keys()];

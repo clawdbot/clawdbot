@@ -1,3 +1,4 @@
+import { withProviderAcceptanceObserver, type ProviderAcceptance } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
@@ -85,6 +86,7 @@ export type ModelCallUsage = NonNullable<
 >;
 export type ModelCallObservationState = {
   requestPayloadBytes?: number;
+  providerAcceptanceKind?: ProviderAcceptance["kind"];
   responseStatus?: number;
   responseStreamBytes: number;
   timeToFirstByteMs?: number;
@@ -154,6 +156,7 @@ function emitProviderRequestTimelineEvent(
   durationMs: number,
   ok: boolean,
   responseStatus: number | undefined,
+  providerAcceptanceKind: ModelCallObservationState["providerAcceptanceKind"],
 ): void {
   const provider = boundedTimelineAttribute(eventBase.provider);
   const model = boundedTimelineAttribute(eventBase.model);
@@ -174,6 +177,8 @@ function emitProviderRequestTimelineEvent(
       ...(model ? { model } : {}),
       ...(api ? { api } : {}),
       ...(transport ? { transport } : {}),
+      providerAccepted: providerAcceptanceKind !== undefined,
+      ...(providerAcceptanceKind ? { providerAcceptanceKind } : {}),
     },
   });
 }
@@ -291,6 +296,7 @@ function emitModelCallCompleted(
     durationMs,
     true,
     observer.state.responseStatus,
+    observer.state.providerAcceptanceKind,
   );
   emitCoreModelRequestEndedDiagnosticEvent(
     {
@@ -329,7 +335,14 @@ function emitModelCallError(
   const errorStatus = diagnosticHttpStatusCode(err);
   const responseStatus =
     observer.state.responseStatus ?? (errorStatus === undefined ? undefined : Number(errorStatus));
-  emitProviderRequestTimelineEvent(eventBase, startedAt, durationMs, false, responseStatus);
+  emitProviderRequestTimelineEvent(
+    eventBase,
+    startedAt,
+    durationMs,
+    false,
+    responseStatus,
+    observer.state.providerAcceptanceKind,
+  );
   emitCoreModelRequestEndedDiagnosticEvent(
     {
       type: "model.call.error",
@@ -393,13 +406,19 @@ function withDiagnosticRequestContext(
   if (traceparent) {
     headers[TRACEPARENT_HEADER_NAME] = traceparent;
   }
-  return {
+  const requestOptions = {
     ...options,
     requestId: callId,
     ...((options?.headers || traceparent) && { headers }),
     onPayload,
     onResponse,
   };
+  return withProviderAcceptanceObserver(requestOptions, (acceptance) => {
+    observer.state.providerAcceptanceKind = acceptance.kind;
+    if (acceptance.kind === "http_response") {
+      observer.state.responseStatus = acceptance.status;
+    }
+  });
 }
 
 export function createModelLifecycle(params: {

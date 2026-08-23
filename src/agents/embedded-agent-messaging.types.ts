@@ -29,6 +29,7 @@ export type MessagingToolSourceReplyPayload = Pick<
   | "text"
 > & {
   idempotencyKey?: string;
+  transcriptOwner?: true;
   /** Current-source progress (`false`) or completed reply (`true`). */
   sourceReplyFinal?: boolean;
 };

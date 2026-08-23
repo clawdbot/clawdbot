@@ -143,7 +143,9 @@ describe("Canvas presenter tool", () => {
         action: "present",
         node: "legacy-android",
       }),
-    ).rejects.toThrow('node "legacy-android" is not an eligible Canvas panel');
+    ).rejects.toThrow(
+      'node "legacy-android" is not an eligible Canvas panel (requires a connected macOS node advertising canvas.present; eligible node ids: mac-1)',
+    );
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 

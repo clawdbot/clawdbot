@@ -2,43 +2,29 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  normalizeTrimmedStringList,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
 import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import {
-  readProviderJsonArrayFieldResponse,
-  readProviderJsonResponse,
-} from "../agents/provider-http-errors.js";
-import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-// Builds setup metadata for self-hosted provider plugins.
-import { cancelUnreadResponseBody } from "../infra/http-body.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import type {
-  ProviderCatalogContext,
-  ProviderAuthResult,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderAuthResult,
+  ProviderCatalogContext,
   ProviderNonInteractiveApiKeyResult,
 } from "./types.js";
 
@@ -47,254 +33,6 @@ export {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
-
-const log = createSubsystemLogger("plugins/self-hosted-provider-setup");
-
-// Self-hosted provider base URLs are user-supplied and untrusted (an attacker
-// who can influence the configured endpoint, e.g. via SSRF, could serve an
-// unbounded JSON stream). Cap discovery response bodies before parsing so a
-// hostile or buggy endpoint cannot drive the setup wizard into OOM.
-const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
-const SELF_HOSTED_RUNTIME_CONTEXT_MAX_MODELS = 200;
-const SELF_HOSTED_RUNTIME_CONTEXT_CONCURRENCY = 8;
-
-type LlamaCppPropsResponse = {
-  default_generation_settings?: {
-    n_ctx?: unknown;
-  };
-  n_ctx?: unknown;
-};
-
-function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason/i.test(modelId);
-}
-
-const SELF_HOSTED_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
-
-function buildSelfHostedBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
-  try {
-    const parsed = new URL(baseUrl.trim());
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    if (SELF_HOSTED_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname.toLowerCase())) {
-      return undefined;
-    }
-    return {
-      hostnameAllowlist: [parsed.hostname],
-      allowPrivateNetwork: true,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function readPositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.trunc(value);
-}
-
-const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
-  "context_length",
-  "context_window",
-  "context_size",
-] as const;
-
-function readOpenAICompatibleContextWindow(
-  model: Record<string, unknown> | undefined,
-): number | undefined {
-  for (const field of OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS) {
-    const contextWindow = readPositiveInteger(model?.[field]);
-    if (contextWindow !== undefined) {
-      return contextWindow;
-    }
-  }
-  return undefined;
-}
-
-async function readSelfHostedDiscoveryJson<T>(response: Response, label: string): Promise<T> {
-  return await readProviderJsonResponse<T>(response, `${label} discovery`, {
-    maxBytes: SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES,
-  });
-}
-
-function resolveLlamaCppPropsUrl(baseUrl: string, modelId?: string): string {
-  const parsed = new URL(baseUrl);
-  const pathname = parsed.pathname.replace(/\/+$/, "");
-  const rootPathname = pathname.endsWith("/v1") ? pathname.slice(0, -3) || "/" : pathname;
-  parsed.pathname = `${rootPathname.replace(/\/+$/, "")}/props`;
-  parsed.search = "";
-  parsed.hash = "";
-  const normalizedModelId = normalizeOptionalString(modelId);
-  if (normalizedModelId) {
-    parsed.searchParams.set("model", normalizedModelId);
-    parsed.searchParams.set("autoload", "false");
-  }
-  return parsed.toString();
-}
-
-async function discoverLlamaCppRuntimeContextTokens(params: {
-  baseUrl: string;
-  apiKey?: string;
-  modelId?: string;
-}): Promise<number | undefined> {
-  let url: string;
-  try {
-    url = resolveLlamaCppPropsUrl(params.baseUrl, params.modelId);
-  } catch {
-    return undefined;
-  }
-  try {
-    const trimmedApiKey = normalizeOptionalString(params.apiKey);
-    const { response, release } = await fetchWithSsrFGuard({
-      url,
-      init: {
-        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
-      },
-      policy: buildSelfHostedBaseUrlSsrFPolicy(params.baseUrl),
-      timeoutMs: 2500,
-    });
-    try {
-      if (!response.ok) {
-        await cancelUnreadResponseBody(response);
-        return undefined;
-      }
-      const data = await readSelfHostedDiscoveryJson<LlamaCppPropsResponse>(
-        response,
-        "llama.cpp /props",
-      );
-      return (
-        readPositiveInteger(data.default_generation_settings?.n_ctx) ??
-        readPositiveInteger(data.n_ctx)
-      );
-    } finally {
-      await release();
-    }
-  } catch {
-    return undefined;
-  }
-}
-
-export async function discoverOpenAICompatibleLocalModels(params: {
-  baseUrl: string;
-  apiKey?: string;
-  label: string;
-  contextWindow?: number;
-  discoverRuntimeContext?: boolean;
-  maxTokens?: number;
-  env?: NodeJS.ProcessEnv;
-}): Promise<ModelDefinitionConfig[]> {
-  const env = params.env ?? process.env;
-  if (env.VITEST || env.NODE_ENV === "test") {
-    return [];
-  }
-
-  const trimmedBaseUrl = params.baseUrl.trim().replace(/\/+$/, "");
-  const url = `${trimmedBaseUrl}/models`;
-
-  try {
-    const trimmedApiKey = normalizeOptionalString(params.apiKey);
-    const { response, release } = await fetchWithSsrFGuard({
-      url,
-      init: {
-        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
-      },
-      policy: buildSelfHostedBaseUrlSsrFPolicy(trimmedBaseUrl),
-      timeoutMs: 5000,
-    });
-    try {
-      if (!response.ok) {
-        await cancelUnreadResponseBody(response);
-        log.warn(`Failed to discover ${params.label} models: ${response.status}`);
-        return [];
-      }
-      const models = await readProviderJsonArrayFieldResponse(
-        response,
-        `${params.label} discovery`,
-        "data",
-        { maxBytes: SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES },
-      );
-      if (models.length === 0) {
-        log.warn(`No ${params.label} models found on local instance`);
-        return [];
-      }
-
-      const discoveredModels = models.flatMap((rawModel) => {
-        const model = asOptionalRecord(rawModel);
-        const modelId = normalizeOptionalString(model?.id);
-        if (!modelId) {
-          return [];
-        }
-        return [
-          {
-            id: modelId,
-            meta: asOptionalRecord(model?.meta),
-            advertisedContextWindow: readOpenAICompatibleContextWindow(model),
-          },
-        ];
-      });
-      const runtimeContextTokensByModelId = new Map<string, number>();
-      if (params.contextWindow === undefined && params.discoverRuntimeContext !== false) {
-        const uniqueModelIds = uniqueStrings(discoveredModels.map((model) => model.id));
-        const probeModelIds = uniqueModelIds.slice(0, SELF_HOSTED_RUNTIME_CONTEXT_MAX_MODELS);
-        // A valid large router catalog must not start hundreds of guarded
-        // fetches at once; unprobed models retain their advertised metadata.
-        for (
-          let offset = 0;
-          offset < probeModelIds.length;
-          offset += SELF_HOSTED_RUNTIME_CONTEXT_CONCURRENCY
-        ) {
-          const runtimeContextTokenResults = await Promise.all(
-            probeModelIds.slice(offset, offset + SELF_HOSTED_RUNTIME_CONTEXT_CONCURRENCY).map(
-              async (modelId) =>
-                [
-                  modelId,
-                  await discoverLlamaCppRuntimeContextTokens({
-                    baseUrl: trimmedBaseUrl,
-                    apiKey: params.apiKey,
-                    modelId: uniqueModelIds.length > 1 ? modelId : undefined,
-                  }),
-                ] as const,
-            ),
-          );
-          for (const [modelId, runtimeContextTokens] of runtimeContextTokenResults) {
-            if (runtimeContextTokens) {
-              runtimeContextTokensByModelId.set(modelId, runtimeContextTokens);
-            }
-          }
-        }
-      }
-
-      return discoveredModels.map((model) => {
-        const modelConfig: ModelDefinitionConfig = {
-          id: model.id,
-          name: model.id,
-          reasoning: isReasoningModelHeuristic(model.id),
-          input: ["text"],
-          cost: SELF_HOSTED_DEFAULT_COST,
-          contextWindow:
-            params.contextWindow ??
-            readPositiveInteger(model.meta?.n_ctx_train) ??
-            model.advertisedContextWindow ??
-            SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
-        };
-        const runtimeContextTokens = runtimeContextTokensByModelId.get(model.id);
-        if (runtimeContextTokens) {
-          modelConfig.contextTokens = runtimeContextTokens;
-        }
-        return modelConfig;
-      });
-    } finally {
-      await release();
-    }
-  } catch (error) {
-    log.warn(`Failed to discover ${params.label} models: ${String(error)}`);
-    return [];
-  }
-}
 
 export function applyProviderDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawConfig {
   const existingModel = cfg.agents?.defaults?.model;
@@ -386,22 +124,7 @@ type OpenAICompatibleSelfHostedProviderPromptResult = {
   profileId: string;
 };
 
-function buildSelfHostedProviderAuthResult(
-  result: OpenAICompatibleSelfHostedProviderPromptResult,
-): ProviderAuthResult {
-  return {
-    profiles: [
-      {
-        profileId: result.profileId,
-        credential: result.credential,
-      },
-    ],
-    configPatch: result.config,
-    defaultModel: result.modelRef,
-  };
-}
-
-export async function promptAndConfigureOpenAICompatibleSelfHostedProvider(
+async function promptAndConfigureOpenAICompatibleSelfHostedProvider(
   params: OpenAICompatibleSelfHostedProviderSetupParams,
 ): Promise<OpenAICompatibleSelfHostedProviderPromptResult> {
   const baseUrlRaw = await params.prompter.text({
@@ -455,7 +178,11 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProviderAuth(
   params: OpenAICompatibleSelfHostedProviderSetupParams,
 ): Promise<ProviderAuthResult> {
   const result = await promptAndConfigureOpenAICompatibleSelfHostedProvider(params);
-  return buildSelfHostedProviderAuthResult(result);
+  return {
+    profiles: [{ profileId: result.profileId, credential: result.credential }],
+    configPatch: result.config,
+    defaultModel: result.modelRef,
+  };
 }
 
 export async function discoverOpenAICompatibleSelfHostedProvider<

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createChannelPreflightAudio } from "./media-understanding-runtime.js";
+import {
+  createChannelPreflightAudio,
+  formatAudioTranscriptForAgent,
+} from "./media-understanding-runtime.js";
 
 type TranscribeFirstAudio =
   typeof import("../media-understanding/audio-preflight.js").transcribeFirstAudio;
@@ -16,6 +19,14 @@ const audioConfig = {
     },
   },
 };
+
+describe("formatAudioTranscriptForAgent", () => {
+  it("labels and escapes machine-generated transcripts", () => {
+    expect(formatAudioTranscriptForAgent('say "hi"\nthen go')).toBe(
+      '[Audio transcript (machine-generated, untrusted)]: "say \\"hi\\"\\nthen go"',
+    );
+  });
+});
 
 describe("createChannelPreflightAudio", () => {
   it("suppresses speculative echo without mutating the caller config", async () => {

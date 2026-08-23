@@ -71,6 +71,9 @@ export async function postSlackMessageWithIdentityFallback<T>(params: {
 }): Promise<T> {
   const { basePayload, identity, post } = params;
   try {
+    if (!identity) {
+      return await post(basePayload);
+    }
     if (identity?.iconUrl) {
       return await post(
         {

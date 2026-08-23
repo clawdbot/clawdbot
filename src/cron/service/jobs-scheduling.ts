@@ -731,16 +731,36 @@ export function recomputeNextRunsForMaintenance(
   return changed;
 }
 
-/** Returns the next enabled wake timestamp from the in-memory cron store. */
-export function nextWakeAtMs(state: CronServiceState) {
+/** Summarizes the resident job schedule in one pass for timer and status projections. */
+export function summarizeCronJobSchedule(state: CronServiceState) {
+  const jobs = state.store?.jobs ?? [];
   let nextWake: number | undefined;
-  for (const job of state.store?.jobs ?? []) {
+  let jobCount = 0;
+  let enabledCount = 0;
+  for (const job of jobs) {
+    jobCount += 1;
     const nextRun = job.state.nextRunAtMs;
-    if (isJobEnabled(job) && hasScheduledNextRunAtMs(nextRun)) {
+    const hasNextRun = hasScheduledNextRunAtMs(nextRun);
+    const rawEnabled = job.enabled;
+    // Timer diagnostics historically count only explicit enablement, while
+    // wake selection keeps older jobs without `enabled` runnable.
+    if (rawEnabled) {
+      enabledCount += 1;
+    }
+    if ((rawEnabled ?? true) && hasNextRun) {
       nextWake = nextWake === undefined ? nextRun : Math.min(nextWake, nextRun);
     }
   }
-  return nextWake;
+  return {
+    jobCount,
+    enabledCount,
+    nextWakeAtMs: nextWake,
+  };
+}
+
+/** Returns the next enabled wake timestamp from the in-memory cron store. */
+export function nextWakeAtMs(state: CronServiceState) {
+  return summarizeCronJobSchedule(state).nextWakeAtMs;
 }
 
 /** Applies one canonical server-authored authority envelope to a tool-bearing job. */

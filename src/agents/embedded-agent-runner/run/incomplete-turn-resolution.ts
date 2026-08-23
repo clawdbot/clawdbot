@@ -47,6 +47,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   externalAbort: boolean;
   timedOut: boolean;
   hadPotentialSideEffects?: boolean;
+  hasIntentionalTerminalCompletion?: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
   // Prefer the current attempt's terminal message. The session fallback can
@@ -78,7 +79,8 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError
+    params.attempt.lastToolError ||
+    params.hasIntentionalTerminalCompletion
   ) {
     return null;
   }
