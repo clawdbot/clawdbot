@@ -3,7 +3,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { isOutboundDeliveryError, type OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
+import {
+  isOutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+  type OutboundPayloadDeliveryOutcome,
+} from "./deliver-types.js";
 import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
 import { loadPendingDeliveries } from "./delivery-queue-storage.js";
 import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
@@ -118,5 +122,32 @@ describe("queued delivery dispatch evidence", () => {
     expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
       expect.objectContaining({ status: "failed", sentBeforeError: true }),
     );
+  });
+
+  it("preserves an earlier receipt when a later payload is proven not sent", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const notDispatched = new PlatformMessageNotDispatchedError("second payload never dispatched", {
+      cause: new Error("connect ECONNREFUSED"),
+    });
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "first-message" })
+      .mockRejectedValueOnce(notDispatched);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "first" }, { text: "second" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("second payload never dispatched");
+
+    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+      retryCount: 1,
+      recoveryState: "unknown_after_send",
+    });
   });
 });

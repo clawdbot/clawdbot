@@ -556,10 +556,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         }
       } else if (!platformResultsReturned) {
         const sendEvidence =
-          !isProvenDeliveryNotSentError(err) &&
-          (deliveredResults.length > 0 ||
-            platformDispatchedPayloads.size > 0 ||
-            (err instanceof OutboundDeliveryError && err.sentBeforeError));
+          deliveredResults.length > 0 ||
+          (!isProvenDeliveryNotSentError(err) &&
+            (platformDispatchedPayloads.size > 0 ||
+              (err instanceof OutboundDeliveryError && err.sentBeforeError)));
         if (sendEvidence) {
           try {
             queuedPostSendState ??= await persistOwnedPostSendState();
