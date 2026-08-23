@@ -26,6 +26,24 @@ const {
   runDoctorLintCli,
 } = mocks;
 
+const DOCTOR_MUTATION_OPTIONS = [
+  "--repair",
+  "--fix",
+  "--force",
+  "--yes",
+  "--generate-gateway-token",
+] as const;
+
+const DOCTOR_SESSION_SQLITE_MODES = [
+  "inspect",
+  "dry-run",
+  "import",
+  "validate",
+  "compact",
+  "restore",
+  "recover",
+] as const;
+
 vi.mock("../../commands/doctor.js", () => ({
   doctorCommand: mocks.doctorCommand,
 }));
@@ -372,11 +390,124 @@ describe("registerMaintenanceCommands doctor action", () => {
     }
   });
 
-  it("rejects JSON repair mode before running doctor", async () => {
-    const message =
-      "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.";
+  it.each(
+    DOCTOR_MUTATION_OPTIONS.flatMap((mutationOption) => [
+      { mode: "explicit lint", args: ["--lint", mutationOption], mutationOption },
+      {
+        mode: "explicit JSON lint",
+        args: ["--lint", "--json", mutationOption],
+        mutationOption,
+      },
+      { mode: "implicit JSON lint", args: ["--json", mutationOption], mutationOption },
+    ]),
+  )("rejects $mutationOption in $mode before running doctor", async ({ args, mutationOption }) => {
+    const mode = args.includes("--lint") ? "--lint" : "--json";
+    const conflictingOptions =
+      mutationOption === "--yes" || mutationOption === "--generate-gateway-token"
+        ? mutationOption
+        : "--repair, --fix, or --force";
+    const message = `doctor ${mode} runs read-only lint checks and cannot be combined with ${conflictingOptions}.`;
 
-    await runMaintenanceCli(["doctor", "--json", "--repair"]);
+    await runMaintenanceCli(["doctor", ...args]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it.each(DOCTOR_MUTATION_OPTIONS)(
+    "keeps interactive lint mutation conflict %s on stderr",
+    async (mutationOption) => {
+      const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+      Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+
+      try {
+        await runMaintenanceCli(["doctor", "--lint", mutationOption]);
+
+        expect(doctorCommand).not.toHaveBeenCalled();
+        expect(runDoctorLintCli).not.toHaveBeenCalled();
+        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(mutationOption));
+        expect(runtime.writeJson).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(2);
+      } finally {
+        if (stdoutDescriptor) {
+          Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
+        } else {
+          Reflect.deleteProperty(process.stdout, "isTTY");
+        }
+      }
+    },
+  );
+
+  it.each(["--yes", "--generate-gateway-token"])(
+    "keeps %s available to mutating doctor posture",
+    async (mutationOption) => {
+      doctorCommand.mockResolvedValue(undefined);
+
+      await runMaintenanceCli(["doctor", mutationOption]);
+
+      expect(doctorCommand).toHaveBeenCalledTimes(1);
+      expect(runDoctorLintCli).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    },
+  );
+
+  it.each(DOCTOR_SESSION_SQLITE_MODES)(
+    "rejects separate session SQLite %s posture during explicit lint",
+    async (sessionMode) => {
+      const message = `doctor --lint runs read-only lint checks and cannot be combined with --session-sqlite ${sessionMode}.`;
+
+      await runMaintenanceCli(["doctor", "--lint", "--session-sqlite", sessionMode]);
+
+      expect(doctorCommand).not.toHaveBeenCalled();
+      expect(runDoctorLintCli).not.toHaveBeenCalled();
+      expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(2);
+    },
+  );
+
+  it.each(DOCTOR_SESSION_SQLITE_MODES)(
+    "preserves session SQLite %s posture with its own JSON output",
+    async (sessionMode) => {
+      doctorCommand.mockResolvedValue(undefined);
+
+      await runMaintenanceCli(["doctor", "--session-sqlite", sessionMode, "--json"]);
+
+      expect(doctorCommand).toHaveBeenCalledTimes(1);
+      expect(commandCall(doctorCommand)[1]).toEqual(
+        expect.objectContaining({ sessionSqlite: sessionMode, json: true }),
+      );
+      expect(runDoctorLintCli).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    },
+  );
+
+  it.each([
+    ["agent selector", ["--session-sqlite-agent", "main"]],
+    ["store selector", ["--session-sqlite-store", "/tmp/openclaw/sessions.json"]],
+    ["all-agents selector", ["--session-sqlite-all-agents"]],
+    ["GitHub issue creation", ["--github-issue"]],
+  ])("rejects orphan session SQLite %s during explicit lint", async (_label, options) => {
+    const message =
+      "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.";
+
+    await runMaintenanceCli(["doctor", "--lint", ...options]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects GitHub issue creation from session recovery during explicit lint", async () => {
+    const message =
+      "doctor --lint runs read-only lint checks and cannot be combined with --session-sqlite recover.";
+
+    await runMaintenanceCli(["doctor", "--lint", "--session-sqlite", "recover", "--github-issue"]);
 
     expect(doctorCommand).not.toHaveBeenCalled();
     expect(runDoctorLintCli).not.toHaveBeenCalled();
