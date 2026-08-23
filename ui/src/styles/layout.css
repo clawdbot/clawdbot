@@ -3506,10 +3506,13 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .sidebar-footer-actions {
   position: absolute;
+  inset-block-start: 50%;
   inset-inline-end: 8px;
   display: flex;
+  height: 32px;
   align-items: center;
   gap: 4px;
+  transform: translateY(-50%);
 }
 
 openclaw-sidebar-attention {
