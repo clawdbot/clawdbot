@@ -18,6 +18,7 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
+import { ExpectedCliError } from "../../cli/failure-output.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -314,23 +315,10 @@ export async function channelsCapabilitiesCommand(
   const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
   const rawTarget = normalizeOptionalString(opts.target) ?? "";
 
-  if (opts.account && (!rawChannel || rawChannel === "all")) {
-    runtime.error(
-      danger(
-        `--account requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`,
-      ),
-    );
-    runtime.exit(1);
-    return;
-  }
-  if (rawTarget && (!rawChannel || rawChannel === "all")) {
-    runtime.error(
-      danger(
-        `--target requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`,
-      ),
-    );
-    runtime.exit(1);
-    return;
+  if ((!rawChannel || rawChannel === "all") && (opts.account || rawTarget)) {
+    const option = opts.account ? "--account" : "--target";
+    const message = `${option} requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`;
+    throw new ExpectedCliError({ message, humanOutput: danger(message), machineOutput: message });
   }
 
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
@@ -371,9 +359,8 @@ export async function channelsCapabilitiesCommand(
       );
       return;
     }
-    runtime.error(danger(formatUnknownChannelMessage({ channel: rawChannel })));
-    runtime.exit(1);
-    return;
+    const message = formatUnknownChannelMessage({ channel: rawChannel });
+    throw new ExpectedCliError({ message, humanOutput: danger(message), machineOutput: message });
   }
 
   const reports: ChannelCapabilitiesReport[] = [];

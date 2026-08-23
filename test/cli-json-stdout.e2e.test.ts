@@ -331,6 +331,84 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it.each([
+    {
+      name: "account validation in human mode",
+      args: ["channels", "capabilities", "--account", "ghost"],
+      message: "--account requires a specific --channel. Run openclaw channels list to choose one.",
+      human: true,
+    },
+    {
+      name: "account validation with JSON before its option",
+      args: ["channels", "capabilities", "--json", "--account", "ghost"],
+      message: "--account requires a specific --channel. Run openclaw channels list to choose one.",
+    },
+    {
+      name: "target validation with JSON after its option and explicit Commander routing",
+      args: ["channels", "capabilities", "--target", "channel:1", "--json"],
+      message: "--target requires a specific --channel. Run openclaw channels list to choose one.",
+      commander: true,
+    },
+    {
+      name: "unknown channel validation with JSON before its option",
+      args: ["channels", "capabilities", "--json", "--channel", "definitely-not-a-channel"],
+      message:
+        'Unknown channel "definitely-not-a-channel". Run `openclaw channels list --all` to see configured and installable channels.',
+    },
+    {
+      name: "account validation through dual-TTY finalization",
+      args: ["channels", "capabilities", "--account", "ghost", "--json"],
+      message: "--account requires a specific --channel. Run openclaw channels list to choose one.",
+      tty: true,
+    },
+  ])(
+    "renders channels capabilities $name through the canonical failure owner",
+    async (testCase) => {
+      await withTempHome(
+        async (tempHome) => {
+          const preload = Buffer.from(
+            [
+              'import net from "node:net";',
+              'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+              'globalThis.fetch = async () => { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+              ...("tty" in testCase
+                ? [
+                    'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+                    'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+                  ]
+                : []),
+            ].join("\n"),
+          ).toString("base64");
+          const result = runBuiltCli(tempHome, testCase.args, {
+            NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+            OPENCLAW_GATEWAY_PORT: "29871",
+            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+            ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+          });
+
+          expect(result.status, result.stderr).toBe(1);
+          if ("human" in testCase) {
+            expect(result.stdout).toBe("");
+          } else {
+            expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+            expect(JSON.parse(result.stdout)).toEqual({
+              ok: false,
+              error: { type: "cli_error", message: testCase.message },
+            });
+          }
+          expect(result.stderr).toContain(testCase.message);
+          expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
+          if ("tty" in testCase) {
+            expect(result.stderr).toContain("\u001B[?25h");
+          }
+        },
+        { prefix: "openclaw-channels-capabilities-failure-e2e-" },
+      );
+    },
+  );
+
   it("returns one canonical document for a command that previously failed on stderr only", async () => {
     await withTempHome(
       async (tempHome) => {
