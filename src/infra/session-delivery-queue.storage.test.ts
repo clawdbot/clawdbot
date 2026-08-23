@@ -271,7 +271,7 @@ describe("session-delivery queue storage", () => {
           inputProvenance: {
             kind: "inter_session",
             sourceSessionKey: "image_generate:task-1",
-            sourceChannel: "webchat",
+            sourceChannel: "internal",
             sourceTool: "image_generate",
           },
           sourceReplyDeliveryMode: "message_tool_only",

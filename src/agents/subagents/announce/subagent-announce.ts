@@ -14,13 +14,13 @@ import {
 } from "../../../auto-reply/tokens.js";
 import { logWarn } from "../../../logger.js";
 import { defaultRuntime } from "../../../runtime.js";
+import { INTERNAL_PROVENANCE_SOURCE_CHANNEL } from "../../../sessions/input-provenance.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import {
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   buildAnnounceIdFromChildRun,
@@ -579,7 +579,7 @@ export async function runSubagentAnnounceFlow(params: {
       directOrigin,
       sourceSessionKey: params.childSessionKey,
       sourceRunId: params.childRunId,
-      sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+      sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
       sourceTool: "subagent_announce",
       isSourceSessionEffectsAllowed: completionDeliveryAllowed,
       isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,

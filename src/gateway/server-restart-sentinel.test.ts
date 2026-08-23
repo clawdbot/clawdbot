@@ -583,7 +583,7 @@ function deliverGeneratedMedia(
       route: { channel: "discord", to: "channel:123", chatType: "channel" },
       inputProvenance: {
         kind: "inter_session",
-        sourceChannel: "webchat",
+        sourceChannel: "internal",
         sourceTool: "image_generate",
       },
       sourceReplyDeliveryMode: "automatic",
@@ -1128,7 +1128,7 @@ describe("scheduleRestartSentinelWake", () => {
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "image_generate:task-1",
-          sourceChannel: "webchat",
+          sourceChannel: "internal",
           sourceTool: "image_generate",
         },
         sourceReplyDeliveryMode: "message_tool_only",
@@ -1153,7 +1153,7 @@ describe("scheduleRestartSentinelWake", () => {
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "image_generate:task-1",
-          sourceChannel: "webchat",
+          sourceChannel: "internal",
           sourceTool: "image_generate",
         },
         sourceReplyDeliveryMode: "automatic",

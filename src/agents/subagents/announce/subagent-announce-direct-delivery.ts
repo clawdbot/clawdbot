@@ -6,13 +6,13 @@ import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
+  INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../../sessions/input-provenance.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { sessionDeliveryChannel } from "../../../utils/delivery-context.shared.js";
 import {
-  INTERNAL_MESSAGE_CHANNEL,
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
@@ -332,7 +332,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       inputProvenance: {
         kind: "inter_session",
         sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+        sourceChannel: params.sourceChannel ?? INTERNAL_PROVENANCE_SOURCE_CHANNEL,
         sourceTool: params.sourceTool ?? "subagent_announce",
       },
       ...(completionSourceReplyDeliveryMode

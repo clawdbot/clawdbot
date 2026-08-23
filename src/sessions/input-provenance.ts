@@ -19,6 +19,13 @@ export type InputProvenance = {
 
 export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
 
+// Distinct from INTERNAL_MESSAGE_CHANNEL (src/utils/message-channel-constants.ts),
+// which is the routing sentinel controlling non-delivery dispatch. This value only
+// labels sourceChannel provenance for genuinely internal completions (background
+// media generation, ACP harness tasks, subagent announce/wake handoffs) so they are
+// never diagnosed as originating from the nonexistent "webchat" browser surface.
+export const INTERNAL_PROVENANCE_SOURCE_CHANNEL = "internal" as const;
+
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
 const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
   "agent_harness_task",

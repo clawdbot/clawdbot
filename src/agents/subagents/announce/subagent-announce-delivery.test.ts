@@ -3177,7 +3177,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         },
         inputProvenance: {
           kind: "inter_session",
-          sourceChannel: "webchat",
+          sourceChannel: "internal",
           sourceTool: "image_generate",
         },
         sourceReplyDeliveryMode: "message_tool_only",

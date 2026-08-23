@@ -8,12 +8,12 @@ import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { logWarn } from "../../../logger.js";
 import { getSharedGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { INTERNAL_PROVENANCE_SOURCE_CHANNEL } from "../../../sessions/input-provenance.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import {
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
@@ -441,7 +441,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         requesterOrigin: requesterSessionOrigin,
         directOrigin,
         sourceSessionKey: currentSettledEntry.childSessionKey,
-        sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+        sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
         sourceTool: "subagent_announce",
         targetRequesterSessionKey: requesterSessionKey,
         requesterIsSubagent: false,

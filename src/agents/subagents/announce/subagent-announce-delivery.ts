@@ -10,7 +10,10 @@ import {
   releaseSessionDeliveryClaim,
 } from "../../../infra/session-delivery-queue-storage.js";
 import { defaultRuntime } from "../../../runtime.js";
-import { isAgentMediatedCompletionSourceTool } from "../../../sessions/input-provenance.js";
+import {
+  INTERNAL_PROVENANCE_SOURCE_CHANNEL,
+  isAgentMediatedCompletionSourceTool,
+} from "../../../sessions/input-provenance.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
 import { hasGeneratedMediaCompletionEvent } from "../../internal-event-contract.js";
@@ -163,7 +166,7 @@ export async function deliverSubagentAnnouncement(params: {
         inputProvenance: {
           kind: "inter_session",
           ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-          sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
+          sourceChannel: params.sourceChannel ?? INTERNAL_PROVENANCE_SOURCE_CHANNEL,
           sourceTool: params.sourceTool ?? "subagent_announce",
         },
         sourceReplyDeliveryMode,
