@@ -20,7 +20,7 @@ type WorkerNodeProvisioningOptions = {
   destroyProviderLease: (
     record: WorkerEnvironmentRecord,
     leaseId: string,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
   ) => Promise<void>;
   finishProvenDestroy: (record: WorkerEnvironmentRecord) => Promise<WorkerEnvironmentRecord>;
   saveError: (record: WorkerEnvironmentRecord, error: unknown) => WorkerEnvironmentRecord;
@@ -31,7 +31,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
   const fail = async (
     record: WorkerEnvironmentRecord,
     lease: NodeLease,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
     error: unknown,
   ): Promise<never> => {
     const detail = boundedError(error);
@@ -70,7 +70,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
   return async (
     record: WorkerEnvironmentRecord,
     lease: NodeLease,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
     patch: { leaseId: string; sharedHost: boolean; desktop: WorkerLease["desktop"] | null },
   ): Promise<WorkerEnvironmentRecord> => {
     let nodeBuild: WorkerAdmissionHandshake;

@@ -3,8 +3,6 @@
     <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Obrolan"</string>
     <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sesi"</string>
     <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Model"</string>
-    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s sebelumnya"</string>
-    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s berikutnya"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kontrol"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bicara"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Audio jam tangan gagal"</string>
@@ -41,6 +39,17 @@
     <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mulai percakapan"</string>
     <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bicara atau ketik di jam tangan Anda. Ponsel yang disandingkan mengirim pesan melalui sesi OpenClaw yang telah diautentikasi."</string>
     <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sesi saat ini"</string>
+    <string name="context_label_value" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"%1$s: %2$s"</string>
+    <string name="close" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Tutup"</string>
+    <string name="search" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Cari"</string>
+    <string name="search_sessions" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Cari sesi"</string>
+    <string name="search_models" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Cari model"</string>
+    <string name="load_more" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Muat lebih banyak"</string>
+    <string name="active_on_phone" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Aktif di ponsel"</string>
+    <string name="open_on_watch" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Buka di jam tangan"</string>
+    <string name="no_matches" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Tidak ada kecocokan"</string>
+    <string name="search_sessions_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Temukan sesi"</string>
+    <string name="search_models_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Temukan model"</string>
     <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tampilan"</string>
     <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gelap"</string>
     <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Terang"</string>

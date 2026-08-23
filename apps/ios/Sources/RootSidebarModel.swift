@@ -387,7 +387,7 @@ final class RootSidebarModel {
             CostUsageSummaryLite.self,
             appModel: appModel,
             method: "usage.cost",
-            paramsJSON: "{\"days\":31}")
+            paramsJSON: CostUsageRequest.monthParamsJSON())
         async let cronJobs = self.loadCronJobs(appModel: appModel)
         let loadedUsage = await usage
         let loadedCronJobs = await cronJobs

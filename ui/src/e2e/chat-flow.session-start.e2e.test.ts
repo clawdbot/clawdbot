@@ -137,9 +137,14 @@ suite.define(() => {
         sessionKey: "global",
         state: "delta",
       });
-      await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
+      const transcript = page.locator(".chat-thread-inner");
+      await transcript.getByText("First token visible.", { exact: true }).waitFor({
+        timeout: 10_000,
+      });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-      await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
+      await transcript.getByText("First token visible.", { exact: true }).waitFor({
+        timeout: 10_000,
+      });
       await expect
         .poll(() => page.locator('[data-chat-model-option="openai/startup-model"]').count())
         .toBe(1);

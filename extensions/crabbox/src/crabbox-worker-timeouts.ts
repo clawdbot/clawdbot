@@ -5,6 +5,8 @@ type CrabboxProvisionTimeoutProfile = {
 
 export const CRABBOX_WARMUP_TIMEOUT_MS = 240_000;
 export const CRABBOX_LIFECYCLE_TIMEOUT_MS = 60_000;
+// AWS coordinator heartbeat latency reached 107.6 seconds in production measurements.
+export const CRABBOX_HEARTBEAT_TIMEOUT_MS = 150_000;
 
 // `providers --json` is a static compiled report: no network, no credentials,
 // measured well under a second. The picker awaits it, so cap it far below the
@@ -15,7 +17,7 @@ const CRABBOX_PROVISION_TIMEOUT_MS = 290_000;
 // Crabbox starts its 45-minute desktop/browser bootstrap clock after acquisition.
 // Preserve OpenClaw's existing five-minute acquisition envelope, then leave one
 // lifecycle allowance for post-warmup inspection and cleanup.
-const CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS = 50 * 60_000;
+export const CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS = 50 * 60_000;
 const CRABBOX_DESKTOP_PROVISION_TIMEOUT_MS =
   CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS + CRABBOX_LIFECYCLE_TIMEOUT_MS;
 // Setup gets its own budget on top of provision so a slow warmup cannot starve it.

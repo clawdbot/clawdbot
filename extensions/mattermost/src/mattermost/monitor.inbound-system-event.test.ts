@@ -860,6 +860,11 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.BodyForAgent).toBe("hello from mattermost");
     expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
     expect(ctx?.MessageSid).toBe("post-inbound-system-event-regular");
+    expect(ctx?.ConversationRouteContextObserved).toBe(true);
+    expect(ctx?.ConversationRoutePeerId).toBe("chan-1");
+    expect(ctx?.GroupSpace).toBe("team-1");
+    expect(ctx?.NativeChannelId).toBe("chan-1");
+    expect(ctx?.InboundAccessAuthorized).toBe(true);
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
   });

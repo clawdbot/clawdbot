@@ -128,6 +128,16 @@ describe("resolveDiscordThreadStarter", () => {
     });
   });
 
+  it("preserves ordered text from later embeds in REST-fetched thread starters", async () => {
+    const { result } = await resolveStarter({
+      message: createStarterMessage({
+        embeds: [{}, { title: "Alert", description: "Details" }, { description: "Follow-up" }],
+      }),
+    });
+
+    expect(requireThreadStarter(result).text).toBe("Alert\nDetails\nFollow-up");
+  });
+
   it("prefers starter content over embed fallback text", async () => {
     const { result } = await resolveStarter({
       message: createStarterMessage({

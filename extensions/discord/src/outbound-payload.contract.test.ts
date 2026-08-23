@@ -54,18 +54,37 @@ describe("Discord outbound payload contract", () => {
 describe("Discord voice fallback delivery safety", () => {
   function runVoicePayload(
     error: unknown,
-    options: { deliveredText?: boolean; messageCreateAmbiguous?: boolean } = {},
+    options: {
+      additionalMedia?: boolean;
+      additionalMediaFailure?: Error;
+      deliveredText?: boolean;
+      messageCreateAmbiguous?: boolean;
+    } = {},
   ) {
+    const onDeliveryResult = vi.fn();
     const voiceDelivery = vi.fn(async () => {
       if (options.messageCreateAmbiguous) {
         recordDiscordMessageCreateAmbiguity(error);
       }
       throw error;
     });
-    const textDelivery = vi.fn(async () => ({
-      messageId: "fallback-text",
-      channelId: "123456",
-    }));
+    let textDeliveryCalls = 0;
+    const textDelivery = vi.fn(async (_to: string, _text: string, sendOptions?: unknown) => {
+      const callIndex = textDeliveryCalls++;
+      if (options.additionalMediaFailure && callIndex > 0) {
+        throw options.additionalMediaFailure;
+      }
+      const result = {
+        messageId: "fallback-text",
+        channelId: "123456",
+      };
+      await (
+        sendOptions as
+          | { onDeliveryResult?: (deliveryResult: typeof result) => Promise<void> }
+          | undefined
+      )?.onDeliveryResult?.(result);
+      return result;
+    });
     const sendPayload = requireDiscordSendPayload();
     const promise = sendPayload({
       cfg: {},
@@ -75,15 +94,19 @@ describe("Discord voice fallback delivery safety", () => {
         ...(options.deliveredText
           ? { ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true } }
           : { text: "answer" }),
-        mediaUrls: ["https://example.test/voice.ogg"],
+        mediaUrls: [
+          "https://example.test/voice.ogg",
+          ...(options.additionalMedia ? ["https://example.test/remaining.png"] : []),
+        ],
         audioAsVoice: true,
       },
       deps: {
         discord: textDelivery,
         discordVoice: voiceDelivery,
       },
+      onDeliveryResult,
     });
-    return { promise, textDelivery, voiceDelivery };
+    return { onDeliveryResult, promise, textDelivery, voiceDelivery };
   }
 
   it.each([
@@ -202,12 +225,16 @@ describe("Discord voice fallback delivery safety", () => {
       label: "voice preparation was aborted before message creation",
       error: Object.assign(new Error("audio source aborted"), { name: "AbortError" }),
     },
-  ])("preserves text fallback when $label", async ({ error }) => {
-    const { promise, textDelivery, voiceDelivery } = runVoicePayload(error);
+  ])("reports failure after preserving text fallback when $label", async ({ error }) => {
+    const { onDeliveryResult, promise, textDelivery, voiceDelivery } = runVoicePayload(error);
 
-    await expect(promise).resolves.toMatchObject({ messageId: "fallback-text" });
+    await expect(promise).rejects.toBe(error);
     expect(voiceDelivery).toHaveBeenCalledOnce();
     expect(textDelivery).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "discord", messageId: "fallback-text" }),
+    );
   });
 
   it.each([
@@ -247,28 +274,71 @@ describe("Discord voice fallback delivery safety", () => {
         cause: Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" }),
       }),
     },
-  ])("retains the text fallback after $label", async ({ error }) => {
-    const { promise, textDelivery, voiceDelivery } = runVoicePayload(error);
+  ])("retains text progress before reporting $label", async ({ error }) => {
+    const { onDeliveryResult, promise, textDelivery, voiceDelivery } = runVoicePayload(error);
 
-    await expect(promise).resolves.toMatchObject({ messageId: "fallback-text" });
+    await expect(promise).rejects.toBe(error);
     expect(voiceDelivery).toHaveBeenCalledOnce();
     expect(textDelivery).toHaveBeenCalledWith(
       "channel:123456",
       "answer",
       expect.objectContaining({ cfg: {} }),
     );
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "discord", messageId: "fallback-text" }),
+    );
+  });
+
+  it("delivers remaining media before reporting a definitive voice failure", async () => {
+    const error = new Error("ffmpeg unavailable");
+    const { onDeliveryResult, promise, textDelivery, voiceDelivery } = runVoicePayload(error, {
+      additionalMedia: true,
+    });
+
+    await expect(promise).rejects.toBe(error);
+    expect(voiceDelivery).toHaveBeenCalledOnce();
+    expect(textDelivery).toHaveBeenCalledTimes(2);
+    expect(textDelivery).toHaveBeenNthCalledWith(
+      2,
+      "channel:123456",
+      "",
+      expect.objectContaining({ mediaUrl: "https://example.test/remaining.png" }),
+    );
+    expect(onDeliveryResult).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the voice failure when a remaining media send also fails", async () => {
+    const voiceError = new Error("ffmpeg unavailable");
+    const remainingError = new Error("remaining media unavailable");
+    const { promise, textDelivery, voiceDelivery } = runVoicePayload(voiceError, {
+      additionalMedia: true,
+      additionalMediaFailure: remainingError,
+    });
+
+    await expect(promise).rejects.toBe(voiceError);
+    expect(voiceDelivery).toHaveBeenCalledOnce();
+    expect(textDelivery).toHaveBeenCalledTimes(2);
+    console.log(
+      `discord-voice-partial-proof ${JSON.stringify({
+        voiceAttempt: "failed",
+        fallbackTextDelivered: true,
+        remainingMediaAttempted: true,
+        remainingMediaFailed: true,
+        reportedError: "ffmpeg unavailable",
+      })}`,
+    );
   });
 
   it("keeps an existing transcript when an audio encoder fails before voice delivery", async () => {
-    const { promise, textDelivery, voiceDelivery } = runVoicePayload(
-      new Error("ffmpeg unavailable"),
-      {
-        deliveredText: true,
-      },
-    );
+    const error = new Error("ffmpeg unavailable");
+    const { onDeliveryResult, promise, textDelivery, voiceDelivery } = runVoicePayload(error, {
+      deliveredText: true,
+    });
 
-    await expect(promise).resolves.toMatchObject({ messageId: "" });
+    await expect(promise).rejects.toBe(error);
     expect(voiceDelivery).toHaveBeenCalledOnce();
     expect(textDelivery).not.toHaveBeenCalled();
+    expect(onDeliveryResult).not.toHaveBeenCalled();
   });
 });

@@ -105,6 +105,8 @@ dispatch so authorization failures have one canonical structured response:
   `operator.admin` for `profileId` or a target-less
   `cloudWorkers.projectProfiles` lookup; `sessions.move` needs `operator.write`
   for Gateway or device targets and `operator.admin` for profile targets;
+  `abandonSource: true` remains `operator.write` but is schema-valid only with
+  a Gateway target and runtime-valid only for an exact offline device source;
   `sessions.reclaim` remains `operator.write`. Malformed dispatch params or a
   malformed move target use `operator.write` so the handler can return the
   precise schema error. All three methods retain session ownership,

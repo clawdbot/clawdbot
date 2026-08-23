@@ -15,6 +15,10 @@ export type WorkerActiveDispatchPlacement = Extract<
   { state: "active" }
 >;
 export type WorkerFailedDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "failed" }>;
+export type WorkerProvisioningDispatchPlacement = Extract<
+  WorkerDispatchPlacement,
+  { state: "provisioning" }
+>;
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 type WorkerReconcilingDispatchPlacement = Extract<
   WorkerDispatchPlacement,
@@ -29,8 +33,10 @@ export type WorkerDispatchPlacementStore = Pick<
   | "claimTurn"
   | "closeWorkerTurnToolState"
   | "beginPlacementMove"
+  | "preparePlacementMove"
   | "cancelPlacementMove"
   | "completePlacementMoveSourceToLocal"
+  | "completeAbandonedPlacementMoveSourceToLocal"
   | "completePlacementMoveToWorker"
   | "getPlacementMove"
   | "listPlacementMoves"
@@ -44,6 +50,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "list"
   | "listPendingWorkspaceResults"
   | "markWorkspaceResultPending"
+  | "handoffWorkspaceResultRecovery"
   | "workspaceResultInstanceId"
   | "validateWorkspaceResultClaim"
   | "recordStagedWorkspaceResult"
@@ -70,6 +77,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "createFromProfileSnapshot"
   | "destroy"
   | "get"
+  | "reconcileEnvironment"
   | "reconcileOnce"
   | "startTunnel"
   | "stopTunnel"

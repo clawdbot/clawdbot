@@ -523,6 +523,6 @@ describe("Claude live process approvals", () => {
         deniedReason: "plugin-approval",
       },
     ]);
-    expect(liveRunLifecycle.cancel).toHaveBeenCalledWith("manual-cancel");
+    expect(liveRunLifecycle.cancel).not.toHaveBeenCalled();
   });
 });

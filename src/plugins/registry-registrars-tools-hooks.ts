@@ -453,6 +453,9 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(eligibleTriggers ? { eligibleTriggers } : {}),
+      ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true
+        ? { requiresToolAuthority: true }
+        : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };

@@ -39,7 +39,6 @@ import {
 } from "./llama-server-install.js";
 
 type ModelArtifact = {
-  source: string;
   fileName: string;
   url: string;
   expectedSize?: number;
@@ -48,11 +47,9 @@ type ModelArtifact = {
 
 export type ManagedLlamaServer = {
   command: string;
-  presetPath: string;
   baseUrl: string;
   healthUrl: string;
   args: string[];
-  backend: LlamaServerAsset["backend"];
 };
 
 export type LlamaServerRuntimeFacts = {
@@ -171,13 +168,12 @@ async function resolveHuggingFaceArtifact(
     .filter(Boolean)
     .join("_")
     .replace(/[^a-z\d._-]+/giu, "_")}`;
-  return { source, fileName: safeName, url, expectedSize, expectedSha256 };
+  return { fileName: safeName, url, expectedSize, expectedSha256 };
 }
 
 function defaultArtifact(source: string): ModelArtifact | undefined {
   if (source === DEFAULT_LLAMA_CPP_MODEL_URI) {
     return {
-      source,
       fileName: DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
       url: `https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/${DEFAULT_LLAMA_CPP_MODEL_REVISION}/gemma-4-E4B-it-Q4_K_M.gguf?download=true`,
       expectedSize: DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
@@ -186,7 +182,6 @@ function defaultArtifact(source: string): ModelArtifact | undefined {
   }
   if (source === DEFAULT_LLAMA_CPP_EMBEDDING_MODEL) {
     return {
-      source,
       fileName: DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
       url: `https://huggingface.co/ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/resolve/${DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION}/embeddinggemma-300m-qat-Q8_0.gguf?download=true`,
       expectedSize: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES,
@@ -232,7 +227,7 @@ async function resolveModelArtifact(source: string, signal?: AbortSignal): Promi
     if (!fileName.toLowerCase().includes(".gguf")) {
       throw new Error(`Remote model URL must name a GGUF file: ${source}`);
     }
-    return { source, fileName, url: source };
+    return { fileName, url: source };
   }
   throw new Error(`Unsupported remote model URI: ${source}`);
 }
@@ -399,7 +394,6 @@ export async function prepareManagedLlamaServer(params: {
   const rootUrl = `http://127.0.0.1:${port}`;
   return {
     command,
-    presetPath,
     baseUrl: `${rootUrl}/v1`,
     healthUrl: `${rootUrl}/health`,
     args: [
@@ -414,7 +408,6 @@ export async function prepareManagedLlamaServer(params: {
       "--metrics",
       "--no-ui",
     ],
-    backend: asset.backend,
   };
 }
 

@@ -4,8 +4,8 @@ import { A2UI_PATH, isA2uiPath } from "./a2ui-shared.js";
 import { resolveFileWithinRoot } from "./file-resolver.js";
 
 type A2uiRootResolver = () => Promise<string | null>;
-type A2uiHttpRequest = { method?: string; url?: string };
-type A2uiHttpResponse = {
+export type A2uiHttpRequest = { method?: string; url?: string };
+export type A2uiHttpResponse = {
   statusCode: number;
   setHeader(name: string, value: number | string | readonly string[]): void;
   end(chunk?: Buffer | string): void;

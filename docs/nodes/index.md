@@ -46,8 +46,8 @@ Pending pairing requests expire 5 minutes after the device's last retry — a de
   [Active computer presence](/nodes/presence) for setup, privacy, timing, and
   troubleshooting.
 - The device pairing record is the durable approved-role contract. Token rotation stays inside that contract; it cannot upgrade a paired node into a role that pairing approval never granted.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate, gateway-owned node pairing store that tracks the node's approved command/capability surface across reconnects. It does **not** gate transport authentication — device pairing does that.
-- `openclaw nodes remove --node <id|name|ip>` removes a node pairing. For a device-backed node it revokes the device's `node` role in the paired-device store and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. It also clears any matching entry from the separate node pairing store. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
+- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) manages the node's approved command/capability surface on its canonical paired-device record. Device pairing owns both transport authentication and the durable node surface; there is no separate node pairing store.
+- `openclaw nodes remove --node <id|name|ip>` revokes the device's `node` role in the paired-device store and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`
   - non-exec node commands: `operator.pairing` + `operator.write`
@@ -94,7 +94,7 @@ A Gateway can remain healthy for browser users while node hosting is unavailable
 - **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
 - **Node onboarding URL:** With `gateway.bind: "loopback"`, configure Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl` before minting a join code. Otherwise `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.`
 - **Node onboarding plugin:** Join codes and `openclaw connect` require the bundled `device-pair` plugin. If it is disabled or excluded by plugin policy, set `plugins.entries.device-pair.enabled: true`, make sure `device-pair` is allowed, and restart the Gateway.
-- **Device session runtime:** Paired-device runners host only the embedded OpenClaw runtime. Give at least one selected agent/model route `agentRuntime.id: "openclaw"`; Codex and ACPX routes cannot dispatch to a paired device. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [runtime policy](/gateway/config-agents#runtime-policy).
+- **Device session runtime:** Paired-device runners support the embedded OpenClaw runtime and explicitly authorized Codex `remote-exec`; ACPX routes cannot dispatch to a paired device. Codex requires `codex.exec-server.stdio.v1` in `gateway.nodes.commands.allow` plus its normal pairing and invocation approvals. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [Codex paired-device placement](/plugins/codex-harness#run-codex-on-a-paired-device) and [runtime policy](/gateway/config-agents#runtime-policy).
 - **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol#worker-role-and-closed-protocol).
 
 For a Cloudflare Access-fronted Gateway:
@@ -491,34 +491,49 @@ Gateway does not fall back to the node's local OpenClaw package or an older
 supervisor dialect.
 
 This setting enables supervised session turns on the paired device, including
-Gateway-owned workspace transfer and result reconciliation. Each node runs at
-most two worker processes by default. A third launch waits up to 10 seconds for
-a durable slot; while both slots are occupied, the node remains available for
-status and cancellation but is not selected for a new session turn.
+Gateway-owned workspace transfer and result reconciliation. By default, each
+node has one worker slot per available CPU core. Configure the slot count with
+`nodeHost.workerRuns.capacity`. Launches beyond capacity wait up to 10 seconds
+for a durable slot; while all slots are occupied, the node remains available
+for status and cancellation but is not selected for a new session turn.
 
-The picker derives every device row from `environments.list`. A device is
-selectable only when current inventory reports status `available`,
-`sessionHost: true`, valid exact worker slots, and at least one available slot.
-Connected non-hosts, saturated hosts, hosts without current capacity,
-update-required or otherwise outdated hosts, and unavailable hosts remain
+The picker derives every device row from `environments.list`. Every selected
+runtime requires an available, connected paired session host. OpenClaw worker
+turns additionally require valid exact worker slots with at least one free
+slot. Codex paired-device execution launches its exec-server directly, so it
+does not consume or require a worker slot; instead, its required command must
+appear in the node's effective `invocableCommands`, not merely its declared
+capabilities. A declared command is usable only when the approved pairing and
+Gateway command allowlist both authorize it. Connected non-hosts, ineligible
+or saturated hosts, update-required devices, and unavailable hosts remain
 visible but disabled with an actionable reason. Enable hosting with
 `openclaw connect --service --session-host` or the `nodeHost.workerRuns`
 setting, then restart the node host. Update-required hosts must be upgraded and
 restarted before selection.
 
 When a known session host disconnects, its paired-device record preserves only
-the last accepted current-v5 hosting consent. The offline row remains visible
-and disabled with status unavailable. A current disabled or empty v5
-publication records false; older v1-v4 and update-required dialects do not
+the last accepted current-v6 hosting consent. The offline row remains visible
+and disabled with status unavailable. A current disabled or empty v6
+publication records false; older v1-v5 and update-required dialects do not
 overwrite the last current fact. Connected inventory always wins over stored
 history, a missing stored value means false, and exact worker slots are never
 persisted or shown as offline capacity.
 
-If the device is offline before a turn is dispatched, the Gateway waits up to
-10 seconds and then returns a visible retry/reconnect error while keeping the
-session placement available for a later attempt. Gateway restart likewise
-preserves an idle device placement and reconnects its tunnel lazily on the next
-turn. A paired node remains dormant for 14 days after its exact recorded
+If the device is offline, its active placement remains active: availability is
+process-current, not a terminal placement state. `sessions.list` and
+`sessions.describe` project `runner: { kind: "device", status: "offline" }`
+until that exact current-v6 node runner reconnects. Gateway restart therefore
+shows an active device placement as offline until reconnect; current inventory
+then changes the projection to `available` and emits a session refresh. Exact
+worker slots gate only new placements whose runtime consumes a worker slot;
+they do not affect Codex remote execution or an existing session's availability.
+
+Control UI shows **Device offline** and waits by default without giving up the
+placement, workspace, or authority. Retry the next turn after the device
+returns. **Continue on Gateway…** is a separate destructive choice: it fences
+the device owner and continues from the last Gateway-synced workspace without
+replaying the interrupted turn. Unsynced device files and in-flight work may be
+lost. A paired node remains dormant for 14 days after its exact recorded
 disconnect; at that boundary its old worker environment is treated as gone and
 the session placement reconciles normally. Pairing itself remains, so a later
 reconnect can provision a fresh environment. Legacy pairings without exact node

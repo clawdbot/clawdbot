@@ -106,6 +106,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     shouldInjectGroupIntro,
     typingMode,
     allowEmptyAssistantReplyAsSilent,
+    terminalReplyExpectation,
   } = context;
   const {
     ctx,
@@ -497,6 +498,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       cliSessionBindingFacts,
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
+      terminalReplyExpectation,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
       ...(opts?.skillWorkshopProposalRevision
         ? {

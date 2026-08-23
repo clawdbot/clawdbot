@@ -550,7 +550,8 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: 6px;
+  margin: 0;
+  padding: 10px 12px;
   font-size: var(--control-ui-text-sm);
   line-height: 1.6;
 }
@@ -649,7 +650,7 @@
 .chat-tool-card--flush > .chat-tool-card__actions {
   position: absolute;
   top: 8px;
-  right: 6px;
+  inset-inline-end: 6px;
   z-index: 1;
   opacity: 0;
   transition: opacity 120ms ease;
@@ -659,10 +660,44 @@
   opacity: 1;
 }
 
+.chat-tool-card__modes {
+  --track-width: 0;
+}
+
+.chat-tool-card__modes::part(nav) {
+  padding: 4px 8px 0;
+}
+
+.chat-tool-card__modes::part(tabs) {
+  gap: 2px;
+}
+
+.chat-tool-card__modes::part(body) {
+  padding: 0;
+}
+
+.chat-tool-card__modes wa-tab::part(base) {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+
+.chat-tool-card__modes wa-tab[active]::part(base) {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+
+.chat-tool-card__modes wa-tab-panel {
+  padding: 0;
+}
+
 /* Reserve the floating action box (button + its 6px inset) plus the block's own
    12px padding so command text never runs underneath it. */
 .chat-tool-card--flush:has(> .chat-tool-card__actions) .chat-tool-term__cmd {
-  padding-right: calc(var(--chat-tool-action-size, 40px) + 18px);
+  padding-inline-end: calc(var(--chat-tool-action-size, 40px) + 18px);
 }
 
 .chat-tool-card--flush:hover > .chat-tool-card__actions,
@@ -681,7 +716,7 @@
   align-items: center;
   gap: 6px;
   justify-content: flex-end;
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 
 .chat-tool-card__action-btn {
@@ -736,7 +771,7 @@
   border: 0;
   background: transparent;
   font: 11px/1.4 var(--mono);
-  text-align: left;
+  text-align: start;
   cursor: var(--cursor-action);
 }
 
@@ -835,11 +870,17 @@
   margin-top: 8px;
 }
 
+.chat-tool-card__widget-host {
+  width: 100%;
+}
+
 .chat-tool-card__preview {
   position: relative;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: var(--radius-md);
-  background: var(--card);
+  width: 100%;
+  max-width: 100%;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
   overflow: hidden;
 }
 
@@ -850,7 +891,7 @@
 
 /* MCP Apps are responsive documents, so give them the assistant column instead
    of letting the content-sized reply bubble collapse their iframe to ~300px. */
-.chat-group.assistant .chat-bubble:has(> .chat-tool-card__preview[data-content-kind="mcp-app"]) {
+.chat-group.assistant .chat-bubble:has(> .chat-tool-card__widget-host) {
   align-self: stretch;
   width: 100%;
 }
@@ -875,13 +916,26 @@
   flex-shrink: 0;
 }
 
+/* Chromium can retain a skipped row's pre-menu geometry. Fully lay out the
+   active widget row so closing its top-layer menu cannot move the disclosure. */
+.chat-virtual-row:has(.chat-tool-card__widget-actions[open]) {
+  content-visibility: visible;
+}
+
 .chat-tool-card__widget-actions::part(menu) {
-  min-width: 176px;
+  min-width: 164px;
+  max-width: 208px;
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
+}
+
+.chat-tool-card__widget-actions .session-menu__item {
+  min-height: 32px;
+  padding-inline: 7px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .chat-tool-card__widget-actions-trigger,
@@ -955,6 +1009,22 @@
      flashing white in dark mode. Documents from the pre-token wrapper assumed
      white; accepted tradeoff — they are transient (32-doc LRU) and age out. */
   background: var(--card);
+}
+
+.chat-tool-card__widget-raw {
+  width: 100%;
+}
+
+.chat-tool-card__widget-raw > .chat-tool-card__raw {
+  margin-top: 8px;
+}
+
+.chat-tool-card__widget-raw .chat-tool-card__raw-toggle {
+  display: none;
+}
+
+.chat-tool-card__widget-raw .chat-tool-card__raw-body {
+  margin-top: 0;
 }
 
 .chat-tool-card__raw-toggle {
@@ -1049,16 +1119,10 @@
 }
 
 /* ── Activity group (a turn's run of tool rows) ── */
-/* Keep the activity summary, call bubbles, and flat result rows on one width.
-   Include the role classes so this wins over the generic tool-group rule. */
-.chat-group.tool.chat-group--activity .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(760px, 100%));
-}
-
 .chat-activity-group {
   width: 100%;
   min-width: 0;
-  max-width: 100%;
+  max-width: var(--chat-message-max-width, min(760px, 100%));
 }
 
 .chat-activity-group__summary {
@@ -1130,10 +1194,27 @@
 }
 
 /* Completed-turn work rollup: slim "Worked for X" disclosure standing in for
-   the turn's intermediate tool/commentary groups. Sits snug above the final
-   reply, aligned with the message column via a gutter matching the avatar. */
+   the turn's intermediate tool/commentary groups. Keep it equally separated
+   from the prompt and final reply. */
 .chat-group--work {
-  padding-bottom: 8px;
+  padding-block: 9px;
+}
+
+@keyframes chat-work-settle-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-group--work {
+    animation: chat-work-settle-in 200ms var(--ease-out) both;
+  }
 }
 
 .chat-work-group .chat-activity-group__label {
@@ -2266,7 +2347,6 @@ openclaw-tooltip.chat-tasks-status__preview {
   color: var(--text);
   font-size: 11px;
   line-height: 1.45;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 

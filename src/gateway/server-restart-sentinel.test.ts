@@ -717,9 +717,9 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.mergeSessionDeliveryPreparedMediaBlocks.mockClear();
     mocks.markSessionDeliveryAttemptStarted.mockClear();
     mocks.markSessionDeliverySettlement.mockClear();
-    mocks.appendAssistantMessageToSessionTranscript.mockClear();
-    mocks.createManagedOutgoingMediaBlocks.mockClear();
-    mocks.attachManagedOutgoingMediaToMessage.mockClear();
+    mocks.appendAssistantMessageToSessionTranscript.mockReset();
+    mocks.createManagedOutgoingMediaBlocks.mockReset();
+    mocks.attachManagedOutgoingMediaToMessage.mockReset();
     mocks.removeCronRunContinuationSessionIfIdle.mockClear();
     mocks.settleCorrelatedSubagentDelivery.mockClear();
     mocks.loadPendingSessionDelivery.mockClear();
@@ -1623,7 +1623,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.appendAssistantMessageToSessionTranscript
       .mockImplementationOnce(transcriptActual.appendAssistantMessageToSessionTranscript)
       .mockImplementationOnce(transcriptActual.appendAssistantMessageToSessionTranscript);
-    mocks.createManagedOutgoingMediaBlocks.mockImplementationOnce(
+    mocks.createManagedOutgoingMediaBlocks.mockImplementation(
       managedMediaActual.createManagedOutgoingMediaBlocks,
     );
     mocks.attachManagedOutgoingMediaToMessage

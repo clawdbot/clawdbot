@@ -77,8 +77,8 @@ function extractStatusSection(text, title) {
   return stripAnsi(section.join("\n"));
 }
 
-function readAuthProfileStoreText(agentDir) {
-  const dbPath = path.join(agentDir, "openclaw-agent.sqlite");
+function readSharedAuthProfileStoreText(stateDir) {
+  const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
   if (!fs.existsSync(dbPath)) {
     return "";
   }
@@ -86,8 +86,8 @@ function readAuthProfileStoreText(agentDir) {
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
     const row = db
-      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
-      .get("primary");
+      .prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?")
+      .get("shared");
     return typeof row?.store_json === "string" ? row.store_json : "";
   } catch {
     return "";
@@ -100,15 +100,21 @@ function assertOnboardState() {
   const home = process.argv[3];
   const stateDir = path.join(home, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  const legacyAuthDatabase = path.join(
+    stateDir,
+    "agents",
+    "main",
+    "agent",
+    "openclaw-agent.sqlite",
+  );
 
   if (!fs.existsSync(configPath)) {
     throw new Error("onboard did not write openclaw.json");
   }
-  if (!fs.existsSync(agentDir)) {
-    throw new Error("onboard did not create main agent dir");
+  if (fs.existsSync(legacyAuthDatabase)) {
+    throw new Error("onboard created the retired main-agent auth database");
   }
-  const authStoreText = readAuthProfileStoreText(agentDir);
+  const authStoreText = readSharedAuthProfileStoreText(stateDir);
   if (!authStoreText) {
     throw new Error("onboard did not persist auth profile store");
   }

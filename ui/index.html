@@ -355,6 +355,22 @@
           scheduleRecovery();
         }
 
+        function unregisterServiceWorkers() {
+          if (!navigator.serviceWorker?.getRegistrations) return;
+          // Recovery must not depend on a possibly broken worker. Navigations bypass it,
+          // so a reload can self-heal after the registrations are removed.
+          void navigator.serviceWorker
+            .getRegistrations()
+            .then(function (registrations) {
+              return Promise.all(
+                registrations.map(function (registration) {
+                  return registration.unregister();
+                }),
+              );
+            })
+            .catch(function () {});
+        }
+
         function retryCurrentDocument() {
           if (
             appStarted ||
@@ -388,6 +404,7 @@
               if (!appStarted) window.location.replace(documentUrl.href);
             })
             .catch(function () {
+              unregisterServiceWorkers();
               finishRecoveryAttempt();
             })
             .finally(function () {
@@ -429,6 +446,7 @@
 
         if (retry) {
           retry.addEventListener("click", function () {
+            unregisterServiceWorkers();
             window.location.reload();
           });
         }

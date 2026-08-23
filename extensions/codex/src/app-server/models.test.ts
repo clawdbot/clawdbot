@@ -149,7 +149,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.148.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const list = JSON.parse(harness.writes[2] ?? "{}") as { id?: number; method?: string };
@@ -170,7 +170,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.148.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const list = JSON.parse(harness.writes[2] ?? "{}") as { id?: number; method?: string };
@@ -184,7 +184,13 @@ describe("listCodexAppServerModels", () => {
             id: "gpt-5.4",
             model: "gpt-5.4",
             upgrade: null,
-            upgradeInfo: null,
+            upgradeInfo: {
+              model: "gpt-5.6",
+              upgradeCopy: "Try GPT-5.6",
+              modelLink: null,
+              migrationMarkdown: null,
+              retirementAt: 1_800_000_000,
+            },
             availabilityNux: null,
             displayName: "gpt-5.4",
             description: "GPT-5.4",
@@ -196,6 +202,7 @@ describe("listCodexAppServerModels", () => {
             ],
             defaultReasoningEffort: "medium",
             supportsPersonality: false,
+            multiAgentVersion: "v2",
             additionalSpeedTiers: [],
             isDefault: true,
           },
@@ -232,7 +239,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.148.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const firstList = JSON.parse(harness.writes[2] ?? "{}") as {
@@ -312,7 +319,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.148.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const firstList = JSON.parse(harness.writes[2] ?? "{}") as { id?: number };

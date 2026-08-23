@@ -64,10 +64,10 @@ class CloudWorkersPage extends OpenClawLightDomElement {
 
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
-    invalidateRequests: () => this.resetCatalog(),
+    invalidateRequests: () => this.resetGatewayState(),
     onSnapshot: (change) => {
       if (change.initial) {
-        this.resetCatalog();
+        this.resetGatewayState();
       }
     },
     ensureInitialData: () => void this.loadCatalog(),
@@ -85,7 +85,8 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
-  private resetCatalog() {
+  private resetGatewayState() {
+    this.busyProfileId = null;
     this.advertisedProfileIds = new Set();
     this.catalogLoaded = false;
     this.catalogLoading = false;

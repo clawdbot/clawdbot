@@ -4,13 +4,14 @@ import type { SessionPlacementTurnParams } from "../../agents/session-placement-
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import type { WorkerTunnelHandle } from "./tunnel-contract.js";
+import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import { latestDurableWorkspaceConflict, waitForTurnOperation } from "./worker-turn-admission.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 import {
@@ -115,6 +116,8 @@ export async function reconcileWorkspaceAfterTurn(params: {
   localWorkspaceDir: string;
   transcriptTarget: Parameters<typeof SessionManager.open>[0];
   tunnel: WorkerTunnelHandle;
+  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<WorkspaceConflictReport | undefined> {
   const currentPlacement = params.placements.get(params.placement.sessionId);
   const generationMatches =
@@ -175,6 +178,9 @@ export async function reconcileWorkspaceAfterTurn(params: {
         if (!journal.wasAccepted()) {
           throw new Error("Cloud worker workspace reconciliation was not durably accepted");
         }
+        if (params.prepareAcceptedWorkspacePublication) {
+          await params.prepareAcceptedWorkspacePublication(params.turnClaim).catch(() => undefined);
+        }
         params.placements.acceptWorkspaceResult(params.turnClaim);
         const recordedStagedResultRef = params.placements
           .listPendingWorkspaceResults()
@@ -223,6 +229,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
             );
           },
         });
+        await params.publishAcceptedWorkspace?.(params.turnClaim);
         await settleStagedWorkspaceResult({
           placements: params.placements,
           turnClaim: params.turnClaim,
@@ -279,6 +286,8 @@ export async function executeRemoteExecTurn(params: {
   turnClaim: WorkerSessionTurnClaim;
   localWorkspaceDir: string;
   runLocal: () => Promise<EmbeddedAgentRunResult>;
+  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<EmbeddedAgentRunResult> {
   const environment = params.environments.get(params.placement.environmentId);
   if (
@@ -318,6 +327,37 @@ export async function executeRemoteExecTurn(params: {
     localWorkspaceDir: params.localWorkspaceDir,
     transcriptTarget,
     tunnel,
+    ...(params.prepareAcceptedWorkspacePublication
+      ? { prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication }
+      : {}),
+    ...(params.publishAcceptedWorkspace
+      ? { publishAcceptedWorkspace: params.publishAcceptedWorkspace }
+      : {}),
+  }).catch((reconciliationError: unknown) => {
+    const currentEnvironment = params.environments.get(params.placement.environmentId);
+    if (
+      environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
+      environment.nodeDeviceId &&
+      currentEnvironment?.state === "attached" &&
+      currentEnvironment.providerId === DEVICE_WORKER_PROVIDER_ID &&
+      currentEnvironment.environmentId === environment.environmentId &&
+      currentEnvironment.ownerEpoch === environment.ownerEpoch &&
+      currentEnvironment.nodeDeviceId === environment.nodeDeviceId &&
+      currentEnvironment.attachedSessionIds.length === 1 &&
+      currentEnvironment.attachedSessionIds[0] === params.placement.sessionId &&
+      reconciliationError instanceof WorkerWorkspaceReconciliationError &&
+      reconciliationError.cause instanceof WorkerTunnelOwnerDisconnectedError
+    ) {
+      // Offline paired nodes keep their exact lease; the next turn reconciles its dirty workspace.
+      params.placements.cancelWorkspaceResultAndReleaseTurn(params.turnClaim, {
+        reason: "node-disconnect",
+      });
+    }
+    if (executionError) {
+      // Preserve the terminal execution failure while retaining the independent workspace loss.
+      throw new Error(formatErrorMessage(executionError), { cause: reconciliationError });
+    }
+    throw reconciliationError;
   });
   if (executionError) {
     throw executionError instanceof Error

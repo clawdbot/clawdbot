@@ -172,6 +172,12 @@ export type EmbeddedRunFailureSignal = {
   fatalForCron: true;
 };
 
+export type EmbeddedRunTerminalToolFailure = {
+  source: "tool";
+  toolName: "exec" | "wait";
+  code: "UNKNOWN_TOOL_ID";
+};
+
 export type EmbeddedAgentRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedAgentMeta;
@@ -186,6 +192,8 @@ export type EmbeddedAgentRunMeta = {
   providerStarted?: boolean;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
+  /** An exact, successfully settled tool batch intentionally completed the turn without a reply. */
+  intentionalTerminalCompletion?: "tool-batch";
   terminalReply?: AgentRunTerminalReplySnapshot;
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
@@ -206,6 +214,8 @@ export type EmbeddedAgentRunMeta = {
     terminalPresentation?: boolean;
   };
   failureSignal?: EmbeddedRunFailureSignal;
+  /** Bounded, sanitized unresolved Code Mode failure for operator diagnostics. */
+  terminalToolFailure?: EmbeddedRunTerminalToolFailure;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
   stopReason?: string;
   /** Pending tool calls when stopReason is "tool_calls". */

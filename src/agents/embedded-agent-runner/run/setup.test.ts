@@ -298,6 +298,46 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     expect(result.effectiveModel.contextWindow).toBe(272_000);
   });
 
+  it("caps the native run budget with the session-selected context window", () => {
+    // Native (non-CLI) runs must honor the selection too; the CLI backend maps
+    // the option id to argv/env separately (reply-path regression: a 200k
+    // selection previously left native budget and payload sizing at 1M).
+    const runtimeModel: ProviderRuntimeModel = {
+      provider: "anthropic",
+      id: "claude-fable-5",
+      name: "Claude Fable 5",
+      baseUrl: "https://api.anthropic.com",
+      api: "anthropic-messages",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      contextWindows: [
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+        { id: "1m", label: "1M", contextWindow: 1_000_000 },
+      ],
+      contextWindowDefault: "1m",
+    };
+    const resolve = (contextWindow?: string) =>
+      resolveEmbeddedRuntimeModelPolicy({
+        cfg: undefined,
+        provider: "anthropic",
+        modelId: "claude-fable-5",
+        runtimeModel,
+        nativeModelOwned: false,
+        ...(contextWindow ? { contextWindow } : {}),
+      });
+
+    const selected = resolve("200k");
+    expect(selected.contextTokenBudget).toBe(200_000);
+    expect(selected.effectiveModel.contextWindow).toBe(200_000);
+
+    const unselected = resolve(undefined);
+    expect(unselected.contextTokenBudget).toBe(1_000_000);
+    expect(unselected.effectiveModel.contextWindow).toBe(1_000_000);
+  });
+
   it("preserves the effective budget and adds an authored cap for plugin transports (#124702)", () => {
     const resolve = (models: ModelDefinitionConfig[]) =>
       resolveEmbeddedRunEffectiveModel({

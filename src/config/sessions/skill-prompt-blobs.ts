@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { stripRuntimeOnlySessionSkillsFields } from "./store-entry-shape.js";
 import type { SessionEntry, SessionSkillPromptRef, SessionSkillSnapshot } from "./types.js";
 
 const PROMPT_BLOB_DIR = "skills-prompts";
@@ -173,21 +174,25 @@ export function projectSessionStoreForPersistence(params: {
   let changed = false;
   const promptBlobs = new Map<string, SessionSkillPromptBlobProjection>();
   for (const [key, entry] of Object.entries(params.store)) {
-    const prompt = entry.skillsSnapshot?.prompt;
-    if (!prompt || !shouldStorePromptAsBlob(prompt)) {
+    let projectedEntry = stripRuntimeOnlySessionSkillsFields(entry);
+    const prompt = projectedEntry.skillsSnapshot?.prompt;
+    if (prompt && shouldStorePromptAsBlob(prompt)) {
+      const promptRef = buildPromptRef(prompt);
+      promptBlobs.set(promptRef.hash, {
+        ref: promptRef,
+        path: resolveSessionSkillPromptBlobPath(params.storePath, promptRef.hash),
+        prompt,
+      });
+      projectedEntry = stripPromptForPersistence(projectedEntry, promptRef);
+    }
+    if (projectedEntry === entry) {
       continue;
     }
-    const promptRef = buildPromptRef(prompt);
-    promptBlobs.set(promptRef.hash, {
-      ref: promptRef,
-      path: resolveSessionSkillPromptBlobPath(params.storePath, promptRef.hash),
-      prompt,
-    });
     if (persisted === params.store) {
       // Copy-on-write keeps callers that only inspect the projection from seeing partial mutation.
       persisted = { ...params.store };
     }
-    persisted[key] = stripPromptForPersistence(entry, promptRef);
+    persisted[key] = projectedEntry;
     changed = true;
   }
   return { store: persisted, changed, promptBlobs };

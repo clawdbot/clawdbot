@@ -140,7 +140,10 @@ export function normalizeClaudeCliStreamJsonRecord(
   return normalized ? { line: JSON.stringify(parsed), omittedRawChars } : undefined;
 }
 
-function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: number): string {
+export function streamJsonOutputLimitErrorText(
+  kind: "raw" | "line" | "lines",
+  limit: number,
+): string {
   if (kind === "line") {
     return `CLI JSONL line exceeded ${limit} characters; refusing to parse output.`;
   }
