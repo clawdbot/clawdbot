@@ -975,6 +975,23 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 }
 
 @Suite(.serialized) struct NodeAppModelInvokeTests {
+    @Test @MainActor func `device status preserves battery monitoring ownership`() async {
+        let device = UIDevice.current
+        let original = device.isBatteryMonitoringEnabled
+        defer { device.isBatteryMonitoringEnabled = original }
+        let appModel = NodeAppModel()
+
+        for initial in [false, true] {
+            device.isBatteryMonitoringEnabled = initial
+            let response = await appModel.handleInvoke(BridgeInvokeRequest(
+                id: "device-status-\(initial)",
+                command: OpenClawDeviceCommand.status.rawValue))
+
+            #expect(response.ok)
+            #expect(device.isBatteryMonitoringEnabled == initial)
+        }
+    }
+
     @Test @MainActor func `health summary routes a fixed period to the health service`() async throws {
         let service = MockHealthSummaryService()
         let appModel = NodeAppModel(healthSummaryService: service)

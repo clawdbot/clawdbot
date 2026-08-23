@@ -42,7 +42,9 @@ final class DeviceStatusService: DeviceStatusServicing {
 
     private func batteryStatus() -> OpenClawBatteryStatusPayload {
         let device = UIDevice.current
+        let wasMonitoring = device.isBatteryMonitoringEnabled
         device.isBatteryMonitoringEnabled = true
+        defer { device.isBatteryMonitoringEnabled = wasMonitoring }
         let level = device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil
         let state: OpenClawBatteryState = switch device.batteryState {
         case .charging: .charging
