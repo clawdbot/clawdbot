@@ -874,6 +874,14 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
                     ${t("attention.issues")}
                   </h2>
                   ${this.renderAskOpenClawButton(custodianItems.length, custodianSeverity)}
+                  <button
+                    type="button"
+                    class="sidebar-brand__icon sidebar-issues-panel__mobile-close"
+                    aria-label=${t("common.close")}
+                    @click=${() => this.closePanel(true)}
+                  >
+                    ${icons.x}
+                  </button>
                 </header>
                 <div
                   class="sidebar-issues-panel__tabs"
