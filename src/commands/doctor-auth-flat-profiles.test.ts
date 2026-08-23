@@ -200,13 +200,13 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     const legacyDatabasePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
     expect(fs.existsSync(legacyDatabasePath)).toBe(false);
 
-    const realExistsSync = fs.existsSync.bind(fs);
+    const realLstatSync = fs.lstatSync.bind(fs);
     let legacyJsonProbes = 0;
-    const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((pathname) => {
+    const lstatSpy = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
       if (path.resolve(String(pathname)) === path.resolve(authPath)) {
         legacyJsonProbes += 1;
       }
-      return realExistsSync(pathname);
+      return realLstatSync(pathname, options as never);
     });
     try {
       for (const key of ["sk-first-write", "sk-second-write"]) {
@@ -223,7 +223,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       }
       expect(legacyJsonProbes).toBe(1);
     } finally {
-      existsSpy.mockRestore();
+      lstatSpy.mockRestore();
     }
 
     const beforeDoctor = openOpenClawStateDatabase({ env: state.env });

@@ -355,14 +355,14 @@ describe("auth profile sqlite store", () => {
   it("keeps legacy ownership when a retired-file probe fails", async () => {
     await withAgentDirEnv("openclaw-auth-shared-file-probe-error-", async (agentDir) => {
       const authPath = path.join(agentDir, "auth-profiles.json");
-      const realExistsSync = fs.existsSync.bind(fs);
+      const realLstatSync = fs.lstatSync.bind(fs);
       let authPathProbes = 0;
-      const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((pathname) => {
+      const lstatSpy = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
         if (path.resolve(String(pathname)) === path.resolve(authPath)) {
           authPathProbes += 1;
           throw Object.assign(new Error("permission denied"), { code: "EACCES" });
         }
-        return realExistsSync(pathname);
+        return realLstatSync(pathname, options as never);
       });
 
       try {
@@ -370,7 +370,7 @@ describe("auth profile sqlite store", () => {
         writePersistedAuthProfileStoreRaw(apiKeyStore("sk-second"));
         expect(authPathProbes).toBe(1);
       } finally {
-        existsSpy.mockRestore();
+        lstatSpy.mockRestore();
       }
 
       const sharedDatabase = new DatabaseSync(resolveOpenClawStateSqlitePath());
@@ -404,25 +404,25 @@ describe("auth profile sqlite store", () => {
     await withAgentDirEnv("openclaw-auth-sqlite-late-legacy-", (agentDir) => {
       saveAuthProfileStore(apiKeyStore("not-a-real"), agentDir);
       const legacyPath = path.join(agentDir, "auth.json");
-      const existsSync = fs.existsSync.bind(fs);
+      const lstatSync = fs.lstatSync.bind(fs);
       let legacyChecks = 0;
-      const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((pathname) => {
+      const lstatSpy = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
         if (path.resolve(String(pathname)) === path.resolve(legacyPath)) {
           legacyChecks += 1;
           if (legacyChecks === 2) {
             fs.writeFileSync(legacyPath, '{"openai":{"key":"not-a-real"}}\n', "utf8");
-            return true;
+            return lstatSync(pathname, options as never);
           }
-          return false;
+          throw Object.assign(new Error("missing"), { code: "ENOENT" });
         }
-        return existsSync(pathname);
+        return lstatSync(pathname, options as never);
       });
       try {
         expect(() => ensureAuthProfileStore(agentDir, { syncExternalCli: false })).toThrow(
           "requires legacy credential migration",
         );
       } finally {
-        existsSpy.mockRestore();
+        lstatSpy.mockRestore();
       }
       expect(fs.existsSync(legacyPath)).toBe(true);
     });

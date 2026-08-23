@@ -36,4 +36,26 @@ describe("listAuthProfileStoresRequiringMigration", () => {
       expect(() => assertAuthProfileMigrationReady(credentialAgentDir)).not.toThrow();
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a broken auth-profiles symlink on the Doctor-owned migration path",
+    async () => {
+      await withTestDir({ prefix: "openclaw-auth-migration-broken-link-" }, async (root) => {
+        const agentDir = path.join(root, "agent");
+        const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+        await fs.mkdir(agentDir, { recursive: true });
+        await fs.symlink("missing-auth-profiles.json", path.join(agentDir, "auth-profiles.json"));
+
+        expect(listAuthProfileStoresRequiringMigration({ agentDirs: [agentDir], env })).toEqual([
+          resolveAuthProfileDatabasePath(agentDir),
+        ]);
+        expect(() => assertAuthProfileMigrationReady(agentDir)).toThrow(
+          expect.objectContaining({
+            action: "openclaw doctor --fix",
+            code: "AUTH_PROFILE_MIGRATION_REQUIRED",
+          }),
+        );
+      });
+    },
+  );
 });

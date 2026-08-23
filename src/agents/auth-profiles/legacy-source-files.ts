@@ -15,6 +15,21 @@ export type LegacyAuthProfileSource = {
   path: string;
 };
 
+export class LegacyAuthProfileSourceInspectionError extends Error {
+  readonly code = "AUTH_PROFILE_MIGRATION_REQUIRED" as const;
+  readonly action = "openclaw doctor --fix" as const;
+  readonly sourcePath: string;
+
+  constructor(sourcePath: string, cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Cannot inspect legacy auth source ${sourcePath}; run openclaw doctor --fix: ${detail}`, {
+      cause,
+    });
+    this.name = "LegacyAuthProfileSourceInspectionError";
+    this.sourcePath = sourcePath;
+  }
+}
+
 export function resolveLegacyOAuthPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveOAuthDir(env), "oauth.json");
 }
@@ -24,6 +39,25 @@ function resolveLegacySourceAgentDir(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   return agentDir ? resolveUserPath(agentDir) : resolveSharedMainAuthAgentDir(env);
+}
+
+function hasLegacySourceEntry(sourcePath: string): boolean {
+  let entry: fs.Stats;
+  try {
+    entry = fs.lstatSync(sourcePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw new LegacyAuthProfileSourceInspectionError(sourcePath, error);
+  }
+  if (entry.isFile() || entry.isSymbolicLink()) {
+    return true;
+  }
+  throw new LegacyAuthProfileSourceInspectionError(
+    sourcePath,
+    new Error("entry is not a regular file or symbolic link"),
+  );
 }
 
 /** Detects retired auth files by name only; runtime code must never read their contents. */
@@ -41,7 +75,7 @@ export function listLegacyAuthProfileSources(params: {
   if (path.resolve(agentDir) === path.resolve(sharedMainDir)) {
     candidates.push({ kind: "legacy-oauth", path: resolveLegacyOAuthPath(params.env) });
   }
-  return candidates.filter((candidate) => fs.existsSync(candidate.path));
+  return candidates.filter((candidate) => hasLegacySourceEntry(candidate.path));
 }
 
 export function listLegacyAuthProfileArchives(params: {
