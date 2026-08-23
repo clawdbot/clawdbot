@@ -812,9 +812,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       )
       .toSorted((left, right) => ITEM_PRIORITY[left.kind] - ITEM_PRIORITY[right.kind]);
     const count = approvalQueue.length + items.length + (updateSurface ? 1 : 0);
-    if (count === 0) {
-      return nothing;
-    }
     const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count),
     });
@@ -835,6 +832,8 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
             : items;
     const showApprovals = this.selectedTab === "all" || this.selectedTab === "approvals";
     const showUpdate = updateSurface && ["all", "system"].includes(this.selectedTab);
+    const visibleCount =
+      (showApprovals ? approvalQueue.length : 0) + visibleItems.length + (showUpdate ? 1 : 0);
     const errorItems = visibleItems.filter((item) => item.severity === "error");
     const warningItems = visibleItems.filter((item) => item.severity === "warning");
     const tabCounts: Record<IssueTab, number> = {
@@ -863,10 +862,12 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
             ? this.closePanel(true)
             : this.openPanel(event.currentTarget as HTMLElement)}
       >
-        <span class="sidebar-issues-button__icon" aria-hidden="true">${icons.bell}</span>
-        <span class="sidebar-issues-button__count" aria-hidden="true"
-          >${count > 9 ? "9+" : count}</span
-        >
+        <span class="sidebar-issues-button__icon" aria-hidden="true">${icons.inbox}</span>
+        ${count > 0
+          ? html`<span class="sidebar-issues-button__count" aria-hidden="true"
+              >${count > 9 ? "9+" : count}</span
+            >`
+          : nothing}
       </button>
       ${this.panelOpen
         ? html`<openclaw-menu-surface>
@@ -880,6 +881,9 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
             >
               <header class="sidebar-issues-panel__header">
                 <h2 id="sidebar-issues-panel-heading" class="sidebar-issues-panel__heading">
+                  <span class="sidebar-issues-panel__heading-icon" aria-hidden="true"
+                    >${icons.inbox}</span
+                  >
                   ${t("attention.issues")}
                 </h2>
                 ${this.renderAskOpenClawButton(custodianItems.length, custodianSeverity)}
@@ -900,6 +904,15 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
                   tabindex="0"
                   @scroll=${this.syncOverflowCue}
                 >
+                  ${visibleCount === 0
+                    ? html`<div class="sidebar-issues-panel__empty">
+                        <span class="sidebar-issues-panel__empty-icon" aria-hidden="true"
+                          >${icons.inbox}</span
+                        >
+                        <strong>${t("attention.emptyTitle")}</strong>
+                        <span>${t("attention.emptyBody")}</span>
+                      </div>`
+                    : nothing}
                   ${showApprovals
                     ? approvalQueue.map((approval) => this.renderApprovalItem(approval))
                     : nothing}

@@ -4248,6 +4248,8 @@ export const en: TranslationMap = {
     failed: "Failed",
     overdue: "Overdue",
     dismissItem: "Dismiss {item}",
+    emptyTitle: "Nothing waiting",
+    emptyBody: "New requests and alerts land here.",
     issues: "Inbox",
     issueCount: "{count} inbox item",
     issueCountPlural: "{count} inbox items",

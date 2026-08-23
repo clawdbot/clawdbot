@@ -3597,6 +3597,16 @@ openclaw-sidebar-attention {
   line-height: 1.2;
 }
 
+.sidebar-issues-panel__heading-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.sidebar-issues-panel__heading-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
 .sidebar-issues-panel__ask {
   flex: 0 0 32px;
 }
@@ -3691,6 +3701,35 @@ openclaw-sidebar-attention {
 .sidebar-issues-panel__list:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.sidebar-issues-panel__empty {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.sidebar-issues-panel__empty strong {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+}
+
+.sidebar-issues-panel__empty-icon {
+  display: inline-flex;
+  margin-block-end: 3px;
+  color: var(--muted);
+}
+
+.sidebar-issues-panel__empty-icon svg {
+  width: 28px;
+  height: 28px;
 }
 
 .sidebar-issues-panel__overflow-cue {
