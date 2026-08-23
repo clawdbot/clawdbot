@@ -166,18 +166,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     await stopFixtureServer(fixtureServer);
   });
 
-  it("keeps the lane title across every standalone mock document", async () => {
-    const page = await browser.newPage();
-    try {
-      for (const url of [fixtureServer.url, new URL("/chat", fixtureServer.url).toString()]) {
-        await page.goto(url, { waitUntil: "networkidle" });
-        await expect.poll(() => page.title()).toBe("⬇️ Update dismiss · :5246");
-      }
-    } finally {
-      await page.close();
-    }
-  });
-
   for (const mode of ["dark", "light"] as const) {
     it(`themes dropdown items and widget frames in ${mode} mode`, async () => {
       const context = await browser.newContext({ colorScheme: mode });

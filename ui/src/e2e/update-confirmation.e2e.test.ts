@@ -168,7 +168,7 @@ suite.define(() => {
         const footerUpdate = page.locator(".sidebar-footer-update");
         await footerUpdate.waitFor();
         expect(await footerUpdate.isDisabled()).toBe(true);
-        expect(await footerUpdate.locator(".sidebar-footer-update__dismiss").count()).toBe(0);
+        expect(await page.locator(".sidebar-footer-update__dismiss").count()).toBe(0);
 
         await page.locator(".sidebar-issues-button").click();
         const updateIssue = page.locator(

@@ -30,6 +30,7 @@ import type { SessionMenuAction } from "./session-menu.ts";
 import { listAssignableSessionOwners } from "./session-owner-chip.ts";
 import {
   isUpdateAttentionDismissed,
+  isUpdateAttentionForced,
   loadDismissals,
   resolveUpdateAttentionDismissal,
 } from "./sidebar-attention-dismissals.ts";
@@ -125,15 +126,14 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
   const context = host.sessionDataContext;
   const overlaySnapshot = context?.overlays.snapshot;
   const updateAttentionDismissal = resolveUpdateAttentionDismissal({
-    gatewayBootId: context?.gateway.snapshot.hello?.server.bootId,
+    gatewayBootId: context?.gateway.snapshot.hello?.server?.bootId,
     updateAvailable: overlaySnapshot?.updateAvailable,
     updateSchedule: overlaySnapshot?.updateSchedule,
   });
   const updateAttentionDismissed = Boolean(
     context &&
     updateAttentionDismissal &&
-    overlaySnapshot?.updateStatusBanner?.tone !== "warning" &&
-    overlaySnapshot?.updateStatusBanner?.tone !== "danger" &&
+    !isUpdateAttentionForced(overlaySnapshot?.updateStatusBanner?.tone) &&
     isUpdateAttentionDismissed(
       loadDismissals(context.gateway.connection.gatewayUrl),
       updateAttentionDismissal,

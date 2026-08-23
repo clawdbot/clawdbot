@@ -204,7 +204,6 @@ describe("gateway pre-auth hardening", () => {
       httpServer,
       wss,
       clients,
-      bootId: "preauth-hardening-test-boot",
       preauthConnectionBudget: createPreauthConnectionBudget(1),
       resolvedAuth,
       workerIngressEnabled: true,
@@ -284,6 +283,7 @@ describe("gateway pre-auth hardening", () => {
     attachGatewayWsConnectionHandler({
       wss,
       clients,
+      bootId: "preauth-hardening-test-boot",
       preauthConnectionBudget,
       port: 0,
       getResolvedAuth: () => resolvedAuth,

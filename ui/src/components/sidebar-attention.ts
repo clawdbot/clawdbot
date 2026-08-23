@@ -27,6 +27,7 @@ import {
   dismissUpdateAttention,
   dismissalStoreKey,
   isUpdateAttentionDismissed,
+  isUpdateAttentionForced,
   loadDismissals,
   pruneDismissals,
   resolveUpdateAttentionDismissal,
@@ -381,22 +382,21 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   private updateAttentionDismissal(): UpdateAttentionDismissal | null {
     const snapshot = this.context?.overlays.snapshot;
     return resolveUpdateAttentionDismissal({
-      gatewayBootId: this.context?.gateway.snapshot.hello?.server.bootId,
+      gatewayBootId: this.context?.gateway.snapshot.hello?.server?.bootId,
       updateAvailable: snapshot?.updateAvailable,
       updateSchedule: snapshot?.updateSchedule,
     });
   }
 
   private updateSurfaceForced(): boolean {
-    const tone = this.context?.overlays.snapshot.updateStatusBanner?.tone;
-    return tone === "warning" || tone === "danger";
+    return isUpdateAttentionForced(this.context?.overlays.snapshot.updateStatusBanner?.tone);
   }
 
   private updateSurfaceVisible(): boolean {
-    return Boolean(
+    return (
       this.hasUpdateSurface() &&
       (this.updateSurfaceForced() ||
-        !isUpdateAttentionDismissed(this.dismissed, this.updateAttentionDismissal())),
+        !isUpdateAttentionDismissed(this.dismissed, this.updateAttentionDismissal()))
     );
   }
 

@@ -595,7 +595,7 @@ describe("update attention", () => {
       updateSchedule: null,
       updateCampaignStatusHydrated: true,
       updateRunning: false,
-      updateStatusBanner: null as null | { tone: "warning" | "danger"; text: string },
+      updateStatusBanner: null as null | { tone: "warn" | "danger"; text: string },
     };
     element.context = {
       gateway: {
@@ -616,7 +616,7 @@ describe("update attention", () => {
     element.dismissUpdateSurface();
     expect(element.updateSurfaceVisible()).toBe(false);
 
-    overlaySnapshot.updateStatusBanner = { tone: "warning", text: "Update blocked" };
+    overlaySnapshot.updateStatusBanner = { tone: "warn", text: "Update blocked" };
     expect(element.updateSurfaceVisible()).toBe(true);
     overlaySnapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
     expect(element.updateSurfaceVisible()).toBe(true);
@@ -624,7 +624,7 @@ describe("update attention", () => {
 });
 
 describe("pruneDismissals", () => {
-  const chip = (kind: Exclude<SidebarAttentionKind, "updateAvailable">, signature: string) => ({
+  const chip = (kind: SidebarAttentionKind, signature: string) => ({
     kind,
     signature,
   });

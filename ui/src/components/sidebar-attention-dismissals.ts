@@ -2,22 +2,21 @@
 // Deliberately client-side chrome (like nav width / dock layout), not gateway
 // state: dismissing a nag on one device should not acknowledge it everywhere.
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
 const SIDEBAR_ATTENTION_ITEM_KINDS = ["cronFailed", "cronOverdue", "modelAuthExpired"] as const;
-const SIDEBAR_ATTENTION_KINDS = ["updateAvailable", ...SIDEBAR_ATTENTION_ITEM_KINDS] as const;
-export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_KINDS)[number];
-type SidebarAttentionItemKind = (typeof SIDEBAR_ATTENTION_ITEM_KINDS)[number];
+export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_ITEM_KINDS)[number];
 
 export type UpdateAttentionDismissal = { version: string; gatewayBootId: string };
-export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionItemKind, string[]>> & {
+export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string[]>> & {
   updateAvailable?: UpdateAttentionDismissal;
 };
 
 // Minimal chip shape the snooze logic needs; keeps this module free of the
 // component's item type so the two files cannot form an import cycle.
-type DismissableChip = { kind: SidebarAttentionItemKind; signature: string };
+type DismissableChip = { kind: SidebarAttentionKind; signature: string };
 
 const DISMISSED_STORE_PREFIX = "openclaw.control.sidebarAttention.v1:";
 
@@ -32,12 +31,13 @@ export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
   }
   try {
     const parsed: unknown = JSON.parse(storage.getItem(dismissalStoreKey(gatewayUrl)) ?? "null");
-    if (!parsed || typeof parsed !== "object") {
+    const record = asNullableRecord(parsed);
+    if (!record) {
       return {};
     }
     const result: SidebarAttentionDismissals = {};
     for (const kind of SIDEBAR_ATTENTION_ITEM_KINDS) {
-      const value = (parsed as Record<string, unknown>)[kind];
+      const value = record[kind];
       const signatures = Array.isArray(value)
         ? value.filter((entry): entry is string => typeof entry === "string")
         : typeof value === "string"
@@ -47,17 +47,11 @@ export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
         result[kind] = [...new Set(signatures)];
       }
     }
-    const updateAvailable = (parsed as Record<string, unknown>).updateAvailable;
-    if (
-      updateAvailable &&
-      typeof updateAvailable === "object" &&
-      typeof (updateAvailable as Record<string, unknown>).version === "string" &&
-      typeof (updateAvailable as Record<string, unknown>).gatewayBootId === "string"
-    ) {
-      result.updateAvailable = {
-        version: (updateAvailable as Record<string, string>).version,
-        gatewayBootId: (updateAvailable as Record<string, string>).gatewayBootId,
-      };
+    const updateAvailable = asNullableRecord(record.updateAvailable);
+    const version = readStringField(updateAvailable, "version");
+    const gatewayBootId = readStringField(updateAvailable, "gatewayBootId");
+    if (version && gatewayBootId) {
+      result.updateAvailable = { version, gatewayBootId };
     }
     return result;
   } catch {
@@ -88,7 +82,7 @@ export function saveDismissals(gatewayUrl: string, dismissals: SidebarAttentionD
  */
 export function addDismissal(
   gatewayUrl: string,
-  kind: SidebarAttentionItemKind,
+  kind: SidebarAttentionKind,
   signature: string,
 ): SidebarAttentionDismissals {
   const stored = loadDismissals(gatewayUrl);
@@ -123,6 +117,10 @@ export function isUpdateAttentionDismissed(
     stored.version === current.version &&
     stored.gatewayBootId === current.gatewayBootId,
   );
+}
+
+export function isUpdateAttentionForced(tone: "danger" | "info" | "warn" | null | undefined) {
+  return tone === "warn" || tone === "danger";
 }
 
 export function dismissUpdateAttention(

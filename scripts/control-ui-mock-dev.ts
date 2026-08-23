@@ -90,8 +90,6 @@ const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
 const PLAN_DEMO_RUN_ID = "mock-plan-run";
 const CUSTODIAN_CHAT_REPLY_DELAY_MS = 600;
 const CHAT_SEND_REPLY_DELAY_MS = 200;
-const MOCK_DOCUMENT_TITLE = "⬇️ Update dismiss · :5246";
-
 type UpdateFixture = {
   available: UpdateAvailable;
   runResponse: unknown;
@@ -1824,7 +1822,7 @@ async function createChatPickerScenario(
   const richAttention = fixture === "approval";
   const cronMocks = buildCronMocks(Date.now(), { richAttention });
   const updateFixtureNow = Date.now();
-  const updateFixture = buildUpdateFixture(fixture ?? "update-available", updateFixtureNow);
+  const updateFixture = buildUpdateFixture(fixture, updateFixtureNow);
   const updateSchedule = updateFixture?.schedule ?? null;
   const heldUpdateSchedule: UpdateScheduleState | null = updateSchedule?.campaign
     ? {
@@ -3146,22 +3144,9 @@ function createStatefulMockInitScript(): string {
   return `(() => { const __name = (target) => target; (${installControlUiStatefulMocks.toString()})(${CUSTODIAN_CHAT_REPLY_DELAY_MS}, ${CHAT_SEND_REPLY_DELAY_MS}); })();`;
 }
 
-function createMockDocumentTitleInitScript(): string {
-  return `(() => {
-    const title = ${JSON.stringify(MOCK_DOCUMENT_TITLE)};
-    document.title = title;
-    Object.defineProperty(document, "title", {
-      configurable: true,
-      get: () => title,
-      set: () => {},
-    });
-  })();`;
-}
-
 function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin {
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
   const statefulInitScript = escapeScriptContent(createStatefulMockInitScript());
-  const documentTitleInitScript = escapeScriptContent(createMockDocumentTitleInitScript());
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
   return {
     configureServer(server) {
@@ -3179,7 +3164,7 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
     transformIndexHtml(html) {
       return html.replace(
         "</head>",
-        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n${documentTitleInitScript}\n    </script>\n  </head>`,
+        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
       );
     },
   };

@@ -49,7 +49,7 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
           }}
           >${text ? html`<span class="sidebar-footer-build__text">${text}</span>` : nothing}
           ${this.updateAttentionDismissed
-            ? html`<span class="sidebar-footer-build__update"
+            ? html`<span class="agent-select__badge sidebar-footer-build__update"
                 >${t("updates.sidebar.availableTitle")}</span
               >`
             : nothing}</a
