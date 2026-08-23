@@ -46,6 +46,7 @@ export function createWorkerPlacementRunnerAvailabilityReader(params: {
     }
     return {
       kind: "device",
+      deviceId: environment.nodeDeviceId,
       status: params.hasCurrentDeviceRunner(environment.nodeDeviceId) ? "available" : "offline",
     };
   };

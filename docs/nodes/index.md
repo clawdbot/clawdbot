@@ -471,9 +471,10 @@ while its receipt still matches the Gateway's current build.
 
 You can also enroll and enable a service host in one step with
 `openclaw connect --service --session-host`. In Control UI New Session, a
-write-scoped operator selects a Gateway project or folder and then the paired
-device. OpenClaw creates a session-owned managed worktree on the Gateway,
-dispatches it with the exact `deviceId`, and sends the first turn only after the
+write-scoped operator selects a Gateway project or folder and then either a
+specific paired device or **Any available node**. OpenClaw creates a
+session-owned managed worktree on the Gateway, dispatches it with the exact
+`deviceId` or `autoDevice: true`, and sends the first turn only after the chosen
 device placement becomes active. New Session does not bind `execNode` or browse
 the device filesystem.
 
@@ -510,6 +511,17 @@ visible but disabled with an actionable reason. Enable hosting with
 `openclaw connect --service --session-host` or the `nodeHost.workerRuns`
 setting, then restart the node host. Update-required hosts must be upgraded and
 restarted before selection.
+
+Choose **Any available node** to let the Gateway select an eligible paired,
+connected session host. For OpenClaw worker turns, it selects the host with the
+most available worker slots and breaks ties by device ID. Runtimes that do not
+consume worker slots choose the eligible host with the lowest device ID instead.
+If a selected host disconnects, reaches capacity, or otherwise becomes
+ineligible before dispatch finishes, the Gateway tries the next ranked host, up
+to three hosts total. Other dispatch failures are returned immediately. If no
+host is eligible, the error explains whether no session hosts are paired, hosts
+are disconnected or at capacity, a host needs an update, or the selected runtime
+is unsupported. The dispatch response identifies the device that was selected.
 
 When a known session host disconnects, its paired-device record preserves only
 the last accepted current-v6 hosting consent. The offline row remains visible

@@ -161,7 +161,7 @@ export function makeDispatchTestContext(
 
 export async function invokeSessionDispatch(
   context: GatewayRequestContext,
-  target: { profileId?: string; machineClass?: string; deviceId?: string } = {
+  target: { profileId?: string; machineClass?: string; deviceId?: string; autoDevice?: true } = {
     profileId: "test",
   },
   sessionMutationAuthorization?: SessionMutationAuthorization,
