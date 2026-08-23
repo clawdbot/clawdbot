@@ -4678,6 +4678,11 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-left: 2px;
 }
 
+.sidebar-identity-menu .theme-mode-toggle {
+  justify-content: flex-end;
+  border: 0;
+}
+
 .theme-mode-toggle {
   display: inline-flex;
   align-items: center;
