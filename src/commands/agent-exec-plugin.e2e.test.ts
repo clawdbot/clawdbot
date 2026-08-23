@@ -10,7 +10,10 @@ import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/ins
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function writeHarnessPlugin(stateDir: string): Promise<void> {
+async function writeHarnessPlugin(
+  stateDir: string,
+  config: OpenClawConfig = buildExecProofConfig(),
+): Promise<void> {
   const pluginDir = path.join(stateDir, "extensions", "exec-proof");
   await fs.mkdir(pluginDir, { recursive: true });
   await fs.writeFile(
@@ -45,8 +48,10 @@ async function writeHarnessPlugin(stateDir: string): Promise<void> {
           supports: ({ provider }) => provider === "exec-proof"
             ? { supported: true, priority: 100 }
             : { supported: false },
-          async runAttempt() {
-            const text = "PLUGIN_HARNESS_OK";
+          async runAttempt(params) {
+            const text = params.agentId === "beta"
+              ? "SELECTED_AGENT_OK agent=" + params.agentId + " workspace=" + params.workspaceDir + " agentDir=" + params.agentDir
+              : "PLUGIN_HARNESS_OK";
             const assistant = {
               role: "assistant",
               content: [{ type: "text", text }],
@@ -95,7 +100,7 @@ async function writeHarnessPlugin(stateDir: string): Promise<void> {
     },
     {
       stateDir,
-      config: buildExecProofConfig(),
+      config,
       candidates: [
         {
           idHint: "exec-proof",
@@ -138,37 +143,131 @@ function buildExecProofConfig(): OpenClawConfig {
   };
 }
 
-async function writeConfig(stateDir: string): Promise<void> {
-  await fs.writeFile(
-    path.join(stateDir, "openclaw.json"),
-    JSON.stringify(buildExecProofConfig()),
-    "utf8",
-  );
+function buildSelectedAgentExecProofConfig(params: {
+  alphaWorkspace: string;
+  betaWorkspace: string;
+  betaAgentDir: string;
+}): OpenClawConfig {
+  return {
+    ...buildExecProofConfig(),
+    agents: {
+      ownership: "explicit",
+      list: [
+        { id: "alpha", workspace: params.alphaWorkspace },
+        {
+          id: "beta",
+          workspace: params.betaWorkspace,
+          agentDir: params.betaAgentDir,
+          model: "exec-proof/proof-model",
+        },
+      ],
+    },
+  };
 }
 
-function buildCliSource(args: string[]): string {
+async function writeConfig(
+  stateDir: string,
+  config: OpenClawConfig = buildExecProofConfig(),
+): Promise<void> {
+  await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(config), "utf8");
+}
+
+function buildCliSource(args: string[], runtimeConfig?: OpenClawConfig): string {
   return `
     import { runMainOrRootHelp } from "./src/entry.ts";
+    ${
+      runtimeConfig
+        ? `const { setRuntimeConfigSnapshot } = await import("./src/config/io.ts");
+    setRuntimeConfigSnapshot(${JSON.stringify(runtimeConfig)});`
+        : ""
+    }
     await runMainOrRootHelp(${JSON.stringify(["node", "openclaw", ...args])});
   `;
 }
 
+function buildChildEnv(stateDir: string): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: stateDir,
+  };
+  delete childEnv.NODE_ENV;
+  delete childEnv.OPENCLAW_RUN_NODE_OUTPUT_LOG;
+  delete childEnv.VITEST;
+  delete childEnv.VITEST_POOL_ID;
+  delete childEnv.VITEST_WORKER_ID;
+  return childEnv;
+}
+
 describe("agent exec installed plugin isolation", () => {
+  it("completes a selected-agent run and preserves explicit cwd precedence", async () => {
+    const stateDir = tempDirs.make("openclaw-agent-exec-selected-plugin-e2e-");
+    const alphaWorkspace = path.join(stateDir, "workspaces", "alpha");
+    const betaWorkspace = path.join(stateDir, "workspaces", "beta");
+    const betaAgentDir = path.join(stateDir, "persistent-agents", "beta");
+    const overrideWorkspace = path.join(stateDir, "workspaces", "override");
+    await Promise.all(
+      [alphaWorkspace, betaWorkspace, betaAgentDir, overrideWorkspace].map((dir) =>
+        fs.mkdir(dir, { recursive: true }),
+      ),
+    );
+    const config = buildSelectedAgentExecProofConfig({
+      alphaWorkspace,
+      betaWorkspace,
+      betaAgentDir,
+    });
+    await writeHarnessPlugin(stateDir, config);
+    await writeConfig(stateDir, config);
+    const source = buildCliSource(
+      [
+        "agent",
+        "exec",
+        "prove selected agent",
+        "--agent",
+        "beta",
+        "--cwd",
+        overrideWorkspace,
+        "--json",
+      ],
+      config,
+    );
+
+    const { stdout, stderr } = await execFileAsync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", source],
+      {
+        cwd: path.resolve(import.meta.dirname, "../.."),
+        encoding: "utf8",
+        env: buildChildEnv(stateDir),
+        timeout: 30_000,
+      },
+    );
+    expect(stdout, stderr).not.toBe("");
+    const output = JSON.parse(stdout) as { final: string } & Record<string, unknown>;
+    expect(output).toMatchObject({
+      ok: true,
+      status: "ok",
+      model: "proof-model",
+      provider: "exec-proof",
+    });
+    const finalPrefix = `SELECTED_AGENT_OK agent=beta workspace=${overrideWorkspace} agentDir=`;
+    expect(output.final.startsWith(finalPrefix)).toBe(true);
+    const isolatedAgentDir = output.final.slice(finalPrefix.length);
+    expect(path.resolve(isolatedAgentDir)).not.toBe(path.resolve(betaAgentDir));
+    expect(path.basename(isolatedAgentDir)).toBe("agent");
+    expect(path.basename(path.dirname(isolatedAgentDir))).toBe("beta");
+    expect(path.basename(path.dirname(path.dirname(isolatedAgentDir)))).toBe("agents");
+    expect(path.basename(path.dirname(path.dirname(path.dirname(isolatedAgentDir))))).toMatch(
+      /^openclaw-agent-exec-/u,
+    );
+  });
+
   it("runs an operator-installed harness without retaining run state", async () => {
     const stateDir = tempDirs.make("openclaw-agent-exec-plugin-e2e-");
     await writeHarnessPlugin(stateDir);
     await writeConfig(stateDir);
     const source = buildCliSource(["agent", "exec", "prove plugin discovery", "--json"]);
-    const childEnv: NodeJS.ProcessEnv = {
-      ...process.env,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    delete childEnv.NODE_ENV;
-    delete childEnv.OPENCLAW_RUN_NODE_OUTPUT_LOG;
-    delete childEnv.VITEST;
-    delete childEnv.VITEST_POOL_ID;
-    delete childEnv.VITEST_WORKER_ID;
+    const childEnv = buildChildEnv(stateDir);
 
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
