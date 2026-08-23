@@ -23,6 +23,7 @@ export type CommandPaletteTargetDetail = {
 };
 
 export type CommandPaletteElement = HTMLElement & {
+  custodianAvailable: boolean;
   desktopAvailable: boolean;
   isOpen: boolean;
   openPalette: () => void;

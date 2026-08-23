@@ -281,10 +281,11 @@ describe("terminal panel readiness", () => {
     panel.available = true;
     (panel as unknown as { catalogReadyTimeoutMs: number }).catalogReadyTimeoutMs = 5;
     document.body.append(panel);
+    const catalog = { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" };
 
     panel.handleToggleRequest(
       new CustomEvent("openclaw:terminal-toggle", {
-        detail: { catalog: { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" } },
+        detail: { catalog },
       }),
     );
 
@@ -298,5 +299,15 @@ describe("terminal panel readiness", () => {
       params: { sessionId: "catalog-terminal-1" },
     });
     expect(panel.renderRoot.querySelector(".tabstrip-tab")).toBeNull();
+    const retry = panel.renderRoot.querySelector<HTMLButtonElement>(".tp-error button");
+    expect(retry?.textContent?.trim()).toBe("Retry");
+
+    retry?.click();
+    await waitForFast(() => {
+      expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(2);
+    });
+    expect(requests.findLast((request) => request.method === "terminal.open")?.params).toEqual(
+      expect.objectContaining({ catalog }),
+    );
   });
 });

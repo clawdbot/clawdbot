@@ -1,4 +1,5 @@
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildGoogleChatApprovalActionParameters,
@@ -23,7 +24,7 @@ type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 function createApprovalResolveResult(params: {
   applied: boolean;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   decision: ApprovalDecision;
 }): ApprovalResolveResult {
   const presentation =
@@ -106,7 +107,7 @@ describe("maybeHandleGoogleChatApprovalCardClick", () => {
       .mockImplementation(
         (params: {
           approvalId: string;
-          approvalKind: "exec" | "plugin";
+          approvalKind: ChannelApprovalKind;
           decision: ApprovalDecision;
         }) =>
           Promise.resolve(

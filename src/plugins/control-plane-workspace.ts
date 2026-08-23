@@ -1,8 +1,7 @@
 /** Resolves the optional agent workspace enrichment used by plugin control-plane inventory. */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentWorkspaceDir,
-  tryResolveLegacyCompatibilityAgentId,
+  tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
@@ -10,6 +9,7 @@ import type { PluginDiagnostic } from "./manifest-types.js";
 const PLUGIN_WORKSPACE_SCOPE_OMITTED_DIAGNOSTIC_CODE = "workspace-scope-omitted" as const;
 
 type PluginControlPlaneWorkspaceResolution = {
+  agentId?: string;
   workspaceDir?: string;
   workspaceScope: "selected" | "omitted";
   diagnostic?: PluginDiagnostic;
@@ -27,14 +27,13 @@ export function resolvePluginControlPlaneWorkspace(params: {
   if (params.workspaceDir !== undefined) {
     return { workspaceDir: params.workspaceDir, workspaceScope: "selected" };
   }
-  const agentId =
-    normalizeOptionalString(params.config.agents?.defaults?.systemAgent?.agentId) ??
-    tryResolveLegacyCompatibilityAgentId(params.config);
+  const agentId = tryResolveAmbientOwnerAgentId(params.config);
   const workspaceDir = agentId
     ? resolveAgentWorkspaceDir(params.config, agentId, params.env)
     : undefined;
   if (workspaceDir) {
     return {
+      agentId,
       workspaceDir,
       workspaceScope: "selected",
     };

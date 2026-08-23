@@ -2,14 +2,12 @@
 import { createAgent, validateAgentIdInput } from "../agents/agent-create.js";
 import {
   listAgentEntries,
-  resolveDefaultAgentId,
+  resolveAmbientOwnerAgentId,
   toAgentEntriesRecord,
-  tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { readConfigFileSnapshot, resolveConfigSnapshotHash } from "../config/config.js";
-import { createMergePatch } from "../config/merge-patch.js";
-import { applyMergePatch } from "../config/merge-patch.js";
+import { createMergePatch, applyMergePatch } from "../config/merge-patch.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -97,8 +95,7 @@ export async function ensureOnboardingAgent(params: {
   ) {
     return {
       config: params.config,
-      agentId:
-        tryResolveLegacyCompatibilityAgentId(params.config) ?? resolveDefaultAgentId(params.config),
+      agentId: resolveAmbientOwnerAgentId(params.config),
       bootstrapPending: false,
       createdAgent: false,
     };
@@ -116,7 +113,7 @@ export async function ensureOnboardingAgent(params: {
         candidate: params.config,
         currentRuntime: effective,
       }),
-      agentId: tryResolveLegacyCompatibilityAgentId(effective) ?? resolveDefaultAgentId(effective),
+      agentId: resolveAmbientOwnerAgentId(effective),
       bootstrapPending: false,
       createdAgent: false,
     };

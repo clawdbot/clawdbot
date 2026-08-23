@@ -13,6 +13,7 @@ import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { sweepOrphanSessionStoreTemps } from "./store-temp-cleanup.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
+import { migrateManagedWorktreeCanonicalWorkspaces } from "./worktree-workspace-migration.js";
 
 export type SessionStartupMigrationLogger = Record<"info" | "warn", (message: string) => void>;
 
@@ -30,6 +31,7 @@ export async function runSessionStartupMigration(params: {
     migrateOrphanedSessionKeys?: typeof migrateOrphanedSessionKeys;
     migrateLegacyMainSessionKeys?: typeof migrateLegacyMainSessionKeys;
     prepareLegacySessionSurfaces?: PrepareLegacySessionSurfaces;
+    migrateManagedWorktreeCanonicalWorkspaces?: typeof migrateManagedWorktreeCanonicalWorkspaces;
     resolveAllAgentSessionStoreTargetsSync?: typeof resolveAllAgentSessionStoreTargetsSync;
     sweepOrphanSessionStoreTemps?: typeof sweepOrphanSessionStoreTemps;
   };
@@ -109,6 +111,7 @@ export async function runSessionStartupMigration(params: {
   const sweepTemps = params.deps?.sweepOrphanSessionStoreTemps ?? sweepOrphanSessionStoreTemps;
   try {
     let removedFiles = 0;
+    let migratedWorktreeSessions = 0;
     for (const target of targets) {
       const path = resolveSqliteTargetFromSessionStorePath(target.storePath, {
         agentId: target.agentId,
@@ -117,6 +120,21 @@ export async function runSessionStartupMigration(params: {
       const alreadyOpen = isOpenClawAgentDatabaseOpen(path);
       const database = openOpenClawAgentDatabase({ agentId: target.agentId, path });
       setCanonicalSqliteSessionMainKey(database, params.cfg.session?.mainKey);
+      const migrateWorktreeSessions =
+        params.deps?.migrateManagedWorktreeCanonicalWorkspaces ??
+        migrateManagedWorktreeCanonicalWorkspaces;
+      try {
+        migratedWorktreeSessions += await migrateWorktreeSessions({
+          agentId: target.agentId,
+          cfg: params.cfg,
+          env,
+          storePath: target.storePath,
+        });
+      } catch (error) {
+        params.log.warn(
+          `session: managed-worktree workspace migration failed for ${target.agentId}; continuing: ${String(error)}`,
+        );
+      }
       if (!alreadyOpen) {
         closeOpenClawAgentDatabaseByPath(path);
       }
@@ -124,6 +142,11 @@ export async function runSessionStartupMigration(params: {
     }
     if (removedFiles > 0) {
       params.log.info(`session: removed ${removedFiles} stale session store temp file(s)`);
+    }
+    if (migratedWorktreeSessions > 0) {
+      params.log.info(
+        `session: recorded canonical workspaces for ${migratedWorktreeSessions} managed-worktree session(s)`,
+      );
     }
   } catch (err) {
     params.log.warn(

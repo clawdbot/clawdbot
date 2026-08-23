@@ -116,10 +116,10 @@ openclaw-board-view {
 .board-widget__menu::part(menu) {
   min-width: 190px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 .board-tabs__overflow-item {
@@ -334,9 +334,12 @@ openclaw-board-widget-cell {
 }
 
 openclaw-workboard-card-widget,
-openclaw-workboard-mini-widget {
+openclaw-workboard-mini-widget,
+openclaw-workboard-board-widget {
   display: block;
+  max-width: 100%;
   min-height: 100%;
+  min-width: 0;
 }
 
 .workboard-widget-card,
@@ -459,6 +462,75 @@ openclaw-workboard-mini-widget {
   justify-content: flex-start;
 }
 
+.workboard-widget-board {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  max-width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 10px;
+}
+
+.workboard-widget-board__header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workboard-widget-board__header strong {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workboard-widget-board__header span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.workboard-widget-board__header a {
+  color: var(--accent);
+  font-size: 10px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.workboard-widget-board .workboard-board {
+  flex: 1;
+  grid-auto-columns: minmax(240px, 1fr);
+  grid-auto-flow: column;
+  grid-template-columns: none;
+  max-width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.workboard-widget-board .workboard-column,
+.workboard-widget-board .workboard-board--compact .workboard-column {
+  max-width: none;
+  min-height: 0;
+  min-width: 240px;
+  overflow: hidden;
+  width: auto;
+}
+
+.workboard-widget-board .workboard-column__cards {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.workboard-card__actions--widget {
+  justify-content: stretch;
+}
+
 .board-widget__mcp-app {
   display: grid;
   min-height: 100%;
@@ -533,11 +605,8 @@ openclaw-workboard-mini-widget {
     grid-template-rows: minmax(0, 1fr);
   }
 
-  /* Chrome is a compact top-left pill, not a full-width strip: widgets put
-     their own actions top-right, so that corner must stay visible and
-     clickable even while host chrome is revealed. The 30px pill height is
-     overlay-only; coarse pointers keep the base 38px in-flow grid row that
-     BOARD_WIDGET_TOUCH_BAR_PX mirrors. */
+  /* Fine pointers center a compact overlay; coarse pointers keep the base 38px
+     in-flow row that BOARD_WIDGET_TOUCH_BAR_PX mirrors. */
   .board-widget__bar {
     backdrop-filter: blur(6px);
     background: color-mix(in srgb, var(--board-surface) 92%, transparent);
@@ -545,17 +614,15 @@ openclaw-workboard-mini-widget {
     border-radius: 999px;
     box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
     height: 30px;
-    left: 7px;
-    /* Reserve a widget-owned top-right action region: the interactive pill may
-       never stretch across the card, or it re-intercepts the exact corner this
-       chrome exists to keep clickable. The 88px floor keeps the drag handle and
-       menu usable on very narrow widgets; below 184px the container query strips
-       the pill to that irreducible pair so the reservation stays maximal. */
-    max-width: max(88px, calc(100% - 96px));
+    left: 50%;
+    /* Centered widgets reserve 88px for actions in both top corners. Narrow
+       cards fall back to the prior left placement below. */
+    max-width: calc(100% - 176px);
     opacity: 0;
     padding: 0 5px;
     position: absolute;
     top: 7px;
+    transform: translateX(-50%);
     transition:
       opacity 100ms ease,
       visibility 0s linear 100ms;
@@ -580,11 +647,18 @@ openclaw-workboard-mini-widget {
     overflow: hidden;
   }
 
-  /* Below 184px the 96px reservation and the 88px pill cannot coexist, so the
-     pill sheds its display-only pieces and keeps just move + menu — the two
-     controls without which a widget cannot be managed. The card's aria-label
-     and the drag handle tooltip still carry the title. */
-  @container (max-width: 184px) {
+  @container (max-width: 264px) {
+    .board-widget__bar {
+      left: 7px;
+      max-width: max(88px, calc(100% - 96px));
+      transform: none;
+    }
+  }
+
+  /* Until centered chrome has room for its display fields, keep only move +
+     menu — the controls required to manage a widget. The card's aria-label and
+     drag handle tooltip still carry the title. */
+  @container (max-width: 376px) {
     .board-widget__bar > .board-widget__title,
     .board-widget__bar > .board-widget__kind,
     .board-widget__bar > .board-widget__capabilities {

@@ -6,7 +6,6 @@ import {
   getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
@@ -593,6 +592,49 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
+  it("shows exact WHAM classification and canonical reason in status JSON", async () => {
+    const now = Date.now();
+    const store = mocks.store as typeof mocks.store & {
+      usageStats?: Record<
+        string,
+        {
+          cooldownUntil: number;
+          cooldownReason: "auth";
+          cooldownClassification: "wham_token_expired";
+        }
+      >;
+    };
+    store.usageStats = {
+      "openai:default": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "auth",
+        cooldownClassification: "wham_token_expired",
+      },
+    };
+    mocks.resolveProfileUnusableUntilForDisplay.mockImplementation((_store, profileId) =>
+      profileId === "openai:default" ? now + 60_000 : undefined,
+    );
+
+    try {
+      const jsonRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, jsonRuntime as never);
+      expect(parseFirstJsonLog(jsonRuntime).auth.unusableProfiles).toEqual([
+        expect.objectContaining({
+          profileId: "openai:default",
+          reason: "auth",
+          classification: "wham_token_expired",
+        }),
+      ]);
+
+      const textRuntime = createRuntime();
+      await modelsStatusCommand({}, textRuntime as never);
+      expect(textRuntime.log.mock.calls.flat().join("\n")).toContain("cooldown:wham_token_expired");
+    } finally {
+      delete store.usageStats;
+      mocks.resolveProfileUnusableUntilForDisplay.mockReset().mockReturnValue(undefined);
+    }
+  });
+
   it("routes legacy Gemini CLI cooldowns to supported Google API-key setup", async () => {
     const now = Date.now();
     const profileId = "google-gemini-cli:legacy";
@@ -637,7 +679,7 @@ describe("modelsStatusCommand auth overview", () => {
     const catalogStarted = createDeferred();
     const releaseCatalog = createDeferred();
     let replacement: ReturnType<typeof getCurrentPluginMetadataSnapshot> = undefined;
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
     mocks.loadModelCatalog.mockImplementationOnce(async () => {
       replacement = getCurrentPluginMetadataSnapshot({
         config,
@@ -672,7 +714,7 @@ describe("modelsStatusCommand auth overview", () => {
     } finally {
       releaseCatalog.resolve();
       await commandPromise.catch(() => {});
-      clearCurrentPluginMetadataSnapshot();
+      clearPluginMetadataLifecycleCaches();
       if (originalLoadModelCatalog) {
         mocks.loadModelCatalog.mockImplementation(originalLoadModelCatalog);
       } else {
@@ -705,7 +747,6 @@ describe("modelsStatusCommand auth overview", () => {
         readOnly: true,
       }),
     );
-
     expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
@@ -947,6 +988,152 @@ describe("modelsStatusCommand auth overview", () => {
         });
       },
     );
+  });
+
+  async function withConfig<T>(cfg: unknown, run: () => Promise<T>): Promise<T> {
+    const original = mocks.loadConfig.getMockImplementation();
+    mocks.loadConfig.mockReturnValue(cfg);
+    try {
+      return await run();
+    } finally {
+      if (original) {
+        mocks.loadConfig.mockImplementation(original);
+      }
+    }
+  }
+
+  it("resolves a selected agent's bare alias from that agent's model scope", async () => {
+    const localRuntime = createRuntime();
+    await withConfig(
+      {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-default", fallbacks: [] } },
+          entries: {
+            jeremiah: {
+              model: { primary: "jeremiah-choice" },
+              models: { "anthropic/claude-sonnet-4-6": { alias: "jeremiah-choice" } },
+            },
+          },
+        },
+      },
+      async () => {
+        await withAgentScopeOverrides({ primary: "jeremiah-choice" }, async () => {
+          await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime as never);
+          const payload = parseFirstJsonLog(localRuntime);
+          expect(payload.defaultModel).toBe("jeremiah-choice");
+          // Resolving the bare alias against global defaults reported
+          // openai/jeremiah-choice while the runtime selected Anthropic, so status,
+          // --check and --probe all inspected the wrong provider route.
+          expect(payload.resolvedDefault).toBe("anthropic/claude-sonnet-4-6");
+          expect(payload.aliases).toMatchObject({
+            "jeremiah-choice": "anthropic/claude-sonnet-4-6",
+          });
+        });
+      },
+    );
+  });
+
+  it("prefers a per-agent alias row over the same alias in defaults", async () => {
+    const localRuntime = createRuntime();
+    await withConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-default", fallbacks: [] },
+            models: { "openai/gpt-shared": { alias: "shared" } },
+          },
+          entries: {
+            jeremiah: {
+              model: { primary: "shared" },
+              models: { "anthropic/claude-sonnet-4-6": { alias: "shared" } },
+            },
+          },
+        },
+      },
+      async () => {
+        await withAgentScopeOverrides({ primary: "shared" }, async () => {
+          await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime as never);
+          const payload = parseFirstJsonLog(localRuntime);
+          // Per-agent rows are applied after defaults, so the agent's row owns
+          // the alias and the displayed target must follow the same precedence.
+          expect(payload.resolvedDefault).toBe("anthropic/claude-sonnet-4-6");
+          expect(payload.aliases).toMatchObject({ shared: "anthropic/claude-sonnet-4-6" });
+        });
+      },
+    );
+  });
+
+  it("keeps unscoped status on global defaults when no agent is selected", async () => {
+    const localRuntime = createRuntime();
+    await withConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "shared", fallbacks: [] },
+            models: { "openai/gpt-shared": { alias: "shared" } },
+          },
+          entries: {
+            jeremiah: {
+              model: { primary: "shared" },
+              models: { "anthropic/claude-sonnet-4-6": { alias: "shared" } },
+            },
+          },
+        },
+      },
+      async () => {
+        await modelsStatusCommand({ json: true }, localRuntime as never);
+        const payload = parseFirstJsonLog(localRuntime);
+        // No --agent still reports unscoped defaults; another agent's rows must
+        // not leak into the global view.
+        expect(payload.resolvedDefault).toBe("openai/gpt-shared");
+        expect(payload.aliases).toMatchObject({ shared: "openai/gpt-shared" });
+      },
+    );
+  });
+
+  it("uses system-agent storage without changing unscoped model output", async () => {
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] },
+          systemAgent: { agentId: "jeremiah" },
+        },
+        entries: { main: {}, jeremiah: {} },
+      },
+      models: { providers: {} },
+    });
+    mocks.resolveAgentExplicitModelPrimary.mockClear();
+    mocks.resolveAgentModelFallbacksOverride.mockClear();
+    mocks.loadModelCatalog.mockClear();
+
+    try {
+      await withAgentScopeOverrides(
+        {
+          primary: "openai/gpt-5.6-luna",
+          fallbacks: ["openai/gpt-5.6-sol"],
+        },
+        async () => {
+          const localRuntime = createRuntime();
+          await modelsStatusCommand({ json: true }, localRuntime as never);
+
+          expectResolveAgentDirCalledFor("jeremiah");
+          expect(mocks.resolveAgentExplicitModelPrimary).not.toHaveBeenCalled();
+          expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+            expect.objectContaining({ agentId: "jeremiah", readOnly: true }),
+          );
+          expect(parseFirstJsonLog(localRuntime)).toMatchObject({
+            defaultModel: "anthropic/claude-opus-4-6",
+            fallbacks: [],
+          });
+        },
+      );
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+    }
   });
 
   it("rejects API-key auth for subscription-only Codex Spark", async () => {

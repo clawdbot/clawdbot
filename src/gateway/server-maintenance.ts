@@ -10,14 +10,11 @@ import {
 } from "../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
-import {
-  recordDeliveryFailureMaintenanceError,
-  sweepDeliveryFailureMaintenance,
-  type DeliveryFailureMaintenanceResult,
-} from "../infra/delivery-queue-failure-maintenance.js";
+import { pruneExpiredDeliveryQueueTombstones } from "../infra/delivery-queue-sqlite.js";
+import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
-import { cleanOldMedia, prunePlaybackTranscodeCache } from "../media/store.js";
+import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import {
@@ -96,7 +93,6 @@ export function startGatewayMaintenanceTimers(params: {
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
-  runDeliveryFailureSweep?: () => Promise<DeliveryFailureMaintenanceResult>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
   enableSkillCurator?: boolean;
   runSkillCollectionReconcile?: () => Promise<unknown>;
@@ -171,29 +167,23 @@ export function startGatewayMaintenanceTimers(params: {
   const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
   void performWorktreeGc();
 
-  // Queue media has its own reference-aware retention policy and runs even when
-  // the general media TTL sweep is disabled.
+  // Queue tombstone expiry and reference-aware media GC share one maintenance
+  // cycle even when the general media TTL sweep is disabled.
   const runDeliveryQueueMediaGc =
-    params.runDeliveryQueueMediaGc ?? (() => pruneOrphanedDeliveryQueueMedia());
-  const maintainDeliveryFailures =
-    params.runDeliveryFailureSweep ?? (() => sweepDeliveryFailureMaintenance());
+    params.runDeliveryQueueMediaGc ??
+    (async () => {
+      try {
+        pruneExpiredDeliveryQueueTombstones();
+      } finally {
+        await pruneOrphanedDeliveryQueueMedia();
+      }
+    });
   let deliveryQueueMediaGcStartedAtMs = 0;
   const deliveryQueueMediaGcLoader = createLazyPromiseLoader(async () => {
     try {
-      const result = await maintainDeliveryFailures();
-      if (result.errors > 0) {
-        params.logHealth.error(
-          `delivery failure maintenance completed with ${result.errors} row error${result.errors === 1 ? "" : "s"}`,
-        );
-      }
-    } catch (error) {
-      recordDeliveryFailureMaintenanceError();
-      params.logHealth.error(`delivery failure maintenance failed: ${formatError(error)}`);
-    }
-    try {
       await runDeliveryQueueMediaGc();
     } catch (error) {
-      params.logHealth.error(`delivery queue media cleanup failed: ${formatError(error)}`);
+      params.logHealth.error(`delivery queue maintenance failed: ${formatError(error)}`);
     } finally {
       deliveryQueueMediaGcLoader.clear();
     }
@@ -205,6 +195,23 @@ export function startGatewayMaintenanceTimers(params: {
     return deliveryQueueMediaGcLoader.load();
   };
   void performDeliveryQueueMediaGc();
+
+  let devicePairSetupCompletionGcInFlight: Promise<void> | null = null;
+  const performDevicePairSetupCompletionGc = (nowMs: number) => {
+    if (devicePairSetupCompletionGcInFlight) {
+      return devicePairSetupCompletionGcInFlight;
+    }
+    devicePairSetupCompletionGcInFlight = pruneExpiredDevicePairSetupCompletions({ nowMs })
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
+      })
+      .finally(() => {
+        devicePairSetupCompletionGcInFlight = null;
+      });
+    return devicePairSetupCompletionGcInFlight;
+  };
+  void performDevicePairSetupCompletionGc(Date.now());
 
   let skillCuratorCleanup = () => {};
   if (params.enableSkillCurator) {
@@ -228,6 +235,7 @@ export function startGatewayMaintenanceTimers(params: {
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
+    void performDevicePairSetupCompletionGc(now);
     if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
       void performDeliveryQueueMediaGc();
     }
@@ -419,15 +427,16 @@ export function startGatewayMaintenanceTimers(params: {
   });
 
   let mediaCleanupInFlight: Promise<void> | null = null;
-  const runConfiguredMediaCleanup = () => {
+  const runMediaCleanup = () => {
     const ttlMs = params.mediaCleanupTtlMs;
-    if (typeof ttlMs !== "number" || mediaCleanupInFlight) {
+    if (mediaCleanupInFlight) {
       return mediaCleanupInFlight;
     }
-    mediaCleanupInFlight = cleanOldMedia(ttlMs, {
-      recursive: true,
-      pruneEmptyDirs: true,
-    })
+    const cleanup =
+      typeof ttlMs === "number"
+        ? cleanOldMedia(ttlMs, { recursive: true, pruneEmptyDirs: true })
+        : pruneOutboundMedia();
+    mediaCleanupInFlight = cleanup
       .catch((err: unknown) => {
         params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
       })
@@ -443,11 +452,11 @@ export function startGatewayMaintenanceTimers(params: {
     if (mediaCleanupStopped) {
       return;
     }
-    // Playback and managed outgoing have fixed owner lifecycles and must not
-    // depend on the optional attachment-retention sweep being configured or healthy.
+    // Playback and managed outgoing have independent owner lifecycles and must
+    // not depend on the selected general-or-outbound media sweep being healthy.
     void playbackTranscodeCacheCleanupLoader.load();
     void managedOutgoingCleanupLoader.load();
-    void runConfiguredMediaCleanup();
+    void runMediaCleanup();
   };
   let mediaCleanupStartPromise: Promise<void> | undefined;
   const startMediaCleanup = () => {

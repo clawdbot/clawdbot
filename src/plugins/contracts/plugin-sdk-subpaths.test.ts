@@ -36,8 +36,8 @@ import {
   privateLocalOnlyPluginSdkEntrypoints,
   publicPluginSdkSubpaths as pluginSdkSubpaths,
 } from "../../../scripts/lib/plugin-sdk-entries.mts";
-import type { ChannelMessageActionContext } from "../../channels/plugins/types.public.js";
 import type {
+  ChannelMessageActionContext,
   BaseProbeResult,
   BaseTokenResolution,
   ChannelAgentTool,
@@ -496,7 +496,7 @@ describe("plugin-sdk subpath exports", () => {
     expect(docs).toContain("scripts/lib/plugin-sdk-entrypoints.json");
     expect(docs).toContain("scripts/lib/plugin-sdk-private-local-only-subpaths.json");
     expect(docs).toContain("scripts/lib/plugin-sdk-deprecated-public-subpaths.json");
-    expect(docs).toContain("private-local entries explicitly");
+    expect(docs).toContain("selected private-local entries");
 
     for (const subpath of pluginSdkSubpaths) {
       expect(packageExports).toHaveProperty(`./plugin-sdk/${subpath}`, {
@@ -776,7 +776,10 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceContract("memory-core-host-runtime-core", {
       mentions: ["SILENT_REPLY_TOKEN", "resolveMemorySearchConfig", "MemoryPluginRuntime"],
-      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-core.js";'],
+      omits: [
+        'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
+        "recordMemoryArtifactWriteProvenance",
+      ],
     });
     expectSourceContract("memory-core-host-runtime-cli", {
       mentions: ["defaultRuntime", "withManager", "withProgressTotals"],
@@ -1113,7 +1116,9 @@ describe("plugin-sdk subpath exports", () => {
       "shouldAckReaction",
       "DEFAULT_EMOJIS",
     ]);
-    expectSourceOmits("channel-feedback", [
+    // The load-only WhatsApp bridge lives in the barrel for published
+    // pre-#121257 artifacts; the owner file stays free of channel policy.
+    expectSourceMentions("channel-feedback", [
       "shouldAckReactionForWhatsApp",
       "WhatsAppAckReactionMode",
     ]);
@@ -1253,7 +1258,11 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
     expectSourceMentions("agent-harness", ["./agent-harness-runtime.js"]);
-    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedPiCompactResult"]);
+    expectSourceMentions("agent-harness-runtime", [
+      "AgentHarness",
+      "EmbeddedAgentCompactResult",
+      "agentHarnessStructuredInput",
+    ]);
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");

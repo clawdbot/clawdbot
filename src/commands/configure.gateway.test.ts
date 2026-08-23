@@ -182,7 +182,7 @@ describe("promptGatewayConfig", () => {
     });
     expect(result.config.gateway?.bind).toBe("loopback");
     expect(result.config.gateway?.tailscale?.mode).toBe("off");
-    expect(result.config.gateway?.tailscale?.resetOnExit).toBe(false);
+    expect(result.config.gateway?.tailscale).toEqual({ mode: "off" });
   });
 
   it("adds Tailscale origin to controlUi.allowedOrigins when tailscale serve is enabled", async () => {

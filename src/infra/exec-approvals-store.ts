@@ -4,8 +4,9 @@ import {
   AgentDeletionCommitUncertainError,
 } from "../agents/agent-lifecycle-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -60,15 +61,31 @@ function warnFailClosed(message: string, error?: unknown): void {
   }
 }
 
-function readExecApprovalsSnapshotFromDatabase(): ExecApprovalsSnapshot {
-  assertNoPendingLegacyExecApprovals();
-  const { db } = openOpenClawStateDatabase();
+function snapshotFromExecApprovalsDatabase(
+  db: ReturnType<typeof openOpenClawStateDatabase>["db"],
+): ExecApprovalsSnapshot {
   return snapshotFromExecApprovalsRow({
     path: resolveExecApprovalsDisplayPath(),
     row: readExecApprovalsConfigRow(db),
     onMalformed: () =>
       warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
   });
+}
+
+function readExecApprovalsSnapshotFromDatabase(): ExecApprovalsSnapshot {
+  assertNoPendingLegacyExecApprovals();
+  return snapshotFromExecApprovalsDatabase(openOpenClawStateDatabase().db);
+}
+
+function readExecApprovalsSnapshotFromDatabaseReadOnly(): ExecApprovalsSnapshot {
+  assertNoPendingLegacyExecApprovals();
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => snapshotFromExecApprovalsDatabase(db)) ??
+    snapshotFromExecApprovalsRow({
+      path: resolveExecApprovalsDisplayPath(),
+      row: undefined,
+    })
+  );
 }
 
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
@@ -87,6 +104,19 @@ export function loadExecApprovals(): ExecApprovalsFile {
     return readExecApprovalsSnapshot().file;
   } catch (error) {
     if (!(error instanceof ExecApprovalsStoreUnavailableError)) {
+      throw error;
+    }
+    warnFailClosed("exec approvals SQLite state is unavailable; denying host execution", error);
+    return createFailClosedExecApprovalsFallback();
+  }
+}
+
+/** Loads exec approvals without creating or migrating shared state. */
+export function loadExecApprovalsReadOnly(): ExecApprovalsFile {
+  try {
+    return readExecApprovalsSnapshotFromDatabaseReadOnly().file;
+  } catch (error) {
+    if (error instanceof ExecApprovalsMigrationRequiredError) {
       throw error;
     }
     warnFailClosed("exec approvals SQLite state is unavailable; denying host execution", error);
@@ -194,9 +224,10 @@ export async function withAgentExecApprovalsRemoved<T>(
   if (!operationId) {
     throw new ExecApprovalsMutationFencedError();
   }
-  const removedPolicyEntries = Object.entries(snapshot.file.agents ?? {}).filter(
-    ([policyKey]) => normalizeAgentId(policyKey) === key,
-  );
+  const removedPolicyEntries = Object.entries(snapshot.file.agents ?? {}).filter(([policyKey]) => {
+    const normalizedPolicyKey = normalizeAgentIdStrict(policyKey);
+    return normalizedPolicyKey.ok && normalizedPolicyKey.value === key;
+  });
   if (removedPolicyEntries.length > 0) {
     const updated = updateExecApprovalsInTransaction({
       baseHash: snapshot.hash,

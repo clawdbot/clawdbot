@@ -170,7 +170,16 @@ function buildSendSchema(options: {
     ),
     replyTo: Type.Optional(Type.String()),
     threadId: Type.Optional(Type.String()),
-    asVoice: Type.Optional(Type.Boolean()),
+    asVoice: Type.Optional(
+      Type.Boolean({ description: "Send audio as a voice note; combines with voiceText." }),
+    ),
+    voiceText: Type.Optional(
+      Type.String({ description: "Text to synthesize; message remains visible." }),
+    ),
+    voiceProvider: Type.Optional(
+      Type.String({ description: "Per-send speech provider override." }),
+    ),
+    voiceId: Type.Optional(Type.String({ description: "Per-send speech voice override." })),
     silent: Type.Optional(Type.Boolean()),
     quoteText: Type.Optional(Type.String({ description: "Telegram reply quote text." })),
     gifPlayback: Type.Optional(Type.Boolean()),

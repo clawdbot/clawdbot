@@ -73,6 +73,34 @@ describe("formatPluginSourceForTable", () => {
     createFormattedSourceExpectation("global", "global", "demo-global", "index.js"),
   ])("shortens $origin sources under the $sourceKey root", expectFormattedSourceCase);
 
+  it("middle-truncates long out-of-root source paths for table rows", () => {
+    const longSource = path.join(
+      path.sep,
+      "Users",
+      "x",
+      "some",
+      "deeply",
+      "nested",
+      "project",
+      "checkout",
+      "extensions",
+      "very-long-plugin-directory-name",
+      "index.ts",
+    );
+    const out = formatPluginSourceForTable(
+      { origin: "config", source: longSource },
+      {
+        global: PLUGIN_SOURCE_ROOTS.global,
+      },
+    );
+    expect(out.rootKey).toBeUndefined();
+    expect(out.value.length).toBeLessThanOrEqual(48);
+    expect(out.value).toContain("...");
+    // Both path ends stay visible so rows remain identifiable.
+    expect(out.value.startsWith(path.join(path.sep, "Users", "x"))).toBe(true);
+    expect(out.value.endsWith("index.ts")).toBe(true);
+  });
+
   it("ignores untrusted explicit env override for the stock source root", () => {
     const homeDir = path.resolve(path.sep, "tmp", "openclaw-home");
     const rawEnv = {

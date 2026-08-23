@@ -243,7 +243,8 @@ export function normalizeSessionEntry(
   entry: SessionEntryLike,
   sessionKey?: string,
 ): SessionEntry | null {
-  const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey });
+  const { room, ...entryWithoutRoom } = entry;
+  const shaped = normalizePersistedSessionEntryShape(entryWithoutRoom, { sessionKey });
   if (!shaped) {
     return null;
   }
@@ -254,11 +255,9 @@ export function normalizeSessionEntry(
         ? normalized.updatedAt
         : Date.now();
   }
-  const rec = normalized as unknown as Record<string, unknown>;
-  if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
-    rec.groupChannel = rec.room;
+  if (typeof normalized.groupChannel !== "string" && typeof room === "string") {
+    normalized.groupChannel = room;
   }
-  delete rec.room;
   return normalized;
 }
 

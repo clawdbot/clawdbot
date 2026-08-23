@@ -213,7 +213,7 @@ async function writeUrlToFile(filePath: string, url: string, opts: { expectedHos
                 `writeUrlToFile: downloaded ${bytes} bytes, exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
               );
             }
-            await fileHandle.write(value);
+            await fileHandle.writeFile(value);
           }
         } catch (err) {
           await reader.cancel().catch(() => undefined);

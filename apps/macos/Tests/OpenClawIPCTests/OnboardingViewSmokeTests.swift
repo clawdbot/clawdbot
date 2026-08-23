@@ -139,12 +139,7 @@ struct OnboardingViewSmokeTests {
         #expect(!order.contains(2))
     }
 
-    @Test func `fresh remote setup installs CLI for the Mac node worker`() {
-        let order = OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: true)
-
-        #expect(order.contains(2))
+    @Test func `CLI install activates only a local gateway`() {
         #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
         #expect(OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .local))
     }
@@ -185,7 +180,6 @@ struct OnboardingViewSmokeTests {
     @Test func `automatic CLI setup waits for the initial status probe`() {
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: true,
             statusKnown: false,
             executableReady: false,
@@ -193,7 +187,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: true,
             statusKnown: true,
             executableReady: false,
@@ -201,7 +194,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: false,
             statusKnown: true,
             executableReady: false,
@@ -209,7 +201,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: true,
             statusKnown: true,
             executableReady: true,
@@ -217,19 +208,28 @@ struct OnboardingViewSmokeTests {
             installing: false))
     }
 
-    @Test func `detected CLI starts its gateway after this Mac is selected`() {
-        #expect(!OnboardingView.shouldStartExistingCLIActivation(
-            isLocal: false,
+    @Test func `detected CLI follows the selected onboarding connection mode`() {
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .remote,
             executableReady: true,
-            installing: false))
-        #expect(OnboardingView.shouldStartExistingCLIActivation(
-            isLocal: true,
+            installing: false) == .remote)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .local,
             executableReady: true,
-            installing: false))
-        #expect(!OnboardingView.shouldStartExistingCLIActivation(
-            isLocal: true,
+            installing: false) == .local)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .unconfigured,
             executableReady: true,
-            installing: true))
+            installing: false) == nil)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .local,
+            executableReady: true,
+            installing: true) == nil)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .remote,
+            executableReady: false,
+            installing: false) == nil)
+        #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
     }
 
     @Test func `later gateway readiness revises a pinned CLI activation failure`() {
@@ -253,6 +253,24 @@ struct OnboardingViewSmokeTests {
             isLocal: false,
             executableReady: true,
             installed: false))
+    }
+
+    @Test func `gateway start failure message retains the concrete reason`() {
+        #expect(
+            OnboardingView.gatewayStartFailureMessage(
+                prefix: "OpenClaw was installed, but the Gateway did not start. Retry setup.",
+                reason: "launchd disabled") ==
+                "OpenClaw was installed, but the Gateway did not start. Retry setup. (launchd disabled)")
+        #expect(
+            OnboardingView.gatewayStartFailureMessage(
+                prefix: "OpenClaw was installed, but the Gateway did not start. Retry setup.",
+                reason: nil) ==
+                "OpenClaw was installed, but the Gateway did not start. Retry setup.")
+        #expect(
+            OnboardingView.gatewayStartFailureMessage(
+                prefix: "OpenClaw was installed, but the Gateway did not start. Retry setup.",
+                reason: "") ==
+                "OpenClaw was installed, but the Gateway did not start. Retry setup.")
     }
 
     @Test func `connection mode change restarts full page monitoring`() {

@@ -278,8 +278,10 @@ export async function preflightDiscordMessage(
   const messageText = resolveDiscordMessageText(message, {
     includeForwarded: true,
   });
+  // Only bot/webhook traffic can be rejected before canonical routing; ordinary
+  // messages should reach the single authoritative binding lookup below.
   const injectedBoundThreadBinding =
-    !isDirectMessage && !isGroupDm
+    !isDirectMessage && !isGroupDm && (webhookId || author.bot)
       ? resolveInjectedBoundThreadLookupRecord({
           threadBindings: params.threadBindings,
           threadId: messageChannelId,
@@ -350,6 +352,8 @@ export async function preflightDiscordMessage(
   const resolvedAccountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
   const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
   let commandAuthorized = true;
+  let channelIngress;
+  let resolveChannelIngress;
   if (isDirectMessage) {
     const access = await resolveDiscordDmPreflightAccess({
       preflight: params,
@@ -358,6 +362,7 @@ export async function preflightDiscordMessage(
       dmPolicy,
       resolvedAccountId,
       allowNameMatching,
+      conversationId: messageChannelId,
     });
     if (isPreflightAborted(params.abortSignal)) {
       return null;
@@ -366,6 +371,8 @@ export async function preflightDiscordMessage(
       return null;
     }
     commandAuthorized = access.commandAuthorized;
+    channelIngress = access.channelIngress;
+    resolveChannelIngress = access.resolveChannelIngress;
   }
 
   const botId = params.botUserId;
@@ -631,24 +638,35 @@ export async function preflightDiscordMessage(
   const hasAbortRequest = isAbortRequestText(baseText);
 
   if (!isDirectMessage) {
-    const commandAccess = await resolveDiscordTextCommandAccess({
-      accountId: params.accountId,
-      cfg: params.cfg,
-      ownerAllowFrom: params.allowFrom,
-      sender: {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      },
-      memberAccessConfigured: hasAccessRestrictions,
-      memberAllowed,
-      allowNameMatching,
-      allowTextCommands,
-      hasControlCommand: hasControlCommandInMessage,
-    });
-    commandAuthorized = commandAccess.authorized;
+    const resolveCommandIngress = async (
+      contextBinding?: Parameters<typeof resolveDiscordTextCommandAccess>[0]["contextBinding"],
+      conversation?: { parentId?: string; threadId?: string },
+    ) =>
+      await resolveDiscordTextCommandAccess({
+        accountId: params.accountId,
+        cfg: params.cfg,
+        ownerAllowFrom: params.allowFrom,
+        sender: {
+          id: sender.id,
+          name: sender.name,
+          tag: sender.tag,
+        },
+        memberAccessConfigured: hasAccessRestrictions,
+        memberAllowed,
+        allowNameMatching,
+        allowTextCommands,
+        hasControlCommand: hasControlCommandInMessage,
+        conversationId: messageChannelId,
+        conversationParentId: conversation?.parentId,
+        conversationThreadId: conversation?.threadId,
+        ...(contextBinding ? { contextBinding } : {}),
+      });
+    const commandAccess = await resolveCommandIngress();
+    commandAuthorized = commandAccess.commandAccess.authorized;
+    channelIngress = commandAccess;
+    resolveChannelIngress = resolveCommandIngress;
 
-    if (commandAccess.shouldBlockControlCommand) {
+    if (commandAccess.commandAccess.shouldBlockControlCommand) {
       logInboundDrop({
         log: logVerbose,
         channel: "discord",
@@ -803,6 +821,19 @@ export async function preflightDiscordMessage(
     }
   }
 
+  const guildId = isGuildMessage
+    ? (data.guild?.id ?? data.guild_id ?? message.guild_id)
+    : undefined;
+  const conversationAvatar =
+    isDirectMessage || guildId
+      ? params.avatarResolver?.resolve({
+          client: params.client,
+          conversationId: messageChannelId,
+          author,
+          ...(guildId ? { guildId } : {}),
+        })
+      : undefined;
+
   // Discord CDN attachment URLs expire; download now (receipt time) instead
   // of after the run queue, which may delay processing past the URL TTL.
   const mediaResolveOptions = {
@@ -845,11 +876,14 @@ export async function preflightDiscordMessage(
     isDirectMessage,
     isGroupDm,
     commandAuthorized,
+    channelIngress: channelIngress!,
+    resolveChannelIngress: resolveChannelIngress!,
     baseText,
     messageText,
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
     preparedMedia,
     wasMentioned,
+    conversationAvatar,
     route: effectiveRoute,
     threadBinding,
     boundSessionKey: boundSessionKey || undefined,

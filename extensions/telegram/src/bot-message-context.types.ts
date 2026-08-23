@@ -1,8 +1,12 @@
 // Telegram type declarations define plugin contracts.
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type {
+  OpenClawConfig,
   DmPolicy,
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -11,6 +15,7 @@ import type {
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramMediaKind } from "./bot/body-helpers.js";
+import type { TelegramThreadSpec } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
@@ -23,7 +28,12 @@ export type TelegramMediaRef = {
   sourceMessageId?: string;
 };
 
+export type TelegramChannelIngressResolver = (
+  contextBinding: ChannelIngressContextBinding,
+) => Promise<ResolvedChannelMessageIngress>;
+
 export type TelegramMessageContextOptions = {
+  threadSpec?: TelegramThreadSpec;
   commandSource?: "text" | "native";
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
@@ -36,6 +46,7 @@ export type TelegramMessageContextOptions = {
   spooledReplay?: boolean;
   /** Use an attempt-local participant so an outer retry loop owns final spool settlement. */
   isolateSpooledReplaySettlement?: boolean;
+  channelIngressResolvers?: readonly TelegramChannelIngressResolver[];
 };
 
 export type TelegramPromptContextEntry = NonNullable<
@@ -61,10 +72,8 @@ type ResolveTelegramGroupConfig = (
 };
 
 type ResolveGroupActivation = (params: {
-  chatId: string | number;
   agentId?: string;
-  messageThreadId?: number;
-  sessionKey?: string;
+  sessionKey: string;
   cfg: OpenClawConfig;
 }) => boolean | undefined;
 

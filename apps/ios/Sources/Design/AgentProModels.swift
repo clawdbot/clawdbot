@@ -264,13 +264,20 @@ struct ClawHubSearchResponseLite: Decodable {
 struct ClawHubSearchResultLite: Decodable {
     let slug: String
     let installRef: String?
+    let trustState: String?
     let displayName: String
     let summary: String?
     let version: String?
 
     /// Several publishers can share one slug, so install must send the Gateway-supplied reference.
+    /// It names the result's own source and is never rebuilt from owner and slug.
     var reference: String {
         self.installRef ?? self.slug
+    }
+
+    /// This surface installs without a review card, so the row itself has to carry the warning.
+    var isUnscannedSource: Bool {
+        self.trustState == ClawHubSkillSummary.unscannedTrustState
     }
 }
 

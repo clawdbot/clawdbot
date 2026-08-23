@@ -1,8 +1,7 @@
 // Isolated agent session tests cover session creation and metadata for cron runs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { SessionOrigin } from "../../config/sessions/types.js";
+import type { SessionEntry, SessionOrigin } from "../../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { projectSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -424,6 +423,7 @@ describe("resolveCronSession", () => {
           cacheRead: 4,
           cacheWrite: 5,
           contextTokens: 200_000,
+          contextTokensSource: "runtime",
           compactionCount: 9,
           memoryFlush: { kind: "succeeded", compactionCount: 9 },
           abortCutoffMessageSid: "old-message",
@@ -509,6 +509,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.cacheRead).toBeUndefined();
       expect(result.sessionEntry.cacheWrite).toBeUndefined();
       expect(result.sessionEntry.contextTokens).toBeUndefined();
+      expect(result.sessionEntry.contextTokensSource).toBeUndefined();
       expect(result.sessionEntry.compactionCount).toBeUndefined();
       expect(result.sessionEntry.memoryFlush).toBeUndefined();
       expect(result.sessionEntry.abortCutoffMessageSid).toBeUndefined();

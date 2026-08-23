@@ -20,6 +20,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { SLACK_APPROVAL_HEADER_BLOCK_ID } from "./approval-actions.js";
 import {
   isSlackAnyNativeApprovalClientEnabled,
   shouldHandleSlackNativeApprovalRequest,
@@ -228,6 +229,7 @@ function buildSlackExecPendingApprovalBlocks(view: ExecApprovalPendingView): Sla
   return [
     {
       type: "section",
+      block_id: SLACK_APPROVAL_HEADER_BLOCK_ID,
       text: {
         type: "mrkdwn",
         text: "*Exec approval required*\nA command needs your approval.",
@@ -254,6 +256,7 @@ function buildSlackPluginPendingApprovalBlocks(view: PluginApprovalPendingView):
   return [
     {
       type: "section",
+      block_id: SLACK_APPROVAL_HEADER_BLOCK_ID,
       text: {
         type: "mrkdwn",
         text: `*Plugin approval required*\n${truncateSlackMrkdwn(

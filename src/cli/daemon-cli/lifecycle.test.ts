@@ -842,6 +842,7 @@ describe("runDaemonRestart health checks", () => {
 
   it("uses targeted RPC for an unmanaged Windows gateway restart", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    callGatewayCli.mockResolvedValueOnce({ ok: true, status: "emitted", pid: 4200 });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart({ runPostRestartCheck: true });
 

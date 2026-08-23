@@ -4,6 +4,7 @@
 import type { OpenAIResponsesCompactionRejection } from "@openclaw/ai/transports";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import type { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
@@ -101,6 +102,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
   providerTextTransforms: ReturnType<typeof resolveProviderTextTransforms>;
   abortSignal: AbortSignal;
   runTrace: DiagnosticTraceContext;
+  diagnosticOwner: DiagnosticEmbeddedRunOwner;
 }) {
   const attempt = input.attempt;
   const session = input.session;
@@ -387,6 +389,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
     trace: input.runTrace,
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
     nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+    ownerGeneration: input.diagnosticOwner.generation,
     onStarted: () => {
       attempt.onExecutionPhase?.({
         phase: "model_call_started",

@@ -1,4 +1,3 @@
-import path from "node:path";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { normalizePackageTagInput } from "./package-tag.js";
@@ -11,7 +10,6 @@ import {
 } from "./update-channels.js";
 import { resolveExtendedStablePackage } from "./update-check.js";
 import {
-  cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
@@ -73,7 +71,6 @@ export async function runGlobalUpdate(params: {
     pkgRoot,
     packageName,
   });
-  await cleanupGlobalRenameDirs({ globalRoot: path.dirname(pkgRoot), packageName });
   const extendedStable =
     channel === "extended-stable"
       ? await resolveExtendedStablePackage({ installKind: "package", timeoutMs, packageName })

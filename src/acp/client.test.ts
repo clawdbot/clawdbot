@@ -660,6 +660,27 @@ describe("resolvePermissionRequest", () => {
     });
   });
 
+  it.each(["FILE:///tmp/outside/marker.txt", "file:/tmp/outside/marker.txt"])(
+    "prompts for read when non-canonical file URL escapes cwd: %s",
+    async (fileUrl) => {
+      const prompt = vi.fn(async () => false);
+      const res = await resolvePermissionRequest(
+        makePermissionRequest({
+          toolCall: {
+            toolCallId: "tool-read-file-url-escape-cwd",
+            title: "read: ignored-by-raw-input",
+            status: "pending",
+            rawInput: { path: fileUrl },
+          },
+        }),
+        { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd" },
+      );
+      expect(prompt).toHaveBeenCalledTimes(1);
+      expect(prompt).toHaveBeenCalledWith("read", "read: ignored-by-raw-input");
+      expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+    },
+  );
+
   it("prompts for read when rawInput path escapes cwd via traversal", async () => {
     const prompt = vi.fn(async () => false);
     const res = await resolvePermissionRequest(

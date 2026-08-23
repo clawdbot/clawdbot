@@ -303,6 +303,8 @@ export async function startTelegramWebhook(opts: {
   host?: string;
   secret?: string;
   runtime?: RuntimeEnv;
+  buildContext?: Parameters<typeof createTelegramBot>[0]["buildContext"];
+  dispatchReplyFromConfig?: Parameters<typeof createTelegramBot>[0]["dispatchReplyFromConfig"];
   fetch?: typeof fetch;
   abortSignal?: AbortSignal;
   healthPath?: string;
@@ -359,6 +361,8 @@ export async function startTelegramWebhook(opts: {
   const bot = createTelegramBot({
     token: opts.token,
     runtime,
+    buildContext: opts.buildContext,
+    dispatchReplyFromConfig: opts.dispatchReplyFromConfig,
     proxyFetch: opts.fetch,
     fetchAbortSignal: botFetchAbortSignal,
     accountAbortSignal,

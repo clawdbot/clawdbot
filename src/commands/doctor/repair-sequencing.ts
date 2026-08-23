@@ -18,6 +18,7 @@ import {
   maybeRepairOpenAICodexAuthConfig,
 } from "../doctor-auth-flat-profiles.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
+import { maybeMigrateExternalCliProfileMetadata } from "../doctor-external-cli-profiles.js";
 import { maybeRepairPluginOpenClawHostLinks } from "../doctor-plugin-host-links.js";
 import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-registry.js";
 import { migrateLegacySkillWorkshopProposals } from "../doctor-skill-workshop-sqlite.js";
@@ -65,7 +66,10 @@ export async function runDoctorRepairSequence(params: {
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
 }): Promise<{
   state: DoctorConfigMutationState;
+  /** Notes for repairs already committed to durable state (SQLite/filesystem). */
   changeNotes: string[];
+  /** Notes for candidate-config mutations that are durable only after the config write. */
+  configChangeNotes: string[];
   warningNotes: string[];
   authProfilesRepaired: boolean;
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
@@ -74,6 +78,7 @@ export async function runDoctorRepairSequence(params: {
   let state = params.state;
   const pluginMetadataSnapshotState = params.pluginMetadataSnapshotState ?? {};
   const changeNotes: string[] = [];
+  const configChangeNotes: string[] = [];
   const warningNotes: string[] = [];
   const env = params.env ?? process.env;
   const resolveCurrentPluginMetadataScope = () => {
@@ -112,7 +117,8 @@ export async function runDoctorRepairSequence(params: {
     warnings?: string[];
   }) => {
     if (mutation.changes.length > 0) {
-      appendNotes(changeNotes, mutation.changes);
+      // Candidate-only mutation: report as applied only after the config write lands.
+      appendNotes(configChangeNotes, mutation.changes);
       state = applyDoctorConfigMutation({
         state,
         mutation,
@@ -333,6 +339,21 @@ export async function runDoctorRepairSequence(params: {
     env,
   });
   appendRepairNotes(staleOAuthShadowRepair);
+  const externalCliProfileMigration = maybeMigrateExternalCliProfileMetadata({
+    cfg: state.candidate,
+    env,
+  });
+  if (externalCliProfileMigration.configChanged) {
+    state = applyDoctorConfigMutation({
+      state,
+      mutation: {
+        config: state.candidate,
+        changes: ["External CLI OAuth migration updated auth.profiles."],
+      },
+      shouldRepair: true,
+    });
+  }
+  appendRepairNotes(externalCliProfileMigration);
   const authProfileSqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
     cfg: state.candidate,
     prompter: { confirmAutoFix: async () => true },
@@ -358,11 +379,13 @@ export async function runDoctorRepairSequence(params: {
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
+    externalCliProfileMigration.changes.length > 0 ||
     authProfileSqliteMigration.changes.length > 0;
 
   return {
     state,
     changeNotes,
+    configChangeNotes,
     warningNotes,
     authProfilesRepaired,
     ...(openAICodexAuthProfileIdMap.size > 0 ? { openAICodexAuthProfileIdMap } : {}),

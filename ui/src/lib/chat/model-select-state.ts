@@ -6,6 +6,7 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
@@ -72,7 +73,9 @@ type ChatFastModeSelectStateInput = {
 const FAST_MODE_PROVIDER_IDS = new Set(["anthropic", "minimax", "minimax-portal", "openai", "xai"]);
 
 function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
-  return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  return state.sessionsResult?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, state.sessionKey),
+  );
 }
 
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
@@ -304,7 +307,9 @@ function hasCatalogProviderMetadata(value: string, catalog: ModelCatalogEntry[])
 export function resolveChatFastModeSelectState(
   input: ChatFastModeSelectStateInput,
 ): ChatFastModeSelectState {
-  const activeRow = input.sessionsResult?.sessions?.find((row) => row.key === input.sessionKey);
+  const activeRow = input.sessionsResult?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, input.sessionKey),
+  );
   const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;
   const defaultProvider =
     normalizeChatModelProviderId(input.sessionsResult?.defaults?.modelProvider ?? "") || null;

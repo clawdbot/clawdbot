@@ -4,6 +4,7 @@ import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.SessionBranch
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
@@ -101,6 +102,32 @@ class ChatScreenTest {
     assertEquals(
       "ops",
       chatAgentChipText(GatewayAgentSummary(id = "ops", name = " ", emoji = null)),
+    )
+  }
+
+  @Test
+  fun sessionChipUsesTheSharedDashboardTitlePrecedence() {
+    val dashboardKey = "agent:main:dashboard:fresh"
+
+    assertEquals(
+      "New chat",
+      chatSessionChipText(
+        entry = ChatSessionEntry(key = dashboardKey, updatedAtMs = 1),
+        mainSessionKey = "agent:main:node-phone",
+      ),
+    )
+    assertEquals(
+      "Manual bee research",
+      chatSessionChipText(
+        entry =
+          ChatSessionEntry(
+            key = dashboardKey,
+            updatedAtMs = 1,
+            label = "Manual bee research",
+            displayName = "Honeybee flower-location communication",
+          ),
+        mainSessionKey = "agent:main:node-phone",
+      ),
     )
   }
 

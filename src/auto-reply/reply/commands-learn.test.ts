@@ -100,7 +100,7 @@ describe("learn command", () => {
     const instruction = (params.ctx as { BodyForAgent?: string }).BodyForAgent ?? "";
 
     expect(instruction).toContain(
-      "Revise the best pending proposal or update the best existing skill before creating anything new.",
+      "Revise the best pending proposal or update the best Workshop-owned skill before creating anything new.",
     );
     expect(instruction).toContain("Make at most one proposal mutation.");
     expect(instruction).toContain("first ~60 characters");

@@ -358,6 +358,10 @@ export async function handleSlackMessageAction(params: {
         initialComment:
           readStringParam(actionParams, "initialComment", { allowEmpty: true }) ??
           readStringParam(actionParams, "message", { allowEmpty: true }) ??
+          // `media` is accepted as an alias for the file, so a send-shaped call
+          // arrives with its text in `caption`; without this alias that text is
+          // silently dropped instead of becoming the upload's first comment.
+          readStringParam(actionParams, "caption", { allowEmpty: true }) ??
           "",
         filename: readStringParam(actionParams, "filename"),
         title: readStringParam(actionParams, "title"),

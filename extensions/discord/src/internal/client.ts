@@ -2,7 +2,7 @@
 import type { APIInteraction } from "discord-api-types/v10";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { DiscordCommandDeployer, type DeployCommandOptions } from "./command-deploy.js";
-import type { BaseCommand } from "./commands.js";
+import type { DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
 import { BaseMessageInteractiveComponent, type Modal } from "./components.js";
 import { DiscordEntityCache } from "./entity-cache.js";
@@ -57,7 +57,7 @@ export class Client {
   routes: Route[] = [];
   plugins: Array<{ id: string; plugin: Plugin }> = [];
   options: ClientOptions;
-  commands: BaseCommand[];
+  commands: DiscordCommand[];
   listeners: AnyListener[];
   rest: RequestClient;
   componentHandler = new ComponentRegistry<BaseMessageInteractiveComponent>();
@@ -71,7 +71,7 @@ export class Client {
   constructor(
     options: ClientOptions,
     handlers: {
-      commands?: BaseCommand[];
+      commands?: DiscordCommand[];
       listeners?: AnyListener[];
       components?: BaseMessageInteractiveComponent[];
       modals?: Modal[];

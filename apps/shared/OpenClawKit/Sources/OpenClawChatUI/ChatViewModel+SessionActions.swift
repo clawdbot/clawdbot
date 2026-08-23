@@ -35,11 +35,10 @@ extension OpenClawChatViewModel {
         worktreeBaseRef: String? = nil,
         routeLease: OpenClawChatNewSessionRouteLease? = nil) async -> Bool
     {
-        guard !self.blocksAttachmentOwnerChange else {
-            self.errorText = String(
-                localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
-            return false
-        }
+        guard !self.isCreatingSession, self.canCreateSessionForImmediateSwitch() else { return false }
+        self.isCreatingSession = true
+        defer { self.isCreatingSession = false }
+        let initiatingSession = self.currentSessionSnapshot()
         let normalizedAgentID = agentID?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -77,6 +76,7 @@ extension OpenClawChatViewModel {
             let createdKey = created.key.trimmingCharacters(in: .whitespacesAndNewlines)
             next = createdKey.isEmpty ? requested : createdKey
         } catch {
+            guard self.isCurrentSession(initiatingSession) else { return false }
             if Self.isUnsupportedCreateSessionError(error) {
                 // Reset only mimics a plain new chat; agent/worktree selections were
                 // not honored, so advanced requests surface the error instead of
@@ -86,17 +86,17 @@ extension OpenClawChatViewModel {
                     self.errorText = error.localizedDescription
                     return false
                 }
+                guard self.canCreateSessionForImmediateSwitch() else { return false }
                 chatUILogger.info("sessions.create unsupported; falling back to sessions.reset")
                 await self.performReset()
-                return true
+                return self.isCurrentSession(initiatingSession)
             }
             chatUILogger.error("sessions.create failed \(error.localizedDescription, privacy: .public)")
             self.errorText = error.localizedDescription
             return false
         }
-        guard !self.blocksAttachmentOwnerChange else {
-            self.errorText = String(
-                localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
+        guard self.isCurrentSession(initiatingSession), self.canCreateSessionForImmediateSwitch() else {
+            if !self.sessions.contains(where: { $0.key == next }) { self.refreshSessions() }
             return false
         }
         self.adoptCreatedSession(next)
@@ -375,11 +375,15 @@ extension OpenClawChatViewModel {
         }
     }
 
-    public func forkSession(key: String) async {
+    public func forkSession(key: String, fromLastCompleted: Bool? = nil) async {
         guard self.canCreateSessionForImmediateSwitch() else { return }
         let initiatingSession = self.currentSessionSnapshot()
         do {
-            let createdKey = try await self.transport.forkSession(parentKey: key)
+            let stableBoundary = fromLastCompleted ??
+                (self.sessions.first(where: { $0.key == key })?.hasActiveRun == true)
+            let createdKey = try await self.transport.forkSession(
+                parentKey: key,
+                fromLastCompleted: stableBoundary)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !createdKey.isEmpty else { return }
             guard self.isCurrentSession(initiatingSession), self.canCreateSessionForImmediateSwitch() else {
@@ -480,7 +484,7 @@ extension OpenClawChatViewModel {
             }
         }
         do {
-            let response = try await self.transport.listSessionBranches(
+            let response = try await self.requestSessionBranchListing(
                 sessionKey: session.key,
                 agentID: self.outboxAgentID(for: session))
             guard self.isCurrentSession(session),

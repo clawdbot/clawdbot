@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  SecretsStoreDeleteParamsSchema,
   SecretsStoreListResultSchema,
   SecretsStoreMutationResultSchema,
   SecretsStoreSetParamsSchema,
@@ -56,11 +57,24 @@ describe("secret store protocol schemas", () => {
     ).toBe(false);
     expect(
       Value.Check(SecretsStoreSetParamsSchema, {
+        name: "github-setup-11111111111111111111111111111111",
+        value: "value",
+        kind: "secret",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SecretsStoreDeleteParamsSchema, {
+        name: "github-setup-11111111111111111111111111111111",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SecretsStoreSetParamsSchema, {
         name: "lowercase",
         value: "value",
         kind: "secret",
       }),
     ).toBe(false);
+    expect(Value.Check(SecretsStoreDeleteParamsSchema, { name: "github-setup-token" })).toBe(false);
     expect(
       Value.Check(SecretsStoreMutationResultSchema, {
         ok: true,

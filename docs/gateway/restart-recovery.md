@@ -20,16 +20,20 @@ and what the automatic resume looks like.
 
 ## What survives a restart
 
-| State                         | Storage                                     | Behavior across restart                                                                                 |
-| ----------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Conversation history          | Per-agent SQLite database                   | Untouched; sessions continue from the stored transcript                                                 |
-| Interrupted main-session turn | Per-agent SQLite session row and transcript | Automatically resumed or reconciled a few seconds after startup                                         |
-| Subagent runs                 | SQLite (shared state database)              | Registry restored on boot; interrupted runs resumed                                                     |
-| Background tasks              | SQLite (shared state database)              | Reconciled on boot; orphaned runs recovered or marked lost                                              |
-| Queued outbound deliveries    | SQLite delivery queue                       | Pending rows drain after restart; terminal failures follow bounded detail and ownership-fence retention |
-| Scheduled (cron) jobs         | SQLite cron store                           | Schedules persist; the scheduler re-arms on boot                                                        |
-| Restart continuation          | SQLite restart sentinel                     | One-shot follow-up dispatched to the session that asked for the restart                                 |
-| Gateway terminal PTYs         | Process memory                              | End with the old process; terminal sessions are not recovered                                           |
+| State                         | Storage                                     | Behavior across restart                                                 |
+| ----------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
+| Conversation history          | Per-agent SQLite database                   | Untouched; sessions continue from the stored transcript                 |
+| Interrupted main-session turn | Per-agent SQLite session row and transcript | Automatically resumed or reconciled a few seconds after startup         |
+| Subagent runs                 | SQLite (shared state database)              | Registry restored on boot; interrupted runs resumed                     |
+| Background tasks              | SQLite (shared state database)              | Reconciled on boot; orphaned runs recovered or marked lost              |
+| Queued outbound deliveries    | SQLite delivery queue                       | Drained after restart; undelivered replies are retried                  |
+| Scheduled (cron) jobs         | SQLite cron store                           | Schedules persist; the scheduler re-arms on boot                        |
+| Restart continuation          | SQLite restart sentinel                     | One-shot follow-up dispatched to the session that asked for the restart |
+| Gateway terminal PTYs         | Process memory                              | End with the old process; terminal sessions are not recovered           |
+
+Pending delivery rows drain or retry after restart. Failed rows discard their
+payload; only reusable or crash-ambiguous owners keep a minimal bounded or
+permanent receipt that prevents duplicate delivery.
 
 ## Graceful restarts drain first
 

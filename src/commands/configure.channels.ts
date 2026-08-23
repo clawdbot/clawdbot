@@ -130,10 +130,11 @@ export async function removeChannelConfigWizard(
     }
 
     note(
-      [`${label} removed from config.`, "Note: credentials/sessions on disk are unchanged."].join(
-        "\n",
-      ),
-      "Channel removed",
+      [
+        `${label} selected for removal from config.`,
+        "Note: credentials/sessions on disk are unchanged.",
+      ].join("\n"),
+      "Channel removal",
     );
   }
 }

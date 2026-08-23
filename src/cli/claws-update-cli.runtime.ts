@@ -210,6 +210,7 @@ export async function runClawsUpdateCommand(
         sourceMcpServers: listedMcpServers.mcpServers,
         consentPlanIntegrity: opts.planIntegrity,
         packagePreflight: preflightClawPackage,
+        runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
         cronGateway: {
           add: async (input) => await callGatewayFromCli("cron.add", {}, input),
           get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),

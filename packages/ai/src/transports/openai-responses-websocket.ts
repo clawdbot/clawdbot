@@ -16,7 +16,6 @@ import {
   parseOpenAIResponsesWebSocketServerError,
   OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketPreDispatchError,
-  OpenAIResponsesWebSocketResponseFailedError,
   OpenAIResponsesWebSocketSafeRetryError,
 } from "./openai-responses-contracts.js";
 import { transportAbortError } from "./transport-stream-shared.js";
@@ -425,14 +424,13 @@ export function createOpenAIResponsesWebSocketStream(params: {
           if (!event) {
             continue;
           }
-          if (event.type === "response.failed") {
-            throw new OpenAIResponsesWebSocketResponseFailedError(event.response.output.length > 0);
-          }
           if (event.type === "response.completed") {
             terminalResponse = event.response;
           }
           terminalReceived =
-            event.type === "response.completed" || event.type === "response.incomplete";
+            event.type === "response.completed" ||
+            event.type === "response.incomplete" ||
+            event.type === "response.failed";
           yield event;
           if (terminalReceived) {
             degradedWebSocketConnections.delete(degradationKey);
@@ -450,12 +448,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
         if (!requestDispatched && !params.signal?.aborted) {
           throw new OpenAIResponsesWebSocketPreDispatchError(error);
         }
-        if (
-          !requestDispatched ||
-          params.callerSignal?.aborted ||
-          error instanceof OpenAIResponsesWebSocketResponseFailedError ||
-          safeRetry
-        ) {
+        if (!requestDispatched || params.callerSignal?.aborted || safeRetry) {
           throw error;
         }
         throw new OpenAIResponsesWebSocketPostDispatchError(error);

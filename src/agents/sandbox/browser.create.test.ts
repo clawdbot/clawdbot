@@ -894,25 +894,7 @@ describe("ensureSandboxBrowser create args", () => {
     });
 
     const cfg = buildConfig(false);
-    cfg.browser.autoStartTimeoutMs = 25;
-
-    const originalSetTimeout = globalThis.setTimeout;
-    let requestTimeoutMs: number | undefined;
-    let fireRequestTimeout: (() => void) | undefined;
-    // Fire the production request timer only after the real loopback server sees
-    // the request, keeping the stalled-fetch proof deterministic and fast.
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      callback: (...args: unknown[]) => void,
-      timeout?: number,
-      ...args: unknown[]
-    ) => {
-      if (requestTimeoutMs === undefined) {
-        requestTimeoutMs = timeout;
-        fireRequestTimeout = () => callback(...args);
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      }
-      return originalSetTimeout(() => callback(...args), timeout);
-    }) as typeof setTimeout);
+    cfg.browser.autoStartTimeoutMs = 250;
 
     try {
       const startup = ensureTestSandboxBrowser({
@@ -921,23 +903,28 @@ describe("ensureSandboxBrowser create args", () => {
         agentWorkspaceDir: "/tmp/workspace",
         cfg,
       });
+      const startupResult = startup.then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
       await Promise.race([
         requestReceived,
         new Promise<never>((_resolve, reject) => {
-          originalSetTimeout(
-            () => reject(new Error("CDP request was not received")),
-            1_000,
-          ).unref();
+          setTimeout(() => reject(new Error("CDP request was not received")), 2_000).unref();
         }),
       ]);
 
       expect(requestPath).toBe("/json/version");
-      expect(requestTimeoutMs).toBeGreaterThanOrEqual(1);
-      expect(requestTimeoutMs).toBeLessThanOrEqual(cfg.browser.autoStartTimeoutMs);
-      fireRequestTimeout?.();
-      await expect(startup).rejects.toThrow("hung container has been forcefully removed");
+      const result = await startupResult;
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected stalled CDP startup to fail");
+      }
+      expect(result.error).toBeInstanceOf(Error);
+      expect((result.error as Error).message).toContain(
+        `within ${cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
+      );
     } finally {
-      setTimeoutSpy.mockRestore();
       for (const socket of sockets) {
         socket.destroy();
       }

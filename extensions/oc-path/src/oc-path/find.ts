@@ -13,7 +13,7 @@ import type { MdAst } from "./ast.js";
 import type { JsoncValue } from "./jsonc/ast.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
 import { pickJsonlLine } from "./jsonl/line.js";
-import type { OcPath } from "./oc-path.js";
+import type { OcPath, PredicateSpec } from "./oc-path.js";
 import {
   MAX_TRAVERSAL_DEPTH,
   OcPathError,
@@ -34,7 +34,6 @@ import {
   splitRespectingBrackets,
   unquoteSeg,
 } from "./oc-path.js";
-import type { PredicateSpec } from "./oc-path.js";
 import type { OcAst, OcMatch } from "./universal.js";
 import { resolveOcPath } from "./universal.js";
 

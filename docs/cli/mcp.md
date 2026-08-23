@@ -78,6 +78,8 @@ Use [`openclaw acp`](/cli/acp) instead when OpenClaw should host the coding runt
     - older transcript history is read with `messages_read`
     - Claude push notifications only exist while the MCP session is alive
     - when the client disconnects, the bridge exits and the live queue is gone
+    - cancelling an `events_wait` request immediately releases its server-side wait and timeout
+    - bridge or MCP transport close failures make `openclaw mcp serve` fail instead of reporting a clean shutdown
     - one-shot agent entry points such as `openclaw agent` and `openclaw infer model run` retire any bundled MCP runtimes they open when the reply completes, so repeated scripted runs do not accumulate stdio MCP child processes
     - stdio MCP servers launched by OpenClaw (bundled or user-configured) are torn down as a process tree on shutdown, so child subprocesses started by the server do not survive after the parent stdio client exits
     - deleting or resetting a session disposes that session's MCP clients through the shared runtime cleanup path, so there are no lingering stdio connections tied to a removed session
@@ -159,15 +161,16 @@ This gives MCP clients one place to:
     Reads recent transcript messages for one session-backed conversation. `limit` defaults to 20, max 200.
   </Accordion>
   <Accordion title="attachments_fetch">
-    Extracts non-text message content blocks from one transcript message. This is a metadata view over transcript content, not a standalone durable attachment blob store.
+    Extracts non-text message content blocks and canonical persisted media metadata from one transcript message. Persisted entries use `{ "type": "openclaw_media", "media": { ... } }`, where `media` can include `url`, `contentType`, `kind`, `fileName`, dimensions, duration, or size. This is a metadata view, not a standalone durable attachment blob store.
   </Accordion>
   <Accordion title="events_poll">
-    Reads queued live events since a numeric cursor. `limit` max 200.
+    Reads queued live events since a numeric cursor. `limit` max 200. If the requested cursor predates retained queue history, the result also includes `gap.requested_after_cursor` and `gap.oldest_available_cursor`.
   </Accordion>
   <Accordion title="events_wait">
     Long-polls until the next matching queued event arrives or a timeout expires (default 30s, max 300s).
 
     Use this when a generic MCP client needs near-real-time delivery without a Claude-specific push protocol.
+    A known cursor gap returns immediately with the same additive `gap` metadata, even when no matching event is currently retained.
 
   </Accordion>
   <Accordion title="messages_send">
@@ -209,6 +212,7 @@ Current event types:
 <Warning>
 - the queue is live-only; it starts when the MCP bridge starts
 - `events_poll` and `events_wait` do not replay older Gateway history by themselves
+- the queue is bounded; when `gap` is present, read durable history with `messages_read`, then resume with `after_cursor` set to one less than `gap.oldest_available_cursor`
 - durable backlog should be read with `messages_read`
 
 </Warning>
@@ -331,7 +335,7 @@ For broader testing context, see [Testing](/help/testing).
     Usually means the Gateway session is not already routable. Confirm that the underlying session has stored channel/provider, recipient, and optional account/thread route metadata.
   </Accordion>
   <Accordion title="events_poll or events_wait misses older messages">
-    Expected. The live queue starts when the bridge connects. Read older transcript history with `messages_read`.
+    The live queue starts when the bridge connects and retains a bounded window. If a result includes `gap`, read durable transcript history with `messages_read`, then resume with `after_cursor` set to one less than `gap.oldest_available_cursor`.
   </Accordion>
   <Accordion title="Claude notifications do not show up">
     Check all of these:
@@ -383,16 +387,39 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 
 Runtime adapters may normalize this shared registry into the shape their downstream client expects. For example, embedded OpenClaw consumes OpenClaw `transport` values directly, while Claude Code and Gemini receive CLI-native `type` values such as `http`, `sse`, or `stdio`.
 
-Codex app-server also honors an optional `codex` block on each server. This is
-OpenClaw projection metadata for Codex app-server threads only; it does not
-change ACP sessions, generic Codex harness config, or other runtime adapters.
-Use non-empty `codex.agents` to project a server only into specific OpenClaw
-agent ids. Empty, blank, or invalid agent lists are rejected by config
-validation and omitted by the runtime projection path instead of becoming
-global. Use `codex.defaultToolsApprovalMode` (`auto`, `prompt`, or `approve`)
-to emit Codex's native `default_tools_approval_mode` for a trusted server.
-OpenClaw strips the `codex` metadata before handing the native `mcp_servers`
-config to Codex.
+### Codex tool approvals
+
+Codex app-server approval-gates tools that have no MCP safety annotations when
+the server uses the default `auto` mode. Interactive turns can approve those
+calls in the Control UI. For a server you trust, set the mode while adding it:
+
+```bash
+openclaw mcp add memory \
+  --command npx \
+  --arg -y \
+  --arg @modelcontextprotocol/server-memory \
+  --approval approve
+```
+
+For an existing saved server, update only its approval mode:
+
+```bash
+openclaw mcp configure memory --approval approve
+```
+
+The flag writes `codex.defaultToolsApprovalMode`, which accepts `auto`,
+`prompt`, or `approve`. `approve` bypasses per-call approval for every tool on
+that server, so use it only for trusted servers. `mcp probe` and `mcp doctor
+--probe` warn when a server remains in `auto` mode and none of its tools has
+safety annotations.
+
+The optional `codex` block is OpenClaw projection metadata for Codex app-server
+threads only; it does not change ACP sessions, generic Codex harness config, or
+other runtime adapters. Use non-empty `codex.agents` to project a server only
+into specific OpenClaw agent ids. Empty, blank, or invalid agent lists are
+rejected by config validation and omitted by the runtime projection path
+instead of becoming global. OpenClaw strips the `codex` metadata before handing
+the native `mcp_servers` config to Codex.
 
 ### Saved MCP server definitions
 
@@ -419,9 +446,9 @@ Notes:
 - `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization. Credential-bearing stdio arguments are redacted in text and JSON output.
 - `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
 - `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics.
-- `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags.
+- `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags. Use `--approval auto|prompt|approve` to set the Codex tool approval mode.
 - `set` expects one JSON object value on the command line.
-- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
+- `configure` updates enablement, tool filters, timeouts, OAuth, TLS, Codex approval mode, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
 - `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
 - `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
 - `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
@@ -590,6 +617,8 @@ Use `--json` for scripts and dashboards. Field sets can grow over time, so consu
         "docs": {
           "launch": "streamable-http https://mcp.example.com/mcp",
           "tools": 2,
+          "codexApprovalMode": "auto",
+          "approvalHint": "tools have no safety annotations; calls will require interactive approval",
           "resources": true,
           "listChanged": {
             "tools": true,
@@ -603,7 +632,7 @@ Use `--json` for scripts and dashboards. Field sets can grow over time, so consu
     }
     ```
 
-    `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). The command prints the complete result before exiting nonzero when diagnostics are present or a selected enabled server did not connect, so automation can inspect partial successes. Use `probe` for reachability and capability proof, not for static config audits.
+    `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. Each server includes its effective `codexApprovalMode`; `approvalHint` appears when that mode is `auto` and the discovered tools have no safety annotations. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). The command prints the complete result before exiting nonzero when diagnostics are present or a selected enabled server did not connect, so automation can inspect partial successes. Use `probe` for reachability and capability proof, not for static config audits.
 
   </Accordion>
 </AccordionGroup>
@@ -634,6 +663,9 @@ Example config shape:
         "toolFilter": {
           "include": ["search_*"],
           "exclude": ["admin_*"]
+        },
+        "codex": {
+          "defaultToolsApprovalMode": "approve"
         }
       }
     }
@@ -919,7 +951,7 @@ Behavior and security boundaries:
 - Origin-bound App permissions such as camera, microphone, and geolocation are not granted while inner App documents use opaque origins for cross-App isolation.
 - App HTML, complete tool arguments, and raw results live in a bounded ten-minute in-memory view lease and are not written to disk or copied into transcript preview metadata. The transcript stores only a bounded server/tool/resource descriptor tied to the original tool-call ID. After a Gateway restart, the Control UI can verify that descriptor against the authenticated session transcript and refetch the `ui://` resource; reconstructed views are read-only until a fresh run establishes current tool permissions.
 - In channel conversations, the latest successful App view in a turn adds one **Open App**-style action to the final assistant reply. Telegram DMs use a native Mini App button; Slack and Discord render the same portable action as a link. Other channels keep the original reply text and append an understandable HTTPS link.
-- Channel launch links are available only when Gateway Tailscale exposure has prepared a published HTTPS origin. `gateway.tailscale.mode: "serve"` is reachable only from the tailnet; `"funnel"` is reachable from the public internet. An externally managed Funnel preserved by `gateway.tailscale.preserveFunnel` is also treated as internet-reachable. See [Tailscale](/gateway/tailscale).
+- Channel launch links are available only when Gateway Tailscale exposure has prepared a published HTTPS origin. `gateway.tailscale.mode: "serve"` is reachable only from the tailnet; password-authenticated `"funnel"` is reachable from the public internet. Externally managed Funnel routes targeting the ordinary Gateway listener must migrate to managed `"funnel"` mode before OpenClaw can publish an internet-reachable origin. See [Tailscale](/gateway/tailscale).
 - Launch tickets are opaque, minted only while materializing the final channel reply, and expire after at most two minutes or when the underlying view lease expires, whichever comes first. The URL does not contain Gateway bearer credentials, session keys, view metadata, App HTML, tool input, or tool results.
 - If no published origin or ticket capacity is available, the view or ticket has expired, or the transport cannot render native controls, the original assistant text remains available. The Control UI keeps its existing inline App canvas and does not receive a duplicate launch action.
 - `openclaw security audit` warns while the bridge is enabled. Disable it with `openclaw config set mcp.apps.enabled false --strict-json` when it is not needed.

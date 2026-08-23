@@ -81,10 +81,15 @@ const TRAIN_2026_7_METHODS = [
 ] as const;
 
 const CURRENT_TRAIN_METHODS = [
+  "diagnostics.lanes",
+  "device.pair.setupStatus",
   "sessions.patchMany",
+  "sessions.groups.update",
+  "sessions.groups.defaults",
   "sessions.recover",
   "update.hold",
   "sessions.catalog.startTerminal",
+  "sessions.github.publish",
   "worker.desktop.observe",
   "projects.list",
   "projects.register",
@@ -105,7 +110,16 @@ const CURRENT_TRAIN_METHODS = [
   "portal.list",
   "portal.open",
   "portal.close",
-  "delivery.failures.resubmit",
+  "sessions.move",
+  "sessions.assignOwner",
+  "controlUi.sessionPreview",
+  "progressCard.get",
+  "progressCard.put",
+  "tools.github.status",
+  "tools.github.configure",
+  "tools.github.authorize.start",
+  "tools.github.authorize.poll",
+  "tools.github.authorize.cancel",
 ] as const;
 
 describe("core gateway method release trains", () => {

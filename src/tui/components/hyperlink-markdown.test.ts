@@ -17,6 +17,30 @@ function osc8Targets(raw: string) {
 }
 
 describe("HyperlinkMarkdown", () => {
+  it("does not reallocate prepared lines for an unchanged same-width redraw", () => {
+    const markdown = new HyperlinkMarkdown(
+      "مرحبا [docs](https://example.test/path)",
+      0,
+      0,
+      markdownTheme,
+    );
+
+    const first = markdown.render(80);
+    expect(markdown.render(80)).toBe(first);
+
+    const resized = markdown.render(40);
+    expect(resized).not.toBe(first);
+    expect(markdown.render(40)).toBe(resized);
+
+    markdown.setText("updated");
+    const updated = markdown.render(40);
+    expect(updated).not.toBe(resized);
+    expect(markdown.render(40)).toBe(updated);
+
+    markdown.invalidate();
+    expect(markdown.render(40)).not.toBe(updated);
+  });
+
   it("moves dunder identifiers intact across fenced code wrap boundaries", () => {
     const markdown = new HyperlinkMarkdown(
       ["```python", 'if __name__ == "__main__":', "```"].join("\n"),

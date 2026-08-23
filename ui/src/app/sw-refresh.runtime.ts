@@ -32,7 +32,17 @@ export async function refreshControlUiServiceWorker(): Promise<boolean> {
   if (!registration) {
     return false;
   }
-  const incumbent = registration.active;
+  // `registration.update()` is not a synchronization primitive: when an
+  // install is already in flight it may reject or briefly hide that worker.
+  // Fence against the document's controller before starting another check.
+  const incumbent = serviceWorker.controller ?? registration.active;
+  const pendingReplacement =
+    registration.installing ??
+    registration.waiting ??
+    (registration.active && registration.active !== incumbent ? registration.active : null);
+  if (pendingReplacement) {
+    return waitForReplacementWorker(pendingReplacement);
+  }
   await registration.update();
   const replacement =
     registration.installing ??

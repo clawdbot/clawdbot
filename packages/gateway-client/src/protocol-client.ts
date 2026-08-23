@@ -6,6 +6,14 @@ import {
 import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
 import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
+import type {
+  CloseSnapshot,
+  ConnectTimingState,
+  GatewayProtocolClientOptions,
+  GatewayProtocolCloseContext,
+  GatewayProtocolSocket,
+  GatewayProtocolTiming,
+} from "./protocol-client-contract.js";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
@@ -19,15 +27,6 @@ export {
   type GatewayProtocolRequestOptions,
   type GatewayProtocolRequestTiming,
 };
-
-import type {
-  CloseSnapshot,
-  ConnectTimingState,
-  GatewayProtocolClientOptions,
-  GatewayProtocolCloseContext,
-  GatewayProtocolSocket,
-  GatewayProtocolTiming,
-} from "./protocol-client-contract.js";
 
 export type {
   GatewayProtocolCloseContext,

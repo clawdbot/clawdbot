@@ -16,8 +16,7 @@ import {
   isVersionManagedNodePath,
   resolveSystemNodePath,
 } from "./runtime-paths.js";
-import { getMinimalServicePathPartsFromEnv } from "./service-env.js";
-import { SERVICE_PROXY_ENV_KEYS } from "./service-env.js";
+import { getMinimalServicePathPartsFromEnv, SERVICE_PROXY_ENV_KEYS } from "./service-env.js";
 import {
   collectInlineManagedServiceEnvKeys,
   collectInlineServiceEnvKeys,

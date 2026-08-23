@@ -3,12 +3,10 @@ import { existsSync, globSync, readdirSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  assignVitestFsCacheWriter,
   createNodeTestShardBundles,
   createNodeTestShards,
   createVitestCacheWarmGroups,
   resolvePolicyTestTargets,
-  type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
@@ -112,40 +110,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(resolvePolicyTestTargets(["docs/web/control-ui.md"])).toEqual([]);
   });
 
-  it("assigns one semantic Vitest cache writer without changing shard order", () => {
-    const full = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
-    const compact = createNodeTestShardBundles({
-      includeReleaseOnlyPluginShards: false,
-      compactMode: "push",
-    });
-
-    const expectWriter = (plan: Array<Pick<NodeTestShard, "groups" | "shardName">>) => {
-      const marked = assignVitestFsCacheWriter(plan);
-      expect(marked.map((shard) => shard.shardName)).toEqual(plan.map((shard) => shard.shardName));
-      expect(marked.filter((shard) => shard.saveVitestFsCache)).toHaveLength(1);
-      expect(
-        marked.find((shard) => shard.saveVitestFsCache)?.shardName.startsWith("core-unit-fast") ||
-          marked
-            .find((shard) => shard.saveVitestFsCache)
-            ?.groups?.some((group) => group.shard_name.startsWith("core-unit-fast")),
-      ).toBe(true);
-    };
-    expectWriter(full);
-    expectWriter(compact);
-
-    expect(assignVitestFsCacheWriter([])).toEqual([]);
-    const changedOnly = {
-      checkName: "checks-node-changed-only",
-      configs: ["test/vitest/vitest.unit.config.ts"],
-      requiresDist: false,
-      runner: DEFAULT_NODE_TEST_RUNNER,
-      shardName: "changed-only",
-    };
-    expect(assignVitestFsCacheWriter([changedOnly])).toEqual([
-      { ...changedOnly, saveVitestFsCache: true },
-    ]);
-  });
-
   it("projects cache-warm groups from the owned node test plan", () => {
     const groups = createVitestCacheWarmGroups();
     expect(groups).toHaveLength(10);
@@ -161,8 +125,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const coreStripePatterns = coreStripeGroups.flatMap((group) => group.includePatterns ?? []);
     expect(new Set(coreStripePatterns).size).toBe(coreStripePatterns.length);
 
-    const isolatedGroups = groups.filter((group) =>
-      group.shard_name.startsWith("cache-warm:core-unit-fast-isolated:"),
+    const isolatedGroups = groups.filter(
+      (group) =>
+        group.shard_name.startsWith("cache-warm:core-unit-fast-isolated:") ||
+        group.shard_name.startsWith("cache-warm:core-unit-fast-fake-timers:"),
     );
     expect(isolatedGroups).toHaveLength(2);
     expect(isolatedGroups.every((group) => group.includePatterns === undefined)).toBe(true);
@@ -306,21 +272,122 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "core-tooling-3",
       "core-tooling-4",
       "core-tooling-5",
+      "core-tooling-6",
+      "core-tooling-7",
       "core-tooling-isolated",
     ]);
 
-    // Pushes retain three lanes of headroom under the workflow's 28-worker cap.
-    expect(compact).toHaveLength(25);
-    expect(pullRequestCompact).toHaveLength(32);
-    expect(githubCompact).toHaveLength(55);
-    expect(githubPullRequestCompact).toHaveLength(62);
-    expect(hybridCompact).toEqual(githubCompact);
-    expect(hybridPullRequestCompact).toEqual(githubPullRequestCompact);
-    expect(githubPullRequestCompact.length).toBeLessThanOrEqual(64);
-    expect(Math.max(...githubCompact.map((shard) => shard.predictedSeconds ?? Infinity))).toBe(209);
+    for (const profile of [
+      {
+        name: "Blacksmith",
+        pullRequest: pullRequestCompact,
+        pullRequestJobs: 34,
+        pullRequestMax: 207,
+        push: compact,
+        pushJobs: 25,
+        pushMax: 207,
+      },
+      {
+        name: "GitHub-hosted",
+        pullRequest: githubPullRequestCompact,
+        pullRequestJobs: 80,
+        pullRequestMax: 186,
+        push: githubCompact,
+        pushJobs: 71,
+        pushMax: 149,
+      },
+      {
+        name: "hybrid",
+        pullRequest: hybridPullRequestCompact,
+        pullRequestJobs: 57,
+        pullRequestMax: 140,
+        push: hybridCompact,
+        pushJobs: 49,
+        pushMax: 140,
+      },
+    ]) {
+      expect(profile.push, `${profile.name} push jobs`).toHaveLength(profile.pushJobs);
+      expect(profile.pullRequest, `${profile.name} pull-request jobs`).toHaveLength(
+        profile.pullRequestJobs,
+      );
+      expect(
+        Math.max(...profile.push.map((shard) => shard.predictedSeconds ?? Infinity)),
+        `${profile.name} push max`,
+      ).toBe(profile.pushMax);
+      expect(
+        Math.max(...profile.pullRequest.map((shard) => shard.predictedSeconds ?? Infinity)),
+        `${profile.name} pull-request max`,
+      ).toBe(profile.pullRequestMax);
+    }
+    expect(hybridCompact.filter((shard) => !shard.requiresDist)).toHaveLength(48);
+    expect(githubCompact.length - hybridCompact.length).toBeGreaterThanOrEqual(20);
+    expect(githubPullRequestCompact.length).toBeLessThanOrEqual(96);
+    // Nondist expanded-profile lanes stay under the 150-second body ceiling;
+    // the hosted PR's serial TUI PTY descriptor remains indivisible.
+    for (const plan of [
+      githubCompact,
+      githubPullRequestCompact,
+      hybridCompact,
+      hybridPullRequestCompact,
+    ]) {
+      expect(
+        plan
+          .filter((shard) => !shard.requiresDist)
+          .every((shard) => (shard.predictedSeconds ?? Infinity) <= 150),
+      ).toBe(true);
+    }
+    for (const plan of [
+      githubCompact,
+      githubPullRequestCompact,
+      hybridCompact,
+      hybridPullRequestCompact,
+    ]) {
+      const agentChatStripes = plan
+        .flatMap((shard) => shard.groups)
+        .filter((group) => group.shard_name.startsWith("agentic-control-plane-agent-chat-hosted-"));
+      expect(agentChatStripes).toHaveLength(2);
+      expect(
+        agentChatStripes.every(
+          (group) =>
+            !group.includePatterns?.includes(
+              "src/gateway/server.chat.gateway-server-chat.test.ts",
+            ) || !group.includePatterns.includes("src/gateway/server.sessions.create.test.ts"),
+        ),
+      ).toBe(true);
+    }
+    // Historical checks-node-compact-large-2 was this gateway-core group. Its
+    // 139.5s Blacksmith spike keeps a dedicated floor and singleton bin even
+    // though compact check numbers change when the matrix shrinks.
+    const hybridLargeTail = hybridCompact.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "agentic-gateway-core-3"),
+    );
+    expect(hybridLargeTail?.groups.map((group) => group.shard_name)).toEqual([
+      "agentic-gateway-core-3",
+    ]);
+    expect(hybridLargeTail?.predictedSeconds).toBe(140);
+    // Synthesized hosted stripes carry divided admission weights while native
+    // hybrid groups carry Blacksmith stripe hints, so both weight sources must
+    // survive rebalancing rather than one class monopolizing the tall bins.
+    // Assert that property, not one arrangement: bin membership legitimately
+    // moves whenever a hint is refit from fresh measurements.
+    const hybridStripeBins = hybridCompact.filter((shard) =>
+      shard.groups.some((group) => /-hosted-\d+$/u.test(group.shard_name)),
+    );
+    expect(hybridStripeBins.length).toBeGreaterThan(0);
     expect(
-      Math.max(...githubPullRequestCompact.map((shard) => shard.predictedSeconds ?? Infinity)),
-    ).toBe(209);
+      hybridStripeBins.every((shard) => (shard.predictedSeconds ?? Infinity) <= 150),
+      "synthesized hosted stripes must respect the hybrid body ceiling",
+    ).toBe(true);
+    // agents-core-models measured 56.3s (n=6) against a 36s scaled estimate, so
+    // packing it beside agents-core-runtime-hosted-1 (60.4s) built the only bin
+    // running >=1.25x its prediction: 122s of work priced at 88s. The measured
+    // hybrid hint separates them; without it they pack together again.
+    const modelsBin = hybridCompact.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "agentic-agents-core-models"),
+    );
+    expect(modelsBin?.groups.map((group) => group.shard_name)).not.toContain(
+      "agentic-agents-core-runtime-hosted-1",
+    );
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
@@ -526,7 +593,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const smallTailAnchors = [
       "agentic-control-plane-auth-node",
       "agentic-control-plane-agent-chat",
-      "core-runtime-infra-process",
+      "core-runtime-config",
       "agentic-cli",
       "core-runtime-cron-isolated-agent",
       "core-runtime-infra-storage-state",
@@ -602,7 +669,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       .flatMap((shard) => shard.groups)
       .filter((group) => /^core-tooling-\d+$/u.test(group.shard_name));
     const toolingFiles = toolingGroups.flatMap((group) => group.includePatterns ?? []);
-    expect(toolingGroups).toHaveLength(5);
+    expect(toolingGroups).toHaveLength(7);
     expect(
       toolingGroups.every((group) => group.configs[0] === "test/vitest/vitest.tooling.config.ts"),
     ).toBe(true);
@@ -631,12 +698,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         shardName: "core-unit-fast-2",
       },
       {
-        configs: [
-          "test/vitest/vitest.unit-fast-isolated.config.ts",
-          "test/vitest/vitest.unit-fast-fake-timers.config.ts",
-        ],
+        configs: ["test/vitest/vitest.unit-fast-isolated.config.ts"],
         requiresDist: false,
         shardName: "core-unit-fast-isolated",
+      },
+      {
+        configs: ["test/vitest/vitest.unit-fast-fake-timers.config.ts"],
+        requiresDist: false,
+        shardName: "core-unit-fast-fake-timers",
       },
       {
         configs: ["test/vitest/vitest.unit-src.config.ts"],
@@ -772,7 +841,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
 
     const stripes = toolingShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
-    expect(stripes).toHaveLength(5);
+    expect(stripes).toHaveLength(7);
     for (const stripe of stripes) {
       expect(stripe.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
       expect(stripe.requiresDist).toBe(false);
@@ -991,14 +1060,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         shardName: "core-runtime-secrets",
       },
       {
-        configs: [
-          "test/vitest/vitest.logging.config.ts",
-          "test/vitest/vitest.process.config.ts",
-          "test/vitest/vitest.runtime-config.config.ts",
-        ],
+        configs: ["test/vitest/vitest.logging.config.ts", "test/vitest/vitest.process.config.ts"],
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
         shardName: "core-runtime-infra-process",
+      },
+      {
+        configs: ["test/vitest/vitest.runtime-config.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-config",
       },
       {
         configs: ["test/vitest/vitest.tui-pty.config.ts"],
@@ -1151,6 +1222,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       shard.shardName.startsWith("agentic-control-plane-"),
     );
     const cliShard = shards.find((shard) => shard.shardName === "agentic-cli");
+    const cliProcessShard = shards.find((shard) => shard.shardName === "agentic-cli-process");
     const commandSupportShard = shards.find(
       (shard) => shard.shardName === "agentic-command-support",
     );
@@ -1218,7 +1290,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(cliShard).toEqual({
       checkName: "checks-node-agentic-cli",
       shardName: "agentic-cli",
-      configs: ["test/vitest/vitest.cli.config.ts", "test/vitest/vitest.cli-process.config.ts"],
+      configs: ["test/vitest/vitest.cli.config.ts"],
+      requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
+    });
+    expect(cliProcessShard).toEqual({
+      checkName: "checks-node-agentic-cli-process",
+      shardName: "agentic-cli-process",
+      configs: ["test/vitest/vitest.cli-process.config.ts"],
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
     });

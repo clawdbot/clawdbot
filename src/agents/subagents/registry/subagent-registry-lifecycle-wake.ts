@@ -1,6 +1,9 @@
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
+import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  runWithGatewayIndependentRootWorkContinuation,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
@@ -153,6 +156,7 @@ const completeRequesterSettleWakeBatch = (
       context.deleteRequesterSettleWakeTimer(runId);
     }
     if (entry.requesterSettleWake === undefined || !params.runs.has(runId)) {
+      clearGatewayContextResolver(entry);
       params.resumedRuns.delete(runId);
       params.clearPendingLifecycleError(runId);
     }
@@ -483,6 +487,7 @@ export function completeCleanupBookkeeping(
       cleanupParams.entry.terminalOwner = previousTerminalOwner;
       throw error;
     }
+    clearGatewayContextResolver(cleanupParams.entry);
     scheduleCleanupTails({ allowRetiredRow: false, isDeleteCleanup });
     retryDeferredCompletedAnnounces(cleanupParams.runId);
     return;
@@ -504,6 +509,7 @@ export function completeCleanupBookkeeping(
         params.runs.set(cleanupParams.runId, cleanupParams.entry);
         throw error;
       }
+      clearGatewayContextResolver(cleanupParams.entry);
       scheduleCleanupTails({ allowRetiredRow: true, isDeleteCleanup });
       retryDeferredCompletedAnnounces(cleanupParams.runId);
       return;
@@ -547,6 +553,7 @@ export function completeCleanupBookkeeping(
       cleanupParams.entry.terminalOwner = previousTerminalOwner;
       throw error;
     }
+    clearGatewayContextResolver(cleanupParams.entry);
   }
   scheduleCleanupTails({ allowRetiredRow: false, isDeleteCleanup });
   retryDeferredCompletedAnnounces(cleanupParams.runId);

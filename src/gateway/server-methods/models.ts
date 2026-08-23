@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Models gateway methods expose prepared, cached, and explicitly refreshed catalog views.
 import { validateModelsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -14,10 +15,11 @@ export const modelsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateModelsListParams, "models.list", respond)) {
       return;
     }
+    const cfg = context.getRuntimeConfig();
     const resolved = resolveAgentIdOrRespondError({
-      rawAgentId: params.agentId,
+      rawAgentId: params.agentId ?? tryResolveAmbientOwnerAgentId(cfg),
       respond,
-      cfg: context.getRuntimeConfig(),
+      cfg,
       normalize: normalizeOptionalString,
     });
     if (!resolved) {

@@ -2,7 +2,10 @@ import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.
 // Settles run-bound approvals when their active agent run is aborted.
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.js";
-import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
+import {
+  sameWorkerSessionTurnClaim,
+  type WorkerSessionTurnClaim,
+} from "../worker-environments/placement-record.js";
 
 function cancelMatchingApprovals<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
@@ -49,19 +52,6 @@ export function cancelAgentRuntimeBoundApprovals<TPayload>(params: {
   });
 }
 
-function sameWorkerTurnClaim(left: WorkerSessionTurnClaim, right: WorkerSessionTurnClaim): boolean {
-  return (
-    left.sessionId === right.sessionId &&
-    left.claimId === right.claimId &&
-    left.runId === right.runId &&
-    left.placementGeneration === right.placementGeneration &&
-    left.owner.kind === "worker" &&
-    right.owner.kind === "worker" &&
-    left.owner.environmentId === right.owner.environmentId &&
-    left.owner.ownerEpoch === right.owner.ownerEpoch
-  );
-}
-
 /** Settles approvals whose authoritative worker turn claim has been fenced. */
 export function cancelWorkerTurnClaimBoundApprovals<TPayload>(params: {
   claim: WorkerSessionTurnClaim;
@@ -73,7 +63,11 @@ export function cancelWorkerTurnClaimBoundApprovals<TPayload>(params: {
     publish: params.publish,
     matches: (pending) => {
       const authority = pending.agentRuntimeDelegatedAuthority;
-      return authority?.kind === "worker" && sameWorkerTurnClaim(authority.turnClaim, params.claim);
+      return (
+        authority?.kind === "worker" &&
+        params.claim.owner.kind === "worker" &&
+        sameWorkerSessionTurnClaim(authority.turnClaim, params.claim)
+      );
     },
   });
 }

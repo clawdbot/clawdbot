@@ -281,21 +281,40 @@ describe("telegram text fragments", () => {
   });
 
   const TEXT_FRAGMENT_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
-
-  it(
-    "buffers near-limit text and processes sequential parts as one message",
-    async () => {
-      const { handler, replySpy } = await createBotHandlerWithOptions({});
-      const quote = "FRAGMENT_REPLY_QUOTE";
-      const part1 = `${"A".repeat(4050)} ${quote}`;
-      const part2 = "B".repeat(50);
-      const firstMessage = {
+  const buildNearLimitMessage = (params: {
+    messageId: number;
+    prefix?: string;
+    suffix?: string;
+    entities?: Array<{ type: "bot_command"; offset: number; length: number }>;
+  }) => {
+    const text = `${params.prefix ?? ""}${"A".repeat(4050)}${params.suffix ?? ""}`;
+    return {
+      text,
+      message: {
         chat: { id: 42, type: "private" as const },
         from: { id: 777, is_bot: false as const, first_name: "Ada" },
-        message_id: 10,
+        message_id: params.messageId,
         date: 1736380800,
-        text: part1,
-      };
+        text,
+        ...(params.entities ? { entities: params.entities } : {}),
+      },
+    };
+  };
+
+  it.each([
+    { label: "plain", prefix: "" },
+    { label: "slash-prefixed non-command", prefix: "/not_a_command " },
+  ])(
+    "buffers $label near-limit text and processes sequential parts as one message",
+    async ({ prefix }) => {
+      const { handler, replySpy } = await createBotHandlerWithOptions({});
+      const quote = "FRAGMENT_REPLY_QUOTE";
+      const { text: part1, message: firstMessage } = buildNearLimitMessage({
+        messageId: 10,
+        prefix,
+        suffix: ` ${quote}`,
+      });
+      const part2 = "B".repeat(50);
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
@@ -314,7 +333,7 @@ describe("telegram text fragments", () => {
             date: 1736380801,
             text: part2,
             reply_to_message: { ...firstMessage, reply_to_message: undefined },
-            quote: { text: quote, position: 4051 },
+            quote: { text: quote, position: part1.indexOf(quote) },
           },
           me: { username: "openclaw_bot" },
           getFile: async () => ({}),
@@ -336,6 +355,28 @@ describe("telegram text fragments", () => {
         setTimeoutSpy.mockRestore();
         clearTimeoutSpy.mockRestore();
       }
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "processes leading Telegram bot commands immediately without static registration",
+    async () => {
+      const { handler, replySpy } = await createBotHandlerWithOptions({});
+      const command = "/deploy@openclaw_bot";
+      const { message } = buildNearLimitMessage({
+        messageId: 20,
+        prefix: `${command} `,
+        entities: [{ type: "bot_command", offset: 0, length: command.length }],
+      });
+
+      await handler({
+        message,
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
     },
     TEXT_FRAGMENT_TEST_TIMEOUT_MS,
   );

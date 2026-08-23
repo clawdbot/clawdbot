@@ -21,6 +21,7 @@ export async function executeParallelFreeWebSearchProviderTool(
   args: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
+  signal?.throwIfAborted();
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
     "parallel-free",
@@ -59,6 +60,7 @@ export async function executeParallelFreeWebSearchProviderTool(
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
     signal,
   });
+  signal?.throwIfAborted();
   const payload = buildParallelSearchPayload({
     provider: "parallel-free",
     objective,

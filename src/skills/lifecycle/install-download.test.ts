@@ -109,7 +109,9 @@ function createCancelableBody() {
   return { stream, wasCanceled: () => canceled };
 }
 
-function runCommandResult(params?: Partial<Record<"code" | "stdout" | "stderr", string | number>>) {
+function runCommandResult(
+  params?: Partial<Record<"code" | "stdout" | "stderr" | "stdoutTruncatedBytes", string | number>>,
+) {
   return {
     code: 0,
     stdout: "",
@@ -287,6 +289,51 @@ describe("installDownloadSpec extraction safety", () => {
 });
 
 describe("installDownloadSpec extraction safety (tar.bz2)", () => {
+  it.each(["plain", "verbose"] as const)(
+    "rejects truncated %s tar listings before extraction",
+    async (truncatedListing) => {
+      const name = `tbz2-truncated-${truncatedListing}`;
+      const entry = buildEntry(name);
+      const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
+
+      mockArchiveResponse(new Uint8Array([1, 2, 3]));
+      runCommandWithTimeoutMock.mockImplementation(async (...argv: unknown[]) => {
+        const cmd = (argv[0] ?? []) as string[];
+        if (cmd[0] === "tar" && cmd[1] === "tf") {
+          return runCommandResult({
+            stdout: "package/hello.txt\n",
+            ...(truncatedListing === "plain" ? { stdoutTruncatedBytes: 1 } : {}),
+          });
+        }
+        if (cmd[0] === "tar" && cmd[1] === "tvf") {
+          return runCommandResult({
+            stdout: "-rw-r--r--  0 0 0 0 Jan  1 00:00 package/hello.txt\n",
+            ...(truncatedListing === "verbose" ? { stdoutTruncatedBytes: 1 } : {}),
+          });
+        }
+        if (cmd[0] === "tar" && cmd[1] === "xf") {
+          throw new Error("should not extract");
+        }
+        return runCommandResult();
+      });
+
+      const result = await installDownloadSkill({
+        name,
+        url: `https://example.invalid/${name}.tbz2`,
+        archive: "tar.bz2",
+        targetDir,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.stderr).toContain("tar listing output was truncated");
+      expect(
+        runCommandWithTimeoutMock.mock.calls.some(
+          (call) => (call[0] as string[])[0] === "tar" && (call[0] as string[])[1] === "xf",
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("handles tar.bz2 extraction safety edge-cases", async () => {
     for (const testCase of [
       {

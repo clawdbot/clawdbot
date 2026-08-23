@@ -139,12 +139,48 @@ export const DevicePairRequestedEventSchema = closedObject({
   ts: Type.Integer({ minimum: 0 }),
 });
 
+/** Opaque non-secret setup correlation id; never derived from the bearer setup code. */
+const SetupIdSchema = Type.String({ minLength: 1, maxLength: 128 });
+
 /** Event emitted after a pairing request is approved, rejected, or otherwise resolved. */
 export const DevicePairResolvedEventSchema = closedObject({
   requestId: NonEmptyString,
   deviceId: NonEmptyString,
   decision: NonEmptyString,
   ts: Type.Integer({ minimum: 0 }),
+});
+
+/**
+ * Terminal outcome of one setup credential, recorded when its exact bootstrap
+ * handoff delivered credentials. Carries no bearer material and no
+ * token-derived identifier.
+ */
+export const DevicePairSetupCompletedEventSchema = closedObject({
+  setupId: SetupIdSchema,
+  deviceId: NonEmptyString,
+  deviceName: Type.Optional(NonEmptyString),
+  access: Type.Union([Type.Literal("full"), Type.Literal("limited"), Type.Literal("node")]),
+  ts: Type.Integer({ minimum: 0 }),
+});
+
+/** Event emitted when the bearer was retired but response delivery could not be confirmed. */
+export const DevicePairSetupDeliveryUncertainEventSchema = DevicePairSetupCompletedEventSchema;
+
+/** Reconciles one setup credential the caller already holds a `setupId` for. */
+export const DevicePairSetupStatusParamsSchema = closedObject({
+  setupId: SetupIdSchema,
+});
+
+/**
+ * Authoritative answer to "what happened to this exact setup credential?".
+ * `completion` means the credential-bearing response finished. `deliveryUncertain`
+ * means the bearer was retired for replay safety but the client may not have
+ * received its credential. When both are absent, the setup is outstanding,
+ * expired, or already past retention.
+ */
+export const DevicePairSetupStatusResultSchema = closedObject({
+  completion: Type.Optional(DevicePairSetupCompletedEventSchema),
+  deliveryUncertain: Type.Optional(DevicePairSetupDeliveryUncertainEventSchema),
 });
 
 const SetupCodeQrDataUrlSchema = Type.String({
@@ -171,12 +207,17 @@ export const DevicePairSetupCodeParamsSchema = closedObject({
 });
 
 /**
- * Setup code plus non-secret connection metadata. `auth` is a label only
- * ("token" | "password"); the gateway credential itself is never returned.
+ * Setup code plus non-secret connection metadata. `setupId` is an opaque
+ * correlation id independent from the embedded bearer, while `expiresAtMs`
+ * is the authoritative setup expiry. `auth` is a label only ("token" |
+ * "password"); the gateway credential itself is never returned.
  * `accessDowngraded` reports the plaintext-LAN safety fallback from full to
  * limited access so the presenting client can explain how to upgrade.
  */
 export const DevicePairSetupCodeResultSchema = closedObject({
+  // Optional on the wire so separately shipped native clients can still decode
+  // setup-code responses from older v4 gateways that predate lifecycle metadata.
+  setupId: Type.Optional(SetupIdSchema),
   setupCode: NonEmptyString,
   joinUrl: Type.Optional(NonEmptyString),
   qrDataUrl: Type.Optional(SetupCodeQrDataUrlSchema),
@@ -201,6 +242,12 @@ export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>
 export type DevicePairRemoveParams = Static<typeof DevicePairRemoveParamsSchema>;
 export type DevicePairSetupCodeParams = Static<typeof DevicePairSetupCodeParamsSchema>;
 export type DevicePairSetupCodeResult = Static<typeof DevicePairSetupCodeResultSchema>;
+export type DevicePairSetupCompletedEvent = Static<typeof DevicePairSetupCompletedEventSchema>;
+export type DevicePairSetupDeliveryUncertainEvent = Static<
+  typeof DevicePairSetupDeliveryUncertainEventSchema
+>;
+export type DevicePairSetupStatusParams = Static<typeof DevicePairSetupStatusParamsSchema>;
+export type DevicePairSetupStatusResult = Static<typeof DevicePairSetupStatusResultSchema>;
 export type DevicePairRenameParams = Static<typeof DevicePairRenameParamsSchema>;
 export type DeviceTokenRotateParams = Static<typeof DeviceTokenRotateParamsSchema>;
 export type DeviceTokenRotateResult = Static<typeof DeviceTokenRotateResultSchema>;

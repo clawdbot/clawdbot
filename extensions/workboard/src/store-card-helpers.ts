@@ -182,6 +182,22 @@ export function shouldSkipPersistedLifecycleStatusUpdate(
   return statusTransitionAt !== undefined && sourceUpdatedAt < statusTransitionAt;
 }
 
+export function shouldSyncWorkboardLifecycleStatus(
+  card: WorkboardCard,
+  target: WorkboardStatus | undefined,
+): boolean {
+  if (!target || card.status === target) {
+    return false;
+  }
+  if (target === "running") {
+    return card.status === "backlog" || card.status === "todo" || card.status === "ready";
+  }
+  return (
+    (target === "blocked" || target === "review") &&
+    (card.status === "running" || card.status === "todo" || card.status === "ready")
+  );
+}
+
 export function updateEvent(
   existing: WorkboardCard,
   next: WorkboardCard,

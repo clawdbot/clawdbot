@@ -13,9 +13,10 @@ import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
-import { deleteMediaBuffer, MEDIA_MAX_BYTES } from "../../media/store.js";
+import { MEDIA_MAX_BYTES } from "../../media/store.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
+  discardPreparedInboundMedia,
   MediaOffloadError,
   type OffloadedRef,
   logAttachmentFailure,
@@ -166,9 +167,7 @@ async function prestageMediaPathOffloads(params: {
       workspaceDir: sandbox.workspaceDir,
     };
   } catch (err) {
-    await Promise.allSettled(
-      params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
-    );
+    await discardPreparedInboundMedia(params.offloadedRefs);
     if (err instanceof MediaOffloadError || err instanceof UnsupportedAttachmentError) {
       throw err;
     }

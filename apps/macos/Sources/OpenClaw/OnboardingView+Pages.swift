@@ -879,6 +879,7 @@ extension OnboardingView {
     private var installStepStateForInstall: InstallStepState {
         if self.cliInstalled { return .done }
         if self.installingCLI {
+            if self.cliInstallPhase == .choosingTarget { return .pending }
             return self.cliInstallPhase == .startingService ? .done : .running
         }
         if self.installFailed { return .failed }

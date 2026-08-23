@@ -63,6 +63,7 @@ const state = vi.hoisted(() => ({
   updateSessionStoreMock: vi.fn(),
   resolveCurrentTurnImagesMock: vi.fn(),
   peekSessionMcpRuntimeMock: vi.fn(),
+  recordMessageToolRunOutcomeMock: vi.fn(),
   productionBuildEmbeddedRunExecutionParams: undefined as
     | typeof buildEmbeddedRunExecutionParams
     | undefined,
@@ -221,6 +222,10 @@ vi.mock("../../infra/agent-run-registry.js", async () => {
     registerAgentRunContext: vi.fn(),
   };
 });
+
+vi.mock("../../infra/message-tool-run-outcome-store.js", () => ({
+  recordMessageToolRunOutcome: (params: unknown) => state.recordMessageToolRunOutcomeMock(params),
+}));
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
@@ -645,6 +650,7 @@ export function setupAgentRunnerExecutionTestState() {
     state.updateSessionStoreMock.mockReset();
     state.resolveCurrentTurnImagesMock.mockReset();
     state.peekSessionMcpRuntimeMock.mockReset();
+    state.recordMessageToolRunOutcomeMock.mockReset();
     state.productionBuildEmbeddedRunExecutionParams = undefined;
     state.peekSessionMcpRuntimeMock.mockReturnValue(undefined);
     state.resolveCurrentTurnImagesMock.mockImplementation(

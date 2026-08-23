@@ -261,8 +261,8 @@ function validateGoogleChatServiceAccountCredentials(
     throw new Error(`Google Chat credentials must use service_account auth, got "${type}" instead`);
   }
 
-  readRequiredTrimmedString(credentials, "client_email");
-  readRequiredTrimmedString(credentials, "private_key");
+  const clientEmail = readRequiredTrimmedString(credentials, "client_email");
+  const privateKey = readRequiredTrimmedString(credentials, "private_key");
 
   const universeDomain = readOptionalTrimmedString(credentials, "universe_domain");
   if (universeDomain && universeDomain !== GOOGLE_AUTH_UNIVERSE_DOMAIN) {
@@ -276,7 +276,11 @@ function validateGoogleChatServiceAccountCredentials(
   assertExactUrlField(credentials, "token_uri", GOOGLE_AUTH_TOKEN_URI);
   assertUrlPrefixField(credentials, "client_x509_cert_url", GOOGLE_CLIENT_CERTS_URL_PREFIX);
 
-  return credentials as unknown as GoogleChatServiceAccountCredentials;
+  return {
+    ...credentials,
+    client_email: clientEmail,
+    private_key: privateKey,
+  };
 }
 
 async function readCredentialsFile(filePath: string): Promise<Record<string, unknown>> {

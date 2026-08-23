@@ -2,6 +2,7 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -18,10 +19,7 @@ function errorMessage(error: unknown): string {
   if (isMissingOperatorReadScopeError(error)) {
     return formatMissingOperatorReadScopeMessage("usage");
   }
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" ? error : "request failed";
+  return formatUiError(error, "request failed");
 }
 
 async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRouteData> {
@@ -42,7 +40,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       query,
       result: null,
       costSummary: null,
-      providerUsageSummary: null,
+      providerUsage: null,
       loadedAtMs: null,
       error: null,
     };
@@ -57,7 +55,9 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       gateway,
       gatewaySnapshot,
       query,
-      ...snapshot,
+      result: snapshot.result,
+      costSummary: snapshot.costSummary,
+      providerUsage: snapshot.providerUsage,
       loadedAtMs: Date.now(),
       error: null,
     };
@@ -68,7 +68,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       query,
       result: null,
       costSummary: null,
-      providerUsageSummary: null,
+      providerUsage: null,
       loadedAtMs: null,
       error: errorMessage(error),
     };

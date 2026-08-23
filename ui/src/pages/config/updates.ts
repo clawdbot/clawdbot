@@ -4,7 +4,10 @@ import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import type { UpdateAvailable, UpdateScheduleState } from "../../api/types.ts";
-import type { ApplicationStatusBanner } from "../../app/update-overlay-helpers.ts";
+import type {
+  ApplicationStatusBanner,
+  RecordedUpdateAttempt,
+} from "../../app/update-overlay-helpers.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
@@ -34,9 +37,11 @@ type UpdatesViewProps = {
   heldUpdateCampaignId: string | null;
   updateAvailable: UpdateAvailable | null;
   statusBanner: ApplicationStatusBanner | null;
+  recordedAttempt: RecordedUpdateAttempt | null;
   configBusy: boolean;
   canAdmin: boolean;
   canUpdate: boolean;
+  canCheckStatus: boolean;
   canHoldUpdate: boolean;
   updateBusy: boolean;
   nowMs?: number;
@@ -44,7 +49,103 @@ type UpdatesViewProps = {
   onAutomaticUpdatesChange: (enabled: boolean) => void;
   onUpdateNow: () => void;
   onHoldUpdate: () => Promise<boolean>;
+  onCheckStatus: () => Promise<void>;
 };
+
+function formatAttemptIdentity(version: string | null, sha: string | null): string {
+  return version ? `v${version}` : sha ? sha.slice(0, 12) : t("common.unknown");
+}
+
+function renderRecordedAttempt(props: UpdatesViewProps) {
+  const attempt = props.recordedAttempt;
+  if (!attempt && !props.statusBanner) {
+    return nothing;
+  }
+  const canRetry = props.canUpdate && !props.updateBusy;
+  const recordedTarget = attempt
+    ? formatAttemptIdentity(attempt.targetVersion, attempt.targetSha)
+    : null;
+  const target =
+    recordedTarget && recordedTarget !== t("common.unknown")
+      ? recordedTarget
+      : (formatUpdateTargetLabel(props.schedule, props.updateAvailable) ?? t("common.unknown"));
+  return renderSettingsSection({ title: t("updates.page.latestAttempt") }, [
+    attempt
+      ? renderSettingsRow({
+          title: t("updates.page.attemptedAt"),
+          control: renderTimestamp(attempt.timestampMs, props.nowMs),
+        })
+      : nothing,
+    renderSettingsRow({
+      title: t("updates.page.attemptTarget"),
+      control: renderSettingsValue(target, { mono: true }),
+    }),
+    attempt
+      ? renderSettingsRow({
+          title: t("updates.page.installedIdentity"),
+          control: renderSettingsValue(
+            formatAttemptIdentity(attempt.installedVersion, attempt.installedSha),
+            { mono: true },
+          ),
+        })
+      : nothing,
+    attempt?.installKind
+      ? renderSettingsRow({
+          title: t("updates.page.attemptInstallKind"),
+          control: renderSettingsValue(attempt.installKind),
+        })
+      : nothing,
+    attempt
+      ? renderSettingsRow({
+          title: t("updates.page.attemptReason"),
+          control: renderSettingsValue(html`<code>${attempt.reason}</code>`, { mono: true }),
+        })
+      : nothing,
+    attempt?.failure
+      ? renderSettingsRow({
+          title: t("updates.page.failedStep"),
+          stacked: true,
+          control: html`<details class="updates-attempt-details">
+            <summary>${t("updates.page.viewDetails")}</summary>
+            <div><code>${attempt.failure.step}</code></div>
+            <pre>${attempt.failure.detail}</pre>
+          </details>`,
+        })
+      : nothing,
+    renderSettingsRow({
+      title: t("updates.page.recoveryActions"),
+      control: html`<div class="updates-status-control">
+        <button
+          class="btn btn--sm"
+          type="button"
+          title=${props.canCheckStatus ? "" : t("updates.adminRequired")}
+          ?disabled=${!props.canCheckStatus || props.updateBusy}
+          @click=${() => void props.onCheckStatus()}
+        >
+          ${t("updates.page.checkStatus")}
+        </button>
+        <button
+          class="btn btn--sm primary"
+          type="button"
+          title=${canRetry ? "" : t("updates.adminRequired")}
+          ?disabled=${!canRetry}
+          @click=${props.onUpdateNow}
+        >
+          ${t("updates.page.retryUpdate")}
+        </button>
+      </div>`,
+    }),
+    renderSettingsRow({
+      title: t("updates.page.cliFallback"),
+      stacked: true,
+      control: html`<details class="updates-attempt-details">
+        <summary>${t("updates.page.showCliFallback")}</summary>
+        <pre><code>openclaw update status --json
+openclaw update</code></pre>
+      </details>`,
+    }),
+  ]);
+}
 
 function readUpdatesSettings(
   configObject: Record<string, unknown>,
@@ -311,6 +412,7 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
             ? html`<div class="callout warning" role="note">${t("updates.adminRequired")}</div>`
             : nothing,
           renderBuildFacts(props),
+          renderRecordedAttempt(props),
           renderSettingsSection({ title: t("updates.page.policyTitle") }, policyRows),
           renderSettingsSection({ title: t("updates.page.statusTitle") }, [
             renderSettingsRow({
@@ -351,6 +453,11 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
               `,
             }),
           ]),
+          html`<p class="settings-page__hint">
+            <a href="https://docs.openclaw.ai/install/update-troubleshooting" target="_blank"
+              >${t("updates.page.troubleshoot")}</a
+            >
+          </p>`,
         ],
         { intro: t("updates.page.intro") },
       )}

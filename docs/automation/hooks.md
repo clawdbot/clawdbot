@@ -112,7 +112,7 @@ Detailed documentation goes here.
 | `export`   | Named export to use (defaults to `"default"`)        |
 | `os`       | Required platforms (e.g., `["darwin", "linux"]`)     |
 | `requires` | Required `bins`, `anyBins`, `env`, or `config` paths |
-| `always`   | Bypass eligibility checks (boolean)                  |
+| `always`   | Bypass `requires.*` checks on a compatible OS        |
 | `hookKey`  | Config key override (defaults to the hook name)      |
 | `homepage` | Docs URL shown by `openclaw hooks info`              |
 | `install`  | Installation methods                                 |

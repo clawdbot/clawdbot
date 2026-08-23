@@ -17,23 +17,9 @@ type UserChatMessageContentBlock = {
   };
 };
 
-type BuildUserChatMessageContentOptions = {
-  renderInlineImageDataUrls?: boolean;
-};
-
-function isInlineDataUrl(value: string): boolean {
-  return /^\s*data:/iu.test(value);
-}
-
-function formatInlineImageAttachmentPlaceholder(attachment: ChatAttachment): string {
-  const label = attachment.fileName?.trim();
-  return label ? `Attached image: ${label}` : "Attached image";
-}
-
 export function buildUserChatMessageContentBlocks(
   message: string,
   attachments?: readonly ChatAttachment[],
-  options: BuildUserChatMessageContentOptions = {},
 ): UserChatMessageContentBlock[] {
   const blocks: UserChatMessageContentBlock[] = [];
   const text = message.trim();
@@ -46,10 +32,6 @@ export function buildUserChatMessageContentBlocks(
       continue;
     }
     if (attachment.mimeType.startsWith("image/")) {
-      if (isInlineDataUrl(previewUrl) && !options.renderInlineImageDataUrls) {
-        blocks.push({ type: "text", text: formatInlineImageAttachmentPlaceholder(attachment) });
-        continue;
-      }
       blocks.push({
         type: "image",
         url: previewUrl,

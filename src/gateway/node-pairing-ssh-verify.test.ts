@@ -106,6 +106,13 @@ describe("planNodePairingSshVerify", () => {
       { config: undefined, eligibility: makeEligibility({ reportedClientIp: "203.0.113.9" }) },
     ],
     [
+      "local-use NAT64 source address",
+      {
+        config: undefined,
+        eligibility: makeEligibility({ reportedClientIp: "64:ff9b:1::8.8.8.8" }),
+      },
+    ],
+    [
       "loopback source address",
       { config: undefined, eligibility: makeEligibility({ reportedClientIp: "127.0.0.1" }) },
     ],

@@ -488,10 +488,7 @@ export async function persistPluginInstall(params: {
   const runtime = params.runtime ?? defaultRuntime;
   // Terminal diagnostics may contain paths/errors; management receives only producer-authored summaries.
   const warn = (message: string, managementMessage: string): void => {
-    if (params.persistenceLogger?.warn) {
-      params.persistenceLogger.warn(managementMessage);
-      return;
-    }
+    params.persistenceLogger?.warn?.(managementMessage);
     runtime.log(theme.warn(message));
   };
   const installRecords = await tracePluginLifecyclePhaseAsync(

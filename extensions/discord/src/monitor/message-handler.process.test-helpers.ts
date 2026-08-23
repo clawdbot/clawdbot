@@ -164,16 +164,10 @@ export function getDeliveredFinalTexts(): string[] {
   });
 }
 
-export function expectFinalWithProgressReceipt(answer: string, ...parts: string[]) {
-  const text = getDeliveredFinalTexts()[0] ?? "";
-  const receiptStart = text.lastIndexOf("\n-# ");
-  expect(receiptStart).toBeGreaterThan(-1);
-  expect(text.slice(0, receiptStart)).toBe(answer);
-  const receipt = text.slice(receiptStart + 1);
-  for (const part of parts) {
-    expect(receipt).toContain(part);
-  }
-  expect(receipt).toContain("⏱️");
+// The final answer is delivered on its own: no synthesized activity receipt is
+// ever appended beneath it.
+export function expectFinalAnswerText(answer: string) {
+  expect(getDeliveredFinalTexts()[0] ?? "").toBe(answer);
 }
 
 export function expectFreshFinalText(text: string) {

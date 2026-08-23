@@ -19,7 +19,7 @@ import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-mi
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { recordEmbeddedToolSendReceipt } from "./tool-send-receipts.js";
+import { recordEmbeddedToolReceipt } from "./tool-send-receipts.js";
 
 type AgentToolResultEvent = {
   threadId?: string;
@@ -32,10 +32,24 @@ type AgentToolResultEvent = {
   isError?: boolean;
 };
 
-function snapshotToolSendReceipt(details: unknown): unknown {
-  const toolSend = (asOptionalRecord(details) ?? {}).toolSend;
-  const toolSendRecord = asOptionalRecord(toolSend);
-  return toolSendRecord ? { ...toolSendRecord } : toolSend;
+function snapshotToolReceipt(
+  details: unknown,
+  includeMessageDelivery: boolean,
+): { toolSend?: unknown; messageDelivery?: unknown } | undefined {
+  const record = asOptionalRecord(details);
+  const snapshot = (value: unknown) => {
+    const valueRecord = asOptionalRecord(value);
+    return valueRecord ? { ...valueRecord } : value;
+  };
+  const toolSend = record?.toolSend;
+  const messageDelivery = includeMessageDelivery ? record?.messageDelivery : undefined;
+  if (toolSend === undefined && messageDelivery === undefined) {
+    return undefined;
+  }
+  return {
+    ...(toolSend !== undefined ? { toolSend: snapshot(toolSend) } : {}),
+    ...(messageDelivery !== undefined ? { messageDelivery: snapshot(messageDelivery) } : {}),
+  };
 }
 
 function buildAgentToolResultMiddlewareFactory(
@@ -74,10 +88,10 @@ function buildAgentToolResultMiddlewareFactory(
         content,
         details: event.details,
       } satisfies AgentToolResult<unknown>;
-      const rawToolSend = snapshotToolSendReceipt(current.details);
-      if (eventToolCallId && rawToolSend !== undefined) {
-        // Routing evidence stays private so middleware may fully replace result details.
-        recordEmbeddedToolSendReceipt(sessionManager, eventToolCallId, rawToolSend);
+      const receipt = snapshotToolReceipt(current.details, event.toolName === "message");
+      if (eventToolCallId && receipt) {
+        // Delivery evidence stays private so middleware may fully replace result details.
+        recordEmbeddedToolReceipt(sessionManager, eventToolCallId, receipt);
       }
       const inputHadErrorStatus = isToolResultError(current);
       const adjustedInput = eventToolCallId

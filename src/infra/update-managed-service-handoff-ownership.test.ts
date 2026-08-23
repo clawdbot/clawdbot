@@ -144,8 +144,9 @@ async function runOwnershipHelper(params: {
     `${JSON.stringify(
       {
         ...helperParams,
-        parentPid: process.pid,
-        parentExitTimeoutMs: 1,
+        parentPid: 0,
+        parentExitTimeoutMs: 5_000,
+        commandArgv: [process.execPath, "-e", "process.exit(7)"],
         logPath,
         sensitivePaths: [],
       },
@@ -204,7 +205,7 @@ describe("managed service update handoff external ownership", () => {
       },
     });
 
-    expect(result).toEqual({ code: 1, signal: null });
+    expect(result).toEqual({ code: 7, signal: null });
     const databasePath = resolveOpenClawStateSqlitePath(env);
     const stat = await fs.stat(databasePath);
     expect({
@@ -268,7 +269,7 @@ describe("managed service update handoff external ownership", () => {
           await vi.waitFor(
             async () => {
               await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
-                "did not exit before handoff timeout",
+                "managed update command exited code=7",
               );
             },
             { interval: 5, timeout: 2_000 },
@@ -299,7 +300,7 @@ describe("managed service update handoff external ownership", () => {
     if (!helperResult) {
       throw new Error("expected the detached helper to return a result");
     }
-    expect(helperResult.result).toEqual({ code: 1, signal: null });
+    expect(helperResult.result).toEqual({ code: 7, signal: null });
     const databasePath = resolveOpenClawStateSqlitePath(helperResult.env);
     const sqlite = await import("node:sqlite");
     const verifyDb = new sqlite.DatabaseSync(databasePath, { readOnly: true });

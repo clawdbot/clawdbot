@@ -2,7 +2,6 @@ import { controlUiSessionSlug, SESSION_UUID_SUFFIX_RE } from "@openclaw/session-
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPathTarget } from "../../app-session-route-paths.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import {
   consumeSessionNavigationHandoff,
   prepareSessionNavigationHandoff,
@@ -12,6 +11,7 @@ import {
   SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 
 export function sessionKeyUuid(sessionKey: string): string | null {
   const uuid = parseAgentSessionKey(sessionKey)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];

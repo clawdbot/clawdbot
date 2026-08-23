@@ -115,7 +115,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
     {
       id: "microsoft",
       enabledByDefault: true,
-      contracts: { speechProviders: ["microsoft"] },
+      contracts: { speechProviders: ["microsoft", "edge"] },
     },
     {
       id: "tts-local-cli",
@@ -141,14 +141,19 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         realtimeVoiceProviders: ["openai"],
         imageGenerationProviders: ["openai"],
         videoGenerationProviders: ["openai"],
-        memoryEmbeddingProviders: ["openai"],
+        embeddingProviders: ["openai"],
       },
+    },
+    {
+      id: "xai",
+      enabledByDefault: true,
+      contracts: { realtimeVoiceProviders: ["xai", "grok-voice"] },
     },
     {
       id: "ollama",
       enabledByDefault: true,
       providers: ["ollama"],
-      contracts: { memoryEmbeddingProviders: ["ollama"] },
+      contracts: { embeddingProviders: ["ollama"] },
     },
     {
       id: "generic-embedding",
@@ -589,6 +594,16 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         tts: { provider: "microsoft" },
       } as OpenClawConfig,
       ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "activates the sole Talk speech provider from its capability alias",
+      { channels: {}, talk: { providers: { edge: {} } } } as OpenClawConfig,
+      ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "activates the selected Talk realtime capability alias",
+      { channels: {}, talk: { realtime: { provider: "grok-voice" } } } as OpenClawConfig,
+      ["browser", "xai", "memory-core"],
     ],
     [
       "includes bundled speech providers configured by provider block",
@@ -1479,6 +1494,45 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         memorySlot: "none",
       }),
       expected: ["demo-global-explicit-startup"],
+    });
+  });
+
+  it("loads enabled plugin tool owners before turns can enter the Gateway", () => {
+    useManifestRegistryFixture({
+      diagnostics: [],
+      plugins: [
+        withManifestLoadPaths({
+          id: "bundled-tool-owner",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          contracts: { tools: ["bundled_tool"] },
+        }),
+        withManifestLoadPaths({
+          id: "external-tool-owner",
+          origin: "global",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          contracts: { tools: ["external_tool"] },
+        }),
+      ],
+    });
+
+    expectStartupPluginIds({
+      config: createStartupConfig({ noConfiguredChannels: true, memorySlot: "none" }),
+      expected: ["bundled-tool-owner"],
+    });
+    expectStartupPluginIds({
+      config: createStartupConfig({
+        enabledPluginIds: ["external-tool-owner"],
+        allowPluginIds: ["external-tool-owner"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-tool-owner"],
     });
   });
 

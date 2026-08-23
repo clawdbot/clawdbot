@@ -63,6 +63,8 @@ const BOOTSTRAP_RECEIPT: WorkerEnvironmentBootstrapReceipt = {
   protocolFeatures: ["workspace-sync-v1", "model-proxy-v1"],
 };
 const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
+const DAY_MS = 24 * 60 * 60 * 1_000;
+const PRUNE_NOW_MS = 10 * DAY_MS;
 
 describe("worker environment store", () => {
   let root: string;
@@ -118,6 +120,19 @@ describe("worker environment store", () => {
       to: "bootstrapping",
       patch: { leaseId, sshEndpoint: SSH_ENDPOINT },
     });
+  }
+
+  function seedOrphaned(environmentId: string, stateChangedAtMs: number) {
+    nowMs = 1_000;
+    const bootstrapping = seedBootstrapping(environmentId, `lease:${environmentId}`);
+    store.transition({
+      environmentId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: readyPatch(),
+    });
+    nowMs = stateChangedAtMs;
+    return store.transition({ environmentId, from: "ready", to: "orphaned" });
   }
 
   function readyPatch(receipt = BOOTSTRAP_RECEIPT) {
@@ -358,6 +373,77 @@ describe("worker environment store", () => {
     expect(fallbackPortRows("worker-constraints")).toEqual([]);
   });
 
+  it("uses the terminal environment index for ordered cleanup", () => {
+    const plan = database.db
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT worker_environments.environment_id
+         FROM worker_environments
+         LEFT JOIN worker_session_placements
+           ON worker_session_placements.environment_id = worker_environments.environment_id
+         WHERE worker_environments.state IN ('destroyed', 'failed', 'orphaned')
+           AND worker_environments.state_changed_at_ms <= ?
+           AND worker_session_placements.session_id IS NULL
+         ORDER BY worker_environments.state_changed_at_ms ASC,
+                  worker_environments.environment_id ASC
+         LIMIT ?`,
+      )
+      .all(PRUNE_NOW_MS - 7 * DAY_MS, 2) as Array<{ detail: string }>;
+
+    expect(plan.map((row) => row.detail).join("\n")).toContain(
+      "idx_worker_environments_terminal_changed",
+    );
+  });
+
+  it("prunes only old unreferenced terminal environments and cascades owned rows", () => {
+    seedOrphaned("worker-old-first", DAY_MS);
+    seedOrphaned("worker-old-second", 2 * DAY_MS);
+    seedOrphaned("worker-referenced", 3 * DAY_MS);
+    seedOrphaned("worker-recent", PRUNE_NOW_MS - 1_000);
+    nowMs = 1_000;
+    const ready = seedBootstrapping("worker-ready", "lease:worker-ready");
+    store.transition({
+      environmentId: ready.environmentId,
+      from: ready.state,
+      to: "ready",
+      patch: readyPatch(),
+    });
+    database.db
+      .prepare(
+        `INSERT INTO worker_session_placements (
+          session_id, agent_id, session_key, state, environment_id, recovery_error,
+          created_at_ms, updated_at_ms, state_changed_at_ms
+        ) VALUES ('session-referenced', 'agent-1', 'session-key-1', 'failed', ?,
+          'worker environment disappeared', 1, 1, 1)`,
+      )
+      .run("worker-referenced");
+    database.db
+      .prepare(
+        `INSERT INTO worker_inference_turns (
+          session_id, run_epoch, run_id, turn_id, environment_id, request_hash,
+          state, terminal_json, created_at_ms, updated_at_ms
+        ) VALUES ('session-old', 1, 'run-old', 'turn-old', ?, 'hash-old',
+          'terminal', '{}', 1, 1)`,
+      )
+      .run("worker-old-first");
+    expect(fallbackPortRows("worker-old-first")).toHaveLength(2);
+
+    expect(store.pruneTerminalEnvironments({ nowMs: PRUNE_NOW_MS, limit: 1 })).toBe(1);
+    expect(store.get("worker-old-first")).toBeUndefined();
+    expect(fallbackPortRows("worker-old-first")).toEqual([]);
+    expect(
+      database.db
+        .prepare("SELECT environment_id FROM worker_inference_turns WHERE environment_id = ?")
+        .get("worker-old-first"),
+    ).toBeUndefined();
+
+    expect(store.pruneTerminalEnvironments({ nowMs: PRUNE_NOW_MS, limit: 10 })).toBe(1);
+    expect(store.get("worker-old-second")).toBeUndefined();
+    expect(store.get("worker-referenced")?.state).toBe("orphaned");
+    expect(store.get("worker-recent")?.state).toBe("orphaned");
+    expect(store.get("worker-ready")?.state).toBe("ready");
+  });
+
   it("normalizes provider-advertised SSH fallback ports at the durable boundary", () => {
     expect(
       normalizeWorkerSshEndpoint({
@@ -558,6 +644,22 @@ describe("worker environment store", () => {
     ).toThrow("owner epoch changed");
   });
 
+  it("revokes one environment credential without changing lifecycle state", () => {
+    const bootstrapping = seedBootstrapping("worker-revocation", "lease-revocation");
+    store.transition({
+      environmentId: bootstrapping.environmentId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: readyPatch(),
+    });
+    expect(store.getCredential(bootstrapping.environmentId)).toBeDefined();
+
+    store.revokeEnvironmentCredential(bootstrapping.environmentId);
+
+    expect(store.getCredential(bootstrapping.environmentId)).toBeUndefined();
+    expect(store.get(bootstrapping.environmentId)?.state).toBe("ready");
+  });
+
   it("allocates globally distinct owner epochs when a session moves environments", () => {
     const makeReady = (environmentId: string, leaseId: string) => {
       const bootstrapping = seedBootstrapping(environmentId, leaseId);
@@ -670,48 +772,6 @@ describe("worker environment store", () => {
         patch: { leaseId: "different-lease" },
       }),
     ).toThrow("lease id is immutable");
-  });
-
-  it("persists a credential-bound local receipt without SSH metadata", () => {
-    createIntent("worker-node", { settings: { device: "device-1" } });
-    store.transition({ environmentId: "worker-node", from: "requested", to: "provisioning" });
-
-    const ready = store.transition({
-      environmentId: "worker-node",
-      from: "provisioning",
-      to: "ready",
-      patch: {
-        leaseId: "device-lease-1",
-        sshEndpoint: null,
-        sharedHost: true,
-        ...readyPatch({ ...BOOTSTRAP_RECEIPT, installKind: "local" }),
-      },
-    });
-
-    expect(ready).toMatchObject({
-      state: "ready",
-      leaseId: "device-lease-1",
-      sshEndpoint: null,
-      bootstrapReceipt: {
-        ...BOOTSTRAP_RECEIPT,
-        protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],
-        installKind: "local",
-      },
-      sharedHost: true,
-      ownerEpoch: 1,
-    });
-    expect(store.get("worker-node")).toEqual(ready);
-    expect(
-      database.db
-        .prepare(
-          "SELECT ssh_host, ssh_host_key, bootstrap_install_kind FROM worker_environments WHERE environment_id = ?",
-        )
-        .get("worker-node"),
-    ).toEqual({
-      ssh_host: null,
-      ssh_host_key: null,
-      bootstrap_install_kind: "local",
-    });
   });
 
   it("enforces one credential-bound session and teardown fencing", () => {

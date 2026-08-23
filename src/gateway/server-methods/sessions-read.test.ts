@@ -2,9 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { AgentsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore as resolveStorePath } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { recordAgentProvenance } from "../../state/agent-provenance.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
@@ -43,18 +45,18 @@ function expectAgentStoreAbsent(agentId: string): void {
   );
 }
 
-async function listAgentIdsViaRpc(
+async function listAgentsViaRpc(
   includeSystem = false,
   catalogContext: Partial<GatewayRequestContext> = {},
-): Promise<string[]> {
+): Promise<AgentsListResult> {
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  let ids: string[] | undefined;
+  let result: AgentsListResult | undefined;
   await agentsHandlers["agents.list"]?.({
     req: {} as never,
     params: {},
     respond: (ok, payload) => {
       if (ok) {
-        ids = (payload as { agents: Array<{ id: string }> }).agents.map((agent) => agent.id);
+        result = payload as AgentsListResult;
       }
     },
     context: {
@@ -68,7 +70,18 @@ async function listAgentIdsViaRpc(
       : null,
     isWebchatConnect: () => false,
   });
-  return ids ?? [];
+  if (!result) {
+    throw new Error("agents.list did not return a result");
+  }
+  return result;
+}
+
+async function listAgentIdsViaRpc(
+  includeSystem = false,
+  catalogContext: Partial<GatewayRequestContext> = {},
+): Promise<string[]> {
+  const result = await listAgentsViaRpc(includeSystem, catalogContext);
+  return result.agents.map((agent) => agent.id);
 }
 
 async function setAgentsConfig(agentsConfig: Record<string, unknown> | undefined): Promise<void> {
@@ -112,6 +125,23 @@ test("agents.list returns the roster when optional prepared model facts are unav
   ]);
 
   expect(readPreparedGatewayModelCatalog).toHaveBeenCalledOnce();
+});
+
+test("agents.list includes durable provenance only for matching roster rows", async () => {
+  await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });
+  recordAgentProvenance("research", { createdVia: "agent", creatorAgentId: "ops" }, { nowMs: 42 });
+
+  const result = await listAgentsViaRpc();
+
+  expect(result.agents.map((agent) => agent.id)).toEqual(["ops", "research"]);
+  expect(result.agents[0]).not.toHaveProperty("createdVia");
+  expect(result.agents[0]).not.toHaveProperty("creatorAgentId");
+  expect(result.agents[0]).not.toHaveProperty("createdAt");
+  expect(result.agents[1]).toMatchObject({
+    createdVia: "agent",
+    creatorAgentId: "ops",
+    createdAt: 42,
+  });
 });
 
 beforeEach(async () => {

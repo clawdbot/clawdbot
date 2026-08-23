@@ -1,7 +1,8 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 // Implements guided and non-interactive `openclaw channels add` account setup.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   applyPreparedChannelAccountConfiguration,
   type ChannelAccountMutationPlugin,
@@ -64,7 +65,7 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
         ({ listTrustedChannelPluginCatalogEntries }) =>
           listTrustedChannelPluginCatalogEntries({
             cfg,
-            workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
+            workspaceDir: resolveAgentWorkspaceDir(cfg, resolveAgentOperationAgentId(cfg)),
           }),
       )
     : await import("../../channels/plugins/catalog.js").then(
@@ -155,6 +156,14 @@ async function channelsAddCommandImpl(
 
   const useWizard = shouldUseWizard(params);
   if (useWizard) {
+    const { resolveInitialWizardChannelTarget, runChannelsAddWizardFlow } =
+      await import("./add-wizard.js");
+    const target = await resolveInitialWizardChannelTarget(opts.channel, cfg);
+    if (target.kind === "unresolved") {
+      runtime.error(target.message);
+      runtime.exit(1);
+      return;
+    }
     if (!isTerminalInteractive()) {
       runtime.error(
         "Interactive channel setup requires a TTY. Use `openclaw channels add --channel <id> --use-env` or pass the channel's credential flags for non-interactive setup.",
@@ -162,15 +171,12 @@ async function channelsAddCommandImpl(
       runtime.exit(1);
       return;
     }
-    const { resolveInitialWizardChannel, runChannelsAddWizardFlow } =
-      await import("./add-wizard.js");
-    const initialChannel = await resolveInitialWizardChannel(opts.channel ?? "", cfg);
     await runChannelsAddWizardFlow({
       cfg,
       ...(baseHash !== undefined ? { baseHash } : {}),
       runtime,
       prompter: createClackPrompter(),
-      ...(initialChannel ? { initialChannel } : {}),
+      ...(target.kind === "resolved" ? { initialChannel: target.channel } : {}),
       ...(params?.beforePersistentEffect
         ? { beforePersistentEffect: params.beforePersistentEffect }
         : {}),
@@ -182,7 +188,7 @@ async function channelsAddCommandImpl(
   let channel = normalizeChannelId(rawChannel);
   let catalogEntry = await resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
-    resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
+    resolveAgentWorkspaceDir(nextConfig, resolveAgentOperationAgentId(nextConfig));
   // May load a scoped plugin when the channel is not already registered.
   const loadScopedPlugin = async (
     channelId: ChannelId,

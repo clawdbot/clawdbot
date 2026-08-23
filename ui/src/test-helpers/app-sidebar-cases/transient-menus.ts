@@ -96,6 +96,11 @@ describe("AppSidebar transient menus", () => {
   it("ignores a stale More-menu hide after opening its replacement", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const pagesLabel = sidebar.querySelector(
+      ".sidebar-nav__head .sidebar-recent-sessions__label-text",
+    );
+    expect(pagesLabel?.classList.contains("sr-only")).toBe(true);
+    expect(pagesLabel?.textContent).toBe("Pages");
     const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-nav__head-action");
     if (!trigger) {
       throw new Error("expected Pages menu trigger");

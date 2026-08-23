@@ -240,7 +240,7 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
     contextWindowInfo: {
       tokens: 150_000,
       referenceTokens: 200_000,
-      source: "agentContextTokens",
+      source: "modelsConfig",
     },
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
@@ -1033,6 +1033,134 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("projects explicit outbound MCP media without retaining echoed image bytes", async () => {
+    const echoedBase64 = "private-echoed-base64";
+    const mediaUrls = [
+      "https://example.test/one.png",
+      "https://example.test/two.png",
+      "https://example.test/three.png",
+    ];
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureKey = input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "";
+      for (const [index, mediaUrl] of mediaUrls.entries()) {
+        const captureHandle = markMcpLoopbackToolCallStarted({
+          captureKey,
+          toolName: "image_generate",
+          args: { prompt: `image ${index + 1}` },
+        });
+        if (!captureHandle) {
+          throw new Error("Expected outbound media capture");
+        }
+        recordMcpLoopbackToolCallResult({
+          captureHandle,
+          toolName: "image_generate",
+          args: { prompt: `image ${index + 1}` },
+          result: {
+            content: [
+              {
+                type: "image",
+                data: echoedBase64,
+                mimeType: "image/png",
+              },
+            ],
+            details: { media: { mediaUrls: [mediaUrl] } },
+          },
+          outcome: "completed",
+        });
+        markMcpLoopbackToolCallFinished(captureHandle);
+      }
+      for (const [toolName, media] of [
+        ["image", { mediaUrls: ["/tmp/private.png"], outbound: false }],
+        ["untrusted_tool", { mediaUrls: ["/tmp/untrusted.png"] }],
+      ] as const) {
+        const captureHandle = markMcpLoopbackToolCallStarted({
+          captureKey,
+          toolName,
+          args: {},
+        });
+        if (!captureHandle) {
+          throw new Error("Expected private media capture");
+        }
+        recordMcpLoopbackToolCallResult({
+          captureHandle,
+          toolName,
+          args: {},
+          result: {
+            content: [{ type: "image", data: echoedBase64, mimeType: "image/png" }],
+            details: { media },
+          },
+          outcome: "completed",
+        });
+        markMcpLoopbackToolCallFinished(captureHandle);
+      }
+      return makeManagedRun({ stdout: "done" });
+    });
+    const context = makeClaudePreparedContext({
+      sessionKey: "agent:main:outbound-media",
+      runId: "run-outbound-media",
+    });
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toEqual([
+      {
+        text: "done",
+        mediaUrls,
+        mediaUrl: mediaUrls[0],
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(echoedBase64);
+    expect(JSON.stringify(result)).not.toContain("/tmp/private.png");
+    expect(JSON.stringify(result)).not.toContain("/tmp/untrusted.png");
+  });
+
+  it("deduplicates a CLI Markdown image selected from structured tool media", async () => {
+    const mediaUrl = "/root/.openclaw/media/tool-image-generation/our-agent-soviet-meme.png";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "image_generate",
+        args: { prompt: "our agent" },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected outbound media capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "image_generate",
+        args: { prompt: "our agent" },
+        result: {
+          content: [{ type: "text", text: "Image generated" }],
+          details: { media: { mediaUrls: [mediaUrl], trustedLocalMedia: true } },
+        },
+        outcome: "completed",
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      return makeManagedRun({
+        stdout: `Our agent.\n\n![Our Agent meme](${mediaUrl})`,
+      });
+    });
+    const context = makeClaudePreparedContext({
+      sessionKey: "agent:main:markdown-tool-media",
+      runId: "run-markdown-tool-media",
+    });
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toEqual([
+      {
+        text: "Our agent.",
+        mediaUrls: [mediaUrl],
+        mediaUrl,
+        trustedLocalMedia: true,
+      },
+    ]);
+  });
+
   it("surfaces a CLI failure after a delivered progress reply", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -1212,6 +1340,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "sent before failure" },
           },
@@ -1312,6 +1445,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "sent through source reply" },
           },
@@ -1375,6 +1513,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "visible source reply" },
           },
@@ -2906,7 +3049,7 @@ describe("runCliAgent reliability", () => {
       expect(llmOutputEvent.provider).toBe("codex-cli");
       expect(llmOutputEvent.model).toBe("gpt-5.4");
       expect(llmOutputEvent.contextTokenBudget).toBe(150_000);
-      expect(llmOutputEvent.contextWindowSource).toBe("agentContextTokens");
+      expect(llmOutputEvent.contextWindowSource).toBe("modelsConfig");
       expect(llmOutputEvent.contextWindowReferenceTokens).toBe(200_000);
       expect(llmOutputEvent.assistantTexts).toEqual(["hello from cli"]);
       const lastAssistant = requireRecord(llmOutputEvent.lastAssistant, "last assistant");
@@ -2919,7 +3062,7 @@ describe("runCliAgent reliability", () => {
         "llm_output context",
       );
       expect(llmOutputContext.contextTokenBudget).toBe(150_000);
-      expect(llmOutputContext.contextWindowSource).toBe("agentContextTokens");
+      expect(llmOutputContext.contextWindowSource).toBe("modelsConfig");
       expect(llmOutputContext.contextWindowReferenceTokens).toBe(200_000);
 
       const agentEndEvent = requireRecord(
@@ -3077,6 +3220,7 @@ describe("runCliAgent reliability", () => {
       expect(result.payloads).toEqual([{ text: "hello from cli" }]);
       expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
         assistantTranscriptOwned: true,
+        assistantTranscriptIdempotencyKey: "cli-assistant:run-persist-cli",
       });
       expect(onUserMessagePersisted).toHaveBeenCalledOnce();
       expect(onUserMessagePersisted).toHaveBeenCalledWith(
@@ -4538,9 +4682,97 @@ describe("runCliAgent reliability", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("keeps native control operations out of restrictive prompt preparation", async () => {
+    const { dir, sessionFile } = createSessionFile({
+      history: [{ role: "user", content: "earlier ask" }],
+    });
+    const config: OpenClawConfig = { agents: { defaults: { workspace: dir } } };
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "control-cli",
+          pluginId: "test-control",
+          config: {
+            command: "claude",
+            args: ["-p"],
+            resumeArgs: ["-p", "--resume", "{sessionId}"],
+            output: "jsonl",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => ({
+        prependContext: "mutated",
+        toolsAllow: [],
+      })),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    try {
+      const context = await prepareCliRunContext({
+        admittedRunContext: createTestAdmittedRunContext("run-native-compact"),
+        sessionId: "s1",
+        sessionFile,
+        workspaceDir: dir,
+        config,
+        prompt: "/compact",
+        extraSystemPrompt: "must not attach to a control operation",
+        finalizePromptForResolvedTools: () => "mutated",
+        provider: "control-cli",
+        model: "model",
+        timeoutMs: 180_000,
+        runId: "run-native-compact",
+        cliSessionId: "native-session",
+        cliSessionBinding: {
+          sessionId: "native-session",
+          mcpConfigHash: "persisted-mcp-config",
+          mcpResumeHash: "persisted-mcp-resume",
+        },
+        controlOperation: "compact",
+      });
+
+      expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
+      expect(context.params.prompt).toBe("/compact");
+      expect(context.params.cliToolAvailability).toBeUndefined();
+      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "native-session" });
+      expect(context.systemPrompt).toBe("");
+      expect(context.contextEngine).toBeUndefined();
+      expect(context.claudeSkillsPluginArgs).toEqual([]);
+      expect(context.bootstrapPromptWarningLines).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("resolveCliNoOutputTimeoutMs", () => {
+  it("gives expected-quiet controls the caller-owned overall timeout budget", () => {
+    expect(
+      resolveCliNoOutputTimeoutMs({
+        backend: { command: "claude" },
+        timeoutMs: 180_000,
+        useResume: true,
+        expectedQuiet: true,
+        trigger: "manual",
+      }),
+    ).toBe(180_000);
+    expect(
+      resolveCliNoOutputTimeoutMs({
+        backend: { command: "claude" },
+        timeoutMs: 600_000,
+        useResume: true,
+        expectedQuiet: true,
+        trigger: "manual",
+      }),
+    ).toBe(600_000);
+  });
+
   it("lets explicit cron timeouts lift the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
       backend: { command: "codex" },

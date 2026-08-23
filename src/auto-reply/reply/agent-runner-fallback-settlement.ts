@@ -39,20 +39,26 @@ export async function settleAgentFallbackCycle(params: {
   const fallbackProvider = fallbackResult.provider;
   const fallbackModel = fallbackResult.model;
   const fallbackExhausted = fallbackResult.outcome === "exhausted";
+  // run-entry owns the canonical reply/receipt facts. Carry them through the
+  // fallback backstop so downstream waiters never have to rederive them.
+  const terminalMetadata = fallbackResult.terminal.metadata;
   const settledLifecycleTerminal =
     cycle.state.pendingLifecycleTerminal?.provider === fallbackProvider &&
     cycle.state.pendingLifecycleTerminal.model === fallbackModel
       ? cycle.state.pendingLifecycleTerminal.backstop
       : undefined;
   cycle.state.pendingLifecycleTerminal = undefined;
+  if (turn.isRestartRecoveryArmed?.()) {
+    turn.replyOperation?.abortForRestart();
+  }
   if (isReplyOperationRestartAbort(turn.replyOperation)) {
-    settledLifecycleTerminal?.emit("end", runResult);
+    settledLifecycleTerminal?.emit("end", runResult, terminalMetadata);
     throw isAgentRunRestartAbortReason(cycle.runAbortSignal?.reason)
       ? cycle.runAbortSignal?.reason
       : createAgentRunRestartAbortError();
   }
   if (isReplyOperationUserAbort(turn.replyOperation)) {
-    settledLifecycleTerminal?.emit("end", runResult);
+    settledLifecycleTerminal?.emit("end", runResult, terminalMetadata);
     await drainPendingToolTasks({ tasks: turn.pendingToolTasks, onTimeout: logVerbose });
     return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
   }
@@ -127,7 +133,6 @@ export async function settleAgentFallbackCycle(params: {
       }),
     };
   }
-  const terminalMetadata = fallbackResult.terminal.metadata;
   const sourceReplyPolicy = turn.sessionKey
     ? resolveSourceReplyPolicy({
         cfg: cycle.runtimeConfig,
@@ -180,7 +185,9 @@ export async function settleAgentFallbackCycle(params: {
     settledLifecycleTerminal?.emit(
       "end",
       runResult,
-      privateFinalTerminalReply ? { terminalReply: privateFinalTerminalReply } : undefined,
+      privateFinalTerminalReply
+        ? { ...terminalMetadata, terminalReply: privateFinalTerminalReply }
+        : terminalMetadata,
     );
   }
   return {

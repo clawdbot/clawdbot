@@ -8,8 +8,8 @@ import type {
   SessionsDiffResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../components/tooltip.ts";
 import {
   expandSessionDiffGap,
   splitSessionDiffFileText,
@@ -23,6 +23,7 @@ import { parseSessionDiffPatch, type ParsedFilePatch } from "../../../lib/chat/s
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { openEditor } from "../../../lib/editor-links.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
@@ -576,9 +577,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   private renderBody(): TemplateResult {
     if (this.diffTask.status === TaskStatus.ERROR) {
       const error = this.diffTask.error;
-      return html`<div class="callout danger">
-        ${error instanceof Error ? error.message : String(error)}
-      </div>`;
+      return html`<div class="callout danger">${formatUiError(error)}</div>`;
     }
     const value = this.diffTask.value;
     if (!value) {

@@ -42,6 +42,8 @@ import {
   type AgentRuntimeIdentityTokenParams,
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
+import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -84,7 +86,11 @@ function buildWorkerAgentRuntimeIdentity(params: {
 type PrepareWorkerAgentRuntimeIdentityParams = Omit<
   Parameters<typeof buildWorkerAgentRuntimeIdentity>[0],
   "admittedRunContext" | "turn"
-> & { runtimeInstanceId: string; turn: SessionPlacementTurnParams };
+> & {
+  runtimeInstanceId: string;
+  turn: SessionPlacementTurnParams;
+  placements: WorkerSessionPlacementStore;
+};
 
 export async function prepareWorkerAgentRuntimeIdentity(
   params: PrepareWorkerAgentRuntimeIdentityParams,
@@ -96,9 +102,21 @@ export async function prepareWorkerAgentRuntimeIdentity(
     admittedRunContext: params.turn.admittedRunContext,
     preparedRunAdmission: params.turn.preparedRunAdmission,
   });
+  const runtimeIdentity = buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext });
+  // Worker session RPC carries no raw identity token. Bind provenance to the exact
+  // host claim before launch so child lineage cannot become bearer authority.
+  if (runtimeIdentity.executionIdentityToken) {
+    bindWorkerTurnExecutionIdentity(
+      params.placements,
+      params.turnClaim,
+      runtimeIdentity.executionIdentityToken,
+      admittedRunContext.operationalRunInstance,
+      { agentId: params.agentId, sessionKey: params.sessionKey },
+    );
+  }
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,
-    runtimeIdentity: buildWorkerAgentRuntimeIdentity({ ...params, admittedRunContext }),
+    runtimeIdentity,
   };
 }
 

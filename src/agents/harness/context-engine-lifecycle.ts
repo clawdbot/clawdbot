@@ -189,7 +189,7 @@ export async function assembleHarnessContextEngine(params: {
     return undefined;
   }
   const contextEngine = params.contextEngine;
-  const messages = stripRuntimeContextCustomMessages(params.messages);
+  const messages = stripRuntimeContextCustomMessages(params.messages).slice();
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
   const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
   const assemble = () =>

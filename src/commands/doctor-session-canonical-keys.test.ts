@@ -690,16 +690,26 @@ describe("doctor canonical session-key repair", () => {
           .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
           .get("agent:main:child") as { entry_json: string }
       ).entry_json;
-      database.db
-        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-        .run(
-          JSON.stringify({ ...(JSON.parse(canonicalJson) as object), spawnedBy: null }),
-          "agent:main:child",
-        );
-      expect(await repairCanonicalSessionKeys({ apply: false, cfg, env })).toMatchObject({
+      database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+        JSON.stringify({
+          ...(JSON.parse(canonicalJson) as object),
+          icon: "archive",
+          spawnedBy: null,
+        }),
+        "agent:main:child",
+      );
+      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 1,
-        repairedGroups: 0,
+        repairedGroups: 1,
       });
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "main",
+          env,
+          sessionKey: "agent:main:child",
+          storePath,
+        })?.entry,
+      ).not.toHaveProperty("icon");
     });
   });
 
@@ -728,7 +738,7 @@ describe("doctor canonical session-key repair", () => {
         .prepare(
           `UPDATE session_nodes
              SET entry_json = 'not-json', archived_at = 30, category = 'investigation',
-                 icon = 'archive', label = 'Recovered metadata', last_activity_at = 29,
+                 icon = '🦞', label = 'Recovered metadata', last_activity_at = 29,
                  last_interaction_at = 28, last_read_at = 27, parent_session_key = 'agent:main:parent',
                  pinned_at = 26, spawned_by = 'agent:main:controller', status = 'failed',
                  display_name = 'Projected display name'
@@ -809,6 +819,7 @@ describe("doctor canonical session-key repair", () => {
         chatType: "group",
         endedAt: 24,
         label: "Recovered metadata",
+        icon: "🦞",
         displayName: "Projected display name",
         lastActivityAt: 29,
         lastInteractionAt: 28,
@@ -824,7 +835,6 @@ describe("doctor canonical session-key repair", () => {
         startedAt: 23,
         status: "failed",
       });
-      expect(repaired).not.toHaveProperty("icon");
       expect(deliveryContextFromSession(repaired)).toEqual({
         accountId: "work",
         channel: "matrix",

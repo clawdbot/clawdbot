@@ -34,6 +34,12 @@ export function classifyCompactionReason(reason?: string): string {
   if (!text) {
     return "unknown";
   }
+  if (
+    text.startsWith("no api key found") ||
+    (text.startsWith("authentication failed for ") && text.includes("credentials may have expired"))
+  ) {
+    return "auth_failed";
+  }
   if (text.includes("nothing to compact") || text.includes("no real conversation messages")) {
     return "no_compactable_entries";
   }

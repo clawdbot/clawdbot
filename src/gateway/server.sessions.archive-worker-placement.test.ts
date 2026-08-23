@@ -89,8 +89,10 @@ test("sessions.patch reclaims the exact active cloud placement before archive me
   const sessionId = "session-archive-cloud-active";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
+  const reclaimStarted = createDeferredCore();
   const reclaimGate = createDeferredCore();
   const reclaim = vi.fn(async () => {
+    reclaimStarted.resolve();
     await reclaimGate.promise;
     placement = workerPlacement({ sessionId, sessionKey, state: "reclaimed" });
     return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
@@ -107,7 +109,8 @@ test("sessions.patch reclaims the exact active cloud placement before archive me
     },
   );
 
-  await vi.waitFor(() => expect(reclaim).toHaveBeenCalledOnce());
+  await reclaimStarted.promise;
+  expect(reclaim).toHaveBeenCalledOnce();
   expect(reclaim).toHaveBeenCalledWith({ sessionId, sessionKey, agentId: "main" });
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
   reclaimGate.resolve();

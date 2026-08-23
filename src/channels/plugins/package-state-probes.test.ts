@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginChannelCatalogEntry } from "../../plugins/channel-catalog-registry.js";
 import {
+  collectBundledChannelPackageStateLoadFailures,
   hasBundledChannelPackageState,
   listBundledChannelIdsForPackageState,
 } from "./package-state-probes.js";
@@ -343,6 +344,13 @@ describe("channel package-state probes", () => {
     expect(warning).toContain("failed to load persistedAuthState checker for matrix");
     expect(warning).toContain(`plugin module path not found: ${builtRoot}`);
     expect(warning).not.toContain("escapes plugin root");
+    expect(collectBundledChannelPackageStateLoadFailures()).toEqual([
+      {
+        detail: expect.stringContaining(`plugin module path not found: ${builtRoot}`),
+        metadataKey: "persistedAuthState",
+        pluginId: "matrix",
+      },
+    ]);
   });
 
   it("tries dist-runtime package-state probes before falling back to source", () => {

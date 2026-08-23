@@ -32,6 +32,7 @@ import {
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
+import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import {
@@ -216,12 +217,7 @@ function formatBatchSourceCounts(counts: Record<string, number>): string {
 }
 
 function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: number): T[][] {
-  const limit = Math.max(1, Math.floor(maxRequests));
-  const batches: T[][] = [];
-  for (let start = 0; start < chunks.length; start += limit) {
-    batches.push(chunks.slice(start, start + limit));
-  }
-  return batches;
+  return chunkItems(chunks, Math.max(1, Math.floor(maxRequests)));
 }
 
 function resolveEmbeddingTimeoutMs(params: {
@@ -286,17 +282,25 @@ async function runEmbeddingOperationWithTimeout<T>(params: {
     return await params.run(signal);
   }
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  const timeoutError = new Error(params.message);
+  const deadlineStartedAt = Date.now();
   let timer: NodeJS.Timeout | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      const error = new Error(params.message);
-      reject(error);
-      controller.abort(error);
+      reject(timeoutError);
+      controller.abort(timeoutError);
     }, timeoutMs);
   });
   try {
     const operation = params.run(signal);
-    return (await Promise.race([operation, timeoutPromise])) as T;
+    const result = (await Promise.race([operation, timeoutPromise])) as T;
+    params.signal?.throwIfAborted();
+    // An overdue watchdog can run after provider success following an event-loop stall.
+    if (Date.now() - deadlineStartedAt >= timeoutMs) {
+      controller.abort(timeoutError);
+      throw timeoutError;
+    }
+    return result;
   } finally {
     if (timer) {
       clearTimeout(timer);
@@ -788,21 +792,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     timeoutMs: number,
     message: string,
   ): Promise<T> {
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-      return await promise;
-    }
-    const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
-    let timer: NodeJS.Timeout | null = null;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), resolvedTimeoutMs);
-    });
-    try {
-      return (await Promise.race([promise, timeoutPromise])) as T;
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
+    return await runEmbeddingOperationWithTimeout({ timeoutMs, message, run: () => promise });
   }
 
   private async withBatchFailureLock<T>(fn: () => Promise<T>): Promise<T> {

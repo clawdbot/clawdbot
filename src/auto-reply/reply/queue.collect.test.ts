@@ -3,8 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
+import {
+  configureChannelAdmissionEvidenceCollection,
+  consumeChannelAdmissionEvidence,
+} from "../../channels/message-access/admission-evidence.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -27,6 +32,14 @@ import {
 import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
+type InternalFollowupRun = FollowupRun & {
+  currentTurnImagesPrepared?: true;
+  mediaImageLayout?: {
+    slots: Array<{ kind: "inline" | "offloaded"; factIndex?: number }>;
+    suppressedFactIndexes: number[];
+  };
+};
+
 installQueueRuntimeErrorSilencer();
 
 function createQueueSettings(overrides: Partial<QueueSettings> = {}): QueueSettings {
@@ -48,7 +61,7 @@ function enqueueTestRun(
 }
 
 function createDrainRecorder(expectedCalls = 1) {
-  const calls: FollowupRun[] = [];
+  const calls: Array<FollowupRun & { currentTurnImagesPrepared?: true }> = [];
   const done = createDeferred();
   const runFollowup = async (run: FollowupRun) => {
     calls.push(run);
@@ -744,7 +757,6 @@ describe("followup queue collect routing", () => {
 
     const queue = getExistingFollowupQueue(key);
     expect(accepted).toEqual([true, true, true, true, true, true, true]);
-    expect(queue?.summaryElisions).toHaveLength(2);
     expect(queue?.summaryElisions.map((entry) => entry.sources.at(-1)?.originatingTo)).toEqual([
       "channel:B",
       "channel:A",
@@ -847,7 +859,6 @@ describe("followup queue collect routing", () => {
 
     await drainRecordedQueue(key, runFollowup, done);
 
-    expect(calls).toHaveLength(3);
     expect(calls.map((call) => call.originatingTo)).toEqual([
       "channel:B",
       "channel:C",
@@ -1801,6 +1812,27 @@ describe("followup queue collect routing", () => {
     }
   });
 
+  it("drains a bound Skill Workshop revision individually", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-skill-workshop-revision-${Date.now()}`,
+      {},
+      2,
+    );
+    const revisionRun = createRun({ prompt: "revise proposal" });
+    revisionRun.run.skillWorkshopProposalRevision = {
+      agentId: "main",
+      workspaceDir: "/tmp/workspace",
+      proposalId: "proposal-h1",
+      expectedRevisionHash: "1".repeat(64),
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "normal" }), settings);
+    enqueueFollowupRun(key, revisionRun, settings);
+    await drainRecordedQueue(key, runFollowup, done);
+
+    expect(calls.map((call) => call.prompt)).toEqual(["normal", "revise proposal"]);
+  });
+
   it("can prepend priority followups before already queued items", () => {
     const key = `test-priority-followup-front-${Date.now()}`;
     const settings = createQueueSettings({ mode: "followup" });
@@ -2014,6 +2046,82 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.imageOrder).toEqual(["inline", "inline"]);
   });
 
+  it("preserves prepared empty image state across collected batches", async () => {
+    const key = `test-collect-prepared-empty-images-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
+    const missingMedia = {
+      path: "/openclaw-test-missing/current.png",
+      contentType: "image/png",
+      hydrationSuppressed: true,
+    };
+
+    for (const prompt of ["one", "two"]) {
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({
+          prompt,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        currentTurnImagesPrepared: true,
+        images: [],
+        imageOrder: [],
+        media: [missingMedia],
+        mediaImageLayout: { slots: [], suppressedFactIndexes: [0] },
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    }
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    const collected = calls[0] as InternalFollowupRun | undefined;
+    expect(collected?.currentTurnImagesPrepared).toBe(true);
+    expect(collected?.images).toEqual([]);
+    expect(collected?.imageOrder).toEqual([]);
+    expect(collected?.media).toEqual([missingMedia, missingMedia]);
+    expect(collected?.mediaImageLayout).toEqual({
+      slots: [],
+      suppressedFactIndexes: [0, 1],
+    });
+  });
+
+  it("offsets prepared media layout fact indexes across collected batches", async () => {
+    const key = `test-collect-prepared-image-layout-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const settings = createQueueSettings();
+
+    for (const [index, prompt] of ["one", "two"].entries()) {
+      const preparedRun: InternalFollowupRun = {
+        ...createRun({
+          prompt,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        }),
+        currentTurnImagesPrepared: true,
+        images: [],
+        imageOrder: ["offloaded"],
+        media: [{ path: `/tmp/offloaded-${index}.png`, contentType: "image/png" }],
+        mediaImageLayout: {
+          slots: [{ kind: "offloaded", factIndex: 0 }],
+          suppressedFactIndexes: [],
+        },
+      };
+      enqueueFollowupRun(key, preparedRun, settings);
+    }
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect((calls[0] as InternalFollowupRun | undefined)?.mediaImageLayout).toEqual({
+      slots: [
+        { kind: "offloaded", factIndex: 0 },
+        { kind: "offloaded", factIndex: 1 },
+      ],
+      suppressedFactIndexes: [],
+    });
+  });
+
   it("splits collect batches when sender authorization changes", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-collect-auth-split-${Date.now()}`,
@@ -2065,6 +2173,78 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).not.toContain("what's the weather?");
     expect(calls[1]?.prompt).toContain("what's the weather?");
     expect(calls[1]?.prompt).toContain("(from Owner)");
+  });
+
+  it("preserves sender-scoped batching while identity collection is disabled", async () => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(false);
+    try {
+      const { key, calls, done, runFollowup, settings } = createQueueCase(
+        `test-collect-identity-disabled-${Date.now()}`,
+        {},
+        2,
+      );
+      for (const senderId of ["user-1", "user-2"]) {
+        const item = createRun({
+          prompt: `from ${senderId}`,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        });
+        enqueueFollowupRun(
+          key,
+          {
+            ...item,
+            run: { ...item.run, senderId, senderIsOwner: false },
+          },
+          settings,
+        );
+      }
+
+      await drainRecordedQueue(key, runFollowup, done);
+      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+
+      expect(calls.map((call) => call.run.senderId)).toEqual(["user-1", "user-2"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("keeps same-participant evidence for a collected batch", async () => {
+    const cleanup = configureChannelAdmissionEvidenceCollection(true);
+    try {
+      const sameCase = createQueueCase(`test-collect-identity-same-${Date.now()}`);
+      for (const prompt of ["same one", "same two"]) {
+        const item = createRun({
+          prompt,
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+        });
+        enqueueFollowupRun(
+          sameCase.key,
+          {
+            ...item,
+            channelAdmissionEvidence: createChannelParticipantAdmissionEvidence({
+              channelId: "slack",
+              accountId: "default",
+              participantId: "user-1",
+            }),
+            run: { ...item.run, senderId: "user-1", senderIsOwner: false },
+          },
+          sameCase.settings,
+        );
+      }
+      await drainRecordedQueue(sameCase.key, sameCase.runFollowup, sameCase.done);
+      await vi.waitFor(() => expect(getExistingFollowupQueue(sameCase.key)).toBeUndefined());
+      expect(sameCase.calls).toHaveLength(1);
+      expect(sameCase.calls[0]?.run.senderId).toBe("user-1");
+      expect(
+        consumeChannelAdmissionEvidence(sameCase.calls[0]?.channelAdmissionEvidence),
+      ).toMatchObject({
+        ingressState: "present",
+        invoker: { state: "present", kind: "person" },
+      });
+    } finally {
+      cleanup();
+    }
   });
 
   it("splits collect batches when queued cancellation owners differ", async () => {

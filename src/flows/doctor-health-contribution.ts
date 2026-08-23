@@ -69,12 +69,14 @@ function normalizeContributionHealthCheck(
       `doctor contribution ${contributionId} must specify health check ids when it declares multiple healthChecks`,
     );
   }
-  return {
-    ...check,
+  const identity = {
     id,
     kind: check.kind ?? "core",
     source: check.source ?? "doctor",
   };
+  return "run" in check
+    ? { ...check, ...identity, sourceContract: "run" }
+    : { ...check, ...identity, sourceContract: "split" };
 }
 
 function deriveCoreHealthCheckId(contributionId: string): string {

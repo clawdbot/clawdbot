@@ -1,3 +1,4 @@
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../auto-reply/heartbeat.js";
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
@@ -7,7 +8,6 @@ import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js"
 import {
   isHeartbeatTypingEnabled,
   heartbeatLog,
-  resolveHeartbeatAckMaxChars,
   resolveHeartbeatChannelPlugin,
   resolveHeartbeatTypingIntervalSeconds,
 } from "./heartbeat-runner-config.js";
@@ -41,7 +41,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   if (prepared.kind === "skipped") {
     return { status: "skipped", reason: prepared.reason };
   }
-  const { cfg, agentId, heartbeat, startedAt } = wake;
+  const { cfg, agentId, startedAt } = wake;
   const { delivery, visibility, replyPrefix, runSessionKey } = prepared;
   const { outboundPolicySessionKey, hasRelayableExecCompletion } = prepared;
 
@@ -168,7 +168,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           ctx: { ChatType: delivery.chatType, Provider: delivery.channel },
         }) === "message_tool_only",
       responsePrefix: resolveHeartbeatResponsePrefix(),
-      ackMaxChars: resolveHeartbeatAckMaxChars(cfg, heartbeat),
+      ackMaxChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
     });
     return await finalizeHeartbeatOutcome({
       opts,

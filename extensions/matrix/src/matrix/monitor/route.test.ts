@@ -37,8 +37,6 @@ function matrixBinding(
   } as RouteBinding;
 }
 
-const threadCfg = { ...baseCfg, bindings: [matrixBinding("main")] } satisfies OpenClawConfig;
-
 function senderPeer(id = "@alice:example.org"): RoutePeer {
   return { kind: "direct", id };
 }
@@ -46,6 +44,11 @@ function senderPeer(id = "@alice:example.org"): RoutePeer {
 function dmRoomPeer(id = "!dm:example.org"): RoutePeer {
   return { kind: "channel", id };
 }
+
+const threadCfg = {
+  ...baseCfg,
+  bindings: [matrixBinding("main")],
+} satisfies OpenClawConfig;
 
 function resolveDmRoute(
   cfg: OpenClawConfig,

@@ -61,10 +61,9 @@ describe("plugin install persistence warning audiences", () => {
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       'Installed plugin "workboard" without enabling it because it requires configuration first. Configure it, then run `openclaw plugins enable workboard`.',
     );
-    expect(pluginsCliRuntimeLogs).toEqual([
-      "Installed plugin: workboard",
-      "Restart the gateway to load plugins.",
-    ]);
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain("requires configuration first");
+    expect(pluginsCliRuntimeLogs).toContain("Installed plugin: workboard");
+    expect(pluginsCliRuntimeLogs).toContain("Restart the gateway to load plugins.");
   });
 
   it("preserves owner-authored exclusive-slot warnings verbatim", async () => {
@@ -149,25 +148,20 @@ describe("plugin install persistence warning audiences", () => {
 
       if (audience === "terminal") {
         expect(warn).not.toHaveBeenCalled();
-        expect(pluginsCliRuntimeLogs.join("\n")).toContain(cleanupDetail);
-        expect(pluginsCliRuntimeLogs.join("\n")).toContain(refreshDetail);
-        expect(pluginsCliRuntimeLogs.join("\n")).toContain(configuredSource);
-        expect(pluginsCliRuntimeLogs.join("\n")).toContain(install.installPath);
-        return;
+      } else {
+        const warnings = warn.mock.calls.map(([message]) => String(message));
+        expect(warnings).toHaveLength(3);
+        expect(warnings.join("\n")).toContain("previous plugin installation");
+        expect(warnings.join("\n")).toContain("registry");
+        expect(warnings.join("\n")).toContain("shadowed");
+        expect(warnings.join("\n")).not.toContain("/private/");
+        expect(warnings.join("\n")).not.toContain("PRIVATE_NPM_MARKER");
+        expect(warnings.join("\n")).not.toContain("PRIVATE_REFRESH_MARKER");
       }
-
-      const warnings = warn.mock.calls.map(([message]) => String(message));
-      expect(warnings).toHaveLength(3);
-      expect(warnings.join("\n")).toContain("previous plugin installation");
-      expect(warnings.join("\n")).toContain("registry");
-      expect(warnings.join("\n")).toContain("shadowed");
-      expect(warnings.join("\n")).not.toContain("/private/");
-      expect(warnings.join("\n")).not.toContain("PRIVATE_NPM_MARKER");
-      expect(warnings.join("\n")).not.toContain("PRIVATE_REFRESH_MARKER");
-      expect(pluginsCliRuntimeLogs).toEqual([
-        "Installed plugin: workboard",
-        "Restart the gateway to load plugins.",
-      ]);
+      expect(pluginsCliRuntimeLogs.join("\n")).toContain(cleanupDetail);
+      expect(pluginsCliRuntimeLogs.join("\n")).toContain(refreshDetail);
+      expect(pluginsCliRuntimeLogs.join("\n")).toContain(configuredSource);
+      expect(pluginsCliRuntimeLogs.join("\n")).toContain(install.installPath);
     },
   );
 });

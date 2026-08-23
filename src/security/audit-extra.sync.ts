@@ -13,16 +13,19 @@ import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { describeBinding } from "../commands/agents.binding-format.js";
+import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
-import { resolveGatewayAuth, type ResolvedGatewayAuth } from "../gateway/auth.js";
+import { resolveGatewayAuthForConfig, type ResolvedGatewayAuth } from "../gateway/auth-resolve.js";
 import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   listDangerousPluginNodeCommands,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
+import { listEffectiveGroupRouteBindings } from "../routing/resolve-route.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
 import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
 
@@ -71,11 +74,6 @@ function isProbablySyncedPath(p: string): boolean {
     s.includes("googledrive") ||
     s.includes("onedrive")
   );
-}
-
-function looksLikeEnvRef(value: string): boolean {
-  const v = value.trim();
-  return v.startsWith("${") && v.endsWith("}");
 }
 
 function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
@@ -590,7 +588,7 @@ export function collectSyncedFolderFindings(params: {
 export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const password = normalizeOptionalString(cfg.gateway?.auth?.password) ?? "";
-  if (password && !looksLikeEnvRef(password)) {
+  if (password && !hasUnresolvedConfigPath(cfg, "gateway.auth.password")) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
       severity: "warn",
@@ -603,7 +601,7 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
   }
 
   const hooksToken = normalizeOptionalString(cfg.hooks?.token) ?? "";
-  if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(hooksToken)) {
+  if (cfg.hooks?.enabled === true && hooksToken && !hasUnresolvedConfigPath(cfg, "hooks.token")) {
     findings.push({
       checkId: "config.secrets.hooks_token_in_config",
       severity: "info",
@@ -636,14 +634,14 @@ export function collectHooksHardeningFindings(
     });
   }
 
-  const configGatewayAuth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
+  const configGatewayAuth = resolveGatewayAuthForConfig({
+    config: cfg,
     tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
     env,
   });
   const overrideGatewayAuth = options.gatewayAuthOverride
-    ? resolveGatewayAuth({
-        authConfig: cfg.gateway?.auth,
+    ? resolveGatewayAuthForConfig({
+        config: cfg,
         authOverride: options.gatewayAuthOverride,
         tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
         env,
@@ -769,8 +767,8 @@ export function collectGatewayHttpNoAuthFindings(
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({
-    authConfig: cfg.gateway?.auth,
+  const auth = resolveGatewayAuthForConfig({
+    config: cfg,
     authOverride: options.gatewayAuthOverride,
     tailscaleMode,
     env,
@@ -1241,6 +1239,31 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
 
 export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
+  const mainGroupScopes = listEffectiveGroupRouteBindings(cfg)
+    .filter((binding) => binding.session?.groupScope === "main")
+    .map(
+      (binding) =>
+        `- bindings[].session.groupScope="main": ${describeBinding(binding)} (agent=${binding.agentId})`,
+    );
+  if (cfg.session?.groupScope === "main") {
+    mainGroupScopes.unshift(
+      '- session.groupScope="main" (global: all group/channel rooms unless a binding overrides it)',
+    );
+  }
+  if (mainGroupScopes.length > 0) {
+    findings.push({
+      checkId: "security.trust_model.group_scope_main",
+      severity: "warn",
+      title: "Group rooms share the main session",
+      detail:
+        "The following group routing scopes merge room conversations into the agent main session:\n" +
+        mainGroupScopes.join("\n") +
+        "\nEvery member of each affected room shares the main-session context. Use this only for mutually trusted rooms.",
+      remediation:
+        'Use session.groupScope="per-group" globally and remove binding overrides, or reserve "main" for rooms whose members you trust: https://docs.openclaw.ai/channels/groups#session-keys',
+    });
+  }
+
   const signals = listPotentialMultiUserSignals(cfg);
   if (signals.length === 0) {
     return findings;

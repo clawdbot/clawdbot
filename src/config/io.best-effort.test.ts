@@ -154,6 +154,29 @@ describe("readBestEffortConfig", () => {
     });
   });
 
+  it("records why an unparseable config was ignored by best-effort reads", async () => {
+    await withTempHome(async (home) => {
+      const configPath = `${home}/.openclaw/openclaw.json`;
+      await fs.mkdir(`${home}/.openclaw`, { recursive: true });
+      await fs.writeFile(configPath, "{ definitely not json", "utf-8");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        const config = await readSourceConfigBestEffort();
+
+        // The fallback value stays {} — but the degradation is recorded.
+        expect(config).toEqual({});
+        expect(
+          warn.mock.calls.some(([line]) =>
+            String(line).includes("best-effort read ignored unparseable config"),
+          ),
+        ).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
   it("preserves Windows case-insensitive env lookup in isolated reads", async () => {
     await withTempHome(async (home) => {
       const mixedCaseKey = "OpenClaw_Config_Path";
@@ -201,6 +224,22 @@ describe("readBestEffortConfig", () => {
       expect(await fs.readFile(configPath, "utf-8")).toBe(directEditRaw);
       const entries = await fs.readdir(`${home}/.openclaw`);
       expect(entries.some((entry) => entry.startsWith("openclaw.json.clobbered."))).toBe(false);
+    });
+  });
+
+  it("materializes fresh-install defaults when the config file is missing", async () => {
+    await withTempHome(async () => {
+      const { loadConfig } = await import("./io.runtime.js");
+
+      const snapshot = await readConfigFileSnapshot({ observe: false });
+      const loaded = loadConfig({ pin: false, skipPluginValidation: true });
+
+      expect(snapshot.exists).toBe(false);
+      // Missing config = fresh install; snapshot and load must produce the same
+      // out-of-box defaults an existing empty {} config gets (contextPruning
+      // stays provider-conditional, so compaction is the parity signal here).
+      expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
+      expect(loaded.agents?.defaults?.compaction?.mode).toBe("safeguard");
     });
   });
 
@@ -254,6 +293,7 @@ describe("readBestEffortConfig", () => {
 
       const snapshot = await readBestEffortConfigSnapshot({ observe: false });
 
+      expect(snapshot.configDiagnostics).toBeNull();
       expect(snapshot.sourceConfig.agents?.defaults?.contextPruning?.mode).toBeUndefined();
       expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
       expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
@@ -265,6 +305,26 @@ describe("readBestEffortConfig", () => {
       expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toMatchObject({
         config_path: configPath,
         last_known_good_json: expect.any(String),
+      });
+    });
+  });
+
+  it("returns invalid config diagnostics with the best-effort fallback", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        gateway: { port: "abc" },
+      } as never);
+
+      const snapshot = await readBestEffortConfigSnapshot({ observe: false });
+
+      expect(snapshot.configDiagnostics).toEqual({
+        path: configPath,
+        issues: [
+          {
+            path: "gateway.port",
+            message: "Invalid input: expected number, received string",
+          },
+        ],
       });
     });
   });

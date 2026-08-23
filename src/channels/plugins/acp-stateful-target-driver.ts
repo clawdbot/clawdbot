@@ -130,6 +130,7 @@ async function resetAcpTargetInPlace(params: {
     key: params.sessionKey,
     reason: params.reason,
     commandSource: params.commandSource ?? "stateful-target:acp-reset-in-place",
+    armSessionDiffBaselineCapture: true,
   });
   if (result.ok) {
     if ("incognitoDeleted" in result) {

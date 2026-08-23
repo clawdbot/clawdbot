@@ -654,7 +654,6 @@ describe("google-shared convertMessages", () => {
     const toolResponsePart = contents[0]?.parts?.find(
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
-    expect(toolResponsePart).toBeDefined();
     const toolResponse = requireRecordProperty(assertRecord(toolResponsePart), "functionResponse");
     expect(assertRecord(toolResponse.response).output).toBe(
       '{"type":"json","payload":{"sessionKey":"current","status":"ok"}}',

@@ -20,8 +20,11 @@ import {
   describePluginInstallSource,
   type PluginInstallSourceInfo,
 } from "../../plugins/install-source-info.js";
-import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
-import type { PluginPackageChannel, PluginPackageInstall } from "../../plugins/manifest.js";
+import type {
+  OpenClawPackageManifest,
+  PluginPackageChannel,
+  PluginPackageInstall,
+} from "../../plugins/manifest.js";
 import { listOfficialExternalChannelCatalogEntries } from "../../plugins/official-external-plugin-catalog.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";

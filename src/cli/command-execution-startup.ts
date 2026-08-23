@@ -69,6 +69,7 @@ export async function ensureCliExecutionBootstrap(params: {
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   skipConfigGuard?: boolean;
+  validateConfigOnly?: boolean;
   skipPristineCoreStateMigrations?: boolean;
   skipPristineStartupStateMigrations?: boolean;
 }) {
@@ -83,6 +84,9 @@ export async function ensureCliExecutionBootstrap(params: {
     loadPlugins: params.loadPlugins ?? params.startupPolicy.loadPlugins,
     pluginRegistry: params.startupPolicy.pluginRegistry,
     skipConfigGuard: params.skipConfigGuard ?? params.startupPolicy.skipConfigGuard,
+    ...((params.validateConfigOnly ?? params.startupPolicy.validateConfigOnly)
+      ? { validateConfigOnly: true }
+      : {}),
     ...(params.skipPristineStartupStateMigrations
       ? { skipPristineStartupStateMigrations: true }
       : {}),

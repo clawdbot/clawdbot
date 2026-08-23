@@ -12,11 +12,11 @@ import {
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
-import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
@@ -155,9 +155,8 @@ function mergeManagedMediaIntoAssistantContent(params: {
       continue;
     }
     const split = splitMediaFromOutput(block.text);
-    const directiveTagsChanged = stripInlineDirectiveTagsForDisplay(split.text).changed;
     const visibleText = sanitizeAssistantDisplayText(split.text, {
-      preserveBoundaries: !directiveTagsChanged,
+      preserveBoundaries: true,
     });
     if (visibleText) {
       const { textSignature: _textSignature, ...rest } = block;
@@ -265,7 +264,7 @@ export async function appendAssistantTranscriptMessage(params: {
   idempotencyKey?: string;
   abortMeta?: {
     aborted: true;
-    origin: "rpc" | "stop-command";
+    origin: "rpc" | "stop-command" | "placement-abandon";
     runId: string;
   };
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
@@ -481,11 +480,12 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   if (!mergedContent) {
     return null;
   }
+  const rewrittenMessage = applyAssistantDeliveryDirectives({
+    ...target.message,
+    content: mergedContent,
+  });
   const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
-    message: {
-      ...target.message,
-      content: mergedContent,
-    },
+    message: rewrittenMessage,
   });
   const rewritten = await rewriteTranscriptEventRowsExact(params.scope, {
     allowInitialGenerationMaterialization: initialGenerationMaterialized,

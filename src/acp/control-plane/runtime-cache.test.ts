@@ -1,9 +1,7 @@
 /** Tests runtime cache touch semantics and idle-candidate collection. */
-import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
-import type { AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it } from "vitest";
-import type { CachedRuntimeState } from "./runtime-cache.js";
-import { RuntimeCache } from "./runtime-cache.js";
+import { RuntimeCache, type CachedRuntimeState } from "./runtime-cache.js";
 
 function mockState(sessionKey: string): CachedRuntimeState {
   const runtime = {

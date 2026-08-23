@@ -19,6 +19,19 @@
   gap: 9px;
 }
 
+.workboard-automation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  text-decoration: none;
+}
+
+.workboard-automation-chip svg {
+  width: 14px;
+  height: 14px;
+}
+
 .workboard-board-glyph--header {
   width: 28px;
   height: 28px;
@@ -417,12 +430,10 @@
      would let the listbox overflow when the popup has little room to open. */
   max-height: min(320px, var(--auto-size-available-height, calc(100vh - 48px)));
   padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 86%, transparent);
+  border: 1px solid var(--overlay-border);
   border-radius: 8px;
   background: color-mix(in srgb, var(--bg-elevated) 94%, var(--bg) 6%);
-  box-shadow:
-    0 16px 40px color-mix(in srgb, black 34%, transparent),
-    inset 0 1px 0 color-mix(in srgb, white 5%, transparent);
+  box-shadow: var(--overlay-shadow);
 }
 
 .workboard-field--wide {

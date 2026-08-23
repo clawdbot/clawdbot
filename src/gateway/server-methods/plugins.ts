@@ -11,6 +11,10 @@ import {
   validatePluginsSetEnabledParams,
   validatePluginsUninstallParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
+  readInstallPolicyWarningErrorDetails,
+} from "../../../packages/gateway-protocol/src/install-policy-warning-error-details.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { searchInstallablePluginPackages } from "../../plugins/catalog-search.js";
@@ -127,13 +131,20 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         lifecycleError?.code && isClawHubTrustErrorCode(lifecycleError.code)
           ? lifecycleError.code
           : undefined;
-      const details = lifecycleError
+      const trustDetails = lifecycleError
         ? buildClawHubTrustErrorDetails({
             ...(trustCode ? { code: trustCode } : {}),
             ...(lifecycleError.version ? { version: lifecycleError.version } : {}),
             ...(lifecycleError.warning ? { warning: lifecycleError.warning } : {}),
           })
         : undefined;
+      const installPolicyDetails = lifecycleError?.installPolicyWarning
+        ? readInstallPolicyWarningErrorDetails({
+            installPolicyCode: INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
+            ...lifecycleError.installPolicyWarning,
+          })
+        : undefined;
+      const details = installPolicyDetails ?? trustDetails;
       respond(
         false,
         undefined,

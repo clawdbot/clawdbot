@@ -122,6 +122,25 @@ describe("chat-model-select-state", () => {
     });
   });
 
+  it("finds the active row across the legacy main alias window", () => {
+    // Pre-hello (or legacy-alias) states select "main" while the row list
+    // already carries the canonical agent:main:main key; a strict compare
+    // missed the row and the picker fell back to the agent default.
+    const sessionsResult = createSessionsListResult({
+      model: "gpt-5.3-codex",
+      modelProvider: "openai",
+    });
+    const session = expectDefined(sessionsResult.sessions[0], "alias fixture row");
+    sessionsResult.sessions[0] = { ...session, key: "agent:main:main" };
+    const value = resolveChatModelOverrideValue(
+      createChatModelState({
+        chatModelCatalog: DEFAULT_CHAT_MODEL_CATALOG,
+        sessionsResult,
+      }),
+    );
+    expect(value).toBe("openai/gpt-5.3-codex");
+  });
+
   it("uses the server-qualified value when the active session provider is present", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog(DEEPSEEK_CHAT_MODEL),

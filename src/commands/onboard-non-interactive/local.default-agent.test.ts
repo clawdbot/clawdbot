@@ -176,29 +176,80 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
       expect.objectContaining({ firstAgent: { name: "main" } }),
     );
+    expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      workspace,
+      runtime,
+      expect.objectContaining({ agentId: "main" }),
+    );
     expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(
       mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
     );
   });
 
-  it("passes an explicit first-agent name into the single creation step", async () => {
+  it("provisions and reports the named first agent returned by creation", async () => {
+    const workspace = "/tmp/robby-workspace";
+    mocks.ensureOnboardingAgent.mockImplementationOnce(
+      async ({ config }: { config: OpenClawConfig }) => ({
+        config: {
+          ...config,
+          agents: {
+            ...config.agents,
+            entries: {
+              robby: {
+                name: "robby",
+                workspace,
+              },
+            },
+          },
+        },
+        agentId: "robby",
+        bootstrapPending: true,
+        createdAgent: true,
+      }),
+    );
+
     await runNonInteractiveLocalSetup({
       opts: {
         nonInteractive: true,
         mode: "local",
         agentName: "robby",
-        authChoice: "skip",
+        workspace,
+        authChoice: "demo-api-key",
         skipHooks: true,
         skipSkills: true,
         skipHealth: true,
+        json: true,
       },
       runtime,
       baseConfig: {},
     });
 
+    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          agentId: "robby",
+          agentDir: expect.stringMatching(/[/\\]agents[/\\]robby[/\\]agent$/),
+          workspaceDir: workspace,
+        }),
+      }),
+    );
+    expect(mocks.applyAuthChoice.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.ensureOnboardingAgent).toHaveBeenCalledOnce();
     expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
       expect.objectContaining({ firstAgent: { name: "robby" } }),
+    );
+    expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      workspace,
+      runtime,
+      expect.objectContaining({ agentId: "robby" }),
+    );
+    expect(mocks.ensureWorkspaceAndSessions.mock.calls.map(([dir]) => dir)).not.toContain(
+      `${workspace}/main`,
+    );
+    expect(mocks.logJson).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: workspace }),
     );
   });
 
@@ -226,6 +277,28 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     expect(mocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
   });
 
+  it("does not publish config when the existing agent workspace cannot be provisioned", async () => {
+    mocks.ensureWorkspaceAndSessions.mockRejectedValueOnce(new Error("workspace is unwritable"));
+
+    await expect(
+      runNonInteractiveLocalSetup({
+        opts: {
+          nonInteractive: true,
+          mode: "local",
+          authChoice: "skip",
+          skipHooks: true,
+          skipSkills: true,
+          skipHealth: true,
+        },
+        runtime,
+        baseConfig: { agents: { entries: { ops: { default: true } } } },
+      }),
+    ).rejects.toThrow("workspace is unwritable");
+
+    expect(mocks.commitConfig).not.toHaveBeenCalled();
+    expect(mocks.logConfigUpdated).not.toHaveBeenCalled();
+  });
+
   it("provisions and reports the keyed default agent while preserving the global workspace", async () => {
     const baseConfig = {
       agents: {
@@ -244,8 +317,9 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       opts: {
         nonInteractive: true,
         mode: "local",
+        agentName: "robby",
         workspace: "/tmp/global-workspace",
-        authChoice: "skip",
+        authChoice: "demo-api-key",
         skipHooks: true,
         skipSkills: true,
         skipHealth: true,
@@ -256,6 +330,15 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       baseConfig,
     });
 
+    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          agentId: "ops",
+          agentDir: "/tmp/ops-agent",
+          workspaceDir: "/tmp/ops-workspace",
+        }),
+      }),
+    );
     expect(mocks.commitConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         nextConfig: expect.objectContaining({

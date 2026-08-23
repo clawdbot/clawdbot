@@ -25,7 +25,6 @@ import {
   getMatrixThreadBindingManagerEntry,
   listBindingsForAccount,
   removeBindingRecord,
-  resetMatrixThreadBindingsForTests,
   resolveBindingKey,
   resolveEffectiveBindingExpiry,
   setBindingRecord,
@@ -317,7 +316,7 @@ export async function createMatrixThreadBindingManager(params: {
     if (existingEntry.storageKey === storageKey) {
       return existingEntry.manager;
     }
-    existingEntry.manager.stop();
+    await existingEntry.manager.stop();
   }
   const pluginLoaded = await loadBindingsFromPluginState({
     accountId: params.accountId,
@@ -483,15 +482,18 @@ export async function createMatrixThreadBindingManager(params: {
         }),
       });
     },
-    stop: () => {
+    stop: async () => {
       if (sweepTimer) {
         clearInterval(sweepTimer);
       }
+      let finalPersist = persistQueue;
       if (persistTimer) {
         clearTimeout(persistTimer);
         persistTimer = null;
-        persistSafely("shutdown-flush");
+        finalPersist = enqueuePersist();
       }
+      // Retire the live generation now, but settle its captured persistence before
+      // shutdown can close the shared Matrix state store.
       unregisterSessionBindingAdapter({
         channel: "matrix",
         accountId: params.accountId,
@@ -499,10 +501,12 @@ export async function createMatrixThreadBindingManager(params: {
       });
       if (getMatrixThreadBindingManagerEntry(params.accountId)?.manager === manager) {
         deleteMatrixThreadBindingManagerEntry(params.accountId);
+        // Live bindings belong to this manager generation; persisted rows reload on restart.
+        for (const record of listBindingsForAccount(params.accountId)) {
+          removeBindingRecord(record);
+        }
       }
-      for (const record of listBindingsForAccount(params.accountId)) {
-        removeBindingRecord(record);
-      }
+      await finalPersist;
     },
   };
 
@@ -708,4 +712,4 @@ export async function createMatrixThreadBindingManager(params: {
   });
   return manager;
 }
-export { getMatrixThreadBindingManager, resetMatrixThreadBindingsForTests };
+export { getMatrixThreadBindingManager };

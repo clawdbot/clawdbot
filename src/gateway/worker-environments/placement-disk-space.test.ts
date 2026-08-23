@@ -17,6 +17,7 @@ function activePlacement(
     sessionKey: "agent:main:session-disk",
     agentId: "main",
     state: "active",
+    executionMode: "worker-turn",
     environmentId: "environment-disk",
     generation: 3,
     activeOwnerEpoch: 7,

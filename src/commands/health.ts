@@ -34,7 +34,7 @@ import {
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   buildRateLimitedHealthDiagnostic,
@@ -205,21 +205,7 @@ export function formatDeliveryQueueHealthLine(
   const oldestNote =
     oldest.length > 0 ? `; oldest ${formatDurationHuman(now - Math.min(...oldest))} ago` : "";
   if (deadLetterCounts) {
-    const payloadBearing = failed.reduce((sum, queue) => sum + (queue.payloadBearing ?? 0), 0);
-    const payloadNote = payloadBearing > 0 ? `; payload-bearing ${payloadBearing}` : "";
-    const ownerCleanupPending = failed.reduce(
-      (sum, queue) => sum + (queue.ownerCleanupPending ?? 0),
-      0,
-    );
-    const ownerCleanupNote =
-      ownerCleanupPending > 0 ? `; owner cleanup pending ${ownerCleanupPending}` : "";
-    warnings.push(
-      `dead-lettered entries — ${deadLetterCounts}${oldestNote}${payloadNote}${ownerCleanupNote}`,
-    );
-  }
-  const maintenanceErrors = summary.deliveryQueues?.maintenance?.errors ?? 0;
-  if (maintenanceErrors > 0) {
-    warnings.push(`retention maintenance errors ${maintenanceErrors}`);
+    warnings.push(`dead-lettered entries — ${deadLetterCounts}${oldestNote}`);
   }
   if (ingressPressure.length > 0) {
     const pressureCounts = ingressPressure
@@ -235,12 +221,7 @@ export function formatDeliveryQueueHealthLine(
       `ingress pressure — ${pressureCounts}; oldest ${formatDurationHuman(now - oldestPressure)} ago`,
     );
   }
-  if (warnings.length === 0) {
-    return null;
-  }
-  const inspectNote =
-    deadLetterCounts || maintenanceErrors > 0 ? ". Inspect: openclaw delivery failures list" : "";
-  return `Delivery queue: warning (${warnings.join("; ")})${inspectNote}`;
+  return warnings.length > 0 ? `Delivery queue: warning (${warnings.join("; ")})` : null;
 }
 
 /** Formats config hot-reload watcher degradation for text health output. */
@@ -268,7 +249,7 @@ export async function healthCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const cfg = opts.config ?? (await readBestEffortHealthConfig());
+  const cfg = opts.config ?? (await readNonObservingHealthConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
   let summary: HealthSummary;
   try {
@@ -286,6 +267,7 @@ export async function healthCommand(
           config: cfg,
           token: opts.token,
           password: opts.password,
+          sharedStateMode: "read-only",
           ignoreEnvUrlOverride: opts.ignoreEnvUrlOverride,
           localPortOverride: opts.localPortOverride,
         }),
@@ -356,9 +338,10 @@ export async function healthCommand(
               } satisfies AgentHealthSummary;
             }),
           );
-    const displayAgents = opts.verbose
-      ? resolvedAgents
-      : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
+    const displayAgents =
+      opts.verbose || !defaultAgentId
+        ? resolvedAgents
+        : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
     const channelBindings = buildChannelAccountBindings(cfg);
     const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
       includeSetupFallbackPlugins: false,
@@ -580,7 +563,28 @@ export async function healthCommand(
   }
 }
 
-async function readBestEffortHealthConfig(): Promise<OpenClawConfig> {
-  const { readBestEffortConfig } = await loadConfigRuntime();
-  return await readBestEffortConfig();
+/**
+ * Runs `healthCommand` inside a host flow (wizard/onboard/doctor). The command's
+ * CLI-style `runtime.exit(1)` diagnostic paths surface as a thrown `ExitError`,
+ * so the host reports the failure and keeps running instead of dying mid-flow.
+ */
+export async function healthCommandNonExiting(
+  opts: Parameters<typeof healthCommand>[0],
+  runtime: RuntimeEnv,
+): Promise<void> {
+  await healthCommand(opts, {
+    ...runtime,
+    exit: (code) => {
+      throw new ExitError(code);
+    },
+  });
+}
+
+export async function readNonObservingHealthConfig(): Promise<OpenClawConfig> {
+  const { readConfigFileSnapshot } = await loadConfigRuntime();
+  const snapshot = await readConfigFileSnapshot({
+    observe: false,
+    pluginValidation: "core-only",
+  });
+  return snapshot.runtimeConfig ?? snapshot.config;
 }

@@ -1,6 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
+import type { AcpRuntime, AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { consumeAcpTurnStream } from "../../acp/control-plane/manager.turn-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSystemEventOptionsOwnerAgentId } from "../../infra/system-event-ownership.js";
 import {
@@ -39,7 +42,10 @@ function createConfig(global: boolean): OpenClawConfig {
   };
 }
 
-async function postAgentHook(global: boolean) {
+async function postAgentHook(
+  global: boolean,
+  options: { admissionTimeoutMs?: number; rejectInitialConfig?: boolean } = {},
+) {
   const config = createConfig(global);
   const hooksConfig = resolveHooksConfig(config);
   if (!hooksConfig) {
@@ -52,6 +58,7 @@ async function postAgentHook(global: boolean) {
     bindHost: "127.0.0.1",
     port: 18789,
     logHooks: { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
+    agentStartAdmissionTimeoutMs: options.admissionTimeoutMs,
   });
   const req = Object.assign(
     Readable.from([JSON.stringify({ message: "Dispatch", name: "Recovery", agentId: "hooks" })]),
@@ -74,11 +81,12 @@ async function postAgentHook(global: boolean) {
     }),
   } as unknown as ServerResponse;
 
-  mocks.getRuntimeConfig
-    .mockImplementationOnce(() => {
+  if (options.rejectInitialConfig !== false) {
+    mocks.getRuntimeConfig.mockImplementationOnce(() => {
       throw new Error("required system config unavailable");
-    })
-    .mockReturnValue(config);
+    });
+  }
+  mocks.getRuntimeConfig.mockReturnValue(config);
   expect(await handler(req, res)).toBe(true);
   return { body: JSON.parse(responseBody) as unknown, status: res.statusCode };
 }
@@ -125,4 +133,73 @@ describe("gateway hook early-failure recovery", () => {
     });
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
+
+  it.each(["startTurn", "runTurn"] as const)(
+    "does not invoke ACP %s after the final Gateway admission deadline rejects the prompt",
+    async (runtimeApi) => {
+      const releasePreparation = createDeferred();
+      const handle = {
+        sessionKey: "agent:hooks:acp:gateway-admission",
+        backend: "test-acp",
+        runtimeSessionName: "gateway-admission",
+      };
+      const startTurn = vi.fn((turn: AcpRuntimeTurnInput) => ({
+        requestId: turn.requestId,
+        promptStarted: Promise.resolve(),
+        events: (async function* () {})(),
+        result: Promise.resolve({ status: "completed" as const }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }));
+      const runTurn = vi.fn((_turn: AcpRuntimeTurnInput) => (async function* () {})());
+      const runtime = {
+        ensureSession: vi.fn(async () => handle),
+        ...(runtimeApi === "startTurn" ? { startTurn } : {}),
+        runTurn,
+        cancel: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+      } satisfies AcpRuntime;
+
+      mocks.runCronIsolatedAgentTurn.mockImplementationOnce(
+        async (params: { onExecutionStarted?: () => void; abortSignal?: AbortSignal }) => {
+          await releasePreparation.promise;
+          const streamOptions = {
+            runtime,
+            turn: {
+              handle,
+              text: "Dispatch",
+              mode: "prompt" as const,
+              requestId: `gateway-admission-${runtimeApi}`,
+              signal: params.abortSignal,
+            },
+            eventGate: { open: true },
+            onBeforePrompt: params.onExecutionStarted,
+            onPromptStarted: () => params.onExecutionStarted?.(),
+          };
+          await consumeAcpTurnStream(streamOptions);
+          return { status: "ok", summary: "done" };
+        },
+      );
+
+      try {
+        const response = await postAgentHook(false, {
+          admissionTimeoutMs: 10,
+          rejectInitialConfig: false,
+        });
+
+        expect(response.status).toBe(503);
+        expect(response.body).toMatchObject({
+          ok: false,
+          error: "hook agent run did not start before admission timeout",
+        });
+      } finally {
+        releasePreparation.resolve();
+      }
+
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(mocks.runCronIsolatedAgentTurn).toHaveBeenCalledOnce();
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(runTurn).not.toHaveBeenCalled();
+    },
+  );
 });

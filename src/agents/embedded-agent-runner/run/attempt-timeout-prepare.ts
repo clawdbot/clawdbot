@@ -71,6 +71,8 @@ export function prepareEmbeddedAttemptTimeout(input: {
         ) {
           input.markTimedOutDuringCompaction();
         }
+        // Settlement owns partial-output publication because abort or failure
+        // can still supersede this timeout while queued events drain.
         input.markTimedOutByRunBudget();
         input.abortRun(true);
         if (!abortWarnTimer) {

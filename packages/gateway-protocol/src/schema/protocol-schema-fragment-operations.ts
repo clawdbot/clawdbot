@@ -2,7 +2,6 @@ import * as auditActivity from "./audit-activity.js";
 import * as auditRun from "./audit-run.js";
 import * as audit from "./audit.js";
 import * as config from "./config.js";
-import * as deliveryFailures from "./delivery-failures.js";
 import * as openclaw from "./openclaw.js";
 import * as taskSuggestions from "./task-suggestions.js";
 import * as tasks from "./tasks.js";
@@ -18,6 +17,7 @@ export const OperationsProtocolSchemas = {
   AuditActivityListResult: auditActivity.AuditActivityListResultSchema,
   ExecutionIdentityContextV1: auditRun.ExecutionIdentityContextV1Schema,
   DecisionReceiptV1: auditRun.DecisionReceiptV1Schema,
+  DecisionReceiptDisplayV1: auditRun.DecisionReceiptDisplayV1Schema,
   AuditRunIdentityPresentV1: auditRun.AuditRunIdentityPresentV1Schema,
   AuditRunIdentityUnknownV1: auditRun.AuditRunIdentityUnknownV1Schema,
   AuditRunIdentityUnsupportedV1: auditRun.AuditRunIdentityUnsupportedV1Schema,
@@ -56,11 +56,6 @@ export const OperationsProtocolSchemas = {
   ConfigSchemaLookupParams: config.ConfigSchemaLookupParamsSchema,
   ConfigSchemaResponse: config.ConfigSchemaResponseSchema,
   ConfigSchemaLookupResult: config.ConfigSchemaLookupResultSchema,
-  DeliveryFailureResubmitReason: deliveryFailures.DeliveryFailureResubmitReasonSchema,
-  DeliveryFailureResubmitParams: deliveryFailures.DeliveryFailureResubmitParamsSchema,
-  DeliveryFailureResubmitSuccessResult: deliveryFailures.DeliveryFailureResubmitSuccessResultSchema,
-  DeliveryFailureResubmitRefusedResult: deliveryFailures.DeliveryFailureResubmitRefusedResultSchema,
-  DeliveryFailureResubmitResult: deliveryFailures.DeliveryFailureResubmitResultSchema,
   SystemAgentChatParams: openclaw.SystemAgentChatParamsSchema,
   SystemAgentChatResult: openclaw.SystemAgentChatResultSchema,
   SystemAgentChatHistoryParams: openclaw.SystemAgentChatHistoryParamsSchema,

@@ -13,6 +13,7 @@ import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
@@ -202,12 +203,13 @@ describe("runGatewayUpdate", () => {
     async () => {
       await setupGitCheckout();
       const fakeBinDir = path.join(tempDir, "fake-bin");
-      const fakeGitPath = path.join(fakeBinDir, "git");
+      const fakeCommandName = "openclaw-update-timeout-fixture.cjs";
+      const fakeCommandPath = path.join(fakeBinDir, fakeCommandName);
       const childPidPath = path.join(tempDir, "nested-child.pid");
       await fs.mkdir(fakeBinDir, { recursive: true });
       await fs.writeFile(
-        fakeGitPath,
-        `#!${process.execPath}\n` +
+        fakeCommandPath,
+        "#!/usr/bin/env node\n" +
           `const { spawn } = require("node:child_process");\n` +
           `const fs = require("node:fs");\n` +
           `const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });\n` +
@@ -215,28 +217,25 @@ describe("runGatewayUpdate", () => {
           `setInterval(() => {}, 1000);\n`,
         "utf-8",
       );
-      await fs.chmod(fakeGitPath, 0o755);
-
-      // Keep install-surface candidates on the fixture root so this test exercises
-      // one timed-out process tree instead of repeating the timeout for Vitest's cwd.
-      const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tempDir);
+      await fs.chmod(fakeCommandPath, 0o755);
       let childPid: number | null = null;
       let childExited = false;
       try {
-        await withEnvAsync(
-          {
+        const { runCommand } = await buildUpdateCommandRunner();
+        const result = await runCommand([process.execPath, fakeCommandPath], {
+          timeoutMs: 500,
+          env: {
+            ...process.env,
+            NODE_OPTIONS: "",
             OPENCLAW_UPDATE_TEST_CHILD_PID_PATH: childPidPath,
-            PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
           },
-          async () => {
-            await resolveUpdateInstallSurface({ cwd: tempDir, timeoutMs: 500 });
-          },
-        );
+        });
+        expect(result.termination).toBe("timeout");
+        expect(await pathExists(childPidPath)).toBe(true);
         childPid = Number.parseInt(await fs.readFile(childPidPath, "utf-8"), 10);
         expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
         childExited = await waitForProcessExit(childPid);
       } finally {
-        cwdSpy.mockRestore();
         if (childPid && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }
@@ -247,7 +246,7 @@ describe("runGatewayUpdate", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "prefers the invoking pnpm 11 project over its shared-store cwd",
+    "classifies a prepared pnpm 11 project by its canonical package root",
     async () => {
       const globalRoot = path.join(tempDir, "pnpm-home", "global", "v11");
       const installDir = path.join(globalRoot, "install-a");
@@ -288,8 +287,8 @@ describe("runGatewayUpdate", () => {
 
       await expect(
         resolveUpdateInstallSurface({
-          cwd: storeRoot,
-          argv1: path.join(packageRoot, "openclaw.mjs"),
+          root: packageRoot,
+          installKind: "package",
           timeoutMs: 1000,
           runCommand,
         }),
@@ -302,29 +301,14 @@ describe("runGatewayUpdate", () => {
     },
   );
 
-  it("skips an unrelated enclosing git root before the OpenClaw checkout", async () => {
-    const versionManagerRoot = path.join(tempDir, "version-manager");
-    const binDir = path.join(versionManagerRoot, "bin");
+  it("uses a prepared Git checkout without probing process artifacts again", async () => {
     const sourceRoot = path.join(tempDir, "source");
-    await Promise.all([
-      fs.mkdir(binDir, { recursive: true }),
-      fs.mkdir(sourceRoot, { recursive: true }),
-    ]);
-    await fs.writeFile(
-      path.join(sourceRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf8",
-    );
-
-    const { runner, calls } = createRunner({
-      [`git -C ${binDir} rev-parse --show-toplevel`]: { stdout: versionManagerRoot },
-      [`git -C ${sourceRoot} rev-parse --show-toplevel`]: { stdout: sourceRoot },
-    });
+    const { runner, calls } = createRunner({});
 
     await expect(
       resolveUpdateInstallSurface({
-        argv1: path.join(binDir, "openclaw"),
-        cwd: sourceRoot,
+        root: sourceRoot,
+        installKind: "git",
         timeoutMs: 1000,
         runCommand: runner,
       }),
@@ -334,7 +318,20 @@ describe("runGatewayUpdate", () => {
       root: sourceRoot,
       packageRoot: sourceRoot,
     });
-    expect(calls).toContain(`git -C ${sourceRoot} rev-parse --show-toplevel`);
+    expect(calls).toEqual([]);
+  });
+
+  it("preserves non-global package roots without probing Git or the process cwd", async () => {
+    const root = path.join(tempDir, "standalone-package");
+    const { runner, calls } = createRunner({
+      "npm root -g": { stdout: path.join(tempDir, "npm-global") },
+      "pnpm root -g": { stdout: path.join(tempDir, "pnpm-global") },
+    });
+
+    await expect(
+      resolveUpdateInstallSurface({ root, installKind: "package", runCommand: runner }),
+    ).resolves.toEqual({ kind: "package-root", mode: "unknown", root, packageRoot: root });
+    expect(calls).toEqual(["npm root -g", "pnpm root -g"]);
   });
 
   async function setupUiIndex() {
@@ -772,6 +769,9 @@ describe("runGatewayUpdate", () => {
       if (key === "pnpm root -g") {
         return { stdout: "", stderr: "", code: 1 };
       }
+      if (key === "npm --version") {
+        return { stdout: "12.0.0", stderr: "", code: 0 };
+      }
       if (key === baseInstallKey) {
         return (await params.onBaseInstall?.()) ?? { stdout: "ok", stderr: "", code: 0 };
       }
@@ -897,6 +897,45 @@ describe("runGatewayUpdate", () => {
     expect(calls.indexOf("beforeGitMutation")).toBeLessThan(
       calls.indexOf(`git -C ${tempDir} rebase ${upstreamSha}`),
     );
+  });
+
+  it("rejects target-incompatible live config before allowing git mutation", async () => {
+    await setupGitPackageManagerFixture();
+    const beforeGitMutation = vi.fn<() => Promise<void>>();
+    const invalidConfig = "target rejected the active config";
+    const { calls, runCommand, targetSha } = await createDevGitRunner({
+      targetRef: "main",
+      onCommand: (key, options) => {
+        if (
+          options?.cwd &&
+          preflightPrefixPattern.test(options.cwd) &&
+          key === "pnpm openclaw config validate --json"
+        ) {
+          return { code: 1, stderr: invalidConfig };
+        }
+        return undefined;
+      },
+    });
+
+    const result = await runWithCommand(runCommand, {
+      channel: "dev",
+      devTarget: { mode: "detached", ref: "main" },
+      beforeGitMutation,
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "preflight-no-good-commit",
+    });
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        name: `preflight config validate (${targetSha.slice(0, 8)})`,
+        exitCode: 1,
+        stderrTail: invalidConfig,
+      }),
+    );
+    expect(beforeGitMutation).not.toHaveBeenCalled();
+    expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${targetSha}`);
   });
 
   it("hands beforeGitMutation an unreadable marker when target metadata cannot be read", async () => {
@@ -2217,7 +2256,6 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "dev" });
 
     expect(result.status).toBe("ok");
-    expect(buildNodeOptions).toHaveLength(2);
     expect(buildNodeOptions).toEqual(["--max-old-space-size=8192", "--max-old-space-size=8192"]);
     expect(buildCacheRoots).toEqual([
       path.join(tempDir, ".artifacts", "build-all-cache"),
@@ -2732,6 +2770,7 @@ describe("runGatewayUpdate", () => {
   const createGlobalInstallHarness = (params: {
     pkgRoot: string;
     npmRootOutput?: string;
+    npmVersion?: string;
     pnpmRootOutput?: string;
     installCommand: InstallCommandExpectation;
     gitRootMode?: "not-git" | "missing";
@@ -2756,6 +2795,9 @@ describe("runGatewayUpdate", () => {
           return { stdout: params.npmRootOutput, stderr: "", code: 0 };
         }
         return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === "npm --version") {
+        return { stdout: params.npmVersion ?? "12.0.0", stderr: "", code: 0 };
       }
       if (key === "pnpm root -g") {
         if (params.pnpmRootOutput) {

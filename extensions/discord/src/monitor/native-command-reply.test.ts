@@ -78,6 +78,83 @@ describe("deliverDiscordInteractionReply", () => {
     expect(interaction.followUp).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])(
+    "sends embed-only native command replies with preferFollowUp=%s",
+    async (preferFollowUp) => {
+      const interaction = createInteraction();
+      const embeds = [{ title: "Status", description: "All systems operational" }];
+      const payload = { channelData: { discord: { embeds } } };
+
+      expect(hasRenderableReplyPayload(payload)).toBe(true);
+      await expect(
+        deliverDiscordInteractionReply({
+          interaction: interaction as never,
+          payload,
+          textLimit: 2000,
+          preferFollowUp,
+          responseEphemeral: true,
+          chunkMode: "length",
+        }),
+      ).resolves.toBe(true);
+
+      const sender = preferFollowUp ? interaction.followUp : interaction.reply;
+      expect(sender).toHaveBeenCalledWith({ embeds, ephemeral: true });
+    },
+  );
+
+  it.each([false, true])(
+    "keeps native reply embeds on the first chunk with media=%s",
+    async (includeMedia) => {
+      const interaction = createInteraction();
+      const embeds = [{ title: "Status" }];
+      if (includeMedia) {
+        loadWebMediaMock.mockResolvedValue({
+          buffer: Buffer.from("image"),
+          fileName: "status.png",
+          contentType: "image/png",
+        });
+      }
+
+      await deliverDiscordInteractionReply({
+        interaction: interaction as never,
+        payload: {
+          text: "x".repeat(2_100),
+          ...(includeMedia ? { mediaUrls: ["file:///tmp/status.png"] } : {}),
+          channelData: { discord: { embeds } },
+        },
+        textLimit: 2000,
+        preferFollowUp: false,
+        chunkMode: "length",
+      });
+
+      expect(interaction.reply).toHaveBeenCalledWith(
+        expect.objectContaining({ embeds, ...(includeMedia ? { files: expect.any(Array) } : {}) }),
+      );
+      expect(interaction.followUp).toHaveBeenCalledWith({ content: "x".repeat(100) });
+    },
+  );
+
+  it("omits legacy content and embeds from native Components V2 replies", async () => {
+    const interaction = createInteraction();
+    const components = [{ type: 17, components: [{ type: 10, content: "Choose" }] }];
+
+    await deliverDiscordInteractionReply({
+      interaction: interaction as never,
+      payload: {
+        text: "legacy fallback",
+        channelData: {
+          discord: { components, embeds: [{ title: "legacy embed" }] },
+        },
+      },
+      textLimit: 2000,
+      preferFollowUp: false,
+      chunkMode: "length",
+    });
+
+    expect(interaction.reply).toHaveBeenCalledWith({ components });
+    expect(interaction.followUp).not.toHaveBeenCalled();
+  });
+
   it("sends the detected WebP media type across a real interaction multipart request", async () => {
     const loopback = await createDiscordLoopbackRest();
     loadWebMediaMock.mockResolvedValue({

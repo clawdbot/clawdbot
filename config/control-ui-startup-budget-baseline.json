@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 330521,
-  "reason": "cumulative Control UI growth from 2026-08-14 fixes (#123475, #123502, #123515, #123530, #123560, #123592); CI-measured build-artifacts bytes (run 31798463207)",
-  "updatedAt": "2026-08-14"
+  "startupJsGzipBytes": 345049,
+  "reason": "streamed-markdown highlighting changes (#127749, #127754) consumed the ratchet",
+  "updatedAt": "2026-08-22"
 }

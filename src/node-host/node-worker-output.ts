@@ -13,13 +13,16 @@ export type NodeWorkerCredentialScrubber = {
 };
 
 export function createNodeWorkerCredentialScrubber(
-  credential: string,
+  credentials: string | readonly string[],
 ): NodeWorkerCredentialScrubber {
-  const representations = new Set([
-    credential,
-    encodeURIComponent(credential),
-    JSON.stringify(credential).slice(1, -1),
-  ]);
+  const values = typeof credentials === "string" ? [credentials] : credentials;
+  const representations = new Set(
+    values.flatMap((credential) => [
+      credential,
+      encodeURIComponent(credential),
+      JSON.stringify(credential).slice(1, -1),
+    ]),
+  );
   const ordered = [...representations].toSorted((left, right) => right.length - left.length);
   return {
     maxRepresentationBytes: Math.max(

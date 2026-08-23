@@ -981,7 +981,6 @@ describe("createBackupArchive", () => {
             maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
             env: { ...process.env, OPENCLAW_STATE_DIR: restoredStateDir },
           }).entries();
-          expect(restoredEntries).toHaveLength(2);
           expect(new Set(restoredEntries.map((entry) => entry.key)).size).toBe(2);
           expect(restoredEntries.map((entry) => entry.value)).toEqual([record, record]);
         } finally {
@@ -2195,6 +2194,35 @@ describe("createBackupArchive", () => {
         } finally {
           await gatewayLock.release();
         }
+      },
+    );
+  });
+
+  it("rejects absolute symlink targets before publishing the archive", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-absolute-symlink-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputPath = state.path("absolute-symlink.tar.gz");
+        const outsideTarget = state.path("outside-target.txt");
+        await fs.writeFile(outsideTarget, "outside\n", "utf8");
+        await fs.symlink(outsideTarget, state.statePath("ordinary-link"));
+
+        await expect(
+          createBackupArchive({
+            output: outputPath,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 33, 0),
+          }),
+        ).rejects.toThrow(/Archive symbolic link target must be relative/iu);
+        await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
       },
     );
   });

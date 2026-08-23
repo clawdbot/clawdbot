@@ -1,4 +1,5 @@
 import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { shortHash } from "../utils/hash.js";
 
 const ANTHROPIC_COMPACTION_REPLAY_TYPE = "anthropic-compaction";
@@ -85,40 +86,39 @@ function buildAnthropicReplayContext(model: Model, options?: ReplayOpts): Anthro
   };
 }
 
+function isAnthropicCompactionState(
+  state: Record<string, unknown>,
+): state is Record<string, unknown> &
+  (AnthropicCompactionReplayState | AnthropicCompactionSuppressionState) {
+  if (
+    state.v !== 1 ||
+    typeof state.data !== "string" ||
+    typeof state.provider !== "string" ||
+    typeof state.api !== "string" ||
+    typeof state.model !== "string" ||
+    typeof state.baseUrlHash !== "string" ||
+    (state.sessionHash !== undefined && typeof state.sessionHash !== "string") ||
+    (state.authProfileHash !== undefined && typeof state.authProfileHash !== "string")
+  ) {
+    return false;
+  }
+  if (state.type === ANTHROPIC_COMPACTION_SUPPRESSION_TYPE) {
+    return state.data === ANTHROPIC_COMPACTION_SUPPRESSION_DATA;
+  }
+  return (
+    state.type === ANTHROPIC_COMPACTION_REPLAY_TYPE &&
+    state.data.length > 0 &&
+    (state.replayIndex === undefined ||
+      (typeof state.replayIndex === "number" &&
+        Number.isSafeInteger(state.replayIndex) &&
+        state.replayIndex >= 0))
+  );
+}
+
 function readAnthropicCompactionState(
   value: unknown,
 ): AnthropicCompactionReplayState | AnthropicCompactionSuppressionState | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const state = value as Record<string, unknown>;
-  const validEnvelope =
-    state.v === 1 &&
-    typeof state.data === "string" &&
-    typeof state.provider === "string" &&
-    typeof state.api === "string" &&
-    typeof state.model === "string" &&
-    typeof state.baseUrlHash === "string" &&
-    (state.sessionHash === undefined || typeof state.sessionHash === "string") &&
-    (state.authProfileHash === undefined || typeof state.authProfileHash === "string");
-  if (!validEnvelope) {
-    return undefined;
-  }
-  const replayState = state as unknown as
-    | AnthropicCompactionReplayState
-    | AnthropicCompactionSuppressionState;
-  if (replayState.type === ANTHROPIC_COMPACTION_SUPPRESSION_TYPE) {
-    return replayState.data === ANTHROPIC_COMPACTION_SUPPRESSION_DATA ? replayState : undefined;
-  }
-  if (
-    replayState.type !== ANTHROPIC_COMPACTION_REPLAY_TYPE ||
-    replayState.data.length === 0 ||
-    (replayState.replayIndex !== undefined &&
-      (!Number.isSafeInteger(replayState.replayIndex) || replayState.replayIndex < 0))
-  ) {
-    return undefined;
-  }
-  return replayState;
+  return isRecord(value) && isAnthropicCompactionState(value) ? value : undefined;
 }
 
 function replayContextMatches(

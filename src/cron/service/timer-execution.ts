@@ -7,8 +7,10 @@ import {
 } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { type CronActiveJobMarker, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import { cronScriptFailureMetadata } from "../script-failure.js";
 import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
   CronDeliveryTrace,
@@ -20,7 +22,6 @@ import type {
 import { abortErrorMessage, timeoutErrorMessage } from "./execution-errors.js";
 import { resolveJobPayloadTextForMain } from "./jobs-scheduling.js";
 import type { CronServiceState } from "./state.js";
-import { resolveMainSessionCronRunSessionKey } from "./task-runs.js";
 import {
   type CronTriggerEvalOutcome,
   type ExecuteJobCoreOptions,
@@ -102,7 +103,11 @@ export async function executeJobCore(
   if (job.trigger) {
     const evaluator = state.deps.evaluateCronTrigger;
     if (!evaluator) {
-      return { status: "error", error: "cron trigger evaluator is unavailable" };
+      return {
+        status: "error",
+        error: "cron trigger evaluator is unavailable",
+        ...cronScriptFailureMetadata("trigger", "runtime_unavailable"),
+      };
     }
     const evaluation = await evaluator({
       job,
@@ -127,6 +132,7 @@ export async function executeJobCore(
       return {
         status: "error",
         error: `cron trigger evaluation failed (${evaluation.code}): ${evaluation.error}`,
+        ...cronScriptFailureMetadata("trigger", evaluation.code),
         triggerEval: { fired: false, stateChanged: false },
       };
     }
@@ -246,20 +252,14 @@ async function executeMainSessionCronJob(
           : 'main job requires payload.kind="systemEvent"',
     };
   }
-  const cronStartedAt =
-    typeof job.state.runningAtMs === "number" ? job.state.runningAtMs : state.deps.nowMs();
-  const cronRunSessionKey = resolveMainSessionCronRunSessionKey(
+  const agentId = resolveCronJobEffectiveAgentId(
     job,
-    cronStartedAt,
     state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
   );
   const deliveryContext = resolveMainSessionCronDeliveryContext(state, job);
-  // Main-session jobs enqueue text into a per-run child session so each cron
-  // execution has its own transcript and task drill-down target.
   const queuedSystemEvent = normalizeQueuedSystemEventHandle(
     enqueueCronSystemEvent(state, text, {
-      agentId: job.agentId,
-      sessionKey: cronRunSessionKey,
+      agentId,
       contextKey: `cron:${job.id}`,
       ...(deliveryContext ? { deliveryContext } : {}),
     }),
@@ -281,8 +281,7 @@ async function executeMainSessionCronJob(
           source: "cron",
           intent: "immediate",
           reason,
-          agentId: job.agentId,
-          sessionKey: cronRunSessionKey,
+          agentId,
           owningCronJobMarker: activeJobMarker,
           owningCronLaneTaskMarker,
           heartbeat: { target: "last" },
@@ -310,11 +309,10 @@ async function executeMainSessionCronJob(
           source: "cron",
           intent: "immediate",
           reason,
-          agentId: job.agentId,
-          sessionKey: cronRunSessionKey,
+          agentId,
           heartbeat: { target: "last" },
         });
-        return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
+        return { status: "ok", summary: text };
       }
       if (abortSignal?.aborted) {
         removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
@@ -330,11 +328,10 @@ async function executeMainSessionCronJob(
           source: "cron",
           intent: "immediate",
           reason,
-          agentId: job.agentId,
-          sessionKey: cronRunSessionKey,
+          agentId,
           heartbeat: { target: "last" },
         });
-        return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
+        return { status: "ok", summary: text };
       }
       await waitWithAbort(
         Math.min(
@@ -347,7 +344,7 @@ async function executeMainSessionCronJob(
     }
 
     if (heartbeatResult.status === "ran") {
-      return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
+      return { status: "ok", summary: text };
     }
     if (heartbeatResult.status === "skipped") {
       removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
@@ -355,7 +352,6 @@ async function executeMainSessionCronJob(
         status: "skipped",
         error: heartbeatResult.reason,
         summary: text,
-        sessionKey: cronRunSessionKey,
       };
     }
     removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
@@ -363,7 +359,6 @@ async function executeMainSessionCronJob(
       status: "error",
       error: heartbeatResult.reason,
       summary: text,
-      sessionKey: cronRunSessionKey,
     };
   }
 
@@ -374,11 +369,10 @@ async function executeMainSessionCronJob(
   requestCronHeartbeat(state, {
     intent: job.wakeMode === "now" ? "immediate" : "event",
     reason: `cron:${job.id}`,
-    agentId: job.agentId,
-    sessionKey: cronRunSessionKey,
+    agentId,
     heartbeat: { target: "last" },
   });
-  return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
+  return { status: "ok", summary: text };
 }
 
 async function executeDetachedCronJob(
@@ -426,12 +420,14 @@ async function executeDetachedCronJob(
     return {
       status: res.status,
       error: res.error,
+      errorClassification: res.errorClassification,
       deliveryError: res.deliveryError,
       summary: res.summary,
       delivered: res.delivered,
       deliveryAttempted: res.deliveryAttempted,
       delivery: res.delivery,
       diagnostics: res.diagnostics,
+      failureNotificationDetail: res.failureNotificationDetail,
     };
   }
 
@@ -493,6 +489,7 @@ async function executeDetachedCronJob(
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
     diagnostics: res.diagnostics,
+    failureNotificationDetail: res.failureNotificationDetail,
     model: res.model,
     provider: res.provider,
     usage: res.usage,
@@ -507,15 +504,19 @@ async function executeScriptCronJob(
   streamBatch?: string,
   assertRunCurrent?: () => void,
 ) {
-  if (state.deps.cronConfig?.triggers?.enabled !== true) {
+  if (state.deps.cronConfig?.triggers?.enabled === false) {
     return {
       status: "error" as const,
       error:
-        "cron script payload execution is disabled; set cron.triggers.enabled=true to allow unattended scripts",
+        "cron script payload execution is disabled because the operator set cron.triggers.enabled: false; remove it or set it to true to allow unattended scripts",
     };
   }
   if (!state.deps.runScriptJob) {
-    return { status: "error" as const, error: "cron script payload executor is unavailable" };
+    return {
+      status: "error" as const,
+      error: "cron script payload executor is unavailable",
+      ...cronScriptFailureMetadata("payload", "runtime_unavailable"),
+    };
   }
   const result = await state.deps.runScriptJob({ job, streamBatch, abortSignal });
   // Script runners may settle after ignoring an abort. Recheck both operator
@@ -534,6 +535,7 @@ async function executeScriptCronJob(
     return {
       status: "error" as const,
       error: "cron script payload returned nextCheck, but this job has no pacing bounds",
+      ...cronScriptFailureMetadata("payload", "invalid_input"),
     };
   }
 

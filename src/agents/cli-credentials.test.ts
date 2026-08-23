@@ -363,7 +363,7 @@ describe("cli credentials", () => {
     expect(cliLogin && "email" in cliLogin ? cliLogin.email : undefined).toBeUndefined();
   });
 
-  it("keeps no-prompt Claude reads on the file credential path after a keychain read", () => {
+  it("keeps runtime-style no-prompt Claude reads on the file credential path", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-cache-"));
     vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
     mockClaudeCliCredentialRead();

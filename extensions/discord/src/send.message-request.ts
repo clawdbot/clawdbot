@@ -3,18 +3,19 @@ import { randomBytes } from "node:crypto";
 import { MessageFlags, type APIAllowedMentions, type APIEmbed } from "discord-api-types/v10";
 import {
   Embed,
+  hasDiscordV2Components,
   serializePayload,
   type MessagePayloadFile,
   type MessagePayloadObject,
   type TopLevelComponents,
 } from "./internal/discord.js";
-import { stripUndefinedFields } from "./internal/undefined-fields.js";
 
-export { stripUndefinedFields };
+export { stripUndefinedFields } from "./internal/undefined-fields.js";
 
 const SUPPRESS_EMBEDS_FLAG = MessageFlags.SuppressEmbeds;
 export const SUPPRESS_NOTIFICATIONS_FLAG = MessageFlags.SuppressNotifications;
 
+type DiscordMessageComponents = NonNullable<MessagePayloadObject["components"]>;
 type DiscordSendComponentFactory = (text: string) => TopLevelComponents[];
 export type DiscordSendComponents = TopLevelComponents[] | DiscordSendComponentFactory;
 export type DiscordSendEmbeds = Array<APIEmbed | Embed>;
@@ -25,10 +26,10 @@ export function createDiscordMessageNonce(): string {
 }
 
 export function resolveDiscordSendComponents(params: {
-  components?: DiscordSendComponents;
+  components?: DiscordSendComponents | DiscordMessageComponents;
   text: string;
   isFirst: boolean;
-}): TopLevelComponents[] | undefined {
+}): DiscordMessageComponents | undefined {
   if (!params.components || !params.isFirst) {
     return undefined;
   }
@@ -56,14 +57,14 @@ export function resolveDiscordSendEmbeds(params: {
 
 function buildDiscordMessagePayload(params: {
   text: string;
-  components?: TopLevelComponents[];
+  components?: DiscordMessageComponents;
   embeds?: Embed[];
   allowedMentions?: DiscordAllowedMentions;
   flags?: number;
   files?: MessagePayloadFile[];
 }): MessagePayloadObject {
   const payload: MessagePayloadObject = {};
-  const hasV2 = hasV2Components(params.components);
+  const hasV2 = hasDiscordV2Components(params.components);
   const trimmed = params.text.trim();
   if (!hasV2 && trimmed) {
     payload.content = params.text;
@@ -109,7 +110,7 @@ export function resolveDiscordSuppressEmbeds(params: {
 
 type DiscordMessageRequestParams = {
   text: string;
-  components?: TopLevelComponents[];
+  components?: DiscordMessageComponents;
   embeds?: Embed[];
   allowedMentions?: DiscordAllowedMentions;
   files?: MessagePayloadFile[];
@@ -123,16 +124,12 @@ export function buildDiscordMessageRequest(params: DiscordMessageRequestParams) 
     params.endpoint === "create-message"
       ? (params.nonce ?? createDiscordMessageNonce())
       : undefined;
-  return stripUndefinedFields({
+  return {
     ...serializePayload(payload),
     ...(params.replyTo
       ? { message_reference: { message_id: params.replyTo, fail_if_not_exists: false } }
       : {}),
-    nonce,
-    enforce_nonce: nonce ? true : undefined,
-  });
-}
-
-function hasV2Components(components?: TopLevelComponents[]): boolean {
-  return Boolean(components?.some((component) => "isV2" in component && component.isV2));
+    ...(nonce !== undefined ? { nonce } : {}),
+    ...(nonce ? { enforce_nonce: true } : {}),
+  };
 }

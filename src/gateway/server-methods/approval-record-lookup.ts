@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type {
   ExecApprovalIdLookupResult,
   ExecApprovalManager,
@@ -77,16 +78,23 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
 export function listVisiblePendingApprovalRequests<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   client?: GatewayClient | null;
-}): Array<{ id: string; request: TPayload; createdAtMs: number; expiresAtMs: number }> {
+  approvalKind?: ChannelApprovalKind;
+}): Array<{
+  approvalKind?: ChannelApprovalKind;
+  id: string;
+  request: TPayload;
+  createdAtMs: number;
+  expiresAtMs: number;
+}> {
   return params.manager
     .listPendingRecords()
     .filter((record) => isApprovalRecordVisibleToClient({ record, client: params.client ?? null }))
-    .map(({ id, request, createdAtMs, expiresAtMs }) => ({
-      id,
-      request,
-      createdAtMs,
-      expiresAtMs,
-    }));
+    .map(({ id, request, createdAtMs, expiresAtMs }) => {
+      const approval = { id, request, createdAtMs, expiresAtMs };
+      return params.approvalKind
+        ? Object.assign(approval, { approvalKind: params.approvalKind })
+        : approval;
+    });
 }
 
 function resolveLookupError(params: {

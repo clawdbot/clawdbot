@@ -65,7 +65,7 @@ const {
   resolveDefaultAccountId,
   resolveAccountConfig: resolveMergedSlackAccountConfig,
 } = createAccountListHelpers<SlackAccountConfig>("slack", {
-  nestedObjectKeys: ["botLoopProtection", "relay"],
+  nestedObjectKeys: ["botLoopProtection", "presenceEvents", "relay"],
   hasImplicitDefaultAccount: (cfg) => {
     const slack = cfg.channels?.slack;
     if (slack?.postAs === "user") {

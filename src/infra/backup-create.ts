@@ -25,6 +25,7 @@ import {
 } from "../state/openclaw-state-snapshot-sanitizer.js";
 import { resolveHomeDir, resolveUserPath, shortenHomePath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { assertArchiveSymbolicLinkTarget } from "./backup-archive-path-policy.js";
 import {
   cleanupBackupArchivePublication,
   createBackupArchivePublication,
@@ -42,7 +43,7 @@ import {
   createBackupLinkCache,
   createBackupVolatileStatCache,
 } from "./backup-volatile-stat-cache.js";
-import { formatErrorMessage } from "./errors.js";
+import { formatErrorMessage, isErrno } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { writeJson } from "./json-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
@@ -164,16 +165,75 @@ async function resolveOutputPath(params: {
   return resolved;
 }
 
+type BackupOutputFailurePhase = "parent" | "publication" | "write";
+
+function formatBackupOutputFailure(
+  error: unknown,
+  outputPath: string,
+  phase: BackupOutputFailurePhase,
+  ownedRoot?: string,
+): unknown {
+  const cause = phase === "write" && error instanceof Error ? error.cause : undefined;
+  const filesystemError = isErrno(error) ? error : isErrno(cause) ? cause : null;
+  if (!filesystemError) {
+    return error;
+  }
+  if (ownedRoot) {
+    const failedPath = filesystemError.path;
+    if (typeof failedPath !== "string" || !isPathWithin(path.resolve(failedPath), ownedRoot)) {
+      return error;
+    }
+  }
+
+  const outputParent = path.dirname(outputPath);
+  const retry = "run `openclaw backup create --output <archive>` again.";
+  let detail: string;
+  switch (filesystemError.code) {
+    case "ENOENT":
+      detail = `Backup output directory could not be created: ${outputParent}. Check the path and ${retry}`;
+      break;
+    case "EACCES":
+    case "EPERM":
+    case "EROFS":
+      detail = `Backup output directory is not writable: ${outputParent}. Check the path and directory permissions, then ${retry}`;
+      break;
+    case "EEXIST":
+    case "ENOTDIR":
+      if (phase !== "parent") {
+        return error;
+      }
+      detail = `Backup output parent is not a directory: ${outputParent}. Choose a directory path and ${retry}`;
+      break;
+    case "ENOSPC":
+      detail = `The destination does not have enough free space: ${outputParent}. Free up disk space and ${retry}`;
+      break;
+    case "EDQUOT":
+      detail = `The destination storage quota is exhausted: ${outputParent}. Free up space or choose another path, then ${retry}`;
+      break;
+    default:
+      detail = `The output path could not be prepared: ${outputParent}. Check the path and filesystem, then ${retry}`;
+  }
+  return new Error(`Backup archive creation failed: ${outputPath}. ${detail}`, { cause: error });
+}
+
 async function assertOutputPathReady(outputPath: string): Promise<void> {
   try {
     await fs.access(outputPath);
     throw new Error(`Refusing to overwrite existing backup archive: ${outputPath}`);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "ENOENT") {
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
       return;
     }
-    throw err;
+    throw formatBackupOutputFailure(error, outputPath, "parent");
+  }
+}
+
+async function prepareBackupOutputParent(outputPath: string): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  } catch (error) {
+    throw formatBackupOutputFailure(error, outputPath, "parent");
   }
 }
 
@@ -769,7 +829,7 @@ export async function createBackupArchive(
     return result;
   }
 
-  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await prepareBackupOutputParent(outputPath);
   const tempRoot = await chooseBackupTempRoot({ assets: result.assets, outputPath });
   await fs.mkdir(tempRoot, { recursive: true });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
@@ -779,7 +839,7 @@ export async function createBackupArchive(
     publication = await createBackupArchivePublication(outputPath);
   } catch (error) {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
+    throw formatBackupOutputFailure(error, outputPath, "publication");
   }
   const tempArchivePath = publication.tempArchivePath;
   const preservedStatePaths = [
@@ -855,9 +915,10 @@ export async function createBackupArchive(
     const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
     let skippedPluginSkills = false;
-    // node-tar invokes filters from async stat callbacks, so throwing inside
-    // the filter is uncaught. Omit unexpected SQLite and reject after tar settles.
+    // node-tar invokes filter/onWriteEntry from async filesystem callbacks, so
+    // collect violations there and reject only after tar settles.
     const unexpectedSqliteSourcePaths: string[] = [];
+    let archiveSymlinkViolation: Error | undefined;
     const tarFilter = (
       entryPath: string,
       entryStat: import("node:fs").Stats | import("tar").ReadEntry,
@@ -921,6 +982,7 @@ export async function createBackupArchive(
         skippedVolatileCount = 0;
         skippedPluginSkills = false;
         unexpectedSqliteSourcePaths.length = 0;
+        archiveSymlinkViolation = undefined;
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
           createArchiveStream: (reportProgress) =>
@@ -943,12 +1005,25 @@ export async function createBackupArchive(
                       reportProgress({ phase: "raw", entryPath: sourceEntryPath, bytes });
                     });
                   }
-                  entry.path = remapArchiveEntryPath({
+                  const archiveEntryPath = remapArchiveEntryPath({
                     entryPath: entry.path,
                     manifestPath,
                     archiveRoot,
                     sourcePathRemaps,
                   });
+                  if (entry.type === "SymbolicLink" && !archiveSymlinkViolation) {
+                    try {
+                      assertArchiveSymbolicLinkTarget({
+                        archiveRoot,
+                        entryPath: archiveEntryPath,
+                        linkpath: entry.linkpath,
+                      });
+                    } catch (error) {
+                      archiveSymlinkViolation =
+                        error instanceof Error ? error : new Error(String(error));
+                    }
+                  }
+                  entry.path = archiveEntryPath;
                 },
               },
               [
@@ -963,16 +1038,21 @@ export async function createBackupArchive(
           },
         });
         const unexpectedSqliteSourcePath = unexpectedSqliteSourcePaths[0];
-        if (unexpectedSqliteSourcePath) {
+        const archiveValidationError = unexpectedSqliteSourcePath
+          ? new Error(
+              `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
+            )
+          : archiveSymlinkViolation;
+        if (archiveValidationError) {
           if (!removePreparedBackupArchive(prepared)) {
             publication.pendingCleanupArchives.push(prepared);
           }
-          throw new Error(
-            `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
-          );
+          throw archiveValidationError;
         }
         return prepared;
       },
+    }).catch((error: unknown) => {
+      throw formatBackupOutputFailure(error, outputPath, "write", publication.stagingDir);
     });
     result.skippedVolatileCount = skippedVolatileCount;
     if (pluginSkillsPath && skippedPluginSkills) {
@@ -990,11 +1070,15 @@ export async function createBackupArchive(
         } (live sessions, cron logs, queues, sockets, pid/tmp).`,
       );
     }
-    await publishPreparedBackupArchive({
-      plan: publication,
-      prepared: completedArchive,
-      log: opts.log,
-    });
+    try {
+      await publishPreparedBackupArchive({
+        plan: publication,
+        prepared: completedArchive,
+        log: opts.log,
+      });
+    } catch (error) {
+      throw formatBackupOutputFailure(error, outputPath, "publication");
+    }
   } finally {
     await cleanupBackupArchivePublication(publication, opts.log);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);

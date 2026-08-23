@@ -7,19 +7,41 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
-import { runRegisteredCli } from "../test-utils/command-runner.js";
-import { CAPABILITY_METADATA, registerCapabilityCli } from "./capability-cli.js";
+import { registerCapabilityCli } from "./capability-cli.js";
+import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runCap(...argv: string[]): Promise<void> {
-  return runRegisteredCli({ register: registerCapabilityCli as (program: Command) => void, argv });
+async function runCap(...argv: string[]): Promise<void> {
+  const program = new Command();
+  await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+  await program.parseAsync(argv, { from: "user" });
 }
 
 function runCapability(domain: string, action: string, ...argv: string[]): Promise<void> {
   return runCap("capability", domain, action, ...argv);
+}
+
+function runCapabilityWithParentAgent(
+  domain: string,
+  action: string,
+  agent: string,
+  ...argv: string[]
+): Promise<void> {
+  return runCap("capability", domain, "--agent", agent, action, ...argv);
+}
+
+function runModelAuthWithAgent(
+  position: "parent" | "leaf",
+  action: "login" | "logout" | "status",
+  agent: string,
+  ...argv: string[]
+): Promise<void> {
+  return position === "parent"
+    ? runCap("capability", "model", "--agent", agent, "auth", action, ...argv)
+    : runCap("capability", "model", "auth", action, "--agent", agent, ...argv);
 }
 
 function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {
@@ -46,8 +68,12 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
   getRuntimeConfigSourceSnapshot: vi.fn(() => null),
   setRuntimeConfigSnapshot: vi.fn(),
-  loadAuthProfileStoreForRuntime: vi.fn(() => ({ profiles: {}, order: {} })),
-  listProfilesForProvider: vi.fn(() => []),
+  loadAuthProfileStoreForRuntime: vi.fn<
+    typeof import("../agents/auth-profiles.js").loadAuthProfileStoreForRuntime
+  >(() => ({ version: 1, profiles: {}, order: {} })),
+  listProfilesForProvider: vi.fn<
+    typeof import("../agents/auth-profiles.js").listProfilesForProvider
+  >(() => []),
   resolveApiKeyForProviderCore: vi.fn(),
   loadManifestMetadataSnapshot: vi.fn(() => ({ manifestRegistry: { plugins: [] } })),
   planEffectiveModelCatalogRows: vi.fn<
@@ -67,7 +93,9 @@ const mocks = vi.hoisted(() => ({
       return store;
     },
   ),
-  resolveMemorySearchConfig: vi.fn(() => null),
+  resolveMemorySearchConfig: vi.fn<
+    typeof import("../agents/memory-search.js").resolveMemorySearchConfig
+  >(() => null),
   loadModelCatalog: vi.fn(async () => []),
   prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
     selection: {
@@ -124,6 +152,7 @@ const mocks = vi.hoisted(() => ({
   generateImage: vi.fn(),
   listRuntimeImageGenerationProviders: vi.fn(() => []),
   generateVideo: vi.fn(),
+  describeVideoFile: vi.fn(),
   listRuntimeVideoGenerationProviders: vi.fn(() => []),
   transcribeAudioFile: vi.fn(async () => ({ text: "meeting notes" })),
   textToSpeech: vi.fn(async () => ({
@@ -184,7 +213,12 @@ const mocks = vi.hoisted(() => ({
     entries: [],
   })),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
-  isWebSearchProviderConfigured: vi.fn(() => false),
+  listWebSearchProviders: vi.fn<typeof import("../web-search/runtime.js").listWebSearchProviders>(
+    () => [],
+  ),
+  isWebSearchProviderConfigured: vi.fn<
+    typeof import("../web-search/runtime.js").isWebSearchProviderConfigured
+  >(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
   getModelsCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
   getMemoryEmbeddingCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
@@ -229,6 +263,7 @@ const mocks = vi.hoisted(() => ({
       runtime.log(JSON.stringify({ ok: true, providers: [{ id: "openai" }] }));
     },
   ),
+  modelsAuthLoginCommand: vi.fn(),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -279,7 +314,15 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentConfig: () => ({}),
-  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveAgentEffectiveModelPrimary: (
+    cfg: {
+      agents?: {
+        defaults?: { model?: string };
+        entries?: Record<string, { model?: string }>;
+      };
+    },
+    agentId: string,
+  ) => cfg.agents?.entries?.[agentId]?.model ?? cfg.agents?.defaults?.model,
   resolveAgentModelFallbacksOverride: () => [],
 }));
 
@@ -319,7 +362,7 @@ vi.mock("../agents/memory-search.js", () => ({
 }));
 
 vi.mock("../commands/models/auth.js", () => ({
-  modelsAuthLoginCommand: vi.fn(),
+  modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
 }));
 
 vi.mock("../commands/models/list.status-command.js", () => ({
@@ -349,7 +392,8 @@ vi.mock("../media-understanding/runtime.js", () => ({
     mocks.describePreparedImageWithModel as typeof import("../media-understanding/runtime.js").describePreparedImageWithModel,
   describeImageFileWithModel:
     mocks.describeImageFileWithModel as typeof import("../media-understanding/runtime.js").describeImageFileWithModel,
-  describeVideoFile: vi.fn(),
+  describeVideoFile:
+    mocks.describeVideoFile as typeof import("../media-understanding/runtime.js").describeVideoFile,
   transcribeAudioFile:
     mocks.transcribeAudioFile as typeof import("../media-understanding/runtime.js").transcribeAudioFile,
 }));
@@ -422,7 +466,7 @@ vi.mock("../tts/provider-registry.js", () => ({
 }));
 
 vi.mock("../web-search/runtime.js", () => ({
-  listWebSearchProviders: vi.fn(() => []),
+  listWebSearchProviders: mocks.listWebSearchProviders,
   isWebSearchProviderConfigured:
     mocks.isWebSearchProviderConfigured as typeof import("../web-search/runtime.js").isWebSearchProviderConfigured,
   runWebSearch: vi.fn(),
@@ -520,13 +564,16 @@ describe("capability cli", () => {
 
   beforeEach(() => {
     vi.stubEnv("OPENAI_API_KEY", "");
+    mocks.loadConfig.mockReset().mockReturnValue({});
     mocks.runtime.log.mockClear();
     mocks.runtime.error.mockClear();
     mocks.runtime.writeJson.mockClear();
     mocks.loadModelCatalog
       .mockReset()
       .mockResolvedValue([{ id: "gpt-5.4", provider: "openai", name: "GPT-5.4" }] as never);
-    mocks.loadAuthProfileStoreForRuntime.mockReset().mockReturnValue({ profiles: {}, order: {} });
+    mocks.loadAuthProfileStoreForRuntime
+      .mockReset()
+      .mockReturnValue({ version: 1, profiles: {}, order: {} });
     mocks.listProfilesForProvider.mockReset().mockReturnValue([]);
     mocks.resolveApiKeyForProviderCore.mockReset().mockRejectedValue(new Error("no auth profile"));
     mocks.loadManifestMetadataSnapshot
@@ -584,6 +631,11 @@ describe("capability cli", () => {
     mocks.generateImage.mockReset();
     mocks.listRuntimeImageGenerationProviders.mockReset().mockReturnValue([]);
     mocks.generateVideo.mockReset();
+    mocks.describeVideoFile.mockReset().mockResolvedValue({
+      text: "friendly lobster",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    } as never);
     mocks.listRuntimeVideoGenerationProviders.mockReset().mockReturnValue([]);
     mocks.transcribeAudioFile.mockClear();
     mocks.textToSpeech.mockClear();
@@ -607,6 +659,7 @@ describe("capability cli", () => {
         { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
       ]);
     mocks.listEmbeddingProviders.mockReset().mockReturnValue([]);
+    mocks.listWebSearchProviders.mockReset().mockReturnValue([]);
     mocks.isWebSearchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.isWebFetchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.getModelsCommandSecretTargetIds.mockClear();
@@ -622,6 +675,7 @@ describe("capability cli", () => {
         diagnostics: [],
       }));
     mocks.modelsStatusCommand.mockClear();
+    mocks.modelsAuthLoginCommand.mockClear();
   });
 
   async function runModelRunWithModel(model: string, transport: "local" | "gateway") {
@@ -720,6 +774,11 @@ describe("capability cli", () => {
     return calls[0]?.[0];
   }
 
+  function firstVideoDescriptionCall() {
+    const calls = mocks.describeVideoFile.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    return calls[0]?.[0];
+  }
+
   function primeGeneratedVideoUrl(url: string): void {
     mocks.generateVideo.mockResolvedValue({
       provider: "vydra",
@@ -740,7 +799,15 @@ describe("capability cli", () => {
 
   function firstAudioTranscriptionCall() {
     const calls = mocks.transcribeAudioFile.mock.calls as unknown as Array<
-      [{ cfg?: unknown; filePath?: string; language?: unknown; prompt?: unknown }]
+      [
+        {
+          agentDir?: string;
+          cfg?: unknown;
+          filePath?: string;
+          language?: unknown;
+          prompt?: unknown;
+        },
+      ]
     >;
     return calls[0]?.[0];
   }
@@ -795,6 +862,7 @@ describe("capability cli", () => {
 
     expect(mocks.loadModelCatalog).toHaveBeenCalledWith({
       config: mocks.loadConfig(),
+      ...(command === "providers" ? { agentId: "main" } : {}),
       readOnly: true,
     });
   });
@@ -812,6 +880,120 @@ describe("capability cli", () => {
       expect.objectContaining({ provider: "openai", configured: true }),
     );
     expect(mocks.getProviderEnvVars).toHaveBeenCalledWith("openai");
+  });
+
+  it("scopes provider state and model selection to an explicit agent", async () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: {
+          alpha: { model: "anthropic/claude-sonnet-4-6" },
+          beta: { model: "openai/gpt-5.4" },
+        },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-sonnet-4-6", provider: "anthropic", name: "Claude" },
+      { id: "gpt-5.4", provider: "openai", name: "GPT" },
+    ] as never);
+    mocks.loadAuthProfileStoreForRuntime.mockImplementation(
+      (agentDir) =>
+        ({
+          profiles:
+            agentDir === "/tmp/agent-alpha"
+              ? { "anthropic:alpha": { provider: "anthropic" } }
+              : { "openai:beta": { provider: "openai" } },
+          order: {},
+        }) as never,
+    );
+    mocks.listProfilesForProvider.mockImplementation((store, provider) =>
+      Object.entries(store.profiles as Record<string, { provider: string }>)
+        .filter(([, profile]) => profile.provider === provider)
+        .map(([id]) => id),
+    );
+
+    await runCapability("model", "providers", "--agent", "alpha", "--json");
+
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({
+      config: cfg,
+      agentId: "alpha",
+      readOnly: true,
+    });
+    expect(mocks.resolveAgentDir.mock.calls.map((call) => call[1])).toEqual(["alpha", "alpha"]);
+    expect(firstJsonOutput()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider: "anthropic", configured: true, selected: true }),
+        expect.objectContaining({ provider: "openai", configured: false, selected: false }),
+      ]),
+    );
+  });
+
+  it("uses the configured system agent for embedding provider state", async () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: { alpha: {}, beta: {} },
+      },
+    };
+    mocks.loadConfig.mockReturnValue(cfg);
+    mocks.resolveMemorySearchConfig.mockImplementation(
+      (_cfg, agentId) =>
+        (agentId === "beta"
+          ? { provider: "openai", model: "text-embedding-3-small" }
+          : null) as never,
+    );
+
+    await runCapability("embedding", "providers", "--json");
+
+    expect(mocks.resolveMemorySearchConfig).toHaveBeenCalledWith(cfg, "beta");
+    expect(mocks.resolveAgentDir.mock.calls.every((call) => call[1] === "beta")).toBe(true);
+    expect(firstJsonOutput()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "openai", configured: true, selected: true }),
+      ]),
+    );
+  });
+
+  it("requires an explicit owner for agent-backed provider state in explicit fleets", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        entries: { alpha: {}, beta: {} },
+      },
+    });
+
+    await expect(runCapability("audio", "providers", "--json")).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("inference provider inspection has no explicit owner");
+    expectRuntimeErrorContains("Pass --agent <id> or set agents.defaults.systemAgent.agentId");
+    expect(mocks.loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
+  });
+
+  it("scopes web search auth inspection to the selected agent", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        entries: { alpha: {}, beta: {} },
+      },
+    });
+    const provider = {
+      id: "openai",
+      envVars: ["OPENAI_API_KEY"],
+      requiresCredential: true,
+    };
+    mocks.listWebSearchProviders.mockReturnValue([provider] as never);
+
+    await runCapability("web", "providers", "--agent", "beta", "--json");
+
+    expect(firstJsonOutput()).toMatchObject({ search: [{ id: "openai" }], fetch: [] });
+    expect(mocks.isWebSearchProviderConfigured).toHaveBeenCalledWith({
+      provider,
+      config: mocks.loadConfig(),
+      agentDir: "/tmp/agent-beta",
+    });
   });
 
   it("inspects runtime-declared manifest models without live discovery", async () => {
@@ -862,6 +1044,67 @@ describe("capability cli", () => {
     expect(call?.context?.messages?.[0]?.role).toBe("user");
     expect(call?.context?.messages?.[0]?.content).toBe("hello");
     expect(call?.context).not.toHaveProperty("systemPrompt");
+  });
+
+  it("uses the configured system agent for local model runs", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, main: {} },
+      },
+    });
+
+    await runCapability("model", "run", "--local", "--prompt", "hi", "--json");
+
+    expect(firstPreparedModelParams()?.agentId).toBe("ops");
+  });
+
+  it("requires an agent owner for model runs in explicit fleets", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, main: {} },
+      },
+    });
+
+    await expect(
+      runCapability("model", "run", "--local", "--prompt", "hi", "--json"),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("infer model run");
+    expectRuntimeErrorContains("--agent");
+    expectRuntimeErrorContains("agents.defaults.systemAgent.agentId");
+  });
+
+  it("lets explicit model run agents override the system agent", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, main: {} },
+      },
+    });
+
+    await runCapability("model", "run", "--local", "--prompt", "hi", "--agent", "main", "--json");
+
+    expect(firstPreparedModelParams()?.agentId).toBe("main");
+  });
+
+  it("rejects unknown model run agents", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: {}, main: {} },
+      },
+    });
+
+    await expect(
+      runCapability("model", "run", "--local", "--prompt", "hi", "--agent", "nope", "--json"),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains('Unknown agent id "nope"');
   });
 
   it("opts explicit local provider/model probes into bundled static catalog fallback", async () => {
@@ -1532,7 +1775,7 @@ describe("capability cli", () => {
       runCapability("image", "describe", "--file", "photo.jpg", "--json"),
     ).rejects.toThrow("exit 1");
     expect(runtimeErrorMessages()).toEqual([
-      `Error: No description returned for image: ${path.resolve("photo.jpg")}`,
+      `No description returned for image: ${path.resolve("photo.jpg")}`,
     ]);
   });
 
@@ -1612,6 +1855,332 @@ describe("capability cli", () => {
 
     expect(firstImageGenerationCall()?.prompt).toBe("friendly lobster");
     expect(firstImageGenerationCall()?.timeoutMs).toBe(180000);
+  });
+
+  it("keeps image generation owner selection explicit in multi-agent fleets", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+    });
+
+    await expect(
+      runCapability("image", "generate", "--prompt", "friendly lobster", "--json"),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("Multiple agents are configured");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { agent: "", message: "--agent must not be blank" },
+    { agent: "retired", message: 'Unknown agent id "retired"' },
+  ])(
+    "rejects invalid image generation agent '$agent' before dispatch",
+    async ({ agent, message }) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+
+      await expect(
+        runCapability(
+          "image",
+          "generate",
+          "--agent",
+          agent,
+          "--prompt",
+          "friendly lobster",
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expectRuntimeErrorContains(message);
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "model run",
+      run: () => runCapability("model", "run", "--agent", "beta", "--prompt", "hello", "--json"),
+      selectedAgent: () => firstPreparedModelParams()?.agentId,
+      expectedAgent: "beta",
+    },
+    {
+      name: "image generate",
+      run: () => {
+        primeGeneratedImage("gpt-image-1", "provider-output.png");
+        return runCapability(
+          "image",
+          "generate",
+          "--agent",
+          "beta",
+          "--prompt",
+          "portrait",
+          "--json",
+        );
+      },
+      selectedAgent: () => firstImageGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "image edit",
+      run: async () => {
+        const inputDir = tempDirs.make("openclaw-image-agent-");
+        const inputPath = path.join(inputDir, "input.png");
+        await fs.writeFile(inputPath, Buffer.from(PNG_1X1_BASE64, "base64"));
+        primeGeneratedImage("gpt-image-1", "provider-output.png");
+        await runCapability(
+          "image",
+          "edit",
+          "--agent",
+          "beta",
+          "--file",
+          inputPath,
+          "--prompt",
+          "crop it",
+          "--json",
+        );
+      },
+      selectedAgent: () => firstImageGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "image describe",
+      run: () =>
+        runCapability("image", "describe", "--agent", "beta", "--file", "photo.png", "--json"),
+      selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
+      expectedAgent: "beta",
+    },
+    {
+      name: "image describe-many",
+      run: () =>
+        runCapability("image", "describe-many", "--agent", "beta", "--file", "photo.png", "--json"),
+      selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
+      expectedAgent: "beta",
+    },
+    {
+      name: "audio transcribe",
+      run: () =>
+        runCapability("audio", "transcribe", "--agent", "beta", "--file", "memo.m4a", "--json"),
+      selectedAgent: () => firstAudioTranscriptionCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "video generate",
+      run: () => {
+        mocks.generateVideo.mockResolvedValue({
+          provider: "minimax",
+          model: "MiniMax-Hailuo-2.3",
+          attempts: [],
+          videos: [
+            {
+              buffer: Buffer.from("video-bytes"),
+              mimeType: "video/mp4",
+              fileName: "provider-name.mp4",
+            },
+          ],
+        });
+        return runCapability("video", "generate", "--agent", "beta", "--prompt", "clip", "--json");
+      },
+      selectedAgent: () => firstVideoGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "video describe",
+      run: () =>
+        runCapability("video", "describe", "--agent", "beta", "--file", "clip.mp4", "--json"),
+      selectedAgent: () => firstVideoDescriptionCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "embedding create",
+      run: () =>
+        runCapability("embedding", "create", "--agent", "beta", "--text", "hello", "--json"),
+      selectedAgent: () => firstEmbeddingProviderCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+  ])(
+    "routes --agent through $name owner selection",
+    async ({ run, selectedAgent, expectedAgent }) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+
+      await run();
+
+      expect(selectedAgent()).toBe(expectedAgent);
+    },
+  );
+
+  it.each([
+    {
+      name: "model run",
+      run: () =>
+        runCapabilityWithParentAgent("model", "run", "beta", "--prompt", "hello", "--json"),
+      selectedAgent: () => firstPreparedModelParams()?.agentId,
+      expectedAgent: "beta",
+    },
+    {
+      name: "image generate",
+      run: () => {
+        primeGeneratedImage("gpt-image-1", "provider-output.png");
+        return runCapabilityWithParentAgent(
+          "image",
+          "generate",
+          "beta",
+          "--prompt",
+          "portrait",
+          "--json",
+        );
+      },
+      selectedAgent: () => firstImageGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "image edit",
+      run: async () => {
+        const inputDir = tempDirs.make("openclaw-image-parent-agent-");
+        const inputPath = path.join(inputDir, "input.png");
+        await fs.writeFile(inputPath, Buffer.from(PNG_1X1_BASE64, "base64"));
+        primeGeneratedImage("gpt-image-1", "provider-output.png");
+        await runCapabilityWithParentAgent(
+          "image",
+          "edit",
+          "beta",
+          "--file",
+          inputPath,
+          "--prompt",
+          "crop it",
+          "--json",
+        );
+      },
+      selectedAgent: () => firstImageGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "image describe",
+      run: () =>
+        runCapabilityWithParentAgent("image", "describe", "beta", "--file", "photo.png", "--json"),
+      selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
+      expectedAgent: "beta",
+    },
+    {
+      name: "image describe-many",
+      run: () =>
+        runCapabilityWithParentAgent(
+          "image",
+          "describe-many",
+          "beta",
+          "--file",
+          "photo.png",
+          "--json",
+        ),
+      selectedAgent: () => mocks.resolveAgentDir.mock.calls[0]?.[1],
+      expectedAgent: "beta",
+    },
+    {
+      name: "audio transcribe",
+      run: () =>
+        runCapabilityWithParentAgent("audio", "transcribe", "beta", "--file", "memo.m4a", "--json"),
+      selectedAgent: () => firstAudioTranscriptionCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "video generate",
+      run: () => {
+        mocks.generateVideo.mockResolvedValue({
+          provider: "minimax",
+          model: "MiniMax-Hailuo-2.3",
+          attempts: [],
+          videos: [
+            {
+              buffer: Buffer.from("video-bytes"),
+              mimeType: "video/mp4",
+              fileName: "provider-name.mp4",
+            },
+          ],
+        });
+        return runCapabilityWithParentAgent(
+          "video",
+          "generate",
+          "beta",
+          "--prompt",
+          "clip",
+          "--json",
+        );
+      },
+      selectedAgent: () => firstVideoGenerationCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "video describe",
+      run: () =>
+        runCapabilityWithParentAgent("video", "describe", "beta", "--file", "clip.mp4", "--json"),
+      selectedAgent: () => firstVideoDescriptionCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+    {
+      name: "embedding create",
+      run: () =>
+        runCapabilityWithParentAgent("embedding", "create", "beta", "--text", "hello", "--json"),
+      selectedAgent: () => firstEmbeddingProviderCall()?.agentDir,
+      expectedAgent: "/tmp/agent-beta",
+    },
+  ])(
+    "inherits parent --agent through $name owner selection",
+    async ({ run, selectedAgent, expectedAgent }) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+
+      await run();
+
+      expect(selectedAgent()).toBe(expectedAgent);
+    },
+  );
+
+  it("prefers a leaf --agent over the parent selector", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+    });
+    primeGeneratedImage("gpt-image-1", "provider-output.png");
+
+    await runCap(
+      "capability",
+      "image",
+      "--agent",
+      "alpha",
+      "generate",
+      "--agent",
+      "beta",
+      "--prompt",
+      "portrait",
+      "--json",
+    );
+
+    expect(firstImageGenerationCall()?.agentDir).toBe("/tmp/agent-beta");
+  });
+
+  it.each([
+    { agent: "", message: "--agent must not be blank" },
+    { agent: "retired", message: 'Unknown agent id "retired"' },
+  ])("rejects invalid inherited agent '$agent' before dispatch", async ({ agent, message }) => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+    });
+
+    await expect(
+      runCapabilityWithParentAgent(
+        "image",
+        "generate",
+        agent,
+        "--prompt",
+        "friendly lobster",
+        "--json",
+      ),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains(message);
+    expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
   it("passes image output format and generic background hints through to generation runtime", async () => {
@@ -1739,7 +2308,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --output-format must be one of png, jpeg, or webp",
+      "--output-format must be one of png, jpeg, or webp",
     );
 
     mocks.runtime.error.mockClear();
@@ -1755,7 +2324,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --openai-background must be one of transparent, opaque, or auto",
+      "--openai-background must be one of transparent, opaque, or auto",
     );
 
     mocks.runtime.error.mockClear();
@@ -1771,7 +2340,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --background must be one of transparent, opaque, or auto",
+      "--background must be one of transparent, opaque, or auto",
     );
 
     mocks.runtime.error.mockClear();
@@ -1787,7 +2356,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --quality must be one of low, medium, high, or auto",
+      "--quality must be one of low, medium, high, or auto",
     );
 
     mocks.runtime.error.mockClear();
@@ -1803,7 +2372,7 @@ describe("capability cli", () => {
       ),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Error: --openai-moderation must be one of low or auto",
+      "--openai-moderation must be one of low or auto",
     );
   });
 
@@ -1879,6 +2448,7 @@ describe("capability cli", () => {
       "--quality",
       "--timeout-ms",
       "--output",
+      "--agent",
       "--json",
     ]);
   });
@@ -1901,13 +2471,14 @@ describe("capability cli", () => {
       "--quality",
       "--timeout-ms",
       "--output",
+      "--agent",
       "--json",
     ]);
   });
 
-  it("keeps capability inspect metadata flags in sync with each command's registered options", () => {
+  it("keeps capability inspect metadata flags in sync with each command's registered options", async () => {
     const program = new Command();
-    registerCapabilityCli(program);
+    await registerCapabilityCli(program, ["node", "openclaw", "infer", "--help"]);
     const capability =
       program.commands.find((command) => command.name() === "infer") ??
       program.commands.find((command) => command.aliases().includes("capability"));
@@ -2524,7 +3095,7 @@ describe("capability cli", () => {
       runCapability("audio", "transcribe", "--file", "memo.m4a", "--json"),
     ).rejects.toThrow("exit 1");
     expect(runtimeErrorMessages()).toEqual([
-      `Error: No transcript returned for audio: ${path.resolve("memo.m4a")}`,
+      `No transcript returned for audio: ${path.resolve("memo.m4a")}`,
     ]);
   });
 
@@ -2553,7 +3124,7 @@ describe("capability cli", () => {
     await expect(
       runCapability("audio", "transcribe", "--file", "memo.m4a", "--json"),
     ).rejects.toThrow("exit 1");
-    expect(runtimeErrorMessages()).toEqual(["Error: Audio transcription response missing text"]);
+    expect(runtimeErrorMessages()).toEqual(["Audio transcription response missing text"]);
   });
 
   it("forwards transcription prompt and language hints", async () => {
@@ -3160,6 +3731,7 @@ describe("capability cli", () => {
   });
 
   it("removes model auth profiles from the selected agent store", async () => {
+    mocks.loadConfig.mockReturnValue({ agents: { entries: { poe: {} }, ownership: "explicit" } });
     mocks.listProfilesForProvider.mockReturnValue(["openai:default"] as never);
 
     await runCapability(
@@ -3182,6 +3754,71 @@ describe("capability cli", () => {
       removedProfiles: ["openai:default"],
     });
   });
+
+  it.each(["parent", "leaf"] as const)(
+    "routes %s --agent through model auth login",
+    async (position) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+
+      await runModelAuthWithAgent(position, "login", "beta", "--provider", "openai");
+
+      expect(mocks.modelsAuthLoginCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: "openai", agent: "beta" }),
+        mocks.runtime,
+      );
+    },
+  );
+
+  it.each(["parent", "leaf"] as const)(
+    "routes %s --agent through model auth status",
+    async (position) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+
+      await runModelAuthWithAgent(position, "status", "beta", "--json");
+
+      expect(mocks.modelsStatusCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ json: true, agent: "beta" }),
+        expect.any(Object),
+      );
+    },
+  );
+
+  it.each(["parent", "leaf"] as const)(
+    "routes %s --agent through model auth logout",
+    async (position) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+      mocks.listProfilesForProvider.mockReturnValue(["openai:default"] as never);
+
+      await runModelAuthWithAgent(position, "logout", "beta", "--provider", "openai", "--json");
+
+      expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/agent-beta");
+    },
+  );
+
+  it.each([
+    { position: "parent" as const, agent: "", message: "--agent must not be blank" },
+    { position: "leaf" as const, agent: "retired", message: 'Unknown agent id "retired"' },
+  ])(
+    "rejects invalid $position model auth agent '$agent' before dispatch",
+    async ({ position, agent, message }) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+      });
+
+      await expect(runModelAuthWithAgent(position, "status", agent, "--json")).rejects.toThrow(
+        "exit 1",
+      );
+
+      expectRuntimeErrorContains(message);
+      expect(mocks.modelsStatusCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it("fails logout if the auth store update does not complete", async () => {
     mocks.listProfilesForProvider.mockReturnValue(["openai:default"] as never);

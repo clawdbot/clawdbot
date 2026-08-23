@@ -637,7 +637,7 @@ describe("mixed inline directives", () => {
       kind: "continue",
       provider: "anthropic",
       model: "claude-opus-4-6",
-      contextTokens: 90_000,
+      contextTokens: 1_000_000,
       directiveAck: {
         text: "Session model reset to configured default (anthropic/claude-opus-4-6).",
       },

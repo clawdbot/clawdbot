@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-type MockIngressInput = { message?: string; sessionKey?: string; runId?: string };
+type MockIngressInput = {
+  accountId?: string;
+  message?: string;
+  sessionKey?: string;
+  runId?: string;
+};
 
 const mocks = vi.hoisted(() => ({
   agentCommandFromIngress: vi.fn(async (_input: MockIngressInput) => ({
@@ -23,6 +28,7 @@ describe("Discord voice ingress execution correlation", () => {
     };
     const shared = {
       entry: entry as never,
+      accountId: "work",
       userId: "user-1",
       cfg: {} as never,
       discordConfig: {} as never,
@@ -42,6 +48,7 @@ describe("Discord voice ingress execution correlation", () => {
       "agent:main:discord:channel:channel-1",
       "agent:main:discord:channel:channel-1",
     ]);
+    expect(inputs.map((input) => input.accountId)).toEqual(["work", "work"]);
     for (const input of inputs) {
       expect(input).not.toHaveProperty("runId");
     }

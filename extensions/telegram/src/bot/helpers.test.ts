@@ -1,6 +1,6 @@
 // Telegram tests cover helpers plugin behavior.
 import type { MessageEntity } from "grammy/types";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   describeReplyTarget,
   getTelegramTextParts,
@@ -10,7 +10,6 @@ import {
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
-  resetTelegramForumFlagCacheForTest,
   shouldUseTelegramDmThreadSession,
 } from "./helpers.js";
 import { renderTelegramTextEntities } from "./inbound-text-entities.js";
@@ -19,6 +18,13 @@ type TelegramMessage = Parameters<typeof normalizeForwardedContext>[0];
 
 function asMalformedTelegramMessage(message: unknown): TelegramMessage {
   return message as TelegramMessage;
+}
+
+let forumChatId = -1_009_000_000_000;
+
+function nextForumChatId(): number {
+  forumChatId += 1;
+  return forumChatId;
 }
 
 describe("resolveTelegramForumThreadId", () => {
@@ -41,19 +47,16 @@ describe("resolveTelegramForumThreadId", () => {
 });
 
 describe("resolveTelegramForumFlag", () => {
-  beforeEach(() => {
-    resetTelegramForumFlagCacheForTest();
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it("keeps explicit forum metadata when Telegram already provides it", async () => {
+    const chatId = nextForumChatId();
     const getChat = vi.fn(async () => ({ is_forum: false }));
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100123,
+        chatId,
         chatType: "supergroup",
         isGroup: true,
         isForum: true,
@@ -64,25 +67,27 @@ describe("resolveTelegramForumFlag", () => {
   });
 
   it("falls back to getChat for supergroups when is_forum is omitted", async () => {
+    const chatId = nextForumChatId();
     const getChat = vi.fn(async () => ({ is_forum: true }));
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100789,
+        chatId,
         chatType: "supergroup",
         isGroup: true,
         getChat,
       }),
     ).resolves.toBe(true);
-    expect(getChat).toHaveBeenCalledWith(-100789);
+    expect(getChat).toHaveBeenCalledWith(chatId);
   });
 
   it("uses supergroup topic-message metadata before getChat lookup", async () => {
+    const chatId = nextForumChatId();
     const getChat = vi.fn(async () => {
       throw new Error("lookup should not run");
     });
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100987,
+        chatId,
         chatType: "supergroup",
         isGroup: true,
         isTopicMessage: true,
@@ -107,9 +112,10 @@ describe("resolveTelegramForumFlag", () => {
   });
 
   it("reuses resolved forum metadata for later supergroup updates", async () => {
+    const chatId = nextForumChatId();
     const getChat = vi.fn(async () => ({ is_forum: true }));
     const params = {
-      chatId: -100456,
+      chatId,
       chatType: "supergroup" as const,
       isGroup: true,
       getChat,
@@ -120,9 +126,10 @@ describe("resolveTelegramForumFlag", () => {
   });
 
   it("refreshes cached forum metadata from explicit Telegram updates", async () => {
+    const chatId = nextForumChatId();
     const getChat = vi.fn(async () => ({ is_forum: true }));
     const params = {
-      chatId: -100654,
+      chatId,
       chatType: "supergroup" as const,
       isGroup: true,
       getChat,
@@ -134,10 +141,11 @@ describe("resolveTelegramForumFlag", () => {
   });
 
   it("drops cached forum metadata when the current clock is not a valid date timestamp", async () => {
+    const chatId = nextForumChatId();
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const getChat = vi.fn(async () => ({ is_forum: true }));
     const params = {
-      chatId: -100655,
+      chatId,
       chatType: "supergroup" as const,
       isGroup: true,
       getChat,
@@ -149,10 +157,11 @@ describe("resolveTelegramForumFlag", () => {
   });
 
   it("does not cache forum metadata when the expiry timestamp would exceed the valid date range", async () => {
+    const chatId = nextForumChatId();
     vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
     const getChat = vi.fn(async () => ({ is_forum: true }));
     const params = {
-      chatId: -100656,
+      chatId,
       chatType: "supergroup" as const,
       isGroup: true,
       getChat,
@@ -163,17 +172,20 @@ describe("resolveTelegramForumFlag", () => {
   });
 
   it("returns false when forum lookup is unavailable", async () => {
+    const chatId = nextForumChatId();
     const getChat = vi.fn(async () => {
       throw new Error("lookup failed");
     });
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100999,
+        chatId,
         chatType: "supergroup",
         isGroup: true,
         getChat,
       }),
     ).resolves.toBe(false);
+    expect(getChat).toHaveBeenCalledOnce();
+    expect(getChat).toHaveBeenCalledWith(chatId);
   });
 });
 

@@ -15,9 +15,9 @@ export type NodeHostConfig = {
       enabled?: boolean;
     };
   };
-  /** Full OpenClaw session hosting from this node's local installation. */
+  /** Full OpenClaw session hosting from Gateway-managed worker bundles. */
   workerRuns?: {
-    /** Advertise this paired node as a worker session host (default: false). */
+    /** Allow this paired node to host worker sessions (default: false). */
     enabled?: boolean;
   };
   /** Browser proxy settings for node hosts. */

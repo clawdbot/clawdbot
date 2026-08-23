@@ -1073,6 +1073,52 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
+      label: "propagates explicit profile-independent gateway method policy",
+      run: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "profile-independent-gateway-method",
+          filename: "profile-independent-gateway-method.cjs",
+          body: `module.exports = {
+    id: "profile-independent-gateway-method",
+    register(api) {
+      api.registerGatewayMethod(
+        "profile-independent-gateway-method.status",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.read", profileAccess: "independent" },
+      );
+      api.registerGatewayMethod(
+        "profile-independent-gateway-method.content",
+        ({ respond }) => respond(true, { ok: true }),
+        { scope: "operator.read" },
+      );
+    },
+  };`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["profile-independent-gateway-method"],
+            },
+          },
+        });
+        const descriptors = new Map(
+          registry.gatewayMethodDescriptors.map((descriptor) => [descriptor.name, descriptor]),
+        );
+
+        expect(descriptors.get("profile-independent-gateway-method.status")?.profileAccess).toBe(
+          "independent",
+        );
+        expect(descriptors.get("profile-independent-gateway-method.content")?.profileAccess).toBe(
+          "required",
+        );
+      },
+    },
+    {
       label: "coerces reserved gateway method namespaces to operator.admin",
       run: () => {
         useNoBundledPlugins();
