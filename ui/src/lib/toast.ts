@@ -66,7 +66,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   connectedMoveCallback() {}
 
   show(options: ToastOptions) {
-    this.finishDismiss("replaced");
+    this.finishDismiss(this.exitReason ?? "replaced");
     this.toast = options;
     this.active = true;
     this.exitReason = null;
