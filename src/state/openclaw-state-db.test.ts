@@ -6252,6 +6252,29 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ).toEqual(["outer"]);
   });
 
+  it("revalidates ownership without repeating schema discovery on an open owner", () => {
+    const options = { env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
+    const database = openOpenClawStateDatabase(options);
+    const { constants } = requireNodeSqlite();
+    let schemaReads = 0;
+    database.db.setAuthorizer((actionCode, tableName) => {
+      if (actionCode === constants.SQLITE_READ && tableName === "sqlite_master") {
+        schemaReads += 1;
+      }
+      return constants.SQLITE_OK;
+    });
+
+    try {
+      for (let index = 0; index < 12; index += 1) {
+        runOpenClawStateWriteTransaction(() => undefined, options);
+      }
+    } finally {
+      database.db.setAuthorizer(null);
+    }
+
+    expect(schemaReads).toBe(0);
+  });
+
   it("rejects Promise-returning write transactions", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
