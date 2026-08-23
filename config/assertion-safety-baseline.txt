@@ -2378,7 +2378,7 @@ src/claws/update-capability-changes.ts	11
 src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
-src/cli/capability-cli/audio.ts	4
+src/cli/capability-cli/audio.ts	3
 src/cli/capability-cli/embedding.ts	3
 src/cli/capability-cli/image.ts	21
 src/cli/capability-cli/model.ts	4
