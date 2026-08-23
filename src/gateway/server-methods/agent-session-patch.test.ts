@@ -70,6 +70,43 @@ function buildCreationPatch(opts: {
 }
 
 describe("agent session patch", () => {
+  it("consumes the pending-reset marker when a new lifecycle keeps the session id", () => {
+    const now = 5_000;
+    const tombstone: SessionEntry = { sessionId: "tombstoned-session", updatedAt: 0 };
+    const built = buildAgentSessionPatch({
+      freshEntry: tombstone,
+      initialEntry: tombstone,
+      cfg: {},
+      sessionAgentId: "main",
+      canonicalSessionKey: "agent:main:main",
+      storePath: "/tmp/openclaw-agent-tombstone-test.json",
+      normalizedSpawned: {},
+      requestDeliveryHint: undefined,
+      hasRestoredCronContinuation: false,
+      resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
+      now,
+      isSystemGatewayRun: false,
+      visibleRequest: true,
+      fallbackSessionId: "tombstoned-session",
+      touchInteraction: false,
+      failedSessionTranscriptMissing: () => false,
+    });
+
+    expect(built.isNewSession).toBe(true);
+    expect(built.patch.sessionId).toBe("tombstoned-session");
+    expect(built.patch.lifecycleRevision).toEqual(expect.any(String));
+
+    const merged = mergeSessionEntry(tombstone, built.patch);
+    expect(merged.updatedAt).toBeGreaterThan(0);
+    expect(merged.lifecycleRevision).toBe(built.patch.lifecycleRevision);
+  });
+
+  it("keeps the pending-reset marker for bookkeeping patches without identity rotation", () => {
+    const tombstone: SessionEntry = { sessionId: "tombstoned-session", updatedAt: 0 };
+    const merged = mergeSessionEntry(tombstone, { label: "renamed", updatedAt: 5_000 });
+    expect(merged.updatedAt).toBe(0);
+  });
+
   it("clears agent status at the next human interaction boundary", () => {
     const patch = buildPatch(true);
     expect(Object.hasOwn(patch, "agentStatus")).toBe(true);

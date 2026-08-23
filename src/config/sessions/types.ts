@@ -755,9 +755,14 @@ function resolveMergedUpdatedAt(
   }
   // The legacy updatedAt=0 pending-reset marker (see evaluateSessionFreshness)
   // is a one-time reset contract: bookkeeping activity touches must not lift it,
-  // or the required reset is silently skipped. Only identity-changing writes
-  // (the rollover that performs the reset) mint a fresh updatedAt.
-  if (existingUpdatedAt === 0 && (!patch.sessionId || patch.sessionId === existing?.sessionId)) {
+  // or the required reset is silently skipped. Only writes that change the full
+  // lifecycle identity (session id or lifecycle revision — the rollover that
+  // performs the reset) mint a fresh updatedAt.
+  if (
+    existingUpdatedAt === 0 &&
+    (!patch.sessionId || patch.sessionId === existing?.sessionId) &&
+    (!patch.lifecycleRevision || patch.lifecycleRevision === existing?.lifecycleRevision)
+  ) {
     return 0;
   }
   return Math.max(existingUpdatedAt ?? 0, patchUpdatedAt ?? 0, now);

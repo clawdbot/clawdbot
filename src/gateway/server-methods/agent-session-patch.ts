@@ -238,6 +238,12 @@ export function buildAgentSessionPatch(params: {
     sessionId: patchSessionId,
     updatedAt: params.now,
     ...(freshIsNewSession && !freshSessionRotatedSinceLoad ? { sessionStartedAt: params.now } : {}),
+    // A new lifecycle on a previously occupied slot must advance the lifecycle
+    // identity: the merge then consumes the legacy updatedAt=0 pending-reset
+    // marker exactly once instead of re-detecting the tombstone on every turn.
+    ...(freshIsNewSession && params.freshEntry && !freshSessionRotatedSinceLoad
+      ? { lifecycleRevision: crypto.randomUUID() }
+      : {}),
     ...(params.touchInteraction
       ? {
           lastInteractionAt: params.now,
