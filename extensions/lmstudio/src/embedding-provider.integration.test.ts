@@ -1,4 +1,5 @@
-import { createServer } from "node:http";
+import { once } from "node:events";
+import { createServer, type IncomingHttpHeaders } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLmstudioEmbeddingProvider } from "./embedding-provider.js";
 
@@ -13,37 +14,18 @@ describe("LM Studio embedding request headers", () => {
     vi.stubEnv("OPENCLAW_TEST_LMSTUDIO_LITERAL", "ambient-bait");
     vi.stubEnv("OPENCLAW_TEST_LMSTUDIO_PROVIDER", "resolved-provider-value");
 
-    const observedRequests: Array<{
-      path: string | undefined;
-      literalHeader: string | string[] | undefined;
-      sharedHeader: string | string[] | undefined;
-      providerHeader: string | string[] | undefined;
-      emptyHeader: string | string[] | undefined;
-      authorization: string | undefined;
-    }> = [];
+    const observedRequests: Array<{ url?: string; headers: IncomingHttpHeaders }> = [];
     const server = createServer((request, response) => {
       request.resume();
       request.once("end", () => {
-        observedRequests.push({
-          path: request.url,
-          literalHeader: request.headers["x-already-resolved"],
-          sharedHeader: request.headers["x-shared"],
-          providerHeader: request.headers["x-provider-only"],
-          emptyHeader: request.headers["x-empty"],
-          authorization: request.headers.authorization,
-        });
+        observedRequests.push({ url: request.url, headers: request.headers });
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({ data: [{ index: 0, embedding: [0.25, 0.5, 0.75] }] }));
       });
     });
 
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
 
     try {
       const address = server.address();
@@ -82,16 +64,18 @@ describe("LM Studio embedding request headers", () => {
       });
 
       await expect(provider.embedQuery("hello")).resolves.toEqual([0.25, 0.5, 0.75]);
-      expect(observedRequests).toEqual([
+      expect(observedRequests).toMatchObject([
         {
-          path: "/v1/embeddings",
-          literalHeader: "${OPENCLAW_TEST_LMSTUDIO_LITERAL}",
-          sharedHeader: "remote-value",
-          providerHeader: "resolved-provider-value",
-          emptyHeader: undefined,
-          authorization: "Bearer synthetic-memory-key",
+          url: "/v1/embeddings",
+          headers: {
+            "x-already-resolved": "${OPENCLAW_TEST_LMSTUDIO_LITERAL}",
+            "x-shared": "remote-value",
+            "x-provider-only": "resolved-provider-value",
+            authorization: "Bearer synthetic-memory-key",
+          },
         },
       ]);
+      expect(observedRequests[0]?.headers).not.toHaveProperty("x-empty");
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {

@@ -291,45 +291,15 @@ describe("secrets runtime snapshot core lanes", () => {
   });
 
   it.each([
-    {
-      adapterId: "openai",
-      authProviderId: "openai",
-      configuredProviderId: "auto",
-      registryMetadata: true,
-    },
-    {
-      adapterId: "openai",
-      authProviderId: "openai",
-      configuredProviderId: undefined,
-      registryMetadata: true,
-    },
-    {
-      adapterId: "gemini",
-      authProviderId: "google",
-      configuredProviderId: "gemini",
-      registryMetadata: true,
-    },
-    {
-      adapterId: "bedrock",
-      authProviderId: "amazon-bedrock",
-      configuredProviderId: "bedrock",
-      registryMetadata: true,
-    },
-    {
-      adapterId: "gemini",
-      authProviderId: "google",
-      configuredProviderId: "tenant-gemini",
-      registryMetadata: true,
-    },
-    {
-      adapterId: "gemini",
-      authProviderId: "google",
-      configuredProviderId: "gemini",
-      registryMetadata: false,
-    },
-  ])(
-    "binds $configuredProviderId memory credentials to $authProviderId (metadata=$registryMetadata)",
-    async ({ adapterId, authProviderId, configuredProviderId, registryMetadata }) => {
+    ["openai", "openai", "auto", true],
+    ["openai", "openai", undefined, true],
+    ["gemini", "google", "gemini", true],
+    ["bedrock", "amazon-bedrock", "bedrock", true],
+    ["gemini", "google", "tenant-gemini", true],
+    ["gemini", "google", "gemini", false],
+  ] as const)(
+    "binds %s memory credentials to %s (configured=%s, metadata=%s)",
+    async (adapterId, authProviderId, configuredProviderId, registryMetadata) => {
       const apiKeyRef = {
         source: "env" as const,
         provider: "default",
@@ -348,50 +318,45 @@ describe("secrets runtime snapshot core lanes", () => {
         hooks: [],
         contracts: { embeddingProviders: [adapterId] },
       };
-      const manifestRegistry = { plugins: [manifest], diagnostics: [] };
-      const config = (baseUrl: string, tenant: string) =>
-        asConfig({
-          agents: { list: [{ id: "main", default: true }] },
-          memory: {
-            search: {
-              ...(configuredProviderId ? { provider: configuredProviderId } : {}),
-              remote: { apiKey: apiKeyRef },
-            },
-          },
-          models: {
-            providers: {
-              [authProviderId]: {
-                baseUrl,
-                headers: { "X-Tenant": tenant },
-                models: [],
-              },
-              ...(configuredProviderId &&
-              configuredProviderId !== "auto" &&
-              configuredProviderId !== adapterId
-                ? {
-                    [configuredProviderId]: {
-                      api: adapterId,
-                      baseUrl: "https://tenant.example.invalid/v1",
-                      headers: { "X-Custom-Tenant": "configured" },
-                      models: [],
-                    },
-                  }
-                : {}),
-            },
-          },
-        });
-      const prepare = (baseUrl: string, tenant: string, env: NodeJS.ProcessEnv) =>
+      const prepare = (version: "old" | "new", env: NodeJS.ProcessEnv) =>
         prepareSecretsRuntimeSnapshot({
-          config: config(baseUrl, tenant),
+          config: asConfig({
+            agents: { list: [{ id: "main", default: true }] },
+            memory: {
+              search: {
+                ...(configuredProviderId ? { provider: configuredProviderId } : {}),
+                remote: { apiKey: apiKeyRef },
+              },
+            },
+            models: {
+              providers: {
+                [authProviderId]: {
+                  baseUrl: `https://${version}.example.invalid/v1`,
+                  headers: { "X-Tenant": version },
+                  models: [],
+                },
+                ...(configuredProviderId &&
+                configuredProviderId !== "auto" &&
+                configuredProviderId !== adapterId
+                  ? {
+                      [configuredProviderId]: {
+                        api: adapterId,
+                        baseUrl: "https://tenant.example.invalid/v1",
+                        headers: { "X-Custom-Tenant": "configured" },
+                        models: [],
+                      },
+                    }
+                  : {}),
+              },
+            },
+          }),
           env,
           includeAuthStoreRefs: false,
           allowUnavailableSecretOwners: true,
           loadablePluginOrigins: new Map(),
-          ...(registryMetadata ? { manifestRegistry } : {}),
+          ...(registryMetadata ? { manifestRegistry: { plugins: [manifest] } } : {}),
         });
-      const active = await prepare("https://old.example.invalid/v1", "old", {
-        MEMORY_REMOTE_KEY: "last-known-good",
-      });
+      const active = await prepare("old", { MEMORY_REMOTE_KEY: "last-known-good" });
       activateSecretsRuntimeSnapshot(active);
 
       if (registryMetadata) {
@@ -401,8 +366,8 @@ describe("secrets runtime snapshot core lanes", () => {
         );
       }
 
-      const unchanged = await prepare("https://old.example.invalid/v1", "old", {});
-      const changed = await prepare("https://new.example.invalid/v1", "new", {});
+      const unchanged = await prepare("old", {});
+      const changed = await prepare("new", {});
 
       expect(unchanged.config.memory?.search?.remote?.apiKey).toBe("last-known-good");
       expect(unchanged.degradedOwners).toMatchObject([

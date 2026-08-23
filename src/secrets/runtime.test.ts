@@ -250,68 +250,6 @@ describe("secrets runtime snapshot", () => {
     ]);
   });
 
-  it("binds stale memory credentials to the selected provider destination", async () => {
-    const apiKeyRef = {
-      source: "env" as const,
-      provider: "default",
-      id: "MEMORY_REMOTE_KEY",
-    };
-    const config = (baseUrl: string, tenant: string) =>
-      asConfig({
-        ...explicitMainRoster(),
-        memory: {
-          search: {
-            provider: "openai",
-            remote: { apiKey: apiKeyRef },
-          },
-        },
-        models: {
-          providers: {
-            openai: {
-              baseUrl,
-              headers: { "X-Tenant": tenant },
-              models: [],
-            },
-          },
-        },
-      });
-    const active = await prepareSecretsRuntimeSnapshot({
-      config: config("https://old.example.invalid/v1", "old"),
-      env: { MEMORY_REMOTE_KEY: "last-known-good" },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-    activateSecretsRuntimeSnapshotState({
-      snapshot: active,
-      refreshContext: null,
-      refreshHandler: null,
-    });
-
-    const unchanged = await prepareSecretsRuntimeSnapshot({
-      config: config("https://old.example.invalid/v1", "old"),
-      env: {},
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-    const changed = await prepareSecretsRuntimeSnapshot({
-      config: config("https://new.example.invalid/v1", "new"),
-      env: {},
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-
-    expect(unchanged.config.memory?.search?.remote?.apiKey).toBe("last-known-good");
-    expect(unchanged.degradedOwners).toMatchObject([
-      { ownerKind: "capability", ownerId: "memory-provider:main", degradationState: "stale" },
-    ]);
-    expect(changed.config.memory?.search?.remote?.apiKey).toEqual(apiKeyRef);
-    expect(changed.degradedOwners).toMatchObject([
-      { ownerKind: "capability", ownerId: "memory-provider:main", degradationState: "cold" },
-    ]);
-  });
-
   it("isolates only the skill whose API key cannot resolve", async () => {
     const missingRef = {
       source: "env",

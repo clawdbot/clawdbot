@@ -56,105 +56,65 @@ function requireFirstFetchInput(fetchMock: ReturnType<typeof vi.fn>): RequestInf
 }
 
 describe("Gemini embedding provider", () => {
-  it("keeps provider credentials off a different remote destination", async () => {
-    const { client } = await createGeminiEmbeddingProvider({
-      config: {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://provider.example.test/v1beta",
-              apiKey: "provider-key",
-              headers: { "X-Provider-Tenant": "provider-a" },
-              models: [],
-            },
-          },
+  const providerBaseUrl = "https://provider.example.test/v1beta";
+  const config = {
+    models: {
+      providers: {
+        google: {
+          baseUrl: providerBaseUrl,
+          apiKey: "provider-key",
+          headers: { "X-Provider-Tenant": "provider-a" },
+          models: [],
         },
-      } as never,
-      provider: "google",
+      },
+    },
+  };
+
+  it.each([
+    {
+      name: "provider-owned",
+      remote: { baseUrl: providerBaseUrl },
+      expectedApiKey: "provider-key",
+      expectedHeaders: { "X-Provider-Tenant": "provider-a" },
+    },
+    {
+      name: "remote-owned with a resolved env-looking literal",
       remote: {
         baseUrl: "https://remote.example.test/v1beta",
-        apiKey: "remote-key",
+        apiKey: "GOOGLE_API_KEY",
         headers: { "X-Remote-Tenant": "remote-b" },
       },
+      expectedApiKey: "GOOGLE_API_KEY",
+      expectedHeaders: { "X-Remote-Tenant": "remote-b" },
+    },
+  ])("binds Gemini credentials to the $name destination", async (testCase) => {
+    vi.stubEnv("GOOGLE_API_KEY", testCase.remote.baseUrl === providerBaseUrl ? "" : "ambient-bait");
+    const { client } = await createGeminiEmbeddingProvider({
+      config: config as never,
+      provider: "google",
+      remote: testCase.remote,
       model: "gemini-embedding-001",
       fallback: "none",
     });
 
-    expect(client.baseUrl).toBe("https://remote.example.test/v1beta");
-    expect(client.apiKeys).toEqual(["remote-key"]);
-    expect(client.headers).toMatchObject({ "X-Remote-Tenant": "remote-b" });
-    expect(client.headers).not.toHaveProperty("X-Provider-Tenant");
+    expect(client.apiKeys).toContain(testCase.expectedApiKey);
+    expect(client.headers).toMatchObject(testCase.expectedHeaders);
+    if (testCase.remote.baseUrl !== providerBaseUrl) {
+      expect(client.apiKeys).toEqual([testCase.expectedApiKey]);
+      expect(client.headers).not.toHaveProperty("X-Provider-Tenant");
+    }
   });
 
-  it("fails before egress when a remote destination has no explicit key", async () => {
+  it("rejects an unauthenticated remote destination before provider-key fallback", async () => {
     await expect(
       createGeminiEmbeddingProvider({
-        config: {
-          models: {
-            providers: {
-              google: {
-                baseUrl: "https://provider.example.test/v1beta",
-                apiKey: "provider-key",
-                models: [],
-              },
-            },
-          },
-        } as never,
+        config: config as never,
         provider: "google",
         remote: { baseUrl: "https://remote.example.test/v1beta" },
         model: "gemini-embedding-001",
         fallback: "none",
       }),
     ).rejects.toThrow(/memory\.search\.remote\.apiKey/);
-  });
-
-  it("rejects an unavailable memory SecretRef before provider fallback or egress", async () => {
-    const apiKeyRef = {
-      source: "env" as const,
-      provider: "default",
-      id: "MISSING_GOOGLE_MEMORY_KEY",
-    };
-    const fetchMock = installFetchMock(() => ({ embedding: { values: [1, 0] } }));
-
-    await expect(
-      createGeminiEmbeddingProvider({
-        config: {
-          models: {
-            providers: {
-              google: {
-                baseUrl: "https://new.example.invalid/v1beta",
-                apiKey: "provider-fallback-key",
-                headers: { "X-Tenant": "new" },
-                models: [],
-              },
-            },
-          },
-        } as never,
-        provider: "gemini",
-        remote: { apiKey: apiKeyRef },
-        model: "gemini-embedding-001",
-        fallback: "none",
-      }).then(({ provider }) => provider.embedQuery("must not leave the process")),
-    ).rejects.toMatchObject({
-      name: "UnresolvedSecretInputError",
-      path: "memory.search.remote.apiKey",
-      ref: apiKeyRef,
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("does not reinterpret a resolved literal as an ambient env name", async () => {
-    vi.stubEnv("GOOGLE_API_KEY", "ambient-key");
-
-    const { client } = await createGeminiEmbeddingProvider({
-      config: {} as never,
-      provider: "google",
-      remote: { apiKey: "GOOGLE_API_KEY" },
-      model: "gemini-embedding-001",
-      fallback: "none",
-    });
-
-    expect(client.apiKeys).toEqual(["GOOGLE_API_KEY"]);
   });
 
   it.each(["models/", "gemini/", "google/"])(

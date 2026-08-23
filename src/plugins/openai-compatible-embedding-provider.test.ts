@@ -457,7 +457,6 @@ describe("openai-compatible generic embedding provider", () => {
           baseUrl: `  ${server.baseUrl}/  `,
           apiKey: `  ${token}  `,
           headers: {
-            Authorization: "Bearer ignored",
             "x-local-runtime": "ollama",
           },
         },

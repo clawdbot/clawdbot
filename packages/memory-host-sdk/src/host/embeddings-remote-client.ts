@@ -24,10 +24,7 @@ function resolveOpenClawAttributionHeaders(): Record<string, string> {
 function normalizeEmbeddingDestinationKey(baseUrl: string): string | undefined {
   try {
     const parsed = new URL(baseUrl);
-    let hostname = parsed.hostname.toLowerCase();
-    if (hostname === "localhost" || hostname === "::1" || hostname === "[::1]") {
-      hostname = "127.0.0.1";
-    }
+    const hostname = parsed.hostname.toLowerCase();
     const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
     const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
     return `${parsed.protocol}//${hostname}:${port}${pathname}`;

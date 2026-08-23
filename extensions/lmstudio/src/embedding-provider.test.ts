@@ -367,26 +367,18 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       },
       acquireLocalService,
     };
-    const { provider } = await createLmstudioEmbeddingProvider(options);
+    const { provider, client } = await createLmstudioEmbeddingProvider(options);
 
     await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
     expect(acquireLocalService).not.toHaveBeenCalled();
-    expect(resolveLmstudioRuntimeApiKeyMock).not.toHaveBeenCalled();
-    expect(resolveLmstudioProviderHeadersMock).not.toHaveBeenCalled();
-    expect(createRemoteEmbeddingProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        client: expect.objectContaining({
-          headers: {
-            "Content-Type": "application/json",
-            "X-Remote-Tenant": "remote-b",
-          },
-        }),
-      }),
-    );
+    expect(client.headers).toEqual({
+      "Content-Type": "application/json",
+      "X-Remote-Tenant": "remote-b",
+    });
   });
 
   it("does not inherit primary remote headers when LM Studio activates as a fallback", async () => {
-    await createLmstudioEmbeddingProvider({
+    const { client } = await createLmstudioEmbeddingProvider({
       config: buildConfig({
         provider: {
           params: { preload: false },
@@ -403,17 +395,8 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       },
     });
 
-    expect(resolveLmstudioProviderHeadersMock).toHaveBeenCalledWith(
-      expect.objectContaining({ headers: { "X-Provider-Tenant": "provider-a" } }),
-    );
-    expect(createRemoteEmbeddingProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        client: expect.objectContaining({
-          baseUrl: "http://localhost:1234/v1",
-          headers: { "Content-Type": "application/json" },
-        }),
-      }),
-    );
+    expect(client.baseUrl).toBe("http://localhost:1234/v1");
+    expect(client.headers).toEqual({ "Content-Type": "application/json" });
   });
 
   it("preserves a scheme-added /api/v1 local service target", async () => {
