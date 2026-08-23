@@ -372,6 +372,9 @@ describeTelegramDispatch("dispatchTelegramMessage context-recovery", () => {
     expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
       "general topic context",
     );
+    expect(JSON.stringify(outboundCtxPayload.ChannelStructuredContext)).not.toContain(
+      "spoofed current marker from history",
+    );
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({
         updateLastRoute: expect.objectContaining({
