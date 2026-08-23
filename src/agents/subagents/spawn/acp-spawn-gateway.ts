@@ -2,11 +2,12 @@ import type { ExecutionIdentityAdmissionToken } from "../../../audit/execution-i
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { AGENT_LANE_SUBAGENT } from "../../lanes.js";
 import type { AcpSpawnBootstrapDeliveryPlan } from "./acp-spawn-bootstrap-delivery.js";
+import { terminateAcceptedCollectorRun } from "./subagent-spawn-cleanup.js";
 import {
   buildSubagentExecutionSessionSpawnContext,
   withSubagentGatewayExecutionIdentity,
 } from "./subagent-spawn-execution-identity.js";
-import { callSubagentGateway } from "./subagent-spawn-gateway.js";
+import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 
 export async function launchAcpChildThroughGateway(params: {
   attachments?: unknown[];
@@ -18,6 +19,7 @@ export async function launchAcpChildThroughGateway(params: {
   participantStorePath: string;
   runTimeoutSeconds: number;
   sessionKey: string;
+  signal?: AbortSignal;
   task: string;
 }) {
   const response = await callSubagentGateway(
@@ -47,6 +49,13 @@ export async function launchAcpChildThroughGateway(params: {
       },
     ),
   );
+  if (params.signal?.aborted) {
+    await terminateAcceptedCollectorRun({
+      childSessionKey: params.sessionKey,
+      gatewayRunId: readGatewayRunId(response) ?? params.childIdem,
+    });
+    params.signal.throwIfAborted();
+  }
   recordSessionParticipantBestEffort({
     actor: { type: "agent", id: params.lineage.parentAgentId },
     agentId: params.lineage.targetAgentId,

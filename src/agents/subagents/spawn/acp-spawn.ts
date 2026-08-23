@@ -613,9 +613,8 @@ export async function spawnAcpDirect(
         },
         parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
         participantStorePath: storePath,
+        signal: ctx.signal,
       });
-      // Request cancellation can race Gateway dispatch; recheck before registering the child.
-      ctx.signal?.throwIfAborted();
       const runId = readGatewayRunId(response) ?? childIdem;
       if (state.parentRelay && runId !== childIdem && parentSessionKey) {
         state.parentRelay.dispose();

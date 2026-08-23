@@ -3618,21 +3618,30 @@ describe("spawnAcpDirect", () => {
     );
   });
 
-  it("cleans up instead of registering when the requester aborts during ACP dispatch", async () => {
+  it("aborts the accepted Gateway run before cleanup when the requester aborts during dispatch", async () => {
     const controller = new AbortController();
     let releaseDispatch!: () => void;
     const pendingDispatch = new Promise<void>((resolve) => {
       releaseDispatch = resolve;
     });
+    const lifecycle: string[] = [];
     let dispatchStarted = false;
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
-      const args = argsUnknown as { method?: string };
+      const args = argsUnknown as { method?: string; params?: { runId?: string } };
       if (args.method === "agent") {
         dispatchStarted = true;
         await pendingDispatch;
+        lifecycle.push("accepted");
         return { runId: "run-after-abort" };
       }
+      if (args.method === "chat.abort") {
+        lifecycle.push("aborted");
+        return { ok: true, aborted: true, runIds: [args.params?.runId] };
+      }
       return { ok: true };
+    });
+    hoisted.cleanupFailedAcpSpawnMock.mockImplementationOnce(async () => {
+      lifecycle.push("cleaned");
     });
 
     const spawn = spawnAcpDirect(createSpawnRequest(), {
@@ -3645,6 +3654,15 @@ describe("spawnAcpDirect", () => {
     const result = await spawn;
 
     expect(expectFailedSpawn(result, "error").errorCode).toBe("dispatch_failed");
+    expect(gatewayRequest("chat.abort")).toEqual(
+      expect.objectContaining({
+        params: {
+          sessionKey: result.childSessionKey,
+          runId: "run-after-abort",
+        },
+      }),
+    );
+    expect(lifecycle).toEqual(["accepted", "aborted", "cleaned"]);
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
     expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledWith(
       expect.objectContaining({
