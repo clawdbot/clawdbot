@@ -633,9 +633,10 @@ suite.define(() => {
         await chooser.focus();
         await expect(chooser).toBeFocused();
         await screenshot(page, "11-avatar-keyboard-focus.png");
-        const fileChooserPromise = page.waitForEvent("filechooser");
-        await page.keyboard.press("Enter");
-        const fileChooser = await fileChooserPromise;
+        const [fileChooser] = await Promise.all([
+          page.waitForEvent("filechooser"),
+          chooser.press("Enter"),
+        ]);
         await fileChooser.setFiles({
           name: "avatar.png",
           mimeType: "image/png",
