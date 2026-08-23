@@ -50,6 +50,8 @@ type CompactFileIcon =
 type FileIconFamilyDefinition = {
   family: AttachmentFileIconFamily;
   accent: string;
+  accentByExtension?: Readonly<Record<string, string>>;
+  accentByMimeType?: Readonly<Record<string, string>>;
   extensions: readonly string[];
   mimeTypes: readonly string[];
   compact?: CompactFileIcon;
@@ -99,7 +101,7 @@ const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
   },
   {
     family: "image",
-    accent: "#929292",
+    accent: "#3FA66B",
     extensions: ["gif", "jpg", "jpeg", "png", "webp", "avif", "heic"],
     mimeTypes: ["image/gif", "image/jpeg", "image/png", "image/webp", "image/avif", "image/heic"],
     compact: "png",
@@ -107,14 +109,14 @@ const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
   },
   {
     family: "video",
-    accent: "#929292",
+    accent: "#E94B64",
     extensions: ["mp4", "mov", "m4v", "webm", "mkv"],
     mimeTypes: ["video/mp4", "video/quicktime", "video/webm", "video/x-matroska"],
     compact: "mp4",
   },
   {
     family: "audio",
-    accent: "#929292",
+    accent: "#E86672",
     extensions: ["mp3", "wav", "m4a", "aac", "flac", "ogg"],
     mimeTypes: [
       "audio/mpeg",
@@ -130,7 +132,7 @@ const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
   },
   {
     family: "archive",
-    accent: "#929292",
+    accent: "#8B7CF6",
     extensions: ["zip", "rar", "7z", "tar", "gz", "tgz", "bz2"],
     mimeTypes: [
       "application/zip",
@@ -143,7 +145,7 @@ const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
   },
   {
     family: "text",
-    accent: "#929292",
+    accent: "#5B7FD6",
     extensions: ["txt", "log"],
     mimeTypes: ["text/plain"],
     compact: "txt",
@@ -158,6 +160,8 @@ const FILE_ICON_FAMILIES: readonly FileIconFamilyDefinition[] = [
   {
     family: "code",
     accent: "#E76F3C",
+    accentByExtension: { css: "#8B7CF6" },
+    accentByMimeType: { "text/css": "#8B7CF6" },
     extensions: ["css", "html", "htm", "xml", "jsx", "tsx", "ts", "sh", "bash", "zsh"],
     mimeTypes: [
       "text/css",
@@ -234,9 +238,13 @@ export function resolveAttachmentFileIcon(
   const compact = extension
     ? (definition.compactByExtension?.[extension] ?? definition.compact)
     : definition.compact;
+  const accent =
+    (extension ? definition.accentByExtension?.[extension] : undefined) ??
+    (normalizedMimeType ? definition.accentByMimeType?.[normalizedMimeType] : undefined) ??
+    definition.accent;
   return {
     family: definition.family,
-    accent: definition.accent,
+    accent,
     extension,
     extensionLabel:
       extension?.toUpperCase() ??
@@ -276,6 +284,7 @@ export function renderAttachmentFileIcon(options: {
       "--chat-file-icon-shell-light": `url("${fileIconAssetPath("large/shell-light")}")`,
       "--chat-file-icon-shell-dark": `url("${fileIconAssetPath("large/shell-dark")}")`,
       "--chat-file-icon-overlay": `url("${fileIconAssetPath(`overlays/${resolved.family}`)}")`,
+      "--chat-file-icon-accent": resolved.accent,
       "--chat-file-icon-compact-light": `url("${compactLight}")`,
       "--chat-file-icon-compact-dark": `url("${compactDark}")`,
     })}
