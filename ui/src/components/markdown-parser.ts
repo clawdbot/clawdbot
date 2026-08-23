@@ -656,12 +656,7 @@ export function createMarkdownParser(): MarkdownItParser {
   });
 
   // Fenced and indented blocks share one interaction and overflow surface.
-  markdownParser.renderer.rules.fence = (
-    tokens,
-    index,
-    _options,
-    env: Partial<MarkdownRenderEnv> | undefined,
-  ) => {
+  markdownParser.renderer.rules.fence = (tokens, index, _options, env) => {
     const token = tokens[index];
     if (!token) {
       return "";
@@ -671,10 +666,11 @@ export function createMarkdownParser(): MarkdownItParser {
     const language = token.info.trim().split(/\s+/)[0] || "";
     // An unfinished fence consumes the remaining input; only container closers can
     // follow it. Invalid fence-looking prose must not de-highlight an earlier block.
+    const streamingOpenFence = env?.streamingOpenFence === true;
     return renderMarkdownCodeBlock(token.content, language, env, {
       copyText: markdownCodeBlockCopyText(token.content),
       highlight:
-        !env?.streamingOpenFence || tokens.findLastIndex(({ nesting }) => nesting !== -1) !== index,
+        !streamingOpenFence || tokens.findLastIndex(({ nesting }) => nesting !== -1) !== index,
     });
   };
   // Override indented code blocks (code_block) with the same treatment as fence
