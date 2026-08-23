@@ -618,17 +618,12 @@ describe("createBeamMirrorRunner", () => {
     try {
       const tick = runner.tick();
       await readStarted.promise;
-      let stopSettled = false;
       const firstStop = runner.stop();
       expect(runner.stop()).toBe(firstStop);
-      const stop = firstStop.then(() => {
-        stopSettled = true;
-      });
-      await vi.waitFor(() => expect(stopSettled).toBe(true), { timeout: 100 });
-      await tick;
+      await Promise.all([firstStop, tick]);
 
       releaseRead.resolve();
-      await Promise.all([read.mock.results[0]?.value, stop]);
+      await read.mock.results[0]?.value;
 
       expect(read).toHaveBeenCalledOnce();
       expect(sent).toEqual([]);
@@ -939,16 +934,12 @@ describe("createBeamMirrorService", () => {
       service.start({ logger: silentLogger });
       await listingStarted.promise;
 
-      let stopSettled = false;
-      const stop = service.stop().then(() => {
-        stopSettled = true;
-      });
-      await vi.waitFor(() => expect(stopSettled).toBe(true), { timeout: 100 });
+      await service.stop();
       expect(read).not.toHaveBeenCalled();
       expect(upload).not.toHaveBeenCalled();
 
       releaseListing.resolve();
-      await Promise.all([list.mock.results[0]?.value, stop]);
+      await list.mock.results[0]?.value;
 
       expect(read).not.toHaveBeenCalled();
       expect(upload).not.toHaveBeenCalled();

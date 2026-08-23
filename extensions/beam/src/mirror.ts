@@ -284,18 +284,26 @@ export function createBeamMirrorRunner(params: {
   let redirectBlockedEndpoint: string | undefined;
   let activeTick: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
+  const stopError = new Error("Beam mirror stopped");
 
-  const raceCatalog = <T>(operation: Promise<T>): Promise<T> =>
-    new Promise((resolve, reject) => {
-      const abort = () => reject(new Error("Beam mirror stopped"));
-      signal.addEventListener("abort", abort, { once: true });
-      void operation
-        .then(resolve, reject)
-        .finally(() => signal.removeEventListener("abort", abort));
+  // Catalog work cannot be cancelled, so detach its late result after stop.
+  // Guarded transport cleanup remains joined to the active scan in upload().
+  const raceCatalog = async <T>(operation: Promise<T>): Promise<T> => {
+    let rejectAbort: (error: Error) => void;
+    const aborted = new Promise<never>((_, reject) => {
+      rejectAbort = reject;
+    });
+    const abort = () => rejectAbort(stopError);
+    signal.addEventListener("abort", abort, { once: true });
+    try {
       if (signal.aborted) {
         abort();
       }
-    });
+      return await Promise.race([operation, aborted]);
+    } finally {
+      signal.removeEventListener("abort", abort);
+    }
+  };
 
   const warnThrottled = (message: string) => {
     if (now() - lastWarnAt >= MIRROR_WARN_INTERVAL_MS) {
