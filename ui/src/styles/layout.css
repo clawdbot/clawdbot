@@ -1140,6 +1140,13 @@ openclaw-settings-save-indicator:empty {
   color: var(--inbox-attention);
 }
 
+.sidebar-shell__content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .sidebar-shell__body {
   min-height: 0;
   flex: 1;
@@ -1411,17 +1418,13 @@ body.update-dialog-open .sidebar-update-card__status {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--muted) 35%, transparent);
 }
 
-.sidebar-sessions:has(.sidebar-session-catalog-error) {
-  flex: 1 0 auto;
-}
-
 .sidebar-session-catalog-error.callout.danger {
-  position: sticky;
+  position: relative;
   z-index: 10;
-  bottom: 8px;
   flex-wrap: wrap;
+  flex: 0 0 auto;
   align-items: flex-start;
-  margin-top: auto;
+  margin: 8px;
   border-color: color-mix(in srgb, var(--danger) 22%, var(--border));
   box-shadow: var(--shadow-sm);
 }
@@ -1541,15 +1544,6 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-shell__body--scroll-bottom {
-  --sidebar-body-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
-}
-
-.sidebar-shell__body:has(.sidebar-session-catalog-error).sidebar-shell__body--scroll-top {
-  --sidebar-body-mask: linear-gradient(to bottom, black 0, black 100%);
-}
-
-.sidebar-shell__body:has(.sidebar-session-catalog-error).sidebar-shell__body--scroll-middle,
-.sidebar-shell__body:has(.sidebar-session-catalog-error).sidebar-shell__body--scroll-bottom {
   --sidebar-body-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
 }
 

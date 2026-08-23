@@ -21,7 +21,6 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import { renderPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 
 type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   totalRowCount: number;
@@ -37,7 +36,6 @@ type SidebarSessionListHost = SessionListHost & {
 
 type SessionCatalogRenderSnapshot = {
   catalogs: readonly SessionCatalog[];
-  refreshStatus: PanelRefreshStatus;
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
@@ -453,14 +451,6 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
-  const catalogStatus =
-    host.sessionsStatusFilter === "archived"
-      ? nothing
-      : renderPanelRefreshStatus({
-          status: params.catalogs.refreshStatus,
-          onRetry: () => void host.sessionData.refreshSessionCatalogs(),
-          className: "sidebar-session-error sidebar-session-catalog-error",
-        });
   return html`
     <section
       class="sidebar-sessions ${host.sessionOrganizer.sessionListRemovalDrop
@@ -506,7 +496,6 @@ export function renderSessionList(params: {
             >`
           : nothing}
       </div>
-      ${catalogStatus}
     </section>
   `;
 }
