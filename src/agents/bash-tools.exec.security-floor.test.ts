@@ -334,6 +334,40 @@ describe("exec security floor", () => {
     expect(autoReviewer).not.toHaveBeenCalled();
   });
 
+  it("retains the Guardian approval on the completed gateway result", async () => {
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "read-only version check",
+    }));
+    const tool = createExecTool({
+      host: "gateway",
+      mode: "auto",
+      safeBins: [],
+      autoReviewer,
+      runId: "run-guardian-review",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-guardian-review", {
+      command: "node --version",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "completed",
+      approvalReviewOutcome: "approved",
+      approvalReviews: [
+        {
+          id: "guardian:call-guardian-review",
+          label: "Guardian",
+          status: "approved",
+          riskLevel: "low",
+          rationale: "read-only version check",
+        },
+      ],
+    });
+  });
+
   it("uses agent-scoped host policy when clamping normalized modes", async () => {
     writeExecApprovalsFixture(tempRoot ?? os.tmpdir(), {
       version: 1,

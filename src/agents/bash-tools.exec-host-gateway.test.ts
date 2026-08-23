@@ -1038,6 +1038,71 @@ describe("processGatewayAllowlist", () => {
     expect(JSON.stringify(captured.events)).not.toContain("allowed");
   });
 
+  it("emits the Guardian review lifecycle on the reviewed exec call", async () => {
+    const command = "echo ok";
+    await configurePlanBackedCommand({ command });
+    let resolveReview!: (decision: Awaited<ReturnType<ExecAutoReviewer>>) => void;
+    const autoReviewer = vi.fn<ExecAutoReviewer>(
+      () =>
+        new Promise((resolve) => {
+          resolveReview = resolve;
+        }),
+    );
+    const reviews: Array<Record<string, unknown>> = [];
+    const unsubscribe = onAgentEvent((event) => {
+      if (
+        event.runId === "run-review" &&
+        event.stream === "tool" &&
+        event.data.phase === "review"
+      ) {
+        reviews.push(event.data);
+      }
+    });
+
+    try {
+      const pending = runGatewayAllowlist({
+        command,
+        ask: "on-miss",
+        autoReview: true,
+        autoReviewer,
+        runId: "run-review",
+        toolCallId: "tool-review",
+      });
+      await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledTimes(1));
+      expect(reviews).toEqual([
+        expect.objectContaining({
+          phase: "review",
+          toolCallId: "tool-review",
+          approvalReviewOutcome: "reviewing",
+          review: expect.objectContaining({ label: "Guardian", status: "in_progress" }),
+        }),
+      ]);
+
+      resolveReview({ decision: "allow-once", risk: "low", rationale: "read-only" });
+      await pending;
+
+      expect(reviews).toEqual([
+        expect.objectContaining({
+          approvalReviewOutcome: "reviewing",
+          review: expect.objectContaining({ status: "in_progress" }),
+        }),
+        expect.objectContaining({
+          phase: "review",
+          toolCallId: "tool-review",
+          approvalReviewOutcome: "approved",
+          review: expect.objectContaining({
+            label: "Guardian",
+            status: "approved",
+            riskLevel: "low",
+            rationale: "read-only",
+          }),
+        }),
+      ]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it.runIf(process.platform !== "win32").each(["bash", "sh", "/bin/sh"])(
     "keeps %s login-shell startup outside model auto-review",
     async (shell) => {
@@ -1062,18 +1127,39 @@ describe("processGatewayAllowlist", () => {
     await configurePlanBackedCommand({ command });
     const autoReviewer = vi.fn<ExecAutoReviewer>(() => new Promise(() => {}));
     const abortController = new AbortController();
-    const result = runGatewayAllowlist({
-      command,
-      ask: "on-miss",
-      autoReview: true,
-      autoReviewer,
-      signal: abortController.signal,
+    const reviewStatuses: string[] = [];
+    const unsubscribe = onAgentEvent((event) => {
+      if (
+        event.runId === "run-cancelled-review" &&
+        event.stream === "tool" &&
+        event.data.phase === "review"
+      ) {
+        const review = event.data.review as { status?: unknown } | undefined;
+        if (typeof review?.status === "string") {
+          reviewStatuses.push(review.status);
+        }
+      }
     });
-    await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledTimes(1));
 
-    abortController.abort(new Error("cancelled during review"));
+    try {
+      const result = runGatewayAllowlist({
+        command,
+        ask: "on-miss",
+        autoReview: true,
+        autoReviewer,
+        signal: abortController.signal,
+        runId: "run-cancelled-review",
+        toolCallId: "tool-cancelled-review",
+      });
+      await vi.waitFor(() => expect(autoReviewer).toHaveBeenCalledTimes(1));
 
-    await expect(result).rejects.toThrow("cancelled during review");
+      abortController.abort(new Error("cancelled during review"));
+
+      await expect(result).rejects.toThrow("cancelled during review");
+    } finally {
+      unsubscribe();
+    }
+    expect(reviewStatuses).toEqual(["in_progress", "aborted"]);
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
   });
 

@@ -5,9 +5,35 @@ import { resolveAgentConfig } from "./agent-scope-config.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
 import { type ExecProcessOutcome, resolveExecTarget } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type {
+  ExecToolApprovalReview,
+  ExecToolDefaults,
+  ExecToolDetails,
+} from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { failedTextResult, textResult } from "./tools/common.js";
+
+export function createExecApprovalReviewProjection() {
+  let review: ExecToolApprovalReview | undefined;
+  return {
+    set(next: ExecToolApprovalReview | undefined): void {
+      review = next;
+    },
+    attach(result: AgentToolResult<ExecToolDetails>): AgentToolResult<ExecToolDetails> {
+      if (!review) {
+        return result;
+      }
+      return {
+        ...result,
+        details: {
+          ...result.details,
+          approvalReviews: [review],
+          approvalReviewOutcome: review.status === "approved" ? "approved" : "denied",
+        },
+      };
+    },
+  };
+}
 
 export function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;

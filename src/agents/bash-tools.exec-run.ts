@@ -57,6 +57,7 @@ import {
 } from "./bash-tools.exec-script-preflight.js";
 import {
   buildExecForegroundResult,
+  createExecApprovalReviewProjection,
   createExecHostResolver,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
@@ -206,6 +207,7 @@ export function createExecTool(
       const startedAt = Date.now();
       let execCommandOverride: string | undefined;
       let revalidateGatewayApproval: GatewayApprovalRevalidator | undefined;
+      const approvalReview = createExecApprovalReviewProjection();
       const foregroundFallbackWarning =
         !allowBackground && (params.background === true || typeof params.yieldMs === "number")
           ? "Warning: continuation options are unavailable; running synchronously."
@@ -525,11 +527,12 @@ export function createExecTool(
             processContinuationAvailable: allowBackground,
             trustedSafeBinDirs,
           });
+          approvalReview.set(gatewayResult.approvalReview);
           if (gatewayResult.pendingResult) {
-            return gatewayResult.pendingResult;
+            return approvalReview.attach(gatewayResult.pendingResult);
           }
           if (gatewayResult.deniedResult) {
-            return gatewayResult.deniedResult;
+            return approvalReview.attach(gatewayResult.deniedResult);
           }
           signal?.throwIfAborted();
           revalidateGatewayApproval = gatewayResult.revalidateBeforeExecution;
@@ -643,6 +646,8 @@ export function createExecTool(
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
+        const resolveReviewed = (result: AgentToolResult<ExecToolDetails>) =>
+          resolve(approvalReview.attach(result));
         const rejectIfAborted = () => {
           if (!toolAborted) {
             return false;
@@ -653,7 +658,7 @@ export function createExecTool(
 
         const resolveRunning = () => {
           cleanupToolRunListeners();
-          resolve({
+          resolveReviewed({
             content: [
               {
                 type: "text",
@@ -679,7 +684,7 @@ export function createExecTool(
           }
           if (settledOutcome) {
             cleanupToolRunListeners();
-            resolve(
+            resolveReviewed(
               buildExecForegroundResult({
                 outcome: settledOutcome,
                 cwd: run.session.cwd,
@@ -719,7 +724,7 @@ export function createExecTool(
             if (rejectIfAborted() || yielded || run.session.backgrounded) {
               return;
             }
-            resolve(
+            resolveReviewed(
               buildExecForegroundResult({
                 outcome,
                 cwd: run.session.cwd,

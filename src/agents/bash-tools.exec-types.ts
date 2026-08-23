@@ -130,8 +130,21 @@ export type ExecElevatedDefaults = {
   fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
 };
 
-/** Structured details returned by exec tool calls. */
-export type ExecToolDetails =
+/** One model-backed approval review recorded on an exec tool call. */
+export type ExecToolApprovalReview = {
+  id: string;
+  label: string;
+  status: "in_progress" | "approved" | "denied" | "timed_out" | "aborted";
+  riskLevel?: string;
+  rationale?: string;
+};
+
+type ExecToolApprovalReviewDetails = {
+  approvalReviews?: readonly ExecToolApprovalReview[];
+  approvalReviewOutcome?: "approved" | "denied" | "reviewing";
+};
+
+type ExecToolStateDetails =
   | {
       status: "running";
       sessionId: string;
@@ -187,3 +200,6 @@ export type ExecToolDetails =
       nodeId?: string;
       warningText?: string;
     };
+
+/** Structured details returned by exec tool calls. */
+export type ExecToolDetails = ExecToolApprovalReviewDetails & ExecToolStateDetails;

@@ -79,6 +79,7 @@ import type {
   ExecElevatedDefaults,
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
+  ExecToolApprovalReview,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
@@ -137,9 +138,54 @@ type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   allowWithoutEnforcedCommand?: boolean;
   revalidateBeforeExecution?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
+  approvalReview?: ExecToolApprovalReview;
   pendingResult?: AgentToolResult<ExecToolDetails>;
   deniedResult?: AgentToolResult<ExecToolDetails>;
 };
+
+type GatewayGuardianReviewStatus = "in_progress" | "approved" | "denied" | "aborted";
+
+function emitGatewayGuardianReview(params: {
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  toolCallId?: string;
+  status: GatewayGuardianReviewStatus;
+  riskLevel?: string;
+  rationale?: string;
+}): ExecToolApprovalReview | undefined {
+  if (!params.runId || !params.toolCallId) {
+    return undefined;
+  }
+  const approvalReviewOutcome =
+    params.status === "in_progress"
+      ? "reviewing"
+      : params.status === "approved"
+        ? "approved"
+        : "denied";
+  const review: ExecToolApprovalReview = {
+    id: `guardian:${params.toolCallId}`,
+    label: "Guardian",
+    status: params.status,
+    ...(params.riskLevel ? { riskLevel: params.riskLevel } : {}),
+    ...(params.rationale ? { rationale: params.rationale } : {}),
+  };
+  emitAgentEvent({
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    stream: "tool",
+    data: {
+      phase: "review",
+      name: "exec",
+      toolCallId: params.toolCallId,
+      hideFromChannelProgress: true,
+      approvalReviewOutcome,
+      review,
+    },
+  });
+  return review;
+}
 
 function hasGatewayAllowlistMiss(params: {
   hostSecurity: ExecSecurity;
@@ -899,8 +945,16 @@ export async function processGatewayAllowlist(
       requiresAllowlistPlanApproval ||
       requiresHeredocApproval ||
       requiresSecurityAuditSuppressionApproval;
+    let guardianReview: ExecToolApprovalReview | undefined;
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
+      const reviewContext = {
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        toolCallId: params.toolCallId,
+      };
+      emitGatewayGuardianReview({ ...reviewContext, status: "in_progress" });
       const pendingDecision = resolveExecAutoReviewDecision(reviewer, {
         command: params.command,
         argv: autoReviewSingleStep?.argv,
@@ -930,11 +984,23 @@ export async function processGatewayAllowlist(
           sessionKey: params.sessionKey,
         },
       });
-      // Custom reviewers may never settle; cancellation must not retain approval authority.
-      const decision = params.signal
-        ? await abortable(params.signal, pendingDecision)
-        : await pendingDecision;
-      params.signal?.throwIfAborted();
+      let decision: Awaited<typeof pendingDecision>;
+      try {
+        // Custom reviewers may never settle; cancellation must not retain approval authority.
+        decision = params.signal
+          ? await abortable(params.signal, pendingDecision)
+          : await pendingDecision;
+        params.signal?.throwIfAborted();
+      } catch (error) {
+        emitGatewayGuardianReview({ ...reviewContext, status: "aborted" });
+        throw error;
+      }
+      guardianReview = emitGatewayGuardianReview({
+        ...reviewContext,
+        status: decision.decision === "allow-once" ? "approved" : "denied",
+        riskLevel: decision.risk,
+        rationale: decision.rationale,
+      });
       if (
         decision.decision === "allow-once" &&
         decision.risk === "low" &&
@@ -974,6 +1040,7 @@ export async function processGatewayAllowlist(
         });
         return {
           execCommandOverride: autoReviewEnforcedCommand,
+          ...(guardianReview ? { approvalReview: guardianReview } : {}),
           ...(revalidateBeforeExecution ? { revalidateBeforeExecution } : {}),
         };
       }
@@ -1095,6 +1162,7 @@ export async function processGatewayAllowlist(
             command: params.command,
             cwd: params.workdir,
           }),
+          ...(guardianReview ? { approvalReview: guardianReview } : {}),
         };
       }
 
@@ -1122,6 +1190,7 @@ export async function processGatewayAllowlist(
       return {
         execCommandOverride,
         allowWithoutEnforcedCommand: execCommandOverride === undefined,
+        ...(guardianReview ? { approvalReview: guardianReview } : {}),
         ...(revalidateBeforeExecution ? { revalidateBeforeExecution } : {}),
       };
     }
@@ -1271,6 +1340,7 @@ export async function processGatewayAllowlist(
             command: params.command,
             cwd: params.workdir,
           }),
+          ...(guardianReview ? { approvalReview: guardianReview } : {}),
         };
       }
 
@@ -1288,6 +1358,7 @@ export async function processGatewayAllowlist(
       return {
         execCommandOverride: approvalDecision.execCommandOverride,
         allowWithoutEnforcedCommand: approvalDecision.execCommandOverride === undefined,
+        ...(guardianReview ? { approvalReview: guardianReview } : {}),
         ...(revalidateBeforeExecution ? { revalidateBeforeExecution } : {}),
       };
     }
@@ -1510,6 +1581,7 @@ export async function processGatewayAllowlist(
         allowedDecisions: approvalAllowedDecisions,
         processContinuationAvailable: params.processContinuationAvailable,
       }),
+      ...(guardianReview ? { approvalReview: guardianReview } : {}),
     };
   }
 
