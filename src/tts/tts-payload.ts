@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "../auto-reply/reply-payload-parts.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadAsTtsSupplement,
@@ -6,7 +7,6 @@ import {
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose, logVerbose } from "../globals.js";
-import { resolveSendableOutboundReplyParts } from "../infra/outbound/reply-payload-parts.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";

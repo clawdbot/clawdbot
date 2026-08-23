@@ -1,6 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
-import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
+import type {
+  ChannelMessageSendMediaContext,
+  ChannelMessageSendTextContext,
+} from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -96,6 +99,71 @@ describe("exact Matrix delivery queue reconciliation", () => {
       await drainMatrixReconnect({ deliver: recoveryDeliver, stateDir: tmpDir });
       expect(recoveryDeliver).not.toHaveBeenCalled();
       expect(sendText).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    { reconciliation: "automatic", legacyAttachment: "matching" },
+    { reconciliation: "automatic", legacyAttachment: "distinct" },
+    { reconciliation: "explicit", legacyAttachment: "matching" },
+    { reconciliation: "explicit", legacyAttachment: "distinct" },
+  ] as const)(
+    "delivers one attachment with $reconciliation reconciliation and a $legacyAttachment legacy URL",
+    async ({ reconciliation, legacyAttachment }) => {
+      process.env.OPENCLAW_STATE_DIR = tmpDir;
+      const mediaUrl = "https://example.invalid/image.png";
+      const legacyMediaUrl =
+        legacyAttachment === "distinct" ? "https://example.invalid/obsolete.png" : mediaUrl;
+      const sendMedia = vi.fn(async (ctx: ChannelMessageSendMediaContext) => {
+        await ctx.onPlatformSendDispatch?.();
+        return {
+          messageId: "media-1",
+          receipt: createMessageReceiptFromOutboundResults({
+            results: [{ channel: "matrix", messageId: "media-1" }],
+            kind: "media",
+          }),
+        };
+      });
+
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "matrix",
+            source: "test",
+            plugin: {
+              ...createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
+              message: {
+                id: "matrix",
+                durableFinal: {
+                  ...(reconciliation === "automatic"
+                    ? { automaticUnknownSendReconciliation: true }
+                    : {}),
+                  capabilities: { text: true, media: true, reconcileUnknownSend: true },
+                  reconcileUnknownSendKinds: { media: true },
+                  reconcileUnknownSend: async () => ({ status: "not_sent" as const }),
+                },
+                send: { text: vi.fn(), media: sendMedia },
+              },
+            },
+          },
+        ]),
+      );
+
+      await expect(
+        deliverOutboundPayloads({
+          cfg: {} as OpenClawConfig,
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text: "caption", mediaUrl: legacyMediaUrl, mediaUrls: [mediaUrl] }],
+          queuePolicy: "required",
+          ...(reconciliation === "explicit" ? { requireUnknownSendReconciliation: true } : {}),
+        }),
+      ).resolves.toMatchObject([{ messageId: "media-1" }]);
+
+      expect(sendMedia).toHaveBeenCalledOnce();
+      expect(sendMedia).toHaveBeenCalledWith(
+        expect.objectContaining({ mediaUrl, deliveryPartIndex: 0, deliveryPartCount: 1 }),
+      );
     },
   );
 });

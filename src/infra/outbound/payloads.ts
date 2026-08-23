@@ -188,28 +188,6 @@ function isSuppressedRelayStatusText(text: string): boolean {
   return false;
 }
 
-function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | undefined>): string[] {
-  const seen = new Set<string>();
-  const merged: string[] = [];
-  for (const list of lists) {
-    if (!list) {
-      continue;
-    }
-    for (const entry of list) {
-      const trimmed = entry?.trim();
-      if (!trimmed) {
-        continue;
-      }
-      if (seen.has(trimmed)) {
-        continue;
-      }
-      seen.add(trimmed);
-      merged.push(trimmed);
-    }
-  }
-  return merged;
-}
-
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
   context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
@@ -222,9 +200,13 @@ function createOutboundPayloadPlanEntry(
   });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
   const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrls?.[0];
-  const mergedMedia = mergeMediaUrls(
-    explicitMediaUrls,
-    explicitMediaUrl ? [explicitMediaUrl] : undefined,
+  const mergedMedia = Array.from(
+    new Set(
+      resolveSendableOutboundReplyParts({
+        mediaUrls: explicitMediaUrls,
+        mediaUrl: explicitMediaUrl,
+      }).mediaUrls,
+    ),
   );
   const strippedText = stripUnsupportedCitationControlMarkers(parsed.text ?? "");
   const strippedParsed =
@@ -237,7 +219,8 @@ function createOutboundPayloadPlanEntry(
     return null;
   }
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
-  const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
+  const resolvedMediaUrl =
+    !hasMultipleMedia && explicitMediaUrl?.trim() === mergedMedia[0] ? explicitMediaUrl : undefined;
   const normalizedPayload: ReplyPayload = {
     ...payload,
     text:

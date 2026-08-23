@@ -3,6 +3,7 @@
  *
  * Summarizes reply payloads so delivery can pick adapter paths and recovery metadata.
  */
+import { resolveSendableOutboundReplyParts } from "../../auto-reply/reply-payload-parts.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type {
   RenderedMessageBatch,
@@ -11,22 +12,12 @@ import type {
   RenderedMessageBatchPlanKind,
 } from "./types.js";
 
-function countMedia(payload: ReplyPayload): number {
-  return collectMediaUrls(payload).length;
-}
-
-function collectMediaUrls(payload: ReplyPayload): string[] {
-  return [payload.mediaUrl, ...(payload.mediaUrls ?? [])]
-    .map((url) => url?.trim())
-    .filter((url): url is string => Boolean(url));
-}
-
 function createRenderedMessageBatchPlanItem(
   payload: ReplyPayload,
   index: number,
 ): RenderedMessageBatchPlanItem {
   const text = payload.text?.trim();
-  const mediaUrls = collectMediaUrls(payload);
+  const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
   const presentationBlockCount = payload.presentation?.blocks?.length ?? 0;
   const kinds: RenderedMessageBatchPlanKind[] = [];
   if (text) {
@@ -62,9 +53,9 @@ export function createRenderedMessageBatchPlan(
 ): RenderedMessageBatchPlan {
   const items = payloads.map(createRenderedMessageBatchPlanItem);
   return payloads.reduce<RenderedMessageBatchPlan>(
-    (plan, payload) => {
+    (plan, payload, index) => {
       const text = payload.text?.trim();
-      const mediaCount = countMedia(payload);
+      const mediaCount = items[index]?.mediaUrls.length ?? 0;
       return {
         payloadCount: plan.payloadCount + 1,
         textCount: plan.textCount + (text ? 1 : 0),

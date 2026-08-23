@@ -658,6 +658,32 @@ describe("reconcileClickClackUnknownSend", () => {
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
   });
 
+  it("recovers one attachment when legacy and plural URLs describe the same upload", async () => {
+    findUploadByNonce.mockResolvedValueOnce({ id: "upl_existing", filename: "proof.ts" });
+    findMessageByNonce.mockResolvedValueOnce({
+      id: "msg_existing",
+      attachments: [{ id: "upl_existing" }],
+    });
+    const mediaUrl = "/workspace/proof.ts";
+
+    const result = await reconcileClickClackUnknownSend({
+      cfg,
+      queueId: "queue-media",
+      channel: "clickclack",
+      to: "channel:general",
+      enqueuedAt: 1,
+      retryCount: 0,
+      payloads: [{ text: "proof", mediaUrl, mediaUrls: [mediaUrl] }],
+    });
+
+    expect(result.status).toBe("sent");
+    expect(findUploadByNonce).toHaveBeenCalledOnce();
+    expect(findMessageByNonce).toHaveBeenCalledOnce();
+    if (result.status === "sent") {
+      expect(result.receipt.platformMessageIds).toEqual(["msg_existing"]);
+    }
+  });
+
   it("replays normally when uploads exist but messages do not", async () => {
     findUploadByNonce
       .mockResolvedValueOnce({ id: "upl_first", filename: "first.png" })

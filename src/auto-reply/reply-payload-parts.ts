@@ -1,4 +1,4 @@
-import { normalizeStringEntries } from "../../../packages/normalization-core/src/string-normalization.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 /** Derived sendability facts for text/media outbound payload delivery. */
 export type SendableOutboundReplyParts = {

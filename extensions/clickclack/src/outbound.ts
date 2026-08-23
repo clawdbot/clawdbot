@@ -13,6 +13,7 @@ import {
   loadOutboundMediaFromUrl,
   type OutboundMediaLoadOptions,
 } from "openclaw/plugin-sdk/outbound-media";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   FormatCapabilityProfile,
   renderMarkdownWithMarkers,
@@ -305,9 +306,7 @@ function collectReconciliationMediaUrls(ctx: ChannelMessageUnknownSendContext): 
     return planned.map((url) => url.trim()).filter(Boolean);
   }
   const payload = ctx.payloads[0];
-  return [payload?.mediaUrl, ...(payload?.mediaUrls ?? [])]
-    .map((url) => url?.trim())
-    .filter((url): url is string => Boolean(url));
+  return payload ? resolveSendableOutboundReplyParts(payload).mediaUrls : [];
 }
 
 /**

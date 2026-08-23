@@ -31,6 +31,22 @@ function resolveMirrorProjection(payloads: readonly ReplyPayload[]) {
 }
 
 describe("normalizeReplyPayloadsForDelivery", () => {
+  it("prefers plural attachments over a distinct legacy primary before delivery", () => {
+    const [entry] = createOutboundPayloadPlan([
+      {
+        text: "caption",
+        mediaUrl: "https://x.test/obsolete.png",
+        mediaUrls: ["https://x.test/image.png"],
+      },
+    ]);
+
+    expect(entry?.payload).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: ["https://x.test/image.png"],
+    });
+    expect(entry?.parts.mediaUrls).toEqual(["https://x.test/image.png"]);
+  });
+
   it("parses directives, merges media, and preserves reply metadata", () => {
     expect(
       normalizeReplyPayloadsForDelivery([

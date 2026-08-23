@@ -3,7 +3,7 @@ import { filterMessagingToolMediaDuplicates } from "../auto-reply/reply/reply-pa
 import { createRenderedMessageBatchPlan } from "../channels/message/rendered-batch.js";
 
 describe("media retirement outbound non-goals", () => {
-  it("keeps lowercase ReplyPayload media fields in rendered batch plans", () => {
+  it("keeps canonical lowercase ReplyPayload media fields in rendered batch plans", () => {
     expect(
       createRenderedMessageBatchPlan([
         {
@@ -13,10 +13,10 @@ describe("media retirement outbound non-goals", () => {
         },
       ]),
     ).toMatchObject({
-      mediaCount: 2,
+      mediaCount: 1,
       items: [
         {
-          mediaUrls: ["https://example.test/one.png", "https://example.test/two.png"],
+          mediaUrls: ["https://example.test/two.png"],
         },
       ],
     });
