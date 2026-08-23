@@ -111,11 +111,10 @@ export async function runPreparedEmbeddedLoop(
     { config: params.config },
   );
   params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext };
-  // Admission is resolved once before the retry loop. Carry that exact object through every
-  // attempt/recovery owner so downstream dispatch cannot lose the admitted context.
+  params.beforeAgentRunAdmission ??= {};
+  // Carry the admitted context and gate memo through every attempt/recovery owner.
   const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
-  provider = preparedRuntime.provider;
-  modelId = preparedRuntime.modelId;
+  ({ provider, modelId } = preparedRuntime);
   const {
     requestedModelId,
     model,

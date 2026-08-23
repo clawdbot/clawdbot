@@ -46,6 +46,7 @@ import type {
   ToolResultFormat,
 } from "../../embedded-agent-subscribe.shared-types.js";
 import type { FastModeAutoProgressState } from "../../fast-mode.js";
+import type { AgentHarnessBeforeAgentRunAdmission } from "../../harness/before-agent-run-admission.js";
 import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../../harness/context-engine-turn-attempt.js";
 import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
@@ -87,6 +88,11 @@ export type CurrentInboundPromptContext = {
 export type RunEmbeddedAgentParams = {
   /** Already-admitted internal execution; mutually exclusive with preparedRunAdmission. */
   admittedRunContext?: AdmittedRunContext;
+  /**
+   * Run-scoped before_agent_run gate memo, allocated once outside the attempt
+   * retry loop so re-dispatch replays the decision instead of recharging it.
+   */
+  beforeAgentRunAdmission?: AgentHarnessBeforeAgentRunAdmission;
   /** Host-only post-prepare continuation, removed before plugin invocation. */
   preparedRunAdmission?: PreparedAgentRunAdmission;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */

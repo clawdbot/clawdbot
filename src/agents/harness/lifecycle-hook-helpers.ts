@@ -8,17 +8,21 @@ import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveBlockMessage } from "../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
+  PluginHookBeforeAgentRunEvent,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
 import type { VoidHookRunOptions } from "../../plugins/hooks.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { AgentHarnessBeforeAgentRunAdmission } from "./before-agent-run-admission.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
+import { limitAgentHookHistoryMessages } from "./hook-history.js";
 
 const log = createSubsystemLogger("agents/harness");
 const FINALIZE_RETRY_BUDGET_KEY = Symbol.for("openclaw.pluginFinalizeRetryBudget");
@@ -97,6 +101,99 @@ export function runAgentHarnessLlmOutputHook(params: {
     .catch((error: unknown) => {
       log.warn(`llm_output hook failed: ${String(error)}`);
     });
+}
+
+/** Closed outcome of the fail-closed before_agent_run gate. */
+type AgentHarnessBeforeAgentRunOutcome =
+  | { action: "proceed" }
+  | { action: "blocked"; blockedBy: string; message: string };
+
+/** Attribution used when the gate itself fails rather than a plugin deciding to block. */
+const BEFORE_AGENT_RUN_FAILURE_ATTRIBUTION = "before_agent_run";
+
+/** Fail-closed outcome for a gate that could not produce a plugin decision. */
+function buildBeforeAgentRunGateFailure(reason: string): AgentHarnessBeforeAgentRunOutcome {
+  return {
+    action: "blocked",
+    blockedBy: BEFORE_AGENT_RUN_FAILURE_ATTRIBUTION,
+    message: resolveBlockMessage(
+      { outcome: "block", reason },
+      { blockedBy: BEFORE_AGENT_RUN_FAILURE_ATTRIBUTION },
+    ),
+  };
+}
+
+/**
+ * Runs the fail-closed before_agent_run gate for a harness attempt.
+ *
+ * Block-message rendering stays here so plugin-local `reason` text can never
+ * reach a user-facing surface, and history is bounded/cloned here so every
+ * runtime gets the same isolated snapshot without copying the policy.
+ */
+export async function runAgentHarnessBeforeAgentRunHook(params: {
+  event: Omit<PluginHookBeforeAgentRunEvent, "messages"> & { messages?: readonly unknown[] };
+  ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
+  /** Run-scoped memo; outer attempt re-dispatch replays its recorded decision. */
+  admission?: AgentHarnessBeforeAgentRunAdmission;
+}): Promise<AgentHarnessBeforeAgentRunOutcome> {
+  const admission = params.admission;
+  if (admission?.decision) {
+    return admission.decision;
+  }
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("before_agent_run")) {
+    return { action: "proceed" };
+  }
+  if (typeof hookRunner.runBeforeAgentRun !== "function") {
+    // Enforcement is configured but cannot execute; an unrunnable gate must
+    // never silently admit the turn.
+    log.warn("before_agent_run gate is registered but not runnable; blocking request");
+    return recordBeforeAgentRunOutcome(
+      admission,
+      buildBeforeAgentRunGateFailure("before_agent_run gate is not runnable"),
+    );
+  }
+  let result: Awaited<ReturnType<NonNullable<typeof hookRunner>["runBeforeAgentRun"]>> | undefined;
+  try {
+    result = await hookRunner.runBeforeAgentRun(
+      {
+        ...params.event,
+        /** Gives hooks a bounded snapshot they cannot mutate in-session. */
+        messages: limitAgentHookHistoryMessages(params.event.messages ?? []).map((message) =>
+          structuredClone(message),
+        ),
+      },
+      buildAgentHookContext(params.ctx),
+    );
+  } catch (error) {
+    log.warn(`before_agent_run hook failed; blocking request: ${String(error)}`);
+    return recordBeforeAgentRunOutcome(
+      admission,
+      buildBeforeAgentRunGateFailure("before_agent_run hook failed"),
+    );
+  }
+  const decision = result?.decision;
+  if (decision?.outcome !== "block") {
+    return recordBeforeAgentRunOutcome(admission, { action: "proceed" });
+  }
+  const blockedBy = result?.pluginId ?? "unknown";
+  log.warn(`before_agent_run hook blocked by ${blockedBy}`);
+  return recordBeforeAgentRunOutcome(admission, {
+    action: "blocked",
+    blockedBy,
+    message: resolveBlockMessage(decision, { blockedBy }),
+  });
+}
+
+function recordBeforeAgentRunOutcome(
+  admission: AgentHarnessBeforeAgentRunAdmission | undefined,
+  outcome: AgentHarnessBeforeAgentRunOutcome,
+): AgentHarnessBeforeAgentRunOutcome {
+  if (admission) {
+    admission.decision = outcome;
+  }
+  return outcome;
 }
 
 async function executeAgentHarnessAgentEndHook(params: {

@@ -270,6 +270,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
   });
   const attemptParams: EmbeddedRunAttemptParams = {
     admittedRunContext: params.admittedRunContext,
+    beforeAgentRunAdmission: params.beforeAgentRunAdmission,
     contextEngineAgentId: runtime.contextEngineAgentId,
     ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",

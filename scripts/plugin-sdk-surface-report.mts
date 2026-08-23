@@ -312,7 +312,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: conversation-binding inspection result and runtime inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
-      4340,
+      // +1: fail-closed before_agent_run gate for the Codex native app-server
+      //     harness, so it reuses core block-message/exactly-once policy.
+      4341,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -404,7 +406,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: read-only authoritative conversation-binding inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
-      2581,
+      // +1: fail-closed before_agent_run gate for the Codex native app-server harness.
+      2582,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

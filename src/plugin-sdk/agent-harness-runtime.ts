@@ -542,6 +542,7 @@ export {
   awaitAgentHarnessAgentEndHook,
   getAgentHarnessHookRunner,
   runAgentHarnessBeforeAgentFinalizeHook,
+  runAgentHarnessBeforeAgentRunHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,

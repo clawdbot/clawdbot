@@ -2,6 +2,7 @@
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
+import { runCodexAttemptBeforeAgentRunGate } from "./run-attempt-before-agent-run.js";
 import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import { prepareCodexAttemptContext } from "./run-attempt-context.js";
@@ -32,6 +33,13 @@ export async function runCodexAppServerAttempt(
   const resources = prepareCodexAttemptResources(attemptPrompt);
   attemptTools.runtimeYieldCompletionClaim.current = () =>
     resources.state.nativeHookRelay?.hasClaimedDirectChild() ?? false;
+  // Single gate call site for the attempt: compact retry, context-overflow
+  // thread restart, thread rotation, and turn/start retry all live below it,
+  // so the hook can never rerun for the same admitted turn.
+  const beforeAgentRunBlock = await runCodexAttemptBeforeAgentRunGate(resources);
+  if (beforeAgentRunBlock) {
+    return beforeAgentRunBlock.result;
+  }
   await startCodexAttemptRuntime(resources);
 
   const turnRuntime = createCodexAttemptTurnState(resources);
