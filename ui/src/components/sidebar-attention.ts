@@ -378,13 +378,12 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   private openPanel(trigger: HTMLElement) {
     const rect = trigger.getBoundingClientRect();
-    const sidebarRect = trigger.closest(".sidebar")?.getBoundingClientRect();
     const width = Math.min(390, globalThis.innerWidth - 16);
-    const preferredLeft = (sidebarRect?.right ?? rect.right) + 12;
+    const preferredLeft = rect.left + rect.width / 2 - width / 2;
     this.panelTrigger = trigger;
     this.panelPosition = {
       left: Math.max(8, Math.min(preferredLeft, globalThis.innerWidth - width - 8)),
-      bottom: Math.max(8, globalThis.innerHeight - rect.bottom),
+      bottom: Math.max(8, globalThis.innerHeight - rect.top + 8),
     };
     this.selectedTab = "all";
     this.panelOpen = true;
