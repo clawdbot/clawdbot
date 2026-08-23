@@ -1,3 +1,4 @@
+import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 // Matrix plugin module implements replies behavior.
 import {
   createChannelPartialDeliveryError,
@@ -15,6 +16,7 @@ import { resolveMatrixExtraContent } from "../../outbound.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { sendMessageMatrix } from "../send.js";
+import { MsgType } from "../send/types.js";
 import type { MatrixSendResult } from "../send/types.js";
 import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
@@ -94,6 +96,14 @@ function createMatrixReplyDeliveryResult(
   };
 }
 
+function resolveMatrixReasoningReplyText(text?: string): string | undefined {
+  const raw = typeof text === "string" ? text.trim() : "";
+  const reasoningPrefix = "Reasoning:\n";
+  const body = raw.startsWith(reasoningPrefix) ? raw.slice(reasoningPrefix.length).trim() : raw;
+  const formatted = formatReasoningMessage(body);
+  return formatted || undefined;
+}
+
 function resolveVisibleMatrixReplyText(text?: string): string | undefined {
   if (typeof text !== "string") {
     return undefined;
@@ -132,9 +142,12 @@ export async function deliverMatrixReplies(params: {
   const acceptedResults: MatrixSendResult[] = [];
   try {
     for (const reply of params.replies) {
-      const visibleText = resolveVisibleMatrixReplyText(reply.text);
+      const isReasoningPayload = reply.isReasoning === true;
+      const visibleText = isReasoningPayload
+        ? resolveMatrixReasoningReplyText(reply.text)
+        : resolveVisibleMatrixReplyText(reply.text);
       const { hasMedia, hasText, mediaUrls } = resolveSendableOutboundReplyParts(reply);
-      if (reply.isReasoning === true || (!hasMedia && reply.text && visibleText === undefined)) {
+      if (!isReasoningPayload && !hasMedia && reply.text && visibleText === undefined) {
         logVerbose("matrix reply suppressed as reasoning-only");
         continue;
       }
@@ -177,6 +190,7 @@ export async function deliverMatrixReplies(params: {
           threadId: params.threadId,
           accountId: params.accountId,
           extraContent,
+          ...(isReasoningPayload ? { msgtype: MsgType.Notice, disableMentions: true } : {}),
           onDeliveryResult,
         });
         continue;

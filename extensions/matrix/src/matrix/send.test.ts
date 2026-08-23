@@ -1133,6 +1133,22 @@ describe("sendMessageMatrix mentions", () => {
     expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
   });
 
+  it("suppresses mention metadata when requested", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "@room hi @alice:example.org", {
+      client,
+      cfg: {} as never,
+      msgtype: "m.notice",
+      disableMentions: true,
+    });
+
+    const content = sentContent(sendMessage);
+    expect(content.msgtype).toBe("m.notice");
+    expect(content.body).toBe("@room hi @alice:example.org");
+    expect(content["m.mentions"]).toEqual({});
+  });
+
   it("marks room mentions via m.mentions.room", async () => {
     const { client, sendMessage } = makeClient();
 

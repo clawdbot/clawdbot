@@ -172,6 +172,10 @@ function withMatrixExtraContentFields<T extends Record<string, unknown>>(
   return { ...content, ...extraContent };
 }
 
+function suppressMatrixMentions<T extends Record<string, unknown>>(content: T): T {
+  return { ...content, "m.mentions": {} };
+}
+
 async function resolvePreviousEditMentions(params: {
   client: MatrixClient;
   content: Record<string, unknown> | undefined;
@@ -243,8 +247,11 @@ export async function sendMessageMatrix(
           content: MatrixOutboundContent,
           receiptKind: MessageReceiptPartKind,
         ) => {
+          const enrichedContent = withMatrixExtraContentFields(content, pendingExtraContent);
           events.push({
-            content: withMatrixExtraContentFields(content, pendingExtraContent),
+            content: opts.disableMentions
+              ? suppressMatrixMentions(enrichedContent)
+              : enrichedContent,
             receiptKind,
           });
           pendingExtraContent = undefined;
@@ -328,7 +335,7 @@ export async function sendMessageMatrix(
             if (!chunk.trim()) {
               continue;
             }
-            const content = buildTextContent(chunk, relation);
+            const content = buildTextContent(chunk, relation, { msgtype: opts.msgtype });
             await enrichMatrixFormattedContent({
               client,
               content,

@@ -98,6 +98,8 @@ export type MatrixSendOpts = {
   replyToId?: string;
   threadId?: string | number | null;
   timeoutMs?: number;
+  /** Override text event type for non-media Matrix replies. */
+  msgtype?: MatrixTextMsgType;
   /** Opaque durable queue id used to derive Matrix transaction ids. */
   deliveryQueueId?: string;
   /** Stable provider-send index within one durable payload. */
@@ -108,6 +110,8 @@ export type MatrixSendOpts = {
   onPlatformSendDispatch?: () => Promise<void>;
   /** Additional Matrix event content fields to merge into the first sent event. */
   extraContent?: MatrixExtraContentFields;
+  /** Suppress Matrix mention metadata even when the rendered body contains mention-like text. */
+  disableMentions?: boolean;
   /** Send audio as voice message instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
   /** Persist each concrete platform send before any later event can fail. */
