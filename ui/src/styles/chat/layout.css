@@ -5530,6 +5530,10 @@ button.chat-pr__diff {
   stroke: currentColor;
 }
 
+.chat-controls__context-window-icon svg {
+  fill: none;
+}
+
 .chat-controls__fast-mode-copy {
   display: grid;
   gap: 1px;
@@ -5550,6 +5554,18 @@ button.chat-pr__diff {
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-controls__context-window-options {
+  --settings-control-height: 24px;
+
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.chat-controls__context-window-options .settings-segmented__btn {
+  padding: 0 6px;
+  font-size: 10px;
 }
 
 .chat-controls__speed-toggle {

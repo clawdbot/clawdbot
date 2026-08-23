@@ -9,7 +9,10 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  GatewayErrorDetailCodes,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { jsonResult } from "../../agents/tools/common.js";
@@ -19,6 +22,7 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -1424,6 +1428,70 @@ describe("gateway send mirroring", () => {
     );
 
     expect(lastDispatchChannelMessageActionCall()?.conversationReadOrigin).toBe("delegated");
+  });
+
+  it.each([
+    ["an agent runtime message tool", true, "caller"],
+    ["an operator CLI client", false, undefined],
+  ])(
+    "hands gateway-owned plugin deliveries the retry owner for %s",
+    async (_label, isAgentRuntime, expected) => {
+      const sessionKey = "agent:main:slack:channel:C1";
+      mocks.dispatchChannelMessageAction.mockResolvedValueOnce({
+        details: { action: "handled" },
+      });
+
+      await runMessageActionRequest(
+        {
+          channel: "slack",
+          action: "send",
+          params: { channelId: "C1", message: "hi" },
+          sessionKey,
+          agentId: "main",
+          idempotencyKey: `idem-retry-owner-${expected ?? "reporting-only"}`,
+        },
+        isAgentRuntime ? agentRuntimeClient(sessionKey) : (directCliClient() as never),
+      );
+
+      // Only the message tool resends a proven-not-sent failure; leaving its
+      // queue row replayable is what duplicated the send (#124279), and marking
+      // a reporting-only caller would strand its row instead (#100979).
+      expect(lastDispatchChannelMessageActionCall()?.deliveryRetryOwner).toBe(expected);
+    },
+  );
+
+  it.each([
+    ["queue-owned retry", true],
+    ["ordinary failure", false],
+  ])("reports structured details for %s", async (_label, recoveryOwnedRetry) => {
+    const dispatchError = new OutboundDeliveryError("connect ECONNREFUSED", {
+      cause: new Error("connect ECONNREFUSED"),
+      stage: "platform_send",
+    });
+    if (recoveryOwnedRetry) {
+      dispatchError.recoveryOwnedRetry = true;
+    }
+    mocks.dispatchChannelMessageAction.mockRejectedValueOnce(dispatchError);
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "slack",
+        action: "send",
+        params: { channelId: "C1", message: "hi" },
+        idempotencyKey: `idem-queued-detail-${recoveryOwnedRetry}`,
+      },
+      directCliClient(),
+    );
+
+    const error = firstRespondCall(respond)[2];
+    expect(error).toMatchObject({ code: ErrorCodes.UNAVAILABLE });
+    if (recoveryOwnedRetry) {
+      expect(error?.details).toEqual({
+        code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED,
+      });
+    } else {
+      expect(error).not.toHaveProperty("details");
+    }
   });
 
   it("does not send after delegated authority closes during session preparation", async () => {

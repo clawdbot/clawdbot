@@ -369,14 +369,15 @@ jobs:
             --arg baseline_sha "${{ needs.validate_refs.outputs.baseline_revision }}" \
             --arg candidate_sha "${{ needs.validate_refs.outputs.candidate_revision }}" \
             '{
-              schemaVersion: 1,
+              schemaVersion: 2,
               id: "discord-status-reactions",
               title: "Mantis Discord Status Reactions QA",
               summary: "Mantis reran Discord status reactions against the known queued-only baseline and the candidate ref. The baseline reproduced the bug, while the candidate showed the expected queued -> thinking -> done reaction sequence.",
               scenario: "discord-status-reactions-tool-only",
               comparison: {
-                baseline: { sha: $baseline_sha, expected: "queued-only", status: $baseline_status, reproduced: ($baseline_status == "fail") },
-                candidate: { sha: $candidate_sha, expected: "queued -> thinking -> done", status: $candidate_status, fixed: ($candidate_status == "pass") },
+                baseline: { sha: $baseline_sha, expected: "queued-only", expectationMet: ($baseline_status == "fail"), status: $baseline_status, reproduced: ($baseline_status == "fail") },
+                candidate: { sha: $candidate_sha, expected: "queued -> thinking -> done", expectationMet: ($candidate_status == "pass"), status: $candidate_status, fixed: ($candidate_status == "pass") },
+                outcome: (if (($baseline_status == "fail") and ($candidate_status == "pass")) then "pass" else "fail" end),
                 pass: (($baseline_status == "fail") and ($candidate_status == "pass"))
               },
               artifacts: [

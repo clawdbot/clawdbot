@@ -43,13 +43,13 @@ describe("run-with-lease-fence", () => {
       fs.writeFileSync(lostMarker, "lost\n");
 
       try {
-        await expect(waitForChildClose(child, 12_000)).resolves.toEqual({
+        await expect(waitForChildClose(child)).resolves.toEqual({
           code: 97,
           signal: null,
         });
-        const ticksAfterFence = fs.readFileSync(ticksFile, "utf8");
-        await new Promise((resolve) => setTimeout(resolve, 1_200));
-        expect(fs.readFileSync(ticksFile, "utf8")).toBe(ticksAfterFence);
+        expect(() => process.kill(-commandPid, 0)).toThrow(
+          expect.objectContaining({ code: "ESRCH" }),
+        );
         expect(stderr).toContain("::error::Telegram QA lease lost mid-run; fencing proof");
       } finally {
         if (child.exitCode === null) {
@@ -71,5 +71,19 @@ describe("run-with-lease-fence", () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
+  });
+
+  posixIt("passes the caller's stdin through to the fenced command", () => {
+    // The workflow pipes the agent prompt into the fenced Codex process; a
+    // backgrounded child otherwise defaults its stdin to /dev/null, which
+    // made the agent fail with an empty prompt.
+    const root = tempDirs.make("openclaw-lease-fence-stdin-");
+    const result = spawnSync(SCRIPT, [path.join(root, "lease.lost"), "--", "/bin/cat"], {
+      encoding: "utf8",
+      input: "prompt body\n",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("prompt body\n");
   });
 });

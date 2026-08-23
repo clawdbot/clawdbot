@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../components/sidebar-update-card.ts";
 import "./app-host.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -18,6 +19,12 @@ type ShellNavigationState = {
   nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
   onboarding: boolean;
   updated: () => void;
+};
+
+type ShellSettingsEscapeState = ShellKeyboardState & {
+  lastWorkspaceLocation: { routeId: "usage"; pathname: string; search: string };
+  navDrawerOpen: boolean;
+  routeState: { routeId: "appearance" };
 };
 
 type TestWebKitWindow = Window & {
@@ -105,6 +112,41 @@ describe("OpenClaw native shell", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith("appearance", undefined);
+  });
+
+  it("keeps the raw config editor unchanged when Escape is pressed", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellSettingsEscapeState;
+    shell.runtime = {
+      context: {
+        navigate,
+        overlays: { snapshot: { devicePairSetupOpen: false } },
+      } as unknown as ApplicationContext,
+    };
+    shell.lastWorkspaceLocation = { routeId: "usage", pathname: "/usage", search: "" };
+    shell.navDrawerOpen = false;
+    shell.routeState = { routeId: "appearance" };
+    const rawField = document.body.appendChild(document.createElement("label"));
+    rawField.className = "config-raw-field";
+    const rawEditor = rawField.appendChild(document.createElement("textarea"));
+    rawEditor.value = '{ "gateway": { "port": 18789 } }';
+    rawEditor.focus();
+    const onInput = vi.fn();
+    rawEditor.addEventListener("input", onInput);
+    rawEditor.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
+
+    try {
+      const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+      rawEditor.dispatchEvent(event);
+
+      expect(rawEditor.value).toBe('{ "gateway": { "port": 18789 } }');
+      expect(onInput).not.toHaveBeenCalled();
+      expect(navigate).not.toHaveBeenCalled();
+    } finally {
+      rawField.remove();
+    }
   });
 
   it("toggles the navigation sidebar when the native macOS titlebar button fires", () => {
@@ -451,7 +493,7 @@ describe("OpenClaw shell update affordance", () => {
       }),
       container,
     );
-    expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
+    expect(container.querySelector("openclaw-sidebar-update-card")).not.toBeNull();
     container.remove();
   });
 

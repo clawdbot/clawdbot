@@ -17,6 +17,7 @@ const scrubbedEnvKeys = [
   "CLICKCLACK_FIXTURE_PORT",
   "CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES",
   "FIXTURE_PORT",
+  "MOCK_BIND_HOST",
   "MOCK_PORT",
   "MOCK_REQUEST_LOG",
   "MOCK_RESPONSE_CHUNK_DELAY_MS",
@@ -365,6 +366,111 @@ describe("mock OpenAI response markers", () => {
           ]);
         },
       );
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("records bounded media facts without provider payload bytes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-content-facts-"));
+    const requestLog = join(root, "requests.ndjson");
+    const pdfBytes = "private-pdf-bytes";
+    const pdfBase64 = Buffer.from(pdfBytes).toString("base64");
+    try {
+      await writeFile(requestLog, "");
+      await withMockServer(mockOpenAiPath, { MOCK_REQUEST_LOG: requestLog }, async (baseUrl) => {
+        const send = async (input: unknown) => {
+          const response = await fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ input, stream: false }),
+          });
+          expect(response.status).toBe(200);
+        };
+        await send([
+          {
+            type: "message",
+            role: "user",
+            content: Array.from({ length: 128 }, (_, index) => ({
+              type: "input_text",
+              text: `historical turn ${index}`,
+            })),
+          },
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                filename: "proof.pdf",
+                file_data: `data:application/pdf;base64,${pdfBase64}`,
+              },
+              { type: "input_text", text: "Summarize the staged document." },
+            ],
+          },
+        ]);
+        await send([
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "[media attached: /tmp/session/proof.pdf (application/pdf)]\nSummarize it.",
+              },
+            ],
+          },
+        ]);
+
+        const recorded = await readFile(requestLog, "utf8");
+        const entries = recorded
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(entries[0]?.contentFacts).toHaveLength(128);
+        expect(entries[0]?.contentFactsTruncated).toBe(true);
+        expect(entries[0]?.contentFacts.slice(-2)).toEqual([
+          {
+            type: "input_file",
+            filename: "proof.pdf",
+            mimeType: "application/pdf",
+            byteLength: Buffer.byteLength(pdfBytes),
+          },
+          { type: "input_text" },
+        ]);
+        expect(entries[1]?.contentFacts).toEqual([
+          { type: "input_text" },
+          {
+            type: "legacy_media",
+            filename: "/tmp/session/proof.pdf",
+            mimeType: "application/pdf",
+          },
+        ]);
+        expect(recorded).not.toContain(pdfBase64);
+        expect(entries[0]?.body).toContain("data:application/pdf;base64,[redacted:17 bytes]");
+        expect(entries.map((entry) => entry.seq)).toEqual([1, 2]);
+
+        // Redaction walks parsed JSON, so an unparseable body must never be
+        // logged as raw text — that path would leak the base64 payload.
+        const malformed = `{"input": "data:application/pdf;base64,${pdfBase64}"`;
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: malformed,
+        });
+        expect(response.status).toBe(200);
+        const withMalformed = await readFile(requestLog, "utf8");
+        expect(withMalformed).not.toContain(pdfBase64);
+        const malformedEntry = withMalformed
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+          .at(-1);
+        expect(malformedEntry?.body).toBe(
+          `[unparseable request body redacted: ${Buffer.byteLength(malformed)} bytes]`,
+        );
+        expect(malformedEntry?.seq).toBe(3);
+      });
     } finally {
       await rm(root, { force: true, recursive: true });
     }

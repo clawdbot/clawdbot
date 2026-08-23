@@ -812,6 +812,19 @@ describe("skills cli commands", () => {
     expect(installSkillFromSourceMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { spec: "git:owner/tools", flag: "--force-install" },
+    { spec: "./local-skill", flag: "--force-install" },
+    { spec: "git:owner/tools", flag: "--acknowledge-clawhub-risk" },
+    { spec: "./local-skill", flag: "--acknowledge-clawhub-risk" },
+  ])("rejects ClawHub-only $flag for source install $spec", async ({ spec, flag }) => {
+    await expect(runCommand(["skills", "install", spec, flag])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(`${flag} is only supported for ClawHub skill installs.`);
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+    expect(installSkillFromSourceMock).not.toHaveBeenCalled();
+  });
+
   it("installs a skill into the cwd-inferred agent workspace", async () => {
     routeWorkspaceByAgent();
     resolveAgentIdByWorkspacePathMock.mockReturnValue("writer");

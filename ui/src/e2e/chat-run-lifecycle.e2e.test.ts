@@ -59,6 +59,40 @@ suite.define(() => {
     });
   });
 
+  it("keeps a different active run in its own status row", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    await installMockGateway(currentPage, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: "Older run result.",
+          timestamp: Date.now() - 1_000,
+          __openclaw: { id: "older-result", idempotencyKey: "older-run" },
+        },
+      ],
+      inFlightRun: { runId: "newer-run", text: "" },
+      sessionInfo: {
+        activeRunIds: ["newer-run"],
+        hasActiveRun: true,
+        key: "main",
+      },
+    });
+
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Older run result.", { exact: true }).waitFor();
+    await currentPage.locator(".chat-reading-indicator").waitFor();
+
+    expect(await currentPage.locator(".chat-group.assistant").count()).toBe(2);
+    expect(
+      await currentPage
+        .locator(".chat-group.assistant", { hasText: "Older run result." })
+        .locator(".chat-working-indicator--continuation")
+        .count(),
+    ).toBe(0);
+  });
+
   it("restores only the unpersisted assistant response after reconnecting", async () => {
     const artifactDir = path.resolve(".artifacts/control-ui-e2e/chat-inflight-reconnect");
     const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";

@@ -562,7 +562,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
           if (event.event === "session.message") {
             this.clearTypingActorForSessionMessage(event.payload);
           }
-          handlePageGatewayEvent(state, event);
+          handlePageGatewayEvent(state, event, () => this.presented);
         }
       }),
     );
@@ -674,7 +674,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.paneResizeObserver = null;
     this.connectionGeneration += 1;
     this.retireHeaderSessionMutations();
-    this.deferredSessionHydrationRequestVersion += 1;
+    this.retireDeferredSessionHydration();
     this.sessionDiscussionPanels.clear();
     this.taskSuggestionsRequestVersion += 1;
     this.setTaskSuggestions([]);

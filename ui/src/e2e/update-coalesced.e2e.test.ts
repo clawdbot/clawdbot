@@ -10,7 +10,7 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT = "openclaw:native-update-availability-changed";
+const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 const MANAGED_UPDATE_HANDOFF_RESPONSE = {
   ok: true,
   handoff: { status: "started" },
@@ -18,13 +18,7 @@ const MANAGED_UPDATE_HANDOFF_RESPONSE = {
 } as const;
 
 async function openUpdateConfirmation(page: Page): Promise<void> {
-  await page
-    .locator('[data-attention-kind="updateAvailable"] .sidebar-attention__open:visible')
-    .click();
-  await page
-    .locator(".custodian__alert-card")
-    .getByRole("button", { name: "Update and restart", exact: true })
-    .click();
+  await page.locator(".sidebar-footer-update:visible").click();
 }
 
 suite.define(() => {
@@ -74,8 +68,13 @@ suite.define(() => {
 
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
         await dialog.getByRole("button", { name: "Close", exact: true }).click();
-        await page.locator(".sidebar-update-card__status:visible").waitFor();
-        expect(await page.locator(".sidebar-update-card__action").isEnabled()).toBe(true);
+        await page.locator(".sidebar-issues-button").click();
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.locator("summary").click();
+        await updateIssue.locator(".sidebar-update-card__compact-reason").waitFor();
+        expect(await page.locator(".sidebar-footer-update:visible").isEnabled()).toBe(true);
         expect(pageErrors).toEqual([]);
         await page.screenshot({ path: path.join(artifactDir, "package-update-failure.png") });
       },
@@ -122,15 +121,18 @@ suite.define(() => {
         await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
         await page.getByRole("button", { name: "Close", exact: true }).click();
-        await page
+        await page.locator(".sidebar-issues-button").click();
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.locator("summary").click();
+        await updateIssue
           .getByText(
             "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
             { exact: true },
           )
           .waitFor();
-        const updating = page.getByRole("button", { name: /Updating Gateway/ });
-        await updating.waitFor();
-        expect(await updating.isEnabled()).toBe(false);
+        expect(await page.locator(".sidebar-footer-update:visible").isEnabled()).toBe(false);
         expect(pageErrors).toEqual([]);
         await page.screenshot({ path: path.join(artifactDir, "coalesced-restart-banner.png") });
       },
@@ -286,20 +288,11 @@ suite.define(() => {
       ).toEqual([{ type: "start-update" }]);
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
-      await page.evaluate((eventName) => {
-        Reflect.deleteProperty(window, "webkit");
-        window.dispatchEvent(new CustomEvent(eventName));
-      }, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT);
-      await page
-        .locator(".custodian__alert-card")
-        .getByRole("button", { name: "Update and restart", exact: true })
-        .click();
-      await page
-        .locator("openclaw-modal-dialog")
-        .getByRole("button", { name: "Update and restart", exact: true })
-        .click();
-
-      expect(await gateway.getRequests("update.run")).toHaveLength(1);
+      await page.evaluate(
+        (eventName) => window.dispatchEvent(new CustomEvent(eventName)),
+        NATIVE_UPDATE_DECLINED_EVENT,
+      );
+      await expect.poll(async () => (await gateway.getRequests("update.run")).length).toBe(1);
       expect(pageErrors).toEqual([]);
       await page.screenshot({ path: path.join(artifactDir, "gateway-update-target.png") });
     } finally {

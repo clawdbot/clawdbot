@@ -427,10 +427,14 @@ describe("normalizeInitialApplicationLocation", () => {
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["openclaw.setup.detect"] },
+        snapshot: {
+          sessionDefaults: { defaultAgentId: "main", modelConfigured: false },
+        },
       },
     } as Parameters<GatewayListener>[0];
     connectedListener(gateway.snapshot);
-    await vi.waitFor(() => expect(replaceRoute).toHaveBeenCalledOnce(), STARTUP_STEP_WAIT);
+    expect(request).not.toHaveBeenCalled();
+    expect(replaceRoute).toHaveBeenCalledOnce();
     expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
   });
 

@@ -9,11 +9,10 @@ const SIDEBAR_ATTENTION_KINDS = [
   "cronFailed",
   "cronOverdue",
   "modelAuthExpired",
-  "pendingApproval",
 ] as const;
 export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_KINDS)[number];
 
-export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string>>;
+export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string[]>>;
 
 // Minimal chip shape the snooze logic needs; keeps this module free of the
 // component's item type so the two files cannot form an import cycle.
@@ -38,8 +37,13 @@ export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
     const result: SidebarAttentionDismissals = {};
     for (const kind of SIDEBAR_ATTENTION_KINDS) {
       const value = (parsed as Record<string, unknown>)[kind];
-      if (typeof value === "string") {
-        result[kind] = value;
+      const signatures = Array.isArray(value)
+        ? value.filter((entry): entry is string => typeof entry === "string")
+        : typeof value === "string"
+          ? [value]
+          : [];
+      if (signatures.length > 0) {
+        result[kind] = [...new Set(signatures)];
       }
     }
     return result;
@@ -74,7 +78,8 @@ export function addDismissal(
   kind: SidebarAttentionKind,
   signature: string,
 ): SidebarAttentionDismissals {
-  const next = { ...loadDismissals(gatewayUrl), [kind]: signature };
+  const stored = loadDismissals(gatewayUrl);
+  const next = { ...stored, [kind]: [...new Set([...(stored[kind] ?? []), signature])] };
   saveDismissals(gatewayUrl, next);
   return next;
 }
@@ -92,12 +97,16 @@ export function pruneDismissals(
   let changed = false;
   for (const kind of SIDEBAR_ATTENTION_KINDS) {
     const stored = dismissals[kind];
-    if (stored === undefined) {
+    if (!stored) {
       continue;
     }
-    if (items.some((item) => item.kind === kind && item.signature === stored)) {
-      next[kind] = stored;
-    } else {
+    const current = stored.filter((signature) =>
+      items.some((item) => item.kind === kind && item.signature === signature),
+    );
+    if (current.length > 0) {
+      next[kind] = current;
+    }
+    if (current.length !== stored.length) {
       changed = true;
     }
   }

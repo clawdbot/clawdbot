@@ -1804,6 +1804,20 @@ public struct McpAppViewExpiredErrorDetails: Codable, Sendable {
     }
 }
 
+public struct OutboundDeliveryQueuedErrorDetails: Codable, Sendable {
+    public let code: String
+
+    public init(
+        code: String)
+    {
+        self.code = code
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+    }
+}
+
 public struct SkillProposalRevisionChangedErrorDetails: Codable, Sendable {
     public let code: String
     public let expectedrevisionhash: String
@@ -9283,6 +9297,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let label: String?
     public let category: String?
     public let model: String?
+    public let contextwindow: String?
     public let thinkinglevel: String?
     public let permissionmode: SessionPermissionMode?
     public let incognito: Bool?
@@ -9310,6 +9325,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         label: String? = nil,
         category: String? = nil,
         model: String? = nil,
+        contextwindow: String? = nil,
         thinkinglevel: String? = nil,
         permissionmode: SessionPermissionMode? = nil,
         incognito: Bool? = nil,
@@ -9336,6 +9352,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.label = label
         self.category = category
         self.model = model
+        self.contextwindow = contextwindow
         self.thinkinglevel = thinkinglevel
         self.permissionmode = permissionmode
         self.incognito = incognito
@@ -9364,6 +9381,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case label
         case category
         case model
+        case contextwindow = "contextWindow"
         case thinkinglevel = "thinkingLevel"
         case permissionmode = "permissionMode"
         case incognito
@@ -9628,6 +9646,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let archived: Bool?
     public let pinned: Bool?
     public let unread: Bool?
+    public let contextwindow: AnyCodable?
     public let thinkinglevel: AnyCodable?
     public let fastmode: AnyCodable?
     public let tooloverrides: AnyCodable?
@@ -9664,6 +9683,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         archived: Bool? = nil,
         pinned: Bool? = nil,
         unread: Bool? = nil,
+        contextwindow: AnyCodable? = nil,
         thinkinglevel: AnyCodable? = nil,
         fastmode: AnyCodable? = nil,
         tooloverrides: AnyCodable? = nil,
@@ -9699,6 +9719,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.archived = archived
         self.pinned = pinned
         self.unread = unread
+        self.contextwindow = contextwindow
         self.thinkinglevel = thinkinglevel
         self.fastmode = fastmode
         self.tooloverrides = tooloverrides
@@ -9736,6 +9757,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case archived
         case pinned
         case unread
+        case contextwindow = "contextWindow"
         case thinkinglevel = "thinkingLevel"
         case fastmode = "fastMode"
         case tooloverrides = "toolOverrides"
@@ -9770,6 +9792,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public let archived: Bool?
     public let pinned: Bool?
     public let unread: Bool?
+    public let contextwindow: AnyCodable?
     public let thinkinglevel: AnyCodable?
     public let fastmode: AnyCodable?
     public let tooloverrides: AnyCodable?
@@ -9802,6 +9825,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         archived: Bool? = nil,
         pinned: Bool? = nil,
         unread: Bool? = nil,
+        contextwindow: AnyCodable? = nil,
         thinkinglevel: AnyCodable? = nil,
         fastmode: AnyCodable? = nil,
         tooloverrides: AnyCodable? = nil,
@@ -9833,6 +9857,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         self.archived = archived
         self.pinned = pinned
         self.unread = unread
+        self.contextwindow = contextwindow
         self.thinkinglevel = thinkinglevel
         self.fastmode = fastmode
         self.tooloverrides = tooloverrides
@@ -9866,6 +9891,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         case archived
         case pinned
         case unread
+        case contextwindow = "contextWindow"
         case thinkinglevel = "thinkingLevel"
         case fastmode = "fastMode"
         case tooloverrides = "toolOverrides"
@@ -12384,6 +12410,7 @@ public struct SystemAgentSetupActivateResult: Codable, Sendable {
     public let modelref: String?
     public let latencyms: Double?
     public let lines: [String]?
+    public let gatewayrestartrequired: Bool?
     public let status: AnyCodable?
     public let error: String?
 
@@ -12392,6 +12419,7 @@ public struct SystemAgentSetupActivateResult: Codable, Sendable {
         modelref: String? = nil,
         latencyms: Double? = nil,
         lines: [String]? = nil,
+        gatewayrestartrequired: Bool? = nil,
         status: AnyCodable? = nil,
         error: String? = nil)
     {
@@ -12399,6 +12427,7 @@ public struct SystemAgentSetupActivateResult: Codable, Sendable {
         self.modelref = modelref
         self.latencyms = latencyms
         self.lines = lines
+        self.gatewayrestartrequired = gatewayrestartrequired
         self.status = status
         self.error = error
     }
@@ -12408,6 +12437,7 @@ public struct SystemAgentSetupActivateResult: Codable, Sendable {
         case modelref = "modelRef"
         case latencyms = "latencyMs"
         case lines
+        case gatewayrestartrequired = "gatewayRestartRequired"
         case status
         case error
     }
@@ -13204,6 +13234,28 @@ public struct TalkSessionCancelOutputParams: Codable, Sendable {
         case sessionid = "sessionId"
         case turnid = "turnId"
         case reason
+    }
+}
+
+public struct TalkSessionCancelOutputResult: Codable, Sendable {
+    public let ok: Bool
+    public let status: AnyCodable?
+    public let turnid: String?
+
+    public init(
+        ok: Bool,
+        status: AnyCodable? = nil,
+        turnid: String? = nil)
+    {
+        self.ok = ok
+        self.status = status
+        self.turnid = turnid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case status
+        case turnid = "turnId"
     }
 }
 
@@ -14727,6 +14779,8 @@ public struct ModelChoice: Codable, Sendable {
     public let tags: [String]?
     public let available: Bool?
     public let contextwindow: Int?
+    public let contextwindows: [[String: AnyCodable]]?
+    public let contextwindowdefault: String?
     public let reasoning: Bool?
     public let thinkinglevels: [[String: AnyCodable]]?
     public let thinkingdefault: String?
@@ -14743,6 +14797,8 @@ public struct ModelChoice: Codable, Sendable {
         tags: [String]? = nil,
         available: Bool? = nil,
         contextwindow: Int? = nil,
+        contextwindows: [[String: AnyCodable]]? = nil,
+        contextwindowdefault: String? = nil,
         reasoning: Bool? = nil,
         thinkinglevels: [[String: AnyCodable]]? = nil,
         thinkingdefault: String? = nil,
@@ -14758,6 +14814,8 @@ public struct ModelChoice: Codable, Sendable {
         self.tags = tags
         self.available = available
         self.contextwindow = contextwindow
+        self.contextwindows = contextwindows
+        self.contextwindowdefault = contextwindowdefault
         self.reasoning = reasoning
         self.thinkinglevels = thinkinglevels
         self.thinkingdefault = thinkingdefault
@@ -14775,6 +14833,8 @@ public struct ModelChoice: Codable, Sendable {
         case tags
         case available
         case contextwindow = "contextWindow"
+        case contextwindows = "contextWindows"
+        case contextwindowdefault = "contextWindowDefault"
         case reasoning
         case thinkinglevels = "thinkingLevels"
         case thinkingdefault = "thinkingDefault"
@@ -21498,6 +21558,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
     case cronJobNotFound(CronJobNotFoundErrorDetails)
     case missingScope(MissingScopeErrorDetails)
     case mcpAppViewExpired(McpAppViewExpiredErrorDetails)
+    case outboundDeliveryQueued(OutboundDeliveryQueuedErrorDetails)
     case userPrefsLimitExceeded(UserPrefsLimitExceededErrorDetails)
     case skillProposalRevisionChanged(SkillProposalRevisionChangedErrorDetails)
     case projectCloneFailed(ProjectCloneErrorDetails)
@@ -21519,6 +21580,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .cronJobNotFound(let value): value.code
         case .missingScope(let value): value.code
         case .mcpAppViewExpired(let value): value.code
+        case .outboundDeliveryQueued(let value): value.code
         case .userPrefsLimitExceeded(let value): value.code
         case .skillProposalRevisionChanged(let value): value.code
         case .projectCloneFailed(let value): value.code
@@ -21548,6 +21610,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case "CRON_JOB_NOT_FOUND": self = try .cronJobNotFound(CronJobNotFoundErrorDetails(from: decoder))
         case "MISSING_SCOPE": self = try .missingScope(MissingScopeErrorDetails(from: decoder))
         case "MCP_APP_VIEW_EXPIRED": self = try .mcpAppViewExpired(McpAppViewExpiredErrorDetails(from: decoder))
+        case "OUTBOUND_DELIVERY_QUEUED": self = try .outboundDeliveryQueued(OutboundDeliveryQueuedErrorDetails(from: decoder))
         case "USER_PREFS_LIMIT_EXCEEDED": self = try .userPrefsLimitExceeded(UserPrefsLimitExceededErrorDetails(from: decoder))
         case "SKILL_PROPOSAL_REVISION_CHANGED": self = try .skillProposalRevisionChanged(SkillProposalRevisionChangedErrorDetails(from: decoder))
         case "PROJECT_CLONE_FAILED": self = try .projectCloneFailed(ProjectCloneErrorDetails(from: decoder))
@@ -21567,6 +21630,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .cronJobNotFound(let value): try value.encode(to: encoder)
         case .missingScope(let value): try value.encode(to: encoder)
         case .mcpAppViewExpired(let value): try value.encode(to: encoder)
+        case .outboundDeliveryQueued(let value): try value.encode(to: encoder)
         case .userPrefsLimitExceeded(let value): try value.encode(to: encoder)
         case .skillProposalRevisionChanged(let value): try value.encode(to: encoder)
         case .projectCloneFailed(let value): try value.encode(to: encoder)

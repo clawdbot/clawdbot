@@ -513,6 +513,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       label: p.label,
       category: p.category,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: requestedModel }),
+      contextWindow: p.contextWindow,
       thinkingLevel: p.thinkingLevel,
       projectId: requestedProjectId,
       incognito: p.incognito,

@@ -130,7 +130,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       ),
     );
     const currentAgentId = resolveChatAgentId(state);
-    const { catalogKey, fullMessageLoader, chatProps } = resolveChatMessageAccess(state);
+    const { catalogKey, chatProps } = resolveChatMessageAccess(state);
     const overlays = this.context?.overlays;
     const inlineApproval = findInlineApproval(
       overlays?.snapshot?.approvalQueue ?? [],
@@ -228,6 +228,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         sidebarLayout,
         paneWidth: this.paneWidth,
         presentationId: this.presentationId,
+        presented: this.presented,
         gatewaySnapshot,
         setObserverVisibility: this.setSessionObserverVisibility,
       });
@@ -391,7 +392,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       approvalBusy: overlays?.snapshot?.approvalBusy,
       approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
       approvalErrors: overlays?.snapshot?.approvalErrors,
-      approvalNowMs: overlays?.snapshot?.approvalNowMs,
       onApprovalDecision:
         overlays && !sessionParticipationBlocked
           ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
@@ -639,7 +639,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       sessionWorkspace,
       backgroundTasks,
       chatProps: props,
-      fullMessageLoader,
       observerDigest,
       observerRunId,
       catalog: Boolean(catalogKey),

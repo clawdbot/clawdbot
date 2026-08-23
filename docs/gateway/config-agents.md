@@ -541,7 +541,7 @@ Periodic heartbeat runs.
     defaults: {
       heartbeat: {
         agentId: "ops", // ambient owner when no per-agent heartbeat is configured
-        every: "30m", // 0m disables
+        every: "30m", // 0m disables recurring cadence
         activeHours: { start: "08:00", end: "24:00" },
         model: "openai/gpt-5.4-mini",
         session: "main",
@@ -559,7 +559,7 @@ Periodic heartbeat runs.
 }
 ```
 
-- `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable.
+- `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable recurring cadence. Targeted event-driven wakes, including background exec completion follow-ups, can still run one agent turn.
 - `agentId`: explicit owner for ambient heartbeat runs when no `agents.entries.*.heartbeat` block exists. A shared heartbeat block without `agentId` keeps the existing all-agent enrollment behavior.
 - Cadence is written into a system-owned cron monitor row. Run `openclaw doctor --fix` to materialize a missing or stale row. If cron is disabled, scheduled heartbeats do not run and the gateway logs a startup warning.
 - The heartbeat object is strict. Its supported fields are `agentId`, `every`, `activeHours`, `model`, `session`, `target`, `directPolicy`, `to`, `accountId`, `prompt`, `timeoutSeconds`, `lightContext`, and `isolatedSession`.

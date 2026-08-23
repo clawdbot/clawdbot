@@ -844,11 +844,13 @@ suite.define(() => {
         });
 
         const sidebar = page.locator("openclaw-app-sidebar");
-        const sidebarUpdate = sidebar.locator('[data-attention-kind="updateAvailable"]');
+        const sidebarUpdate = sidebar.locator(".sidebar-footer-update");
         const sidebarAutomation = sidebar.locator('[data-attention-kind="cronFailed"]');
         await expect.poll(() => sidebarUpdate.count()).toBe(1);
+        await sidebar.locator(".sidebar-issues-button").click();
         await expect.poll(() => sidebarAutomation.count()).toBe(1);
         await captureUiProof(page, "08-desktop-attention-unchanged.png");
+        await sidebar.locator(".sidebar-issues-button").click();
 
         await page.setViewportSize({ height: 852, width: 393 });
         await expect
@@ -872,6 +874,7 @@ suite.define(() => {
           .poll(() => page.locator(".shell").getAttribute("class"))
           .toContain("shell--nav-drawer-open");
         await expect.poll(() => sidebarUpdate.isVisible()).toBe(true);
+        await sidebar.locator(".sidebar-issues-button").click();
         await expect.poll(() => sidebarAutomation.isVisible()).toBe(true);
         await captureUiProof(page, "10-mobile-attention-drawer.png");
 

@@ -8,7 +8,12 @@ import {
 } from "../../lib/session-method-access.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
-import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+import {
+  switchChatContextWindow,
+  switchChatFastMode,
+  switchChatModel,
+  switchChatThinkingLevel,
+} from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
@@ -122,6 +127,10 @@ export function renderChatPaneComposerControls(params: {
           onFastModeSelect: (next, targetSessionKey) =>
             effortAccess.allowed
               ? switchChatFastMode(state, next, targetSessionKey)
+              : Promise.resolve(false),
+          onContextWindowSelect: (next, targetSessionKey) =>
+            effortAccess.allowed
+              ? switchChatContextWindow(state, next, targetSessionKey)
               : Promise.resolve(false),
           onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
           onModelSelect: (next, targetSessionKey) =>

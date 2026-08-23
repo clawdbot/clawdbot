@@ -222,7 +222,14 @@ describeControlUiE2e("Control UI chat message actions", () => {
           role: "assistant",
           content: [{ type: "text", text: truncatedPreview }],
           timestamp: Date.now() + 4,
-          __openclaw: { id: "assistant-full-message", seq: 5 },
+          // The Gateway records a display-cap structurally; the sentinel alone is
+          // ordinary Markdown to the UI.
+          __openclaw: {
+            id: "assistant-full-message",
+            seq: 5,
+            truncated: true,
+            reason: "display-cap",
+          },
         },
       ],
       methodResponses: {

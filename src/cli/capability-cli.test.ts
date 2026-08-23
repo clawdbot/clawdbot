@@ -7,15 +7,17 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
-import { runRegisteredCli } from "../test-utils/command-runner.js";
-import { CAPABILITY_METADATA, registerCapabilityCli } from "./capability-cli.js";
+import { registerCapabilityCli } from "./capability-cli.js";
+import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runCap(...argv: string[]): Promise<void> {
-  return runRegisteredCli({ register: registerCapabilityCli as (program: Command) => void, argv });
+async function runCap(...argv: string[]): Promise<void> {
+  const program = new Command();
+  await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+  await program.parseAsync(argv, { from: "user" });
 }
 
 function runCapability(domain: string, action: string, ...argv: string[]): Promise<void> {
@@ -2474,9 +2476,9 @@ describe("capability cli", () => {
     ]);
   });
 
-  it("keeps capability inspect metadata flags in sync with each command's registered options", () => {
+  it("keeps capability inspect metadata flags in sync with each command's registered options", async () => {
     const program = new Command();
-    registerCapabilityCli(program);
+    await registerCapabilityCli(program, ["node", "openclaw", "infer", "--help"]);
     const capability =
       program.commands.find((command) => command.name() === "infer") ??
       program.commands.find((command) => command.aliases().includes("capability"));

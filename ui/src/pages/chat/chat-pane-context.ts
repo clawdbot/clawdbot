@@ -301,7 +301,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
     if (sourceChanged) {
-      retireSessionWorkspaceCheckout(state);
+      retireSessionWorkspaceCheckout(state, this.presented);
     }
     if (!sourceChanged && previousMediaAuthToken !== resolveAssistantAttachmentAuthToken(state)) {
       releaseChatMediaResourceSubscriber(state.requestUpdate);

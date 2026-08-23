@@ -24,6 +24,22 @@ The headline owns that run's sidebar subtitle instead of heuristic live activity
 
 Session observation is enabled by default. Safe preamble headlines do not require a utility model; the utility model only owns richer assessments and terminal summaries. In **Settings > Appearance > Sidebar**, you can turn observation off gateway-wide, inspect the resolved small model and its provenance, or choose automatic routing, disable utility tasks, or select an explicit `agents.defaults.utilityModel`. The equivalent config controls are `gateway.controlUi.sessionObserver: false` and `agents.defaults.utilityModel: ""`.
 
+## Environment identity
+
+When you run several Gateways, set `gateway.controlUi.environment` to distinguish their browser tabs and windows:
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      environment: { label: "edge", color: "amber" },
+    },
+  },
+}
+```
+
+The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the sidebar and narrow topbar, a browser-title suffix, and a matching favicon. The label is trimmed and must contain 1–24 characters. Available colors are `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, and `gray`. The label and color are intentionally visible before sign-in; leave `environment` unset to keep the standard appearance unchanged.
+
 ## Quick open (local)
 
 If the Gateway is running on the same computer, open [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/)).

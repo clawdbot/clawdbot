@@ -233,14 +233,18 @@ describe("resizable-divider", () => {
     expect([...divider.classList]).toEqual(["dragging"]);
 
     dispatchPointer(document, "pointermove", 220, 7);
-    expectLastResizeRatio(resized, 0.7);
+    dispatchPointer(document, "pointermove", 120, 7);
+    expect(resized).not.toHaveBeenCalled();
+    await nextFrame();
+    expectLastResizeRatio(resized, 0.65);
+    expect(resized).toHaveBeenCalledTimes(1);
     expect(resizeEnded).not.toHaveBeenCalled();
 
     dispatchPointer(document, "pointerup", 220, 7);
     const endEvent = resizeEnded.mock.lastCall?.[0] as
       | CustomEvent<{ splitRatio: number }>
       | undefined;
-    expect(endEvent?.detail).toEqual({ splitRatio: 0.7 });
+    expect(endEvent?.detail).toEqual({ splitRatio: 0.65 });
     expect(resizeEnded).toHaveBeenCalledTimes(1);
     expect([...divider.classList]).toEqual([]);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
@@ -263,5 +267,22 @@ describe("resizable-divider", () => {
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
     dispatchPointer(document, "pointermove", 220);
     expect(resized).not.toHaveBeenCalled();
+  });
+
+  it("commits the final pointer position when disconnected", async () => {
+    const divider = await renderDivider();
+    const resized = vi.fn();
+    const resizeEnded = vi.fn();
+    divider.setPointerCapture = vi.fn();
+    divider.releasePointerCapture = vi.fn();
+    divider.addEventListener("resize", resized);
+    divider.addEventListener("resize-end", resizeEnded);
+
+    dispatchPointer(divider, "pointerdown", 100);
+    dispatchPointer(document, "pointermove", 120);
+    divider.remove();
+
+    expectLastResizeRatio(resized, 0.65);
+    expectLastResizeRatio(resizeEnded, 0.65);
   });
 });

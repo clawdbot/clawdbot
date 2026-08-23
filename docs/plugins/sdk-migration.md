@@ -983,7 +983,9 @@ await gateway.request("talk.session.create", {
   sessionKey: "main",
 });
 await gateway.request("talk.session.appendAudio", { sessionId, audioBase64 });
-await gateway.request("talk.session.cancelOutput", { sessionId, reason: "barge-in" });
+// Capture this before stopping playback from the active output `talk.event`.
+const turnId = activeOutputTalkEvent.talkEvent.turnId;
+await gateway.request("talk.session.cancelOutput", { sessionId, turnId, reason: "barge-in" });
 await gateway.request("talk.session.submitToolResult", {
   sessionId,
   callId,

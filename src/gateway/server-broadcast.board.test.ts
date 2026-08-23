@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
@@ -14,6 +15,7 @@ import { createSessionObserverAudience } from "./session-observer-audience.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 
 type RecordingSocket = {
+  readyState: number;
   bufferedAmount: number;
   close: ReturnType<typeof vi.fn>;
   send: ReturnType<typeof vi.fn>;
@@ -27,6 +29,7 @@ function makeClient(
 ): { client: GatewayWsClient; socket: RecordingSocket } {
   const events: string[] = [];
   const socket: RecordingSocket = {
+    readyState: WebSocket.OPEN,
     bufferedAmount: 0,
     close: vi.fn(),
     send: vi.fn((payload: string) => {

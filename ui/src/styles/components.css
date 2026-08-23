@@ -70,7 +70,7 @@ openclaw-session-owner-chip {
 .session-owner-stack {
   position: relative;
   display: inline-flex;
-  width: 24px;
+  width: 28px;
   height: 20px;
   align-items: center;
   justify-content: flex-end;
@@ -81,17 +81,15 @@ openclaw-session-owner-chip {
   z-index: 0;
   left: 0;
   display: inline-flex;
-  width: 14px;
-  height: 14px;
 }
 
 .session-owner-stack__back .viewer-avatar,
 .session-owner-stack__overflow {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   border: 1px solid var(--sidebar-bg, var(--bg));
   border-radius: var(--radius-full);
-  font-size: 7px;
+  font-size: 8px;
 }
 
 .session-owner-stack__overflow {
@@ -107,6 +105,8 @@ openclaw-session-owner-chip {
 .session-owner-stack__front {
   position: relative;
   z-index: 1;
+  width: 18px;
+  height: 18px;
 }
 
 /* Leading slot shared by every sidebar row: the row's own artwork plus a run
@@ -319,6 +319,19 @@ openclaw-session-owner-chip {
   padding-left: 18px;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.login-gate__failure-steps .login-gate__command {
+  display: inline-flex;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 2px 3px;
+  vertical-align: middle;
+}
+
+.login-gate__failure-steps .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .login-gate__failure-steps li + li {
@@ -815,23 +828,73 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .session-progress-hovercard {
+  --session-hovercard-shift-x: 0;
+  --session-hovercard-shift-y: 0;
+
   position: fixed;
   z-index: 1990;
-  width: min(380px, calc(100vw - 24px));
+  width: min(296px, calc(100vw - 24px));
   max-height: min(520px, calc(100vh - 24px));
-  padding: 14px 16px;
+  padding: 0;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--card);
+  background: var(--session-hovercard-surface);
   box-shadow: var(--shadow-lg);
   color: var(--text);
   pointer-events: none;
+  opacity: 0;
+  transform: translate3d(var(--session-hovercard-shift-x), var(--session-hovercard-shift-y), 0)
+    scale(0.99);
+  transition:
+    opacity 100ms var(--ease-out),
+    transform 100ms var(--ease-out);
+}
+
+.session-progress-hovercard[data-side="right"] {
+  --session-hovercard-shift-x: -4px;
+  transform-origin: top left;
+}
+
+.session-progress-hovercard[data-side="left"] {
+  --session-hovercard-shift-x: 4px;
+  transform-origin: top right;
+}
+
+.session-progress-hovercard[data-side="bottom"] {
+  --session-hovercard-shift-y: -4px;
+  transform-origin: top left;
+}
+
+.session-progress-hovercard[data-side="top"] {
+  --session-hovercard-shift-y: 4px;
+  transform-origin: bottom left;
+}
+
+.session-progress-hovercard[data-open="true"] {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+  transition-duration: 150ms;
+}
+
+.session-progress-hovercard[data-instant="true"][data-open="true"] {
+  transition: none;
 }
 
 @media (hover: hover) {
-  .session-progress-hovercard {
+  .session-progress-hovercard[data-open="true"] {
     pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-progress-hovercard {
+    transform: none;
+    transition: opacity 80ms linear;
+  }
+
+  .session-progress-hovercard[data-open="true"] {
+    transform: none;
   }
 }
 
@@ -1094,7 +1157,7 @@ openclaw-session-progress-hovercard-provider {
   border-color: transparent;
 }
 
-.btn:disabled {
+.btn:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.5;
   cursor: not-allowed;
 }

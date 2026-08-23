@@ -64,6 +64,7 @@ describe("telegramMessageActions", () => {
       mediaLocalRoots: ["/tmp/conflicting-root"],
       requesterAccountId: "work",
       conversationReadOrigin: "delegated",
+      deliveryRetryOwner: "caller",
       reply: { replyToId: "9001", source: "implicit", mode: "first" },
       toolContext: {
         currentChannelProvider: "telegram",
@@ -77,6 +78,7 @@ describe("telegramMessageActions", () => {
       expect.anything(),
       expect.objectContaining({
         conversationReadOrigin: "delegated",
+        deliveryRetryOwner: "caller",
         mediaAccess,
         reply: { replyToId: "9001", source: "implicit", mode: "first" },
         requesterAccountId: "work",

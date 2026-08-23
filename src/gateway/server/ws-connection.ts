@@ -25,6 +25,7 @@ import {
   MAX_BUFFERED_BYTES,
   MAX_PAYLOAD_BYTES,
   MAX_PREAUTH_PAYLOAD_BYTES,
+  WEBSOCKET_OPEN_READY_STATE,
 } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
@@ -347,6 +348,14 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     const send = (obj: unknown) => {
       if (closed) {
+        return { kind: "unavailable" } as const;
+      }
+      if (socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
+        // Keep pending node results revocable until their close handler drains admitted work.
+        if (client?.connect.role === "node" && nodeLifecycleDispatch.hasActive()) {
+          retainClientUntilNodeDrain = true;
+        }
+        close();
         return { kind: "unavailable" } as const;
       }
       if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {

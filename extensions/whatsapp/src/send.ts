@@ -158,6 +158,14 @@ export async function sendMessageWhatsApp(
     onDeliveryResult?: (result: { messageId: string; toJid: string }) => Promise<void> | void;
   },
 ): Promise<{ messageId: string; toJid: string }> {
+  return await sendWhatsAppUploadFile(to, body, options);
+}
+
+export async function sendWhatsAppUploadFile(
+  to: string,
+  body: string,
+  options: Parameters<typeof sendMessageWhatsApp>[2] & { fileName?: string; contentType?: string },
+): Promise<{ messageId: string; toJid: string }> {
   return await withWhatsAppLogicalDeliveryActivity(() =>
     sendMessageWhatsAppInActivityScope(to, body, options),
   );
@@ -166,7 +174,7 @@ export async function sendMessageWhatsApp(
 async function sendMessageWhatsAppInActivityScope(
   to: string,
   body: string,
-  options: Parameters<typeof sendMessageWhatsApp>[2],
+  options: Parameters<typeof sendMessageWhatsApp>[2] & { fileName?: string; contentType?: string },
 ): Promise<{ messageId: string; toJid: string }> {
   let text = options.preserveLeadingWhitespace ? body : normalizeWhatsAppPayloadText(body);
   const jid = toWhatsappJid(to);
@@ -228,14 +236,22 @@ async function sendMessageWhatsAppInActivityScope(
     } else if (primaryMediaUrl) {
       // Injected readers must carry an explicit local-root boundary. The shared loader enforces
       // that contract; never restore the former implicit `localRoots: "any"` widening here.
+      const loadedMedia = await loadOutboundMediaFromUrl(primaryMediaUrl, {
+        maxBytes: resolveWhatsAppMediaMaxBytes(account),
+        optimizeImages: options.forceDocument ? false : undefined,
+        mediaAccess: options.mediaAccess,
+        mediaLocalRoots: options.mediaLocalRoots,
+        mediaReadFile: options.mediaReadFile,
+      });
+      // An explicit upload MIME supersedes the loader's inferred kind; preserving a stale
+      // document guess would incorrectly send native images and videos as documents.
+      const mediaWithRequestedType = options.contentType
+        ? { ...loadedMedia, contentType: options.contentType, kind: undefined }
+        : loadedMedia;
       media = await prepareWhatsAppOutboundMedia(
-        await loadOutboundMediaFromUrl(primaryMediaUrl, {
-          maxBytes: resolveWhatsAppMediaMaxBytes(account),
-          optimizeImages: options.forceDocument ? false : undefined,
-          mediaAccess: options.mediaAccess,
-          mediaLocalRoots: options.mediaLocalRoots,
-          mediaReadFile: options.mediaReadFile,
-        }),
+        options.fileName
+          ? { ...mediaWithRequestedType, fileName: options.fileName }
+          : mediaWithRequestedType,
         primaryMediaUrl,
       );
     }

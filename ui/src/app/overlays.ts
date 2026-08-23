@@ -90,7 +90,6 @@ export function createApplicationOverlays(
     approvalBusy: false,
     approvalCanGrant: false,
     approvalErrors: new Map(),
-    approvalNowMs: Date.now(),
     devicePairSetupOpen: false,
     devicePairSetupLifecycle: { phase: "selection", access: "full" },
     devicePairPendingCount: 0,
@@ -124,7 +123,6 @@ export function createApplicationOverlays(
     execApprovalQueue: [],
     execApprovalBusy: false,
     execApprovalErrors: new Map(),
-    execApprovalNowMs: Date.now(),
     execApprovalExpiryTimers: new Map(),
   };
 
@@ -138,7 +136,6 @@ export function createApplicationOverlays(
       approvalBusy: promptState.execApprovalBusy,
       approvalCanGrant: readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals,
       approvalErrors: new Map(promptState.execApprovalErrors),
-      approvalNowMs: promptState.execApprovalNowMs ?? Date.now(),
       ...readDevicePairSetupSnapshot(devicePairSetupState),
     };
     for (const listener of listeners) {

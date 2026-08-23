@@ -58,8 +58,8 @@ jobs:
     outputs:
       baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
       baseline_revision: ${{ steps.resolve.outputs.baseline_revision }}
-      candidate_ref: ${{ steps.resolve.outputs.candidate_ref }}
-      candidate_revision: ${{ steps.resolve.outputs.candidate_revision }}
+      head_revision: ${{ steps.resolve.outputs.head_revision }}
+      merge_base_revision: ${{ steps.resolve.outputs.merge_base_revision }}
       instructions: ${{ steps.resolve.outputs.instructions }}
       pr_context: ${{ steps.resolve.outputs.pr_context }}
       publish_artifact_name: ${{ steps.resolve.outputs.publish_artifact_name }}
@@ -98,56 +98,61 @@ jobs:
               repo,
               pull_number: Number(prNumber),
             });
+            const publishArtifactName = inputs.publish_artifact_name || "";
             // The local helper logs values; keep bounded, untrusted PR text out of the public log.
             core.setOutput(
               "pr_context",
               JSON.stringify({ title: pr.title.slice(0, 500), body: (pr.body ?? "").slice(0, 12000) }),
             );
-            const publishArtifactName = inputs.publish_artifact_name || "";
             let baselineRevision = pr.base.sha;
-            const candidateRevision = pr.head.sha;
+            const headRevision = pr.head.sha;
+            let mergeBaseRevision = "";
 
             if (!publishArtifactName) {
               const immutableSha = /^[0-9a-f]{40}$/u;
-              if (!immutableSha.test(candidateRevision)) {
-                core.setFailed(`Candidate ref '${candidateRevision}' is not an immutable commit SHA.`);
+              if (!immutableSha.test(headRevision)) {
+                core.setFailed(`PR head SHA '${headRevision}' is not an immutable commit SHA.`);
                 return;
               }
               if (pr.state !== "open") {
-                core.setFailed(`Candidate ref '${candidateRevision}' is not the open PR head.`);
+                core.setFailed(`PR head '${headRevision}' is not from an open pull request.`);
                 return;
               }
               if (!pr.head.repo) {
-                core.setFailed("Candidate PR source repository is unavailable.");
+                core.setFailed("PR source repository is unavailable.");
                 return;
               }
-
-              const prComparison = await github.request(
-                "GET /repos/{owner}/{repo}/compare/{basehead}",
-                { owner, repo, basehead: `${pr.base.sha}...${candidateRevision}` },
-              );
-              baselineRevision = prComparison.data.merge_base_commit?.sha || "";
-              if (!immutableSha.test(baselineRevision)) {
-                core.setFailed("The PR comparison did not return an immutable merge base.");
-                return;
-              }
-
-              const baselineOnMain = await github.request(
-                "GET /repos/{owner}/{repo}/compare/{basehead}",
-                { owner, repo, basehead: `${baselineRevision}...main` },
-              );
-              if (
-                baselineOnMain.data.status !== "ahead" &&
-                baselineOnMain.data.status !== "identical"
-              ) {
+              if (pr.base.ref !== "main") {
                 core.setFailed(
-                  `Baseline ref '${baselineRevision}' is not an ancestor of main ` +
-                    `(comparison status: ${baselineOnMain.data.status}).`,
+                  `Mantis proves landing on main, but this PR targets '${pr.base.ref}'.`,
+                );
+                return;
+              }
+              const { data: mainRef } = await github.rest.git.getRef({
+                owner,
+                repo,
+                ref: "heads/main",
+              });
+              baselineRevision = mainRef.object.sha;
+              if (!immutableSha.test(baselineRevision)) {
+                core.setFailed(`Main tip SHA '${baselineRevision}' is not an immutable commit SHA.`);
+                return;
+              }
+              const comparison = await github.request(
+                "GET /repos/{owner}/{repo}/compare/{basehead}",
+                { owner, repo, basehead: `${baselineRevision}...${headRevision}` },
+              );
+              mergeBaseRevision = comparison.data.merge_base_commit.sha;
+              if (!immutableSha.test(mergeBaseRevision)) {
+                core.setFailed(
+                  `Merge base SHA '${mergeBaseRevision}' is not an immutable commit SHA.`,
                 );
                 return;
               }
 
               if (pr.head.repo.full_name !== `${owner}/${repo}`) {
+                // Fork approval still pins the exact untrusted head; the local merge only
+                // adds the trusted main parent on top of those reviewed bytes.
                 const allowFork =
                   inputs.allow_fork_candidate === true ||
                   inputs.allow_fork_candidate === "true";
@@ -159,10 +164,10 @@ jobs:
                 }
                 if (
                   !immutableSha.test(inputs.approved_head_sha || "") ||
-                  inputs.approved_head_sha !== candidateRevision
+                  inputs.approved_head_sha !== headRevision
                 ) {
                   core.setFailed(
-                    `Fork approval must name the exact current PR head SHA (${candidateRevision}).`,
+                    `Fork approval must name the exact current PR head SHA (${headRevision}).`,
                   );
                   return;
                 }
@@ -172,8 +177,8 @@ jobs:
             setOutput("should_run", "true");
             setOutput("baseline_ref", baselineRevision);
             setOutput("baseline_revision", baselineRevision);
-            setOutput("candidate_ref", candidateRevision);
-            setOutput("candidate_revision", candidateRevision);
+            setOutput("head_revision", headRevision);
+            setOutput("merge_base_revision", mergeBaseRevision);
             setOutput("pr_number", String(pr.number));
             setOutput("instructions", body);
             setOutput("publish_artifact_name", publishArtifactName);
@@ -301,9 +306,6 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Install local proof tools
-        env:
-          BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
-          CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
         shell: bash
         run: |
           set -euo pipefail
@@ -448,13 +450,11 @@ jobs:
           sudo install -m 0755 scripts/mantis/mantis-sut-container.sh /usr/local/sbin/openclaw-mantis-sut-container
           printf '/tmp/openclaw-mantis-proof-worktrees-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
             | sudo tee /etc/openclaw-mantis-sut-worktrees >/dev/null
-          printf 'baseline\t%s\ncandidate\t%s\n' "$BASELINE_SHA" "$CANDIDATE_SHA" \
-            | sudo tee /etc/openclaw-mantis-sut-revisions >/dev/null
           runtime_parent="/tmp/openclaw-mantis-sut-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           sudo install -d -m 0711 -o root -g root "$runtime_parent"
           sudo install -d -m 0700 -o root -g root "$runtime_parent/attestations"
           printf '%s\n' "$runtime_parent" | sudo tee /etc/openclaw-mantis-sut-runtime-root >/dev/null
-          sudo chmod 0444 /etc/openclaw-mantis-sut-worktrees /etc/openclaw-mantis-sut-revisions /etc/openclaw-mantis-sut-runtime-root
+          sudo chmod 0444 /etc/openclaw-mantis-sut-worktrees /etc/openclaw-mantis-sut-runtime-root
           /usr/local/lib/mantis-toolchain/node --version
           /usr/local/lib/mantis-toolchain/pnpm --version
           /usr/local/lib/mantis-toolchain/uv --version
@@ -498,8 +498,9 @@ jobs:
         id: proof_worktrees
         env:
           BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
-          CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
-          MANTIS_PR_NUMBER: ${{ needs.resolve_request.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.resolve_request.outputs.head_revision }}
+          MERGE_BASE_SHA: ${{ needs.resolve_request.outputs.merge_base_revision }}
+          PR_NUMBER: ${{ needs.resolve_request.outputs.pr_number }}
         shell: bash
         run: |
           set -euo pipefail
@@ -509,18 +510,41 @@ jobs:
           toolchain_dir=/usr/local/lib/mantis-toolchain
           corepack_home="${RUNNER_TEMP}/mantis-corepack"
           mkdir -p "$worktree_root" "$corepack_home"
-          if ! git cat-file -e "${BASELINE_SHA}^{commit}"; then
-            git fetch --no-tags --depth 1 origin "$BASELINE_SHA"
+          for sha in "$BASELINE_SHA" "$HEAD_SHA" "$MERGE_BASE_SHA"; do
+            if ! git cat-file -e "${sha}^{commit}"; then
+              git fetch --no-tags --depth 1 origin "$sha"
+            fi
+            git cat-file -e "${sha}^{commit}"
+          done
+          # Build locally because GitHub's lazily cached PR test merge was observed 50 commits stale.
+          # The explicit merge base makes depth-1 fetches sufficient; this needs git >= 2.38 (runner: 2.43+).
+          merge_rc=0
+          candidate_tree="$(git merge-tree --write-tree --merge-base="$MERGE_BASE_SHA" "$BASELINE_SHA" "$HEAD_SHA")" || merge_rc=$?
+          # merge-tree exits 1 only for content conflicts; other codes are real git failures.
+          if ((merge_rc == 1)); then
+            echo "::error::The PR conflicts with current main and needs a rebase or merge before Mantis can prove it."
+            exit 1
+          elif ((merge_rc != 0)); then
+            exit "$merge_rc"
           fi
-          git cat-file -e "${BASELINE_SHA}^{commit}"
-          if ! git cat-file -e "${CANDIDATE_SHA}^{commit}"; then
-            git fetch --no-tags origin "pull/${MANTIS_PR_NUMBER}/head"
-          fi
-          git cat-file -e "${CANDIDATE_SHA}^{commit}"
+          merge_date="$(git log -1 --format=%cI "$BASELINE_SHA")"
+          # Fixed identity and baseline date make this SHA reproducible for the same main/head pair.
+          CANDIDATE_SHA="$(
+            GIT_AUTHOR_NAME=mantis-proof GIT_AUTHOR_EMAIL=mantis-proof@openclaw.ai \
+            GIT_COMMITTER_NAME=mantis-proof GIT_COMMITTER_EMAIL=mantis-proof@openclaw.ai \
+            GIT_AUTHOR_DATE="$merge_date" GIT_COMMITTER_DATE="$merge_date" \
+            git commit-tree "$candidate_tree" -p "$BASELINE_SHA" -p "$HEAD_SHA" \
+              -m "mantis candidate: PR #${PR_NUMBER} head ${HEAD_SHA} merged onto main ${BASELINE_SHA}"
+          )"
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git worktree add --detach "$baseline_root" "$BASELINE_SHA"
           git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"
+          printf 'baseline\t%s\ncandidate\t%s\n' "$BASELINE_SHA" "$CANDIDATE_SHA" \
+            | sudo tee /etc/openclaw-mantis-sut-revisions >/dev/null
+          sudo chmod 0444 /etc/openclaw-mantis-sut-revisions
           {
             echo "baseline_root=$baseline_root"
+            echo "candidate_revision=$CANDIDATE_SHA"
             echo "lockfile_sha256=$(sha256sum "$baseline_root/pnpm-lock.yaml" | cut -d ' ' -f1)"
             echo "node_version=$($toolchain_dir/node --version)"
             echo "pnpm_version=$($toolchain_dir/pnpm --version)"
@@ -530,17 +554,17 @@ jobs:
         id: baseline_build_cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: .artifacts/mantis-baseline-build.tar
-          key: ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-${{ needs.resolve_request.outputs.baseline_revision }}
+          path: .artifacts/mantis-runtime-build.tar
+          key: ${{ runner.os }}-${{ runner.arch }}-mantis-runtime-v1-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-${{ needs.resolve_request.outputs.baseline_revision }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-
+            ${{ runner.os }}-${{ runner.arch }}-mantis-runtime-v1-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-
 
       - name: Prepare baseline and candidate proof builds
         env:
-          BASELINE_BUILD_ARCHIVE: ${{ github.workspace }}/.artifacts/mantis-baseline-build.tar
+          BASELINE_BUILD_ARCHIVE: ${{ github.workspace }}/.artifacts/mantis-runtime-build.tar
           BASELINE_BUILD_CACHE_HIT: ${{ steps.baseline_build_cache.outputs.cache-hit }}
           BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
-          CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
+          CANDIDATE_SHA: ${{ steps.proof_worktrees.outputs.candidate_revision }}
           HOST_PNPM_STORE: ${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}
         shell: bash
         run: |
@@ -566,8 +590,8 @@ jobs:
               pnpm-lock.yaml \
               pnpm-workspace.yaml \
               tsconfig.json; then
-            # Observed 2026-08: cache-only seeding still rebuilt tsdown-unified for 3m04s;
-            # its cache contract also requires the live plugin-SDK outputs it will replace.
+            # The runtime graph always rebuilds; seed only trusted build metadata and
+            # live plugin-SDK outputs when the candidate kept the cache engine intact.
             tar --no-same-owner -C "$candidate_root" -xf "$BASELINE_BUILD_ARCHIVE" \
               .artifacts/build-all-cache dist/plugin-sdk
             test -z "$(find "$candidate_root/.artifacts/build-all-cache" -type l -print -quit)"
@@ -601,9 +625,11 @@ jobs:
                 HOME="${RUNNER_TEMP}/mantis-baseline-home" \
                 OPENCLAW_BUILD_PRIVATE_QA=1 \
                 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
+                OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 \
                 PATH="$toolchain_dir:/usr/bin:/bin" \
                 "$toolchain_dir/pnpm" build
               mkdir -p "$(dirname "$BASELINE_BUILD_ARCHIVE")"
+              mkdir -p "$baseline_root/.artifacts/build-all-cache"
               baseline_archive_new="${BASELINE_BUILD_ARCHIVE}.new"
               test ! -e "$baseline_archive_new"
               tar -cf "$baseline_archive_new" \
@@ -618,18 +644,6 @@ jobs:
             test -f dist/control-ui/index.html
             test -f dist/index.js -o -f dist/index.mjs
             build_cache_root="$baseline_root/.artifacts/build-all-cache"
-            for phase in tsdown-ai tsdown-packages tsdown-unified; do
-              stamp="$build_cache_root/$phase/stamp.json"
-              outputs="$build_cache_root/$phase/outputs"
-              test -s "$stamp"
-              jq -e '
-                (.version | type) == "number" and
-                (.signature | type) == "string" and (.signature | length) == 64 and
-                (.outputs | type) == "array" and (.outputs | length) > 0
-              ' "$stamp" >/dev/null
-              test -d "$outputs"
-              test -n "$(find "$outputs" -type f -print -quit)"
-            done
             test -z "$(find "$build_cache_root" -type l -print -quit)"
             test -z "$(find "$build_cache_root" -type f -links +1 -print -quit)"
           }
@@ -668,7 +682,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: .artifacts/mantis-baseline-build.tar
+          path: .artifacts/mantis-runtime-build.tar
           key: ${{ steps.baseline_build_cache.outputs.cache-primary-key }}
 
       - name: Install TDLib and restore Telegram QA user
@@ -822,8 +836,8 @@ jobs:
         env:
           BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
           BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
-          CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
-          CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
+          CANDIDATE_REF: ${{ steps.proof_worktrees.outputs.candidate_revision }}
+          CANDIDATE_SHA: ${{ steps.proof_worktrees.outputs.candidate_revision }}
           CODEX_HOME: /tmp/mantis-codex-home-${{ github.run_id }}
           CODEX_INTERNAL_ORIGINATOR_OVERRIDE: codex_github_action
           CODEX_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
@@ -858,9 +872,23 @@ jobs:
             -c 'service_tier="fast"'
             --sandbox danger-full-access
           )
-          scripts/mantis/run-with-lease-fence.sh "$lease_lost_marker" -- \
-            sudo -u codex -- "$codex_bin" "${codex_args[@]}" \
-              < .github/codex/prompts/mantis-telegram-desktop-proof.md
+          run_codex() {
+            scripts/mantis/run-with-lease-fence.sh "$lease_lost_marker" -- \
+              sudo -u codex -- "$codex_bin" "${codex_args[@]}" "$@"
+          }
+          run_codex < .github/codex/prompts/mantis-telegram-desktop-proof.md
+          manifest="$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR/mantis-evidence.json"
+          # Codex can end a turn before the proof exists: run 32615428295 (2026-08) stopped
+          # on a post-compaction "handoff" message with no manifest. Resume the same thread
+          # with the correction instead of dead-ending the run; the bound keeps a stuck
+          # agent finite. Non-zero Codex exits still fail the step immediately.
+          for resume_attempt in 1 2 3; do
+            if sudo test -f "$manifest"; then
+              break
+            fi
+            echo "::warning::Mantis agent ended without ${MANTIS_OUTPUT_DIR}/mantis-evidence.json; resuming the thread (${resume_attempt}/3)"
+            run_codex resume --last - < .github/codex/prompts/mantis-telegram-desktop-proof-resume.md
+          done
 
       - name: Clean up abandoned Mantis sessions
         id: abandoned_cleanup
@@ -954,8 +982,8 @@ jobs:
         env:
           BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
           BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
-          CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
-          CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
+          CANDIDATE_REF: ${{ steps.proof_worktrees.outputs.candidate_revision }}
+          CANDIDATE_SHA: ${{ steps.proof_worktrees.outputs.candidate_revision }}
           SESSION_ROOT: ${{ steps.telegram_credential.outputs.session_root }}
           SUT_CREDENTIAL_DIR: ${{ steps.telegram_credential.outputs.sut_credential_dir }}
         shell: bash
@@ -995,13 +1023,22 @@ jobs:
           manifest="$trusted_output/mantis-evidence.json"
           judgment="$RUNNER_TEMP/mantis-agent-judgment.json"
           sudo jq -e '
+            def valid_assertion:
+              select(type == "object") |
+              select((keys | sort) == ["mode", "target", "value"]) |
+              select(.target == "providerRequests" or .target == "botApiRequests" or .target == "observationEvents") |
+              select(.mode == "contains" or .mode == "absent") |
+              select((.value | type) == "string" and (.value | length) >= 1 and (.value | length) <= 200);
+            select(.schemaVersion == 2) |
             select((.summary | type) == "string" and (.summary | length) <= 4000) |
             select((.comparison.baseline.expected | type) == "string" and (.comparison.baseline.expected | length) <= 1000) |
             select((.comparison.candidate.expected | type) == "string" and (.comparison.candidate.expected | length) <= 1000) |
             {
               summary,
               baselineExpected: .comparison.baseline.expected,
-              candidateExpected: .comparison.candidate.expected
+              baselineAssertion: (.comparison.baseline.assertion | valid_assertion),
+              candidateExpected: .comparison.candidate.expected,
+              candidateAssertion: (.comparison.candidate.assertion | valid_assertion)
             }
           ' "$agent_manifest" > "$judgment"
           baseline_status="$(sudo jq -r '.comparison.baseline.status' "$agent_manifest")"
@@ -1134,19 +1171,17 @@ jobs:
             --scenario-label telegram-desktop-proof
           trusted_manifest="${manifest}.trusted"
           sudo jq --slurpfile judgment "$judgment" '
-            .summary = $judgment[0].summary |
+            .summary = (if .comparison.outcome == "pass" then $judgment[0].summary else .summary end) |
             .comparison.baseline.expected = $judgment[0].baselineExpected |
-            .comparison.candidate.expected = $judgment[0].candidateExpected
+            .comparison.baseline.assertion = $judgment[0].baselineAssertion |
+            .comparison.candidate.expected = $judgment[0].candidateExpected |
+            .comparison.candidate.assertion = $judgment[0].candidateAssertion
           ' "$manifest" | sudo tee "$trusted_manifest" >/dev/null
           sudo mv "$trusted_manifest" "$manifest"
-
-          jq -e '
-            (.comparison.outcome == "pass" and .comparison.pass == true and
-              .comparison.baseline.status == "pass" and .comparison.candidate.status == "pass") or
-            (.comparison.outcome == "blocked" and .comparison.pass == false and
-              (.comparison.baseline.status == "blocked" or .comparison.candidate.status == "blocked")) or
-            (.comparison.outcome == "fail" and .comparison.pass == false)
-          ' "$manifest" >/dev/null
+          sudo env -i PATH=/usr/local/lib/mantis-toolchain:/usr/local/bin:/usr/bin:/bin \
+            /usr/local/lib/mantis-toolchain/node \
+            "$GITHUB_WORKSPACE/scripts/mantis/publish-pr-evidence.mjs" \
+            --manifest "$manifest" --validate-only true
 
           token="$(sudo jq -r '.sutToken' "$SUT_CREDENTIAL_DIR/credential.json")"
           if sudo grep -RIlF -- "$token" "$trusted_output" >/dev/null; then

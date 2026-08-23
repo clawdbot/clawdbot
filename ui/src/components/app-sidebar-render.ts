@@ -7,14 +7,15 @@ import {
 } from "../app-navigation.ts";
 import { isRouteId, isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
+import { hasNativeUpdateBridge } from "../app/native-link-routing.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
+import { confirmAndStartUpdate } from "../app/update-confirmation.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import {
   isPresenceViewerIdle,
@@ -38,7 +39,6 @@ import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionRunSpinner,
@@ -46,15 +46,13 @@ import {
 } from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
-import type { SidebarAttentionSummary } from "./sidebar-attention.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
   activeWorkboardBoardId: string;
+  nativeUpdateDeclined: boolean;
   offline: boolean;
-  attentionSummary: SidebarAttentionSummary;
-  onOpenApprovals?: () => void;
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
   toggleSection(sectionId: string): void;
@@ -99,7 +97,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
   const cardName = normalizeAgentLabel(cardAgent ?? { id: cardAgentId }, cardIdentity);
-  const approvalCount = host.sessionData.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
   const gateway = host.sessionDataContext?.gateway;
   const avatarAuthToken = gateway
     ? resolveControlUiAuthToken({
@@ -131,11 +128,14 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .avatarAuthReady=${avatarAuthReady}
         .avatarText=${cardAvatarText}
         .subtitle=${host.agentChipSubtitle(cardAgentId)}
+        .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
         .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
         .menuUnread=${menuUnread}
-        .approvalCount=${approvalCount}
         .switcherAvailable=${cardAgents.length > 1}
         .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
+        .onMenuPointerEnter=${(trigger: HTMLElement, event: PointerEvent) =>
+          host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)}
+        .onMenuPointerLeave=${() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
         @contextmenu=${(event: MouseEvent) => {
           event.preventDefault();
           if (host.sidebarMenus.agentMenuPosition !== null) {
@@ -348,11 +348,6 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
 
 /** Zone 5: product chrome recedes to one slim footer bar. */
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
-  const custodianPanelAvailable = canCallGatewayMethod(
-    host.sessionDataContext?.gateway.snapshot,
-    "openclaw.chat",
-    "operator.admin",
-  );
   const selfUser = resolveCurrentSelfUser({
     snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
@@ -375,84 +370,88 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     : gateway
       ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
       : buildSubtitle;
-  const attentionCount = host.attentionSummary.count;
-  const custodianLabel = attentionCount
-    ? t(attentionCount === 1 ? "attention.custodianAlertAria" : "attention.custodianAlertsAria", {
-        count: String(attentionCount),
-      })
-    : t("nav.askOpenClaw");
+  const availableUpdate = host.updateAvailable;
+  const showUpdate = availableUpdate !== null;
+  const updateBusy = host.updateBusy || host.updateSchedule?.campaign?.state === "applying";
+  const showInbox = true;
   return html`
-    <div class="sidebar-footer-bar">
-      <openclaw-tooltip .content=${selfLabel}>
-        <button
-          type="button"
-          class="sidebar-identity-card"
-          aria-haspopup="menu"
-          aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
-          aria-label=${identityDetail
-            ? `${identityMenuLabel}: ${identityDetail}`
-            : identityMenuLabel}
-          @click=${(event: MouseEvent) =>
-            host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
-        >
-          <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
-          <span class="sidebar-identity-card__text">
-            <span class="sidebar-identity-card__name"
-              >${selfLabel}<span class="sidebar-identity-card__chevron" aria-hidden="true"
-                >${icons.chevronDown}</span
-              ></span
-            >
-            ${host.offline
-              ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
-                  >${t("connection.reconnecting")}</span
-                >`
-              : gateway
-                ? html`<span
-                    class="sidebar-identity-card__subtitle sidebar-identity-card__subtitle--gateway"
-                    aria-hidden="true"
+    <div
+      class="sidebar-footer-bar ${showInbox && showUpdate
+        ? "sidebar-footer-bar--two-actions"
+        : "sidebar-footer-bar--one-action"}"
+    >
+      <button
+        type="button"
+        class="sidebar-identity-card"
+        aria-haspopup="menu"
+        aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
+        aria-label=${identityDetail ? `${identityMenuLabel}: ${identityDetail}` : identityMenuLabel}
+        @click=${(event: MouseEvent) =>
+          host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
+      >
+        <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
+        <span class="sidebar-identity-card__text">
+          <span class="sidebar-identity-card__name" title=${selfLabel}>${selfLabel}</span>
+          ${host.offline
+            ? html`<span class="sidebar-identity-card__subtitle sr-only" aria-hidden="true"
+                >${t("connection.reconnecting")}</span
+              >`
+            : gateway
+              ? html`<span
+                  class="sidebar-identity-card__subtitle sidebar-identity-card__subtitle--gateway sr-only"
+                  aria-hidden="true"
+                >
+                  <span
+                    class="sidebar-identity-card__gateway-health"
+                    data-health=${gateway.health}
+                  ></span>
+                  <span class="sidebar-identity-card__gateway-name">${gateway.name}</span>
+                  ${gatewayPrimaryTag
+                    ? html`<span class="sidebar-identity-card__gateway-primary"
+                        >· ${gatewayPrimaryTag}</span
+                      >`
+                    : nothing}
+                </span>`
+              : buildSubtitle
+                ? html`<span class="sidebar-identity-card__subtitle sr-only" aria-hidden="true"
+                    >${buildSubtitle}</span
+                  >`
+                : nothing}
+        </span>
+      </button>
+      <span class="sidebar-identity-card__status" role="status" aria-live="polite"
+        >${host.offline ? t("connection.reconnecting") : ""}</span
+      >
+      ${showInbox || showUpdate
+        ? html`<span class="sidebar-footer-actions">
+            ${showInbox ? renderAppSidebarAttention(host) : nothing}
+            ${showUpdate
+              ? html`<span class="sidebar-footer-update-slot">
+                  <button
+                    type="button"
+                    class="sidebar-footer-update"
+                    aria-label=${t("updates.sidebar.availableTitle")}
+                    ?disabled=${updateBusy || !host.canUpdate}
+                    @click=${() => {
+                      void confirmAndStartUpdate({
+                        updateAvailable: availableUpdate,
+                        updateSchedule: host.updateSchedule,
+                        viaNativeApp: !host.nativeUpdateDeclined && hasNativeUpdateBridge(),
+                        startGatewayUpdate: host.onUpdate,
+                        ...(host.watchUpdateProgress
+                          ? { watchUpdateProgress: host.watchUpdateProgress }
+                          : {}),
+                      });
+                    }}
                   >
-                    <span
-                      class="sidebar-identity-card__gateway-health"
-                      data-health=${gateway.health}
-                    ></span>
-                    <span class="sidebar-identity-card__gateway-name">${gateway.name}</span>
-                    ${gatewayPrimaryTag
-                      ? html`<span class="sidebar-identity-card__gateway-primary"
-                          >· ${gatewayPrimaryTag}</span
-                        >`
-                      : nothing}
-                  </span>`
-                : buildSubtitle
-                  ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
-                      >${buildSubtitle}</span
-                    >`
-                  : nothing}
-          </span>
-          <span class="sidebar-identity-card__status" role="status" aria-live="polite"
-            >${host.offline ? t("connection.reconnecting") : ""}</span
-          >
-        </button>
-      </openclaw-tooltip>
-      ${custodianPanelAvailable
-        ? html`<openclaw-tooltip .content=${custodianLabel}>
-            <button
-              type="button"
-              class="sidebar-brand__icon sidebar-footer-bar__custodian"
-              aria-label=${custodianLabel}
-              @click=${() => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
-            >
-              <span class="sidebar-footer-bar__custodian-glyph">
-                ${icons.lobster}
-                ${attentionCount
-                  ? html`<span
-                      class="session-glyph__badge sidebar-footer-bar__custodian-badge sidebar-footer-bar__custodian-badge--${host
-                        .attentionSummary.severity}"
-                      aria-hidden="true"
-                    ></span>`
-                  : nothing}
-              </span>
-            </button>
-          </openclaw-tooltip>`
+                    <span class="sidebar-footer-update__icon" aria-hidden="true"
+                      >${icons.download}</span
+                    >
+                    <span class="sidebar-footer-update__label">${t("updates.sidebar.action")}</span>
+                  </button>
+                </span>`
+              : nothing}
+          </span>`
         : nothing}
     </div>
   `;
@@ -551,10 +550,10 @@ function renderWorkboardBoard(
   );
 }
 
-export function renderAppSidebarAttention(host: AppSidebarRenderHost) {
+function renderAppSidebarAttention(host: AppSidebarRenderHost) {
   return html`<openclaw-sidebar-attention
+    .activeRouteId=${host.activeRouteId}
     .onNavigate=${(routeId: NavigationRouteId) => host.onNavigate?.(routeId)}
-    .onOpenApprovals=${() => host.onOpenApprovals?.()}
-    .onSummaryChange=${(summary: SidebarAttentionSummary) => (host.attentionSummary = summary)}
+    .watchUpdateProgress=${host.watchUpdateProgress}
   ></openclaw-sidebar-attention>`;
 }

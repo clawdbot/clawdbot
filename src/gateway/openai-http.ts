@@ -9,13 +9,14 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -30,6 +31,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -77,6 +79,7 @@ import {
   toolChoiceConstraintPrompt,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -85,6 +88,7 @@ type OpenAiHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 type OpenAiChatMessage = {
@@ -1091,11 +1095,23 @@ export async function handleOpenAiHttpRequest(
     abortSignal: abortController.signal,
     streamParams,
   });
+  const gatewayCommandInput = opts.resolveGatewayContext
+    ? {
+        ...commandInput,
+        onAdmittedRunContext: (context: AdmittedRunContext) =>
+          bindGatewayContextResolver(context, opts.resolveGatewayContext),
+      }
+    : commandInput;
 
   if (!stream) {
     const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await agentCommandFromGatewayIngress(
+        gatewayCommandInput,
+        defaultRuntime,
+        deps,
+        {},
+      );
 
       if (abortController.signal.aborted) {
         return true;
@@ -1380,7 +1396,12 @@ export async function handleOpenAiHttpRequest(
 
   void (async () => {
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await agentCommandFromGatewayIngress(
+        gatewayCommandInput,
+        defaultRuntime,
+        deps,
+        {},
+      );
       resultResolved = true;
 
       if (closed) {

@@ -462,7 +462,7 @@ export class ToolSearchRuntime {
   constructor(
     private readonly ctx: ToolSearchToolContext,
     private readonly config: ToolSearchConfig,
-    private readonly options: { validateInput?: boolean } = {},
+    private readonly options: { prepareInput?: boolean; validateInput?: boolean } = {},
   ) {}
 
   search = async (query: string, options?: { limit?: number } & CatalogVisibilityOptions) => {
@@ -644,8 +644,13 @@ export class ToolSearchRuntime {
       return snapshot;
     };
     const validateInput = this.options.validateInput && entry.source === "openclaw";
+    const prepareInput =
+      this.options.prepareInput &&
+      entry.source === "openclaw" &&
+      "prepareBeforeToolCallParams" in entry.tool &&
+      typeof entry.tool.prepareBeforeToolCallParams === "function";
     const executionTool =
-      validateInput && !isToolWrappedWithBeforeToolCallHook(entry.tool as never)
+      (prepareInput || validateInput) && !isToolWrappedWithBeforeToolCallHook(entry.tool as never)
         ? wrapToolWithBeforeToolCallHook(entry.tool as never)
         : entry.tool;
     const runExecution = async () => {

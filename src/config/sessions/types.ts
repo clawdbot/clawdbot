@@ -457,6 +457,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Epoch ms cutoff paired with abortCutoffMessageSid when available. */
     abortCutoffTimestamp?: number;
     chatType?: SessionChatType;
+    contextWindow?: string;
     thinkingLevel?: string;
     /**
      * Exact isolated-cron continuation policy. Only hidden `:run:` session rows

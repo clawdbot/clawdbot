@@ -12,6 +12,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   countActiveDescendantRuns,
@@ -485,16 +486,26 @@ export function buildGatewaySessionRow(params: {
           modelId: rowModel,
         })
       : undefined;
-  const resolvedCurrentContextTokens = resolvePositiveNumber(
+  const contextWindowProfile = resolveModelContextWindowProfile({
+    catalogEntry,
+    selected: entry?.contextWindow,
+  });
+  const resolvedModelContextTokens = resolvePositiveNumber(
     resolveContextTokensForModel({
       cfg,
       provider: rowModelProvider,
       model: rowModel,
       modelContextTokens: catalogEntry?.contextTokens,
-      modelContextWindow: catalogEntry?.contextWindow,
+      modelContextWindow: contextWindowProfile.contextTokens,
       allowAsyncLoad: false,
     }),
   );
+  const resolvedCurrentContextTokens = contextWindowProfile.contextTokens
+    ? Math.min(
+        resolvedModelContextTokens ?? contextWindowProfile.contextTokens,
+        contextWindowProfile.contextTokens,
+      )
+    : resolvedModelContextTokens;
   const authoredContextTokens = resolvePositiveNumber(
     resolveAuthoredModelContextTokens({
       cfg,
@@ -608,6 +619,9 @@ export function buildGatewaySessionRow(params: {
       ? "tombstoned"
       : undefined,
     thinkingLevel: thinkingProjection.thinkingLevel,
+    contextWindow: contextWindowProfile.contextWindow,
+    contextWindows: contextWindowProfile.contextWindows,
+    contextWindowDefault: contextWindowProfile.contextWindowDefault,
     thinkingLevels: thinkingProjection.thinkingLevels,
     thinkingOptions: thinkingProjection.thinkingOptions,
     thinkingDefault: thinkingProjection.thinkingDefault,

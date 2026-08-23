@@ -124,6 +124,10 @@ describe("workspace bootstrap file caching", () => {
       name: DEFAULT_AGENTS_FILENAME,
       content: content1,
     });
+    // Use integer-second mtime so utimes can restore it exactly, isolating ctime as the
+    // only changed stat field after the in-place edit.
+    const cleanTime = new Date(Math.floor(Date.now() / 1000) * 1000);
+    await fs.utimes(filePath, cleanTime, cleanTime);
     const originalStat = await fs.stat(filePath);
 
     const agentsFile1 = await loadAgentsFile(workspaceDir);
@@ -132,6 +136,36 @@ describe("workspace bootstrap file caching", () => {
     await fs.writeFile(tempPath, content2, "utf-8");
     await fs.utimes(tempPath, originalStat.atime, originalStat.mtime);
     await fs.rename(tempPath, filePath);
+    await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
+
+    const agentsFile2 = await loadAgentsFile(workspaceDir);
+    expectAgentsContent(agentsFile2, content2);
+  });
+
+  it("invalidates cache when content changes in-place with restored mtime", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const content1 = "# old guidance";
+    const content2 = "# new guidance";
+    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
+
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content: content1,
+    });
+    // Use integer-second mtime so utimes can restore it exactly, isolating ctime as the
+    // only changed stat field after the in-place edit.
+    const cleanTime = new Date(Math.floor(Date.now() / 1000) * 1000);
+    await fs.utimes(filePath, cleanTime, cleanTime);
+    const originalStat = await fs.stat(filePath);
+
+    const agentsFile1 = await loadAgentsFile(workspaceDir);
+    expectAgentsContent(agentsFile1, content1);
+
+    // In-place edit: same path, same size, restore mtime — only ctime changes.
+    await fs.writeFile(filePath, content2, "utf-8");
     await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
 
     const agentsFile2 = await loadAgentsFile(workspaceDir);
