@@ -1,5 +1,5 @@
-import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js";
 // Owns queued delivery execution, custody transitions, and terminal cleanup.
+import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js";
 import { hasTrustedMessageAuditListeners } from "../../audit/message-audit-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";

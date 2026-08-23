@@ -1426,6 +1426,36 @@ describe("gateway send mirroring", () => {
     expect(lastDispatchChannelMessageActionCall()?.conversationReadOrigin).toBe("delegated");
   });
 
+  it.each([
+    ["an agent runtime message tool", true, "caller"],
+    ["an operator CLI client", false, undefined],
+  ])(
+    "hands gateway-owned plugin deliveries the retry owner for %s",
+    async (_label, isAgentRuntime, expected) => {
+      const sessionKey = "agent:main:slack:channel:C1";
+      mocks.dispatchChannelMessageAction.mockResolvedValueOnce({
+        details: { action: "handled" },
+      });
+
+      await runMessageActionRequest(
+        {
+          channel: "slack",
+          action: "send",
+          params: { channelId: "C1", message: "hi" },
+          sessionKey,
+          agentId: "main",
+          idempotencyKey: `idem-retry-owner-${expected ?? "reporting-only"}`,
+        },
+        isAgentRuntime ? agentRuntimeClient(sessionKey) : (directCliClient() as never),
+      );
+
+      // Only the message tool resends a proven-not-sent failure; leaving its
+      // queue row replayable is what duplicated the send (#124279), and marking
+      // a reporting-only caller would strand its row instead (#100979).
+      expect(lastDispatchChannelMessageActionCall()?.deliveryRetryOwner).toBe(expected);
+    },
+  );
+
   it("does not send after delegated authority closes during session preparation", async () => {
     const preparation = createDeferred<null>();
     mocks.resolveOutboundSessionRoute.mockReturnValueOnce(preparation.promise);

@@ -1067,6 +1067,11 @@ export const sendHandlers: GatewayRequestHandlers = {
             params: request.params,
             reply: request.reply,
             accountId,
+            // Only the model's message tool mints an agent-runtime turn context, and
+            // it resends proven-not-sent failures itself, so its gateway-owned plugin
+            // delivery must not also stay replayable (#124279). Operator, CLI, and
+            // external RPC clients carry none and keep recovery's replay (#100979).
+            deliveryRetryOwner: trustedContext.runtimeAgentId ? ("caller" as const) : undefined,
             ...selectMessageActionRequesterIdentity(trustedContext),
             senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
               ? request.senderIsOwner === true
