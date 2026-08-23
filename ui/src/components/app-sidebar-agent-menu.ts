@@ -11,6 +11,7 @@ import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
+import type { PresenceViewer } from "../lib/presence-users.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   DEBUG_OVERLAY_SHORTCUT_LABEL,
@@ -19,7 +20,6 @@ import {
 import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
 import { icons, type IconName } from "./icons.ts";
 import "./sidebar-build-chip.ts";
-import type { PresenceViewer } from "./viewer-facepile.ts";
 import "./viewer-facepile.ts";
 import {
   consumeDropdownKeyboardDismissal,

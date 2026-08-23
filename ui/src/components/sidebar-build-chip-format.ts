@@ -10,7 +10,10 @@ const BRANCH_DISPLAY_LENGTH = 14;
 const COPY_FEEDBACK_MS = 1_500;
 
 async function copyBuildCommit(event: Event, commit: string, idleLabel: string) {
-  const button = event.currentTarget as HTMLButtonElement;
+  const button = event.currentTarget;
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
   const copied = await copyToClipboard(commit);
   button.dataset.copied = copied ? "1" : "0";
   button.setAttribute("aria-label", t(copied ? "aboutPage.copiedCommit" : "common.copyFailed"));
@@ -43,7 +46,7 @@ export function formatBuildChipText(info: ControlUiBuildInfo): string | null {
   return `${branch}${commit}`;
 }
 
-export function formatIdentityMenuBuildLabel(info: ControlUiBuildInfo): string | null {
+function formatIdentityMenuBuildLabel(info: ControlUiBuildInfo): string | null {
   const compactBuild = formatBuildChipText(info);
   if (!compactBuild) {
     return null;
@@ -106,6 +109,7 @@ export function renderSidebarServerDetails(
   gatewayVersion: string | null,
 ): TemplateResult {
   const details = formatBuildCardDetails(info, gatewayVersion);
+  const commit = details.commit;
   const unavailable = t("aboutPage.unavailable");
   const copyLabel = t("aboutPage.copyCommit");
   return html`
@@ -115,13 +119,13 @@ export function renderSidebarServerDetails(
         <div class="sidebar-hover-card__metadata-row">
           <dt>${t("aboutPage.commit")}</dt>
           <dd class="sidebar-hover-card__metadata-value--mono sidebar-build-hover-card__commit">
-            <span>${details.commit ?? unavailable}</span>
-            ${details.commit
+            <span>${commit ?? unavailable}</span>
+            ${commit
               ? html`<button
                   type="button"
                   class="sidebar-build-hover-card__copy"
                   aria-label=${copyLabel}
-                  @click=${(event: Event) => void copyBuildCommit(event, details.commit, copyLabel)}
+                  @click=${(event: Event) => void copyBuildCommit(event, commit, copyLabel)}
                 >
                   <span class="sidebar-build-hover-card__copy-idle" aria-hidden="true"
                     >${icons.copy}</span

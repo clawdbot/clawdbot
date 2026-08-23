@@ -2,12 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type {
-  CronJob,
-  CronJobsListResult,
-  ModelAuthStatusResult,
-  UpdateAvailable,
-} from "../api/types.ts";
+import type { CronJob, CronJobsListResult, ModelAuthStatusResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
@@ -62,7 +57,6 @@ type SidebarAttentionElement = HTMLElement & {
   cronJobs: CronJob[];
   modelAuthStatus: ModelAuthStatusResult | null;
   loadedAtMs: number;
-  onSummaryChange?: (summary: { count: number; severity: "error" | "warning" | null }) => void;
 };
 
 function approval(id: string): ExecApprovalRequest {
@@ -71,30 +65,14 @@ function approval(id: string): ExecApprovalRequest {
     kind: "exec",
     request: { command: "echo ok" },
     createdAtMs: 1,
-    expiresAtMs: 2,
+    expiresAtMs: Date.now() + 60_000,
   };
-}
-
-function approvalItems(queue: readonly ExecApprovalRequest[]) {
-  return buildSidebarAttentionItems({
-    cronJobs: [],
-    modelAuthStatus: null,
-    approvalQueue: queue,
-    updateAvailable: null,
-    updateSchedule: null,
-    updateStatusBanner: null,
-    now: 0,
-  }).filter((item) => item.kind === "pendingApproval");
 }
 
 function cronItems(cronJobs: readonly CronJob[], now = 0) {
   return buildSidebarAttentionItems({
     cronJobs,
     modelAuthStatus: null,
-    approvalQueue: [],
-    updateAvailable: null,
-    updateSchedule: null,
-    updateStatusBanner: null,
     now,
   });
 }
@@ -114,10 +92,6 @@ function authItems(agentId: string) {
       ],
     },
     modelAuthAgentId: agentId,
-    approvalQueue: [],
-    updateAvailable: null,
-    updateSchedule: null,
-    updateStatusBanner: null,
     now: 0,
   }).filter((item) => item.kind === "modelAuthExpired");
 }
@@ -147,7 +121,7 @@ describe("automation attention", () => {
     ).toBe(true);
   });
 
-  it("lists overdue job names", () => {
+  it("lists overdue job names newest first", () => {
     const named = cronJob("named-id");
     named.name = "Nightly backup";
     named.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
@@ -159,7 +133,7 @@ describe("automation attention", () => {
       (item) => item.kind === "cronOverdue",
     );
 
-    expect(overdue.map((item) => item.label)).toEqual(["Nightly backup", "unnamed-id"]);
+    expect(overdue.map((item) => item.label)).toEqual(["unnamed-id", "Nightly backup"]);
   });
 
   it("does not flag an actively running job as overdue", () => {
@@ -214,34 +188,6 @@ describe("automation attention", () => {
   });
 });
 
-describe("pending approval attention", () => {
-  it("builds a warning chip only while approvals are pending", () => {
-    expect(approvalItems([])).toEqual([]);
-
-    expect(approvalItems([approval("exec:b")])).toMatchObject([
-      {
-        kind: "pendingApproval",
-        severity: "warning",
-        icon: "shieldQuestion",
-        action: { kind: "openApprovals" },
-      },
-    ]);
-  });
-
-  it("sorts queue ids into a signature that changes for a new approval", () => {
-    const first = approvalItems([approval("exec:b"), approval("exec:a")])[0];
-    const changed = approvalItems([approval("exec:b"), approval("exec:a"), approval("exec:c")])[0];
-
-    if (!first || !changed) {
-      throw new Error("expected pending approval attention items");
-    }
-
-    expect(first.signature).toBe("exec:a\nexec:b");
-    expect(changed.signature).toBe("exec:a\nexec:b\nexec:c");
-    expect(pruneDismissals({ pendingApproval: [first.signature] }, [changed])).toEqual({});
-  });
-});
-
 describe("model auth attention", () => {
   it("keeps identical provider warnings distinct across agents", () => {
     expect(authItems("main")[0]?.signature).toBe("agent:main\nopenai");
@@ -269,10 +215,6 @@ describe("model auth attention", () => {
         ],
       },
       modelAuthAgentId: "main",
-      approvalQueue: [],
-      updateAvailable: null,
-      updateSchedule: null,
-      updateStatusBanner: null,
       now: 0,
     });
 
@@ -296,88 +238,6 @@ describe("model auth attention", () => {
       kind: "navigate",
       routeId: "model-providers",
     });
-  });
-});
-
-describe("update attention", () => {
-  const update: UpdateAvailable = {
-    channel: "dev",
-    currentVersion: "2026.8.1",
-    latestVersion: "2026.8.1",
-    upstreamSha: "a".repeat(40),
-    commitsBehind: 2,
-    commits: [{ sha: "abcdef123", subject: "Improve alerts" }],
-  };
-  const schedule = {
-    channel: "dev",
-    autoEnabled: false,
-    target: {
-      kind: "git" as const,
-      upstreamRef: "origin/main",
-      upstreamSha: "a".repeat(40),
-      commitsBehind: 2,
-    },
-  };
-  const build = (overrides: Record<string, unknown> = {}) =>
-    buildSidebarAttentionItems({
-      cronJobs: [],
-      modelAuthStatus: null,
-      approvalQueue: [],
-      updateAvailable: update,
-      updateSchedule: schedule,
-      updateStatusBanner: null,
-      now: 0,
-      ...overrides,
-    }).filter((item) => item.kind === "updateAvailable");
-
-  it("appears only for an available update outside loud card states", () => {
-    expect(build()).toMatchObject([
-      {
-        severity: "warning",
-        icon: "download",
-        label: "2 commits behind",
-        action: { kind: "askCustodian" },
-      },
-    ]);
-    expect(
-      build({ updateAvailable: { ...update, commitsBehind: 0 }, updateSchedule: null }),
-    ).toEqual([]);
-    expect(build({ updateSchedule: { ...schedule, campaign: { id: "campaign" } } })).toEqual([]);
-    expect(build({ updateStatusBanner: { tone: "danger", text: "failed" } })).toEqual([]);
-  });
-
-  it("changes its signature with upstream sha and carries commit facts", () => {
-    const first = build()[0];
-    const changed = build({
-      updateAvailable: { ...update, upstreamSha: "b".repeat(40) },
-      updateSchedule: {
-        ...schedule,
-        target: { ...schedule.target, upstreamSha: "b".repeat(40) },
-      },
-    })[0];
-    expect(first?.signature).not.toBe(changed?.signature);
-    if (first?.action.kind !== "askCustodian") {
-      throw new Error("expected update custodian action");
-    }
-    expect(first.action.alert.facts).toEqual(["abcdef1 Improve alerts"]);
-    expect(first.action.alert.question).toContain("abcdef1 Improve alerts");
-    expect(first.action.alert.action?.target).toEqual({ kind: "update" });
-  });
-
-  it("falls back to installed and available package versions", () => {
-    const item = build({
-      updateAvailable: {
-        channel: "stable",
-        currentVersion: "1.0.0",
-        latestVersion: "2.0.0",
-      },
-      updateSchedule: null,
-    })[0];
-    if (item?.action.kind !== "askCustodian") {
-      throw new Error("expected package update custodian action");
-    }
-    expect(item.action.alert.facts).toEqual(["Installed v1.0.0 · Available v2.0.0"]);
-    expect(item.action.alert.question).toContain("Installed v1.0.0 · Available v2.0.0");
   });
 });
 
@@ -639,13 +499,21 @@ describe("sidebar attention refresh ownership", () => {
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
     provider.append(element);
     document.body.append(provider);
-    await waitForFast(() => expect(element.textContent).toContain("failed failed"));
+    await waitForFast(() =>
+      expect(element.querySelector<HTMLButtonElement>(".sidebar-issues-button")).not.toBeNull(),
+    );
+    element.querySelector<HTMLButtonElement>(".sidebar-issues-button")?.click();
+    await waitForFast(() =>
+      expect(element.querySelector('[data-attention-kind="cronFailed"]')).not.toBeNull(),
+    );
 
     eventListener?.({ type: "event", event: "cron", payload: {} });
-    await waitForFast(() => expect(element.textContent).not.toContain("failed failed"));
+    await waitForFast(() =>
+      expect(element.querySelector('[data-attention-kind="cronFailed"]')).toBeNull(),
+    );
   });
 
-  it("renders icon-only accessible alerts and reports summary changes", async () => {
+  it("renders the approval queue in the accessible Inbox panel", async () => {
     const request = vi.fn((method: string) => {
       if (method === "cron.list") {
         return Promise.resolve(cronListResponse([]));
@@ -672,20 +540,11 @@ describe("sidebar attention refresh ownership", () => {
       subscribeEvents: () => () => undefined,
     } as unknown as ApplicationGateway;
     const overlayListeners = new Set<() => void>();
-    const overlaySnapshot: {
-      approvalQueue: ExecApprovalRequest[];
-      updateAvailable: UpdateAvailable | null;
-      updateSchedule: null;
-      updateStatusBanner: null;
-    } = {
-      approvalQueue: [],
-      updateAvailable: {
-        channel: "stable",
-        currentVersion: "1.0.0",
-        latestVersion: "2.0.0",
-      },
-      updateSchedule: null,
-      updateStatusBanner: null,
+    const overlaySnapshot = {
+      approvalQueue: [approval("approval-1")],
+      approvalBusy: false,
+      approvalCanGrant: true,
+      approvalErrors: new Map<string, string>(),
     };
     const overlays = {
       snapshot: overlaySnapshot,
@@ -703,25 +562,26 @@ describe("sidebar attention refresh ownership", () => {
       },
     } as unknown as ApplicationContext);
     vi.stubGlobal("localStorage", createTestStorageMock());
-    const summary = vi.fn();
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
-    element.onSummaryChange = summary;
     provider.append(element);
     document.body.append(provider);
 
     await waitForFast(() =>
-      expect(element.querySelector<HTMLButtonElement>(".sidebar-attention__open")).not.toBeNull(),
+      expect(element.querySelector<HTMLButtonElement>(".sidebar-issues-button")).not.toBeNull(),
     );
-    const button = element.querySelector<HTMLButtonElement>(".sidebar-attention__open");
-    expect(button?.getAttribute("aria-label")).toBe("v2.0.0");
-    expect(element.querySelector(".sidebar-attention__label")).toBeNull();
-    expect(summary).toHaveBeenLastCalledWith({ count: 1, severity: "warning" });
+    const button = element.querySelector<HTMLButtonElement>(".sidebar-issues-button");
+    expect(button?.getAttribute("aria-label")).toBe("1 inbox item");
+    button?.click();
+    await waitForFast(() =>
+      expect(element.querySelector('[data-approval-id="approval-1"]')).not.toBeNull(),
+    );
 
-    overlaySnapshot.updateAvailable = null;
+    overlaySnapshot.approvalQueue = [];
     for (const listener of overlayListeners) {
       listener();
     }
-    await waitForFast(() => expect(summary).toHaveBeenLastCalledWith({ count: 0, severity: null }));
+    await waitForFast(() => expect(button?.getAttribute("aria-label")).toBe("0 inbox items"));
+    expect(element.querySelector("#sidebar-issues-panel")).toBeNull();
   });
 });
 

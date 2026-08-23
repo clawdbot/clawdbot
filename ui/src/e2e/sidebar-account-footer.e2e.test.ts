@@ -37,7 +37,7 @@ async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
   ];
   expect(await identity.locator("button").count()).toBe(0);
   expect(await identity.locator(".sidebar-identity-card__more").count()).toBe(0);
-  expect(await sidebar.getByRole("button", { name: "Devices" }).count()).toBe(1);
+  expect(await sidebar.getByRole("button", { name: "Devices" }).count()).toBe(0);
   expect(await sidebar.locator(".sidebar-footer-bar > openclaw-tooltip").count()).toBe(0);
   for (const part of parts) {
     await part.click();
@@ -62,6 +62,7 @@ async function assertIdentityMenuContract(sidebar: Locator, menu: Locator) {
   expect(await menu.locator('wa-dropdown-item[value="command:recent-activity"]').count()).toBe(0);
   expect(await menu.locator(':scope > [role="separator"]').count()).toBe(4);
   expect(await menu.locator('wa-dropdown-item[value="command:settings"] kbd').count()).toBe(1);
+  expect(await menu.locator('wa-dropdown-item[value="command:pair-mobile"]').count()).toBe(1);
 }
 
 async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feature" | "main") {
@@ -86,7 +87,8 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
     const buildLabel = (
       await menu.getByRole("link", { name: "Control UI build details" }).textContent()
     )?.trim();
-    expect(buildLabel).toBe(branch === "main" ? "git@0123456" : "feat/sidebar-f…@0123456");
+    const buildPrefix = branch === "main" ? "git@0123456" : "feat/sidebar-f…@0123456";
+    expect(buildLabel?.startsWith(`${buildPrefix} · `)).toBe(true);
     await captureUnionProof(page, "sidebar-account-footer", `${branch}-${theme}-menu-default.png`, [
       footer,
       menuSurface,

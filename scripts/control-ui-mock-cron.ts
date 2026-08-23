@@ -106,7 +106,7 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
               "Delivery failed after the provider accepted the request but closed the stream before the final acknowledgement. The retry queue retained the payload, the release channel has not been notified, and the notification fan-out must be reconciled before another deployment attempt.",
             lastDurationMs: 18_640,
             consecutiveErrors: 3,
-            lastDeliveryStatus: "error",
+            lastDeliveryStatus: "not-delivered",
           },
         },
         {

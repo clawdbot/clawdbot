@@ -86,6 +86,7 @@
   --accent-foreground: #fafafa;
   --accent-glow: rgba(255, 92, 92, 0.2);
   --inbox-attention: #e5243b;
+  --inbox-attention-hover: color-mix(in srgb, var(--inbox-attention) 88%, black);
   --inbox-attention-foreground: #ffffff;
 
   /* Link text keeps the accent hue but cannot be --accent: chat paints user

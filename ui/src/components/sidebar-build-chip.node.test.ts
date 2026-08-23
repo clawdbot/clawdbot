@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import {
   formatBuildChipText,
-  formatIdentityMenuBuildLabel,
   formatSettingsBuildLabel,
   formatSidebarBuildSubtitle,
 } from "./sidebar-build-chip-format.ts";
@@ -73,20 +72,6 @@ describe("formatBuildChipText", () => {
       expect(formatBuildChipText(testCase.info)).toBe(testCase.expected);
     });
   }
-});
-
-describe("formatIdentityMenuBuildLabel", () => {
-  it.each([
-    { branch: "main", expected: "git@e8cbc62" },
-    { branch: null, expected: "git@e8cbc62" },
-    { branch: "feat/x", expected: "feat/x@e8cbc62" },
-  ])("labels a $branch build", ({ branch, expected }) => {
-    expect(formatIdentityMenuBuildLabel(buildInfo({ branch }))).toBe(expected);
-  });
-
-  it("retains dirty state", () => {
-    expect(formatIdentityMenuBuildLabel(buildInfo({ dirty: true }))).toBe("git@e8cbc62*");
-  });
 });
 
 describe("formatSettingsBuildLabel", () => {

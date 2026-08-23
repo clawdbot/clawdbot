@@ -9,9 +9,9 @@ import type {
 } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
 import { formatCountdown } from "../lib/format.ts";
+import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";
-import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { icons } from "./icons.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
@@ -35,7 +35,6 @@ type SidebarApprovalRowProps = {
   busy: boolean;
   canGrant: boolean;
   error: string | null;
-  nowMs: number;
   openSessionHref?: string;
   sessionTitle?: string | null;
   onDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
@@ -182,7 +181,7 @@ export function compactApprovalCommand(command: string): string {
   return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
 }
 
-export function approvalDecisionLabel(decision: ExecApprovalDecision) {
+function approvalDecisionLabel(decision: ExecApprovalDecision) {
   return t(
     decision === "allow-once"
       ? "execApproval.allowOnce"
@@ -221,47 +220,17 @@ export function approvalTitle(active: ExecApprovalRequest): string {
     : t("execApproval.execApprovalNeeded");
 }
 
-/** Full request facts for a parent disclosure. Unlike the modal card, this
- * deliberately adds no nested details element or second card surface. */
-export function renderExpandedApprovalDetails(active: ExecApprovalRequest) {
-  if (active.kind === "exec") {
-    return html`
-      ${renderCommandWithSpans(active.request)}
-      <div class="exec-approval-meta">
-        ${renderMetaRow(t("execApproval.labels.host"), active.request.host)}
-        ${renderMetaRow(t("execApproval.labels.cwd"), active.request.cwd, { path: true })}
-        ${renderMetaRow(t("execApproval.labels.resolved"), active.request.resolvedPath, {
-          path: true,
-        })}
-        ${renderMetaRow(t("execApproval.labels.security"), active.request.security)}
-        ${renderMetaRow(t("execApproval.labels.ask"), active.request.ask)}
-      </div>
-    `;
-  }
-  return html`
-    ${active.pluginDescription
-      ? html`<div class="exec-approval-description">${active.pluginDescription}</div>`
-      : nothing}
-    <div class="exec-approval-command mono">${active.request.command}</div>
-    <div class="exec-approval-meta">
-      ${renderMetaRow(t("execApproval.labels.session"), active.request.sessionKey)}
-    </div>
-  `;
-}
-
 export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
   const approval = props.approval;
-  const expired = approval.expiresAtMs <= props.nowMs;
+  const nowMs = Date.now();
+  const expired = approval.expiresAtMs <= nowMs;
   const command = compactApprovalCommand(approval.request.command);
   const sessionKey = approval.request.sessionKey?.trim();
   const sessionTitle =
     props.sessionTitle ??
     (sessionKey ? resolveSessionDisplayName(sessionKey) : approvalTitle(approval));
-  const expiryUrgent = expired || approval.expiresAtMs - props.nowMs < 2 * 60_000;
-  const remainingLabel = expired
-    ? t("execApproval.expired")
-    : formatCountdown(approval.expiresAtMs, props.nowMs, true);
-  const expiryLabel = approvalRemainingLabel(approval.expiresAtMs, props.nowMs);
+  const expiryUrgent = expired || approval.expiresAtMs - nowMs < 2 * 60_000;
+  const expiryLabel = approvalRemainingLabel(approval.expiresAtMs, nowMs);
   const reviewOnlyMessage = t("execApproval.reviewOnly");
   const grantError = !props.canGrant && props.error === reviewOnlyMessage;
   return html`<article
@@ -275,15 +244,16 @@ export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
     <div class="sidebar-approval-row__content">
       <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
         <span class="sidebar-issues-panel__entity" title=${sessionTitle}>${sessionTitle}</span>
-        <span
+        <openclaw-approval-countdown
           class="sidebar-approval-row__timer ${expiryUrgent
             ? "sidebar-approval-row__timer--urgent"
             : ""}"
           role="timer"
           aria-label=${expiryLabel}
           title=${expiryLabel}
-          >${remainingLabel}</span
-        >
+          .expiresAtMs=${approval.expiresAtMs}
+          .compact=${true}
+        ></openclaw-approval-countdown>
       </div>
       <div class="sidebar-approval-row__command mono" title=${approval.request.command}>
         <span aria-hidden="true">$ </span>${command}

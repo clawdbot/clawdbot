@@ -528,7 +528,7 @@ describe("settings sidebar search", () => {
     expect(labels).toContain("Avancado");
   });
 
-  it("keeps the refresh card above the settings footer and forwards its action", async () => {
+  it("keeps build identity in the settings footer without update controls", async () => {
     const onUpdate = vi.fn();
     const onRefresh = vi.fn();
     const onNavigate = vi.fn();
@@ -560,13 +560,8 @@ describe("settings sidebar search", () => {
       container,
     );
 
-    const card = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-sidebar-update-card",
-    );
-    await card?.updateComplete;
-    expect(card?.nextElementSibling?.classList.contains("settings-sidebar__footer")).toBe(true);
-    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
+    expect(onRefresh).not.toHaveBeenCalled();
     expect(onUpdate).not.toHaveBeenCalled();
 
     const buildChip = container.querySelector<

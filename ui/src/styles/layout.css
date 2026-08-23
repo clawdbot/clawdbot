@@ -4125,10 +4125,6 @@ openclaw-sidebar-attention {
   transition: transform var(--duration-fast) ease;
 }
 
-.sidebar-issues-panel__chevron--expanded {
-  transform: rotate(90deg);
-}
-
 .sidebar-issues-panel__details[open]
   > .sidebar-issues-panel__summary
   .sidebar-issues-panel__chevron {
@@ -4219,7 +4215,6 @@ openclaw-sidebar-attention {
   overflow: hidden;
   font-weight: 600;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sidebar-approval-row__timer {
@@ -4523,16 +4518,13 @@ openclaw-sidebar-attention {
 
 .sidebar-footer-update:hover:not(:disabled) {
   width: 76px;
-  background: color-mix(in srgb, var(--inbox-attention) 88%, black);
+  background: var(--inbox-attention-hover);
   transition-delay: var(--duration-slow);
 }
 
 .sidebar-footer-update:focus-visible {
   width: 76px;
-  background: color-mix(in srgb, var(--inbox-attention) 88%, black);
-}
-
-.sidebar-footer-update:focus-visible {
+  background: var(--inbox-attention-hover);
   outline: none;
   box-shadow: var(--focus-ring);
 }

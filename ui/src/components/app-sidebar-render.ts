@@ -7,6 +7,7 @@ import {
 } from "../app-navigation.ts";
 import { isRouteId, isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
+import { hasNativeUpdateBridge } from "../app/native-link-routing.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { confirmAndStartUpdate } from "../app/update-confirmation.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
@@ -50,6 +51,7 @@ import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
   activeWorkboardBoardId: string;
+  nativeUpdateDeclined: boolean;
   offline: boolean;
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
@@ -434,7 +436,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
                       void confirmAndStartUpdate({
                         updateAvailable: availableUpdate,
                         updateSchedule: host.updateSchedule,
-                        viaNativeApp: false,
+                        viaNativeApp: !host.nativeUpdateDeclined && hasNativeUpdateBridge(),
                         startGatewayUpdate: host.onUpdate,
                         ...(host.watchUpdateProgress
                           ? { watchUpdateProgress: host.watchUpdateProgress }

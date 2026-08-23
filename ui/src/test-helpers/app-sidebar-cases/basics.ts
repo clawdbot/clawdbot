@@ -32,11 +32,10 @@ describe("AppSidebar update card wiring", () => {
     expect(sidebar.querySelector('.nav-item[href="/settings/secrets"]')).toBeNull();
   });
 
-  it("renders updates above the footer bar and forwards its action", async () => {
+  it("renders the update action in the footer bar and forwards it", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     const onUpdate = vi.fn();
-    const onRefresh = vi.fn();
     sidebar.updateAvailable = {
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
@@ -44,36 +43,19 @@ describe("AppSidebar update card wiring", () => {
     };
     sidebar.canUpdate = true;
     sidebar.onUpdate = onUpdate;
-    sidebar.onRefresh = onRefresh;
     await sidebar.updateComplete;
 
     const footer = sidebar.querySelector(".sidebar-shell__footer");
-    expect(footer?.firstElementChild?.localName).toBe("openclaw-sidebar-update-card");
-    expect(
-      footer?.querySelector(".sidebar-footer-bar > openclaw-sidebar-attention"),
-    ).not.toBeNull();
-    const card = footer?.querySelector("openclaw-sidebar-update-card");
-    expect(card).not.toBeNull();
-    expect(card?.querySelector(".sidebar-update-card")).toBeNull();
+    const updateButton = footer?.querySelector<HTMLButtonElement>(".sidebar-footer-update");
+    expect(updateButton?.getAttribute("aria-label")).toBe("Update available");
     const restoreDialogPolyfill = installDialogPolyfill();
-    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
+    updateButton?.click();
     const { modal } = await waitForRenderedModalDialog(document.body);
     [...modal.querySelectorAll("button")]
       .find((button) => button.textContent?.trim() === "Update and restart")
       ?.click();
     await nextFrame();
     restoreDialogPolyfill();
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    sidebar.refreshRequired = true;
-    await sidebar.updateComplete;
-    const refreshCard = footer?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-sidebar-update-card",
-    );
-    await refreshCard?.updateComplete;
-    expect(refreshCard?.textContent).toContain("Server updated");
-    refreshCard?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    expect(onRefresh).toHaveBeenCalledOnce();
     expect(onUpdate).toHaveBeenCalledOnce();
   });
 });
@@ -209,12 +191,8 @@ describe("AppSidebar viewer presence", () => {
     expect(footer?.querySelector("openclaw-viewer-facepile")).toBeNull();
     expect(footer?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
     expect(footer?.querySelector(".sidebar-brand__logo-slot")).toBeNull();
-    expect([...(footer?.children ?? [])].map((element) => element.localName)).toEqual([
-      "button",
-      "span",
-      "button",
-      "openclaw-sidebar-attention",
-    ]);
+    expect(footer?.querySelector(".sidebar-identity-card")).toBe(identityCard);
+    expect(footer?.querySelector('.sidebar-identity-card__status[role="status"]')).not.toBeNull();
     gatewayHarness.gateway.updateSelfUser?.({
       name: "Augusta Ada",
       avatarUrl: "/api/users/00-self/avatar?v=4",

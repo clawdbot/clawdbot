@@ -6,7 +6,6 @@ import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
@@ -14,12 +13,8 @@ import { t } from "../i18n/index.ts";
 import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
-import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 import { icons } from "./icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
@@ -34,21 +29,24 @@ import {
   buildSidebarAttentionItems,
   type SidebarAttentionItem,
 } from "./sidebar-attention-items.ts";
+import {
+  renderSidebarApprovalItem,
+  renderSidebarAskOpenClawButton,
+  renderSidebarIssueItem,
+  renderSidebarUpdateSurface,
+} from "./sidebar-issue-item.ts";
 import "./tooltip.ts";
 import "./menu-surface.ts";
 import { ISSUE_TABS, issueTabLabel, nextIssueTab, type IssueTab } from "./sidebar-issues-tabs.ts";
-import "./sidebar-update-card.ts";
 
 // A visibility change only refetches a connection-scoped stale snapshot.
 const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
 // Always-visible native windows need a slow lifecycle-owned refresh too.
 const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
 const ITEM_PRIORITY: Record<SidebarAttentionItem["kind"], number> = {
-  pendingApproval: 0,
-  modelAuthExpired: 1,
-  cronFailed: 2,
-  cronOverdue: 3,
-  updateAvailable: 4,
+  modelAuthExpired: 0,
+  cronFailed: 1,
+  cronOverdue: 2,
 };
 class SidebarAttention extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -228,7 +226,12 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     if (changed.has("activeRouteId") && changed.get("activeRouteId") !== undefined) {
       this.closePanel(false);
     }
-    if (this.panelOpen && this.currentItems().length === 0 && !this.updateSurfaceVisible()) {
+    if (
+      this.panelOpen &&
+      this.currentItems().length === 0 &&
+      this.approvalQueue().length === 0 &&
+      !this.updateSurfaceVisible()
+    ) {
       this.closePanel(false);
     }
   }
@@ -306,25 +309,21 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   }
 
   private buildItems(): SidebarAttentionItem[] {
-    const overlays = this.context?.overlays.snapshot;
     return buildSidebarAttentionItems({
       cronJobs: this.cronJobs,
       modelAuthStatus: this.modelAuthStatus,
       modelAuthAgentId: this.modelAuthAgentId,
-      approvalQueue: overlays?.approvalQueue ?? [],
-      updateAvailable: overlays?.updateAvailable ?? null,
-      updateSchedule: overlays?.updateSchedule ?? null,
-      updateStatusBanner: overlays?.updateStatusBanner ?? null,
       now: Date.now(),
     });
   }
 
+  private approvalQueue(): readonly ExecApprovalRequest[] {
+    return this.context?.overlays.snapshot.approvalQueue ?? [];
+  }
+
   private currentItems(): SidebarAttentionItem[] {
     return this.context?.gateway.snapshot.phase === "connected"
-      ? this.buildItems().filter(
-          (item) =>
-            item.kind === "pendingApproval" || !this.dismissed[item.kind]?.includes(item.signature),
-        )
+      ? this.buildItems().filter((item) => !this.dismissed[item.kind]?.includes(item.signature))
       : [];
   }
 
@@ -471,9 +470,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   private async open(item: SidebarAttentionItem) {
     this.closePanel(false);
-    if (item.action.kind === "openApprovals") {
-      return;
-    }
     if (item.action.kind === "navigate") {
       this.onNavigate?.(item.action.routeId);
       return;
@@ -499,16 +495,22 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     if (event.key !== "Tab") {
       return;
     }
+    const panel = event.currentTarget;
+    if (!(panel instanceof HTMLElement)) {
+      return;
+    }
     const rows = Array.from(
-      (event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(
+      panel.querySelectorAll<HTMLElement>(
         "summary, button, a[href], [tabindex]:not([tabindex='-1'])",
       ),
     ).filter((element) => {
       const closedDetails = element.closest("details:not([open])");
+      const insideSummary =
+        element.tagName === "SUMMARY" || Boolean(element.parentElement?.closest("summary"));
       return (
         !element.hasAttribute("disabled") &&
         !element.closest("[hidden]") &&
-        (!closedDetails || element.matches("summary") || Boolean(element.closest("summary")))
+        (!closedDetails || insideSummary)
       );
     });
     const first = rows[0];
@@ -522,66 +524,15 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     }
   };
 
-  private renderAskOpenClawButton(count: number, severity: "error" | "warning" | null) {
-    const snapshot = this.context?.gateway.snapshot;
-    if (!canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")) {
-      return nothing;
-    }
-    const custodianLabel = count
-      ? t(count === 1 ? "attention.custodianAlertAria" : "attention.custodianAlertsAria", {
-          count: String(count),
-        })
-      : t("nav.askOpenClaw");
-    return html`<openclaw-tooltip .content=${custodianLabel}>
-      <button
-        type="button"
-        class="sidebar-brand__icon sidebar-footer-bar__custodian sidebar-issues-panel__ask"
-        aria-label=${custodianLabel}
-        @click=${() => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
-      >
-        <span class="sidebar-footer-bar__custodian-glyph">
-          ${icons.lobster}
-          ${count
-            ? html`<span
-                class="session-glyph__badge sidebar-footer-bar__custodian-badge sidebar-footer-bar__custodian-badge--${severity ??
-                "warning"}"
-                aria-hidden="true"
-              ></span>`
-            : nothing}
-        </span>
-      </button>
-    </openclaw-tooltip>`;
-  }
-
   private renderUpdateSurface() {
-    if (!this.updateSurfaceVisible()) {
-      return nothing;
-    }
-    const context = this.context;
-    if (!context) {
-      return nothing;
-    }
-    const snapshot = context.overlays.snapshot;
-    const gateway = context.gateway.snapshot;
-    return html`<openclaw-sidebar-update-card
-      class="sidebar-issues-panel__update"
-      data-attention-kind="updateAvailable"
-      .compact=${true}
-      .updateAvailable=${snapshot.updateAvailable}
-      .updateSchedule=${snapshot.updateSchedule}
-      .heldUpdateCampaignId=${snapshot.heldUpdateCampaignId}
-      .updateBusy=${snapshot.updateRunning}
-      .statusBanner=${snapshot.updateStatusBanner}
-      .watchUpdateProgress=${this.watchUpdateProgress}
-      .canUpdate=${canCallGatewayMethod(gateway, "update.run", "operator.admin")}
-      .canHoldUpdate=${canCallGatewayMethod(gateway, "update.hold", "operator.admin")}
-      .onUpdate=${() => void context.overlays.runUpdate()}
-      .refreshRequired=${snapshot.controlUiRefreshRequired}
-      .onRefresh=${this.onRefresh ?? (() => undefined)}
-      .onHoldUpdate=${() => context.overlays.holdUpdate()}
-      .onReviewUpdate=${() => this.onNavigate?.("updates")}
-      .onDismiss=${() => this.dismissUpdateSurface()}
-    ></openclaw-sidebar-update-card>`;
+    return renderSidebarUpdateSurface({
+      context: this.context,
+      onDismiss: () => this.dismissUpdateSurface(),
+      onNavigate: () => this.onNavigate?.("updates"),
+      onRefresh: this.onRefresh,
+      visible: this.updateSurfaceVisible(),
+      watchUpdateProgress: this.watchUpdateProgress,
+    });
   }
 
   private async decideApproval(event: Event, approvalId: string, decision: ExecApprovalDecision) {
@@ -589,7 +540,10 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     if (!context) {
       return;
     }
-    const target = event.currentTarget as HTMLElement;
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
     const focusOrder = Array.from(this.querySelectorAll<HTMLElement>("[data-issue-row-focus]"));
     const row = target.closest<HTMLElement>("[data-approval-id]");
     const rowFocus = row?.querySelector<HTMLElement>("[data-issue-row-focus]") ?? null;
@@ -604,178 +558,25 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   }
 
   private renderApprovalItem(approval: ExecApprovalRequest) {
-    const context = this.context;
-    const snapshot = context?.overlays.snapshot;
-    if (!context || !snapshot) {
-      return nothing;
-    }
-    const sessionKey = approval.request.sessionKey?.trim();
-    const session = sessionKey
-      ? context.sessions.state.result?.sessions.find((candidate) =>
-          areUiSessionKeysEquivalent(candidate.key, sessionKey),
-        )
-      : undefined;
-    const sessionTarget = sessionKey
-      ? sessionNavigationTarget({ context, face: "chat", sessionKey })
-      : null;
-    return renderSidebarApprovalRow({
+    return renderSidebarApprovalItem({
       approval,
-      busy: snapshot.approvalBusy,
-      canGrant: snapshot.approvalCanGrant,
-      error: snapshot.approvalErrors.get(approval.id) ?? null,
-      nowMs: snapshot.approvalNowMs,
-      openSessionHref: sessionTarget?.href,
-      sessionTitle: session?.displayName?.trim() || session?.label?.trim(),
+      context: this.context,
+      onClosePanel: () => this.closePanel(false),
       onDecision: (event, approvalId, decision) =>
         void this.decideApproval(event, approvalId, decision),
-      onOpenSession: sessionTarget
-        ? (event) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            this.closePanel(false);
-            context.navigate("chat", sessionTarget.options);
-          }
-        : undefined,
     });
   }
 
-  private renderItemMeta(item: SidebarAttentionItem) {
-    if (!item.meta) {
-      return html`<span class="sidebar-issues-panel__state" title=${item.detail}
-        >${item.detail}</span
-      >`;
-    }
-    return html`<span class="sidebar-issues-panel__state-row" title=${item.detail}>
-      ${item.meta.context
-        ? html`<span class="sidebar-issues-panel__meta-context">${item.meta.context}</span>
-            <span aria-hidden="true">·</span>`
-        : nothing}
-      <span class="sidebar-issues-panel__meta-status">${item.meta.status}</span>
-      <span aria-hidden="true">·</span>
-      <span class="sidebar-issues-panel__meta-time">${item.meta.time}</span>
-    </span>`;
-  }
-
-  private renderNavigationItem(item: SidebarAttentionItem) {
-    if (item.action.kind !== "navigate") {
-      return nothing;
-    }
-    const routeId = item.action.routeId;
-    return html`<div
-      class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
-      data-attention-kind=${item.kind}
-    >
-      <div class="sidebar-issues-panel__summary sidebar-issues-panel__summary--navigation">
-        <a
-          class="sidebar-issues-panel__navigation-link"
-          href=${pathForRoute(routeId, this.context?.basePath ?? "")}
-          data-issue-row-focus
-          @click=${(event: MouseEvent) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            this.closePanel(false);
-            (this.onNavigate ?? ((nextRoute) => this.context?.navigate(nextRoute)))(routeId);
-          }}
-        >
-          <span class="sidebar-issues-panel__icon" aria-hidden="true">${icons[item.icon]}</span>
-          <span class="sidebar-issues-panel__content">
-            <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
-            ${this.renderItemMeta(item)}
-          </span>
-        </a>
-        <button
-          type="button"
-          class="sidebar-issues-panel__dismiss"
-          aria-label=${t("attention.dismissItem", { item: item.label })}
-          title=${t("attention.dismissItem", { item: item.label })}
-          @click=${() => this.dismiss(item)}
-        >
-          ${icons.x}
-        </button>
-        <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
-      </div>
-    </div>`;
-  }
-
   private renderItem(item: SidebarAttentionItem) {
-    if (item.approvalQueue?.length) {
-      return item.approvalQueue.map((approval) => this.renderApprovalItem(approval));
-    }
-    if (item.action.kind === "navigate") {
-      return this.renderNavigationItem(item);
-    }
-    const facts = item.action.kind === "askCustodian" ? item.action.alert.facts : [];
-    const visibleFacts = facts.filter((fact) => fact !== item.label);
-    const actionLabel = item.action.kind === "askCustodian" ? t("nav.askOpenClaw") : item.label;
-    const inlineAction = item.inlineAction;
-    return html`<details
-      class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
-      data-attention-kind=${item.kind}
-    >
-      <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
-        <span
-          class="sidebar-issues-panel__icon ${item.kind === "modelAuthExpired"
-            ? "sidebar-issues-panel__icon--critical"
-            : ""}"
-          aria-hidden="true"
-          >${icons[item.icon]}</span
-        >
-        <span class="sidebar-issues-panel__content">
-          <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
-          ${this.renderItemMeta(item)}
-        </span>
-        <button
-          type="button"
-          class="sidebar-issues-panel__dismiss"
-          aria-label=${t("attention.dismissItem", { item: item.label })}
-          title=${t("attention.dismissItem", { item: item.label })}
-          @click=${(event: Event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            this.dismiss(item);
-          }}
-        >
-          ${icons.x}
-        </button>
-        <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
-      </summary>
-      <div class="sidebar-issues-panel__body">
-        ${visibleFacts.length
-          ? html`<ul class="sidebar-issues-panel__facts">
-              ${visibleFacts.map((fact) => html`<li>${fact}</li>`)}
-            </ul>`
-          : nothing}
-        <div class="sidebar-issues-panel__actions">
-          ${inlineAction
-            ? html`<button
-                type="button"
-                class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-                @click=${() => {
-                  this.closePanel(false);
-                  (this.onNavigate ?? ((routeId) => this.context?.navigate(routeId)))(
-                    inlineAction.routeId,
-                  );
-                }}
-              >
-                ${inlineAction.label}
-              </button>`
-            : nothing}
-          <button
-            type="button"
-            class="sidebar-issues-panel__action ${inlineAction
-              ? ""
-              : "sidebar-issues-panel__action--primary"}"
-            @click=${() => void this.open(item)}
-          >
-            ${actionLabel}
-          </button>
-        </div>
-      </div>
-    </details>`;
+    return renderSidebarIssueItem(item, {
+      basePath: this.context?.basePath ?? "",
+      onDismiss: (dismissedItem) => this.dismiss(dismissedItem),
+      onNavigate: (routeId) => {
+        this.closePanel(false);
+        (this.onNavigate ?? ((nextRoute) => this.context?.navigate(nextRoute)))(routeId);
+      },
+      onOpen: (openedItem) => void this.open(openedItem),
+    });
   }
 
   override render() {
@@ -783,14 +584,10 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       return nothing;
     }
     const updateSurface = this.updateSurfaceVisible();
-    const allItems = this.currentItems();
-    const approvalQueue = allItems.flatMap((item) => item.approvalQueue ?? []);
-    const items = allItems
-      .filter(
-        (item) =>
-          !item.approvalQueue?.length && (!updateSurface || item.kind !== "updateAvailable"),
-      )
-      .toSorted((left, right) => ITEM_PRIORITY[left.kind] - ITEM_PRIORITY[right.kind]);
+    const approvalQueue = this.approvalQueue();
+    const items = this.currentItems().toSorted(
+      (left, right) => ITEM_PRIORITY[left.kind] - ITEM_PRIORITY[right.kind],
+    );
     const count = approvalQueue.length + items.length + (updateSurface ? 1 : 0);
     const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count),
@@ -799,9 +596,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const automationItems = items.filter(
       (item) => item.kind === "cronFailed" || item.kind === "cronOverdue",
     );
-    const systemItems = items.filter(
-      (item) => item.kind === "modelAuthExpired" || item.kind === "updateAvailable",
-    );
+    const systemItems = items.filter((item) => item.kind === "modelAuthExpired");
     const visibleItems =
       this.selectedTab === "automations"
         ? automationItems
@@ -837,10 +632,17 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         aria-haspopup="dialog"
         aria-controls="sidebar-issues-panel"
         aria-label=${label}
-        @click=${(event: MouseEvent) =>
-          this.panelOpen
-            ? this.closePanel(true)
-            : this.openPanel(event.currentTarget as HTMLElement)}
+        @click=${(event: MouseEvent) => {
+          const trigger = event.currentTarget;
+          if (!(trigger instanceof HTMLElement)) {
+            return;
+          }
+          if (this.panelOpen) {
+            this.closePanel(true);
+          } else {
+            this.openPanel(trigger);
+          }
+        }}
       >
         <span class="sidebar-issues-button__icon" aria-hidden="true">${icons.inbox}</span>
         ${count > 0
@@ -873,7 +675,11 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
                     >
                     ${t("attention.issues")}
                   </h2>
-                  ${this.renderAskOpenClawButton(custodianItems.length, custodianSeverity)}
+                  ${renderSidebarAskOpenClawButton({
+                    count: custodianItems.length,
+                    severity: custodianSeverity,
+                    snapshot: this.context?.gateway.snapshot,
+                  })}
                   <button
                     type="button"
                     class="sidebar-brand__icon sidebar-issues-panel__mobile-close"

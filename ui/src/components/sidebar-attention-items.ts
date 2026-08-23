@@ -1,18 +1,5 @@
-// Pure builder for the sidebar attention chips. Kept separate from the Lit
-// element so the chip logic has a real cross-module consumer (the element) and
-// can be unit-tested without rendering a component.
-import type {
-  CronJob,
-  ModelAuthStatusResult,
-  UpdateAvailable,
-  UpdateScheduleState,
-} from "../api/types.ts";
+import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import type { ExecApprovalRequest } from "../app/exec-approval.ts";
-import {
-  formatUpdateTargetLabel,
-  type ApplicationStatusBanner,
-} from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
 import { isCronJobActiveFailure, isCronJobRunning } from "../lib/cron-status.ts";
 import { clampText, formatTimeAgo } from "../lib/format.ts";
@@ -28,11 +15,10 @@ const ALERT_QUESTION_MAX_LENGTH = 1_000;
 
 type SidebarAttentionAction =
   | { kind: "navigate"; routeId: NavigationRouteId }
-  | { kind: "askCustodian"; alert: CustodianAlert }
-  | { kind: "openApprovals" };
+  | { kind: "askCustodian"; alert: CustodianAlert };
 
 export type SidebarAttentionItem = {
-  kind: SidebarAttentionKind;
+  kind: Exclude<SidebarAttentionKind, "updateAvailable">;
   severity: "error" | "warning";
   icon: IconName;
   label: string;
@@ -40,9 +26,6 @@ export type SidebarAttentionItem = {
   meta?: { context?: string; status: string; time: string };
   action: SidebarAttentionAction;
   inlineAction?: { label: string; routeId: NavigationRouteId };
-  /** Pending approvals stay attached to their canonical overlay queue so the
-   * Inbox panel can render the real decision/details surface inline. */
-  approvalQueue?: readonly ExecApprovalRequest[];
   // Sorted identities of the entities behind the chip. A dismissal stores
   // this signature so the chip stays hidden only while the same incident set
   // is affected; any change (new job/provider, new overdue run) resurfaces
@@ -59,14 +42,9 @@ export function buildSidebarAttentionItems(params: {
   cronJobs: readonly CronJob[];
   modelAuthStatus: ModelAuthStatusResult | null;
   modelAuthAgentId?: string | null;
-  approvalQueue: readonly ExecApprovalRequest[];
-  updateAvailable: UpdateAvailable | null;
-  updateSchedule: UpdateScheduleState | null;
-  updateStatusBanner: ApplicationStatusBanner | null;
   now: number;
 }): SidebarAttentionItem[] {
   const items: SidebarAttentionItem[] = [];
-  const signatureOf = (ids: readonly string[]) => ids.toSorted().join("\n");
   const cronJobName = (job: CronJob) => job.name?.trim() || job.id;
   const boundedQuestion = (question: string) => clampText(question, ALERT_QUESTION_MAX_LENGTH);
   const explainedItem = (
@@ -79,74 +57,6 @@ export function buildSidebarAttentionItems(params: {
       alert: { ...alert, id: `${item.kind}:${item.signature}` },
     },
   });
-
-  const update = params.updateAvailable;
-  const target = params.updateSchedule?.target;
-  const commitsBehind = target?.kind === "git" ? target.commitsBehind : update?.commitsBehind;
-  const updateAvailable = Boolean(
-    update &&
-    !params.updateSchedule?.campaign &&
-    !params.updateStatusBanner &&
-    (update.latestVersion !== update.currentVersion ||
-      (target?.kind === "git" && target.commitsBehind > 0)),
-  );
-  if (update && updateAvailable) {
-    const targetLabel = formatUpdateTargetLabel(params.updateSchedule, update);
-    const signature = `${update.upstreamSha ?? (target?.kind === "git" ? target.upstreamSha : update.latestVersion)}\n${update.channel}`;
-    const facts = update.commits?.length
-      ? update.commits.map((commit) => `${commit.sha.slice(0, 7)} ${commit.subject}`)
-      : [
-          t(
-            commitsBehind !== undefined
-              ? "updates.confirm.versionsBehind"
-              : "updates.confirm.versions",
-            {
-              installed: t("updates.target.version", { version: update.currentVersion }),
-              available:
-                targetLabel ?? t("updates.target.version", { version: update.latestVersion }),
-            },
-          ),
-        ];
-    const question = boundedQuestion(
-      t("attention.alerts.updateQuestion", { facts: facts.join("\n") }),
-    );
-    items.push(
-      explainedItem(
-        {
-          kind: "updateAvailable",
-          severity: "warning",
-          icon: "download",
-          label: targetLabel ?? update.latestVersion,
-          detail: `${update.channel} · ${t("updates.sidebar.availableSummary")}`,
-          signature,
-        },
-        {
-          title: t("updates.page.available", { target: targetLabel ?? update.latestVersion }),
-          facts,
-          question,
-          action: { label: t("updates.confirm.action"), target: { kind: "update" } },
-        },
-      ),
-    );
-  }
-
-  if (params.approvalQueue.length > 0) {
-    const count = params.approvalQueue.length;
-    items.push({
-      kind: "pendingApproval",
-      severity: "warning",
-      icon: "shieldQuestion",
-      label: t(count === 1 ? "attention.pendingApproval" : "attention.pendingApprovals", {
-        count: String(count),
-      }),
-      detail: formatTimeAgo(
-        Math.max(0, params.now - Math.max(...params.approvalQueue.map((item) => item.createdAtMs))),
-      ),
-      action: { kind: "openApprovals" },
-      approvalQueue: params.approvalQueue,
-      signature: signatureOf(params.approvalQueue.map((approval) => approval.id)),
-    });
-  }
 
   const failedCron = params.cronJobs
     .filter(isCronJobActiveFailure)
