@@ -33,6 +33,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   private applicationContext: ApplicationContext | null = null;
   private applicationGateway: ApplicationGateway | null = null;
   private progressCards: SessionProgressCardStore | null = null;
+  private stopGatewayUpdates: (() => void) | null = null;
   private stopProgressCardUpdates: (() => void) | null = null;
   private pullRequests: SessionPullRequestSnapshotStore | null = null;
   private stopPullRequestUpdates: (() => void) | null = null;
@@ -45,6 +46,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   private readonly hovercard = new PortaledHovercardController(() => this.close());
   private readonly sessionLinkTitler = new SessionLinkTitler(this);
   private loadGeneration = 0;
+  private gatewaySnapshotRevision = 0;
   private readonly activeTargetObserver = new MutationObserver(() => {
     if (this.activeTarget && !this.contains(this.activeTarget)) {
       this.close();
@@ -122,11 +124,14 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     if (!this.applicationGateway || this.progressCards) {
       return;
     }
+    this.stopGatewayUpdates = this.applicationGateway.subscribe(this.handleGatewayUpdate);
     this.progressCards = sessionProgressCardsForGateway(this.applicationGateway);
     this.stopProgressCardUpdates = this.progressCards.subscribe(this.handleProgressCardUpdate);
   }
 
   private disconnectStore(): void {
+    this.stopGatewayUpdates?.();
+    this.stopGatewayUpdates = null;
     this.progressCards?.unwatch(this);
     this.stopProgressCardUpdates?.();
     this.stopProgressCardUpdates = null;
@@ -144,6 +149,13 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       this.lastProgressCard = card;
     }
     this.showCurrent();
+  };
+
+  private readonly handleGatewayUpdate = () => {
+    this.gatewaySnapshotRevision += 1;
+    if (this.open && this.hovercard.held) {
+      this.showCurrent();
+    }
   };
 
   private readonly handlePullRequestUpdate = () => {
@@ -320,6 +332,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       ),
     };
     const revision = JSON.stringify({
+      gateway: this.gatewaySnapshotRevision,
       progress: this.lastProgressCard?.revision ?? null,
       pullRequests: pullRequests
         ? { branch: pullRequests.branch, pullRequests: pullRequests.pullRequests }
