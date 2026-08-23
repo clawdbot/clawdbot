@@ -16,9 +16,11 @@ const sessionRow = vi.hoisted(() => ({
 const resolveEmbeddedAgentRunProgressStateMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionRowMock = vi.hoisted(() => vi.fn());
 const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
+const listAccessorSessionEntriesReadOnlyMock = vi.hoisted(() => vi.fn());
 const loadAccessorSessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
 const readSessionMessageCountAsyncMock = vi.hoisted(() => vi.fn());
+const resolveTranscriptSessionKeyBySessionIdMock = vi.hoisted(() => vi.fn());
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtimeConfigState.value }));
@@ -26,7 +28,9 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
   return {
     ...actual,
+    listSessionEntriesReadOnly: listAccessorSessionEntriesReadOnlyMock,
     loadSessionEntryReadOnly: loadAccessorSessionEntryReadOnlyMock,
+    resolveTranscriptSessionKeyBySessionId: resolveTranscriptSessionKeyBySessionIdMock,
   };
 });
 vi.mock("./chat-display-projection.js", () => ({
@@ -110,10 +114,12 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveEmbeddedAgentRunProgressStateMock.mockReturnValue(undefined);
+    listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
     loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
     loadGatewaySessionRowMock.mockReturnValue(sessionRow);
     readSessionMessageCountAsyncMock.mockResolvedValue(undefined);
+    resolveTranscriptSessionKeyBySessionIdMock.mockReturnValue(undefined);
     loadGatewaySessionRowMock.mockReturnValue(sessionRow);
     runtimeConfigState.value = {};
     sessionRow.key = "agent:main:main";
@@ -736,6 +742,13 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       agentId: "main",
     },
     {
+      name: "a marker-only update and its canonical transcript key",
+      firstSessionKey: "agent:main:main",
+      secondSessionKey: "agent:main:main",
+      agentId: "main",
+      markerOnly: true,
+    },
+    {
       name: "an ownerless global update in its configured fixed store",
       firstSessionKey: "global",
       secondSessionKey: "global",
@@ -759,17 +772,27 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         }),
     );
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue({ sessionId: "sess-main" });
+    if (scenario.markerOnly) {
+      listAccessorSessionEntriesReadOnlyMock.mockReturnValue([
+        { key: scenario.firstSessionKey, entry: { sessionId: "sess-main" } },
+      ]);
+      resolveTranscriptSessionKeyBySessionIdMock.mockReturnValue(scenario.firstSessionKey);
+    }
     const { broadcastToConnIds, handler } = createHandler(false);
 
     const firstTask = handler({
       message: { role: "assistant", content: [{ type: "text", text: "first" }] },
       messageId: "ordered-1",
-      target: {
-        agentId: scenario.agentId,
-        sessionId: "sess-main",
-        sessionKey: scenario.firstSessionKey,
-        storePath: "/tmp/explicit-sessions.json",
-      },
+      ...(scenario.markerOnly
+        ? { sessionFile: `sqlite:${scenario.agentId}:sess-main:/tmp/explicit-sessions.json` }
+        : {
+            target: {
+              agentId: scenario.agentId,
+              sessionId: "sess-main",
+              sessionKey: scenario.firstSessionKey,
+              storePath: "/tmp/explicit-sessions.json",
+            },
+          }),
     });
     await vi.waitFor(() => expect(readSessionMessageCountAsyncMock).toHaveBeenCalledOnce());
     const secondTask = handler({

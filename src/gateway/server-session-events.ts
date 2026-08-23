@@ -152,13 +152,15 @@ export function createTranscriptUpdateBroadcastHandler(params: {
         ? readTranscriptUpdateLifecycleOwner(update)?.lifecycleRevision
         : undefined);
     const queuedUpdate = lifecycleRevision ? { ...update, lifecycleRevision } : update;
+    const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
     const sessionKey =
       normalizeOptionalString(update.target?.sessionKey) ??
-      normalizeOptionalString(update.sessionKey);
+      normalizeOptionalString(update.sessionKey) ??
+      (legacyMarker ? resolveTranscriptSessionKeyBySessionId(legacyMarker) : undefined);
     let agentId =
       normalizeOptionalString(update.target?.agentId) ??
       normalizeOptionalString(update.agentId) ??
-      parseSqliteSessionFileMarker(update.sessionFile)?.agentId;
+      legacyMarker?.agentId;
     if (!agentId && sessionKey?.toLowerCase() === "global") {
       const config = getRuntimeConfig();
       const persistedOwner = resolvePersistedSessionStoreOwnerForKey(config, sessionKey);
