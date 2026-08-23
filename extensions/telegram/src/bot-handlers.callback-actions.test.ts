@@ -54,7 +54,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isForum: false,
+      threadSpec: { scope: "none" },
     });
 
     await actions.editCallbackMessage("hello");
@@ -74,7 +74,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isForum: false,
+      threadSpec: { scope: "none" },
       richMessages: true,
     });
 
@@ -90,7 +90,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isForum: false,
+      threadSpec: { scope: "none" },
       richMessages: true,
     });
 
@@ -112,7 +112,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isForum: false,
+      threadSpec: { scope: "none" },
       richMessages: true,
     });
 
@@ -138,7 +138,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isForum: false,
+      threadSpec: { scope: "none" },
       richMessages: true,
     });
 
@@ -158,7 +158,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isForum: false,
+      threadSpec: { scope: "none" },
       richMessages: true,
     });
 
@@ -188,7 +188,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage: businessCallbackMessage,
-      isForum: false,
+      threadSpec: { scope: "none" },
       richMessages: true,
     });
 
@@ -209,7 +209,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isForum: false,
+      threadSpec: { scope: "none" },
       richMessages: true,
     });
 
@@ -224,7 +224,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isForum: false,
+      threadSpec: { scope: "none" },
       richMessages: true,
     });
 
@@ -246,7 +246,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isForum: false,
+      threadSpec: { scope: "none" },
       richMessages: true,
     });
 
@@ -281,7 +281,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessageWithButtons", 
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isForum: false,
+      threadSpec: { scope: "none" },
       richMessages: true,
     });
 

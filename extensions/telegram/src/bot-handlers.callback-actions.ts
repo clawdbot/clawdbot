@@ -137,7 +137,10 @@ export function createTelegramCallbackMessageActions(params: {
           message_id: callbackMessage.message_id,
           rich_message: richMessage,
           ...(editParams?.reply_markup
-            ? { reply_markup: editParams.reply_markup as InlineKeyboardMarkup }
+            ? {
+                // SAFETY: editParams is always the caller-authored editMessageText reply_markup (InlineKeyboardMarkup); the rich raw API's own type just hasn't re-exported it.
+                reply_markup: editParams.reply_markup as InlineKeyboardMarkup,
+              }
             : {}),
         }),
       );
