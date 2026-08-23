@@ -1275,7 +1275,9 @@ extension RealtimeTalkRelaySession {
         if let currentIdentity = self.outputIdentity,
            currentIdentity.relation(to: incomingIdentity) == .different
         {
+            let marks = self.takePendingPlaybackMarks()
             self.stopOutputPlayback()
+            self.acknowledgePlaybackMarks(marks)
         } else if self.outputContinuation == nil, self.outputTask != nil {
             self.stopOutputPlayback()
         }

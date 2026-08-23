@@ -697,9 +697,15 @@ extension RealtimeTalkRelaySessionTests {
     }
 
     @Test func `new turn supersedes a stalled prior playback drain`() async throws {
+        let requests = RealtimeRelayStartupRequestLog()
         let player = StalledPCMStreamingAudioPlayer()
         let session = RealtimeTalkRelaySession(
-            transport: unusedRealtimeRelayTransport(),
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+                request: { method, params, _ in
+                    await requests.record(method: method, params: params)
+                    return Data("{\"ok\":true}".utf8)
+                }),
             options: .init(sessionKey: "main", provider: "openai", model: nil, voice: nil),
             audioCapture: TestRealtimeTalkAudioCapture(),
             pcmPlayer: player,
@@ -709,11 +715,18 @@ extension RealtimeTalkRelaySessionTests {
 
         await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-a"))
         try await player.waitForPlaybackCount(1)
+        await session._test_handleGatewayEvent(playbackMarkEvent("turn-a-mark"))
         await session._test_handleGatewayEvent(outputAudioEvent(turnId: "turn-b"))
         try await player.waitForPlaybackCount(2)
+        try await requests.waitForRequestCount(1)
 
         #expect(player.playCount == 2)
         #expect(player.stopCount == 1)
+        let acknowledgements = await requests.snapshot().filter {
+            $0.method == "talk.session.acknowledgeMark"
+        }
+        #expect(acknowledgements.count == 1)
+        #expect(acknowledgements.first?.params?["markName"]?.stringValue == "turn-a-mark")
         session.stop()
     }
 
