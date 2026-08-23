@@ -612,19 +612,11 @@ describe("deriveSessionTotalTokens", () => {
     expect(totalTokens).toBe(2500);
   });
 
-  it("forwards contextTokens as the window bound and rejects an above-window derived total (#125333)", () => {
+  it("keeps a derived total unclamped even when it exceeds contextTokens (#15114/#125333)", () => {
     const totalTokens = deriveSessionTotalTokens({
       lastCallUsage: { input: 150_000, output: 66, total: 150_066 },
       contextTokens: 100_000,
     });
-    expect(totalTokens).toBeUndefined();
-  });
-
-  it("accepts a within-window derived total when contextTokens is forwarded (#125333)", () => {
-    const totalTokens = deriveSessionTotalTokens({
-      lastCallUsage: { input: 30_000, output: 66, total: 30_066 },
-      contextTokens: 100_000,
-    });
-    expect(totalTokens).toBe(30_000);
+    expect(totalTokens).toBe(150_000);
   });
 });

@@ -455,11 +455,18 @@ export function deriveSessionTotalTokens(params: {
 
   // NOTE: SessionEntry.totalTokens is used as a prompt/context snapshot.
   // It intentionally excludes completion/output tokens.
+  //
+  // Do NOT forward params.contextTokens as a window bound here: this is the
+  // live /status-facing accounting path, and (#15114/#15133) explicitly
+  // established that this stored total must stay unclamped even when it
+  // exceeds the window, since clamping hides real overflow from display and
+  // compaction. The physically-impossible-value guard in
+  // deriveContextPromptTokens is reserved for the transcript-derived
+  // memory-flush read path (#125333), which calls it directly.
   const promptTokens = deriveContextPromptTokens({
     lastCallUsage: params.lastCallUsage,
     promptTokens: hasPromptOverride ? promptOverride : undefined,
     usage,
-    contextWindowTokens: params.contextTokens,
   });
 
   if (!(typeof promptTokens === "number") || !Number.isFinite(promptTokens) || promptTokens <= 0) {
