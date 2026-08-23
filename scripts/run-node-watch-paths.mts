@@ -13,6 +13,7 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   "packages/ai/src",
   "packages/gateway-client/src",
   "packages/gateway-protocol/src",
+  "packages/localization-core/src",
   "packages/markdown-core/src",
   "packages/llm-core/src",
   "packages/media-core/src",

@@ -135,6 +135,7 @@ describe("watch-node script", () => {
       expect(watchPaths).toContain("extensions");
       expect(watchPaths).toContain("packages/gateway-client/src");
       expect(watchPaths).toContain("packages/gateway-protocol/src");
+      expect(watchPaths).toContain("packages/localization-core/src");
       expect(watchPaths).toContain("packages/markdown-core/src");
       expect(watchPaths).toContain("packages/media-core/src");
       expect(watchPaths).toContain("packages/media-generation-core/src");
@@ -147,6 +148,8 @@ describe("watch-node script", () => {
       expect(watchOptions.ignored("packages/gateway-client/src/client.ts")).toBe(false);
       expect(watchOptions.ignored("packages/gateway-client/src/client.test.ts")).toBe(true);
       expect(watchOptions.ignored("packages/gateway-protocol/src/schema/cron.ts")).toBe(false);
+      expect(watchOptions.ignored("packages/localization-core/src/context.ts")).toBe(false);
+      expect(watchOptions.ignored("packages/localization-core/src/context.test.ts")).toBe(true);
       expect(watchOptions.ignored("packages/markdown-core/src/ir.ts")).toBe(false);
       expect(watchOptions.ignored("packages/markdown-core/src/ir.test.ts")).toBe(true);
       expect(watchOptions.ignored("packages/media-core/src/mime.ts")).toBe(false);

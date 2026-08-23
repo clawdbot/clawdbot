@@ -306,6 +306,8 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
     id === "@openclaw/fs-safe" ||
     id.startsWith("@openclaw/fs-safe/") ||
+    id === "@openclaw/localization-core" ||
+    id.startsWith("@openclaw/localization-core/") ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id === "@openclaw/retry" ||
@@ -551,6 +553,11 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...coreDistEntries,
     ...dockerE2eHarnessEntries,
     ...Object.fromEntries(
+      Object.entries(buildPackageDistEntriesFromExports("localization-core")).map(
+        ([entry, source]) => [`localization-core/${entry}`, source],
+      ),
+    ),
+    ...Object.fromEntries(
       Object.entries(buildPackageDistEntriesFromExports("normalization-core")).map(
         ([entry, source]) => [`normalization-core/${entry}`, source],
       ),
@@ -722,6 +729,7 @@ const configs = [
       neverBundle: shouldExternalizeMarkdownCoreDependency,
     },
   }),
+  nodeWorkspacePackageBuildConfig("localization-core"),
   nodeWorkspacePackageBuildConfig("normalization-core"),
   nodeWorkspacePackageBuildConfig("retry"),
   nodeWorkspacePackageBuildConfig("media-core"),

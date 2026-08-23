@@ -639,7 +639,7 @@ function buildModelProviderFilterOptions(
     return {
       value: provider,
       label: provider,
-      hint: t("wizard.model.modelCount", { count, plural: count === 1 ? "" : "s" }),
+      hint: t("wizard.model.modelCount", { count }),
     };
   });
 }

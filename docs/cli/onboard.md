@@ -222,13 +222,18 @@ non-interactive onboarding according to the other flags.
 
 ## Locale
 
-Interactive onboarding uses the CLI wizard locale for fixed setup copy. It uses the first nonblank value in this order:
+Interactive onboarding uses the CLI wizard locale for fixed setup copy. A
+nonblank `OPENCLAW_LOCALE` is an explicit override: a supported value selects
+that locale, while an unsupported value falls back directly to English.
 
-1. `OPENCLAW_LOCALE`
-2. `LC_ALL`
-3. `LC_MESSAGES`
-4. `LANG`
-5. English fallback
+Without an explicit override, onboarding checks these inferred host values in
+order, skipping blank or unsupported values:
+
+1. `LC_ALL`
+2. `LC_MESSAGES`
+3. `LANG`
+4. The runtime platform locale reported by `navigator` or `Intl`, when available
+5. English fallback when none select a supported locale
 
 Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use underscore or POSIX suffix forms such as `zh_CN.UTF-8`. Product names, command names, config keys, URLs, provider IDs, model IDs, and plugin/channel labels remain literal.
 
