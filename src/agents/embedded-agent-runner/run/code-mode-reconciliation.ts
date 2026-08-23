@@ -6,7 +6,7 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 const CODE_MODE_RECONCILIATION_PROMPT =
   "The previous Code Mode mutation may have partially applied. Do not repeat or finish any mutation. Use only the available read-only inspection tools to determine the authoritative current state, then report exactly what applied, what did not, what remains unknown, and what work is still required.";
 
-const RECONCILIATION_TOOL_NAMES = new Set(["find", "glob", "grep", "ls", "read", "search"]);
+const RECONCILIATION_TOOL_NAMES = new Set(["read"]);
 
 export function isCodeModeReconciliationTool(tool: { name?: string }): boolean {
   return RECONCILIATION_TOOL_NAMES.has(normalizeToolPolicyName(tool.name ?? ""));

@@ -37,16 +37,22 @@ describe("Code Mode reconciliation", () => {
     expect(activates(overrides)).toBe(false);
   });
 
-  it("exposes only audited core observation tool names", () => {
+  it("exposes only the audited core observation tool", () => {
     expect(
-      ["read", "grep", "find", "ls", "glob", "search"].every((name) =>
-        isCodeModeReconciliationTool({ name }),
-      ),
-    ).toBe(true);
-    expect(
-      ["exec", "write", "apply_patch", "message", "sessions_spawn", "web_fetch"].some((name) =>
-        isCodeModeReconciliationTool({ name }),
-      ),
-    ).toBe(false);
+      [
+        "read",
+        "find",
+        "glob",
+        "grep",
+        "ls",
+        "search",
+        "exec",
+        "write",
+        "apply_patch",
+        "message",
+        "sessions_spawn",
+        "web_fetch",
+      ].filter((name) => isCodeModeReconciliationTool({ name })),
+    ).toEqual(["read"]);
   });
 });

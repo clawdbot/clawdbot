@@ -81,7 +81,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
       : messageToolOwnsVisibleReply(attempt);
   const toolsAllowWithForcedRuntimeTools =
     attempt.forceCodeModeReconciliationTools === true
-      ? ["find", "glob", "grep", "ls", "read", "search"]
+      ? ["read"]
       : mergeForcedEmbeddedAttemptToolsAllow(attempt.toolsAllow, {
           forceMessageTool: forceDirectMessageTool,
           forceToolNames:
