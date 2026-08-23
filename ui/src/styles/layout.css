@@ -3799,7 +3799,19 @@ openclaw-sidebar-attention {
 }
 
 .sidebar-issues-panel__list > [data-attention-kind] + [data-attention-kind] {
-  border-block-start: 3px solid var(--sidebar-bg);
+  border-block-start: 3px solid var(--sidebar-issues-row-separator, var(--sidebar-bg));
+}
+
+.sidebar-issues-panel__list > [data-attention-kind]:is(:hover, :focus-within, [open]),
+.sidebar-issues-panel__list
+  > [data-attention-kind]:is(:hover, :focus-within, [open])
+  + [data-attention-kind],
+.sidebar-issues-panel__list
+  > .sidebar-issues-panel__update:has(> .sidebar-issues-panel__details[open]),
+.sidebar-issues-panel__list
+  > .sidebar-issues-panel__update:has(> .sidebar-issues-panel__details[open])
+  + [data-attention-kind] {
+  --sidebar-issues-row-separator: transparent;
 }
 
 .sidebar-issues-panel__list:focus-visible {
@@ -3866,7 +3878,7 @@ openclaw-sidebar-attention {
   > [data-attention-kind]
   + .sidebar-issues-panel__update
   > .sidebar-issues-panel__details {
-  border-block-start: 3px solid var(--sidebar-bg);
+  border-block-start: 3px solid var(--sidebar-issues-row-separator, var(--sidebar-bg));
 }
 
 .sidebar-issues-panel__details {
