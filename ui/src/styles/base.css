@@ -85,6 +85,8 @@
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #fafafa;
   --accent-glow: rgba(255, 92, 92, 0.2);
+  --inbox-attention: #e5243b;
+  --inbox-attention-foreground: #ffffff;
 
   /* Link text keeps the accent hue but cannot be --accent: chat paints user
      bubbles from that same token, so a link there fights its own background.

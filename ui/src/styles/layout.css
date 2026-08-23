@@ -1135,12 +1135,9 @@ openclaw-settings-save-indicator:empty {
   display: inline-flex;
 }
 
-.sidebar-footer-bar__custodian-badge--warning {
-  color: var(--warn);
-}
-
+.sidebar-footer-bar__custodian-badge--warning,
 .sidebar-footer-bar__custodian-badge--error {
-  color: var(--danger);
+  color: var(--inbox-attention);
 }
 
 .sidebar-shell__body {
@@ -3548,8 +3545,8 @@ openclaw-sidebar-attention {
   justify-content: center;
   padding: 0 3px;
   border-radius: var(--radius-full);
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--inbox-attention);
+  color: var(--inbox-attention-foreground);
   font-size: calc(9px * var(--control-ui-text-scale));
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -4199,8 +4196,8 @@ openclaw-sidebar-attention {
   padding: 0 7px;
   border: 0;
   border-radius: var(--radius-full);
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--inbox-attention);
+  color: var(--inbox-attention-foreground);
   cursor: var(--cursor-action);
   transition:
     width var(--duration-fast) ease,
@@ -4210,7 +4207,7 @@ openclaw-sidebar-attention {
 .sidebar-footer-update:hover:not(:disabled),
 .sidebar-footer-update:focus-visible {
   width: 76px;
-  background: var(--accent-hover);
+  background: color-mix(in srgb, var(--inbox-attention) 88%, black);
 }
 
 .sidebar-footer-update:focus-visible {
