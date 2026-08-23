@@ -254,15 +254,39 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
   // Codex review P2 on #123209: auto-enable leaves an explicitly selected plugin enabled even when
   // another claimant declares it in `preferOver`, so both stay active and the runtime channel
   // facade falls back to registration order. Ownership must stop applying the declaration.
-  it("leaves an explicitly selected fallback in place of the declared replacement", () => {
+  // Registration order is first-wins: `registry-registrars-network.ts` rejects the later claimant
+  // (`channel already registered`) and the first registrant keeps serving the channel, so the
+  // schema follows the first claimant in both orders. Falling through to last-writer instead
+  // validated against a schema belonging to a plugin the runtime never gave the channel to.
+  it("keeps the first claimant when the declaration names an explicitly selected plugin", () => {
     const core = claimant({ id: "clickclack-core" });
     const replacement = claimant({ id: "clickclack-plus", preferOver: ["clickclack-core"] });
     const policy = policyFor({
       isPluginExplicitlySelected: (id) => id === "clickclack-core",
     });
 
-    expect(ownerOf([core, replacement], policy)).toBe("clickclack-plus");
-    expect(ownerOf([replacement, core], policy)).toBe("clickclack-core");
+    expect(ownerOf([core, replacement], policy)).toBe("clickclack-core");
+    expect(ownerOf([replacement, core], policy)).toBe("clickclack-plus");
+  });
+
+  // A suppressed declaration can cross origins: the operator hand-picks a workspace fallback
+  // while a farther bundled replacement declares it in `preferOver`. Both stay active, and the
+  // runtime facade keeps the first registrant no matter whose origin sits closer, so the schema
+  // follows the first claimant in both orders. Letting origin rank decide instead validated
+  // against the closer plugin's schema in exactly the order where the runtime kept the farther one.
+  it("keeps the first claimant when a suppressed declaration crosses origins", () => {
+    const core = claimant({ id: "clickclack-core", origin: "workspace" });
+    const replacement = claimant({
+      id: "clickclack-plus",
+      origin: "bundled",
+      preferOver: ["clickclack-core"],
+    });
+    const policy = policyFor({
+      isPluginExplicitlySelected: (id) => id === "clickclack-core",
+    });
+
+    expect(ownerOf([replacement, core], policy)).toBe("clickclack-plus");
+    expect(ownerOf([core, replacement], policy)).toBe("clickclack-core");
   });
 
   // Codex review P2 on #123209: once the declaration crosses origins the presentation pass has to

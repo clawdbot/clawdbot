@@ -203,6 +203,32 @@ function isDisplacedChannelOwner(
 }
 
 /**
+ * Replacement declarations set aside because the named plugin is explicitly selected, per claimed
+ * channel, keyed declarant id to the ids it named. Kept apart from `DisplacedChannelOwners`
+ * because a set-aside declaration displaces nobody — both claimants stay active — yet the pair
+ * must not settle the way a pair nobody declared anything about does.
+ */
+type SuppressedChannelDeclarations = Map<string, Map<string, Set<string>>>;
+
+/**
+ * Whether a declaration between the two claimants was set aside on this channel. Direction is
+ * deliberately ignored: the runtime facade keeps the first registrant no matter which of the pair
+ * did the declaring.
+ */
+function hasSuppressedChannelDeclaration(
+  suppressed: SuppressedChannelDeclarations,
+  channelId: string,
+  pluginId: string,
+  otherPluginId: string,
+): boolean {
+  const declared = suppressed.get(channelId);
+  return (
+    declared?.get(pluginId)?.has(otherPluginId) === true ||
+    declared?.get(otherPluginId)?.has(pluginId) === true
+  );
+}
+
+/**
  * Every claimant of each channel, keyed by claimed id. Only a record listed in `record.channels`
  * claims: auto-enable and the read-only channel facade build candidate sets from that list alone.
  */
@@ -234,12 +260,17 @@ function collectChannelClaimants(
  * the plugin activation would run instead. When no claimant is active there is no such plugin, and
  * dropping every declaration would leave registry order picking a winner; the declarations are
  * read from the whole claimant set in that case so the answer stays deterministic.
+ *
+ * Alongside the displaced set it reports the declarations it set aside because the named target is
+ * explicitly selected: the ownership tie-break needs that distinction, and only this walk can see
+ * the suppression happen.
  */
 function collectDisplacedOwnersForClaimants(
   claimantsByChannel: ReadonlyMap<string, PluginManifestRecord[]>,
   policy: ChannelOwnershipPolicy,
-): DisplacedChannelOwners {
+): { displaced: DisplacedChannelOwners; suppressed: SuppressedChannelDeclarations } {
   const displaced: DisplacedChannelOwners = new Map();
+  const suppressed: SuppressedChannelDeclarations = new Map();
   for (const [claimedId, claimants] of claimantsByChannel) {
     const activeClaimants = claimants.filter((record) =>
       policy.isPluginActive(record.id, claimedId),
@@ -271,7 +302,20 @@ function collectDisplacedOwnersForClaimants(
           // A manifest that names itself declares nothing: `shouldSkipPreferredPluginAutoEnable`
           // skips the self comparison, so a self-edge would strand ownership on another claimant
           // while that plugin stays active.
-          if (replacedId === record.id || policy.isPluginExplicitlySelected(replacedId)) {
+          if (replacedId === record.id) {
+            continue;
+          }
+          // A declaration naming an explicitly selected plugin is set aside, not applied — the
+          // operator's choice outranks it, so nobody is displaced. The ownership decision still
+          // needs to know the pair was declared: with both claimants left active the runtime
+          // facade rejects the later registration, while an undeclared pair stays on last-writer.
+          // The two are indistinguishable at decision time, so record the suppression here.
+          if (policy.isPluginExplicitlySelected(replacedId)) {
+            const declared = suppressed.get(claimedId) ?? new Map<string, Set<string>>();
+            suppressed.set(claimedId, declared);
+            const setAsideIds = declared.get(record.id) ?? new Set<string>();
+            declared.set(record.id, setAsideIds);
+            setAsideIds.add(replacedId);
             continue;
           }
           const replacedIds = displaced.get(claimedId) ?? new Set<string>();
@@ -287,7 +331,7 @@ function collectDisplacedOwnersForClaimants(
       }
     }
   }
-  return displaced;
+  return { displaced, suppressed };
 }
 
 /**
@@ -298,7 +342,7 @@ function collectDisplacedOwnersForClaimants(
 function collectDisplacedChannelOwners(
   registry: PluginManifestRegistry,
   policy: ChannelOwnershipPolicy,
-): DisplacedChannelOwners {
+): { displaced: DisplacedChannelOwners; suppressed: SuppressedChannelDeclarations } {
   const schemaClaimantCounts = new Map<string, number>();
   for (const record of registry.plugins) {
     for (const channelId of Object.keys(record.channelConfigs ?? {})) {
@@ -331,7 +375,7 @@ export function collectRuntimeDisplacedChannelOwners(
       claimantsByChannel.delete(claimedId);
     }
   }
-  return collectDisplacedOwnersForClaimants(claimantsByChannel, policy);
+  return collectDisplacedOwnersForClaimants(claimantsByChannel, policy).displaced;
 }
 
 /**
@@ -347,6 +391,7 @@ function decideChannelSchemaOwnership(params: {
   incomingDisplaced: boolean;
   currentOriginRank: number;
   incomingOriginRank: number;
+  pairDeclarationSuppressed: boolean;
 }): "keepCurrent" | "takeChannel" {
   if (params.currentActive !== params.incomingActive) {
     return params.incomingActive ? "takeChannel" : "keepCurrent";
@@ -357,7 +402,14 @@ function decideChannelSchemaOwnership(params: {
   if (params.currentOriginRank !== params.incomingOriginRank) {
     return params.currentOriginRank < params.incomingOriginRank ? "keepCurrent" : "takeChannel";
   }
-  return "takeChannel";
+  // Nothing separates the pair as compared here — and a suppressed pair arrives tied even across
+  // origins, because the entry adopts the nearer record's rank before the comparison. How the tie
+  // arose decides. A declaration set aside because the operator selected its target leaves both
+  // claimants active, and the runtime facade then rejects the later registration regardless of
+  // origin (`registry-registrars-network.ts` keeps the first registrant), so the schema must stay
+  // with the first claimant too. A pair with no declaration between them at all stays on the
+  // long-standing last-writer answer.
+  return params.pairDeclarationSuppressed ? "keepCurrent" : "takeChannel";
 }
 
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
@@ -408,7 +460,8 @@ export function collectChannelSchemaMetadataWithOwnership(
   policy: ChannelOwnershipPolicy = MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY,
 ): ChannelSchemaMetadataWithOwnership[] {
   const byChannelId = new Map<string, ChannelMetadataRecord>();
-  const displacedOwners = collectDisplacedChannelOwners(registry, policy);
+  const { displaced: displacedOwners, suppressed: suppressedDeclarations } =
+    collectDisplacedChannelOwners(registry, policy);
   // Redaction is a property of the field, not of whichever claimant wins the schema. A displaced
   // plugin's config can survive under the shared channel when the replacement accepts additional
   // properties, so dropping its hints with its schema would leave a retained secret with no hint
@@ -453,6 +506,12 @@ export function collectChannelSchemaMetadataWithOwnership(
             incomingDisplaced: isDisplacedChannelOwner(displacedOwners, claimedId, record.id),
             currentOriginRank: originRank,
             incomingOriginRank: originRank,
+            pairDeclarationSuppressed: hasSuppressedChannelDeclaration(
+              suppressedDeclarations,
+              claimedId,
+              ownerId,
+              record.id,
+            ),
           }) === "keepCurrent";
         byChannelId.set(channelId, {
           id: channelId,
@@ -509,6 +568,9 @@ export function collectChannelSchemaMetadataWithOwnership(
           // still shields the schema it adopted from farther records.
           currentOriginRank: current.originRank,
           incomingOriginRank: originRank,
+          pairDeclarationSuppressed:
+            ownerId !== undefined &&
+            hasSuppressedChannelDeclaration(suppressedDeclarations, claimedId, ownerId, record.id),
         });
         if (decision === "keepCurrent") {
           continue;
