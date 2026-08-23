@@ -424,6 +424,24 @@ describe("models cli", () => {
     });
   });
 
+  it("passes structured event mode to device-code login", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai",
+      "--device-code",
+      "--json-events",
+    ]);
+
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "openai",
+      method: "device-code",
+      jsonEvents: true,
+    });
+  });
+
   it("passes list-specific --agent and --json to models auth list", async () => {
     await runModelsCommand(["models", "auth", "list", "--agent", "poe", "--json"]);
 

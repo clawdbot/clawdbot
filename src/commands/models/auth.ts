@@ -894,6 +894,8 @@ type LoginOptions = {
    * because credentials already exist on disk.
    */
   force?: boolean;
+  /** Emit bounded NDJSON device-code events without starting an interactive TTY. */
+  jsonEvents?: boolean;
 };
 
 export type ModelsAuthLoginFlowResult = {
@@ -1094,6 +1096,66 @@ export async function runModelsAuthLoginFlowCore(
 }
 
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
+  if (opts.jsonEvents) {
+    if (opts.provider !== "openai" || opts.method !== "device-code") {
+      throw new Error("--json-events supports only OpenAI device-code login.");
+    }
+    const emit = async (event: Record<string, unknown>) => {
+      const line = `${JSON.stringify(event)}\n`;
+      await new Promise<void>((resolve, reject) => {
+        process.stdout.write(line, (error) => (error ? reject(error) : resolve()));
+      });
+    };
+    const unsupported = async <T>(): Promise<T> => {
+      throw new Error("Structured provider login requested an unsupported interactive prompt.");
+    };
+    const prompter: WizardPrompter = {
+      intro: async () => {},
+      outro: async () => {},
+      note: async () => {},
+      plain: async () => {},
+      deviceCode: async ({ code, expiresInMinutes, message }) => {
+        const url = message
+          ?.split("\n")
+          .map((line) => line.trim())
+          .find((line) => line.startsWith("URL: "))
+          ?.slice(5)
+          .trim();
+        if (!url || !expiresInMinutes || expiresInMinutes <= 0) {
+          throw new Error("Provider device-code presentation is incomplete.");
+        }
+        await emit({
+          type: "device_code",
+          code,
+          url,
+          expiresAtMs: Date.now() + expiresInMinutes * 60_000,
+        });
+      },
+      select: unsupported,
+      multiselect: unsupported,
+      text: unsupported,
+      confirm: unsupported,
+      progress: () => ({ update: () => {}, stop: () => {} }),
+    };
+    const { jsonEvents: _jsonEvents, ...flowOpts } = opts;
+    const result = await runModelsAuthLoginFlowCore({
+      ...flowOpts,
+      runtime: { ...runtime, log: () => {}, error: () => {} },
+      prompter,
+      isRemote: true,
+      openUrl: async () => {},
+    });
+    if (
+      result.providerId !== "openai" ||
+      result.methodId !== "device-code" ||
+      result.profiles.length === 0 ||
+      result.profiles.some((profile) => profile.provider !== "openai" || profile.mode !== "oauth")
+    ) {
+      throw new Error("Structured OpenAI login returned an unexpected credential result.");
+    }
+    await emit({ type: "ready" });
+    return;
+  }
   if (!process.stdin.isTTY) {
     throw new Error(
       `models auth login requires an interactive TTY. In automation, use ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} when token auth is available.`,

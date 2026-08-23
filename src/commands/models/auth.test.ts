@@ -523,6 +523,90 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
+  it("emits bounded structured events for headless OpenAI device-code login", async () => {
+    const runtime = createRuntime();
+    const output: string[] = [];
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: unknown,
+      ...args: unknown[]
+    ) => {
+      output.push(String(chunk));
+      const callback = args.find((value) => typeof value === "function") as
+        | ((error?: Error | null) => void)
+        | undefined;
+      callback?.();
+      return true;
+    }) as typeof process.stdout.write);
+    const runDeviceCode = vi.fn(
+      async (ctx: Parameters<ProviderPlugin["auth"][number]["run"]>[0]) => {
+        await ctx.prompter.deviceCode?.({
+          title: "OpenAI Codex device code",
+          code: "ABCD-EFGH",
+          expiresInMinutes: 15,
+          message: "Open this URL locally.\nURL: https://auth.openai.com/codex/device",
+        });
+        return {
+          profiles: [
+            {
+              profileId: "openai:user@example.com",
+              credential: {
+                type: "oauth" as const,
+                provider: "openai",
+                access: "access-token",
+                refresh: "refresh-token",
+                expires: Date.now() + 60_000,
+              },
+            },
+          ],
+        };
+      },
+    );
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      createProvider({
+        id: "openai",
+        auth: [
+          {
+            id: "device-code",
+            label: "Device code",
+            kind: "oauth",
+            run: runDeviceCode,
+          },
+        ],
+        run: runDeviceCode,
+      }),
+    ]);
+
+    try {
+      await modelsAuthLoginCommand(
+        {
+          provider: "openai",
+          method: "device-code",
+          setDefault: true,
+          jsonEvents: true,
+        },
+        runtime,
+      );
+    } finally {
+      write.mockRestore();
+    }
+
+    const events = output
+      .join("")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      type: "device_code",
+      code: "ABCD-EFGH",
+      url: "https://auth.openai.com/codex/device",
+    });
+    expect(events[0]?.expiresAtMs).toEqual(expect.any(Number));
+    expect(events[1]).toEqual({ type: "ready" });
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
   it("keeps login successful when the running gateway cannot refresh auth state", async () => {
     const runtime = createRuntime();
     mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
