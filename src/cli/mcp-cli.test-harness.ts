@@ -8,6 +8,12 @@ import { registerMcpCli } from "./mcp-cli.js";
 type CreateSessionMcpRuntime =
   typeof import("../agents/agent-bundle-mcp-runtime.js").createSessionMcpRuntime;
 
+type GatewayCallRequest = {
+  params?: {
+    allowedPaths?: string[];
+  };
+};
+
 const mocks = vi.hoisted(() => {
   const runtime = {
     log: vi.fn(),
@@ -29,7 +35,7 @@ const mocks = vi.hoisted(() => {
     readMcpOAuthCredentialsStatus: vi.fn(),
     countMcpOAuthPrincipals: vi.fn(),
     startMcpOAuthAuthorization: vi.fn(),
-    callGateway: vi.fn(async () => {
+    callGateway: vi.fn<(request: GatewayCallRequest) => Promise<unknown>>(async () => {
       throw new Error("test gateway unavailable");
     }),
     logWarn: vi.fn(),
