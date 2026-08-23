@@ -1,5 +1,6 @@
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -108,7 +109,7 @@ export function createCronContinuationController(params: {
               basePersisted:
                 releasedMarker.basePersisted === true || canPersistToBase || baseWasSuperseded,
             };
-            current.updatedAt = Date.now();
+            current.updatedAt = resolveBookkeepingUpdatedAt(current.updatedAt);
             replacements.push({ sessionKey: activeClaim.sessionKey, entry: current });
             return { replacements, result: true };
           },

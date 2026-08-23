@@ -22,6 +22,7 @@ import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-pers
 import { isThinkingLevelSupported, resolveSupportedThinkingLevel } from "../auto-reply/thinking.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import { resolveBookkeepingUpdatedAt } from "../config/sessions/reset.js";
 import {
   adoptPersistedSessionSnapshot,
   SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
@@ -271,7 +272,7 @@ export async function applySessionModelSelection(
     }
   }
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
-  nextEntry.updatedAt = Date.now();
+  nextEntry.updatedAt = resolveBookkeepingUpdatedAt(nextEntry.updatedAt);
   let persistedEntry: SessionEntry;
   if (params.storePath) {
     const persistence = await persistReplySessionEntry({

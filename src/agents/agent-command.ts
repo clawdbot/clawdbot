@@ -578,7 +578,9 @@ async function agentCommandInternal(
               terminalRunId: runId,
               terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
             }),
-            updatedAt: Date.now(),
+            // Bookkeeping: keep the legacy updatedAt=0 pending-reset marker
+            // (resolveBookkeepingUpdatedAt inlined; this file is at the max-lines budget).
+            updatedAt: entry.updatedAt === 0 ? 0 : Date.now(),
           };
           const persisted = await persistAgentSession({
             sessionStore,

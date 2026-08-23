@@ -3,6 +3,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveSessionStorePathCore,
 } from "../../../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../../../config/sessions/reset.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -424,7 +425,7 @@ export async function recoverInterruptedSubagentRow(
                 wedgedAt: params.now,
                 wedgedReason: blockedReason,
               };
-              current.updatedAt = params.now;
+              current.updatedAt = resolveBookkeepingUpdatedAt(current.updatedAt, params.now);
               return current;
             },
             {

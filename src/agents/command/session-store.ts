@@ -8,6 +8,7 @@ import {
   setSessionRuntimeModel,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
@@ -357,7 +358,7 @@ export async function clearCliSessionInStore(params: {
       }
       const next = { ...currentEntry };
       clearCliSession(next, provider);
-      next.updatedAt = Date.now();
+      next.updatedAt = resolveBookkeepingUpdatedAt(currentEntry.updatedAt);
       didClear = true;
       return next;
     },
@@ -512,11 +513,12 @@ export async function recordCliCompactionInStore(params: {
     clearAllCliSessions(next);
   }
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
-  next.updatedAt = Date.now();
+  next.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt);
   const newSessionId = normalizeOptionalString(params.newSessionId);
   if (newSessionId && newSessionId !== entry.sessionId) {
     delete (next as { sessionFile?: unknown }).sessionFile;
     next.sessionId = newSessionId;
+    next.updatedAt = Date.now();
     next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     next.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),

@@ -7,6 +7,7 @@ import type {
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import {
   loadSessionEntry,
   publishTranscriptUpdate,
@@ -400,7 +401,12 @@ async function applyWorkerTranscriptCommit(params: {
       const nextEntry = {
         ...freshEntry,
         ...(appendedCount > 0
-          ? { updatedAt: Math.max(freshEntry.updatedAt ?? 0, Date.now()) }
+          ? {
+              updatedAt: Math.max(
+                freshEntry.updatedAt ?? 0,
+                resolveBookkeepingUpdatedAt(freshEntry.updatedAt),
+              ),
+            }
           : {}),
       };
       replaceSessionEntrySync(params.target, nextEntry);

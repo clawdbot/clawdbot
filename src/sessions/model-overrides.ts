@@ -1,6 +1,7 @@
 // Session model override helpers normalize per-session provider model choices.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../config/sessions/reset.js";
 
 /** User or automatic model/provider override selection for a session entry. */
 type ModelOverrideSelection = {
@@ -193,7 +194,7 @@ export function applyModelOverrideToSessionEntry(params: {
       entry.liveModelSwitchPending = true;
     }
     delete entry.fallbackNotice;
-    entry.updatedAt = Date.now();
+    entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt);
   }
 
   return { updated };

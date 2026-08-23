@@ -8,6 +8,7 @@ import {
   shouldSkipPluginHostCleanupStore,
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
+import { resolveBookkeepingUpdatedAt } from "./reset.js";
 import {
   resolveAccessStorePath,
   loadSessionEntry,
@@ -384,7 +385,7 @@ export async function cleanupPluginHostSessionStore(
           return null;
         }
         clearPluginHostCleanupTarget(currentEntry, params);
-        currentEntry.updatedAt = now;
+        currentEntry.updatedAt = resolveBookkeepingUpdatedAt(currentEntry.updatedAt, now);
         return currentEntry;
       },
       {

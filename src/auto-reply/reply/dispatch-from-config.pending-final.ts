@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
@@ -68,7 +69,7 @@ export async function clearPendingFinalDeliveryAfterSuccess(
                   : undefined,
               status: "done" as const,
             }),
-        updatedAt: Date.now(),
+        updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt),
       };
     },
     { skipMaintenance: true, takeCacheOwnership: true },

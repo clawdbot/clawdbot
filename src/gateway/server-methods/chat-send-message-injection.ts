@@ -14,6 +14,7 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
@@ -187,7 +188,7 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
       ? { outcome: "skipped", options: { reason: "reply_operation_aborted" } }
       : { outcome: "completed", options: { reason: "active_run_injected" } },
   });
-  const updatedAt = Date.now();
+  const updatedAt = entry ? resolveBookkeepingUpdatedAt(entry.updatedAt) : Date.now();
   if (entry) {
     entry.updatedAt = updatedAt;
   }

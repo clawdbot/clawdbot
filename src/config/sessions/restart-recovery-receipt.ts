@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveBookkeepingUpdatedAt } from "./reset.js";
 import {
   hasActiveRestartRecoverySourceClaim,
   hasRestartRecoveryTerminalRun,
@@ -70,7 +71,7 @@ export async function beginRestartRecoveryTerminalDelivery(
       return {
         restartRecoveryDeliveryReceiptState: "terminal-pending",
         restartRecoveryDeliveryToolCallId: scope.toolCallId,
-        updatedAt: Date.now(),
+        updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt),
       };
     },
     { skipMaintenance: true, takeCacheOwnership: true },
@@ -123,7 +124,7 @@ export async function completeRestartRecoveryTerminalDelivery(
       }
       return {
         restartRecoveryDeliveryReceiptState: "delivered-terminal",
-        updatedAt: Date.now(),
+        updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt),
       };
     },
     { skipMaintenance: true, takeCacheOwnership: true },
@@ -164,7 +165,7 @@ export async function cancelRestartRecoveryTerminalDelivery(
       return {
         restartRecoveryDeliveryReceiptState: undefined,
         restartRecoveryDeliveryToolCallId: undefined,
-        updatedAt: Date.now(),
+        updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt),
       };
     },
     { skipMaintenance: true, takeCacheOwnership: true },

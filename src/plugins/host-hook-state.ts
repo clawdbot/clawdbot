@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../config/sessions/reset.js";
 import {
   resolveSessionEntryAccessTarget,
   updateResolvedSessionEntry,
@@ -177,7 +178,7 @@ export async function enqueuePluginNextTurnInjection(params: {
     }
     injections[params.pluginId] = [...existing, record];
     entry.pluginNextTurnInjections = injections;
-    entry.updatedAt = now;
+    entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt, now);
     enqueued = true;
     return { enqueued, id: resultId };
   });
@@ -240,7 +241,7 @@ async function drainPluginNextTurnInjections(params: {
     // records are stale owner state and are discarded with expired records.
     delete entry.pluginNextTurnInjections;
     if (drained.length > 0) {
-      entry.updatedAt = now;
+      entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt, now);
     }
     return drained;
   });
@@ -380,7 +381,7 @@ export async function patchPluginSessionExtension(params: {
           entryRecord[slotKey] = projected;
         }
       }
-      entry.updatedAt = Date.now();
+      entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt);
       return pluginState[namespace] as PluginJsonValue | undefined;
     },
   );

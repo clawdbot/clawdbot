@@ -2,6 +2,7 @@
  * Runtime helpers for reconciling compaction counts after subscribe events.
  */
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { resolveBookkeepingUpdatedAt } from "../config/sessions/reset.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 
 /** Persist the highest observed compaction count after a successful subscribed run. */
@@ -27,7 +28,7 @@ export default async function reconcileSessionStoreCompactionCountAfterSuccess(p
     }
     return {
       compactionCount: nextCount,
-      updatedAt: Math.max(entry.updatedAt ?? 0, now),
+      updatedAt: Math.max(entry.updatedAt ?? 0, resolveBookkeepingUpdatedAt(entry.updatedAt, now)),
     };
   });
   return nextEntry?.compactionCount;

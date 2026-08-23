@@ -5,6 +5,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { clearAllCliSessions } from "./cli-session-binding.js";
+import { resolveBookkeepingUpdatedAt } from "./reset.js";
 import type {
   SessionTranscriptAccessScope,
   SessionTranscriptTurnMessageAppend,
@@ -232,7 +233,10 @@ export async function trimTranscriptForManualCompact(
       delete nextEntry.totalTokensFresh;
       delete nextEntry.totalTokensVersion;
       clearAllCliSessions(nextEntry);
-      nextEntry.updatedAt = options.nowMs ?? Date.now();
+      nextEntry.updatedAt = resolveBookkeepingUpdatedAt(
+        freshEntry.updatedAt,
+        options.nowMs ?? Date.now(),
+      );
       // The transcript rewrite, binding clear, and token invalidation describe one generation.
       // Keep them in this transaction so either both become visible or neither does.
       writeSessionEntry(writeDatabase, resolved.sessionKey, nextEntry, {

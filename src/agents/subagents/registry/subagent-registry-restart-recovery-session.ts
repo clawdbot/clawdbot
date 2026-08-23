@@ -1,3 +1,4 @@
+import { resolveBookkeepingUpdatedAt } from "../../../config/sessions/reset.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 
 export async function settleAcceptedRecoverySession(params: {
@@ -35,7 +36,7 @@ export async function settleAcceptedRecoverySession(params: {
         lastAttemptAt: params.now,
         lastRunId: params.runId,
       };
-      current.updatedAt = params.now;
+      current.updatedAt = resolveBookkeepingUpdatedAt(current.updatedAt, params.now);
       settled = true;
       return current;
     },

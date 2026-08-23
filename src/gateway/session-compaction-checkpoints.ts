@@ -17,6 +17,7 @@ import {
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
 import { readFileRangeAsync } from "../config/sessions/file-range.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveBookkeepingUpdatedAt } from "../config/sessions/reset.js";
 import {
   loadSessionEntry,
   loadTranscriptEventsSync,
@@ -775,7 +776,10 @@ async function persistSessionCompactionCheckpoint(
       trimmedCheckpoints = trimSessionCheckpoints(checkpoints, snapshotBytesByPath);
       stored = true;
       return {
-        updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
+        updatedAt: Math.max(
+          existing.updatedAt ?? 0,
+          resolveBookkeepingUpdatedAt(existing.updatedAt, createdAt),
+        ),
         compactionCheckpoints: trimmedCheckpoints.kept,
       };
     },

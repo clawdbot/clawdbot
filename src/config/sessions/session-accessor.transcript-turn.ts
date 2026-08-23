@@ -13,6 +13,7 @@ import { getRuntimeConfig } from "../io.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
+import { resolveBookkeepingUpdatedAt } from "./reset.js";
 import { updateSessionEntry } from "./session-accessor.entry-mutation.js";
 import {
   loadSessionEntryReadOnly,
@@ -487,7 +488,12 @@ async function touchTranscriptTurnSessionEntry(params: {
     },
     (current) =>
       current.sessionId === params.target.sessionId
-        ? { updatedAt: Math.max(current.updatedAt ?? 0, updatedAt) }
+        ? {
+            updatedAt: Math.max(
+              current.updatedAt ?? 0,
+              resolveBookkeepingUpdatedAt(current.updatedAt, updatedAt),
+            ),
+          }
         : null,
     { skipMaintenance: true },
   );

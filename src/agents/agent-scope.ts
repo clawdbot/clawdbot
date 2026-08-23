@@ -7,6 +7,7 @@ import {
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import { resolveBookkeepingUpdatedAt } from "../config/sessions/reset.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
@@ -296,7 +297,7 @@ export function clearAutoFallbackPrimaryProbeSelection(
     delete entry.authProfileOverrideCompactionCount;
   }
   delete entry.fallbackNotice;
-  entry.updatedAt = now;
+  entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt, now);
 }
 
 export { resolveAgentIdFromSessionKey };

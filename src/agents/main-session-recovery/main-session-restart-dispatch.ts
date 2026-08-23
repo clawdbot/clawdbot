@@ -4,6 +4,7 @@ import { GatewayClientRequestError } from "../../../packages/gateway-client/src/
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import { sanitizePendingFinalDeliveryText } from "../../auto-reply/reply/pending-final-delivery.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
   hasRestartRecoveryTerminalRun,
@@ -200,7 +201,7 @@ async function settleRestartRecoveryDispatch(params: {
       } else {
         entry.abortedLastRun = false;
       }
-      entry.updatedAt = now;
+      entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt, now);
       return {
         result: undefined,
         replacements: [{ sessionKey: current.sessionKey, entry }],
@@ -493,7 +494,7 @@ export async function resumeMainSession(params: {
         if (params.forceRestartSafeTools) {
           entry.restartRecoveryForceSafeTools = true;
         }
-        entry.updatedAt = Date.now();
+        entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt);
         return {
           result: true,
           replacements: [{ sessionKey: params.sessionKey, entry }],

@@ -3,6 +3,7 @@ import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions/types.js";
@@ -574,7 +575,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           entry: {
             ...(clearOwnedPendingFinal || clearStaleTransportOnly
               ? clearPendingFinalDelivery(entry, now)
-              : { ...entry, updatedAt: now }),
+              : { ...entry, updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt, now) }),
             ...(recoveryClaimEntry
               ? buildRestartRecoveryClaimCleanupPatch({
                   entry: {

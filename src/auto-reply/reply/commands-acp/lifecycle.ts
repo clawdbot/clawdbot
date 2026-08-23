@@ -29,6 +29,7 @@ import {
   readChannelContextAdmissionEvidence,
   type ChannelAdmissionEvidence,
 } from "../../../channels/message-access/admission-evidence.js";
+import { resolveBookkeepingUpdatedAt } from "../../../config/sessions/reset.js";
 import { updateSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -97,7 +98,7 @@ async function persistSpawnedSessionLabel(params: {
       params.commandParams.sessionStore[params.sessionKey] = {
         ...existing,
         label,
-        updatedAt: now,
+        updatedAt: resolveBookkeepingUpdatedAt(existing.updatedAt, now),
       };
     }
   }

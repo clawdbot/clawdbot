@@ -1,6 +1,7 @@
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentTurnContext } from "../agent-turn/types.js";
@@ -74,7 +75,7 @@ export function createAgentRunModelSelectionHandler(params: {
                 cronRunContinuation,
                 modelProvider: provider,
                 model,
-                updatedAt: Date.now(),
+                updatedAt: resolveBookkeepingUpdatedAt(current.updatedAt),
               },
             },
           ],

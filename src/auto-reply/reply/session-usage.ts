@@ -18,6 +18,7 @@ import {
   type SessionSystemPromptReport,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -152,7 +153,7 @@ export async function persistSessionUsageUpdate(params: {
           sessionKey,
         },
         async (entry) => {
-          const updatedAt = Date.now();
+          const updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt);
           const preserveSessionModelState =
             params.isHeartbeat === true ||
             params.preserveRuntimeModel === true ||
@@ -288,7 +289,7 @@ export async function persistSessionUsageUpdate(params: {
             systemPromptReport: preserveUserFacingRunState
               ? entry.systemPromptReport
               : (params.systemPromptReport ?? entry.systemPromptReport),
-            updatedAt: Date.now(),
+            updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt),
           };
           if (
             !preserveUserFacingRunState &&

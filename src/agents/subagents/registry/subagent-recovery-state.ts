@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../../../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../../../config/sessions/reset.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -44,6 +45,6 @@ export function clearWedgedSubagentRecoveryAbort(entry: SessionEntry, now: numbe
     return false;
   }
   entry.abortedLastRun = false;
-  entry.updatedAt = now;
+  entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt, now);
   return true;
 }

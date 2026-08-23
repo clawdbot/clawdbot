@@ -1,5 +1,6 @@
 /** Keeps automatic auth profiles stable within sessions while rotating at lifecycle boundaries. */
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderModelRouteAuthRequirement } from "../../plugin-sdk/provider-model-types.js";
@@ -72,7 +73,10 @@ function applySessionAuthProfileOverrideState(
   } else {
     entry.authProfileOverrideCompactionCount = state.authProfileOverrideCompactionCount;
   }
-  entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
+  entry.updatedAt = Math.max(
+    entry.updatedAt ?? 0,
+    resolveBookkeepingUpdatedAt(entry.updatedAt, updatedAt),
+  );
 }
 
 function matchesSessionAuthProfileOverrideSnapshot(

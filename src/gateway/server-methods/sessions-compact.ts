@@ -14,6 +14,7 @@ import {
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import {
   applySessionPatchProjection,
   preflightSessionTranscriptForManualCompact,
@@ -420,7 +421,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                     return { ok: false };
                   }
                   const entryToUpdate = existingEntry;
-                  entryToUpdate.updatedAt = Date.now();
+                  entryToUpdate.updatedAt = resolveBookkeepingUpdatedAt(entryToUpdate.updatedAt);
                   entryToUpdate.compactionCount =
                     Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
                   if (result.compactionKind === "context-engine") {

@@ -9,6 +9,7 @@ import {
 } from "../../agents/exec-defaults.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import {
   patchSessionEntryCore,
   updateSessionEntry,
@@ -249,7 +250,7 @@ export async function ensureSkillSnapshot(params: {
     nextEntry = {
       ...current,
       sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
-      updatedAt: Date.now(),
+      updatedAt: resolveBookkeepingUpdatedAt(current.updatedAt),
       systemSent: true,
       skillsSnapshot: skillSnapshot,
     };
@@ -294,7 +295,7 @@ export async function ensureSkillSnapshot(params: {
     nextEntry = {
       ...current,
       sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
-      updatedAt: Date.now(),
+      updatedAt: resolveBookkeepingUpdatedAt(current.updatedAt),
       skillsSnapshot,
     };
     nextEntry = await persistSessionEntryUpdate({
@@ -367,7 +368,7 @@ export async function incrementCompactionCount(params: {
   const nextCount = (entry.compactionCount ?? 0) + incrementBy;
   const updates: Partial<SessionEntry> = {
     compactionCount: nextCount,
-    updatedAt: now,
+    updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt, now),
     ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
   };
   if (compactionKind === "context-engine") {

@@ -252,7 +252,11 @@ export async function projectSessionsPatchEntry(params: {
   const next: SessionEntry = {
     ...existing,
     sessionId: existing?.sessionId || randomUUID(),
-    updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+    // Bookkeeping write on an existing session: preserve the legacy updatedAt=0
+    // pending-reset marker (resolveBookkeepingUpdatedAt inlined; this file is at
+    // the max-lines budget). New rows always mint a fresh timestamp.
+    updatedAt:
+      existing?.sessionId && existing.updatedAt === 0 ? 0 : Math.max(existing?.updatedAt ?? 0, now),
     ...(params.preparedSessionRoot ? { sessionRoot: params.preparedSessionRoot } : {}),
     // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
     ...(creation && params.existingEntry === undefined ? buildSessionCreationStamp(creation) : {}),

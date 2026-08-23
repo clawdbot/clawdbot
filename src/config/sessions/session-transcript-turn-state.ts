@@ -1,3 +1,4 @@
+import { resolveBookkeepingUpdatedAt } from "./reset.js";
 import {
   mergeRestartRecoveryTerminalRunIds,
   sameRestartRecoveryTerminalRunIds,
@@ -85,10 +86,13 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
     ...(acceptedMessage && restartRecoveryTerminalRunIds ? { restartRecoveryTerminalRunIds } : {}),
     ...(touchUpdatedAt > 0
       ? {
-          updatedAt: Math.max(
-            params.currentEntry.updatedAt ?? 0,
-            params.sessionLifecyclePatch?.updatedAt ?? 0,
-            touchUpdatedAt,
+          updatedAt: resolveBookkeepingUpdatedAt(
+            params.currentEntry.updatedAt,
+            Math.max(
+              params.currentEntry.updatedAt ?? 0,
+              params.sessionLifecyclePatch?.updatedAt ?? 0,
+              touchUpdatedAt,
+            ),
           ),
         }
       : {}),

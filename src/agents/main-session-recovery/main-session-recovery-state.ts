@@ -7,6 +7,7 @@ import type {
   MainRestartRecoveryState,
   RestartRecoveryRun,
 } from "../../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import {
   isAcpSessionKey,
@@ -347,7 +348,7 @@ export function transitionMainSessionRecovery(
       for (const run of command.runs ?? []) {
         recordLifecycleFence(entry, run);
       }
-      entry.updatedAt = command.now;
+      entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt, command.now);
       return { kind: "applied" };
     }
     case "inspect": {
@@ -441,7 +442,7 @@ export function transitionMainSessionRecovery(
           lifecycleGeneration: command.lifecycleGeneration,
         },
       });
-      entry.updatedAt = command.now;
+      entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt, command.now);
       return {
         kind: "reserved",
         reservation: {
@@ -563,7 +564,7 @@ export function transitionMainSessionRecovery(
         // or the dedupe cache replays that terminal pre-dispatch failure.
         entry.restartRecoveryDeliveryRunId = undefined;
       }
-      entry.updatedAt = command.now;
+      entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt, command.now);
       return { kind: "applied" };
     }
     case "claim_foreground": {
@@ -708,7 +709,7 @@ export function transitionMainSessionRecovery(
       entry.lastRunId = resolveRestartRecoveryTerminalClientRunId(entry);
       entry.endedAt = command.now;
       entry.runtimeMs = Math.max(0, command.now - (entry.startedAt ?? command.now));
-      entry.updatedAt = command.now;
+      entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt, command.now);
       return { kind: "tombstoned" };
     }
     case "doctor_repair": {
@@ -716,7 +717,7 @@ export function transitionMainSessionRecovery(
         return { kind: "no_change" };
       }
       entry.abortedLastRun = false;
-      entry.updatedAt = command.now;
+      entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt, command.now);
       return { kind: "doctor_repaired" };
     }
     case "clear": {

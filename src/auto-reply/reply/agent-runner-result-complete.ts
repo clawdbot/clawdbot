@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { hasConfiguredModelFallbacks } from "../../agents/agent-scope.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
@@ -404,7 +405,7 @@ export async function completeReplyAgentRun(input: {
                   context: pendingFinalDeliveryContext,
                   createdAt: Date.now(),
                 },
-                updatedAt: Date.now(),
+                updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt),
               }
             : null,
         {

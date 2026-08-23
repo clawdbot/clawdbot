@@ -359,6 +359,45 @@ describe("gateway sessions patch", () => {
     });
   });
 
+  test("preserves the legacy updatedAt=0 pending-reset marker on metadata patches", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess-main",
+        updatedAt: 0,
+      },
+    };
+
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, label: "kept" },
+      }),
+    );
+
+    expect(entry.label).toBe("kept");
+    expect(entry.updatedAt).toBe(0);
+    expect(store[MAIN_SESSION_KEY]?.updatedAt).toBe(0);
+  });
+
+  test("stamps a fresh updatedAt for same-identity patches on live entries", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess-main",
+        updatedAt: 1,
+      },
+    };
+
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, label: "kept" },
+      }),
+    );
+
+    expect(entry.label).toBe("kept");
+    expect(entry.updatedAt).toBeGreaterThan(1);
+  });
+
   test("attributes the archive transition and clears attribution on restore", async () => {
     const archivedBy = { type: "human" as const, id: "profile-ada", label: "Ada" };
     const archived = expectPatchOk(

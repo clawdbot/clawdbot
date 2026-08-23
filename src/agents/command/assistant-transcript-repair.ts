@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import type { SessionEntry, PendingTranscriptRepairState } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -66,7 +67,7 @@ export async function persistAssistantTranscriptRepairRecord(params: {
       entry: {
         ...existing,
         pendingTranscriptRepair: [...(existing.pendingTranscriptRepair ?? []), nextRepair],
-        updatedAt: now,
+        updatedAt: resolveBookkeepingUpdatedAt(existing.updatedAt, now),
       },
       shouldPersist: (current) =>
         current?.sessionId === runOwnedSessionId && current.abortedLastRun !== true,
@@ -153,7 +154,11 @@ export async function repairPendingAssistantTranscriptTurns(params: {
       sessionKey: context.sessionKey,
       storePath: context.storePath,
       initialEntry: current,
-      entry: { ...current, pendingTranscriptRepair: undefined, updatedAt: Date.now() },
+      entry: {
+        ...current,
+        pendingTranscriptRepair: undefined,
+        updatedAt: resolveBookkeepingUpdatedAt(current.updatedAt),
+      },
       shouldPersist: (latest) => latest?.sessionId === entry.sessionId,
     });
   } catch (error) {

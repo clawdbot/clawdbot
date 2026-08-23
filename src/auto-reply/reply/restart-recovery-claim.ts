@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
   hasRestartRecoverySourceClaim,
@@ -76,7 +77,7 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
           recordTerminalSource: true,
           terminalSourceRunId: params.sourceTurnId,
         }),
-        updatedAt: Date.now(),
+        updatedAt: resolveBookkeepingUpdatedAt(current.updatedAt),
       };
     },
     { skipMaintenance: true, takeCacheOwnership: true },
@@ -256,7 +257,7 @@ export function createReplyRestartRecoveryClaimController(params: {
                 restartRecoveryDeliveryRequestFingerprint: undefined,
               }),
           restartRecoverySourceIngress: entry.restartRecoverySourceIngress ?? "control-ui",
-          updatedAt: Date.now(),
+          updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt),
         },
         recorder,
         sessionId,
@@ -329,9 +330,9 @@ export function createReplyRestartRecoveryClaimController(params: {
           runtimeMs: undefined,
           startedAt: updatedAt,
           status: "running",
-          updatedAt,
+          updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt, updatedAt),
         }
-      : { ...retiredClaim, updatedAt };
+      : { ...retiredClaim, updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt, updatedAt) };
     const persisted = await persistAdmissionPatch({
       entry,
       patch,
@@ -381,7 +382,7 @@ export function createReplyRestartRecoveryClaimController(params: {
                       restartRecoveryForceSafeTools: true,
                     }
                   : {}),
-                updatedAt,
+                updatedAt: resolveBookkeepingUpdatedAt(current.updatedAt, updatedAt),
               }
             : null,
         { skipMaintenance: true, takeCacheOwnership: true },
@@ -407,7 +408,10 @@ export function createReplyRestartRecoveryClaimController(params: {
           persistedCurrent.restartRecoveryDeliveryRunId === recoveryRunId &&
           persistedCurrent.restartRecoveryDeliverySourceRunId === recoverySourceRunId &&
           persistedCurrent.restartRecoveryBeforeAgentReplyState === undefined
-            ? { restartRecoveryBeforeAgentReplyState: "pending", updatedAt }
+            ? {
+                restartRecoveryBeforeAgentReplyState: "pending",
+                updatedAt: resolveBookkeepingUpdatedAt(persistedCurrent.updatedAt, updatedAt),
+              }
             : null,
         { skipMaintenance: true, takeCacheOwnership: true },
       );
@@ -451,7 +455,7 @@ export function createReplyRestartRecoveryClaimController(params: {
                 ? Math.max(0, endedAt - current.startedAt)
                 : undefined,
             status: "failed" as const,
-            updatedAt: endedAt,
+            updatedAt: resolveBookkeepingUpdatedAt(current.updatedAt, endedAt),
           };
         }
         const preservesPendingFinal = current.pendingFinalDelivery !== undefined;
@@ -486,7 +490,7 @@ export function createReplyRestartRecoveryClaimController(params: {
                 status: "done" as const,
               }
             : {}),
-          updatedAt: endedAt ?? Date.now(),
+          updatedAt: resolveBookkeepingUpdatedAt(current.updatedAt, endedAt ?? Date.now()),
         };
       },
     );

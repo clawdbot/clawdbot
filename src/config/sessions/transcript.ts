@@ -26,6 +26,7 @@ import {
   type SqliteSessionFileMarker,
 } from "./legacy-sqlite-marker.js";
 import { resolveDefaultSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
+import { resolveBookkeepingUpdatedAt } from "./reset.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -686,7 +687,7 @@ async function touchSqliteAssistantAppendSessionEntry(params: {
 }): Promise<void> {
   const now = Date.now();
   const buildPatch = (entry: SessionEntry | undefined): Partial<SessionEntry> => ({
-    updatedAt: Math.max(entry?.updatedAt ?? 0, now),
+    updatedAt: Math.max(entry?.updatedAt ?? 0, resolveBookkeepingUpdatedAt(entry?.updatedAt, now)),
     sessionStartedAt: entry?.sessionStartedAt ?? params.currentEntry.sessionStartedAt ?? now,
   });
   await updateSessionEntry(
