@@ -3618,7 +3618,7 @@ openclaw-sidebar-attention {
 .shell--mobile-nav .sidebar-issues-panel {
   inset: auto 0 0 !important;
   width: 100%;
-  block-size: 90dvh;
+  block-size: 78dvh;
   max-block-size: calc(100dvh - env(safe-area-inset-top, 0px));
   padding-block-end: env(safe-area-inset-bottom, 0px);
   border-width: 1px 0 0;
