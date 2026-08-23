@@ -213,17 +213,17 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         readStringParam(ctx.params, "mediaUrl", { trim: false }) ??
         readStringParam(ctx.params, "path", { trim: false }) ??
         readStringParam(ctx.params, "filePath", { trim: false });
+      const rawEmbeds = ctx.params.embeds;
+      const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)
+        ? (rawEmbeds as DiscordSendEmbeds)
+        : undefined;
       const content = readStringParam(ctx.params, "content", {
-        required: !asVoice && !componentSpec && !components && !mediaUrl,
+        required: !asVoice && !componentSpec && !components && !embeds?.length && !mediaUrl,
         allowEmpty: true,
       });
       const filename = readStringParam(ctx.params, "filename");
       const replyTo = readStringParam(ctx.params, "replyTo");
       const threadName = readStringParam(ctx.params, "threadName");
-      const rawEmbeds = ctx.params.embeds;
-      const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)
-        ? (rawEmbeds as DiscordSendEmbeds)
-        : undefined;
       const sessionKey = readStringParam(ctx.params, "__sessionKey");
       const agentId = readStringParam(ctx.params, "__agentId");
 

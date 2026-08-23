@@ -42,7 +42,6 @@ import {
   sendDiscordText,
   type DiscordAllowedMentions,
   type DiscordSendProgress,
-  type DiscordSendComponents,
   type DiscordSendEmbeds,
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
@@ -63,7 +62,7 @@ type DiscordSendOpts = {
   maxLinesPerMessage?: number;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
-  components?: DiscordSendComponents;
+  components?: Parameters<typeof resolveDiscordSendComponents>[0]["components"];
   embeds?: DiscordSendEmbeds;
   silent?: boolean;
   threadId?: string | number;
