@@ -997,13 +997,61 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(entry.lastError).toContain("first payload send failed");
   });
 
-  it("replays an entry after a proven pre-connect failure clears send evidence", async () => {
+  it.each([
+    [
+      "a proven pre-connect failure",
+      () =>
+        Object.assign(new Error("connect ECONNREFUSED"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      "ECONNREFUSED",
+    ],
+    [
+      "a provider proof that no message was dispatched",
+      () =>
+        new PlatformMessageNotDispatchedError("upload timed out before completion dispatch", {
+          cause: new Error("request timed out"),
+        }),
+      "upload timed out before completion dispatch",
+    ],
+  ])("dead-letters a caller-owned entry after %s", async (_label, createError, thrown) => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const sendMatrix = vi.fn().mockRejectedValueOnce(createError());
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "first" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow(thrown);
+
+    // The caller received the proven-not-sent error and owns the retry; a
+    // pending row here is what produced duplicate sends (#124279).
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
+
+    const recoverySendMatrix = vi.fn();
+    const deliver = vi.fn<DeliverFn>(async (params) =>
+      deliverOutboundPayloads({ ...params, deps: { matrix: recoverySendMatrix } }),
+    );
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(recoverySendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("replays a reusable intent after a proven pre-connect failure clears send evidence", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     const connectError = Object.assign(new Error("connect ECONNREFUSED"), {
       code: "ECONNREFUSED",
       syscall: "connect",
     });
     const sendMatrix = vi.fn().mockRejectedValueOnce(connectError);
+    const deliveryIntentId = "cron-direct-delivery:v1:reusable-proven-not-sent";
 
     await expect(
       deliverOutboundPayloads({
@@ -1013,65 +1061,20 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
         payloads: [{ text: "first" }],
         deps: { matrix: sendMatrix },
         queuePolicy: "required",
+        deliveryIntentId,
+        completionRetention: boundedCronCompletionRetention,
+        reusePendingDeliveryIntent: true,
       }),
     ).rejects.toThrow("ECONNREFUSED");
 
+    // Queue-owned intents have no independent retry owner: the entry must
+    // stay pending with cleared send evidence so recovery can replay (#100979).
     const beforeDrain = await loadPendingDeliveries(tmpDir);
     expect(beforeDrain).toHaveLength(1);
     expect(beforeDrain[0]).toMatchObject({
       retryCount: 1,
       lastError: expect.stringContaining("ECONNREFUSED"),
     });
-    expect(beforeDrain[0]?.recoveryState).toBeUndefined();
-    expect(beforeDrain[0]?.platformSendStartedAt).toBeUndefined();
-
-    const recoverySendMatrix = vi
-      .fn()
-      .mockRejectedValueOnce(connectError)
-      .mockResolvedValueOnce({ messageId: "recovered" });
-    const deliver = vi.fn<DeliverFn>(async (params) =>
-      deliverOutboundPayloads({
-        ...params,
-        deps: { matrix: recoverySendMatrix },
-      }),
-    );
-    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
-
-    expect(deliver).toHaveBeenCalledTimes(1);
-    const afterRepeatedFailure = await loadPendingDeliveries(tmpDir);
-    expect(afterRepeatedFailure).toHaveLength(1);
-    expect(afterRepeatedFailure[0]?.retryCount).toBe(2);
-    expect(afterRepeatedFailure[0]?.recoveryState).toBeUndefined();
-    expect(afterRepeatedFailure[0]?.platformSendStartedAt).toBeUndefined();
-
-    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
-
-    expect(deliver).toHaveBeenCalledTimes(2);
-    expect(recoverySendMatrix).toHaveBeenCalledTimes(2);
-    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
-  });
-
-  it("replays an entry after the provider proves no platform message was dispatched", async () => {
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const notDispatchedError = new PlatformMessageNotDispatchedError(
-      "upload timed out before completion dispatch",
-      { cause: new Error("request timed out") },
-    );
-    const sendMatrix = vi.fn().mockRejectedValueOnce(notDispatchedError);
-
-    await expect(
-      deliverOutboundPayloads({
-        cfg: {} as OpenClawConfig,
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "first" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-      }),
-    ).rejects.toThrow("upload timed out before completion dispatch");
-
-    const beforeDrain = await loadPendingDeliveries(tmpDir);
-    expect(beforeDrain).toHaveLength(1);
     expect(beforeDrain[0]?.recoveryState).toBeUndefined();
     expect(beforeDrain[0]?.platformSendStartedAt).toBeUndefined();
 

@@ -156,6 +156,16 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
     return queueOwner.fail(record, error);
   };
+  // Claim-fenced row removal: the entry is gone, so nothing can replay it.
+  // Callers must already own the retry before asking for this.
+  const deadLetterOwnedQueue = async (): Promise<void> => {
+    throwIfProducerLeaseLost();
+    if (!queueId) {
+      throw new Error("Queued delivery dead-lettering requires a queue id");
+    }
+    const spoolPaths = await moveToFailed(queueId, platformQueueStateDir, producerClaimId ?? null);
+    await releaseSpoolArtifacts(spoolPaths, platformQueueStateDir);
+  };
   const persistOwnedPostSendState = () => {
     throwIfProducerLeaseLost();
     if (!queueId) {
@@ -383,41 +393,15 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           (partialSendEvidence ? await persistOwnedPostSendState() : undefined);
         const error = "partial delivery failure (bestEffort)";
         if (postSendState === undefined || postSendState === "marked") {
-          if (
-            !partialSendEvidence &&
-            partialFailuresAreProvenNotSent &&
-            !params.reusePendingDeliveryIntent
-          ) {
-            // Proven-not-sent partial failures on caller-owned intents must not be
-            // recovered by the queue drain. The caller has already received the
-            // error and owns the retry. Reusable delivery intents (gateway recovery
-            // notices) stay recoverable — they have no independent retry owner.
-            const spoolPaths = await moveToFailed(
-              queueId,
-              platformQueueStateDir,
-              producerClaimId ?? null,
-            ).catch((err: unknown) => {
-              log.warn(
-                `failed to remove queued delivery ${queueId} after proven-not-sent partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
-              );
-              return [] satisfies string[];
-            });
-            if (spoolPaths.length > 0) {
-              await releaseSpoolArtifacts(spoolPaths, platformQueueStateDir).catch(
-                (err: unknown) => {
-                  log.warn(
-                    `failed to release spool artifacts for ${queueId}: ${formatErrorMessage(err)}`,
-                  );
-                },
-              );
-            }
-          } else {
-            await recordOwnedQueueFailure(failDelivery, error).catch((err: unknown) => {
-              log.warn(
-                `failed to mark queued delivery ${queueId} as failed after partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
-              );
-            });
-          }
+          const recordFailure =
+            !partialSendEvidence && partialFailuresAreProvenNotSent
+              ? failDeliveryBeforePlatformSend
+              : failDelivery;
+          await recordOwnedQueueFailure(recordFailure, error).catch((err: unknown) => {
+            log.warn(
+              `failed to mark queued delivery ${queueId} as failed after partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
+            );
+          });
         } else if (postSendState === "acked") {
           // Direct ack is the fallback when the post-send marker cannot be
           // written. Once the row is gone, recovery cannot run these hooks.
@@ -649,16 +633,48 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             }
           }
           if (!terminalRejectionHandled) {
-            const recordFailure = isProvenDeliveryNotSentError(err)
-              ? failDeliveryBeforePlatformSend
-              : failDelivery;
-            await recordOwnedQueueFailure(recordFailure, formatErrorMessage(err)).catch(
-              (failErr: unknown) => {
-                log.warn(
-                  `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+            // Throwing hands this proven-not-sent failure back to the caller,
+            // who owns the retry; a row left behind lets the recovery drain
+            // resend the same message behind that retry (#124279). Reusable
+            // intents and durable completions have no independent retry owner,
+            // so they stay replayable (#100979).
+            const callerOwnsRetry =
+              isProvenDeliveryNotSentError(err) &&
+              !params.reusePendingDeliveryIntent &&
+              !params.deliveryCompletion;
+            if (callerOwnsRetry) {
+              try {
+                await deadLetterOwnedQueue();
+                // Removing the row retires recovery's chance to report this
+                // delivery, so the terminal audit fact is owed here.
+                emitTerminals(() =>
+                  failedOutboundAuditTerminals({
+                    payloadCount,
+                    results: deliveredResults,
+                    payloadOutcomes: auditPayloadOutcomes ?? [],
+                    failureStage:
+                      err instanceof OutboundDeliveryError ? err.stage : "platform_send",
+                  }),
                 );
-              },
-            );
+              } catch (failErr: unknown) {
+                // Claim loss or a failed removal leaves the row with its owner;
+                // no terminal is emitted because recovery still owns the entry.
+                log.warn(
+                  `failed to dead-letter queued delivery ${queueId} after proven-not-sent failure: ${formatErrorMessage(failErr)}`,
+                );
+              }
+            } else {
+              const recordFailure = isProvenDeliveryNotSentError(err)
+                ? failDeliveryBeforePlatformSend
+                : failDelivery;
+              await recordOwnedQueueFailure(recordFailure, formatErrorMessage(err)).catch(
+                (failErr: unknown) => {
+                  log.warn(
+                    `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
+                  );
+                },
+              );
+            }
           }
         }
       }

@@ -2013,26 +2013,31 @@ describe("deliverOutboundPayloads", () => {
     ["EHOSTUNREACH", "connect"],
     ["UND_ERR_CONNECT_TIMEOUT", undefined],
     ["UND_ERR_DNS_RESOLVE_FAILED", undefined],
-  ])("clears queued send evidence after a proven pre-connect %s failure", async (code, syscall) => {
-    const networkError = Object.assign(new Error(`${syscall ?? "connect"} ${code}`), {
-      code,
-      ...(syscall ? { syscall } : {}),
-    });
-    const sendMatrix = vi.fn().mockRejectedValueOnce(networkError);
+  ])(
+    "dead-letters the queue entry after a proven pre-connect %s failure",
+    async (code, syscall) => {
+      const networkError = Object.assign(new Error(`${syscall ?? "connect"} ${code}`), {
+        code,
+        ...(syscall ? { syscall } : {}),
+      });
+      const sendMatrix = vi.fn().mockRejectedValueOnce(networkError);
 
-    await expect(
-      deliverMatrix({
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-      }),
-    ).rejects.toThrow(code);
+      await expect(
+        deliverMatrix({
+          deps: { matrix: sendMatrix },
+          queuePolicy: "required",
+        }),
+      ).rejects.toThrow(code);
 
-    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
-      "mock-queue-id",
-      expect.stringContaining(code),
-    );
-    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-  });
+      expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
+        "mock-queue-id",
+        undefined,
+        expect.any(String),
+      );
+      expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
+      expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+    },
+  );
 
   it("finds proven pre-connect failures nested in an aggregate cause", async () => {
     const aggregateError = Object.assign(
@@ -2054,9 +2059,40 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow();
 
+    expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
+      "mock-queue-id",
+      undefined,
+      expect.any(String),
+    );
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("keeps a durable-completion entry recoverable after a proven pre-connect failure", async () => {
+    const networkError = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    });
+    const sendMatrix = vi.fn().mockRejectedValueOnce(networkError);
+
+    await expect(
+      deliverMatrix({
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-proven-not-sent",
+          routeFingerprint: "route-proven-not-sent",
+        },
+        onDeliveryAttempt: async () => {},
+      }),
+    ).rejects.toThrow("ECONNREFUSED");
+
+    expect(queueMocks.moveToFailed).not.toHaveBeenCalled();
     expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
       "mock-queue-id",
-      expect.any(String),
+      expect.stringContaining("ECONNREFUSED"),
     );
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
@@ -2147,10 +2183,12 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("connect refused");
 
-    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+    expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
       "mock-queue-id",
-      expect.stringContaining("connect refused"),
+      undefined,
+      expect.any(String),
     );
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
@@ -2208,10 +2246,12 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("Connect Timeout Error");
 
-    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+    expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
       "mock-queue-id",
-      expect.stringContaining("Connect Timeout Error"),
+      undefined,
+      expect.any(String),
     );
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
@@ -2233,10 +2273,12 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("A request error occurred");
 
-    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+    expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
       "mock-queue-id",
-      expect.stringContaining("A request error occurred"),
+      undefined,
+      expect.any(String),
     );
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
@@ -2279,12 +2321,10 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).resolves.toEqual([]);
 
-    expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
+    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
       "mock-queue-id",
-      undefined,
-      expect.any(String),
+      "partial delivery failure (bestEffort)",
     );
-    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
@@ -2303,12 +2343,10 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).resolves.toEqual([]);
 
-    expect(queueMocks.moveToFailed).toHaveBeenCalledWith(
+    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
       "mock-queue-id",
-      undefined,
-      expect.any(String),
+      "partial delivery failure (bestEffort)",
     );
-    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
