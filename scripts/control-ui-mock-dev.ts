@@ -2262,6 +2262,9 @@ async function createChatPickerScenario(
         cpuCount: 16,
         memoryTotalBytes: 68_719_476_736,
         memoryFreeBytes: 34_359_738_368,
+        diskTotalBytes: 1_000_000_000_000,
+        diskAvailableBytes: 640_000_000_000,
+        diskPath: "/Users/peter/.openclaw",
         defaultAgentUtilityModel: {
           status: "auto",
           model: "anthropic/claude-haiku-4-5",

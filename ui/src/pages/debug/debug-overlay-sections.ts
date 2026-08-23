@@ -1,5 +1,7 @@
+import { formatByteSize } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
+import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -56,6 +58,11 @@ export type DebugOverlayStatusSnapshot = {
     rssBytes: number;
     heapUsedBytes: number;
     heapTotalBytes: number;
+  };
+  diskSpace?: {
+    availableBytes: number;
+    totalBytes: number;
+    path?: string;
   };
   uptimeMs?: number;
 };
@@ -116,6 +123,19 @@ function formatDelayMs(value: number): string {
   return formatDurationCompact(value) ?? t("common.na");
 }
 
+function formatFreeBytes(bytes: number): string {
+  return t("debug.overlay.freeShort", { value: formatStorageBytes(bytes) });
+}
+
+function formatStorageBytes(bytes: number): string {
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "tera",
+    separator: " ",
+    fractionDigits: (value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0),
+  });
+}
+
 function renderStatus(
   status: DebugOverlayStatusSnapshot,
   history: readonly DebugOverlayStatusSample[],
@@ -135,6 +155,10 @@ function renderStatus(
   const maxSub =
     typeof eventLoop?.delayMaxMs === "number"
       ? t("debug.overlay.maxShort", { value: formatDelayMs(eventLoop.delayMaxMs) })
+      : "";
+  const diskTotalSub =
+    typeof status.diskSpace?.totalBytes === "number"
+      ? t("debug.overlay.totalShort", { value: formatStorageBytes(status.diskSpace.totalBytes) })
       : "";
   return html`
     <div class="debug-overlay__vitals">
@@ -164,6 +188,17 @@ function renderStatus(
         .format=${formatDelayMs}
         .floorMax=${20}
       ></openclaw-debug-sparkline>
+      ${status.diskSpace
+        ? html`<openclaw-debug-sparkline
+            class="debug-overlay__vital debug-overlay__vital--disk"
+            title=${status.diskSpace.path ?? ""}
+            .label=${t("debug.overlay.disk")}
+            .sub=${diskTotalSub}
+            .samples=${collectSamples(history, (sample) => sample.diskSpace?.availableBytes)}
+            .format=${formatFreeBytes}
+            autorange
+          ></openclaw-debug-sparkline>`
+        : nothing}
     </div>
     ${typeof status.uptimeMs === "number"
       ? html`<div class="debug-overlay__vitals-footer mono">
@@ -215,14 +250,23 @@ export const DEBUG_OVERLAY_SECTIONS: readonly DebugOverlaySectionDescriptor[] = 
     id: "status",
     titleKey: "debug.overlay.status",
     load: async (context, signal) => {
-      const value = await context.client.request<DebugOverlayStatusSnapshot>(
-        "status",
-        {},
-        { signal },
-      );
+      const [value, systemInfo] = await Promise.all([
+        context.client.request<DebugOverlayStatusSnapshot>("status", {}, { signal }),
+        context.client.request<SystemInfoResult>("system.info", {}, { signal }),
+      ]);
+      const diskSpace =
+        typeof systemInfo.diskAvailableBytes === "number" &&
+        typeof systemInfo.diskTotalBytes === "number"
+          ? {
+              availableBytes: systemInfo.diskAvailableBytes,
+              totalBytes: systemInfo.diskTotalBytes,
+              ...(systemInfo.diskPath ? { path: systemInfo.diskPath } : {}),
+            }
+          : undefined;
       return {
         eventLoop: value.eventLoop,
         processMemory: value.processMemory,
+        ...(diskSpace ? { diskSpace } : {}),
         ...(typeof value.uptimeMs === "number" ? { uptimeMs: value.uptimeMs } : {}),
       } satisfies DebugOverlayStatusSnapshot;
     },
