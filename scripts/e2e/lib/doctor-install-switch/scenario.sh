@@ -25,7 +25,11 @@ tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
 node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
 (
   cd "$git_root"
-  openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1
+  # Git-style fixtures still need optional native prebuilds; omit only development dependencies.
+  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=dev --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
+    openclaw_e2e_print_log /tmp/openclaw-git-install.log >&2
+    exit 1
+  fi
   git init -q
   git config user.email "docker-e2e@openclaw.local"
   git config user.name "OpenClaw Docker E2E"

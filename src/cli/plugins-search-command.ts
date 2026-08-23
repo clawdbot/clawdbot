@@ -5,6 +5,7 @@ import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { searchInstallablePluginPackages } from "../plugins/catalog-search.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { ExpectedCliError } from "./failure-output.js";
 
 /** Options accepted by `openclaw plugins search`. */
 type PluginsSearchOptions = {
@@ -34,8 +35,8 @@ export async function runPluginsSearchCommand(
     Array.isArray(queryParts) ? queryParts.join(" ") : queryParts,
   );
   if (!query) {
-    runtime.error("Usage: openclaw plugins search <query>");
-    return runtime.exit(1);
+    const message = "Usage: openclaw plugins search <query>";
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
 
   try {
@@ -52,6 +53,9 @@ export async function runPluginsSearchCommand(
     runtime.log(`${theme.heading("ClawHub plugins")} ${theme.muted(`(${results.length})`)}`);
     runtime.log(results.map(formatPackageSearchLine).join("\n"));
   } catch (error) {
+    if (opts.json) {
+      throw error;
+    }
     runtime.error(formatErrorMessage(error));
     runtime.exit(1);
   }

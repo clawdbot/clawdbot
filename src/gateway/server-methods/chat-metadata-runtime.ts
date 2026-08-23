@@ -472,7 +472,10 @@ export function createGatewayChatMetadataRuntime(params: {
         continue;
       }
       let generation = current;
-      if (!generation && params.refreshOnRead) {
+      // Unavailable means the prepared owner was missing, not that publication failed.
+      // Retry capture so a later published owner is not hidden behind lastError.
+      const retryUnavailableOwner = lastError instanceof ChatMetadataSnapshotUnavailableError;
+      if (!generation && (params.refreshOnRead || retryUnavailableOwner)) {
         await refresh();
         generation = current;
       }

@@ -1,7 +1,9 @@
 import type { GatewaySessionMessageSubscription } from "@openclaw/gateway-client/browser";
 import type {
+  PreservedSessionWorktree,
   SessionOwner,
   SessionsAssignOwnerParams,
+  SessionsDeleteResult,
   SessionsRecoverResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
@@ -96,17 +98,12 @@ export type SessionDeleteTarget = SessionDeleteOptions & {
   key: string;
 };
 
-/** Dirty/unpushed checkouts survive session deletion; callers surface them. */
-export type SessionDeleteOutcome = {
-  deleted: boolean;
-  worktreePreserved?: { id: string; branch: string; path: string };
-};
+export type SessionDeleteOutcome = Pick<SessionsDeleteResult, "deleted" | "worktreePreserved">;
 
 export type SessionDeleteBatchResult = {
   deleted: string[];
   errors: string[];
-  /** Dirty/unpushed checkouts kept by the gateway during this batch. */
-  preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
+  preservedWorktrees: PreservedSessionWorktree[];
 };
 
 export type SessionCompactResult = {
@@ -135,11 +132,6 @@ export type SessionGateway = {
 };
 
 export type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
-
-export type SessionDeleteResponse = {
-  deleted: boolean;
-  worktreePreserved?: SessionDeleteOutcome["worktreePreserved"];
-};
 
 export type SessionConnectionScope = GatewayConnectionScope;
 
@@ -172,7 +164,7 @@ export type SessionCapability = {
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
-    options?: SessionReconcileOptions,
+    options?: SessionReconcileOptions & { sourceCanonicalListRevision?: number },
   ) => boolean;
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;

@@ -226,11 +226,6 @@ describe("resolveBuildAllStep", () => {
       expectedEnv: { FOO: "bar", OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1" },
     },
     {
-      label: "copy-hook-metadata",
-      scriptPath: "scripts/copy-hook-metadata.ts",
-      expectedEnv: { FOO: "bar" },
-    },
-    {
       label: "write-build-info",
       scriptPath: "scripts/write-build-info.ts",
       expectedEnv: { FOO: "bar" },
@@ -372,7 +367,6 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild-stamp",
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
-      "copy-hook-metadata",
       "ui:build",
       "write-build-info",
       "write-cli-startup-metadata",
@@ -448,7 +442,6 @@ describe("resolveBuildAllSteps", () => {
       "runtime-postbuild-stamp",
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
-      "copy-hook-metadata",
       "ui:build",
       "write-build-info",
       "write-cli-startup-metadata",
@@ -592,6 +585,30 @@ describe("resolveBuildAllSteps", () => {
       "build-stamp",
       "runtime-postbuild-stamp",
     ]);
+  });
+
+  it("uses the full runtime artifact surface without declaration work when DTS is disabled", () => {
+    const steps = resolveBuildAllSteps("full", {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    });
+    const labels = steps.map((step) => step.label);
+
+    expect(labels).toEqual([
+      "plugins:assets:build",
+      "tsdown",
+      "external-plugins:local-dist",
+      "check-cli-bootstrap-imports",
+      "plugins:assets:copy",
+      "runtime-postbuild",
+      "build-stamp",
+      "runtime-postbuild-stamp",
+      "ui:build",
+      "write-build-info",
+      "write-cli-startup-metadata",
+    ]);
+    expect(steps.find((step) => step.label === "tsdown")?.cache).toBeUndefined();
+    expect(labels).not.toContain("write-plugin-sdk-entry-dts");
+    expect(labels).not.toContain("check-plugin-sdk-exports");
   });
 
   it("uses a source performance profile with QA assets and immutable build provenance", () => {
@@ -767,11 +784,6 @@ describe("resolveBuildAllSteps", () => {
       expect.objectContaining({ path: "dist/plugin-sdk" }),
     );
     expect(step.cache?.restore).toBe("always");
-  });
-
-  it("does not cache hook metadata over compiled hook handlers", () => {
-    const step = getBuildAllStep("copy-hook-metadata");
-    expect(step.cache).toBeUndefined();
   });
 
   it("rejects unknown build profiles", () => {
@@ -1133,27 +1145,32 @@ describe("resolveBuildAllStepCacheState", () => {
     });
   });
 
-  it("marks cacheable steps stale when a tracked env input changes", () => {
+  it("never reuses a runtime-only cache as a declaration-complete full-build cache", () => {
     withBuildCacheFixture(({ rootDir, step }) => {
       const envStep = {
         ...step,
         cache: {
           ...step.cache,
-          env: ["OPENCLAW_BUILD_PRIVATE_QA"],
+          env: ["OPENCLAW_RUN_NODE_SKIP_DTS_BUILD"],
+          restore: "always" as const,
         },
       };
       const cacheState = resolveBuildAllStepCacheState(envStep, {
         rootDir,
-        env: { OPENCLAW_BUILD_PRIVATE_QA: "0" },
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
       });
-      writeBuildAllStepCacheStamp(envStep, cacheState, { rootDir });
+      writeBuildAllStepCacheStamp(envStep, cacheState, {
+        rootDir,
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      });
 
       const stale = resolveBuildAllStepCacheState(envStep, {
         rootDir,
-        env: { OPENCLAW_BUILD_PRIVATE_QA: "1" },
+        env: {},
       });
       expect(stale.cacheable).toBe(true);
       expect(stale.fresh).toBe(false);
+      expect(stale.restorable).toBe(false);
       expect(stale.reason).toBe("stale");
     });
   });

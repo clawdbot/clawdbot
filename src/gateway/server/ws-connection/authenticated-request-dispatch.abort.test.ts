@@ -155,22 +155,37 @@ describe("authenticated WebSocket request cancellation", () => {
     await vi.waitFor(() => expect(socket.listenerCount("close")).toBe(0));
   });
 
-  it("does not attach a node cancellation lifetime to unrelated requests", async () => {
-    const socket = new EventEmitter();
-    const { client, dispatcher } = createDispatcher(socket);
-    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
-      options.respond(true, { ok: true });
-    });
+  it.each(["test.trace", "sessions.cleanup", "agents.delete"])(
+    "keeps authenticated %s work alive after its socket disconnects",
+    async (method) => {
+      const socket = new EventEmitter();
+      const { client, dispatcher } = createDispatcher(socket);
+      let finish!: () => void;
+      const completion = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      let completed = false;
+      handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+        await completion;
+        completed = true;
+        options.respond(true, { ok: true });
+      });
 
-    await dispatcher.dispatch(
-      { type: "req", id: "ordinary-request", method: "test.trace", params: {} },
-      client,
-    );
-    await vi.waitFor(() => expect(handleGatewayRequest).toHaveBeenCalledOnce());
+      await dispatcher.dispatch(
+        { type: "req", id: "ordinary-request", method, params: {} },
+        client,
+      );
+      await vi.waitFor(() => expect(handleGatewayRequest).toHaveBeenCalledOnce());
 
-    expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
-    expect(socket.listenerCount("close")).toBe(0);
-  });
+      expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+      expect(socket.listenerCount("close")).toBe(0);
+      socket.emit("close", 1006, Buffer.alloc(0));
+      expect(completed).toBe(false);
+
+      finish();
+      await vi.waitFor(() => expect(completed).toBe(true));
+    },
+  );
 
   it("cancels a session companion ask when its authenticated socket closes", async () => {
     const socket = new EventEmitter();

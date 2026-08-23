@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
 import {
   expectedIntegrityForUpdate,
+  isPackageVersionDowngrade,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.types.js";
@@ -170,6 +171,7 @@ export async function updateNpmInstalledHookPacks(params: {
     const nextLabel = nextVersion ?? "unknown";
     const status =
       currentVersion && nextVersion && currentVersion === nextVersion ? "unchanged" : "updated";
+    const downgraded = isPackageVersionDowngrade(currentVersion, nextVersion);
 
     if (params.dryRun) {
       outcomes.push({
@@ -180,7 +182,7 @@ export async function updateNpmInstalledHookPacks(params: {
         message:
           status === "unchanged"
             ? `Hook pack "${hookId}" is up to date (${currentLabel}).`
-            : `Would update hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
+            : `${downgraded ? "Would downgrade" : "Would update"} hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
       });
       continue;
     }
@@ -204,7 +206,7 @@ export async function updateNpmInstalledHookPacks(params: {
       message:
         status === "unchanged"
           ? `Hook pack "${hookId}" already at ${currentLabel}.`
-          : `Updated hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
+          : `${downgraded ? "Downgraded" : "Updated"} hook pack "${hookId}": ${currentLabel} -> ${nextLabel}.`,
     });
   }
 

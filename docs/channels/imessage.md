@@ -540,11 +540,23 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
     - `chat_guid:...`
     - `chat_identifier:...`
 
-    Handle targets are also supported:
+    Direct handles are also supported:
 
+    - `+1555...`
+    - `tel:+1555...`
     - `imessage:+1555...`
     - `sms:+1555...`
     - `user@example.com`
+
+    Use a service-qualified target for a contact name or mixed alphanumeric alias:
+
+    - `auto:<contact>` lets Messages choose iMessage or SMS
+    - `imessage:<contact>` requires iMessage
+    - `sms:<contact>` requires SMS
+
+    Bare contact names and mixed alphanumeric aliases are rejected instead of being converted to
+    a phone number. If an existing automation uses one, add `auto:`, `imessage:`, or `sms:` to
+    make the intended delivery service explicit.
 
     ```bash
     imsg chats --limit 20

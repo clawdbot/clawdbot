@@ -98,7 +98,9 @@ export type TestChatPane = HTMLElement & {
   handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
   handleSessionTypingEvent: (event: SessionTypingEvent) => void;
   clearTypingActorForSessionMessage: (payload: unknown) => void;
-  typingActors: Map<string, { label: string; expiresAt: number }>;
+  typingActors: Map<string, { label: string; expiresAt: number; preview?: string }>;
+  typingActorViews: () => { id: string; label: string; preview?: string }[];
+  sendTypingState: (typing: boolean, preview?: string) => void;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (
     suggestion: SessionSuggestion,
@@ -173,6 +175,67 @@ export function createGatewayBrowserClientFixture(
   overrides: GatewayBrowserClientFixtureOverrides = {},
 ): GatewayBrowserClient {
   return overrides as typeof overrides & GatewayBrowserClient;
+}
+
+export function createInitializationContext(): ApplicationContext {
+  return {
+    basePath: "",
+    gateway: {
+      snapshot: {
+        client: null,
+        phase: "stopped",
+        offlineStable: false,
+        hello: null,
+        canvasPluginSurfaceUrl: null,
+        assistantAgentId: null,
+        sessionKey: "",
+        lastError: null,
+        lastErrorCode: null,
+      },
+      subscribe: () => () => {},
+      subscribeEvents: () => () => {},
+    },
+    config: {
+      current: {
+        assistantIdentity: {
+          agentId: null,
+          name: "Assistant",
+          avatar: null,
+          avatarSource: null,
+          avatarStatus: null,
+          avatarReason: null,
+        },
+        serverVersion: null,
+        localMediaPreviewRoots: [],
+        embedSandboxMode: "strict",
+        allowExternalEmbedUrls: false,
+        terminalEnabled: false,
+      },
+    },
+    agentSelection: { state: { selectedId: "main" } },
+    agents: { state: { agentsList: null } },
+    runtimeConfig: {
+      state: { configNeedsApply: false, configSnapshot: null },
+      subscribe: () => () => {},
+    },
+    placementStartup: {
+      get: () => null,
+      retry: () => undefined,
+      subscribe: () => () => {},
+    },
+    navigate: () => undefined,
+    initialUserMessage: createInitialUserMessageHandoff(),
+    chatAttachmentHandoff: createChatAttachmentHandoff(),
+    sessions: { state: { modelOverrides: {} } },
+  } as unknown as ApplicationContext;
+}
+
+export function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
+  return {
+    role: seq % 2 === 0 ? "assistant" : "user",
+    content: [{ type: "text", text }],
+    __openclaw: { seq },
+  };
 }
 
 type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch" | "state"> & {

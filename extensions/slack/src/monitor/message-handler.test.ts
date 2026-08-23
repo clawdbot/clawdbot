@@ -563,6 +563,47 @@ describe("createSlackMessageHandler", () => {
     expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
   });
 
+  it("retires a buffered key when replay filtering drops every entry", async () => {
+    const handler = createSlackMessageHandler({
+      ctx: createContext(),
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+    const bufferedMessage = {
+      type: "message" as const,
+      channel: "C111",
+      user: "U111",
+      ts: "1709000000.000300",
+      text: "duplicate buffered text",
+    };
+
+    await handler(bufferedMessage as never, { source: "message" });
+    const first = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    await runOnFlush([first]);
+
+    await handler(bufferedMessage as never, { source: "message" });
+    const duplicate = enqueueMock.mock.calls[1]?.[0] as Record<string, unknown>;
+    await runOnFlush([duplicate]);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+    flushKeyMock.mockClear();
+
+    await handler(
+      {
+        type: "message",
+        subtype: "file_share",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000400",
+        text: "file follows",
+        files: [{ id: "F1" }],
+      } as never,
+      { source: "message" },
+    );
+
+    expect(flushKeyMock).not.toHaveBeenCalled();
+  });
+
   it("waits for debounced dispatch completion when requested by relay delivery", async () => {
     const { handler } = createHandlerWithTracker();
     const handled = handler(

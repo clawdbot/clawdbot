@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listAgentIds, tryResolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   discardLegacyRegistryWorktrees,
@@ -12,10 +12,7 @@ import {
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import {
-  resolveSessionStoreCompatibilityAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-} from "../config/legacy.default-agent-owner.js";
+import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -282,8 +279,7 @@ function createPluginDoctorStateMigrationContext(
 }
 
 function tryResolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string | undefined {
-  const agentId =
-    tryResolveLegacyCompatibilityAgentId(cfg) ?? tryResolveSystemAgentTargetAgentId(cfg);
+  const agentId = tryResolveAmbientOwnerAgentId(cfg);
   return agentId && listAgentIds(cfg).includes(agentId) ? agentId : undefined;
 }
 

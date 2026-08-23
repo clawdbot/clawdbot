@@ -23,7 +23,6 @@ import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { normalizeModelRef } from "../model-selection.js";
 import {
   resolveSandboxedBridgeMediaPath,
   type SandboxedBridgeMediaPathConfig,
@@ -694,30 +693,6 @@ export function buildTextToolResult(
       attempts: result.attempts,
     },
   };
-}
-
-/**
- * Resolves a catalog model while supporting registries that index model ids with provider prefixes.
- */
-export function resolveModelFromRegistry(params: {
-  modelRegistry: { find: (provider: string, modelId: string) => unknown };
-  provider: string;
-  modelId: string;
-}): Model {
-  const resolvedRef = normalizeModelRef(params.provider, params.modelId, {
-    allowPluginNormalization: false,
-  });
-  let model = params.modelRegistry.find(resolvedRef.provider, resolvedRef.model) as Model | null;
-  if (!model && !resolvedRef.model.includes("/")) {
-    model = params.modelRegistry.find(
-      resolvedRef.provider,
-      `${resolvedRef.provider}/${resolvedRef.model}`,
-    ) as Model | null;
-  }
-  if (!model) {
-    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
-  }
-  return model;
 }
 
 /**

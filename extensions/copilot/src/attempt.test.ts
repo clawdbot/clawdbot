@@ -562,7 +562,6 @@ describe("runCopilotAttempt", () => {
 
   it("retains the host terminal error after an unrelated successful tool", async () => {
     const terminalError = {
-      actionFingerprint: "message:send:room-1",
       error: "delivery failed",
       mutatingAction: true,
       toolName: "message",
@@ -648,7 +647,6 @@ describe("runCopilotAttempt", () => {
 
   it("clears the host terminal error after matching tool recovery", async () => {
     const terminalError = {
-      actionFingerprint: "message:send:room-1",
       error: "delivery failed",
       mutatingAction: true,
       toolName: "message",

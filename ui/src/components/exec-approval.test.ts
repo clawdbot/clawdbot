@@ -30,7 +30,6 @@ async function renderApproval(
     busy: boolean;
     canGrant: boolean;
     errors: ReadonlyMap<string, string>;
-    nowMs: number;
     onDecision: ReturnType<typeof vi.fn>;
   }> = {},
 ) {
@@ -43,7 +42,6 @@ async function renderApproval(
         busy: overrides.busy ?? false,
         canGrant: overrides.canGrant ?? true,
         errors: overrides.errors ?? new Map(),
-        nowMs: overrides.nowMs ?? Date.now(),
         onDecision,
       }}
     ></openclaw-exec-approval>`,
@@ -154,13 +152,32 @@ describe("openclaw-exec-approval", () => {
     expect(container.querySelector(".exec-approval-warning")).toBeNull();
   });
 
-  it("renders the live expiry countdown as mm:ss", async () => {
-    await renderOpenedApproval(createExecRequest({ expiresAtMs: 90_500 }), { nowMs: 0 });
+  it("keeps the visible and accessible expiry countdowns synchronized", async () => {
+    let nowMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const { approval } = await renderOpenedApproval(createExecRequest({ expiresAtMs: 90_500 }));
+    const { dialog } = await getRenderedModalDialog(container);
+    const countdown = container.querySelector<LitElement>(".exec-approval-countdown");
+    if (!countdown) {
+      throw new Error("Expected approval countdown");
+    }
+    await countdown.updateComplete;
+
+    expect(countdown.textContent?.trim()).toBe("expires in 01:31");
+    expect(dialog.getAttribute("aria-description")).toBe("expires in 01:31");
+
+    const renderSpy = vi.spyOn(approval as LitElement & { render(): unknown }, "render");
+    nowMs = 1_000;
+    await vi.waitFor(
+      () => {
+        expect(countdown.textContent?.trim()).toBe("expires in 01:30");
+      },
+      { timeout: 2_000 },
+    );
     await getRenderedModalDialog(container);
 
-    expect(container.querySelector(".exec-approval-countdown")?.textContent?.trim()).toBe(
-      "expires in 01:31",
-    );
+    expect(dialog.getAttribute("aria-description")).toBe("expires in 01:30");
+    expect(renderSpy).not.toHaveBeenCalled();
   });
 
   it("selects another queued request without changing queue order", async () => {

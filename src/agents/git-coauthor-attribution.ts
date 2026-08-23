@@ -12,10 +12,29 @@ export function prepareGitCoauthorAttribution(params: {
   agentId: string;
   config: OpenClawConfig;
   currentProfileId?: string;
+  excludeAccountId?: number;
   env?: NodeJS.ProcessEnv;
   sessionKey?: string;
   storePath?: string;
 }): string | undefined {
+  return resolveGitCoauthorAttribution(params)?.prompt;
+}
+
+type GitCoauthorAttribution = {
+  trailers: string[];
+  logins: string[];
+  prompt: string;
+};
+
+export function resolveGitCoauthorAttribution(params: {
+  agentId: string;
+  config: OpenClawConfig;
+  currentProfileId?: string;
+  excludeAccountId?: number;
+  env?: NodeJS.ProcessEnv;
+  sessionKey?: string;
+  storePath?: string;
+}): GitCoauthorAttribution | undefined {
   if (!params.sessionKey || !params.storePath) {
     return undefined;
   }
@@ -37,6 +56,7 @@ export function prepareGitCoauthorAttribution(params: {
     resolveConfiguredGitHubToolIdentity({ ...params, scope: "system" });
   const primaryEmail = primaryIdentity?.gitAuthor?.email?.trim().toLowerCase();
   const trailers = new Map<number, string>();
+  const logins = new Map<number, string>();
   let withoutCredit = 0;
   let unresolved = 0;
   let primaryAuthor = 0;
@@ -50,12 +70,17 @@ export function prepareGitCoauthorAttribution(params: {
       withoutCredit += 1;
       continue;
     }
+    if (identity.accountId === params.excludeAccountId) {
+      primaryAuthor += 1;
+      continue;
+    }
     const noreplyEmail = `${identity.accountId}+${identity.login}@users.noreply.github.com`;
     if (noreplyEmail.toLowerCase() === primaryEmail) {
       primaryAuthor += 1;
       continue;
     }
     trailers.set(identity.accountId, `Co-authored-by: ${identity.login} <${noreplyEmail}>`);
+    logins.set(identity.accountId, identity.login);
   }
 
   const exactTrailers = [...trailers.entries()]
@@ -82,5 +107,11 @@ export function prepareGitCoauthorAttribution(params: {
       ? `${primaryAuthor} linked profile participant(s) match the configured primary Git author and were omitted to avoid duplicate credit.`
       : undefined,
   ].filter((value): value is string => Boolean(value));
-  return [guidance, ...notices].join("\n");
+  return {
+    trailers: exactTrailers,
+    logins: [...logins.entries()]
+      .toSorted(([left], [right]) => left - right)
+      .map(([, login]) => login),
+    prompt: [guidance, ...notices].join("\n"),
+  };
 }

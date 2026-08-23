@@ -1716,6 +1716,263 @@ EOF
     expect(result.stdout).not.toContain("Upgrade complete");
   });
 
+  it.each([
+    {
+      name: "fresh retained config rejects failed Doctor before success",
+      configured: true,
+      upgrade: false,
+      verify: false,
+      doctorExit: 9,
+      verifyExit: 0,
+      onboard: false,
+      expectedStatus: 9,
+    },
+    {
+      name: "fresh retained config reports success only after Doctor",
+      configured: true,
+      upgrade: false,
+      verify: false,
+      doctorExit: 0,
+      verifyExit: 0,
+      onboard: false,
+      expectedStatus: 0,
+    },
+    {
+      name: "fresh explicit verification rejects failure before success",
+      configured: false,
+      upgrade: false,
+      verify: true,
+      doctorExit: 0,
+      verifyExit: 1,
+      onboard: false,
+      expectedStatus: 1,
+    },
+    {
+      name: "fresh explicit verification reports success only after verification",
+      configured: false,
+      upgrade: false,
+      verify: true,
+      doctorExit: 0,
+      verifyExit: 0,
+      onboard: false,
+      expectedStatus: 0,
+    },
+    {
+      name: "upgrade implicit verification counts four stages before success",
+      configured: true,
+      upgrade: true,
+      verify: false,
+      doctorExit: 0,
+      verifyExit: 0,
+      onboard: false,
+      expectedStatus: 0,
+    },
+    {
+      name: "upgrade rejects failed Doctor before success",
+      configured: true,
+      upgrade: true,
+      verify: false,
+      doctorExit: 9,
+      verifyExit: 0,
+      onboard: false,
+      expectedStatus: 9,
+    },
+    {
+      name: "upgrade rejects failed verification before success",
+      configured: true,
+      upgrade: true,
+      verify: false,
+      doctorExit: 0,
+      verifyExit: 1,
+      onboard: false,
+      expectedStatus: 1,
+    },
+    {
+      name: "plain fresh install reports success before skipping onboarding",
+      configured: false,
+      upgrade: false,
+      verify: false,
+      doctorExit: 0,
+      verifyExit: 0,
+      onboard: false,
+      expectedStatus: 0,
+    },
+    {
+      name: "plain fresh install reports success before optional onboarding handoff",
+      configured: false,
+      upgrade: false,
+      verify: false,
+      doctorExit: 0,
+      verifyExit: 0,
+      onboard: true,
+      expectedStatus: 0,
+    },
+    {
+      name: "fresh verification completes before success and optional onboarding handoff",
+      configured: false,
+      upgrade: false,
+      verify: true,
+      doctorExit: 0,
+      verifyExit: 0,
+      onboard: true,
+      expectedStatus: 0,
+    },
+  ])(
+    "required installer lifecycle: $name",
+    ({ configured, upgrade, verify, doctorExit, verifyExit, onboard, expectedStatus }) => {
+      const result = runInstallShell(
+        `
+          date() { printf '2026-08-20\\n'; }
+          dirname() { printf 'scripts\\n'; }
+          PATH=/__openclaw_installer_test_no_external_commands__
+          source "${SCRIPT_PATH}"
+          cleanup_tmpfiles() { :; }
+
+          INSTALL_METHOD=git
+          GIT_DIR=
+          NO_PROMPT=0
+          NO_ONBOARD="$SCENARIO_NO_ONBOARD"
+          VERIFY_INSTALL="$SCENARIO_VERIFY"
+          OS=linux
+
+          forbidden_command() {
+            printf 'forbidden external command: %s\\n' "$1" >&2
+            return 98
+          }
+          launchctl() { forbidden_command launchctl; }
+          systemctl() { forbidden_command systemctl; }
+          schtasks() { forbidden_command schtasks; }
+          sudo() { forbidden_command sudo; }
+          curl() { forbidden_command curl; }
+          wget() { forbidden_command wget; }
+          brew() { forbidden_command brew; }
+          git() { forbidden_command git; }
+          node() { forbidden_command node; }
+          openclaw() { forbidden_command openclaw; }
+          run_quiet_step() { forbidden_command run_quiet_step; }
+          run_with_safe_stdin() { forbidden_command run_with_safe_stdin; }
+          install_homebrew() { forbidden_command install_homebrew; }
+          install_node() { forbidden_command install_node; }
+          install_git() { forbidden_command install_git; }
+
+          bootstrap_gum_temp() { :; }
+          print_installer_banner() { :; }
+          print_gum_status() { :; }
+          detect_os_or_die() { OS=linux; }
+          detect_openclaw_checkout() { return 1; }
+          show_install_plan() { :; }
+          check_existing_openclaw() { [[ "$SCENARIO_UPGRADE" == 1 ]]; }
+          load_nvm_for_node_detection() { :; }
+          check_node() { return 0; }
+          activate_supported_node_on_path() { :; }
+          ensure_default_node_active_shell() { return 0; }
+          npm() { return 1; }
+          install_openclaw_from_git() { printf 'event:installed\\n'; }
+          resolve_installed_openclaw_bin() { printf '/nonexistent/mock-openclaw\\n'; }
+          warn_duplicate_openclaw_global_installs() { :; }
+          npm_global_bin_dir() { :; }
+          warn_shell_path_missing_dir() { :; }
+          has_openclaw_config() { [[ "$SCENARIO_CONFIGURED" == 1 ]]; }
+          refresh_gateway_service_if_loaded() { printf 'event:service-refresh-mocked\\n'; }
+          has_controlling_tty() { return 1; }
+          is_gateway_daemon_loaded() { return 1; }
+          is_promptable() {
+            printf 'event:onboarding-handoff-probe\\n'
+            return 1
+          }
+          run_doctor() {
+            printf 'event:doctor\\n'
+            return "$SCENARIO_DOCTOR_EXIT"
+          }
+          resolve_openclaw_version() { printf '2026.8.20-test\\n'; }
+          verify_installation() {
+            [[ "$VERIFY_INSTALL" == 1 ]] || return 0
+            ui_stage "Verifying installation"
+            printf 'event:verification\\n'
+            return "$SCENARIO_VERIFY_EXIT"
+          }
+          maybe_open_dashboard() { printf 'event:dashboard-mocked\\n'; }
+          show_footer_links() { printf 'event:footer\\n'; }
+          ui_section() { printf 'event:stage:%s\\n' "$1"; }
+          ui_info() { printf 'event:info:%s\\n' "$*"; }
+          ui_celebrate() { printf 'event:success:%s\\n' "$*"; }
+
+          configure_install_stage_total
+          main
+        `,
+        {
+          OPENCLAW_CONFIG_PATH: "",
+          OPENCLAW_HOME: "",
+          OPENCLAW_STATE_DIR: "",
+          OPENCLAW_INSTALL_METHOD: "",
+          OPENCLAW_VERIFY_INSTALL: "0",
+          OPENCLAW_NO_ONBOARD: "0",
+          OPENCLAW_NO_PROMPT: "0",
+          SCENARIO_CONFIGURED: configured ? "1" : "0",
+          SCENARIO_UPGRADE: upgrade ? "1" : "0",
+          SCENARIO_VERIFY: verify ? "1" : "0",
+          SCENARIO_DOCTOR_EXIT: String(doctorExit),
+          SCENARIO_VERIFY_EXIT: String(verifyExit),
+          SCENARIO_NO_ONBOARD: onboard || configured ? "0" : "1",
+          TERM: "dumb",
+        },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(expectedStatus);
+      expect(result.stderr).not.toContain("forbidden external command");
+
+      const output = result.stdout;
+      const successMatches = output.match(/OpenClaw installed successfully/g) ?? [];
+      const doctorIndex = output.indexOf("event:doctor");
+      const verificationIndex = output.indexOf("event:verification");
+      const successIndex = output.indexOf("event:success:");
+
+      if (expectedStatus !== 0) {
+        expect(successMatches).toHaveLength(0);
+        expect(output).not.toContain("Upgrade complete");
+        return;
+      }
+
+      expect(successMatches).toHaveLength(1);
+      if (configured) {
+        expect(doctorIndex).toBeGreaterThan(-1);
+        expect(doctorIndex).toBeLessThan(successIndex);
+      } else {
+        expect(doctorIndex).toBe(-1);
+      }
+
+      if (verify || upgrade) {
+        expect(verificationIndex).toBeGreaterThan(-1);
+        expect(verificationIndex).toBeLessThan(successIndex);
+        expect(output).toContain("[4/4] Verifying installation");
+        expect(output).not.toContain("[4/3] Verifying installation");
+      } else {
+        expect(verificationIndex).toBe(-1);
+        expect(output).toContain("[3/3] Finalizing setup");
+      }
+
+      if (upgrade) {
+        const upgradeCompletionIndex = output.indexOf("event:info:Upgrade complete");
+        expect(upgradeCompletionIndex).toBeGreaterThan(successIndex);
+      } else {
+        expect(output).not.toContain("Upgrade complete");
+      }
+
+      if (onboard) {
+        const setupIndex = output.indexOf("event:info:Starting setup");
+        const handoffProbeIndex = output.indexOf("event:onboarding-handoff-probe");
+        expect(setupIndex).toBeGreaterThan(successIndex);
+        expect(handoffProbeIndex).toBeGreaterThan(setupIndex);
+      } else if (!configured) {
+        expect(output.indexOf("event:info:Skipping onboard")).toBeGreaterThan(successIndex);
+      }
+    },
+  );
+
+  it("required installer lifecycle: preserves the interactive exec onboarding handoff", () => {
+    expect(script).toMatch(/exec <\/dev\/tty\s+exec "\$claw" onboard/);
+  });
+
   it("keeps the npm owner runnable when a npm-to-git candidate fails", () => {
     const result = runInstallShell(`
       source "${SCRIPT_PATH}"

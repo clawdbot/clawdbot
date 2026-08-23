@@ -168,8 +168,7 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   }
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
     const createdAt = next.createdAt ?? Date.now();
-    const cleanupAfter = resolveTaskCleanupAfter({ ...next, createdAt });
-    Object.assign(next, cleanupAfter === undefined ? {} : { cleanupAfter });
+    next.cleanupAfter = resolveTaskCleanupAfter({ ...next, createdAt });
   }
   const sessionIndexChanged =
     normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
