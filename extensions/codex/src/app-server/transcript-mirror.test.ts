@@ -20,6 +20,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import { attachCodexMirrorRunId } from "./transcript-mirror-attestation.js";
 import {
   buildCodexUserPromptMessage,
   codexTranscriptMirrorRuntime,
@@ -793,6 +794,17 @@ describe("projectBoundedCodexThreadHistory", () => {
 });
 
 describe("mirrorCodexAppServerTranscript", () => {
+  it("clears terminal ownership when a mirrored message becomes non-terminal", () => {
+    const message = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "intermediate narration" }],
+      timestamp: Date.now(),
+    });
+    const terminal = attachCodexMirrorRunId(message, "run-1", true);
+    const intermediate = attachCodexMirrorRunId(terminal, "run-1");
+
+    expect(intermediate).toMatchObject({ __openclaw: { runId: "run-1" } });
+    expect(intermediate).not.toHaveProperty("__openclaw.runTerminal");
+  });
   it("hides current memory-maintenance messages without hiding replayed turns", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([

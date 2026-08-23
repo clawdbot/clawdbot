@@ -1674,6 +1674,39 @@ describe("chat transcript rendering", () => {
 
     renderItems([
       user,
+      {
+        kind: "group",
+        key: "group:assistant:persisted-announcement",
+        role: "assistant",
+        messages: [
+          {
+            key: "assistant:persisted-announcement",
+            message: {
+              role: "assistant",
+              content: "Persisted narration while the run continues",
+              runId: "run-announcement",
+            },
+          },
+        ],
+        timestamp: 3,
+        isStreaming: false,
+        runId: "run-announcement",
+      },
+      {
+        kind: "reading-indicator",
+        key: "reading:persisted-announcement",
+        startedAt: 4,
+        runId: "run-announcement",
+        boundaryId: "send:run-announcement",
+      },
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+      "Persisted narration while the run continues",
+    );
+
+    renderItems([
+      user,
       { ...stream, isStreaming: false },
       {
         kind: "group",

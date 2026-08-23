@@ -7,14 +7,17 @@ import type { TranscriptAnnouncement } from "./chat-transcript-controller.ts";
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
 const ANNOUNCEMENT_MAX_CHARS = 500;
 
-function assistantGroupText(group: MessageGroup): string | null {
+function assistantGroupAnnouncementSource(
+  group: MessageGroup,
+): { key: string; text: string } | null {
   if (group.role.toLowerCase() !== "assistant") {
     return null;
   }
   for (let index = group.messages.length - 1; index >= 0; index -= 1) {
-    const text = extractTextCached(group.messages[index]?.message)?.trim();
+    const source = group.messages[index];
+    const text = extractTextCached(source?.message)?.trim();
     if (text) {
-      return text;
+      return { key: source?.key ?? group.key, text };
     }
   }
   return null;
@@ -58,6 +61,13 @@ export function latestTranscriptAnnouncement(
           }
           continue;
         }
+        const groups = part.kind === "group" ? [part] : part.groups.toReversed();
+        for (const group of groups) {
+          const source = assistantGroupAnnouncementSource(group);
+          if (source) {
+            return announcement(source.key, source.text);
+          }
+        }
       }
       continue;
     }
@@ -68,10 +78,9 @@ export function latestTranscriptAnnouncement(
           ? item.groups.toReversed()
           : [];
     for (const group of groups) {
-      const text = assistantGroupText(group);
-      if (text) {
-        const owner = group.messages.findLast(({ message }) => Boolean(extractTextCached(message)));
-        return announcement(owner?.key ?? item.key, text);
+      const source = assistantGroupAnnouncementSource(group);
+      if (source) {
+        return announcement(source.key, source.text);
       }
     }
   }
