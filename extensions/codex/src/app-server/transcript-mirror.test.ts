@@ -24,8 +24,8 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { attachCodexMirrorRunId } from "./transcript-mirror-attestation.js";
 import { projectBoundedCodexVisibleSessionHistory } from "./transcript-history-projection.js";
+import { attachCodexMirrorRunId } from "./transcript-mirror-attestation.js";
 import {
   buildCodexUserPromptMessage,
   codexTranscriptMirrorRuntime,
