@@ -981,10 +981,12 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { device.isBatteryMonitoringEnabled = original }
         let appModel = NodeAppModel()
 
-        for initial in [false, true] {
-            device.isBatteryMonitoringEnabled = initial
+        for requestedInitial in [false, true] {
+            device.isBatteryMonitoringEnabled = requestedInitial
+            // Simulator battery support varies, so preserve the state UIKit actually accepted.
+            let initial = device.isBatteryMonitoringEnabled
             let response = await appModel.handleInvoke(BridgeInvokeRequest(
-                id: "device-status-\(initial)",
+                id: "device-status-\(requestedInitial)",
                 command: OpenClawDeviceCommand.status.rawValue))
 
             #expect(response.ok)
