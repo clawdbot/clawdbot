@@ -1,3 +1,4 @@
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 // Native Apple Messages poll bindings for approval prompts.
 //
 // Native polls replace tapback controls when the imsg bridge supports them.
@@ -47,7 +48,7 @@ const APPROVAL_DECISIONS = new Set<ExecApprovalReplyDecision>([
 /** JSON-safe: option pairs stay an array so the persistent store round-trips. */
 type IMessageApprovalPollTarget = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   optionDecisions: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
 };
 
@@ -161,7 +162,7 @@ function registerIMessageApprovalPollTarget(params: {
   conversation: IMessageApprovalConversationKey;
   pollGuid?: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   optionDecisions: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
   expiresAtMs: number;
 }): boolean {

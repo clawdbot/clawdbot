@@ -1,7 +1,10 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
+import { styleMap } from "lit/directives/style-map.js";
+import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { formatUiExternalText } from "./format-error.ts";
 
 type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
@@ -9,6 +12,10 @@ export type ToastOptions = {
   /** A template lets a message name a destination the operator can actually open,
    * instead of spelling out a settings path the toast then makes them find. */
   message: string | TemplateResult;
+  /** Positions a compact toast at the top center of the owning surface. */
+  anchor?: Element;
+  anchorTopOffset?: number;
+  icon?: TemplateResult;
   actionLabel?: string;
   onAction?: () => void;
   onDismiss?: (reason: ToastDismissReason) => void;
@@ -16,6 +23,7 @@ export type ToastOptions = {
 };
 
 const DEFAULT_TOAST_DURATION_MS = 6_000;
+const TOAST_EXIT_FALLBACK_MS = 450;
 
 function activeModalToastLayer() {
   return [...(document.openClawModalToastLayers ?? [])].findLast(
@@ -30,7 +38,10 @@ let queuedToast: ToastOptions | null = null;
 
 class OpenClawToastHost extends OpenClawLightDomContentsElement {
   @state() private toast: ToastOptions | null = null;
+  @state() private active = false;
   private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private exitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private exitReason: ToastDismissReason | null = null;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -55,8 +66,10 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   connectedMoveCallback() {}
 
   show(options: ToastOptions) {
-    this.dismiss("replaced");
+    this.finishDismiss(this.exitReason ?? "replaced");
     this.toast = options;
+    this.active = true;
+    this.exitReason = null;
     this.dismissTimer = globalThis.setTimeout(
       () => this.dismiss("timeout"),
       options.durationMs ?? DEFAULT_TOAST_DURATION_MS,
@@ -68,13 +81,46 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
       globalThis.clearTimeout(this.dismissTimer);
       this.dismissTimer = null;
     }
+    if (this.exitTimer !== null) {
+      globalThis.clearTimeout(this.exitTimer);
+      this.exitTimer = null;
+    }
+  }
+
+  private finishDismiss(reason: ToastDismissReason) {
+    const toast = this.toast;
+    this.clearDismissTimer();
+    this.active = false;
+    this.exitReason = null;
+    this.toast = null;
+    toast?.onDismiss?.(reason);
   }
 
   private dismiss(reason: ToastDismissReason) {
     const toast = this.toast;
+    if (!toast) {
+      return;
+    }
     this.clearDismissTimer();
-    this.toast = null;
-    toast?.onDismiss?.(reason);
+    const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const anchorRect = toast.anchor?.isConnected ? toast.anchor.getBoundingClientRect() : null;
+    const anchored = anchorRect !== null && anchorRect.width > 0;
+    if (
+      (reason !== "dismiss" && reason !== "timeout") ||
+      reducedMotion ||
+      !this.isConnected ||
+      !anchored
+    ) {
+      this.finishDismiss(reason);
+      return;
+    }
+    this.active = false;
+    this.exitReason = reason;
+    this.exitTimer = globalThis.setTimeout(() => {
+      if (this.toast === toast) {
+        this.finishDismiss(reason);
+      }
+    }, TOAST_EXIT_FALLBACK_MS);
   }
 
   override render() {
@@ -82,9 +128,43 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     if (!toast) {
       return nothing;
     }
+    const anchorRect = toast.anchor?.isConnected ? toast.anchor.getBoundingClientRect() : null;
+    const anchored = anchorRect !== null && anchorRect.width > 0;
     return html`
-      <div class="app-toast" role="status" aria-live="polite" aria-atomic="true">
-        <span class="app-toast__message">${toast.message}</span>
+      <div
+        class="app-toast ${anchored ? "app-toast--anchored" : ""}"
+        data-active=${this.active ? "true" : "false"}
+        style=${styleMap(
+          anchored
+            ? {
+                "--app-toast-anchor-center": `${anchorRect.left + anchorRect.width / 2}px`,
+                "--app-toast-anchor-top": `${anchorRect.top + (toast.anchorTopOffset ?? 0)}px`,
+                "--app-toast-anchor-width": `${anchorRect.width}px`,
+              }
+            : {},
+        )}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        @transitionend=${(event: TransitionEvent) => {
+          if (
+            event.target === event.currentTarget &&
+            event.propertyName === "opacity" &&
+            !this.active &&
+            this.exitReason
+          ) {
+            this.finishDismiss(this.exitReason);
+          }
+        }}
+      >
+        ${toast.icon
+          ? html`<span class="app-toast__icon" aria-hidden="true">${toast.icon}</span>`
+          : nothing}
+        <span class="app-toast__message"
+          >${typeof toast.message === "string"
+            ? formatUiExternalText(toast.message)
+            : toast.message}</span
+        >
         ${toast.actionLabel && toast.onAction
           ? html`
               <button
@@ -105,7 +185,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
           aria-label=${t("common.dismiss")}
           @click=${() => this.dismiss("dismiss")}
         >
-          ×
+          ${icons.x}
         </button>
       </div>
     `;
@@ -113,6 +193,9 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
 }
 
 export function showToast(options: ToastOptions): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
   const host = document.querySelector<OpenClawToastHost>("openclaw-toast-host");
   if (!host) {
     queuedToast = options;
@@ -136,7 +219,8 @@ export function showToast(options: ToastOptions): boolean {
   return true;
 }
 
-if (!customElements.get("openclaw-toast-host")) {
+// Guarded so DOM-free (node) consumers of send-failure surfacing can load this module.
+if (typeof customElements !== "undefined" && !customElements.get("openclaw-toast-host")) {
   customElements.define("openclaw-toast-host", OpenClawToastHost);
 }
 

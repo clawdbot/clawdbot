@@ -214,18 +214,45 @@ public struct ClawHubInstalledSkillLink: Codable, Sendable {
     public let valid: Bool
     public let slug: String?
     public let ownerHandle: String?
+    /// Exact reference this skill was installed from. The Gateway records the canonical slug and
+    /// this separately, so an install-only source stays identifiable after install.
+    public let requestedReference: String?
     public let installedVersion: String?
     public let reason: String?
 }
 
 public struct ClawHubSkillSummary: Codable, Identifiable, Hashable, Sendable {
+    /// Trust state the Gateway reports for a result resolved from a source ClawHub has not scanned.
+    public static let unscannedTrustState = "not-scanned-by-clawhub"
+
     public let slug: String
+    public let installRef: String?
+    public let installOnly: Bool?
+    public let trustState: String?
     public let displayName: String
     public let summary: String?
     public let version: String?
 
+    /// Several publishers can share one slug, so the Gateway-supplied reference is what identifies
+    /// a result, what distinguishes rows, and what install must send back. It names the result's
+    /// own source, so it is never rebuilt from owner and slug.
+    public var reference: String {
+        self.installRef?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? self.slug
+    }
+
+    /// Drives the affordance, so no client has to recognize external reference spellings itself.
+    /// Only an explicit install-only result skips review: a Gateway that predates this field omits
+    /// it, and those results must keep the reviewed-version flow they have always used.
+    public var canReadDetails: Bool {
+        self.installOnly != true
+    }
+
+    public var isUnscannedSource: Bool {
+        self.trustState == Self.unscannedTrustState
+    }
+
     public var id: String {
-        self.slug
+        self.reference
     }
 }
 
@@ -258,11 +285,29 @@ public struct ClawHubSkillInstallReview: Identifiable, Hashable, Sendable {
     public let slug: String
     public let displayName: String
     public let summary: String?
-    public let version: String
+    /// Nil for an install-only source: the Gateway pins those to a commit and rejects a version
+    /// selector, so there is no release for the operator to review or acknowledge.
+    public let version: String?
     public let author: String
+    /// Set for an install-only target. Its canonical slug differs from this reference, so install
+    /// readback matches the Gateway's recorded reference instead of the slug that was sent.
+    public let requestedReference: String?
+    public let isUnscannedSource: Bool
 
     public var id: String {
-        "\(self.slug)@\(self.version)"
+        self.version.map { "\(self.slug)@\($0)" } ?? self.slug
+    }
+
+    /// Install target for a result the Gateway serves no detail card for. It carries the search
+    /// reference unchanged, so the source the operator picked is the source that gets installed.
+    public init(directInstall skill: ClawHubSkillSummary) {
+        self.slug = skill.reference
+        self.displayName = skill.displayName
+        self.summary = skill.summary
+        self.version = nil
+        self.author = "Unknown publisher"
+        self.requestedReference = skill.reference
+        self.isUnscannedSource = skill.isUnscannedSource
     }
 
     public init?(detail: ClawHubSkillDetail, fallback: ClawHubSkillSummary) {
@@ -277,6 +322,9 @@ public struct ClawHubSkillInstallReview: Identifiable, Hashable, Sendable {
         self.displayName = detail.skill?.displayName ?? fallback.displayName
         self.summary = detail.skill?.summary ?? fallback.summary
         self.version = version
+        // Only sources ClawHub can serve a detail card for reach this path.
+        self.requestedReference = nil
+        self.isUnscannedSource = false
         let displayName = detail.owner?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
         switch (displayName?.nilIfEmpty, handle?.nilIfEmpty) {
         case let (.some(name), .some(handle)) where name.caseInsensitiveCompare(handle) != .orderedSame:
@@ -299,6 +347,19 @@ public struct ClawHubSkillInstallRejection: Equatable, Sendable {
 }
 
 public enum SkillManagementContract {
+    public static func installed(
+        _ skills: [SkillStatus],
+        searchResult: ClawHubSkillSummary) -> Bool
+    {
+        if searchResult.installOnly == true {
+            return self.installed(skills, requestedReference: searchResult.reference)
+        }
+        if let version = searchResult.version {
+            return self.installed(skills, slug: searchResult.reference, version: version)
+        }
+        return self.installed(skills, slug: searchResult.reference)
+    }
+
     public static func installed(_ skills: [SkillStatus], slug: String, version: String) -> Bool {
         guard let reference = clawHubReference(slug) else { return false }
         return skills.contains {
@@ -309,6 +370,16 @@ public enum SkillManagementContract {
     public static func installed(_ skills: [SkillStatus], slug: String) -> Bool {
         guard let reference = clawHubReference(slug) else { return false }
         return skills.contains { self.matches($0.clawhub, reference: reference) }
+    }
+
+    /// Readback for an install-only source. Its reference is not a `@owner/slug` spelling, so the
+    /// slug comparison above never matches it; the Gateway records the exact reference instead.
+    public static func installed(_ skills: [SkillStatus], requestedReference: String) -> Bool {
+        let reference = requestedReference.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reference.isEmpty else { return false }
+        return skills.contains {
+            $0.clawhub?.valid == true && $0.clawhub?.requestedReference == reference
+        }
     }
 
     public static func sameClawHubSkill(_ lhs: String, _ rhs: String) -> Bool {

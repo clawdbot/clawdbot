@@ -234,6 +234,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       wakeParams({ settledEntry: children[1] }),
     );
     await vi.waitFor(() => expect(deliverSpy).toHaveBeenCalledOnce());
+    await wakeB;
     releaseDeliveries();
     await expect(Promise.all([wakeA, wakeB])).resolves.toEqual(
       expect.arrayContaining([true, false]),
@@ -576,6 +577,52 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(message).toContain("findings captured before the wake");
     expect(message).not.toContain("<prompt-data>\nNO_REPLY\n</prompt-data>");
   });
+
+  it.each([
+    {
+      name: "visible",
+      terminalReply: { disposition: "visible", text: "authoritative final output" } as const,
+      resultText: "stale child output",
+      expected: "authoritative final output",
+    },
+    {
+      name: "silent",
+      terminalReply: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+      expected: undefined,
+    },
+    {
+      name: "empty",
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+      expected: undefined,
+    },
+  ])(
+    "keeps producer-owned $name terminal evidence in the requester settle wake",
+    async ({ terminalReply, resultText, expected }) => {
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+        makeSettledChild({
+          runId: "run-b",
+          delivery: { status: "failed" },
+          completion: {
+            required: true,
+            resultText,
+            fallbackResultText: "stale retained findings",
+            terminalReply,
+          },
+          outcome: { status: "ok" },
+        }),
+      ]);
+
+      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
+      const message = String(deliveredCallArg().triggerMessage);
+      expect(message).not.toContain("stale retained findings");
+      expect(message).not.toContain("stale child output");
+      if (expected) {
+        expect(message).toContain(expected);
+      }
+    },
+  );
 
   it("stays out of pure fire-and-forget batches", async () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([

@@ -12,7 +12,9 @@ import {
   noteActiveCronJobScheduleMutation,
   noteActiveCronJobTriggerMutation,
   onCronJobInactive,
+  requestActiveCronJobCancellation,
 } from "../active-jobs.js";
+import { isHeartbeatTaskDeclarationKey } from "../heartbeat-task.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
@@ -38,6 +40,7 @@ import {
 } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
+import { cronRunReceiptOwnerMutationHooks } from "./run-receipts.js";
 import type {
   CronAddResult,
   CronAddOptions,
@@ -98,6 +101,7 @@ function finalizeUpdatedJob(params: {
   now: number;
   schedulingInputsRequested: boolean;
   scheduleChanged: boolean;
+  explicitTriggerState?: CronJobPatch["state"];
 }) {
   const { job, nextJob, now } = params;
   if (nextJob.schedule.kind === "every") {
@@ -133,6 +137,25 @@ function finalizeUpdatedJob(params: {
   // watcher. Equivalent resaves preserve it; disable/enable and source changes
   // rotate it in the same write that changes the public job definition.
   reconcileStreamSourceIdentity(job, nextJob);
+
+  const previousScript = job.payload.kind === "script" ? job.payload.script : undefined;
+  const nextScript = nextJob.payload.kind === "script" ? nextJob.payload.script : undefined;
+  if (job.trigger?.script !== nextJob.trigger?.script || previousScript !== nextScript) {
+    // Trigger and payload scripts share one durable state slot; only its exact
+    // executable owner may inherit it, while explicit replacement values win.
+    for (const field of [
+      "triggerState",
+      "triggerEvalCount",
+      "lastTriggerEvalAtMs",
+      "lastTriggerFireAtMs",
+    ] as const) {
+      if (params.explicitTriggerState && Object.hasOwn(params.explicitTriggerState, field)) {
+        Object.assign(nextJob.state, { [field]: params.explicitTriggerState[field] });
+      } else {
+        delete nextJob.state[field];
+      }
+    }
+  }
 
   // Only advance a recurring job's next run when the schedule/enabled inputs
   // actually changed. An idempotent re-save (same schedule, or re-enabling an
@@ -187,11 +210,23 @@ async function persistUpdatedJob(params: {
     }
   }
 
-  await persistOrRestore(state, snapshot, { suppressScheduledJobId: nextJob.id });
+  const defaultAgentId = resolveCurrentDefaultAgentId(state);
+  const ownerChanged =
+    resolveEffectiveJobAgentId(previousJob, defaultAgentId) !==
+    resolveEffectiveJobAgentId(nextJob, defaultAgentId);
+  await persistOrRestore(state, snapshot, {
+    suppressScheduledJobId: nextJob.id,
+    transactionHooks: ownerChanged
+      ? cronRunReceiptOwnerMutationHooks({ state, jobId: nextJob.id })
+      : undefined,
+  });
   if (!cronSchedulingInputsEqual(previousJob, nextJob)) {
     // Mark only committed edits; a failed SQLite write cannot retire the run's
     // schedule ownership, and idempotent re-saves must not create a new claim.
     noteActiveCronJobScheduleMutation(nextJob.id);
+  }
+  if (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) {
+    requestActiveCronJobCancellation(nextJob.id, "Cron job disabled by operator.");
   }
   if (
     !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
@@ -289,11 +324,14 @@ export async function add(
   let pendingSessionCleanup: Promise<void> | undefined;
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
-    // Heartbeat monitors are gateway-converged system jobs; without this
-    // boundary any internal caller could upsert the declaration key and
-    // hijack the monitor despite the transport schemas excluding the kind.
+    const declarationKey = normalizeOptionalString(input.declarationKey);
     if (input.payload?.kind === "heartbeat" && opts?.systemOwned !== true) {
       throw new Error("heartbeat payloads are system-owned; jobs cannot be created with them");
+    }
+    if (isHeartbeatTaskDeclarationKey(declarationKey) && opts?.systemOwned !== true) {
+      throw new Error(
+        'cron declarationKey namespace "heartbeat-task:" is system-owned; jobs cannot be created with it',
+      );
     }
     await ensureLoaded(state, { skipRecompute: true });
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
@@ -312,7 +350,6 @@ export async function add(
       }
     }
     const normalizedInput = normalizedId ? { ...input, id: normalizedId } : input;
-    const declarationKey = normalizeOptionalString(input.declarationKey);
     const matches = declarationKey
       ? (state.store?.jobs.filter(
           (job) => job.declarationKey === declarationKey && (opts?.matchesExisting?.(job) ?? true),
@@ -365,6 +402,7 @@ export async function add(
         now,
         schedulingInputsRequested: true,
         scheduleChanged: !isDeepStrictEqual(existing.schedule, nextJob.schedule),
+        explicitTriggerState: normalizedInput.state,
       });
       await persistUpdatedJob({ state, snapshot, previousJob: existing, nextJob });
       return { ...nextJob, created: false, updated: true, job: nextJob };
@@ -447,7 +485,7 @@ export async function removeStaleJobFamily(
   });
 }
 
-export async function updateLoadedJob(params: {
+async function updateLoadedJob(params: {
   state: CronServiceState;
   id: string;
   patch: CronJobPatch;
@@ -502,6 +540,7 @@ export async function updateLoadedJob(params: {
       "trigger" in patch ||
       "pacing" in patch,
     scheduleChanged: patch.schedule !== undefined,
+    explicitTriggerState: patch.state,
   });
   const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
   reconcileRuntimeAuthority({

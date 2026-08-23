@@ -1,6 +1,9 @@
 import { resolveStateDir } from "../../config/paths.js";
-import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "../../infra/file-lock.js";
-import { withSetupMigrationTargetLock } from "../../wizard/setup.migration-snapshot.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import {
+  SetupTargetLockedError,
+  withSetupMigrationTargetLock,
+} from "../../wizard/setup.migration-snapshot.js";
 
 export const SETUP_ADMISSION_BUSY_MESSAGE =
   "OpenClaw setup is already in progress; try again when it finishes.";
@@ -19,9 +22,9 @@ export async function runExclusiveSystemAgentSetupActivation<T>(
     return await task();
   };
   try {
-    return await withSetupMigrationTargetLock(resolveStateDir(), admittedTask, { wait: false });
+    return await withSetupMigrationTargetLock(resolveStateDir(), admittedTask);
   } catch (error) {
-    if (!admitted && (error as { code?: unknown }).code === FILE_LOCK_TIMEOUT_ERROR_CODE) {
+    if (!admitted && error instanceof SetupTargetLockedError) {
       throw new SetupAdmissionBusyError(SETUP_ADMISSION_BUSY_MESSAGE);
     }
     throw error;
@@ -60,6 +63,12 @@ export async function createAdmittedWizardSession<T extends { whenSettled(): Pro
       : createSession();
     const settled = admissionSettled ?? session.whenSettled();
     wizardSessionAdmissionSettlements.set(session, settled);
+    // The runner outlives its start RPC and inherits that request's admission.
+    // Keep the root live so later prompts and post-auth probes remain subordinate work.
+    const releaseGatewayWork = retainGatewayRootWorkAdmissionContinuation();
+    if (releaseGatewayWork) {
+      void settled.then(releaseGatewayWork, releaseGatewayWork);
+    }
     void settled.then(releaseSession, releaseSession);
     return session;
   } catch (error) {

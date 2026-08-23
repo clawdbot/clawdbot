@@ -9,10 +9,6 @@ tests.
   `extensions/**`.
 - When a helper needs a bundled plugin public surface, go through
   `src/test-utils/bundled-plugin-public-surface.ts`.
-- Prefer `loadBundledPluginApiSync(...)`,
-  `loadBundledPluginRuntimeApiSync(...)`,
-  `loadBundledPluginContractApiSync(...)`, and
-  `loadBundledPluginTestApiSync(...)` for eager access to exported surfaces.
 - Prefer `resolveRelativeBundledPluginPublicModuleId(...)` or
   `resolveBundledPluginPublicModulePath(...)` when a helper needs a module id
   or filesystem path for dynamic import, mocking, or loading a plugin entrypoint

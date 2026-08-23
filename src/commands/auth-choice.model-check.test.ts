@@ -239,10 +239,10 @@ describe("warnIfModelConfigLooksOff", () => {
 
     await warnIfModelConfigLooksOff(config, prompter);
 
-    expect(loadModelCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ config, inheritedAuthDir: expect.any(String) }),
-      { force: true, provenance: "explicit" },
-    );
+    expect(loadModelCatalog).toHaveBeenCalledWith(expect.objectContaining({ config }), {
+      force: true,
+      provenance: "explicit",
+    });
   });
 
   it("publishes validation catalogs for the selected agent", async () => {

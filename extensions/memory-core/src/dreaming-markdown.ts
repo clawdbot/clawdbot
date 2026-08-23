@@ -1,6 +1,7 @@
 // Memory Core plugin module implements dreaming markdown behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   formatMemoryDreamingDay,
   type MemoryDreamingPhaseName,
@@ -93,7 +94,7 @@ export async function writeDailyDreamingPhaseBlock(params: {
     inlinePath = resolveDailyMemoryPath(params.workspaceDir, nowMs, params.timezone);
     await fs.mkdir(path.dirname(inlinePath), { recursive: true });
     const original = await fs.readFile(inlinePath, "utf-8").catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      if (extractErrorCode(err) === "ENOENT") {
         return "";
       }
       throw err;

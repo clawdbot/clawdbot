@@ -67,4 +67,19 @@ describe("acceptsClaudeLive", () => {
       permissionMode: "default",
     });
   });
+
+  it("uses bypass permissions for an explicit full session despite restrictive config", () => {
+    const context = {
+      params: {
+        config: { tools: { exec: { mode: "ask" } } },
+        sessionEntry: { permissionMode: "full" },
+      },
+    } as unknown as PreparedCliRunContext;
+
+    expect(resolveClaudeLiveExecPermission(context)).toEqual({
+      security: "full",
+      ask: "off",
+      permissionMode: "bypassPermissions",
+    });
+  });
 });

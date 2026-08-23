@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -27,16 +27,38 @@ function confirmationCopy(page: Page) {
   return page.locator("openclaw-modal-dialog");
 }
 
-async function openUpdateCard(page: Page, baseUrl: string) {
+function confirmationDialog(page: Page) {
+  return page.getByRole("dialog", { name: "Update Gateway", exact: true });
+}
+
+async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   const gateway = await installMockGateway(page, {
     methodResponses: { "update.run": UPDATE_RUN_RESPONSE },
   });
   expect((await page.goto(`${baseUrl}chat`))?.status()).toBe(200);
   await gateway.waitForRequest("chat.startup");
   await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
-  const updateButton = page.getByRole("button", { name: /Update Gateway/ });
+  if (compact) {
+    await page.locator(".chat-header-session-menu__trigger").click();
+    const updateButton = page.getByText("Update available v2.0.0", { exact: true });
+    await updateButton.waitFor({ timeout: 10_000 });
+    return { compact, gateway, updateButton };
+  }
+  await page.locator(".sidebar-issues-button").click();
+  const updateIssue = page.locator(
+    'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+  );
+  await updateIssue.locator("summary").click();
+  const updateButton = updateIssue.locator(".sidebar-update-card__action");
   await updateButton.waitFor({ timeout: 10_000 });
-  return { gateway, updateButton };
+  return { compact, gateway, updateButton };
+}
+
+async function openConfirmation(page: Page, updateButton: Locator, compact = false) {
+  await updateButton.click();
+  if (compact) {
+    await page.getByRole("button", { name: "Update now", exact: true }).click();
+  }
 }
 
 suite.define(() => {
@@ -50,9 +72,9 @@ suite.define(() => {
           path: path.join(PROOF_DIR, "01-update-affordance-light.png"),
         });
 
-        await updateButton.click();
+        await openConfirmation(page, updateButton);
 
-        const dialog = page.getByRole("dialog");
+        const dialog = confirmationDialog(page);
         await dialog.waitFor();
         expect(await dialog.getAttribute("aria-label")).toBe("Update Gateway");
         const dialogText = await confirmationCopy(page).textContent();
@@ -88,11 +110,18 @@ suite.define(() => {
           viewport: variant.viewport,
         },
         async ({ page }) => {
-          const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
-          await updateButton.click();
-          await page.getByRole("dialog").waitFor();
+          const compact = variant.viewport.width < 600;
+          const { gateway, updateButton } = await openUpdateCard(
+            page,
+            suite.server.baseUrl,
+            compact,
+          );
+          await openConfirmation(page, updateButton, compact);
+          await confirmationDialog(page).waitFor();
           expect(
-            await page.getByRole("button", { name: "Update and restart", exact: true }).isVisible(),
+            await confirmationCopy(page)
+              .getByRole("button", { name: "Update and restart", exact: true })
+              .isVisible(),
           ).toBe(true);
           expect(await gateway.getRequests("update.run")).toHaveLength(0);
           await page.screenshot({
@@ -112,18 +141,17 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 720, width: 1280 } },
       async ({ page }) => {
         const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
-        await updateButton.click();
-        await page.getByRole("dialog").waitFor();
+        await openConfirmation(page, updateButton);
+        await confirmationDialog(page).waitFor();
 
         if (dismiss === "Escape") {
           await page.keyboard.press("Escape");
         } else {
           await page.getByRole("button", { name: "Cancel", exact: true }).click();
         }
-        await page.getByRole("dialog").waitFor({ state: "detached" });
+        await confirmationDialog(page).waitFor({ state: "detached" });
 
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
-        expect(await updateButton.isEnabled()).toBe(true);
       },
     );
   });
@@ -136,21 +164,24 @@ suite.define(() => {
 
         await updateButton.focus();
         await page.keyboard.press("Enter");
-        const dialog = page.getByRole("dialog");
+        const dialog = confirmationDialog(page);
         await dialog.waitFor();
 
         // The keypress that opened the dialog lands on Cancel, never on the confirm action.
-        const cancelFocused = await page.evaluate(
-          () => document.activeElement?.textContent?.trim() ?? "",
-        );
-        expect(cancelFocused).toBe("Cancel");
+        const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+        await expect
+          .poll(() => cancel.evaluate((element) => document.activeElement === element))
+          .toBe(true);
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
         await page.screenshot({
           animations: "disabled",
           path: path.join(PROOF_DIR, "05-confirmation-initial-focus.png"),
         });
 
-        const confirm = page.getByRole("button", { name: "Update and restart", exact: true });
+        const confirm = confirmationCopy(page).getByRole("button", {
+          name: "Update and restart",
+          exact: true,
+        });
         await confirm.focus();
         await page.screenshot({
           animations: "disabled",
@@ -169,14 +200,16 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 720, width: 1280 } },
       async ({ page }) => {
         const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
-        await updateButton.click();
-        await page.getByRole("dialog").waitFor();
+        await openConfirmation(page, updateButton);
+        await confirmationDialog(page).waitFor();
 
-        await page.getByRole("button", { name: "Update and restart", exact: true }).click();
+        await confirmationCopy(page)
+          .getByRole("button", { name: "Update and restart", exact: true })
+          .click();
         await gateway.waitForRequest("update.run");
-        // The dialog that started the update reports it; it stays open through
-        // the install instead of closing onto a page with nothing to say.
-        await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
+        await confirmationCopy(page)
+          .getByRole("button", { name: "Updating…", exact: true })
+          .waitFor();
         await page.screenshot({
           animations: "disabled",
           path: path.join(PROOF_DIR, "07-update-running.png"),
@@ -212,7 +245,7 @@ suite.define(() => {
         await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
         await page.getByRole("button", { name: "Update now", exact: true }).click();
 
-        const dialog = page.getByRole("dialog");
+        const dialog = confirmationDialog(page);
         await dialog.waitFor();
         expect(await confirmationCopy(page).textContent()).toContain(
           "Installed v1.0.0 · Available v2.0.0",
@@ -223,7 +256,9 @@ suite.define(() => {
           path: path.join(PROOF_DIR, "08-settings-confirmation.png"),
         });
 
-        await page.getByRole("button", { name: "Update and restart", exact: true }).click();
+        await confirmationCopy(page)
+          .getByRole("button", { name: "Update and restart", exact: true })
+          .click();
         await gateway.waitForRequest("update.run");
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
       },

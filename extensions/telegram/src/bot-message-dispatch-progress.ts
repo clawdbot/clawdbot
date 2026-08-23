@@ -1,15 +1,9 @@
 import {
   createChannelProgressDraftCompositor,
-  isChannelProgressDraftWorkToolName,
-  resolveChannelStreamingPreviewToolProgress,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { TelegramBotDeps } from "./bot-deps.js";
-import {
-  renderStreamText,
-  resetLaneState,
-  rotateAnswerLaneAfterToolProgress,
-} from "./bot-message-dispatch-draft.js";
+import { resetLaneState, rotateAnswerLaneAfterToolProgress } from "./bot-message-dispatch-draft.js";
 import type {
   TelegramDispatchTurn as Turn,
   TelegramDispatchTurnConfig as TurnConfig,
@@ -20,10 +14,6 @@ import {
   formatTelegramProgressLine,
   renderTelegramProgressDraftPreview,
 } from "./progress-draft-preview.js";
-import {
-  createTelegramProgressSummaryTracker,
-  formatTelegramProgressSummaryLine,
-} from "./progress-summary.js";
 
 type BufferedDispatchParams = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -61,17 +51,11 @@ type TelegramProgressDraftState = {
 export function createProgressState(
   config: TurnConfig,
   draftState: TelegramProgressDraftState,
-  getTurn: () => Turn,
   prepareAnswerLaneForToolProgress: () => Promise<void>,
 ): TelegramProgressStateSlice {
   const progressState = {
-    progressSummary: createTelegramProgressSummaryTracker(),
-    progressSummaryStartedAt: Date.now(),
-    summaryDelivered: false,
-    draftEverRendered: false,
     finalAnswerDeliveryStarted: false,
     finalAnswerDelivered: false,
-    sawProgressFinal: false,
     verboseProgressActive: () => false,
   };
   const progressCompositor = createChannelProgressDraftCompositor({
@@ -93,7 +77,6 @@ export function createProgressState(
     // headline/checklist mode, so they must not also arrive inside the text.
     rendersRollingLinesNatively: true,
     update: async (streamText, options) => {
-      getTurn().draftEverRendered = true;
       await prepareAnswerLaneForToolProgress();
       draftState.answerLane.lastPartialText = streamText;
       draftState.answerLane.hasStreamedMessage = true;
@@ -151,9 +134,6 @@ export async function pushReasoningProgress(
   turn: Turn,
   payload: { text?: string; isReasoningSnapshot?: boolean },
 ): Promise<boolean> {
-  if (turn.streamReasoningInProgressDraft && payload.text) {
-    turn.progressSummary.noteReasoningActivity();
-  }
   return await turn.progressCompositor.pushReasoningProgress(payload.text, {
     snapshot: payload.isReasoningSnapshot === true,
   });
@@ -163,13 +143,9 @@ export async function pushThinkingTokenProgress(
   turn: Turn,
   progressTokens: number,
 ): Promise<boolean> {
-  const rendered = await pushToolProgress(turn, buildTelegramThinkingProgressLine(progressTokens), {
+  return await pushToolProgress(turn, buildTelegramThinkingProgressLine(progressTokens), {
     startImmediately: true,
   });
-  if (rendered) {
-    turn.progressSummary.noteReasoningActivity();
-  }
-  return rendered;
 }
 
 export function markFinalStarted(turn: Turn): void {
@@ -179,43 +155,7 @@ export function markFinalStarted(turn: Turn): void {
 
 export function markFinalDelivered(turn: Turn): void {
   turn.finalAnswerDelivered = true;
-  turn.sawProgressFinal = true;
   turn.progressCompositor.markFinalReplyDelivered();
-}
-
-export function resolveCollapseSummaryLine(turn: Turn): string | undefined {
-  if (turn.summaryDelivered || !turn.draftEverRendered) {
-    return undefined;
-  }
-  return (
-    formatTelegramProgressSummaryLine(
-      turn.progressSummary.counts(),
-      Date.now() - turn.progressSummaryStartedAt,
-    ) || undefined
-  );
-}
-
-export async function applyCollapseSummary(
-  turn: Turn,
-  line: string,
-  postCosmeticSummary: (line: string) => Promise<void>,
-): Promise<void> {
-  const messageId = await turn.answerLane.stream?.finalizeToPreview(renderStreamText(turn, line));
-  if (typeof messageId !== "number") {
-    await postCosmeticSummary(line);
-  }
-}
-
-export function resetAnswerLaneAfterCollapse(turn: Turn): void {
-  if (turn.activeAnswerDraftIsToolProgressOnly) {
-    turn.activeAnswerDraftIsToolProgressOnly = false;
-    turn.progressCompositor.suppress();
-    turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
-  }
-  // Collapse must consume the active message before reset drops its identity.
-  // Reversing this order strands the summary or deletes the visible window.
-  turn.answerLane.stream?.forceNewMessage();
-  resetLaneState(turn, turn.answerLane);
 }
 
 export async function teardownProgressWindow(turn: Turn): Promise<void> {
@@ -232,18 +172,6 @@ export async function handleToolStart(
   payload: CallbackPayload<"onToolStart">,
 ): Promise<boolean> {
   const toolName = payload.name?.trim();
-  if (payload.phase === "start") {
-    const windowRendersTool =
-      canPushToolProgress(turn) &&
-      resolveChannelStreamingPreviewToolProgress(turn.telegramCfg, true, turn.streamMode) &&
-      isChannelProgressDraftWorkToolName(toolName);
-    if (windowRendersTool) {
-      turn.progressSummary.noteToolCall();
-    } else {
-      turn.progressSummary.closeReasoningBurst();
-      turn.progressSummary.closeCommentaryBurst();
-    }
-  }
   const progressPromise = pushProgressEvent(turn, () =>
     turn.progressCompositor.pushToolEvent(payload),
   );
@@ -268,13 +196,9 @@ export async function handleItemEvent(
       });
     }
     if (turn.streamMode === "progress" && turn.progressCompositor.commentaryProgressEnabled) {
-      const accepted = await turn.progressCompositor.pushCommentaryProgress(payload.progressText, {
+      rendered ||= await turn.progressCompositor.pushCommentaryProgress(payload.progressText, {
         itemId: payload.itemId,
       });
-      if (accepted) {
-        turn.progressSummary.noteCommentary(payload.itemId, payload.progressText);
-      }
-      rendered ||= accepted;
     }
     return rendered;
   }

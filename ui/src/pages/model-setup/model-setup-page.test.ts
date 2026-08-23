@@ -10,6 +10,7 @@ import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { ModelSetupRouteData } from "./model-setup-page.ts";
 import "./model-setup-page.ts";
 
@@ -37,7 +38,7 @@ const detection: SystemAgentSetupDetectResult = {
       id: "llama-cpp",
       brandId: "llama-cpp",
       label: "llama.cpp",
-      hint: "Run one private GGUF model directly inside this Gateway",
+      hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
     },
     {
       id: "lmstudio",
@@ -110,7 +111,12 @@ function createContext() {
     snapshot,
     context: {
       gateway,
+      agentSelection: {
+        state: { selectedId: "main", scopeId: "main" },
+        subscribe: () => () => undefined,
+      },
       basePath: "/openclaw",
+      resourceBasePath: "/openclaw",
       navigate: vi.fn(),
       runtimeConfig,
     } as unknown as ApplicationContext,
@@ -124,7 +130,14 @@ async function mountPage(
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
   const { client, ...data } = routeData;
-  page.routeData = { ...data, connection: { client, hello: context.gateway.snapshot.hello } };
+  page.routeData = {
+    ...data,
+    connection: {
+      client,
+      hello: context.gateway.snapshot.hello,
+      agentId: context.agentSelection.state.selectedId,
+    },
+  };
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
@@ -159,6 +172,22 @@ describe("ModelSetupPage catalog icons", () => {
     expect(page.querySelector(".model-setup__recommendation img")).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(page.innerHTML).not.toContain(recommendedIconUrl);
+  });
+
+  it("redacts secrets in displayed detection failures", async () => {
+    const { context, client, request, runtimeConfig } = createContext();
+    request.mockRejectedValue(new Error("OPENAI_API_KEY=sk-1234567890abcdef"));
+    const { page } = await mountPage(context, {
+      state: { phase: "ready", result: detection },
+      client,
+      firstRun: false,
+    });
+
+    await (page as unknown as { detect: () => Promise<unknown> }).detect();
+
+    expect(page.textContent).toContain("OPENAI_API_KEY=sk-123...cdef");
+    expect(page.textContent).not.toContain("sk-1234567890abcdef");
+    runtimeConfig.dispose();
   });
 
   it("loads unknown wire icons through the authenticated same-origin catalog proxy", async () => {
@@ -200,7 +229,7 @@ describe("ModelSetupPage catalog icons", () => {
       firstRun: false,
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         page
           .querySelector<HTMLImageElement>(".model-setup__recommendation img")
@@ -248,7 +277,7 @@ describe("ModelSetupPage catalog icons", () => {
       firstRun: false,
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         page
           .querySelector<HTMLImageElement>(".model-setup__recommendation img")
@@ -289,11 +318,11 @@ describe("ModelSetupPage catalog icons", () => {
 
     page.querySelector<HTMLButtonElement>('[data-prepare-choice="llama-cpp"] button')?.click();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(request).toHaveBeenCalledWith(
         "openclaw.setup.prepare.start",
-        { sessionId: expect.any(String), authChoice: "llama-cpp" },
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        { sessionId: expect.any(String), agentId: "main", authChoice: "llama-cpp" },
+        { timeoutMs: null },
       );
       expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
       expect(page.textContent).toContain("Downloading model: 25%");
@@ -309,7 +338,7 @@ describe("ModelSetupPage catalog icons", () => {
           id: choiceId,
           brandId: "llama-cpp",
           label: "llama.cpp",
-          hint: "Run one private GGUF model directly inside this Gateway",
+          hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
         },
       ],
     };
@@ -375,10 +404,11 @@ describe("ModelSetupPage catalog icons", () => {
 
     page.querySelector<HTMLButtonElement>(`[data-prepare-choice="${choiceId}"] button`)?.click();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(request).toHaveBeenCalledWith(
         "openclaw.setup.activate",
         {
+          agentId: "main",
           kind: "provider-auto:vendor%2Flocal%3Av1%25beta%3Fx%23y",
           modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
         },
@@ -421,7 +451,7 @@ describe("ModelSetupPage catalog icons", () => {
 
     page.querySelector<HTMLButtonElement>('[data-prepare-choice="llama-cpp"] button')?.click();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(page.textContent).toContain(
         "llama.cpp did not expose a usable local model. Review the setup result, then retry.",
       );
@@ -561,7 +591,7 @@ describe("ModelSetupPage catalog icons", () => {
 
     page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(order).toEqual([
         "config.set",
         "openclaw.setup.auth.start",
@@ -615,7 +645,7 @@ describe("ModelSetupPage catalog icons", () => {
     snapshot.hello.auth.scopes = ["operator.read"];
     releaseConfigSet?.({ hash: "hash-2" });
 
-    await vi.waitFor(() => expect(page.textContent).toContain("Model setup request failed."));
+    await waitForFast(() => expect(page.textContent).toContain("Model setup request failed."));
     expect(request).not.toHaveBeenCalledWith(
       "openclaw.setup.auth.start",
       expect.anything(),
@@ -744,7 +774,7 @@ describe("ModelSetupPage catalog icons", () => {
 
     page.querySelector<HTMLButtonElement>('[data-candidate-kind="codex-cli"] button')?.click();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(page.textContent).toContain("Connection changed before model activation started.");
     });
     expect(replacementRequest).not.toHaveBeenCalled();
@@ -786,7 +816,7 @@ describe("ModelSetupPage catalog icons", () => {
 
     page.querySelector<HTMLButtonElement>('[data-candidate-kind="codex-cli"] button')?.click();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(page.textContent).toContain("Connection verified");
       expect(page.textContent).toContain("config.get failed after model commit");
     });
@@ -835,7 +865,7 @@ describe("ModelSetupPage catalog icons", () => {
 
     page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(runExternalMutation).toHaveBeenCalledTimes(1);
       expect(page.textContent).toContain("config.get failed after wizard commit");
       expect(page.textContent).toContain("Paste token");

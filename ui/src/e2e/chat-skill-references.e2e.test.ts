@@ -24,6 +24,7 @@ suite.define(() => {
             acceptsArgs: true,
             description: "Pre-commit and ship code review.",
             name: "autoreview",
+            skillDisplayName: "Auto Review",
             scope: "both",
             source: "skill",
             skillModelVisible: true,
@@ -33,6 +34,7 @@ suite.define(() => {
             acceptsArgs: true,
             description: "Build and review technical documentation.",
             name: "technical_documentation",
+            skillDisplayName: "Technical Documentation",
             scope: "both",
             source: "skill",
             skillModelVisible: true,
@@ -76,7 +78,13 @@ suite.define(() => {
         await expect.poll(() => picker.getByRole("option").count()).toBe(1);
         await expect
           .poll(() => picker.getByRole("option").first().textContent())
-          .toContain("$autoreview");
+          .toContain("Auto Review");
+        if (artifactDir) {
+          await page.screenshot({
+            path: path.join(artifactDir, "skill-reference-picker.png"),
+            fullPage: true,
+          });
+        }
         await composer.press("Enter");
         await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
 

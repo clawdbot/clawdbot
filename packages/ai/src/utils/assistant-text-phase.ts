@@ -6,6 +6,8 @@ type AssistantTextPhaseBlock = {
 
 export type PendingCommentaryTags = Map<AssistantTextPhaseBlock, string>;
 
+const EMPTY_ASSISTANT_TEXT_BLOCK_SET: ReadonlySet<unknown> = new Set();
+
 function isAssistantTextPhaseBlock(block: unknown): block is AssistantTextPhaseBlock {
   if (!block || typeof block !== "object") {
     return false;
@@ -18,21 +20,70 @@ function encodeAssistantTextSignatureV1(id: string, phase?: "commentary" | "fina
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
 }
 
-/** Tags unphased narration before a tool-call event becomes consumer-visible. */
-export function tagPendingCommentaryText(content: ReadonlyArray<unknown>): PendingCommentaryTags {
+function tagUnphasedText(
+  content: ReadonlyArray<unknown>,
+  phase: "commentary" | "final_answer",
+  idPrefix: string,
+): PendingCommentaryTags {
   const textBlocks = content.filter(isAssistantTextPhaseBlock);
-  let commentaryIndex = textBlocks.filter((block) => block.textSignature !== undefined).length;
+  let phaseIndex = textBlocks.filter((block) => block.textSignature !== undefined).length;
   const tagged: PendingCommentaryTags = new Map();
   for (const block of textBlocks) {
     if (block.text.trim().length === 0 || block.textSignature !== undefined) {
       continue;
     }
-    const signature = encodeAssistantTextSignatureV1(`commentary-${commentaryIndex}`, "commentary");
+    const signature = encodeAssistantTextSignatureV1(`${idPrefix}-${phaseIndex}`, phase);
     block.textSignature = signature;
     tagged.set(block, signature);
-    commentaryIndex += 1;
+    phaseIndex += 1;
   }
   return tagged;
+}
+
+/** Tags unphased narration before a tool-call event becomes consumer-visible. */
+export function tagPendingCommentaryText(content: ReadonlyArray<unknown>): PendingCommentaryTags {
+  return tagUnphasedText(content, "commentary", "commentary");
+}
+
+/** Records the confirmed final-answer boundary after reasoning resumes. */
+export function tagInterruptedTextPhases(
+  content: ReadonlyArray<unknown>,
+  interruptedText: unknown,
+  preservedVisibleText: ReadonlySet<unknown> = EMPTY_ASSISTANT_TEXT_BLOCK_SET,
+): void {
+  const interruptedTextIndex = content.indexOf(interruptedText);
+  if (interruptedTextIndex === -1) {
+    return;
+  }
+  const finalAnswerIndex = content.findIndex(
+    (block, index) =>
+      index > interruptedTextIndex &&
+      isAssistantTextPhaseBlock(block) &&
+      block.text.trim().length > 0,
+  );
+  if (finalAnswerIndex === -1) {
+    return;
+  }
+  tagUnphasedText(
+    content.slice(0, finalAnswerIndex).filter((block) => !preservedVisibleText.has(block)),
+    "commentary",
+    "commentary",
+  );
+  tagUnphasedText(
+    content.filter((block, index) => index >= finalAnswerIndex || preservedVisibleText.has(block)),
+    "final_answer",
+    "final-answer",
+  );
+}
+
+/** Prevents unresolved completion text from becoming a fallback answer after stream failure. */
+export function tagUnresolvedTextAsCommentary(message: {
+  content: ReadonlyArray<unknown>;
+  openclawDelivery?: { textPhaseRequiresTerminal?: true };
+}): void {
+  if (message.openclawDelivery?.textPhaseRequiresTerminal) {
+    tagUnphasedText(message.content, "commentary", "commentary");
+  }
 }
 
 /** Rolls back only the exact provisional signatures created by this transport turn. */

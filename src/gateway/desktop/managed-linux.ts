@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { sleepWithAbort } from "@openclaw/retry";
 import { tryListenOnPort } from "../../infra/ports-probe.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { runCommandBuffered } from "../../process/exec.js";
@@ -114,13 +115,6 @@ function lastStderrLine(stderr: string): string | undefined {
   return undefined;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
-  });
-}
-
 async function readDisplaySocketNames(socketDir: string): Promise<string[]> {
   try {
     return await fs.readdir(socketDir);
@@ -169,7 +163,9 @@ export function createManagedLinuxDesktop(
   const readinessPollMs = params.runtime?.readinessPollMs ?? MANAGED_READINESS_POLL_MS;
   const readinessTimeoutMs = params.runtime?.readinessTimeoutMs ?? MANAGED_READINESS_TIMEOUT_MS;
   const runPasswordTool = params.runtime?.runPasswordTool ?? runCommandBuffered;
-  const wait = params.runtime?.sleep ?? sleep;
+  // ref:false keeps readiness polling from pinning an otherwise idle process alive.
+  const wait =
+    params.runtime?.sleep ?? ((ms: number) => sleepWithAbort(ms, undefined, { ref: false }));
   const tempRoot = params.runtime?.tempRoot ?? os.tmpdir();
   const pickPort = params.runtime?.tryListenOnPort ?? tryListenOnPort;
   const x11SocketDir = params.runtime?.x11SocketDir ?? "/tmp/.X11-unix";

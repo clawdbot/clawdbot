@@ -11,7 +11,6 @@ import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metada
 import {
   listAgentEntries,
   listAgentIds,
-  resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
@@ -31,6 +30,7 @@ import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/se
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
+import { listAgentProvenance } from "../state/agent-provenance.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 import type { GatewayAgentOwnership } from "./agent-list.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
@@ -40,6 +40,7 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
 import type { GatewayAgentRow } from "./session-utils.types.js";
+import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
@@ -283,22 +284,18 @@ function normalizeFallbackList(values: readonly string[]): string[] {
 function resolveGatewayAgentModel(
   cfg: OpenClawConfig,
   agentId: string,
-): GatewayAgentRow["model"] | undefined {
+  resolvedModel: ReturnType<typeof resolveDefaultModelForAgent>,
+): NonNullable<GatewayAgentRow["model"]> {
   // Agent rows expose model identity to clients; credential-profile binding stays in
   // canonical config and is consumed only by execution-time model selection.
-  const primary = splitTrailingAuthProfile(
-    resolveAgentEffectiveModelPrimary(cfg, agentId) ?? "",
-  ).model;
+  const primary = `${resolvedModel.provider}/${resolvedModel.model}`;
   const fallbackOverride = resolveAgentModelFallbacksOverride(cfg, agentId);
   const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   const fallbacks = normalizeFallbackList(
     (fallbackOverride ?? defaultFallbacks).map((value) => splitTrailingAuthProfile(value).model),
   );
-  if (!primary && fallbacks.length === 0) {
-    return undefined;
-  }
   return {
-    ...(primary ? { primary } : {}),
+    primary,
     ...(fallbacks.length > 0 ? { fallbacks } : {}),
   };
 }
@@ -341,20 +338,25 @@ export function listAgentsForGateway(
   const roster = options?.includeSystem
     ? basic.agents
     : basic.agents.filter((entry) => entry.kind !== "system");
+  const provenanceById = new Map(
+    listAgentProvenance().map((record) => [record.agentId, record] as const),
+  );
   const agents = roster.map((entry) => {
     const { id } = entry;
     const meta = configuredById.get(id);
-    const model = resolveGatewayAgentModel(cfg, id);
     const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
+    const model = resolveGatewayAgentModel(cfg, id, resolvedModel);
     const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: id });
-    const agentRuntime = resolveModelAgentRuntimeMetadata({
-      cfg,
-      agentId: id,
-      provider: resolvedModel.provider,
-      model: resolvedModel.model,
-      sessionKey,
-      acpRuntime: false,
-    });
+    const agentRuntime = projectWorkerPlacementAgentRuntime(
+      resolveModelAgentRuntimeMetadata({
+        cfg,
+        agentId: id,
+        provider: resolvedModel.provider,
+        model: resolvedModel.model,
+        sessionKey,
+        acpRuntime: false,
+      }),
+    );
     const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
     const thinkingProfile = resolveGatewayModelThinkingProfile({
       cfg,
@@ -368,7 +370,7 @@ export function listAgentsForGateway(
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
     // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
     const workspaceGit = insideGitCheckout(workspace);
-    return Object.assign(
+    const agent = Object.assign(
       {
         id,
         ...(options?.includeSystem ? { kind: entry.kind } : {}),
@@ -382,8 +384,16 @@ export function listAgentsForGateway(
         thinkingOptions: thinkingProfile.thinkingLevels.map((level) => level.label),
         thinkingDefault: thinkingProfile.thinkingDefault,
       },
-      model ? { model } : {},
+      { model },
     );
+    const provenance = provenanceById.get(id);
+    return provenance
+      ? Object.assign(agent, {
+          createdVia: provenance.createdVia,
+          creatorAgentId: provenance.creatorAgentId,
+          createdAt: provenance.createdAtMs,
+        })
+      : agent;
   });
   return {
     defaultId: basic.defaultId,

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
-import { pathExists } from "../../infra/fs-safe.js";
+import { pathExists, root } from "../../infra/fs-safe.js";
 import { logWarn } from "../../logger.js";
 import {
   restoreWorkspaceSkillMutation,
@@ -11,6 +11,7 @@ import {
 } from "../lifecycle/workspace-skill-write.js";
 
 export async function rollbackSkillCollectionMutation(params: {
+  workspaceDir: string;
   appliedWrites: readonly PreparedWorkspaceSkillMutation[];
   droppedSkills: readonly { name: string; baseDir: string; stagedDir: string }[];
 }): Promise<void> {
@@ -30,12 +31,18 @@ export async function rollbackSkillCollectionMutation(params: {
       errors.push(error);
     }
   }
+  const workspaceRoot = await root(params.workspaceDir);
   for (const skill of params.droppedSkills.toReversed()) {
     try {
-      if (await pathExists(skill.baseDir)) {
+      const baseRelativePath = relativeSkillCollectionPath(params.workspaceDir, skill.baseDir);
+      if (await workspaceRoot.exists(baseRelativePath)) {
         throw new Error(`Dropped skill changed before restoration: ${skill.name}`);
       }
-      await fs.rename(skill.stagedDir, skill.baseDir);
+      await workspaceRoot.move(
+        relativeSkillCollectionPath(params.workspaceDir, skill.stagedDir),
+        baseRelativePath,
+        { overwrite: true },
+      );
     } catch (error) {
       errors.push(error);
     }
@@ -46,6 +53,7 @@ export async function rollbackSkillCollectionMutation(params: {
 }
 
 export async function stageSkillCollectionDrop(params: {
+  workspaceDir: string;
   name: string;
   baseDir: string;
 }): Promise<{ name: string; baseDir: string; stagedDir: string }> {
@@ -53,7 +61,12 @@ export async function stageSkillCollectionDrop(params: {
     path.dirname(params.baseDir),
     `.openclaw-drop-${path.basename(params.baseDir)}-${randomUUID()}`,
   );
-  await fs.rename(params.baseDir, stagedDir);
+  const workspaceRoot = await root(params.workspaceDir);
+  await workspaceRoot.move(
+    relativeSkillCollectionPath(params.workspaceDir, params.baseDir),
+    relativeSkillCollectionPath(params.workspaceDir, stagedDir),
+    { overwrite: true },
+  );
   return { name: params.name, baseDir: params.baseDir, stagedDir };
 }
 
@@ -73,6 +86,7 @@ export async function restoreSkillCollectionBackupTransaction(params: {
   backupDir: string;
   skillDirs: readonly string[];
   resultSkillDirs: readonly string[];
+  commit: () => void;
 }): Promise<void> {
   const rollbackDir = path.join(params.backupDir, `.restore-${randomUUID()}`);
   try {
@@ -91,6 +105,9 @@ export async function restoreSkillCollectionBackupTransaction(params: {
   let discardSnapshot = false;
   try {
     await restoreSkillCollectionBackup(params);
+    // Ownership is the durable commit for this filesystem transition. Keep the
+    // snapshot until it succeeds so a failed commit can restore the retryable result.
+    params.commit();
     discardSnapshot = true;
   } catch (error) {
     try {
@@ -157,14 +174,24 @@ async function removeSkillCollectionDirectory(
   workspaceDir: string,
   skillDir: string,
 ): Promise<void> {
-  const relativePath = path.relative(workspaceDir, skillDir);
-  if (!relativePath || path.isAbsolute(relativePath) || relativePath.startsWith(`..${path.sep}`)) {
-    throw new Error(`Skill directory must be inside the workspace: ${skillDir}`);
-  }
+  const relativePath = relativeSkillCollectionPath(workspaceDir, skillDir);
   await removePathWithinRoot({
     rootDir: workspaceDir,
     relativePath,
     recursive: true,
     force: false,
   });
+}
+
+function relativeSkillCollectionPath(workspaceDir: string, skillDir: string): string {
+  const relativePath = path.relative(workspaceDir, skillDir);
+  if (
+    !relativePath ||
+    relativePath === ".." ||
+    path.isAbsolute(relativePath) ||
+    relativePath.startsWith(`..${path.sep}`)
+  ) {
+    throw new Error(`Skill directory must be inside the workspace: ${skillDir}`);
+  }
+  return relativePath;
 }

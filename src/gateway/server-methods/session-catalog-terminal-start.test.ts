@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { catalogStartHandler } from "./session-catalog-terminal-start.js";
 
 function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatalogProvider {
@@ -215,6 +216,54 @@ describe("sessions.catalog.startTerminal", () => {
     );
   });
 
+  it("rejects local terminal start for a named profile before provider fallback", async () => {
+    const cwd = process.cwd();
+    const startTerminalSession = vi.fn(async (request: { allowProcessHomeFallback?: boolean }) => {
+      throw new Error(
+        request.allowProcessHomeFallback === false
+          ? "local Test sessions are unavailable in isolated state"
+          : "unguarded local terminal start",
+      );
+    });
+    activeProvider = provider({ startTerminalSession: startTerminalSession as never });
+    const home = os.userInfo().homedir;
+    const stateDir = path.join(home, ".openclaw-dev");
+
+    const respond = await withEnvAsync(
+      {
+        HOME: home,
+        USERPROFILE: home,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_PROFILE: "dev",
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      async () =>
+        await call(
+          { catalogId: "codex", agentId: "main", cwd },
+          { gateway: { cliAgents: { enabled: true } } },
+          { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
+          {
+            isTerminalEnabled: () => true,
+            terminalSessions: { open: vi.fn() },
+            resolveTerminalLaunchPolicy: () => ({
+              ok: true,
+              plan: { agentId: "main", cwd, shell: "/bin/zsh", args: [] },
+            }),
+            isConnectionActive: () => true,
+          },
+        ),
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("local Test sessions are unavailable in isolated state"),
+      }),
+    );
+  });
+
   it("reuses terminal.open admission and manager ownership for terminal start", async () => {
     const cwd = process.cwd();
     const startTerminalSession = vi.fn(async () => ({
@@ -260,6 +309,7 @@ describe("sessions.catalog.startTerminal", () => {
     expect(resolveCreateTarget).toHaveBeenCalledWith("codex", "research", config);
     expect(startTerminalSession).toHaveBeenCalledWith({
       agentId: "research",
+      allowProcessHomeFallback: false,
       cwd,
       initialMessage: "Inspect the failing test",
     });
@@ -313,6 +363,7 @@ describe("sessions.catalog.startTerminal", () => {
 
     expect(startTerminalSession).toHaveBeenCalledWith({
       agentId: "main",
+      allowProcessHomeFallback: false,
       cwd: "/remote/worktree",
       nodeId: "remote",
     });

@@ -8,7 +8,7 @@ import {
   errorShape,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePathCore,
@@ -25,15 +25,13 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../infra/session-cost-usage-totals.js";
-import type {
-  CostUsageSummary,
-  CostUsageTotals,
-  SessionCostSummary,
-  SessionDailyModelUsage,
-  SessionMessageCounts,
-  SessionModelUsage,
-} from "../../infra/session-cost-usage.js";
 import {
+  type CostUsageSummary,
+  type CostUsageTotals,
+  type SessionCostSummary,
+  type SessionDailyModelUsage,
+  type SessionMessageCounts,
+  type SessionModelUsage,
   loadCostUsageSummaryFromCache,
   loadSessionLogs,
   loadSessionCostSummariesFromCache,
@@ -520,21 +518,6 @@ const getDateParts = (date: Date, interpretation: DateInterpretation): DateParts
     monthIndex: date.getUTCMonth(),
     day: date.getUTCDate(),
   };
-};
-
-/**
- * Parse a date string (YYYY-MM-DD) to start-of-day timestamp based on interpretation mode.
- * Returns undefined if invalid.
- */
-const parseDateToMs = (
-  raw: unknown,
-  interpretation: DateInterpretation = { mode: "utc" },
-): number | undefined => {
-  const parts = parseDateParts(raw);
-  if (!parts) {
-    return undefined;
-  }
-  return datePartsToStartMs(parts, interpretation);
 };
 
 const formatDateLabel = (ms: number, interpretation: DateInterpretation): string => {
@@ -1068,7 +1051,11 @@ async function loadAllAgentCostUsageSummary(params: {
   dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  const agentIds = listAgentIds(params.config).map((agentId) => normalizeAgentId(agentId));
+  // Same agent universe as discoverAllSessionsForUsage: enumerating configured
+  // ids only would list system-agent sessions whose cost never reaches totals.
+  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
+    normalizeAgentId(agent.id),
+  );
   const summaries = await runUsageAgentTasks(
     agentIds.map(
       (agentId) => () =>
@@ -1137,9 +1124,6 @@ function mergeUsageCacheStatus(
 
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
-  parseUtcOffsetToMinutes,
-  parseDateToMs,
-  parseDays,
   resolveDateRange,
   loadCostUsageSummaryCached,
   costUsageCache,

@@ -7,10 +7,10 @@ import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 export type OutboundDeliveryResult = {
   channel: ChannelId;
   messageId: string;
-  chatId?: string;
-  channelId?: string;
-  roomId?: string;
-  conversationId?: string;
+  target?: {
+    kind: "chat" | "channel" | "room" | "conversation";
+    id: string;
+  };
   timestamp?: number;
   toJid?: string;
   pollId?: string;
@@ -115,6 +115,7 @@ export class OutboundDeliveryError extends Error {
   readonly payloadOutcomes: OutboundPayloadDeliveryOutcome[];
   readonly sentBeforeError: boolean;
   readonly stage: OutboundDeliveryFailureStage;
+  recoveryOwnedRetry?: true;
 
   constructor(
     message: string,
@@ -129,7 +130,11 @@ export class OutboundDeliveryError extends Error {
     this.name = "OutboundDeliveryError";
     this.results = [...(options.results ?? [])];
     this.payloadOutcomes = [...(options.payloadOutcomes ?? [])];
-    this.sentBeforeError = this.results.length > 0;
+    this.sentBeforeError =
+      this.results.length > 0 ||
+      this.payloadOutcomes.some(
+        (outcome) => outcome.status === "failed" && outcome.sentBeforeError,
+      );
     this.stage = options.stage ?? "unknown";
   }
 }

@@ -164,7 +164,7 @@ const STREAMING_HINT_LABELS = {
   "preview.chunk.breakPreference": "Draft Chunk Break Preference",
   "preview.toolProgress": "Draft Tool Progress",
   "preview.commandText": "Draft Command Text",
-  "progress.render": "Progress Renderer",
+  "progress.style": "Progress Style",
   "progress.nativeTaskCards": "Native Progress Task Cards",
 } as const;
 

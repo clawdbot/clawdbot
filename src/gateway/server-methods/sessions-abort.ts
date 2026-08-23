@@ -90,8 +90,7 @@ function sessionKeyBelongsToAgent(
   agentId: string,
   cfg: OpenClawConfig,
 ): boolean {
-  const sessionAgentId = resolveSessionKeyAgentId(sessionKey, cfg);
-  return Boolean(sessionAgentId && sessionAgentId === normalizeAgentId(agentId));
+  return resolveSessionKeyAgentId(sessionKey, cfg) === normalizeAgentId(agentId);
 }
 
 function resolveScopedAbortKey(params: {
@@ -380,7 +379,10 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         client,
         isWebchatConnect,
       },
-      onAuthorizedAfterQueuedAbort ? { onAuthorizedAfterQueuedAbort } : {},
+      {
+        ...(onAuthorizedAfterQueuedAbort ? { onAuthorizedAfterQueuedAbort } : {}),
+        ...(!requestedRunId ? { cascadeDescendants: true as const } : {}),
+      },
     );
     if (!chatAbortSucceeded) {
       return;

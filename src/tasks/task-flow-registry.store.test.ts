@@ -15,6 +15,7 @@ import {
 } from "./task-flow-registry.js";
 import {
   loadTaskFlowRegistryStateFromSqlite,
+  loadTaskFlowRegistryStateFromSqliteReadOnly,
   saveTaskFlowRegistryStateToSqlite,
 } from "./task-flow-registry.store.sqlite.js";
 import {
@@ -100,6 +101,21 @@ describe("task-flow-registry store runtime", () => {
     vi.useRealTimers();
     restoreOriginalStateDir();
     resetTaskFlowRegistryForTests();
+  });
+
+  it("does not create shared state for a read-only flow snapshot", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-flow-store-readonly-" },
+      async (state) => {
+        process.env.OPENCLAW_STATE_DIR = state.stateDir;
+        resetTaskFlowRegistryForTests({ persist: false });
+        const statePath = resolveOpenClawStateSqlitePath();
+        expect(() => statSync(statePath)).toThrow();
+
+        expect(loadTaskFlowRegistryStateFromSqliteReadOnly().flows.size).toBe(0);
+        expect(() => statSync(statePath)).toThrow();
+      },
+    );
   });
 
   it("uses the configured flow store for restore and save", () => {

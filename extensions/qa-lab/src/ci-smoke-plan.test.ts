@@ -70,17 +70,17 @@ describe("createQaSmokeCiPart", () => {
     smokeProfileMock.mode = "actual";
   });
 
-  it("balances the bounded smoke pack across four profile parts", () => {
-    const parts = ["profile-1", "profile-2", "profile-3", "profile-4"].map((partId) =>
-      createQaSmokeCiPart(partId),
+  it.each([4, 6])("balances the bounded smoke pack across %i profile parts", (partCount) => {
+    const parts = Array.from({ length: partCount }, (_, index) =>
+      createQaSmokeCiPart(`profile-${index + 1}`, partCount),
     );
-    const repeatedLast = createQaSmokeCiPart("profile-4");
+    const repeatedLast = createQaSmokeCiPart(`profile-${partCount}`, partCount);
 
-    expect(repeatedLast).toEqual(parts[3]);
-    expect(parts.slice(0, 3).some((part) => part.runs.some((run) => run.slug === "matrix"))).toBe(
+    expect(repeatedLast).toEqual(parts.at(-1));
+    expect(parts.slice(0, -1).some((part) => part.runs.some((run) => run.slug === "matrix"))).toBe(
       false,
     );
-    expect(parts[3]?.runs.some((run) => run.slug === "matrix")).toBe(true);
+    expect(parts.at(-1)?.runs.some((run) => run.slug === "matrix")).toBe(true);
 
     const scenarioIds = parts.flatMap((part) => part.runs.flatMap((run) => run.scenario_ids));
     expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
@@ -125,26 +125,28 @@ describe("createQaSmokeCiPart", () => {
     const primaryScenarioIds = parts.map(
       (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids ?? [],
     );
-    const primaryRunCosts = primaryScenarioIds.map((ids) =>
+    const scenarioIdsByPart = parts.map((part) => part.runs.flatMap((run) => run.scenario_ids));
+    const partCosts = scenarioIdsByPart.map((ids) =>
       ids.reduce(
         (cost, scenarioId) => cost + estimateScenarioCost(scenarioById.get(scenarioId)),
         0,
       ),
     );
-    const largestScenarioCost = Math.max(
-      ...primaryScenarioIds.flatMap((ids) =>
-        ids.map((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId))),
-      ),
+    const unitCostPartCosts = scenarioIdsByPart.flatMap((ids, index) =>
+      ids.every((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId)) === 1)
+        ? [expectDefined(partCosts[index], "unit-cost QA smoke part")]
+        : [],
     );
-    const heaviestRunCost = expectDefined(
-      primaryRunCosts.toSorted((left, right) => right - left)[0],
-      "heaviest QA smoke run cost",
+    const heaviestUnitCostPart = expectDefined(
+      unitCostPartCosts.toSorted((left, right) => right - left)[0],
+      "heaviest unit-cost QA smoke part",
     );
-    const lightestRunCost = expectDefined(
-      primaryRunCosts.toSorted((left, right) => left - right)[0],
-      "lightest QA smoke run cost",
+    const lightestUnitCostPart = expectDefined(
+      unitCostPartCosts.toSorted((left, right) => left - right)[0],
+      "lightest unit-cost QA smoke part",
     );
-    expect(heaviestRunCost - lightestRunCost).toBeLessThanOrEqual(largestScenarioCost);
+    expect(unitCostPartCosts.length).toBeGreaterThan(1);
+    expect(heaviestUnitCostPart - lightestUnitCostPart).toBeLessThanOrEqual(1);
     expect(primaryScenarioIds.every((ids) => ids.length > 0)).toBe(true);
   });
 
@@ -177,6 +179,12 @@ describe("createQaSmokeCiPart", () => {
   it("rejects undeclared profile parts", () => {
     expect(() => createQaSmokeCiPart("profile-5")).toThrow(
       "unknown QA smoke CI profile part: profile-5",
+    );
+    expect(() => createQaSmokeCiPart("profile-7", 6)).toThrow(
+      "unknown QA smoke CI profile part: profile-7",
+    );
+    expect(() => createQaSmokeCiPart("profile-1", 5)).toThrow(
+      "unsupported QA smoke CI profile part count: 5",
     );
   });
 

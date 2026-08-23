@@ -1137,6 +1137,9 @@ describe("thread binding lifecycle", () => {
   it("preserves prefixed current channel conversation ids as binding keys", async () => {
     createTestThreadBindingManager({
       accountId: "default",
+      cfg: {
+        agents: { list: [{ id: "main" }, { id: "codex" }] },
+      },
       persist: false,
       enableSweeper: false,
       idleTimeoutMs: 24 * 60 * 60 * 1000,
@@ -1156,9 +1159,6 @@ describe("thread binding lifecycle", () => {
         conversationId: "channel:1491611525914558667",
       },
       placement: "current",
-      metadata: {
-        agentId: "codex",
-      },
     });
 
     const boundConversation = requireRecord(
@@ -1169,6 +1169,9 @@ describe("thread binding lifecycle", () => {
       channel: "discord",
       accountId: "default",
       conversationId: "channel:1491611525914558667",
+    });
+    expectFields(requireRecord(bound, "bound session").metadata, "bound metadata", {
+      agentId: "codex",
     });
     expectFields(
       service.resolveByConversation({

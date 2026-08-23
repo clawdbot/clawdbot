@@ -3,6 +3,7 @@
  */
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
+  agentHarnessStructuredInput,
   attachModelProviderRequestTransport,
   buildAgentHarnessUserInputAnswers,
   classifyAgentHarnessTerminalOutcome,
@@ -149,6 +150,18 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
 });
 
 describe("agent harness runtime SDK facade", () => {
+  it("exposes structured input through one frozen named runtime surface", () => {
+    expect(Object.isFrozen(agentHarnessStructuredInput)).toBe(true);
+    expect(Object.keys(agentHarnessStructuredInput).toSorted()).toEqual([
+      "compileForm",
+      "compileQuestions",
+      "compileUrl",
+      "isRecord",
+      "run",
+      "snapshot",
+    ]);
+  });
+
   it("keeps legacy harness implementations source-compatible while requiring capabilities in V2", () => {
     const legacyHarness = {
       id: "legacy-test",

@@ -64,6 +64,10 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     pluginCatalogs: [],
   })),
   prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({ entries: [] })),
+  runPreparedModelCatalogWorker: vi.fn(async (..._args: unknown[]) => ({
+    entries: [],
+    routeVariants: [],
+  })),
   resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
   resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
   warn: vi.fn(),
@@ -84,6 +88,33 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: () => preparedModelRuntimeMocks.pluginMetadataSnapshot,
 }));
 
+vi.mock("./prepared-model-catalog-worker.js", () => ({
+  createPreparedModelCatalogWorkerInput: ({
+    agentFacts,
+  }: {
+    agentFacts: {
+      input: unknown;
+      authStore: unknown;
+      providerIds: unknown;
+    };
+  }) => ({
+    kind: "catalog",
+    generationFingerprint: "test-generation",
+    input: agentFacts.input,
+    authStore: agentFacts.authStore,
+    providerIds: agentFacts.providerIds,
+  }),
+  createPreparedModelCatalogWorker: () => ({
+    loadCatalog: (...args: unknown[]) =>
+      preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args),
+    loadAuth: () =>
+      Promise.resolve({
+        authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
+        authModes: {},
+      }),
+  }),
+}));
+
 vi.mock("./model-catalog.js", () => ({
   buildPreparedModelCatalogSnapshot: (...args: Parameters<BuildPreparedModelCatalogSnapshot>) =>
     preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot(...args),
@@ -95,6 +126,34 @@ vi.mock("./agent-auth-discovery.js", () => ({
 }));
 
 vi.mock("./agent-model-discovery.js", () => ({
+  discoverAuthStorageFacts: (...args: unknown[]) => {
+    if ((args[1] as { skipCredentials?: boolean } | undefined)?.skipCredentials === true) {
+      return {
+        authStorage: { getAll: () => ({}), getOAuthProviders: () => [] },
+        store: { version: 1, profiles: {} },
+        credentials: {},
+      };
+    }
+    const authStorage = (preparedModelRuntimeMocks.discoverAuthStorage(...args) ??
+      preparedModelRuntimeMocks.authStorage) as {
+      getAll(): AuthStorageData;
+      getOAuthProviders(): unknown[];
+    };
+    const credentials = authStorage.getAll();
+    return {
+      authStorage,
+      store: preparedModelRuntimeMocks.preparedAuthStore ?? {
+        version: 1,
+        profiles: Object.fromEntries(
+          Object.entries(credentials).map(([provider, credential]) => [
+            `${provider}:default`,
+            { ...credential, provider },
+          ]),
+        ),
+      },
+      credentials,
+    };
+  },
   discoverAuthStorage: (...args: unknown[]) =>
     preparedModelRuntimeMocks.discoverAuthStorage(...args) ?? preparedModelRuntimeMocks.authStorage,
   discoverModels: (...args: unknown[]) => {
@@ -126,6 +185,8 @@ vi.mock("./agent-scope.js", () => ({
     preparedModelRuntimeMocks.configuredWorkspaces.get(agentId) ??
     (agentId === "default" ? "/tmp/unused-workspace" : `/tmp/workspace-${agentId}`),
   tryResolveConfiguredAgentWorkspaceDir: () => "/tmp/unused-workspace",
+  tryResolveSystemAgentWorkspaceDir: () => "/tmp/unused-workspace",
+  resolveAmbientOwnerAgentId: () => "default",
   resolveDefaultAgentDir: () => "/tmp/unused-agent",
   resolveDefaultAgentId: () => "default",
   resolveAgentConfig: (config: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
@@ -221,6 +282,7 @@ vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
 }));
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => [],
   resolveExternalCliAuthProfiles: () => [],
 }));
 
@@ -307,6 +369,10 @@ export function resetPreparedModelRuntimeHarness(): void {
       pluginCatalogs: [],
     }));
   preparedModelRuntimeMocks.prepareStaticCatalog.mockReset().mockResolvedValue({ entries: [] });
+  preparedModelRuntimeMocks.runPreparedModelCatalogWorker.mockReset().mockResolvedValue({
+    entries: [],
+    routeVariants: [],
+  });
   preparedModelRuntimeMocks.resolveAmbientCredentials.mockReset().mockReturnValue({});
   preparedModelRuntimeMocks.resolveStaticCatalogModel.mockReset().mockReturnValue(undefined);
   preparedModelRuntimeMocks.createStaticCatalogResolver

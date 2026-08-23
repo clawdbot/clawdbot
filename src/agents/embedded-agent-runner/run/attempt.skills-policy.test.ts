@@ -53,6 +53,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       hoisted.resolveEmbeddedRunSkillEntriesMock.mockReturnValue({
         shouldLoadSkillEntries: true,
         skillEntries: [createFixtureSkillEntry("demo")],
+        loadSkillEntries: vi.fn(() => [createFixtureSkillEntry("demo")]),
       });
       hoisted.resolveSkillsPromptForRunMock.mockReturnValue(skillsPrompt);
 

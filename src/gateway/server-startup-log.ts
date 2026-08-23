@@ -256,9 +256,10 @@ function formatSuppressedAmbientChannelsStartupWarning(channelIds: readonly stri
     sanitizeForLog(channelId),
   );
   return (
-    `dev gateway suppressed ambient channel auto-configuration for ${safeChannelIds.length} ` +
+    `gateway suppressed ambient channel auto-configuration for ${safeChannelIds.length} ` +
     `${safeChannelIds.length === 1 ? "channel" : "channels"}: ${safeChannelIds.join(", ")}. ` +
-    "Use --dev-ambient-channels to re-enable ambient channel triggers."
+    "Configure channels.<id> (openclaw channels add <id>) to enable the channel, or pass " +
+    "--ambient-channels to allow ambient env credentials."
   );
 }
 

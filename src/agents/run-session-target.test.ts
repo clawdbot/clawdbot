@@ -301,7 +301,7 @@ describe("agent run session target", () => {
     });
   });
 
-  it("recovers the stored key from a legacy SQLite marker", async () => {
+  it("recovers the persisted owner from a legacy SQLite marker", async () => {
     const storePath = path.join(tempDir, "legacy", "sessions.json");
     const sessionKey = "agent:main:dashboard:legacy-session";
     await upsertSessionEntryCore(
@@ -334,7 +334,7 @@ describe("agent run session target", () => {
           storePath,
         }),
       }),
-    ).resolves.toMatchObject({ sessionKey, storePath });
+    ).resolves.toMatchObject({ sessionKey: "agent:main:legacy-session", storePath });
   });
 
   it("uses the marker store for a compatible partial typed target", async () => {

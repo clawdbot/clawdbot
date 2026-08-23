@@ -126,7 +126,7 @@ describe("openai completions stream", () => {
     ).toBe(true);
   });
 
-  it.each(["reasoning_content", "reasoning"] as const)(
+  it.concurrent.each(["reasoning_content", "reasoning"] as const)(
     "keeps hidden local %s streams alive beyond the model idle timeout",
     async (reasoningField) => {
       // The regression under guard is "hidden reasoning stops resetting the idle

@@ -171,7 +171,6 @@ function main() {
 export const testing = {
   collectPerfReportStats,
   parseArgs,
-  parseBudgetNumber,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

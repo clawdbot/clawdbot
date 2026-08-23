@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { codexTestTurnIds } from "./codex-app-server.test-fixtures.js";
-import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
@@ -15,6 +15,13 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => (
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
+
+async function handleCodexAppServerElicitationRequest(
+  params: Parameters<typeof routeCodexAppServerElicitationRequest>[0],
+) {
+  const result = await routeCodexAppServerElicitationRequest(params);
+  return result.kind === "handled" ? result.response : undefined;
+}
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
   return mock.mock.calls.at(index);
@@ -56,8 +63,12 @@ function createParams(): EmbeddedRunAttemptParams {
         "plugin.approval.waitDecision",
         { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
         { id: request.approvalId },
-      )) as { id?: string; decision?: "allow-once" | "allow-always" | "deny" | null };
-      return result?.id === request.approvalId ? result.decision : undefined;
+      )) as { id?: string } & Partial<
+        NonNullable<Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>>
+      >;
+      return result?.id === request.approvalId
+        ? { decision: result.decision, terminalReason: result.terminalReason }
+        : undefined;
     },
   };
   return {
@@ -352,6 +363,28 @@ describe("Codex app-server elicitation bridge", () => {
     ]);
   });
 
+  it("declines timed-out MCP approvals with explanatory metadata", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-timeout", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-timeout",
+        decision: "deny",
+        terminalReason: "timeout",
+      });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildApprovalElicitation(),
+      paramsForRun: createParams(),
+      ...codexTestTurnIds(),
+    });
+
+    expect(result).toEqual({
+      action: "decline",
+      content: null,
+      _meta: { message: "Approval timed out before an operator responded." },
+    });
+  });
+
   it("does not treat inherited request-time MCP decisions as final", async () => {
     const inheritedDecisionResult = Object.assign(Object.create({ decision: null }), {
       id: "plugin:approval-inherited",
@@ -559,7 +592,7 @@ describe("Codex app-server elicitation bridge", () => {
     });
   });
 
-  it("does not bridge Computer Use elicitations outside form mode", async () => {
+  it("declines Computer Use elicitations outside form mode", async () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildComputerUseApprovalElicitation({
         mode: "notification",
@@ -570,7 +603,7 @@ describe("Codex app-server elicitation bridge", () => {
       computerUseMcpServerName: "computer-use",
     });
 
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
@@ -1522,16 +1555,33 @@ describe("Codex app-server elicitation bridge", () => {
     ]);
   });
 
+  it("declines approval-shaped requests with unmappable schemas before ordinary input", async () => {
+    const result = await routeCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildCurrentCodexApprovalElicitation(),
+        requestedSchema: { type: "array", items: { type: "string" } },
+      },
+      paramsForRun: createParams(),
+      ...codexTestTurnIds(),
+    });
+
+    expect(result).toEqual({
+      kind: "handled",
+      response: { action: "decline", content: null, _meta: null },
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("ignores unscoped approval elicitations without the active thread id", async () => {
     const { turnId, serverName, mode, message, _meta, requestedSchema } =
       buildCurrentCodexApprovalElicitation();
-    const result = await handleCodexAppServerElicitationRequest({
+    const result = await routeCodexAppServerElicitationRequest({
       requestParams: { turnId, serverName, mode, message, _meta, requestedSchema },
       paramsForRun: createParams(),
       ...codexTestTurnIds(),
     });
 
-    expect(result).toBeUndefined();
+    expect(result).toEqual({ kind: "not-mine" });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 

@@ -197,9 +197,8 @@ export function suspendPendingFinalDelivery(
   try {
     params.persistOrThrow(args.runId);
   } catch (error) {
-    const mutableEntry = args.entry as unknown as Record<string, unknown>;
-    for (const key of Object.keys(mutableEntry)) {
-      delete mutableEntry[key];
+    for (const key of Object.keys(args.entry)) {
+      Reflect.deleteProperty(args.entry, key);
     }
     Object.assign(args.entry, previousEntry);
     throw error;

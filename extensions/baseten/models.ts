@@ -9,6 +9,7 @@ import type {
   ModelCompatConfig,
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { asNonArrayRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const BASETEN_MANIFEST_CATALOG = manifest.modelCatalog.providers.baseten;
@@ -250,4 +251,3 @@ export function resolveBasetenDynamicModel(modelId: string) {
     compat: buildBasetenModelCompat(id),
   };
 }
-import { asNonArrayRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";

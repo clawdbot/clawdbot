@@ -10,6 +10,7 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import {
   createAlwaysConfiguredPluginConfig,
+  createActionHubPluginFixture,
   createGatewayActionPlugin,
   messageActionRunnerMocks as mocks,
   resetMessageActionRunnerMocks,
@@ -40,70 +41,7 @@ describe("runMessageAction plugin dispatch", () => {
     resetMessageActionRunnerMocks();
   });
   describe("alias-based plugin action dispatch", () => {
-    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        params,
-      }),
-    );
-
-    const actionHubPlugin: ChannelPlugin = {
-      id: "actionhub",
-      meta: {
-        id: "actionhub",
-        label: "Action Hub",
-        selectionLabel: "Action Hub",
-        docsPath: "/channels/actionhub",
-        blurb: "Action Hub action dispatch test plugin.",
-      },
-      capabilities: { chatTypes: ["direct", "channel"] },
-      config: createAlwaysConfiguredPluginConfig(),
-      messaging: {
-        targetPrefixes: ["actionhub", "actionhub-alias"],
-        normalizeTarget: (raw) => raw.replace(/^actionhub-alias:/i, "actionhub:"),
-        targetResolver: {
-          looksLikeId: () => true,
-        },
-      },
-      actions: {
-        describeMessageTool: () => ({
-          actions: [
-            "pin",
-            "unpin",
-            "list-pins",
-            "member-info",
-            "channel-info",
-            "edit",
-            "thread-create",
-            "thread-reply",
-          ],
-        }),
-        messageActionTargetAliases: {
-          edit: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-          pin: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-          unpin: {
-            aliases: ["messageId", "chatId", "chat_id", "channel_id"],
-            deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
-          },
-        },
-        supportsAction: ({ action }) =>
-          action === "pin" ||
-          action === "unpin" ||
-          action === "list-pins" ||
-          action === "member-info" ||
-          action === "channel-info" ||
-          action === "edit" ||
-          action === "thread-create" ||
-          action === "thread-reply",
-        handleAction,
-      },
-    };
+    const { handleAction, plugin: actionHubPlugin } = createActionHubPluginFixture();
 
     beforeEach(() => {
       setTestPlugin(actionHubPlugin, "actionhub");
@@ -115,6 +53,118 @@ describe("runMessageAction plugin dispatch", () => {
       vi.clearAllMocks();
       vi.unstubAllEnvs();
     });
+
+    it("uses the selected operation-local plugin for target resolution", async () => {
+      const resolveTarget = vi.fn(async ({ input }: { input: string }) => ({
+        to: `user:${input}`,
+        kind: "user" as const,
+      }));
+      const handleScopedAction = vi.fn(async () => jsonResult({ ok: true }));
+      const scopedPlugin = createGatewayActionPlugin({
+        pluginId: "operation-local",
+        label: "Operation Local",
+        blurb: "Operation-local target resolution test plugin.",
+        actions: ["react"],
+        gatewayActions: [],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+            resolveTarget,
+          },
+        },
+        handleAction: handleScopedAction,
+      });
+
+      setActivePluginRegistry(createTestRegistry([]));
+      mocks.resolveOutboundChannelPlugin.mockReturnValue(scopedPlugin);
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            "operation-local": {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "react",
+        params: {
+          channel: "operation-local",
+          target: "plugin-alias",
+          messageId: "message-1",
+          emoji: "eyes",
+        },
+        dryRun: true,
+      });
+
+      expect(result).toMatchObject({ kind: "action", action: "react", handledBy: "dry-run" });
+      expect(resolveTarget).toHaveBeenCalledWith(
+        expect.objectContaining({ input: "plugin-alias", normalized: "plugin-alias" }),
+      );
+      expect(handleScopedAction).not.toHaveBeenCalled();
+    });
+
+    it("uses the selected operation-local plugin for broadcast target resolution", async () => {
+      const resolveTarget = vi.fn(async ({ input }: { input: string }) => ({
+        to: `user:${input}`,
+        kind: "user" as const,
+      }));
+      const handleScopedAction = vi.fn(async () => jsonResult({ ok: true }));
+      const scopedPlugin = createGatewayActionPlugin({
+        pluginId: "operation-local",
+        label: "Operation Local",
+        blurb: "Operation-local broadcast target resolution test plugin.",
+        actions: ["send"],
+        gatewayActions: [],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+            resolveTarget,
+          },
+        },
+        handleAction: handleScopedAction,
+      });
+
+      setActivePluginRegistry(createTestRegistry([]));
+      mocks.resolveOutboundChannelPlugin.mockReturnValue(scopedPlugin);
+      mocks.executeSendAction.mockResolvedValue({
+        handledBy: "core",
+        payload: { ok: true },
+        sendResult: {
+          channel: "operation-local",
+          to: "user:plugin-alias",
+          via: "direct",
+          mediaUrl: null,
+        },
+      });
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            "operation-local": {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "broadcast",
+        params: {
+          channel: "operation-local",
+          targets: ["plugin-alias"],
+          message: "hello",
+        },
+        dryRun: true,
+      });
+
+      expect(result).toMatchObject({
+        kind: "broadcast",
+        action: "broadcast",
+        payload: {
+          results: [{ channel: "operation-local", to: "user:plugin-alias", ok: true }],
+        },
+      });
+      expect(resolveTarget).toHaveBeenCalledWith(
+        expect.objectContaining({ input: "plugin-alias", normalized: "plugin-alias" }),
+      );
+      expect(handleScopedAction).not.toHaveBeenCalled();
+    });
+
     it("rejects unsupported read actions before conversation authorization", async () => {
       await expect(
         runMessageAction({

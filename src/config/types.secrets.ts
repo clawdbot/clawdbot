@@ -262,19 +262,19 @@ export function resolveSecretInputString(params: {
   path: string;
   mode?: SecretInputStringResolutionMode;
 }): SecretInputStringResolution {
+  const { explicitRef, ref } = resolveSecretInputRef({
+    value: params.value,
+    refValue: params.refValue,
+    defaults: params.defaults,
+  });
   const normalized = normalizeSecretInputString(params.value);
-  if (normalized) {
+  if (normalized && !explicitRef) {
     return {
       status: "available",
       value: normalized,
       ref: null,
     };
   }
-  const { ref } = resolveSecretInputRef({
-    value: params.value,
-    refValue: params.refValue,
-    defaults: params.defaults,
-  });
   if (!ref) {
     return {
       status: "missing",
@@ -381,6 +381,10 @@ export type SecretProviderConfig =
   | StoreSecretProviderConfig;
 
 export type SecretsConfig = {
+  egressProxy?: {
+    enabled?: boolean;
+    bypassHosts?: string[];
+  };
   providers?: Record<string, SecretProviderConfig>;
   defaults?: {
     env?: string;

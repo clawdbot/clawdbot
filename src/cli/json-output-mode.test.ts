@@ -4,6 +4,7 @@ import { loggingState } from "../logging/state.js";
 import {
   applyResolvedCommandOutputMode,
   hasJsonOutputFlag,
+  isJsonOutputModeActive,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
 
@@ -62,7 +63,16 @@ describe("json output mode", () => {
         expect(loggingState.forceConsoleToStderr).toBe(true);
         applyResolvedCommandOutputMode(false);
         expect(loggingState.forceConsoleToStderr).toBe(false);
+        expect(
+          isJsonOutputModeActive(["node", "openclaw", "config", "set", "x", "1", "--json"]),
+        ).toBe(false);
       },
+    );
+  });
+
+  it("does not treat config set's parser alias as JSON output before Commander resolves it", () => {
+    expect(isJsonOutputModeActive(["node", "openclaw", "config", "set", "x", "1", "--json"])).toBe(
+      false,
     );
   });
 

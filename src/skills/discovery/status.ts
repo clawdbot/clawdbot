@@ -363,6 +363,10 @@ export function buildWorkspaceSkillStatus(
     opts?.entries ??
       loadWorkspaceSkills(workspaceDir, {
         config: opts?.config,
+        // agentId scopes custodian-source discovery only; the "ignore" mode
+        // keeps the entry list unfiltered per the invariant above.
+        agentId: opts?.agentId,
+        agentSkillFilter: "ignore",
         managedSkillsDir,
         bundledSkillsDir: bundledContext.dir,
         includeArchived: true,

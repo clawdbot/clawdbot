@@ -36,8 +36,12 @@ vi.mock("./ssh.js", async () => {
   };
 });
 
-const { createSshSandboxBackend, resolveSshRuntimePaths, sshSandboxBackendManager } =
-  await import("./ssh-backend.js");
+const {
+  createPreprovisionedSshSandboxBackend,
+  createSshSandboxBackend,
+  resolveSshRuntimePaths,
+  sshSandboxBackendManager,
+} = await import("./ssh-backend.js");
 const tempDirs = createTempDirTracker();
 
 function createConfig(): OpenClawConfig {
@@ -480,6 +484,50 @@ describe("ssh sandbox backend", () => {
     });
     expect(sshMocks.createSshSandboxSessionFromSettings).toHaveBeenCalledTimes(2);
     expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("adopts a preprovisioned workdir without clearing or uploading placement files", async () => {
+    const remoteWorkspaceDir = "/srv/openclaw/workspaces/session-1";
+    const backend = await createPreprovisionedSshSandboxBackend(
+      {
+        sessionKey: "agent:worker:task",
+        scopeKey: "agent:worker",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/agent",
+        skillsWorkspaceDir: "/tmp/skills",
+        cfg: createBackendSandboxConfig({ target: "peter@example.com:2222" }),
+      },
+      {
+        runtimeId: "remote-exec:environment-1:7:11",
+        remoteWorkspaceDir,
+      },
+    );
+
+    expect(backend.runtimeId).toBe("remote-exec:environment-1:7:11");
+    expect(backend.workdir).toBe(remoteWorkspaceDir);
+    expect(backend.workdirRoots).toEqual([remoteWorkspaceDir]);
+
+    const execSpec = await backend.buildExecSpec({
+      command: "pwd",
+      env: {},
+      usePty: false,
+    });
+
+    expect(execSpec.argv.at(-1)).toContain(remoteWorkspaceDir);
+    expect(sshMocks.uploadDirectoryToSshTarget).not.toHaveBeenCalled();
+    expect(sshMocks.runSshSandboxCommand).not.toHaveBeenCalled();
+    await backend.runShellCommand({ script: "pwd" });
+    expect(sshMocks.uploadDirectoryToSshTarget).not.toHaveBeenCalled();
+    expect(String(requireSshRunCommandParams().remoteCommand)).not.toContain(
+      "openclaw-sandbox-clear",
+    );
+
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: execSpec.finalizeToken,
+    });
   });
 
   it("validates remote workdirs before exec accepts backend-owned cwd", async () => {

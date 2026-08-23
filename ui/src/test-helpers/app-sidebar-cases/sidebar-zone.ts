@@ -207,14 +207,12 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
   });
 
-  it("renders pinned sessions as their own labelled group below the Pages routes", async () => {
+  it("renders routes and pinned sessions in the canonical entry order", async () => {
     const { sidebar, sessions } = await mountZone();
     const result = sessions.sessions.state.result;
     if (!result) {
       throw new Error("expected session list");
     }
-    // Nothing pinned yet: the group must not reserve a label or its spacing.
-    expect(sidebar.querySelector(".sidebar-nav__head--pinned")).toBeNull();
     sessions.publish({
       result: {
         ...result,
@@ -231,14 +229,7 @@ describe("AppSidebar interleaved zone", () => {
     const labels = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-zone-entry")].map((entry) =>
       entry.textContent?.trim(),
     );
-    // Routes keep their configured order; the pinned session leaves the Pages
-    // list and heads its own group, so it renders after every route.
-    expect(labels).toEqual(["Usage", "Plugins", "Alpha"]);
-    const pinnedHead = sidebar.querySelector(".sidebar-nav__head--pinned");
-    expect(pinnedHead?.textContent?.trim()).toBe("Pinned");
-    expect(
-      pinnedHead?.nextElementSibling?.contains(zoneEntry(sidebar, "session:agent:main:alpha")),
-    ).toBe(true);
+    expect(labels).toEqual(["Usage", "Alpha", "Plugins"]);
     expect(sidebar.querySelector('[data-session-section="pinned"]')).toBeNull();
     const pinnedRow = sidebar.querySelector('[data-session-key="agent:main:alpha"]');
     const pinnedTree = pinnedRow?.closest(".sidebar-session-tree");
@@ -281,6 +272,61 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector('[data-sidebar-entry="plugin:logbook/logbook"]')).toBeNull();
   });
 
+  it("routes active native plugin tabs to their app page and hides inactive tabs", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+
+    gateway.publish({
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        controlUiTabs: [
+          {
+            group: "control",
+            id: "workboard",
+            label: "Workboard",
+            placement: "route:workboard",
+            pluginId: "workboard",
+          },
+        ],
+      },
+    });
+    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
+    sidebar.workboardBoardsReady = true;
+    sidebar.activeRouteId = "workboard";
+    sidebar.activeWorkboardBoardId = "ops";
+    await sidebar.updateComplete;
+
+    const entry = sidebar.querySelector<HTMLAnchorElement>(
+      '[data-sidebar-entry="plugin:workboard/workboard"] > .nav-item',
+    );
+    expect(entry?.textContent).toContain("Workboard");
+    expect(entry?.getAttribute("href")).toBe("/workboard");
+    expect(entry?.classList.contains("nav-item--active")).toBe(true);
+
+    sidebar.sidebarEntries = ["route:workboard", "route:plugins"];
+    await sidebar.updateComplete;
+    const savedEntry = sidebar.querySelector<HTMLAnchorElement>(
+      '[data-sidebar-entry="route:workboard"] > .nav-item',
+    );
+    expect(savedEntry?.getAttribute("href")).toBe("/workboard");
+    expect(sidebar.querySelector('[data-sidebar-entry="plugin:workboard/workboard"]')).toBeNull();
+
+    gateway.publish({
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        controlUiTabs: [],
+      },
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-sidebar-entry="plugin:workboard/workboard"]')).toBeNull();
+    expect(sidebar.querySelector('[data-sidebar-entry="route:workboard"]')).toBeNull();
+  });
+
   it("renders a pinned Workboard board with its icon, color, label, and route", async () => {
     const { sidebar } = await mountZone();
     sidebar.workboardBoards = [
@@ -305,22 +351,6 @@ describe("AppSidebar interleaved zone", () => {
 
     link?.click();
     expect(onNavigate).toHaveBeenCalledWith("workboard", { pathname: "/workboard/ops" });
-  });
-
-  it("keeps the Workboard parent active when the current board is not pinned", async () => {
-    const { sidebar } = await mountZone();
-    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
-    sidebar.workboardBoardsReady = true;
-    sidebar.sidebarEntries = ["route:workboard"];
-    sidebar.activeRouteId = "workboard";
-    sidebar.activeWorkboardBoardId = "ops";
-    await sidebar.updateComplete;
-
-    expect(
-      sidebar
-        .querySelector('[data-sidebar-entry="route:workboard"] .nav-item')
-        ?.classList.contains("nav-item--active"),
-    ).toBe(true);
   });
 
   it("hides Workboard board pins and editor choices when the plugin is inactive", async () => {

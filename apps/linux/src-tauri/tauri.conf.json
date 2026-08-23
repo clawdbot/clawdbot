@@ -61,13 +61,6 @@
           ]
         },
         {
-          "identifier": "canvas-renderer",
-          "description": "The bundled Canvas renderer can relay A2UI actions.",
-          "local": true,
-          "windows": ["canvas"],
-          "permissions": ["allow-canvas-a2ui-action"]
-        },
-        {
           "identifier": "quickchat",
           "description": "Quick Chat can select agents, configure its shortcut, send messages, render hosted widgets, and receive window events.",
           "local": true,

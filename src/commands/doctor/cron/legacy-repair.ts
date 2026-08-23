@@ -1,5 +1,6 @@
 // Doctor cron storage repair mechanics for legacy stores, run logs, payloads, and Codex refs.
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
@@ -15,6 +16,7 @@ import {
 } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.js";
 import { migrateLegacyDreamingPayloadShape } from "./dreaming-payload-migration.js";
@@ -48,11 +50,20 @@ import {
 } from "./repair-plan.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
 import {
+  assertCronStateSchemaSupported,
+  rethrowSqliteSchemaVersionError,
+} from "./schema-safety.js";
+import {
   collectStoredCronCodexRuntimePolicyTargets,
   cronCodexRuntimePolicyTargetKey,
   normalizeStoredCronJobs,
   type CronCodexRuntimePolicyTarget,
 } from "./store-migration.js";
+
+export type CronOwnerProjection =
+  | { kind: "explicit"; agentId: string }
+  | { kind: "runtime-default"; agentId: string }
+  | { kind: "unresolved" };
 
 export type LegacyCronRepairState = {
   storePath: string;
@@ -64,7 +75,7 @@ export type LegacyCronRepairState = {
   legacyImportCount: number;
   sqliteProjectionBackfillCount: number;
   invalidConfigRows: QuarantinedCronConfigJob[];
-  projectedOwnersByJobId: ReadonlyMap<string, { agentId?: unknown; sessionKey?: unknown }>;
+  projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection>;
   rawJobs: Array<Record<string, unknown>>;
 };
 
@@ -89,6 +100,21 @@ function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
     ?.store;
 }
 
+function projectCronOwner(
+  job: { agentId?: unknown; sessionKey?: unknown },
+  runtimeDefaultAgentId: string | undefined,
+): CronOwnerProjection {
+  const explicitAgentId =
+    normalizeOptionalString(job.agentId) ??
+    parseAgentSessionKey(normalizeOptionalString(job.sessionKey))?.agentId;
+  if (explicitAgentId) {
+    return { kind: "explicit", agentId: explicitAgentId };
+  }
+  return runtimeDefaultAgentId
+    ? { kind: "runtime-default", agentId: runtimeDefaultAgentId }
+    : { kind: "unresolved" };
+}
+
 export async function loadLegacyCronRepairState(params: {
   cfg: OpenClawConfig;
   storePath?: string;
@@ -101,6 +127,7 @@ export async function loadLegacyCronRepairState(params: {
   const legacyStoreDetected = await legacyCronStoreFilesExist(storePath);
   const legacyRunLogDetected = await legacyCronRunLogFilesExist(storePath);
   const legacyQuarantine = await loadLegacyCronQuarantineForMigration(storePath);
+  assertCronStateSchemaSupported(params.env);
   if (
     params.onlyIfLegacyDetected &&
     !legacyStoreDetected &&
@@ -113,14 +140,9 @@ export async function loadLegacyCronRepairState(params: {
   const loaded = params.readOnly
     ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath, params.env)
     : await loadCronJobsStoreWithConfigJobs(storePath);
+  const runtimeDefaultAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
   const projectedOwnersByJobId = new Map(
-    loaded.store.jobs.map((job) => [
-      job.id,
-      {
-        ...(Object.hasOwn(job, "agentId") ? { agentId: job.agentId } : {}),
-        ...(Object.hasOwn(job, "sessionKey") ? { sessionKey: job.sessionKey } : {}),
-      },
-    ]),
+    loaded.store.jobs.map((job) => [job.id, projectCronOwner(job, runtimeDefaultAgentId)]),
   );
   const currentEntries = loaded.configJobs.map((job, index) => ({
     sourceIndex: loaded.configJobIndexes[index] ?? index,
@@ -203,6 +225,7 @@ export async function applyLegacyCronStoreRepair(params: {
   migrateCodexModelRefs?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): Promise<LegacyCronRepairResult> {
+  assertCronStateSchemaSupported();
   const { state } = params;
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -225,6 +248,12 @@ export async function applyLegacyCronStoreRepair(params: {
       shouldMigrateCodexRuntimePolicyTarget: (target) =>
         !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
     });
+  warnings.push(
+    ...normalized.unsupportedLegacyTriggerScriptJobs.map(
+      (job) =>
+        `Cron trigger script for ${job} uses legacy Code Mode APIs that cannot be safely converted; inspect the automation and update its trigger script manually to use direct tool calls.`,
+    ),
+  );
   const legacyWebhook = normalizeOptionalString(
     (params.cfg.cron as Record<string, unknown> | undefined)?.webhook,
   );
@@ -286,6 +315,7 @@ export async function applyLegacyCronStoreRepair(params: {
         saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
       }
     } catch (err) {
+      rethrowSqliteSchemaVersionError(err);
       return {
         changes,
         warnings: [
@@ -314,6 +344,7 @@ export async function applyLegacyCronStoreRepair(params: {
     try {
       importedRunLogs = (await migrateLegacyCronRunLogsToSqlite(state.storePath)).importedFiles;
     } catch (err) {
+      rethrowSqliteSchemaVersionError(err);
       warnings.push(
         `Failed importing legacy cron run logs at ${shortenHomePath(state.storePath)}: ${errorMessage(err)}`,
       );
@@ -330,6 +361,7 @@ export async function applyLegacyCronStoreRepair(params: {
         try {
           markLegacyCronMigrationSourceRemoved(state.legacyMigrationSource);
         } catch (err) {
+          rethrowSqliteSchemaVersionError(err);
           warnings.push(
             `Cron store was archived, but its migration receipt could not be finalized: ${errorMessage(err)}`,
           );
@@ -360,6 +392,11 @@ export async function applyLegacyCronStoreRepair(params: {
       `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
     );
   }
+  if (normalized.legacyTriggerScriptJobs.length > 0) {
+    changes.push(
+      `Rewrote ${pluralize(normalized.legacyTriggerScriptJobs.length, "legacy cron trigger script")} to canonical direct tool calls: ${normalized.legacyTriggerScriptJobs.join(", ")}.`,
+    );
+  }
 
   return {
     changes,
@@ -383,6 +420,7 @@ export async function repairLegacyCronStoreWithoutPrompt(params: {
       onlyIfLegacyDetected: true,
     });
   } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
     return {
       changes: [],
       warnings: [
@@ -410,6 +448,7 @@ export async function collectCronCodexRuntimePolicyTargetsReadOnly(params: {
       warnings: [],
     };
   } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
     return {
       targets: [],
       warnings: [
@@ -438,6 +477,7 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
         })
       : { changes: [], warnings: [] };
   } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
     return {
       changes: [],
       warnings: [

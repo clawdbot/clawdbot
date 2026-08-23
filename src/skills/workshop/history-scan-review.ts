@@ -89,6 +89,7 @@ export async function runSkillHistoryScanReview(params: {
       provider: modelRef.provider,
       model: modelRef.model,
       // A smaller configured fallback must not receive a prompt sized for the primary model.
+      modelSelectionLocked: true,
       modelFallbacksOverride: [],
       timeoutMs: HISTORY_SCAN_TIMEOUT_MS,
       runId,

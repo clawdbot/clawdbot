@@ -1,5 +1,5 @@
 // Resolves image-capable model metadata and credential-bound runtime auth.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel } from "../agents/minimax-vlm.js";
 import {
@@ -222,7 +222,6 @@ export async function resolveImageRuntime(
         agentDir: params.agentDir,
         ...(params.agentId ? { agentId: params.agentId } : {}),
         config: params.cfg ?? {},
-        inheritedAuthDir: resolveDefaultAgentDir(params.cfg ?? {}),
         ...(runtimeParams.workspaceDir ? { workspaceDir: runtimeParams.workspaceDir } : {}),
       });
   let leaseRetained = false;

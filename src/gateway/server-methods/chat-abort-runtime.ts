@@ -1,4 +1,10 @@
 import {
+  killAllControlledSubagentRuns,
+  resolveSubagentController,
+} from "../../agents/subagents/registry/subagent-control.js";
+import { listSubagentRunsForController } from "../../agents/subagents/registry/subagent-registry-read.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
   abortChatRunById,
   type ChatAbortControllerEntry,
   type ChatAbortOps,
@@ -23,7 +29,37 @@ import {
 import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext } from "./types.js";
 
-type AbortOrigin = "rpc" | "stop-command";
+type AbortOrigin = "rpc" | "stop-command" | "placement-abandon";
+
+export function prepareControlledSubagentAbort(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+  requesterTurnRunId?: string;
+}) {
+  const controller = resolveSubagentController({
+    cfg: params.cfg,
+    agentSessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  const runs = listSubagentRunsForController(
+    controller.controllerSessionKey,
+    controller.controllerAgentId,
+  ).filter(
+    (entry) =>
+      params.requesterTurnRunId === undefined ||
+      entry.requesterTurnRunId === params.requesterTurnRunId,
+  );
+  return async () =>
+    runs.length === 0
+      ? undefined
+      : await killAllControlledSubagentRuns({
+          cfg: params.cfg,
+          controller,
+          runs,
+          suppressTaskDelivery: true,
+        });
+}
 
 const SESSION_LIFECYCLE_ABORT_REQUESTER: ChatAbortRequester = { isAdmin: true };
 
@@ -35,40 +71,18 @@ type AbortedPartialSnapshot = {
   abortOrigin: AbortOrigin;
 };
 
-function collectSessionAbortPartials(params: {
-  chatRunState: GatewayRequestContext["chatRunState"];
-  runs: ReadonlyArray<{ runId: string; entry: ChatAbortControllerEntry }>;
-  abortOrigin: AbortOrigin;
-}): AbortedPartialSnapshot[] {
-  const out: AbortedPartialSnapshot[] = [];
-  for (const { runId, entry } of params.runs) {
-    const text = params.chatRunState.resolveBuffer(runId).text;
-    if (!text || !text.trim()) {
-      continue;
-    }
-    out.push({
-      runId,
-      sessionId: entry.sessionId,
-      agentId: entry.agentId,
-      text,
-      abortOrigin: params.abortOrigin,
-    });
-  }
-  return out;
-}
-
 export async function persistAbortedPartials(params: {
-  context: Pick<GatewayRequestContext, "logGateway">;
+  context: { logGateway: Pick<GatewayRequestContext["logGateway"], "warn"> };
   sessionKey: string;
   snapshots: AbortedPartialSnapshot[];
 }): Promise<void> {
-  if (params.snapshots.length === 0) {
-    return;
-  }
   for (const snapshot of params.snapshots) {
     const sessionLoadOptions = snapshot.agentId ? { agentId: snapshot.agentId } : undefined;
     const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey, sessionLoadOptions);
-    const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
+    if (snapshot.abortOrigin === "placement-abandon" && entry?.sessionId !== snapshot.sessionId) {
+      throw new Error("Placement abandonment transcript session changed before persistence");
+    }
+    const sessionId = entry?.sessionId ?? snapshot.sessionId;
     const appended = await appendAssistantTranscriptMessage({
       sessionKey: params.sessionKey,
       message: snapshot.text,
@@ -85,9 +99,11 @@ export async function persistAbortedPartials(params: {
       },
     });
     if (!appended.ok) {
-      params.context.logGateway.warn(
-        `chat.abort transcript append failed: ${appended.error ?? "unknown error"}`,
-      );
+      const error = `chat.abort transcript append failed: ${appended.error ?? "unknown error"}`;
+      params.context.logGateway.warn(error);
+      if (snapshot.abortOrigin === "placement-abandon") {
+        throw new Error(error);
+      }
     }
   }
 }
@@ -139,44 +155,34 @@ type SessionAbortOwnerParams = {
 
 /** Authoritative active, pending, or queued Gateway owner for an exact session. */
 export function hasGatewaySessionAbortOwner(params: SessionAbortOwnerParams): boolean {
-  const active = resolveAuthorizedRunsForSessionKeys({
-    chatAbortControllers: params.context.chatAbortControllers,
+  const ownerScope = {
     sessionKeys: params.sessionKeys,
-    sessionIds: [params.sessionId],
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
     requester: SESSION_LIFECYCLE_ABORT_REQUESTER,
-    includeProtectedRuns: true,
-  });
-  if (active.authorizedRuns.length > 0) {
-    return true;
-  }
-  const queued = resolveAuthorizedQueuedTurnsForSession({
-    context: params.context,
-    sessionKeys: params.sessionKeys,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    defaultAgentId: params.defaultAgentId,
-    requester: SESSION_LIFECYCLE_ABORT_REQUESTER,
-  });
-  if (queued.authorized.length > 0) {
-    return true;
-  }
-  for (const keyPrefix of ["agent:", PENDING_CHAT_SEND_DEDUPE_PREFIX]) {
-    const pending = resolveAuthorizedPreRegisteredRunsForSessionKeys({
-      context: params.context,
-      sessionKeys: params.sessionKeys,
-      agentId: params.agentId,
-      defaultAgentId: params.defaultAgentId,
-      requester: SESSION_LIFECYCLE_ABORT_REQUESTER,
-      keyPrefix,
+  };
+  return (
+    resolveAuthorizedRunsForSessionKeys({
+      chatAbortControllers: params.context.chatAbortControllers,
+      sessionIds: [params.sessionId],
+      ...ownerScope,
       includeProtectedRuns: true,
-    });
-    if (pending.authorizedRuns.length > 0) {
-      return true;
-    }
-  }
-  return false;
+    }).authorizedRuns.length > 0 ||
+    resolveAuthorizedQueuedTurnsForSession({
+      context: params.context,
+      sessionId: params.sessionId,
+      ...ownerScope,
+    }).authorized.length > 0 ||
+    ["agent:", PENDING_CHAT_SEND_DEDUPE_PREFIX].some(
+      (keyPrefix) =>
+        resolveAuthorizedPreRegisteredRunsForSessionKeys({
+          context: params.context,
+          ...ownerScope,
+          keyPrefix,
+          includeProtectedRuns: true,
+        }).authorizedRuns.length > 0,
+    )
+  );
 }
 
 export function cancelWorkerInferenceForSession(params: {
@@ -245,43 +251,25 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     includeProtectedRuns: params.includeProtectedRuns,
     excludeRunIds: params.excludeRunIds,
   });
-  const {
-    authorizedRuns: authorizedPendingAgentRuns,
-    hasUnauthorizedRuns: hasUnauthorizedPendingAgentRuns,
-    hasUnauthorizedProtectedRuns: hasUnauthorizedProtectedPendingAgentRuns,
-    hasProtectedRuns: hasProtectedPendingAgentRuns,
-  } = resolveAuthorizedPreRegisteredRunsForSessionKeys({
-    context: params.context,
-    sessionKeys,
-    agentId: params.agentId,
-    defaultAgentId: params.defaultAgentId,
-    requester: params.requester,
-    keyPrefix: "agent:",
-    preserveSideRuns: params.preserveSideRuns,
-    includeProtectedRuns: params.includeProtectedRuns,
-    excludeRunIds: params.excludeRunIds,
-  });
-  const {
-    authorizedRuns: authorizedPendingChatRuns,
-    hasUnauthorizedRuns: hasUnauthorizedPendingChatRuns,
-    hasUnauthorizedProtectedRuns: hasUnauthorizedProtectedPendingChatRuns,
-    hasProtectedRuns: hasProtectedPendingChatRuns,
-  } = resolveAuthorizedPreRegisteredRunsForSessionKeys({
-    context: params.context,
-    sessionKeys,
-    agentId: params.agentId,
-    defaultAgentId: params.defaultAgentId,
-    requester: params.requester,
-    keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
-    preserveSideRuns: params.preserveSideRuns,
-    includeProtectedRuns: params.includeProtectedRuns,
-    excludeRunIds: params.excludeRunIds,
-  });
+  const resolvePendingRuns = (keyPrefix: string) =>
+    resolveAuthorizedPreRegisteredRunsForSessionKeys({
+      context: params.context,
+      sessionKeys,
+      agentId: params.agentId,
+      defaultAgentId: params.defaultAgentId,
+      requester: params.requester,
+      keyPrefix,
+      preserveSideRuns: params.preserveSideRuns,
+      includeProtectedRuns: params.includeProtectedRuns,
+      excludeRunIds: params.excludeRunIds,
+    });
+  const pendingAgent = resolvePendingRuns("agent:");
+  const pendingChat = resolvePendingRuns(PENDING_CHAT_SEND_DEDUPE_PREFIX);
+  const pendingPlans = [pendingAgent, pendingChat];
   const hasAuthorizedGatewayRuns =
     authorizedRuns.length > 0 ||
-    authorizedPendingAgentRuns.length > 0 ||
-    authorizedPendingChatRuns.length > 0 ||
-    queuedPlan.authorized.length > 0;
+    queuedPlan.authorized.length > 0 ||
+    pendingPlans.some((plan) => plan.authorizedRuns.length > 0);
   const workerService = asWorkerInferenceControl(params.context.workerEnvironmentService);
   const workerSessionId = params.sessionId;
   const hasWorkerRun = Boolean(
@@ -302,16 +290,14 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   );
   const hasUnauthorizedOwner =
     hasUnauthorizedActiveRuns ||
-    hasUnauthorizedPendingAgentRuns ||
-    hasUnauthorizedPendingChatRuns ||
     queuedPlan.hasUnauthorizedRuns ||
+    pendingPlans.some((plan) => plan.hasUnauthorizedRuns) ||
     (hasWorkerRun && !hasControllerRepresentedWorkerRun && !params.requester.isAdmin);
   const hasProtectedLifecycleRuns =
-    hasProtectedActiveRuns || hasProtectedPendingAgentRuns || hasProtectedPendingChatRuns;
+    hasProtectedActiveRuns || pendingPlans.some((plan) => plan.hasProtectedRuns);
   const hasUnauthorizedProtectedOwner =
     hasUnauthorizedProtectedActiveRuns ||
-    hasUnauthorizedProtectedPendingAgentRuns ||
-    hasUnauthorizedProtectedPendingChatRuns;
+    pendingPlans.some((plan) => plan.hasUnauthorizedProtectedRuns);
   const hasUnauthorizedLifecycleOwner =
     Boolean(params.onAuthorizedAfterQueuedAbort) && hasUnauthorizedProtectedOwner;
   const canRunLifecycleCleanup = !hasUnauthorizedOwner && !hasProtectedLifecycleRuns;
@@ -343,10 +329,19 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
       unauthorized: false,
     };
   }
-  const snapshots = collectSessionAbortPartials({
-    chatRunState: params.context.chatRunState,
-    runs: authorizedRuns,
-    abortOrigin: params.abortOrigin,
+  const snapshots = authorizedRuns.flatMap(({ runId, entry }) => {
+    const text = params.context.chatRunState.resolveBuffer(runId).text;
+    return text?.trim()
+      ? [
+          {
+            runId,
+            sessionId: entry.sessionId,
+            agentId: entry.agentId,
+            text,
+            abortOrigin: params.abortOrigin,
+          },
+        ]
+      : [];
   });
   // Abort queued owners before any active-work signal can promote a successor.
   // Keep them first in the response to preserve the established runIds ordering.
@@ -372,7 +367,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   }
   const endedAt = Date.now();
   const stopReason = params.stopReason ?? "rpc";
-  for (const { runId, sessionKey, payload } of authorizedPendingAgentRuns) {
+  for (const { runId, sessionKey, payload } of pendingAgent.authorizedRuns) {
     writePreRegisteredAgentAbort({
       context: params.context,
       runId,
@@ -383,7 +378,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     });
     runIds.push(runId);
   }
-  for (const { runId, payload } of authorizedPendingChatRuns) {
+  for (const { runId, payload } of pendingChat.authorizedRuns) {
     writePreRegisteredChatAbort({
       context: params.context,
       runId,

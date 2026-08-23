@@ -3,44 +3,48 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
+  runOutsideGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
-import type { CronJob } from "../types.js";
 import {
-  hasScheduledNextRunAtMs,
-  nextWakeAtMs,
-  recomputeNextRunsForMaintenance,
-} from "./jobs-scheduling.js";
+  finishCronRunReceiptInDatabase,
+  releaseLocalCronRunReceiptOwnership,
+} from "../store/run-receipt-store.js";
+import type { CronJob } from "../types.js";
+import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
+import { summarizeCronJobSchedule } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
   cleanupQueuedCronRunReservations,
   executeQueuedCronRun,
+  persistQueuedCronRunReservations,
   releaseQueuedCronRun,
   reserveQueuedCronRun,
   resolveRunConcurrency,
+  setCronRunCapacityListener,
+  tryAcquireCronRunSlots,
 } from "./run-admission.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import {
+  recomputeUnownedCronSchedules,
+  recoverNonTerminalCronRunReceipts,
+} from "./run-recovery.js";
+import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
+import type { CronServiceState } from "./state.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
+import { createCronCapacityRecheckTracker } from "./timer-capacity-recheck.js";
 import {
   MAX_CRON_TIMER_DELAY_MS,
   MIN_REFIRE_GAP_MS,
   type TimedCronRunOutcome,
 } from "./timer-execution-timeout.js";
-import { maybeNotifyIsolatedAgentSetupTimeoutWithRecovery } from "./timer-notifications.js";
+import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 import {
   createCompletedCronRunOutcomeDrain,
   finalizeCompletedCronRunOutcomes,
 } from "./timer-outcome-finalization.js";
 import { collectRunnableJobs } from "./timer-runnable.js";
-
-export function maybeNotifyIsolatedAgentSetupTimeout(
-  state: CronServiceState,
-  result: Parameters<typeof maybeNotifyIsolatedAgentSetupTimeoutWithRecovery>[1],
-): boolean {
-  return maybeNotifyIsolatedAgentSetupTimeoutWithRecovery(state, result, () => armTimer(state));
-}
 
 /** Arms the cron timer for the next wake or a maintenance recheck. */
 export function armTimer(state: CronServiceState) {
@@ -56,17 +60,11 @@ export function armTimer(state: CronServiceState) {
     state.deps.log.debug({}, "cron: armTimer skipped - scheduler disabled");
     return;
   }
-  if (state.restartRecoveryPending) {
-    state.deps.log.warn({}, "cron: armTimer skipped - restart recovery pending");
-    return;
-  }
-  const nextAt = nextWakeAtMs(state);
+  const { nextWakeAtMs: nextAt, jobCount, enabledCount } = summarizeCronJobSchedule(state);
   if (!nextAt) {
-    const jobCount = state.store?.jobs.length ?? 0;
-    const enabledCount = state.store?.jobs.filter((j) => j.enabled).length ?? 0;
-    const withNextRun =
-      state.store?.jobs.filter((j) => j.enabled && hasScheduledNextRunAtMs(j.state.nextRunAtMs))
-        .length ?? 0;
+    // The summary uses the same scheduled-timestamp predicate as this branch,
+    // so no explicitly enabled job can have a next run here.
+    const withNextRun = 0;
     if (enabledCount > 0) {
       armRunningRecheckTimer(state);
       state.deps.log.debug(
@@ -117,10 +115,33 @@ function armRunningRecheckTimer(state: CronServiceState) {
 
 function setCronTimer(state: CronServiceState, delayMs: number): void {
   state.timer = setTimeout(() => {
-    void onTimer(state).catch((err: unknown) => {
-      state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+    // The timer outlives the tick that armed it, so it must own a new Gateway root.
+    runOutsideGatewayRootWorkAdmission(() => {
+      void onTimer(state).catch((err: unknown) => {
+        state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+      });
     });
   }, delayMs);
+}
+
+/** Consume a released slot without routing overdue work through the refire floor. */
+function requestImmediateCronRecheck(state: CronServiceState): Promise<void> | undefined {
+  if (state.stopped || state.schedulingPaused || !state.deps.cronEnabled) {
+    return undefined;
+  }
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+  return onTimer(state).catch((err: unknown) => {
+    state.deps.log.error({ err: String(err) }, "cron: immediate capacity recheck failed");
+  });
+}
+
+function requestIndependentImmediateCronRecheck(
+  state: CronServiceState,
+): Promise<void> | undefined {
+  return runOutsideGatewayRootWorkAdmission(() => requestImmediateCronRecheck(state));
 }
 
 /** Handles one cron timer tick under the process-wide root work admission. */
@@ -148,47 +169,31 @@ async function onAdmittedTimer(state: CronServiceState) {
   if (state.stopped || state.schedulingPaused) {
     return;
   }
-  if (state.restartRecoveryPending) {
-    state.deps.log.warn({}, "cron: timer tick skipped - restart recovery pending");
-    return;
-  }
-  if (state.running) {
-    // Re-arm the timer so the scheduler keeps ticking even when a job is
-    // still executing.  Without this, a long-running job (e.g. an agentTurn
-    // exceeding MAX_CRON_TIMER_DELAY_MS) causes the clamped 60 s timer to fire
-    // while `running` is true.  The early return then leaves no timer set,
-    // silently killing the scheduler until the next gateway restart.
-    //
-    // We use MAX_CRON_TIMER_DELAY_MS as a fixed re-check interval to avoid a
-    // zero-delay hot-loop when past-due jobs are waiting for the current
-    // execution to finish.
-    // See: https://github.com/openclaw/openclaw/issues/12025
-    armRunningRecheckTimer(state);
-    return;
-  }
-  let sessionReaperDefaultAgentId: string | undefined;
   state.running = true;
+  state.activeTimerTicks += 1;
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
+  const capacityRechecks = createCronCapacityRecheckTracker(
+    () => requestImmediateCronRecheck(state),
+    () => requestIndependentImmediateCronRecheck(state),
+  );
+  let allowEmptyCapacityRecheck = false;
   try {
-    const hasSessionReaperStore = Boolean(
-      state.deps.resolveSessionStorePath || state.deps.sessionStorePath,
-    );
-    sessionReaperDefaultAgentId = hasSessionReaperStore
-      ? (state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId)?.trim()
-      : undefined;
-    if (hasSessionReaperStore && !sessionReaperDefaultAgentId) {
-      throw new Error("Cron session reaper requires the prepared configured default agent id.");
-    }
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      if (state.stopped || state.restartRecoveryPending) {
-        state.deps.log.warn(
-          { stopped: state.stopped, restartRecoveryPending: state.restartRecoveryPending },
-          "cron: due job reservation skipped - scheduler unavailable",
-        );
+      if (state.stopped) {
+        state.deps.log.warn({}, "cron: due job reservation skipped - scheduler unavailable");
         return [];
+      }
+      // Timer-owned liveness reconciliation is bounded to durable non-terminal markers.
+      const leaseRecovery = recoverNonTerminalCronRunReceipts(state);
+      runPostPersistCronNotifications(state, leaseRecovery.notifications);
+      for (const receipt of leaseRecovery.receipts) {
+        enrollForeignReceipt(state, receipt);
+      }
+      if (leaseRecovery.repaired) {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       }
       const dueCheckNow = state.deps.nowMs();
       const due = collectRunnableJobs(state, dueCheckNow);
@@ -197,55 +202,99 @@ async function onAdmittedTimer(state: CronServiceState) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
         // values without execution. This prevents jobs from being silently skipped
         // when the timer wakes up but findDueJobs returns empty (see #13992).
-        const rollbackSnapshot = snapshotStoreForRollback(state);
-        const postPersistNotifications: DeferredCronNotifications = [];
-        const changed = recomputeNextRunsForMaintenance(state, {
+        const maintenance = recomputeUnownedCronSchedules(state, {
           recomputeExpired: true,
           nowMs: dueCheckNow,
-          deferredNotifications: postPersistNotifications,
         });
-        if (changed) {
-          await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
-        }
+        runPostPersistCronNotifications(state, maintenance.notifications);
+        applyCronRuntimeRowsToState(state, maintenance.jobs);
+        return [];
+      }
+
+      const admissionReleases = tryAcquireCronRunSlots(state, due.length);
+      const admittedDue = due.slice(0, admissionReleases.length);
+      if (admittedDue.length < due.length) {
+        // Keep unreserved work durable and wake it as soon as shared capacity
+        // becomes available. A partial batch gates that wake until its own
+        // receipt-backed reservations have either activated or been fenced.
+        setCronRunCapacityListener(
+          state,
+          admittedDue.length > 0
+            ? () => capacityRechecks.request()
+            : () =>
+                // A zero-admission tick returns before this wake and cannot drain it.
+                void requestIndependentImmediateCronRecheck(state),
+        );
+        allowEmptyCapacityRecheck = admittedDue.length > 0;
+      }
+      if (admittedDue.length === 0) {
         return [];
       }
 
       const now = state.deps.nowMs();
-      const reservationRollbackSnapshot = snapshotStoreForRollback(state);
-      for (const job of due) {
-        job.state.queuedAtMs = now;
+      try {
+        const reservedJobs = await persistQueuedCronRunReservations({
+          state,
+          candidates: admittedDue,
+          reservedAtMs: now,
+        });
+        const reservedDue = reservedJobs.map(({ job, runReceipt }, index) => ({
+          id: job.id,
+          job,
+          reservedAtMs: now,
+          reservationIdentity: reserveQueuedCronRun(state, job.id, now, {
+            runReceipt,
+          }),
+          releaseAdmission: admissionReleases[index]!,
+        }));
+        for (const releaseAdmission of admissionReleases.slice(reservedDue.length)) {
+          releaseAdmission();
+        }
+        return reservedDue;
+      } catch (error) {
+        for (const releaseAdmission of admissionReleases) {
+          releaseAdmission();
+        }
+        throw error;
       }
-      await persistOrRestore(state, reservationRollbackSnapshot);
-      const reservedDue = due.map((job) => ({
-        id: job.id,
-        job,
-        reservedAtMs: now,
-        reservationIdentity: reserveQueuedCronRun(state, job.id, now),
-      }));
-      return reservedDue;
     });
 
+    // Future unclaimed work must stay armed while this batch executes. When
+    // overdue work is capacity-blocked, the release listener is the fast path
+    // and this minute timer is only a bounded safety recheck.
+    if (state.runAdmission.capacityListener) {
+      armRunningRecheckTimer(state);
+    } else {
+      armTimer(state);
+    }
+
     const concurrency = Math.min(resolveRunConcurrency(), Math.max(1, dueJobs.length));
+    capacityRechecks.initializeActivations(dueJobs.length, allowEmptyCapacityRecheck);
     const completedOutcomeDrain = createCompletedCronRunOutcomeDrain(state);
     const claimedIndexes = new Set<number>();
     let reservationReleaseError: unknown;
     let setupTimeoutNotified = false;
     let stopAdmittingDueJobs = false;
-    const hasSetupTimeoutRecoveryHandler = state.deps.onIsolatedAgentSetupTimeout !== undefined;
     const releaseUnclaimedDueJobReservationsWithRetry = async () => {
-      const reservations = dueJobs
-        .filter((_, index) => !claimedIndexes.has(index))
-        .map((due) => ({
-          jobId: due.id,
-          reservationIdentity: due.reservationIdentity,
-        }));
-      await cleanupQueuedCronRunReservations({
-        state,
-        reservations,
-        recompute: "maintenance",
-      });
+      const unclaimed = dueJobs.filter((_, index) => !claimedIndexes.has(index));
+      const reservations = unclaimed.map((due) => ({
+        jobId: due.id,
+        reservationIdentity: due.reservationIdentity,
+      }));
+      try {
+        await cleanupQueuedCronRunReservations({
+          state,
+          reservations,
+          recompute: "maintenance",
+        });
+      } finally {
+        for (const due of unclaimed) {
+          due.releaseAdmission();
+        }
+      }
     };
     if (state.stopped) {
+      capacityRechecks.abort();
       await releaseUnclaimedDueJobReservationsWithRetry();
       return;
     }
@@ -257,8 +306,17 @@ async function onAdmittedTimer(state: CronServiceState) {
       completedResults = await pMap(
         dueJobs,
         async (due, index): Promise<TimedCronRunOutcome | typeof pMapSkip> => {
-          if (stopAdmittingDueJobs || state.stopped || state.restartRecoveryPending) {
+          let initialActivationSettled = false;
+          const settleThisInitialActivation = (allowRecheck: boolean) => {
+            if (initialActivationSettled) {
+              return;
+            }
+            initialActivationSettled = true;
+            capacityRechecks.settleActivation(allowRecheck);
+          };
+          if (stopAdmittingDueJobs || state.stopped) {
             stopAdmittingDueJobs = true;
+            settleThisInitialActivation(false);
             return pMapSkip;
           }
           try {
@@ -267,15 +325,48 @@ async function onAdmittedTimer(state: CronServiceState) {
               jobId: due.id,
               reservedAtMs: due.reservedAtMs,
               reservationIdentity: due.reservationIdentity,
+              admissionRelease: due.releaseAdmission,
               isUnavailable: () => stopAdmittingDueJobs,
               onUnavailable: () => {
                 stopAdmittingDueJobs = true;
               },
-              onActivated: () => claimedIndexes.add(index),
-              onNotRunnable: async (job) => {
-                const rollbackSnapshot = snapshotStoreForRollback(state);
-                delete job.state.queuedAtMs;
-                await persistOrRestore(state, rollbackSnapshot);
+              onActivated: () => {
+                claimedIndexes.add(index);
+                settleThisInitialActivation(true);
+              },
+              onNotRunnable: async () => {
+                const committedJob = commitCronRuntimeRows({
+                  state,
+                  jobIds: [due.id],
+                  operationLabel: "cron.skipped-reservation-cleanup",
+                  mutate: ({ database, jobs }) => {
+                    const current = jobs.get(due.id);
+                    const ownership = state.queuedRunReservationsByJobId.get(due.id);
+                    if (
+                      !current ||
+                      ownership?.identity !== due.reservationIdentity ||
+                      ownership.markerAtMs !== current.state.queuedAtMs
+                    ) {
+                      return { value: undefined };
+                    }
+                    finishCronRunReceiptInDatabase({
+                      database,
+                      handle: ownership.runReceipt,
+                      status: "skipped",
+                      finishedAtMs: state.deps.nowMs(),
+                      error: "cron scheduled reservation became ineligible",
+                    });
+                    delete current.state.queuedAtMs;
+                    return { upsertJobIds: [current.id], value: current };
+                  },
+                });
+                if (committedJob) {
+                  applyCronRuntimeRowsToState(state, [committedJob]);
+                }
+                const ownership = state.queuedRunReservationsByJobId.get(due.id);
+                if (ownership?.identity === due.reservationIdentity) {
+                  releaseLocalCronRunReceiptOwnership(ownership.runReceipt);
+                }
                 releaseQueuedCronRun(state, due.id, due.reservationIdentity);
               },
               onSetupError: (job, errorText) => {
@@ -304,9 +395,9 @@ async function onAdmittedTimer(state: CronServiceState) {
                   return false;
                 }
                 if (
-                  hasSetupTimeoutRecoveryHandler &&
                   finalizedResults.length > 0 &&
-                  !setupTimeoutNotified
+                  !setupTimeoutNotified &&
+                  maybeNotifyIsolatedAgentSetupTimeout(state, result)
                 ) {
                   setupTimeoutNotified = true;
                   stopAdmittingDueJobs = true;
@@ -315,7 +406,6 @@ async function onAdmittedTimer(state: CronServiceState) {
                   } catch (err) {
                     reservationReleaseError = err;
                   }
-                  maybeNotifyIsolatedAgentSetupTimeout(state, result);
                 }
                 return true;
               },
@@ -325,6 +415,7 @@ async function onAdmittedTimer(state: CronServiceState) {
               return pMapSkip;
             }
             if (execution.kind === "skipped") {
+              settleThisInitialActivation(!stopAdmittingDueJobs && !state.stopped);
               return pMapSkip;
             }
             if (execution.handled) {
@@ -335,6 +426,8 @@ async function onAdmittedTimer(state: CronServiceState) {
             stopAdmittingDueJobs = true;
             batchExecutionError ??= error;
             return pMapSkip;
+          } finally {
+            settleThisInitialActivation(false);
           }
         },
         // Let already-admitted mappers drain so their outcomes can be persisted
@@ -397,50 +490,63 @@ async function onAdmittedTimer(state: CronServiceState) {
         : new Error(formatErrorMessage(batchExecutionError));
     }
   } finally {
+    capacityRechecks.abort();
+    await capacityRechecks.drain();
     try {
       // Reaper discovery is maintenance: failure must never strand the timer
       // or leave the scheduler's execution slot permanently occupied.
-      if (sessionReaperDefaultAgentId) {
-        const defaultAgentId = sessionReaperDefaultAgentId;
-        const storeTargets = new Map<string, { agentId: string; storePath: string }>();
-        const addStoreTarget = (agentId: string, storePath: string) => {
-          storeTargets.set(`${agentId}\0${storePath}`, { agentId, storePath });
+      if (state.deps.resolveSessionStorePath || state.deps.sessionStorePath) {
+        const configuredDefaultAgentId = (
+          state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId
+        )?.trim();
+        const defaultAgentId = configuredDefaultAgentId
+          ? normalizeAgentId(configuredDefaultAgentId)
+          : undefined;
+        const reaperAgentIds = new Set(
+          (state.deps.resolveSessionStoreAgentIds?.() ?? []).map(normalizeAgentId),
+        );
+        const resolveJobAgentId = (job: CronJob): string | undefined => {
+          if (typeof job.agentId === "string" && job.agentId.trim()) {
+            return normalizeAgentId(job.agentId);
+          }
+          try {
+            return resolveAgentIdFromSessionKey(job.sessionKey, defaultAgentId);
+          } catch {
+            // An ownerless legacy job needs a configured default for cleanup.
+            // Other prepared owners remain valid reaper targets without one.
+            return undefined;
+          }
         };
-        const resolveJobAgentId = (job: CronJob) =>
-          typeof job.agentId === "string" && job.agentId.trim()
-            ? normalizeAgentId(job.agentId)
-            : resolveAgentIdFromSessionKey(job.sessionKey, defaultAgentId);
-        const configuredAgentIds = state.deps.resolveSessionStoreAgentIds?.() ?? [];
-        if (state.deps.resolveSessionStorePath) {
-          for (const agentId of configuredAgentIds) {
-            const normalizedAgentId = normalizeAgentId(agentId);
-            addStoreTarget(
-              normalizedAgentId,
-              state.deps.resolveSessionStorePath(normalizedAgentId),
-            );
+        for (const job of state.store?.jobs ?? []) {
+          const agentId = resolveJobAgentId(job);
+          if (agentId) {
+            reaperAgentIds.add(agentId);
           }
-          for (const job of state.store?.jobs ?? []) {
-            const agentId = resolveJobAgentId(job);
-            addStoreTarget(agentId, state.deps.resolveSessionStorePath(agentId));
-          }
-          addStoreTarget(defaultAgentId, state.deps.resolveSessionStorePath(defaultAgentId));
-        } else if (state.deps.sessionStorePath) {
-          for (const agentId of configuredAgentIds) {
-            addStoreTarget(normalizeAgentId(agentId), state.deps.sessionStorePath);
-          }
-          for (const job of state.store?.jobs ?? []) {
-            addStoreTarget(resolveJobAgentId(job), state.deps.sessionStorePath);
-          }
-          addStoreTarget(defaultAgentId, state.deps.sessionStorePath);
+        }
+        if (defaultAgentId) {
+          reaperAgentIds.add(defaultAgentId);
         }
 
-        if (storeTargets.size > 0) {
+        if (reaperAgentIds.size > 0) {
           const nowMs = state.deps.nowMs();
-          for (const { agentId, storePath } of storeTargets.values()) {
+          for (const agentId of reaperAgentIds) {
+            if (state.deps.isAgentAvailable?.(agentId) === false) {
+              if (!state.reportedUnavailableReaperAgentIds.has(agentId)) {
+                state.reportedUnavailableReaperAgentIds.add(agentId);
+                state.deps.log.debug({ agentId }, "cron-reaper: skipped unavailable agent");
+              }
+              continue;
+            }
+            state.reportedUnavailableReaperAgentIds.delete(agentId);
+            const storePath = state.deps.resolveSessionStorePath
+              ? state.deps.resolveSessionStorePath(agentId)
+              : state.deps.sessionStorePath;
+            if (!storePath) {
+              continue;
+            }
             try {
               await sweepCronRunSessions({
                 agentId,
-                defaultAgentId,
                 cronConfig: state.deps.cronConfig,
                 sessionStorePath: storePath,
                 nowMs,
@@ -458,8 +564,11 @@ async function onAdmittedTimer(state: CronServiceState) {
     } catch (err) {
       state.deps.log.warn({ err: String(err) }, "cron: session reaper preparation failed");
     } finally {
-      state.running = false;
-      armTimer(state);
+      state.activeTimerTicks = Math.max(0, state.activeTimerTicks - 1);
+      state.running = state.activeTimerTicks > 0;
+      if (!state.running) {
+        armTimer(state);
+      }
     }
   }
 }

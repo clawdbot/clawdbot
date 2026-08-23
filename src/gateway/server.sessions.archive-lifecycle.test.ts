@@ -310,14 +310,12 @@ test("sessions.patch cancels active work and commits only after admission and te
   await writeSessionStore({
     entries: { [sessionKey]: sessionStoreEntry(sessionId) },
   });
-  let interrupted = false;
+  const interrupted = createDeferredCore();
   const admission = await beginSessionWorkAdmission({
     scope: storePath,
     identities: [sessionKey, sessionId],
     assertAllowed: () => {},
-    onInterrupt: () => {
-      interrupted = true;
-    },
+    onInterrupt: () => interrupted.resolve(),
   });
   const persistence = createDeferredCore();
   const active = activeRunContext({
@@ -336,10 +334,8 @@ test("sessions.patch cancels active work and commits only after admission and te
         client: { connId: "archive-writer", connect: { scopes: ["operator.write"] } } as never,
       },
     );
-    await vi.waitFor(() => {
-      expect(interrupted).toBe(true);
-      expect(active.controller.signal.aborted).toBe(true);
-    });
+    await interrupted.promise;
+    expect(active.controller.signal.aborted).toBe(true);
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 
     let replacementAdmitted = false;
@@ -714,10 +710,10 @@ test("sessions.patch fails closed when active worker inference has no archive dr
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 });
 
-test("sessions.patch retains the archive drain through the ordered audit append", async () => {
+test("sessions.patch releases the archive drain without appending a transcript message", async () => {
   const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:archive-drain-audit";
-  const sessionId = "session-archive-drain-audit";
+  const sessionKey = "agent:main:archive-drain-no-transcript";
+  const sessionId = "session-archive-drain-no-transcript";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   const release = vi.fn();
   const append = vi.spyOn(SessionManager, "appendMessageToTranscript");
@@ -726,16 +722,7 @@ test("sessions.patch retains the archive drain through the ordered audit append"
       "sessions.patch",
       { key: sessionKey, archived: true, expectedSessionId: sessionId },
       {
-        client: {
-          authenticatedUserId: "archive-reviewer@example.com",
-          authenticatedUserProfile: {
-            profileId: "archive-reviewer",
-            displayName: "Archive Reviewer",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
-          connect: { scopes: ["operator.write"] },
-        } as never,
+        client: identifiedClient("archive-reviewer"),
         context: {
           workerEnvironmentService: {
             beginInferenceSessionDrain: vi.fn(() => ({
@@ -752,9 +739,8 @@ test("sessions.patch retains the archive drain through the ordered audit append"
     );
 
     expect(archived.ok).toBe(true);
-    expect(append).toHaveBeenCalledOnce();
+    expect(append).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
-    expect(append.mock.invocationCallOrder[0]).toBeLessThan(release.mock.invocationCallOrder[0]!);
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
   } finally {
     append.mockRestore();

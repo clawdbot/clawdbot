@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
@@ -99,6 +100,12 @@ describe("describeHeartbeatSessionTargetIssues", () => {
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("resolved to agent:ops:slack:channel:c123");
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "ops" });
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "ops",
+    }).path;
+    expect(warnings[0]).toContain(`no entry in ${databasePath}`);
+    expect(warnings[0]).not.toContain(`no entry in ${storePath}`);
     expect(warnings[0]).toContain('reason="no-target"');
     expect(warnings[0]).toContain("Heartbeats will run");
   });

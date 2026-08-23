@@ -306,6 +306,7 @@ describe("createCodexAttemptTurnWatchController", () => {
       isCompleted: () => false,
       isTerminalTurnNotificationQueued: () => false,
       getActiveAppServerTurnRequests: () => 0,
+      getActiveAppServerTurnRequestsWithoutTimeout: () => 0,
       getActiveTurnItemCount: () => 0,
       getActiveCompletionBlockerItemCount: () => 0,
       getActiveFinalizationHookCount: () => 0,
@@ -714,7 +715,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
       assistantText: "Finished.",
       activeCount: 1,
       completedCount: 1,
-      timeoutKind: "progress",
+      timeoutKind: "terminal",
       replayBlockedReason: "potential_side_effect",
     },
     {
@@ -1004,10 +1005,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const harness = createStartedThreadHarness();
-    vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockResolvedValue({
-      action: "accept",
-      content: null,
-      _meta: null,
+    vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest").mockResolvedValue({
+      kind: "handled",
+      response: { action: "accept", content: null, _meta: null },
     });
     const params = makeTestParams({ timeoutMs: 10_000 });
     const onRunProgress = vi.fn();
@@ -1071,15 +1071,14 @@ describe("runCodexAppServerAttempt turn watches", () => {
   it("keeps turn request activity active until elicitation handling resolves", async () => {
     const harness = createStartedThreadHarness();
     const bridgedResponse = {
-      action: "accept",
-      content: null,
-      _meta: null,
+      kind: "handled",
+      response: { action: "accept", content: null, _meta: null },
     } as const;
     let resolveBridge!: (value: typeof bridgedResponse) => void;
     const bridgePromise = new Promise<typeof bridgedResponse>((resolve) => {
       resolveBridge = resolve;
     });
-    vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockImplementation(
+    vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest").mockImplementation(
       async () => await bridgePromise,
     );
     const params = makeTestParams({ timeoutMs: 500 });
@@ -1092,6 +1091,16 @@ describe("runCodexAppServerAttempt turn watches", () => {
       turnTerminalIdleTimeoutMs: 1_000,
     });
     await harness.waitForMethod("turn/start");
+    await harness.notify(
+      itemNotification("item/started", {
+        id: "mcp-hung",
+        type: "mcpToolCall",
+        server: "server-1",
+        tool: "approval-gated-tool",
+        status: "inProgress",
+        arguments: {},
+      }),
+    );
 
     const response = harness.handleServerRequest({
       id: "request-pending-elicitation",
@@ -1127,7 +1136,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     ).toBe(false);
 
     resolveBridge(bridgedResponse);
-    await expect(response).resolves.toEqual(bridgedResponse);
+    await expect(response).resolves.toEqual(bridgedResponse.response);
     await vi.waitFor(
       () =>
         expect(onRunProgress).toHaveBeenCalledWith(
@@ -1144,6 +1153,70 @@ describe("runCodexAppServerAttempt turn watches", () => {
       aborted: false,
       timedOut: false,
       promptError: null,
+    });
+  });
+
+  it("times out a hung elicitation at the attempt-progress deadline", async () => {
+    const harness = createStartedThreadHarness();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    let requestAborted = false;
+    vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest").mockImplementation(
+      async ({ signal }) =>
+        await new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              requestAborted = true;
+              reject(new Error("elicitation aborted"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const params = makeTestParams({ timeoutMs: 100 });
+    const onRunProgress = vi.fn();
+    params.onRunProgress = onRunProgress;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 500,
+      turnAssistantCompletionIdleTimeoutMs: 500,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+
+    const response = harness.handleServerRequest({
+      id: "request-hung-elicitation",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        mode: "form",
+        message: "Approve?",
+        requestedSchema: { type: "object", properties: {} },
+        serverName: "server-1",
+        _meta: null,
+      },
+    });
+    await vi.waitFor(
+      () =>
+        expect(onRunProgress).toHaveBeenCalledWith(
+          expect.objectContaining({
+            reason: "request:mcpServer/elicitation/request:start",
+          }),
+        ),
+      fastWait,
+    );
+
+    const result = await run;
+    await expect(response).rejects.toThrow("elicitation aborted");
+    expectTimedOutAttempt(result);
+    expect(requestAborted).toBe(true);
+    const warnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for progress",
+    );
+    expect(warnCall?.[1]).toMatchObject({
+      timeoutMs: 100,
+      lastActivityReason: "request:mcpServer/elicitation/request:start",
     });
   });
 
@@ -1215,11 +1288,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
   it("keeps an eliciting MCP tool active past the completion timeout", async () => {
     const harness = createStartedThreadHarness();
     const bridgedResponse = {
-      action: "accept",
-      content: null,
-      _meta: null,
+      kind: "handled",
+      response: { action: "accept", content: null, _meta: null },
     } as const;
-    vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockResolvedValue(
+    vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest").mockResolvedValue(
       bridgedResponse,
     );
     const params = createParams(
@@ -1262,7 +1334,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
           _meta: null,
         },
       }),
-    ).resolves.toEqual(bridgedResponse);
+    ).resolves.toEqual(bridgedResponse.response);
 
     await new Promise((resolve) => {
       setTimeout(resolve, 40);
@@ -1300,7 +1372,11 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const preRequestIdleMs = 500;
     const pendingHoldMs = 700;
     const harness = createStartedThreadHarness();
-    const params = makeTestParams({ timeoutMs: attemptIdleTimeoutMs });
+    const toolAuthorityFingerprint = "turn-watch-secret-input-authority";
+    const params = makeTestParams({
+      timeoutMs: attemptIdleTimeoutMs,
+      toolAuthorityFingerprint,
+    });
     params.onBlockReply = vi.fn();
     const onRunProgress = vi.fn();
     params.onRunProgress = onRunProgress;
@@ -1368,9 +1444,12 @@ describe("runCodexAppServerAttempt turn watches", () => {
           (event as { reason?: string }).reason === "request:item/tool/requestUserInput:response",
       ),
     ).toBe(false);
-    expect(queueActiveRunMessageForTest("session-1", "2", { isInboundUserMessage: true })).toBe(
-      true,
-    );
+    expect(
+      queueActiveRunMessageForTest("session-1", "2", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint,
+      }),
+    ).toBe(true);
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Deep"] } },
     });

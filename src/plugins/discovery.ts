@@ -7,8 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { readRootJsonObjectSync } from "../infra/json-files.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
+import { readRootJsonObjectSync, tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
@@ -36,8 +35,7 @@ import {
   type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
-import { satisfiesPluginApiRange } from "./package-compat.js";
-import { resolvePackagePluginApiRange } from "./package-compat.js";
+import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   resolvePackageRuntimeExtensionSources,
   resolvePackageSetupSource,
@@ -391,6 +389,24 @@ function createDiscoveryResult(): PluginDiscoveryResult {
   };
 }
 
+function mergeCandidateInstallOwner(
+  existing: PluginCandidate,
+  candidateOwner: string | undefined,
+  candidateOwnerAmbiguous: boolean,
+): void {
+  const existingOwner = resolvePluginCandidateInstallOwner(existing);
+  const ownerConflict = existingOwner && candidateOwner && existingOwner !== candidateOwner;
+  if (
+    isPluginCandidateInstallOwnerAmbiguous(existing) ||
+    candidateOwnerAmbiguous ||
+    ownerConflict
+  ) {
+    recordPluginCandidateInstallOwner(existing, undefined, true);
+  } else if (candidateOwner) {
+    recordPluginCandidateInstallOwner(existing, candidateOwner);
+  }
+}
+
 function mergeDiscoveryResult(
   target: PluginDiscoveryResult,
   source: PluginDiscoveryResult,
@@ -404,18 +420,11 @@ function mergeDiscoveryResult(
     const key = safeRealpathSync(candidate.source, realpathCache) ?? path.resolve(candidate.source);
     const existing = candidatesBySource.get(key);
     if (existing) {
-      const existingOwner = resolvePluginCandidateInstallOwner(existing);
-      const candidateOwner = resolvePluginCandidateInstallOwner(candidate);
-      const ownerConflict = existingOwner && candidateOwner && existingOwner !== candidateOwner;
-      if (
-        isPluginCandidateInstallOwnerAmbiguous(existing) ||
-        isPluginCandidateInstallOwnerAmbiguous(candidate) ||
-        ownerConflict
-      ) {
-        recordPluginCandidateInstallOwner(existing, undefined, true);
-      } else if (candidateOwner) {
-        recordPluginCandidateInstallOwner(existing, candidateOwner);
-      }
+      mergeCandidateInstallOwner(
+        existing,
+        resolvePluginCandidateInstallOwner(candidate),
+        isPluginCandidateInstallOwnerAmbiguous(candidate),
+      );
       continue;
     }
     candidatesBySource.set(key, candidate);
@@ -802,6 +811,14 @@ function addCandidate(params: {
 }) {
   const resolved = path.resolve(params.source);
   if (params.seen.has(resolved)) {
+    const existing = params.candidates.find((candidate) => candidate.source === resolved);
+    if (existing) {
+      mergeCandidateInstallOwner(
+        existing,
+        params.installOwner,
+        params.installOwnerAmbiguous === true,
+      );
+    }
     return;
   }
   const resolvedRoot =

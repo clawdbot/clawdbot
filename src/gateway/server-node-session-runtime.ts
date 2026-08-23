@@ -3,6 +3,12 @@ import {
   resolveCurrentPairedDeviceNodeBinding,
 } from "../infra/device-pairing-node-state.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
+import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
+import {
+  createNodeRegistryRuntime,
+  setNodeRunnerStateChangedListener,
+  type NodeRunnerStateChange,
+} from "./node-registry-private.js";
 // Gateway node session runtime factory.
 // Creates node registry, subscription, and voice-wake fanout state.
 import {
@@ -26,6 +32,7 @@ export function createGatewayNodeSessionRuntime(params: {
   listRegisteredNodePluginToolCommands?: NodeRegistryOptions["listRegisteredNodePluginToolCommands"];
   nodePluginToolsEnabled?: boolean;
   nodeSkillsEnabled?: boolean;
+  onRunnerStateChanged?: (nodeId: string, change: NodeRunnerStateChange) => void;
   resolveCurrentPairingState?: NodeRegistryOptions["resolveCurrentPairingState"];
   isPairingStateCurrent?: NodeRegistryOptions["isPairingStateCurrent"];
   onPairingInvalidated?: NodeRegistryOptions["onPairingInvalidated"];
@@ -34,21 +41,39 @@ export function createGatewayNodeSessionRuntime(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
 }) {
   const nodeSubscriptions = createNodeSubscriptionManager();
-  const nodeRegistry = new NodeRegistry({
-    listRegisteredNodePluginToolCommands: params.listRegisteredNodePluginToolCommands,
-    nodePluginToolsEnabled: params.nodePluginToolsEnabled,
-    nodeSkillsEnabled: params.nodeSkillsEnabled,
-    resolveCurrentPairingState:
-      params.resolveCurrentPairingState ?? resolveCurrentPairedDeviceNodeBinding,
-    isPairingStateCurrent: params.isPairingStateCurrent ?? isPairedDeviceNodeBindingCurrent,
-    onPairingInvalidated: params.onPairingInvalidated,
-    onPairingGenerationChanged: (change) => {
-      nodeSubscriptions.updatePairingGeneration({
-        ...change,
-        preserveSubscriptions: change.preserveSessionState,
-      });
-      params.onPairingGenerationChanged?.(change);
-    },
+  const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
+    () =>
+      new NodeRegistry({
+        listRegisteredNodePluginToolCommands: params.listRegisteredNodePluginToolCommands,
+        nodePluginToolsEnabled: params.nodePluginToolsEnabled,
+        nodeSkillsEnabled: params.nodeSkillsEnabled,
+        resolveCurrentPairingState:
+          params.resolveCurrentPairingState ?? resolveCurrentPairedDeviceNodeBinding,
+        isPairingStateCurrent: params.isPairingStateCurrent ?? isPairedDeviceNodeBindingCurrent,
+        onPairingInvalidated: params.onPairingInvalidated,
+        onPairingGenerationChanged: (change) => {
+          nodeSubscriptions.updatePairingGeneration({
+            ...change,
+            preserveSubscriptions: change.preserveSessionState,
+          });
+          params.onPairingGenerationChanged?.(change);
+        },
+      }),
+  );
+  setNodeRunnerStateChangedListener(nodeRegistry, (nodeId, change) => {
+    // Lifecycle listeners advance the session-list cache fence before clients
+    // can react to either broadcast and issue an immediate refresh.
+    params.onRunnerStateChanged?.(nodeId, change);
+    if (change.inventoryChanged || change.availabilityChanged) {
+      params.broadcast(
+        GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+        { nodeId },
+        { dropIfSlow: true },
+      );
+    }
+    if (change.availabilityChanged) {
+      params.broadcast("sessions.changed", { reason: "runner-availability" }, { dropIfSlow: true });
+    }
   });
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const sessionEventSubscribers = params.sessionEventSubscribers;
@@ -129,6 +154,7 @@ export function createGatewayNodeSessionRuntime(params: {
 
   return {
     nodeRegistry,
+    nodeWorkerSupervisorTransport,
     nodePresenceTimers,
     sessionEventSubscribers,
     sessionMessageSubscribers,

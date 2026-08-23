@@ -174,10 +174,12 @@ export const PluginsInstallParamsSchema = Type.Union([
     packageName: NonEmptyString,
     version: Type.Optional(NonEmptyString),
     acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
+    acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
   }),
   closedObject({
     source: Type.Literal("official"),
     pluginId: NonEmptyString,
+    acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
   }),
 ]);
 

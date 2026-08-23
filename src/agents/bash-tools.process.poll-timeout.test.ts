@@ -147,6 +147,36 @@ test("waiting poll returns only output appended since the previous poll", async 
   }
 });
 
+test("process poll preserves callback chronology across running and terminal drains", async () => {
+  const sessionId = "sess-interleaved-stream-order";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+
+  appendOutput(session, "stderr", "ERR-before\n");
+  appendOutput(session, "stdout", "OUT-after\n");
+
+  const runningPoll = await pollSession(processTool, "toolcall-interleaved-running", sessionId);
+  const runningText = runningPoll.content[0]?.type === "text" ? runningPoll.content[0].text : "";
+  expect(runningText).toContain("ERR-before\nOUT-after");
+  expect(runningText.indexOf("ERR-before")).toBeLessThan(runningText.indexOf("OUT-after"));
+  expect(runningPoll.details).toMatchObject({
+    status: "running",
+    aggregated: "ERR-before\nOUT-after\n",
+  });
+
+  appendOutput(session, "stderr", "ERR-last\n");
+  markExited(session, 0, null, "completed");
+
+  const terminalPoll = await pollSession(processTool, "toolcall-interleaved-terminal", sessionId);
+  const terminalText = terminalPoll.content[0]?.type === "text" ? terminalPoll.content[0].text : "";
+  expect(terminalText).toContain("ERR-last");
+  expect(terminalText).not.toContain("ERR-before");
+  expect(terminalText).not.toContain("OUT-after");
+  expect(terminalPoll.details).toMatchObject({
+    status: "completed",
+    aggregated: "ERR-before\nOUT-after\nERR-last\n",
+  });
+});
+
 test("waiting poll retains terminal state and its receipt after indexed cleanup", async () => {
   vi.useFakeTimers();
   try {

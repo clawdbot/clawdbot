@@ -94,6 +94,7 @@ const NON_WORK_PROGRESS_TOOL_NAMES = new Set([
   "reaction",
   "react",
   "typing",
+  "progress_card",
   "update_plan",
 ]);
 
@@ -167,8 +168,6 @@ export type ChannelProgressLineOptions = {
   /** Whether command progress should show raw command text or status-only copy. */
   commandText?: ChannelStreamingCommandTextMode;
 };
-
-type ChannelProgressDraftRenderMode = "text" | "rich";
 
 export type AgentPlanStepStatus = "pending" | "in_progress" | "completed";
 
@@ -584,7 +583,7 @@ export function buildChannelProgressDraftLine(
       }
       return buildNamedProgressLine(
         input.event,
-        "update_plan",
+        "progress_card",
         [
           input.explanation,
           normalizeAgentPlanSteps(input.steps)?.[0]?.step,
@@ -954,14 +953,6 @@ export function resolveChannelProgressDraftMaxLineChars(
 ): number {
   const configured = asInteger(resolveChannelProgressDraftConfig(entry).maxLineChars);
   return configured && configured > 0 ? configured : defaultValue;
-}
-
-export function resolveChannelProgressDraftRender(
-  entry: StreamingCompatEntry | null | undefined,
-  defaultValue: ChannelProgressDraftRenderMode = "text",
-): ChannelProgressDraftRenderMode {
-  const configured = resolveChannelProgressDraftConfig(entry).render;
-  return configured === "rich" || configured === "text" ? configured : defaultValue;
 }
 
 function sliceCodePoints(value: string, start: number, end?: number): string {

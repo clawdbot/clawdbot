@@ -11,15 +11,14 @@ export type {
   ReplyBackendQueueMessageOptions,
   ReplyBackendQueueMessageResult,
   ReplyMessageInjectionAttempt,
-  ReplyMessageInjectionOutcome,
   ReplyMessageInjectionTarget,
   ReplyOperation,
   ReplyOperationPhase,
+  ReplyTurnKind,
 } from "./reply-run-registry.contracts.js";
 export {
-  abortReplyMessageInjectionTarget,
   beginReplyMessageInjectionTarget,
-  recordAcceptedReplyMessageInjectionTarget,
+  finalizeReplyMessageInjectionAttempt,
   resolveReplyBackendQueueMessageMismatch,
 } from "./reply-run-registry.message-injection.js";
 export {
@@ -37,6 +36,7 @@ export {
   isReplyRunAbortableForCompaction,
   isReplyRunActiveForSessionId,
   isReplyRunEvidenceStaleBySessionId,
+  interruptReplyRunTarget,
   listActiveReplyRunSessionIds,
   listActiveReplyRunSessionKeys,
   markReplyOperationGlobalLaneWaitProgress,
@@ -52,9 +52,11 @@ export {
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.registry.js";
 export {
+  hasReplyOperationExecutionStarted,
   isReplyRunAbortableForSignal,
   isReplyRunEvidenceStale,
   isReplyRunSuccessorAdmissionBlocked,
+  markReplyOperationExecutionStarted,
   registerReplyOperationSuccessorBarrier,
   retainReplyOperationUntilComplete,
   runAfterReplyOperationClear,

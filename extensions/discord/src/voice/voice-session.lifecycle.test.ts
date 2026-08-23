@@ -1,3 +1,4 @@
+import { DiscordError } from "../internal/discord.js";
 import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
@@ -7,6 +8,7 @@ defineDiscordVoiceTests(
     expect,
     it,
     vi,
+    ChannelType,
     requireRecord,
     mockCall,
     lastMockCall,
@@ -19,8 +21,8 @@ defineDiscordVoiceTests(
     createRealtimeVoiceBridgeSessionMock,
     realtimeSessionMock,
     managerModule,
+    createClient,
     createManager,
-    makeVoiceConfig,
     createAgentProxyManager,
     expectConnectedStatus,
     getSessionEntry,
@@ -397,69 +399,107 @@ defineDiscordVoiceTests(
       );
     });
 
-    it("autoJoin uses the last configured channel for duplicate guild entries", async () => {
-      const manager = createManager({
-        voice: {
-          enabled: true,
-          autoJoin: [
-            { guildId: "g1", channelId: "1001" },
-            { guildId: "g1", channelId: "1002" },
-          ],
+    const missingAccessError = new DiscordError(new Response(null, { status: 403 }), {
+      message: "Missing Access",
+      code: 50001,
+    });
+    const unknownChannelError = new DiscordError(new Response(null, { status: 404 }), {
+      message: "Unknown Channel",
+      code: 10003,
+    });
+    const networkError = new TypeError("fetch failed");
+
+    it.each([
+      {
+        name: "preserves Discord 403 / 50001 Missing Access",
+        response: missingAccessError,
+        expected: {
+          ok: false,
+          message: "Failed to resolve Discord channel 1001: Missing Access",
+          guildId: "g1",
+          channelId: "1001",
         },
+      },
+      {
+        name: "preserves Discord 404 / 10003 Unknown Channel",
+        response: unknownChannelError,
+        expected: {
+          ok: false,
+          message: "Failed to resolve Discord channel 1001: Unknown Channel",
+          guildId: "g1",
+          channelId: "1001",
+        },
+      },
+      {
+        name: "preserves generic network failures",
+        response: networkError,
+        expected: {
+          ok: false,
+          message: "Failed to resolve Discord channel 1001: fetch failed",
+          guildId: "g1",
+          channelId: "1001",
+        },
+      },
+      {
+        name: "rejects a fetched GuildText channel",
+        response: { id: "1001", guildId: "g1", type: ChannelType.GuildText },
+        expected: { ok: false, message: "Channel 1001 is not a voice channel." },
+      },
+      {
+        name: "accepts a fetched GuildVoice channel",
+        response: { id: "1001", guildId: "g1", type: ChannelType.GuildVoice },
+        expected: {
+          ok: true,
+          message: "Joined <#1001>.",
+          guildId: "g1",
+          channelId: "1001",
+        },
+      },
+      {
+        name: "accepts a fetched GuildStageVoice channel",
+        response: { id: "1001", guildId: "g1", type: ChannelType.GuildStageVoice },
+        expected: {
+          ok: true,
+          message: "Joined <#1001>.",
+          guildId: "g1",
+          channelId: "1001",
+        },
+      },
+    ])("$name", async ({ response, expected }) => {
+      const client = createClient();
+      client.fetchChannel.mockImplementationOnce(async () => {
+        if (response instanceof Error) {
+          throw response;
+        }
+        return response as never;
       });
+      const manager = createManager(undefined, client);
 
-      await manager.autoJoin();
-
-      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
-      const joinOptions = requireRecord(
-        mockCall(joinVoiceChannelMock as unknown as MockCallSource, 0, "join voice call")[0],
-        "join voice options",
-      );
-      expect(joinOptions.guildId).toBe("g1");
-      expect(joinOptions.channelId).toBe("1002");
-      expectConnectedStatus(manager, "1002");
+      await expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toEqual(expected);
     });
 
-    it("suppresses repeated autoJoin attempts after fatal realtime startup failures", async () => {
-      realtimeSessionMock.connect.mockRejectedValueOnce(new Error("Incorrect API key provided"));
-      const manager = createManager(
-        makeVoiceConfig({
-          mode: "agent-proxy",
-          autoJoin: [{ guildId: "g1", channelId: "1001" }],
-        }),
+    it("keeps cancellation authoritative when channel lookup later rejects", async () => {
+      let rejectChannelLookup!: (reason: unknown) => void;
+      const client = createClient();
+      client.fetchChannel.mockImplementationOnce(
+        async () =>
+          await new Promise<never>((_, reject) => {
+            rejectChannelLookup = reject;
+          }),
       );
+      const manager = createManager(undefined, client);
 
-      await manager.autoJoin();
-      await manager.autoJoin();
+      const join = manager.join({ guildId: "g1", channelId: "1001" });
+      await vi.waitFor(() => expect(client.fetchChannel).toHaveBeenCalledOnce());
+      await manager.leave({ guildId: "g1" });
+      rejectChannelLookup(missingAccessError);
 
-      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
-      expect(realtimeSessionMock.connect).toHaveBeenCalledTimes(1);
-      expect(manager.status()).toStrictEqual([]);
-    });
-
-    it("rejects joins outside configured allowed voice channels", async () => {
-      const manager = createManager(
-        makeVoiceConfig({ allowedChannels: [{ guildId: "g1", channelId: "1001" }] }),
-      );
-
-      const result = await manager.join({ guildId: "g1", channelId: "1002" });
-
-      expect(result.ok).toBe(false);
-      expect(result.message).toBe(
-        "<#1002> is not allowed by channels.discord.voice.allowedChannels.",
-      );
-      expect(joinVoiceChannelMock).not.toHaveBeenCalled();
-    });
-
-    it("allows joins inside configured allowed voice channels", async () => {
-      const manager = createManager(
-        makeVoiceConfig({ allowedChannels: [{ guildId: "g1", channelId: "1001" }] }),
-      );
-
-      const result = await manager.join({ guildId: "g1", channelId: "1001" });
-
-      expect(result.ok).toBe(true);
-      expectConnectedStatus(manager, "1001");
+      await expect(join).resolves.toEqual({
+        ok: false,
+        message: "Discord voice join was cancelled.",
+        guildId: "g1",
+        channelId: "1001",
+      });
     });
 
     it("removes voice listeners on leave", async () => {

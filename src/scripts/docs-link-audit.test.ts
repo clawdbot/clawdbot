@@ -254,13 +254,31 @@ describe("docs-link-audit", () => {
       )}\n`,
       "utf8",
     );
-    fs.writeFileSync(path.join(docsRoot, "help", "testing.md"), "# testing\n", "utf8");
+    fs.writeFileSync(
+      path.join(docsRoot, "help", "testing.md"),
+      [
+        "# testing",
+        "<!-- BEGIN GENERATED: example -->",
+        "visible <!-- a multiline",
+        "comment --> text",
+        "<!-- END GENERATED: example -->",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
     fs.writeFileSync(path.join(docsRoot, "zh-CN", "help", "testing.md"), "# 测试\n", "utf8");
 
     const anchorDocsDir = prepareAnchorAuditDocsDir(docsRoot);
     try {
       expect(fs.existsSync(path.join(anchorDocsDir, "help", "testing.md"))).toBe(true);
       expect(fs.existsSync(path.join(anchorDocsDir, "zh-CN"))).toBe(false);
+      const preparedMarkdown = fs.readFileSync(
+        path.join(anchorDocsDir, "help", "testing.md"),
+        "utf8",
+      );
+      expect(preparedMarkdown).not.toContain("<!--");
+      expect(preparedMarkdown).not.toContain("BEGIN GENERATED");
+      expect(preparedMarkdown.split("\n")).toHaveLength(6);
 
       const sanitizedDocsJson = JSON.parse(
         fs.readFileSync(path.join(anchorDocsDir, "docs.json"), "utf8"),

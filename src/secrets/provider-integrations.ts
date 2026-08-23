@@ -7,6 +7,7 @@ import type {
   ManualExecSecretProviderConfig,
   PluginIntegrationSecretProviderConfig,
 } from "../config/types.secrets.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
@@ -38,17 +39,9 @@ type SecretProviderIntegrationResolution =
 const NODE_COMMAND_PLACEHOLDER = "${node}";
 const PLUGIN_INTEGRATION_PROVIDER_ID_MAX_LENGTH = 128;
 
-function isPathInsideOrEqual(rootDir: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(rootDir), path.resolve(candidate));
-  return (
-    relative === "" ||
-    (relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 function resolvePluginRelativePath(value: string, pluginRoot: string): string | undefined {
   const resolved = path.resolve(pluginRoot, value);
-  return isPathInsideOrEqual(pluginRoot, resolved) ? resolved : undefined;
+  return isPathInside(pluginRoot, resolved) ? resolved : undefined;
 }
 
 function isPluginRelativeEntrypoint(value: string): boolean {
@@ -85,12 +78,12 @@ function isSecurePosixPathStat(stat: fs.Stats): boolean {
 }
 
 function pathSegmentsBetween(rootDir: string, targetDir: string): string[] | undefined {
+  if (!isPathInside(rootDir, targetDir)) {
+    return undefined;
+  }
   const relative = path.relative(rootDir, targetDir);
   if (relative === "") {
     return [];
-  }
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return undefined;
   }
   return relative.split(path.sep).filter(Boolean);
 }
@@ -182,7 +175,7 @@ function resolveNodeEntrypointArg(params: {
   }
   try {
     const realpath = fs.realpathSync(resolved);
-    if (!isPathInsideOrEqual(pluginRootRealpath, realpath)) {
+    if (!isPathInside(pluginRootRealpath, realpath)) {
       return undefined;
     }
     if (

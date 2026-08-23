@@ -80,6 +80,43 @@ struct RootTabsPresentationTests {
         #expect(unknown.isPartial)
     }
 
+    @Test func `usage list shows the latest fourteen days newest first`() {
+        let days = (1...20).map { day in
+            CostUsageDailyEntryLite(
+                date: String(format: "2026-07-%02d", day),
+                totalTokens: day,
+                totalCost: Double(day))
+        }
+
+        let displayed = AgentProTab.displayedUsageDays(days)
+
+        #expect(displayed.map(\.date) == (7...20).reversed().map {
+            String(format: "2026-07-%02d", $0)
+        })
+    }
+
+    @Test func `iOS usage requests device calendar days`() throws {
+        let cases: [(timeZoneID: String, timestamp: TimeInterval, expectedOffset: String)] = [
+            ("America/Los_Angeles", 1_769_000_000, "UTC-8"),
+            ("America/Los_Angeles", 1_785_000_000, "UTC-7"),
+            ("Asia/Kathmandu", 1_785_000_000, "UTC+5:45"),
+        ]
+
+        for testCase in cases {
+            let timeZone = try #require(TimeZone(identifier: testCase.timeZoneID))
+            let paramsJSON = CostUsageRequest.monthParamsJSON(
+                timeZone: timeZone,
+                date: Date(timeIntervalSince1970: testCase.timestamp))
+            let data = try #require(paramsJSON.data(using: .utf8))
+            let params = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+            #expect(params["days"] as? Int == 31)
+            #expect(params["mode"] as? String == "specific")
+            #expect(params["timeZone"] as? String == testCase.timeZoneID)
+            #expect(params["utcOffset"] as? String == testCase.expectedOffset)
+        }
+    }
+
     @Test func `failed cron attention ignores disabled jobs`() {
         #expect(RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: true, status: "error")))
         #expect(!RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: false, status: "error")))
@@ -177,6 +214,7 @@ struct RootTabsPresentationTests {
             .instances,
             .files,
             .dreaming,
+            .desktop,
             .terminal,
             .docs,
         ])
@@ -193,6 +231,7 @@ struct RootTabsPresentationTests {
             "dreaming",
             "usage",
             "cron",
+            "desktop",
             "terminal",
             "docs",
             "settings",
@@ -248,6 +287,33 @@ struct RootTabsPresentationTests {
         #expect(IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: true, hasOperatorAdminScope: true))
         #expect(!IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: true, hasOperatorAdminScope: false))
         #expect(!IPadSkillWorkshopScreen.shouldEnableProposalMutation(canWrite: false, hasOperatorAdminScope: true))
+    }
+
+    @Test func `skill workshop actions carry the reviewed revision hash`() throws {
+        let revisionHash = String(repeating: "a", count: 64)
+        let proposal = Self.skillWorkshopProposal(revisionHash: revisionHash)
+        let apply = try #require(IPadSkillProposalAction(kind: .apply, proposal: proposal))
+        let reject = try #require(IPadSkillProposalAction(kind: .reject, proposal: proposal))
+
+        for (action, method) in [
+            (apply, "skills.proposals.apply"),
+            (reject, "skills.proposals.reject"),
+        ] {
+            let encoded = try #require(
+                JSONSerialization.jsonObject(
+                    with: JSONEncoder().encode(action.params(agentID: "main"))) as? [String: Any])
+
+            #expect(action.method == method)
+            #expect(encoded["agentId"] as? String == "main")
+            #expect(encoded["proposalId"] as? String == proposal.id)
+            #expect(encoded["expectedRevisionHash"] as? String == revisionHash)
+        }
+    }
+
+    @Test func `skill workshop actions require an inspected revision hash`() {
+        #expect(IPadSkillProposalAction(
+            kind: .apply,
+            proposal: Self.skillWorkshopProposal(revisionHash: nil)) == nil)
     }
 
     @Test func `skill workshop held filter includes quarantined and stale`() {
@@ -535,25 +601,6 @@ struct RootTabsPresentationTests {
 
         #expect(width >= RootTabs.sidebarSplitIdealWidth)
         #expect(width <= RootTabs.sidebarSplitMaximumWidth)
-    }
-
-    @Test func `i pad collapsed split sidebar uses header reveal without reserved rail`() {
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .split))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .split))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .drawer))
-        #expect(
-            !RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .drawer))
     }
 
     @Test func `initial sidebar visibility parses launch argument`() {
@@ -969,19 +1016,6 @@ struct RootTabsPresentationTests {
         #expect(!RootTabs.preferredSidebarVisibility(layoutMode: mode))
     }
 
-    @Test func `drawer selection collapses sidebar but split selection does not`() {
-        #expect(RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .drawer))
-        #expect(!RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .split))
-    }
-
-    @Test func `hidden sidebar shows reveal control`() {
-        #expect(RootTabs.shouldShowSidebarRevealControl(isSidebarVisible: false))
-    }
-
-    @Test func `sidebar reveal controls hide when sidebar is visible`() {
-        #expect(!RootTabs.shouldShowSidebarRevealControl(isSidebarVisible: true))
-    }
-
     @Test func `i pad split prefers integrated visible sidebar`() {
         #expect(RootTabs.preferredSidebarVisibility(layoutMode: .split))
         #expect(!RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .split))
@@ -1088,5 +1122,23 @@ struct RootTabsPresentationTests {
             payload: AnyCodable(["kind": AnyCodable("agentTurn")]),
             state: [:],
             lastrunstatus: AnyCodable(status))
+    }
+
+    private static func skillWorkshopProposal(revisionHash: String?) -> IPadSkillProposal {
+        IPadSkillProposal(
+            inspect: IPadSkillProposalInspectResponse(
+                record: IPadSkillProposalRecord(
+                    id: "proposal-1",
+                    status: "pending",
+                    title: "Reviewed proposal",
+                    description: "A reviewed Skill Workshop proposal.",
+                    updatedAt: "2026-08-18T12:00:00Z",
+                    target: IPadSkillProposalTarget(
+                        skillName: "reviewed-skill",
+                        skillKey: "reviewed-skill")),
+                revisionHash: revisionHash,
+                content: "# Reviewed skill",
+                supportFiles: nil),
+            previous: nil)
     }
 }

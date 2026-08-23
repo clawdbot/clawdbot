@@ -18,10 +18,11 @@ enum GatewayLaunchAgentManager {
             return testingDisableLaunchAgentMarkerURL
         }
         #endif
-        let root = AppProfile.current.isActive
-            ? OpenClawPaths.stateDirURL
-            : FileManager().homeDirectoryForCurrentUser.appendingPathComponent(".openclaw", isDirectory: true)
-        return root.appendingPathComponent(self.disableLaunchAgentMarker)
+        return self.disableLaunchAgentMarkerURL(in: OpenClawPaths.stateDirURL)
+    }
+
+    static func disableLaunchAgentMarkerURL(in stateDirectoryURL: URL) -> URL {
+        stateDirectoryURL.appendingPathComponent(self.disableLaunchAgentMarker)
     }
 
     private static var plistURL: URL {
@@ -169,8 +170,8 @@ enum GatewayLaunchAgentManager {
             self.logger.info("launchd change skipped (remote mode)")
             return nil
         }
-        if enabled, self.isLaunchAgentWriteDisabled() {
-            self.logger.info("launchd enable skipped (disable marker set)")
+        if self.isLaunchAgentWriteDisabled() {
+            self.logger.info("launchd change skipped (disable marker set)")
             return nil
         }
 

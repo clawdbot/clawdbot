@@ -4,11 +4,14 @@ import { asFiniteNumber as optionalNumber } from "@openclaw/normalization-core/n
 // records (roles + tokens) and the node catalog (caps + live links). This module
 // joins them by id and groups duplicate pairings of the same client so the page
 // renders one row per machine instead of one row per historical keypair.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
 
 type NodeApprovalState = "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
+type NodeWorkerSlots = { total: number; available: number };
+type NodeWorkerBundleStatus = { status: "installed"; version: string } | { status: "missing" };
 
 /** Typed projection of one raw `node.list` row. */
 type NodeListEntry = {
@@ -26,6 +29,8 @@ type NodeListEntry = {
   commands: string[];
   approvalState?: NodeApprovalState;
   pendingRequestId?: string;
+  workerSlots?: NodeWorkerSlots;
+  workerBundle?: NodeWorkerBundleStatus;
   connected: boolean;
   paired: boolean;
   connectedAtMs?: number;
@@ -78,6 +83,42 @@ function stringList(value: unknown): string[] {
     .filter((entry): entry is string => entry !== undefined);
 }
 
+function parseWorkerSlots(value: unknown): NodeWorkerSlots | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const keys = Object.keys(value);
+  const total = value.total;
+  const available = value.available;
+  return keys.length === 2 &&
+    keys.includes("total") &&
+    keys.includes("available") &&
+    typeof total === "number" &&
+    typeof available === "number" &&
+    Number.isSafeInteger(total) &&
+    Number.isSafeInteger(available) &&
+    total >= 1 &&
+    total <= 1_024 &&
+    available >= 0 &&
+    available <= total
+    ? { total, available }
+    : undefined;
+}
+
+function parseWorkerBundleStatus(value: unknown): NodeWorkerBundleStatus | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const raw = value;
+  if (raw.status === "missing" && Object.keys(raw).length === 1) {
+    return { status: "missing" };
+  }
+  const version = normalizeOptionalString(raw.version);
+  return raw.status === "installed" && version && Object.keys(raw).length === 2
+    ? { status: "installed", version }
+    : undefined;
+}
+
 function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null {
   const nodeId = normalizeOptionalString(raw.nodeId);
   if (!nodeId) {
@@ -102,6 +143,8 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
         ? (approvalState as NodeApprovalState)
         : undefined,
     pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
+    workerSlots: parseWorkerSlots(raw.workerSlots),
+    workerBundle: parseWorkerBundleStatus(raw.workerBundle),
     connected: raw.connected === true,
     paired: raw.paired === true,
     connectedAtMs: optionalNumber(raw.connectedAtMs),

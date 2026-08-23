@@ -1,5 +1,4 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveContextTokensForModel } from "../agents/context.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
@@ -87,14 +86,11 @@ export function resolveSessionSelectedModelRef(params: {
   agentId: string;
   rowContext?: SessionListRowContext;
   allowPluginNormalization?: boolean;
-}): ReturnType<typeof resolveSessionModelRef> | null {
+}): ReturnType<typeof resolveSessionModelRef> {
   const override = normalizeStoredOverrideModel({
     providerOverride: params.entry?.providerOverride,
     modelOverride: params.entry?.modelOverride,
   });
-  if (!override.modelOverride) {
-    return null;
-  }
   if (!params.rowContext) {
     return resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
       allowPluginNormalization: params.allowPluginNormalization,
@@ -103,7 +99,7 @@ export function resolveSessionSelectedModelRef(params: {
   const key = [
     normalizeAgentId(params.agentId),
     override.providerOverride ?? "",
-    override.modelOverride,
+    override.modelOverride ?? "",
   ].join("\0");
   const cached = params.rowContext.selectedModelByOverrideRef.get(key);
   if (cached) {
@@ -160,7 +156,6 @@ export function resolveTranscriptUsageFallback(params: {
   estimatedCostUsd?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
-  contextTokens?: number;
   modelProvider?: string;
   model?: string;
 } | null {
@@ -195,13 +190,6 @@ export function resolveTranscriptUsageFallback(params: {
   }
   const modelProvider = snapshot.modelProvider ?? params.fallbackProvider;
   const model = snapshot.model ?? params.fallbackModel;
-  const contextTokens = resolveContextTokensForModel({
-    cfg: params.cfg,
-    provider: modelProvider,
-    model,
-    // Gateway/session listing is read-only; don't start async model discovery.
-    allowAsyncLoad: false,
-  });
   const estimatedCostUsd = resolveEstimatedSessionCostUsd({
     cfg: params.cfg,
     provider: modelProvider,
@@ -220,7 +208,6 @@ export function resolveTranscriptUsageFallback(params: {
     model,
     totalTokens: resolvePositiveNumber(snapshot.totalTokens),
     totalTokensFresh: snapshot.totalTokensFresh === true,
-    contextTokens: resolvePositiveNumber(contextTokens),
     estimatedCostUsd,
   };
 }

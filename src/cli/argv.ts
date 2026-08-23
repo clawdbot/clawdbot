@@ -78,10 +78,6 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
   return false;
 }
 
-function parsePositiveInt(value: string): number | undefined {
-  return parseStrictPositiveInteger(value);
-}
-
 export function hasFlag(argv: string[], name: string): boolean {
   const args = argv.slice(2);
   for (const arg of args) {
@@ -497,7 +493,7 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
   }
   // Keep absent distinct from present-but-invalid so route-first callers can
   // defer invalid input to Commander instead of silently applying defaults.
-  return parsePositiveInt(raw) ?? null;
+  return parseStrictPositiveInteger(raw) ?? null;
 }
 
 export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {

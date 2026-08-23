@@ -90,7 +90,6 @@ export async function removeCronJobBaseSession(params: {
 export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
   agentId: string;
-  defaultAgentId: string;
   /** Resolved path to sessions.json — required. */
   sessionStorePath: string;
   nowMs?: number;

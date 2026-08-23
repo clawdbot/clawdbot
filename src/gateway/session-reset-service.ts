@@ -3,8 +3,11 @@
 import { randomUUID } from "node:crypto";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import {
   readAcpSessionMeta,
@@ -14,8 +17,7 @@ import {
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
+  resolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import {
   clearBootstrapSnapshot,
@@ -36,6 +38,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveSessionWorkStartError,
   SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry,
   type SessionEntry,
   deleteSessionEntryLifecycle,
   resetSessionEntryLifecycle,
@@ -43,7 +46,9 @@ import {
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
+import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   buildSessionCreationStamp,
   type SessionCreatedActor,
@@ -90,7 +95,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
   forgetActiveSessionForShutdown,
-  listActiveSessionsForShutdown,
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { findDirectChildSessionsForParent } from "./session-child-sessions.js";
@@ -119,9 +123,7 @@ import {
 } from "./worker-environments/session-placement-lifecycle.js";
 
 function resolveLifecycleAgentId(cfg: OpenClawConfig, agentId?: string): string {
-  return normalizeAgentId(
-    agentId ?? tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg),
-  );
+  return normalizeAgentId(agentId ?? resolveAmbientOwnerAgentId(cfg));
 }
 
 type McpRunEndWatcherState = {
@@ -175,7 +177,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   sessionId?: string;
   storePath: string;
   sessionFile?: string;
-  agentId?: string;
+  agentId: string;
   workspaceDir?: string;
   reason:
     | "new"
@@ -236,7 +238,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   const payload = buildSessionEndHookPayload({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    cfg: params.cfg,
+    agentId: params.agentId,
     reason: params.reason,
     sessionFile: transcript.sessionFile,
     transcriptArchived: transcript.transcriptArchived,
@@ -257,7 +259,7 @@ export function emitGatewaySessionStartPluginHook(params: {
   resumedFrom?: string;
   storePath?: string;
   sessionFile?: string;
-  agentId?: string;
+  agentId: string;
 }): void {
   if (!params.sessionId) {
     return;
@@ -285,7 +287,7 @@ export function emitGatewaySessionStartPluginHook(params: {
   const payload = buildSessionStartHookPayload({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    cfg: params.cfg,
+    agentId: params.agentId,
     resumedFrom: params.resumedFrom,
   });
   void runWithGatewayIndependentRootWorkContinuation(async () => {
@@ -293,94 +295,6 @@ export function emitGatewaySessionStartPluginHook(params: {
   }).catch((err: unknown) => {
     logVerbose(`session_start hook failed: ${String(err)}`);
   });
-}
-
-const SHUTDOWN_DRAIN_DEFAULT_TOTAL_TIMEOUT_MS = 2_000;
-
-type DrainActiveSessionsForShutdownResult = {
-  emittedSessionIds: string[];
-  timedOut: boolean;
-};
-
-/**
- * Emit a typed `session_end` for every session that received `session_start`
- * but did not yet receive a paired `session_end`. The bounded total timeout
- * mirrors the gateway lifecycle hook timeout so a slow plugin cannot block
- * SIGTERM/SIGINT past the runtime's overall shutdown grace window.
- *
- * Sessions that have already been finalized through replace / reset / delete /
- * compaction are forgotten from the tracker by `emitGatewaySessionEndPluginHook`
- * before this drain runs, so they will not be double-fired here.
- */
-export async function drainActiveSessionsForShutdown(params: {
-  reason: "shutdown" | "restart";
-  totalTimeoutMs?: number;
-}): Promise<DrainActiveSessionsForShutdownResult> {
-  const tracked = listActiveSessionsForShutdown();
-  if (tracked.length === 0) {
-    return { emittedSessionIds: [], timedOut: false };
-  }
-  const totalTimeoutMs = Math.max(
-    100,
-    Math.floor(params.totalTimeoutMs ?? SHUTDOWN_DRAIN_DEFAULT_TOTAL_TIMEOUT_MS),
-  );
-  const emittedSessionIds: string[] = [];
-  const hookRunner = getGlobalHookRunner();
-  let settledEmissions = 0;
-  // Inline the session_end emission instead of calling
-  // `emitGatewaySessionEndPluginHook`, because that helper uses fire-and-forget
-  // (`void hookRunner.runSessionEnd(...)`). Start every tracked session's
-  // emission before awaiting the bounded aggregate so one slow plugin write
-  // cannot prevent later active sessions from receiving `session_end`.
-  const drain = Promise.allSettled(
-    tracked.map(async (entry) => {
-      try {
-        forgetActiveSessionForShutdown(entry.sessionId);
-        emittedSessionIds.push(entry.sessionId);
-        if (!hookRunner?.hasHooks("session_end")) {
-          return;
-        }
-        const transcript = resolveStableSessionEndTranscript({
-          sessionId: entry.sessionId,
-          storePath: entry.storePath,
-          sessionFile: entry.sessionFile,
-          agentId: entry.agentId,
-        });
-        const payload = buildSessionEndHookPayload({
-          sessionId: entry.sessionId,
-          sessionKey: entry.sessionKey,
-          cfg: entry.cfg,
-          reason: params.reason,
-          sessionFile: transcript.sessionFile,
-          transcriptArchived: transcript.transcriptArchived,
-        });
-        await hookRunner.runSessionEnd(payload.event, payload.context);
-      } catch (err) {
-        logVerbose(`session_end hook failed during shutdown drain: ${String(err)}`);
-      } finally {
-        settledEmissions++;
-      }
-    }),
-  );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), totalTimeoutMs);
-    timer.unref?.();
-  });
-  try {
-    const result = await Promise.race([drain.then(() => "ok" as const), timeout]);
-    if (result === "timeout") {
-      logVerbose(
-        `shutdown session-end drain timed out after ${totalTimeoutMs}ms with ${tracked.length - settledEmissions} session_end handler(s) still pending`,
-      );
-      return { emittedSessionIds, timedOut: true };
-    }
-    return { emittedSessionIds, timedOut: false };
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
 }
 
 export async function emitSessionUnboundLifecycleEvent(params: {
@@ -767,25 +681,22 @@ async function ensureFreshAcpResetState(params: {
     return undefined;
   }
 
-  const backendId = (latestMeta.backend || params.cfg.acp?.backend || "").trim() || undefined;
   if (params.shouldApply && !params.shouldApply()) {
     return undefined;
   }
-  try {
-    params.assertCurrent?.();
-    await getAcpRuntimeBackend(backendId)?.runtime.prepareFreshSession?.({
-      sessionKey: params.sessionKey,
-    });
-    if (params.shouldApply && !params.shouldApply()) {
-      return undefined;
-    }
-    params.assertCurrent?.();
-  } catch (error) {
-    params.assertCurrent?.();
-    logVerbose(
-      `sessions.${params.reason}: ACP prepareFreshSession failed for ${params.sessionKey}: ${String(error)}`,
-    );
+  params.assertCurrent?.();
+  // The helper records skipped/failed preparation; only lifecycle staleness aborts here.
+  await tryPrepareFreshManagerRuntimeSession({
+    deps: { getRuntimeBackend: getAcpRuntimeBackend },
+    cfg: params.cfg,
+    meta: latestMeta,
+    sessionKey: params.sessionKey,
+    logPrefix: `sessions.${params.reason}`,
+  });
+  if (params.shouldApply && !params.shouldApply()) {
+    return undefined;
   }
+  params.assertCurrent?.();
 
   const now = Date.now();
   let resetMeta: SessionAcpMeta | undefined;
@@ -1033,6 +944,8 @@ export async function performGatewaySessionReset(params: {
   key: string;
   agentId?: string;
   spawnedCwd?: string;
+  sessionRoot?: string;
+  permissionMode?: SessionEntry["permissionMode"];
   /** Prepares session-owned resources while the target lifecycle fence is held. */
   prepareLifecycle?: PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;
@@ -1051,6 +964,8 @@ export async function performGatewaySessionReset(params: {
   creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
   authorizedPluginId?: string;
+  /** Arms local checkout attribution in the authoritative reset commit. */
+  armSessionDiffBaselineCapture?: boolean;
   workerPlacementContext?: SessionWorkerPlacementContext;
   assertCurrent?: () => void;
   assertAuthorizedInstance?: () => void;
@@ -1383,10 +1298,12 @@ export async function performGatewaySessionReset(params: {
         params.reason,
         target.canonicalKey ?? params.key,
         {
+          agentId,
           sessionEntry: entry,
           previousSessionEntry: entry,
           commandSource: params.commandSource,
           cfg,
+          storePath,
           workspaceDir,
         },
       );
@@ -1475,6 +1392,7 @@ export async function performGatewaySessionReset(params: {
         const deleted = await deleteSessionEntryLifecycle({
           agentId: target.agentId,
           archiveTranscript: false,
+          deleteDeliveryArtifacts: true,
           deleteTranscriptWithoutArchive: true,
           expectedEntry: entry,
           expectedSessionId: entry.sessionId,
@@ -1573,6 +1491,11 @@ export async function performGatewaySessionReset(params: {
           });
           const now = Date.now();
           const nextSessionId = currentEntry?.sessionId ?? randomUUID();
+          const nextExecNode = params.execNode
+            ? params.execNode
+            : params.clearExecBinding
+              ? undefined
+              : currentEntry?.execNode;
           const creationStamp = currentEntry
             ? {
                 createdVia: currentEntry.createdVia,
@@ -1583,13 +1506,14 @@ export async function performGatewaySessionReset(params: {
             : params.creation
               ? buildSessionCreationStamp(params.creation)
               : {};
-          const nextEntry: SessionEntry = {
+          const nextEntry: InternalSessionEntry = {
             sessionId: nextSessionId,
             lifecycleRevision: randomUUID(),
             updatedAt: now,
             sessionStartedAt: now,
             systemSent: false,
             abortedLastRun: false,
+            contextWindow: currentEntry?.contextWindow,
             thinkingLevel: currentEntry?.thinkingLevel,
             fastMode: currentEntry?.fastMode,
             toolOverrides: currentEntry?.toolOverrides,
@@ -1605,16 +1529,17 @@ export async function performGatewaySessionReset(params: {
                 : currentEntry?.execHost,
             execSecurity: currentEntry?.execSecurity,
             execAsk: currentEntry?.execAsk,
-            execNode: params.execNode
-              ? params.execNode
-              : params.clearExecBinding
-                ? undefined
-                : currentEntry?.execNode,
+            execNode: nextExecNode,
             execCwd: params.execNode
               ? params.execCwd
               : params.clearExecBinding
                 ? undefined
                 : currentEntry?.execCwd,
+            ...(params.armSessionDiffBaselineCapture && !nextExecNode
+              ? {
+                  sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
+                }
+              : {}),
             responseUsage: currentEntry?.responseUsage,
             pinnedAt: currentEntry?.pinnedAt,
             // Resets should keep the user's explicit selection, but clear any
@@ -1638,6 +1563,12 @@ export async function performGatewaySessionReset(params: {
             spawnedCwd: params.clearSpawnedCwd
               ? undefined
               : (preparedLifecycle?.spawnedCwd ?? params.spawnedCwd ?? currentEntry?.spawnedCwd),
+            sessionRoot: params.clearSpawnedCwd
+              ? undefined
+              : (preparedLifecycle?.sessionRoot ?? params.sessionRoot ?? currentEntry?.sessionRoot),
+            permissionMode: params.clearSpawnedCwd
+              ? undefined
+              : (params.permissionMode ?? currentEntry?.permissionMode),
             worktree: params.clearSpawnedCwd
               ? undefined
               : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
@@ -1650,6 +1581,10 @@ export async function performGatewaySessionReset(params: {
             subagentRole: currentEntry?.subagentRole,
             subagentControlScope: currentEntry?.subagentControlScope,
             label: currentEntry?.label,
+            icon: currentEntry?.icon,
+            category: currentEntry?.category,
+            boardFace: currentEntry?.boardFace,
+            visibility: currentEntry?.visibility,
             displayName: currentEntry?.displayName,
             delivery: currentEntry?.delivery,
             pendingDeliveryNotice: currentEntry?.pendingDeliveryNotice,
@@ -1731,17 +1666,16 @@ export async function performGatewaySessionReset(params: {
             sessionId: mutation.nextEntry.sessionId,
           });
           if (committedAcpResetState && isResetLifecycleCurrent()) {
-            try {
-              await getAcpRuntimeBackend(
-                (committedAcpResetState.meta.backend || cfg.acp?.backend || "").trim() || undefined,
-              )?.runtime.prepareFreshSession?.({
-                sessionKey: committedAcpResetState.sessionKey,
-              });
-            } catch (error) {
-              logVerbose(
-                `sessions.session-reset: ACP prepareFreshSession failed for ${committedAcpResetState.sessionKey}: ${String(error)}`,
-              );
-            }
+            // The helper records skipped/failed preparation instead of silently
+            // resuming the old backend conversation after an apparently
+            // successful reset.
+            await tryPrepareFreshManagerRuntimeSession({
+              deps: { getRuntimeBackend: getAcpRuntimeBackend },
+              cfg,
+              meta: committedAcpResetState.meta,
+              sessionKey: committedAcpResetState.sessionKey,
+              logPrefix: "sessions.session-reset",
+            });
           }
           await emitGatewayBeforeResetPluginHook({
             cfg,
@@ -1771,7 +1705,7 @@ export async function performGatewaySessionReset(params: {
       // Runtime model identity is a response projection, not reset persistence. Keep the
       // established RPC entry shape while the stored row retains selection intent only.
       const responseEntry: SessionEntry = {
-        ...next,
+        ...projectPublicSessionEntry(next),
         modelProvider: resolved.modelProvider,
         model: resolved.model,
       };
@@ -1811,7 +1745,17 @@ export async function performGatewaySessionReset(params: {
         // Preserve reset notifications and unbinding order, but finalize the exact
         // old checkout before the fence opens to same-key successors.
         try {
-          await managedWorktrees.removeIfLossless(detachedWorktreeId);
+          if (!(await managedWorktrees.removeIfLossless(detachedWorktreeId))) {
+            const retained = managedWorktrees.findLiveById(detachedWorktreeId);
+            if (retained) {
+              const safePath = truncateUtf16Safe(sanitizeForLog(retained.path), 256);
+              reportLifecycleCleanupError(
+                new Error(
+                  `worktree retained: branch=${retained.branch} path=${safePath} outcome=${retained.runEndCleanup?.outcome}`,
+                ),
+              );
+            }
+          }
         } catch (error) {
           reportLifecycleCleanupError(error);
         }

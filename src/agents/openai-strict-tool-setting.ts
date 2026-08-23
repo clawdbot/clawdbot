@@ -5,6 +5,7 @@
  */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import { getModelProviderRequestRouteFacts } from "./provider-request-config.js";
 
 // Resolves OpenAI strict-tool schema defaults. Native OpenAI routes require
 // strict=true, while compatible providers that merely support strict mode get
@@ -23,15 +24,17 @@ function resolvesToNativeOpenAIStrictTools(
   model: OpenAIStrictToolModel,
   transport: OpenAITransportKind,
 ): boolean {
-  const capabilities = resolveProviderRequestCapabilities({
-    provider: readStringValue(model.provider),
-    api: readStringValue(model.api),
-    baseUrl: readStringValue(model.baseUrl),
-    capability: "llm",
-    transport,
-    modelId: readStringValue(model.id),
-    compat: model.compat,
-  });
+  const capabilities =
+    getModelProviderRequestRouteFacts(model)?.capabilities ??
+    resolveProviderRequestCapabilities({
+      provider: readStringValue(model.provider),
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
+      capability: "llm",
+      transport,
+      modelId: readStringValue(model.id),
+      compat: model.compat,
+    });
   if (!capabilities.usesKnownNativeOpenAIRoute) {
     return false;
   }

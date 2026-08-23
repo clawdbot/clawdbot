@@ -23,7 +23,7 @@ import {
 } from "../../agents/utility-model.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
-import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
+import { resolveSystemMainSessionTarget } from "../../config/sessions.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import {
   loadOrCreateProcessDeviceIdentity,
@@ -171,7 +171,10 @@ export const systemHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedOwner.error);
       return;
     }
-    const sessionKey = requestedSessionKey ?? resolveMainSessionKeyFromConfig();
+    const systemTarget = requestedSessionKey
+      ? { agentId: requestedOwner?.agentId, sessionKey: requestedSessionKey }
+      : resolveSystemMainSessionTarget(cfg);
+    const { agentId: eventOwnerAgentId, sessionKey } = systemTarget;
     const wake = params.wake === true;
     const isNodePresenceLine = text.startsWith("Node:");
     if (wake && isNodePresenceLine) {
@@ -183,21 +186,23 @@ export const systemHandlers: GatewayRequestHandlers = {
       return;
     }
     if (wake && requestedSessionKey) {
-      const targetAgentId = normalizeAgentId(
+      const requestedAgentId = normalizeAgentId(
         requestedOwner?.agentId ?? resolveAgentIdFromSessionKey(requestedSessionKey),
       );
       const configuredAgentIds = listAgentIds(cfg).map(normalizeAgentId);
-      if (!configuredAgentIds.includes(targetAgentId)) {
+      if (!configuredAgentIds.includes(requestedAgentId)) {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${targetAgentId}"`),
+          errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${requestedAgentId}"`),
         );
         return;
       }
       // A targeted wake starts a model run. Require a live persisted session
       // so malformed keys cannot create phantom work under agent defaults.
-      const targetSession = loadGatewaySessionRow(requestedSessionKey, { agentId: targetAgentId });
+      const targetSession = loadGatewaySessionRow(requestedSessionKey, {
+        agentId: requestedAgentId,
+      });
       if (!targetSession || targetSession.archived) {
         respond(
           false,
@@ -300,8 +305,8 @@ export const systemHandlers: GatewayRequestHandlers = {
           };
           enqueueSystemEvent(
             deltaText,
-            requestedOwner
-              ? withSystemEventOwner(eventOptions, requestedOwner.agentId)
+            eventOwnerAgentId
+              ? withSystemEventOwner(eventOptions, eventOwnerAgentId)
               : eventOptions,
           );
         }
@@ -310,7 +315,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       const eventOptions = { sessionKey };
       enqueueSystemEvent(
         text,
-        requestedOwner ? withSystemEventOwner(eventOptions, requestedOwner.agentId) : eventOptions,
+        eventOwnerAgentId ? withSystemEventOwner(eventOptions, eventOwnerAgentId) : eventOptions,
       );
       if (wake) {
         // Targeted admin events may need a proactive response. Carry the exact
@@ -321,6 +326,7 @@ export const systemHandlers: GatewayRequestHandlers = {
           // The dispatcher recognizes "wake" as a payload-bearing run, so an
           // empty HEARTBEAT.md cannot suppress this queued system event.
           reason: "wake",
+          ...(!requestedSessionKey && eventOwnerAgentId ? { agentId: eventOwnerAgentId } : {}),
           sessionKey,
           heartbeat: { target: "last" },
         });

@@ -22,8 +22,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { ProjectCloneError } from "../../projects/project-clone-runtime.js";
 import {
-  deleteClonedProjectCheckout,
   materializeProjectClone,
+  removeClonedProjectCheckout,
 } from "../../projects/project-clone.js";
 import {
   listProjectRegistry,
@@ -33,8 +33,12 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { listProfiles, resolveUserProfileId } from "../../state/user-profiles.js";
-import { githubApiToken } from "../control-ui-github-api.js";
+import {
+  CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
+  githubApiToken,
+} from "../control-ui-github-api.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { searchRemoteProjects } from "../project-github-search.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
@@ -384,6 +388,43 @@ async function listObservedProjects(
   return projectCandidatesToSummaries(candidates);
 }
 
+function findProjectCheckoutReference(
+  cfg: Parameters<typeof listProjectRegistry>[0],
+  repoRoot: string,
+): string | undefined {
+  const normalizedRoot = path.resolve(repoRoot);
+  const workspaceReference = listProjectRegistry(cfg).find(
+    (candidate) =>
+      candidate.source === "workspace" && path.resolve(candidate.repoRoot) === normalizedRoot,
+  );
+  const worktreeReference = listRegistryWorktrees(process.env).find(
+    (worktree) => !worktree.removedAt && path.resolve(worktree.repoRoot) === normalizedRoot,
+  );
+  const sessionReference = Object.entries(
+    loadCombinedSessionStoreForGatewayCore(cfg, { projection: "list" }).store,
+  ).find(([, entry]) => {
+    if (entry.archivedAt) {
+      return false;
+    }
+    const sessionRoot = entry.worktree?.repoRoot;
+    if (sessionRoot && path.resolve(sessionRoot) === normalizedRoot) {
+      return true;
+    }
+    const cwd = entry.spawnedCwd;
+    return Boolean(
+      cwd &&
+      (path.resolve(cwd) === normalizedRoot || isPathInside(normalizedRoot, path.resolve(cwd))),
+    );
+  });
+  return workspaceReference
+    ? `agent workspace ${workspaceReference.displayName}`
+    : worktreeReference
+      ? `managed worktree ${worktreeReference.name}`
+      : sessionReference
+        ? `session ${sessionReference[0]}`
+        : undefined;
+}
+
 export function createProjectsHandlers(service: ProjectWorktreeService): GatewayRequestHandlers {
   return {
     "projects.list": async ({ params, respond, context, client }) => {
@@ -487,6 +528,20 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           undefined,
         );
       } catch (error) {
+        if (isTrustedSecretSurfaceUnavailableError(error)) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, {
+              details: {
+                code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
+                cause: "auth_required",
+              },
+              retryable: false,
+            }),
+          );
+          return;
+        }
         if (error instanceof ProjectCloneError) {
           respond(
             false,
@@ -521,15 +576,15 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       }
       try {
         respond(true, await searchRemoteProjects(params.query), undefined);
-      } catch {
+      } catch (error) {
+        const credentialUnavailable = isTrustedSecretSurfaceUnavailableError(error);
+        const message = credentialUnavailable
+          ? CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE
+          : "GitHub project search is unavailable. Retry shortly.";
         respond(
           false,
           undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "GitHub project search is unavailable. Retry shortly.",
-            { retryable: true },
-          ),
+          errorShape(ErrorCodes.UNAVAILABLE, message, { retryable: !credentialUnavailable }),
         );
       }
     },
@@ -537,15 +592,19 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       if (!assertValidParams(params, validateProjectsRemoveParams, "projects.remove", respond)) {
         return;
       }
-      const project = resolveProjectRegistry(context.getRuntimeConfig(), params.id);
-      if (!project || project.source === "workspace") {
+      const respondUnknownProject = () => {
         respond(
           false,
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, `unknown project id: ${params.id}`),
         );
+      };
+      const project = resolveProjectRegistry(context.getRuntimeConfig(), params.id);
+      if (!project || project.source === "workspace") {
+        respondUnknownProject();
         return;
       }
+      let removed: boolean;
       if (params.deleteCheckout) {
         if (project.source !== "cloned") {
           respond(
@@ -558,56 +617,36 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           );
           return;
         }
-        const normalizedRoot = path.resolve(project.repoRoot);
-        const worktreeReference = listRegistryWorktrees(process.env).find(
-          (worktree) => !worktree.removedAt && path.resolve(worktree.repoRoot) === normalizedRoot,
-        );
-        const sessionReference = Object.entries(
-          loadCombinedSessionStoreForGatewayCore(context.getRuntimeConfig(), {
-            projection: "list",
-          }).store,
-        ).find(([, entry]) => {
-          if (entry.archivedAt) {
-            return false;
-          }
-          const sessionRoot = entry.worktree?.repoRoot;
-          if (sessionRoot && path.resolve(sessionRoot) === normalizedRoot) {
-            return true;
-          }
-          const cwd = entry.spawnedCwd;
-          return Boolean(
-            cwd &&
-            (path.resolve(cwd) === normalizedRoot ||
-              isPathInside(normalizedRoot, path.resolve(cwd))),
-          );
-        });
-        if (worktreeReference || sessionReference) {
-          const reference = worktreeReference
-            ? `managed worktree ${worktreeReference.name}`
-            : `session ${sessionReference?.[0]}`;
+        try {
+          removed = await removeClonedProjectCheckout(project, () => {
+            const reference = findProjectCheckoutReference(
+              context.getRuntimeConfig(),
+              project.repoRoot,
+            );
+            if (reference) {
+              throw new ProjectCheckoutError(
+                `Project checkout is still referenced by ${reference}. Remove that reference before deleting the checkout.`,
+              );
+            }
+          });
+        } catch (error) {
           respond(
             false,
             undefined,
             errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Project checkout is still referenced by ${reference}. Remove that reference before deleting the checkout.`,
+              error instanceof ProjectCheckoutError
+                ? ErrorCodes.INVALID_REQUEST
+                : ErrorCodes.UNAVAILABLE,
+              formatErrorMessage(error),
             ),
           );
           return;
         }
-        try {
-          await deleteClonedProjectCheckout(project);
-        } catch (error) {
-          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-          return;
-        }
+      } else {
+        removed = removeProjectRegistry(params.id);
       }
-      if (!removeProjectRegistry(params.id)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown project id: ${params.id}`),
-        );
+      if (!removed) {
+        respondUnknownProject();
         return;
       }
       respond(true, { removed: true }, undefined);

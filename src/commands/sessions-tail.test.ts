@@ -66,7 +66,7 @@ describe("sessionsTailCommand", () => {
         list: [{ id: "main" }, { id: "ops" }],
       },
     });
-    storePath = path.join(tmpDir, "sessions.json");
+    storePath = path.join(tmpDir, "sessions.sqlite");
   });
 
   afterEach(() => {

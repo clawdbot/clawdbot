@@ -13,6 +13,7 @@ import {
   candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
+  fullReleaseTrustedWorkflowFields,
   githubApi,
   isDirectReleaseCandidateExecution,
   parseArgs,
@@ -1149,6 +1150,8 @@ describe("release candidate checklist", () => {
         "111",
         "--npm-preflight-run",
         "222",
+        "--plugin-sdk-api-acknowledgement",
+        "a1b2c3d4",
         "--skip-dispatch",
       ]),
       workflowRef: "main",
@@ -1159,6 +1162,7 @@ describe("release candidate checklist", () => {
     expect(command).toContain("'full_release_validation_run_id=111'");
     expect(command).toContain("'full_release_validation_run_attempt=2'");
     expect(command).toContain("'preflight_run_id=222'");
+    expect(command).toContain("'plugin_sdk_api_acknowledgement=a1b2c3d4'");
     expect(command).toContain("'tag=v2026.5.14-beta.3'");
     expect(command).toContain("'plugin_publish_scope=all-publishable'");
     expect(command).toContain("'--ref' 'main'");
@@ -1175,6 +1179,12 @@ describe("release candidate checklist", () => {
     for (const input of emittedInputs) {
       expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
     }
+  });
+
+  it("validates Plugin SDK acknowledgement digests", () => {
+    expect(() =>
+      parseArgs(["--tag", "v2026.5.14-beta.3", "--plugin-sdk-api-acknowledgement", "ABC"]),
+    ).toThrow("8-character lowercase digest");
   });
 
   it("requires and carries an exact Windows Node tag for stable release candidates", () => {
@@ -1361,6 +1371,59 @@ describe("release candidate checklist", () => {
         "full-release-validation.yml",
       ),
     ).toThrow("refusing to guess from recent workflow_dispatch runs");
+  });
+
+  it("keeps contract 1 callers compatible and sends identity for contract 2", () => {
+    const workflowSha = "a".repeat(40);
+    const source = (contract: string, declareIdentity: boolean) => `env:
+  RELEASE_ISOLATION_TOOLING_CONTRACT: "${contract}"
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha: {}
+${declareIdentity ? "      trusted_workflow_json: {}\n" : ""}`;
+
+    expect(
+      fullReleaseTrustedWorkflowFields({
+        workflowRef: "main",
+        workflowSha,
+        workflowSource: source("1", false),
+      }),
+    ).toEqual({});
+    const fields = fullReleaseTrustedWorkflowFields({
+      workflowRef: "main",
+      workflowSha,
+      workflowSource: source("2", true),
+    });
+    expect(JSON.parse(fields.trusted_workflow_json ?? "{}")).toEqual({
+      ref: "main",
+      fullRef: "refs/heads/main",
+      sha: workflowSha,
+    });
+    expect(() =>
+      fullReleaseTrustedWorkflowFields({
+        workflowRef: "main",
+        workflowSha,
+        workflowSource: source("2", false),
+      }),
+    ).toThrow("contract 2 requires trusted_workflow_json");
+    for (const contract of ["3", "4"]) {
+      expect(() =>
+        fullReleaseTrustedWorkflowFields({
+          workflowRef: "main",
+          workflowSha,
+          workflowSource: source(contract, true),
+        }),
+      ).toThrow("supported release tooling contract");
+    }
+  });
+
+  it("threads the selected tooling identity into direct full validation dispatch", () => {
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
+
+    expect(source).toContain("const trustedWorkflowFields = fullReleaseTrustedWorkflowFields({");
+    expect(source).toContain("workflowSha: toolingSha");
+    expect(source).toContain("...trustedWorkflowFields");
   });
 
   it("falls back to a single compatible artifact from the same run", () => {

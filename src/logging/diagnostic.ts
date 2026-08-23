@@ -523,6 +523,10 @@ function isStalledModelCallRecoveryEligible(params: {
   stuckSessionAbortMs: number;
 }): boolean {
   const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
+  const effectiveAbortMs = Math.max(
+    params.stuckSessionAbortMs,
+    params.activity?.activeModelCallRequestTimeoutMs ?? 0,
+  );
   // Local providers are not blanket-exempt from recovery. Streaming model
   // chunks refresh run activity while emitted progress events are throttled, so
   // active streams stay fresh and silent/non-streaming calls can be recovered.
@@ -531,7 +535,7 @@ function isStalledModelCallRecoveryEligible(params: {
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "model_call" &&
     typeof lastProgressAgeMs === "number" &&
-    lastProgressAgeMs >= params.stuckSessionAbortMs
+    lastProgressAgeMs >= effectiveAbortMs
   );
 }
 
@@ -540,11 +544,20 @@ function isActiveAbortRecoveryEligible(params: {
   activity?: DiagnosticSessionActivitySnapshot;
   stuckSessionAbortMs: number;
 }): boolean {
+  const effectiveModelAbortMs = Math.max(
+    params.stuckSessionAbortMs,
+    params.activity?.activeModelCallRequestTimeoutMs ?? 0,
+  );
+  const activeModelCallRequestTimeoutMs = params.activity?.activeModelCallRequestTimeoutMs;
+  const activeModelCallAllowanceExpired =
+    activeModelCallRequestTimeoutMs === undefined ||
+    (params.activity?.lastProgressAgeMs ?? 0) >= activeModelCallRequestTimeoutMs;
   return (
     (params.classification?.eventType === "session.stalled" &&
       params.classification.classification === "stalled_agent_run" &&
       params.activity?.hasActiveEmbeddedRun === true &&
-      (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= params.stuckSessionAbortMs) ||
+      (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= effectiveModelAbortMs &&
+      activeModelCallAllowanceExpired) ||
     isStalledEmbeddedRunRecoveryEligible(params) ||
     isBlockedToolCallRecoveryEligible(params) ||
     isStalledModelCallRecoveryEligible(params)
@@ -1176,19 +1189,19 @@ export function startDiagnosticHeartbeat(
       lastDiagnosticHeartbeatTickAt === undefined ? 0 : now - lastDiagnosticHeartbeatTickAt;
     lastDiagnosticHeartbeatTickAt = now;
     const heartbeatOverdueMs = Math.max(0, heartbeatElapsedMs - DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);
+    const inStartupGrace = livenessGraceUntil > 0 && now < livenessGraceUntil;
     // Observe ordinary timer jitter at the scheduled tick so it cannot consume
     // a run's remaining recovery budget. Material lateness can also hide queued
     // progress events, so the next healthy heartbeat owns recovery instead.
     const recoveryObservationNow = now - heartbeatOverdueMs;
     const shouldDeferRecovery = heartbeatOverdueMs >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS;
-    if (shouldDeferRecovery) {
+    if (shouldDeferRecovery && !inStartupGrace) {
       diag.warn(
-        `liveness heartbeat delayed ${Math.round(heartbeatElapsedMs)}ms; deferring recovery decisions`,
+        `liveness heartbeat delayed: overdue=${Math.round(heartbeatOverdueMs)}ms elapsed=${Math.round(heartbeatElapsedMs)}ms; deferring recovery decisions`,
       );
     }
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot(now);
-    const inStartupGrace = livenessGraceUntil > 0 && now < livenessGraceUntil;
     const rawLivenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
     // Keep sampling during grace so event-loop delay baselines reset, but suppress startup-only reports.
     const livenessSample = inStartupGrace ? null : rawLivenessSample;

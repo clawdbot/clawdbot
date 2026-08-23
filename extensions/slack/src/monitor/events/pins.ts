@@ -2,7 +2,7 @@
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackPinEvent } from "../types.js";
 import {
@@ -65,10 +65,10 @@ async function handleSlackPinEvent(params: {
     const userLabel = userInfo?.name ?? payload.user ?? "someone";
     const itemType = payload.item?.type ?? "item";
     const messageId = payload.item?.message?.ts ?? payload.event_ts;
-    enqueueSystemEvent(
+    enqueueRoutedSystemEvent(
       `Slack: ${userLabel} ${action} a ${itemType} in ${ingressContext.channelLabel}.`,
+      ingressContext.route,
       {
-        sessionKey: ingressContext.sessionKey,
         contextKey: `slack:pin:${eventScope ? `${eventScope.teamId}:` : ""}${contextKeySuffix}:${channelId ?? "unknown"}:${messageId ?? "unknown"}:${eventId}`,
       },
     );

@@ -15,8 +15,7 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import { embeddedRunMock, agentDiscoveryMock, testState } from "../test-helpers.runtime-state.js";
-import type { connectOk } from "../test-helpers.server.js";
-import { installGatewayTestHooks, writeSessionStore } from "../test-helpers.server.js";
+import * as gatewayTestHelpers from "../test-helpers.server.js";
 
 export const getSessionManagerModule = createLazyRuntimeModule(
   () => import("../../agents/sessions/index.js"),
@@ -296,7 +295,8 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: vi.fn(async () => {}),
 }));
 
-vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
+vi.mock("../../agents/agent-bundle-mcp-tools.js", async (importOriginal) => ({
+  ...(await importOriginal()),
   disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
   disposeAllSessionMcpRuntimes: bundleMcpRuntimeMocks.disposeAllSessionMcpRuntimes,
   retireSessionMcpRuntime: bundleMcpRuntimeMocks.retireSessionMcpRuntime,
@@ -304,8 +304,7 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
 
 export function setupGatewaySessionsHandlerTestHarness() {
   const { getHarness, openClient, ...handlerFixture } = createGatewaySessionsTestHarness(false);
-  void getHarness;
-  void openClient;
+  void [getHarness, openClient];
   return handlerFixture;
 }
 
@@ -314,13 +313,15 @@ export function setupGatewaySessionsTestHarness() {
 }
 
 function createGatewaySessionsTestHarness(startServer: boolean) {
-  installGatewayTestHooks({ scope: "suite" });
+  gatewayTestHelpers.installGatewayTestHooks({ scope: "suite" });
 
+  const defaultAgentWorkspace = path.join(os.tmpdir(), "openclaw-gateway-test");
   let harness: GatewayServerHarness | undefined;
   let sharedSessionStoreDir: string | undefined;
   let sessionStoreCaseSeq = 0;
 
   beforeAll(async () => {
+    await fs.mkdir(defaultAgentWorkspace, { recursive: true });
     if (startServer) {
       const { startGatewayServerHarness } = await getGatewayServerHarnessModule();
       harness = await startGatewayServerHarness();
@@ -393,15 +394,17 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
     return sharedSessionStoreDir;
   };
 
-  const openClient = async (opts?: Parameters<typeof connectOk>[1]) =>
-    await requireHarness().openClient(opts);
+  const openClient = async (opts?: Parameters<typeof gatewayTestHelpers.connectOk>[1]) =>
+    await gatewayTestHelpers
+      .prepareGatewayReplyRuntimeForTest({ force: true })
+      .then(() => requireHarness().openClient(opts));
 
   async function createSessionStoreDir() {
     const dir = path.join(requireSharedSessionStoreDir(), `case-${sessionStoreCaseSeq++}`);
     await fs.mkdir(dir, { recursive: true });
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
-    return { dir, storePath };
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot(); // A suite server may prewarm before case setup.
+    return { dir, storePath: testState.sessionStorePath };
   }
 
   async function createSelectedGlobalSessionStore() {
@@ -430,7 +433,7 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = { scope: "global" };
     if (writePrimeStore) {
-      await writeSessionStore({
+      await gatewayTestHelpers.writeSessionStore({
         entries: {},
         storePath: path.join(dir, "prime-sessions.json"),
       });
@@ -440,14 +443,14 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
     const workStorePath = storeTemplate.replace("{agentId}", "work");
     await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
     await fs.mkdir(path.dirname(workStorePath), { recursive: true });
-    await writeSessionStore({
+    await gatewayTestHelpers.writeSessionStore({
       agentId: "main",
       entries: {
         global: sessionStoreEntry("sess-main-global"),
       },
       storePath: mainStorePath,
     });
-    await writeSessionStore({
+    await gatewayTestHelpers.writeSessionStore({
       agentId: "work",
       entries: {
         global: sessionStoreEntry("sess-work-global", {
@@ -523,7 +526,7 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
   async function seedActiveMainSession() {
     const { dir, storePath } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
-    await writeSessionStore({
+    await gatewayTestHelpers.writeSessionStore({
       entries: {
         main: sessionStoreEntry("sess-main"),
       },
@@ -535,6 +538,7 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
     createConfiguredGlobalAgentSessionStore,
     createSessionStoreDir,
     createSelectedGlobalSessionStore,
+    defaultAgentWorkspace,
     getHarness: requireHarness,
     openClient,
     resetConfiguredGlobalAgentSessionStore,
@@ -667,14 +671,16 @@ export function expectNoSessionQueueCleanup() {
 }
 
 type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;
+type SessionsHandlerOptions = Parameters<SessionsHandlers[keyof SessionsHandlers]>[0];
 
 export async function directSessionReq<TPayload = unknown>(
   method: keyof SessionsHandlers,
   params: Record<string, unknown>,
   opts?: {
     context?: Record<string, unknown>;
-    client?: Parameters<SessionsHandlers[keyof SessionsHandlers]>[0]["client"];
-    isWebchatConnect?: Parameters<SessionsHandlers[keyof SessionsHandlers]>[0]["isWebchatConnect"];
+    client?: SessionsHandlerOptions["client"];
+    isWebchatConnect?: SessionsHandlerOptions["isWebchatConnect"];
+    sessionMutationAuthorization?: SessionsHandlerOptions["sessionMutationAuthorization"];
     coercePayload?: (payload: unknown) => TPayload;
   },
 ): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
@@ -719,6 +725,7 @@ export async function directSessionReq<TPayload = unknown>(
     } as never,
     client: opts?.client ?? null,
     isWebchatConnect: opts?.isWebchatConnect ?? (() => false),
+    sessionMutationAuthorization: opts?.sessionMutationAuthorization,
   });
   if (!result) {
     throw new Error(`${method} did not respond`);

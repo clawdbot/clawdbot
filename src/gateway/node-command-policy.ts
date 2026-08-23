@@ -13,6 +13,8 @@ import {
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
+  NODE_WORKER_PRIVATE_COMMANDS,
+  isPrivateNodeInvokeCommand,
 } from "../infra/node-commands.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
@@ -406,7 +408,16 @@ function resolveNodeCommandAllowlistInternal(
   });
   const extra = cfg.gateway?.nodes?.commands?.allow ?? [];
   const deny = new Set(cfg.gateway?.nodes?.commands?.deny ?? []);
-  const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
+  // A plugin `dangerous` flag governs the surface that plugin contributes
+  // (listDefaultPluginNodeCommands) and forces a registered invoke policy. It is
+  // not authority to revoke a command core itself declares in PLATFORM_DEFAULTS,
+  // whose grant chain is node-local enablement plus pairing approval. Letting it
+  // do so disabled desktop `computer.act` on every Gateway that auto-starts a
+  // bundled computer-use provider plugin.
+  const baseCommands = new Set(base);
+  const dangerousPluginCommands = new Set(
+    listDangerousPluginNodeCommands().filter((command) => !baseCommands.has(command)),
+  );
   // Dangerous built-ins that also appear in PLATFORM_DEFAULTS stay declarable
   // at pairing but do not enter the runtime allowlist by default.
   const dangerousBuiltinCommands =
@@ -444,6 +455,9 @@ function resolveNodeCommandAllowlistInternal(
       allow.delete(trimmed);
     }
   }
+  for (const privateCommand of NODE_WORKER_PRIVATE_COMMANDS) {
+    allow.delete(privateCommand);
+  }
   return allow;
 }
 
@@ -472,7 +486,7 @@ function normalizeDeclaredCommands(commands?: readonly string[]): string[] {
   const normalized: string[] = [];
   for (const value of commands) {
     const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) {
+    if (!trimmed || seen.has(trimmed) || isPrivateNodeInvokeCommand(trimmed)) {
       continue;
     }
     seen.add(trimmed);
@@ -490,6 +504,33 @@ export function normalizeDeclaredNodeCommands(params: {
   );
 }
 
+// Capability and command are one advertisement: a node offers `computer` because
+// it can run `computer.act`. Keeping the capability after policy withheld every
+// command that fulfills it yields a surface that reads as available and then
+// rejects every invoke. Families core does not own here stay untouched.
+const CAPABILITY_COMMAND_FAMILIES: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["camera", new Set([...CAMERA_COMMANDS, ...MAC_CAMERA_COMMANDS, ...CAMERA_DANGEROUS_COMMANDS])],
+  ["computer", new Set(COMPUTER_COMMANDS)],
+  ["location", new Set(MOBILE_NODE_COMMANDS.location)],
+  ["screen", new Set([...SCREEN_COMMANDS, ...SCREEN_DANGEROUS_COMMANDS])],
+]);
+
+/** Drops capabilities whose commands policy withheld without admitting a sibling. */
+export function retainFulfilledNodeCapabilities(params: {
+  caps: readonly string[];
+  admittedCommands: readonly string[];
+  withheldCommands: readonly string[];
+}): string[] {
+  return params.caps.filter((capability) => {
+    const family = CAPABILITY_COMMAND_FAMILIES.get(capability);
+    return (
+      !family ||
+      !params.withheldCommands.some((command) => family.has(command)) ||
+      params.admittedCommands.some((command) => family.has(command))
+    );
+  });
+}
+
 export function isNodeCommandAllowed(params: {
   command: string;
   declaredCommands?: string[];
@@ -498,6 +539,9 @@ export function isNodeCommandAllowed(params: {
   const command = params.command.trim();
   if (!command) {
     return { ok: false, reason: "command required" };
+  }
+  if (isPrivateNodeInvokeCommand(command)) {
+    return { ok: false, reason: "command not allowlisted" };
   }
   if (!params.allowlist.has(command)) {
     return { ok: false, reason: "command not allowlisted" };

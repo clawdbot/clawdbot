@@ -64,9 +64,6 @@ type ReleaseCheckExecOptions = ExecFileSyncOptions & {
   windowsVerbatimArguments?: boolean;
 };
 
-export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
-export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mts";
-
 export const RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV =
   "OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR";
 
@@ -112,7 +109,7 @@ const requiredPathGroups = [
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
-  "dist/audit/audit-event-writer.worker.js",
+  "dist/agents/prepared-model-catalog.worker.js",
   "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
   "dist/config/sessions/session-transcript-reconcile.worker.js",
   "dist/state/openclaw-database-verify.worker.js",
@@ -1157,8 +1154,6 @@ export function collectForbiddenPackContentPaths(
     })
     .toSorted((left, right) => left.localeCompare(right));
 }
-
-export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
 
 function extractTag(item: string, tag: string): string | null {
   const escapedTag = escapeRegExp(tag);

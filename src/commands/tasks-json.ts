@@ -1,18 +1,22 @@
 // JSON-only task command helpers.
 // These paths avoid maintenance reconciliation so short-lived JSON CLI processes stay read-only and exit cleanly.
 
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseCliEnumFilter } from "../cli/enum-filter.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import { listTaskAuditFindings } from "../tasks/task-registry.audit.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { TASK_RUNTIMES, TASK_STATUSES, type TaskRecord } from "../tasks/task-registry.types.js";
+import {
+  TASK_SYSTEM_AUDIT_CODES,
+  TASK_SYSTEM_AUDIT_SEVERITIES,
+  type TaskSystemAuditCode,
+  type TaskSystemAuditSeverity,
+} from "../tasks/task-system-audit.types.js";
 import {
   buildTaskSystemAuditJsonPayload,
   buildTaskSystemAuditFindings,
-  type TaskSystemAuditCode,
-  type TaskSystemAuditSeverity,
 } from "./tasks-audit-system.js";
 
 function listTaskJsonRecords(): TaskRecord[] {
@@ -51,8 +55,8 @@ function toSystemAuditFindings(params: {
 }
 
 function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
-  const runtimeFilter = normalizeOptionalString(opts.runtime);
-  const statusFilter = normalizeOptionalString(opts.status);
+  const runtimeFilter = parseCliEnumFilter(opts.runtime, "--runtime", TASK_RUNTIMES);
+  const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_STATUSES);
   const tasks = listTaskJsonRecords().filter((task) => {
     if (runtimeFilter && task.runtime !== runtimeFilter) {
       return false;
@@ -71,10 +75,14 @@ function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
 }
 
 function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
-  const severityFilter = normalizeOptionalString(opts.severity) as
-    | TaskSystemAuditSeverity
+  const severityFilter = parseCliEnumFilter(
+    opts.severity,
+    "--severity",
+    TASK_SYSTEM_AUDIT_SEVERITIES,
+  ) as TaskSystemAuditSeverity | undefined;
+  const codeFilter = parseCliEnumFilter(opts.code, "--code", TASK_SYSTEM_AUDIT_CODES) as
+    | TaskSystemAuditCode
     | undefined;
-  const codeFilter = normalizeOptionalString(opts.code) as TaskSystemAuditCode | undefined;
   const result = toSystemAuditFindings({
     severityFilter,
     codeFilter,

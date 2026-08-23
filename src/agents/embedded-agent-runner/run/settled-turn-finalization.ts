@@ -1,3 +1,4 @@
+import { markReplyPayloadForSourceSuppressionDelivery } from "../../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveSettledTurnFinalizationText } from "../../harness/settled-turn-finalization-result.js";
 import type {
@@ -92,6 +93,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     };
   }
   const settledFailureSignal = prepared.failureSignal;
+  const settledTerminalToolFailure = prepared.terminalToolFailure;
 
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
@@ -134,8 +136,15 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       lastRunPromptUsage,
       terminalState,
     });
+    // The isolated finalizer cannot call a message tool. Its answer is
+    // host-owned recovery output and must cross that source-reply suppression.
+    finalizedPrepared.payloadsWithToolMedia?.forEach(markReplyPayloadForSourceSuppressionDelivery);
     // A failure-honest final answer cannot turn a settled cron denial into success.
-    prepared = { ...finalizedPrepared, failureSignal: settledFailureSignal };
+    prepared = {
+      ...finalizedPrepared,
+      failureSignal: settledFailureSignal,
+      terminalToolFailure: settledTerminalToolFailure,
+    };
     return {
       attempt,
       attemptAssistant: attempt.currentAttemptAssistant,
@@ -178,6 +187,7 @@ async function runPreparedSettledTurnFinalization(input: {
         prompt: input.prompt,
         disableTools: true,
         skipPreparedUserTurnMessage: true,
+        suppressNextUserMessagePersistence: true,
         initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
       },
       input.settledAttempt,
@@ -212,6 +222,8 @@ function buildSettledTurnFinalizationAttemptResult(input: {
     sessionIdUsed: settledAttempt.sessionIdUsed,
     sessionFileUsed: settledAttempt.sessionFileUsed,
     ...(input.agentHarnessId ? { agentHarnessId: input.agentHarnessId } : {}),
+    contextTokens: settledAttempt.contextTokens,
+    contextTokensSource: settledAttempt.contextTokensSource,
     authBindingFingerprint: settledAttempt.authBindingFingerprint,
     runtimeArtifact: settledAttempt.runtimeArtifact,
     systemPromptReport: settledAttempt.systemPromptReport,

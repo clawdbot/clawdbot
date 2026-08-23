@@ -106,7 +106,7 @@ struct IOSGatewayChatTransportTests {
         for key in ["Matrix:Channel:Room", "global", "agent:ops:main"] {
             try await transport.patchSession(key: key, pinned: true)
             try await transport.deleteSession(key: key)
-            _ = try await transport.forkSession(parentKey: key)
+            _ = try await transport.forkSession(parentKey: key, fromLastCompleted: false)
         }
 
         let requests = await recorder.all()

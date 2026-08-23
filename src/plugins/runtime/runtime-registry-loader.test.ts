@@ -19,9 +19,22 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot>(),
   isPluginMetadataSnapshotCompatible:
     vi.fn<typeof import("../plugin-metadata-snapshot.js").isPluginMetadataSnapshotCompatible>(),
+  rebasePluginMetadataSnapshotManifestRegistry: vi.fn<
+    typeof import("../plugin-metadata-snapshot.js").rebasePluginMetadataSnapshotManifestRegistry
+  >((snapshot) => snapshot),
+  listAgentEntries: vi.fn<typeof import("../../agents/agent-scope.js").listAgentEntries>(() => []),
   resolveAgentWorkspaceDir: vi.fn<
     typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir
   >(() => "/resolved-workspace"),
+  tryResolveConfiguredAgentWorkspaceDir: vi.fn<
+    typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
+  >(() => "/resolved-workspace"),
+  resolvePluginControlPlaneWorkspace: vi.fn<
+    typeof import("../control-plane-workspace.js").resolvePluginControlPlaneWorkspace
+  >((params) => ({
+    workspaceDir: params.workspaceDir ?? "/resolved-workspace",
+    workspaceScope: "selected",
+  })),
   resolveDefaultAgentId: vi.fn<typeof import("../../agents/agent-scope.js").resolveDefaultAgentId>(
     () => "default",
   ),
@@ -63,20 +76,34 @@ vi.mock("../plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: (
     ...args: Parameters<typeof mocks.isPluginMetadataSnapshotCompatible>
   ) => mocks.isPluginMetadataSnapshotCompatible(...args),
+  rebasePluginMetadataSnapshotManifestRegistry: (
+    ...args: Parameters<typeof mocks.rebasePluginMetadataSnapshotManifestRegistry>
+  ) => mocks.rebasePluginMetadataSnapshotManifestRegistry(...args),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentEntries: (...args: Parameters<typeof mocks.listAgentEntries>) =>
+    mocks.listAgentEntries(...args),
   resolveAgentWorkspaceDir: (...args: Parameters<typeof mocks.resolveAgentWorkspaceDir>) =>
     mocks.resolveAgentWorkspaceDir(...args),
+  tryResolveConfiguredAgentWorkspaceDir: (
+    ...args: Parameters<typeof mocks.tryResolveConfiguredAgentWorkspaceDir>
+  ) => mocks.tryResolveConfiguredAgentWorkspaceDir(...args),
   resolveDefaultAgentId: (...args: Parameters<typeof mocks.resolveDefaultAgentId>) =>
     mocks.resolveDefaultAgentId(...args),
+}));
+
+vi.mock("../control-plane-workspace.js", () => ({
+  resolvePluginControlPlaneWorkspace: (
+    ...args: Parameters<typeof mocks.resolvePluginControlPlaneWorkspace>
+  ) => mocks.resolvePluginControlPlaneWorkspace(...args),
 }));
 
 import { ensurePluginRegistryLoaded } from "./runtime-registry-loader.js";
 
 function useMemoryProviderOwner(params: {
   adapterId: string;
-  contract: "embeddingProviders" | "memoryEmbeddingProviders";
+  contract: "embeddingProviders";
   pluginId: string;
 }): void {
   mocks.resolvePluginMetadataSnapshot.mockReturnValue({
@@ -86,6 +113,7 @@ function useMemoryProviderOwner(params: {
       plugins: [
         {
           pluginId: params.pluginId,
+          startup: { sidecar: false, memory: false, agentHarnesses: [] },
           contributions: {
             contracts: { [params.contract]: [params.adapterId] },
           },
@@ -107,7 +135,18 @@ function requireLoadOptions(): Record<string, unknown> {
 describe("ensurePluginRegistryLoaded", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolvePluginMetadataSnapshot.mockReset();
+    mocks.resolvePluginMetadataSnapshot.mockReset().mockReturnValue({
+      index: {
+        installRecords: {},
+        plugins: [
+          {
+            pluginId: "openai",
+            startup: { sidecar: false, memory: false, agentHarnesses: [] },
+          },
+        ],
+      },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    } as never);
     mocks.isPluginMetadataSnapshotCompatible.mockReturnValue(true);
     mocks.applyPluginAutoEnable.mockImplementation((params) => ({
       config: params.config ?? {},
@@ -188,7 +227,7 @@ describe("ensurePluginRegistryLoaded", () => {
   it.each([
     {
       adapterId: "gemini",
-      contract: "memoryEmbeddingProviders" as const,
+      contract: "embeddingProviders" as const,
       pluginId: "google",
     },
     {
@@ -225,7 +264,7 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set(["gemini"]));
     useMemoryProviderOwner({
       adapterId: "gemini",
-      contract: "memoryEmbeddingProviders",
+      contract: "embeddingProviders",
       pluginId: "google",
     });
 

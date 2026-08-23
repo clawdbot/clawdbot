@@ -206,8 +206,34 @@ export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
   return { ...config, ...(plugins.data ? { codexPlugins: plugins.data } : {}) };
 }
 
-export function isCodexSandboxExecServerEnabled(pluginConfig?: unknown): boolean {
-  return readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true;
+export function isCodexSandboxExecServerEnabled(
+  pluginConfig?: unknown,
+  sandbox?: unknown,
+): boolean {
+  return (
+    isCodexRemoteExecPlacementSandbox(sandbox) ||
+    readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true
+  );
+}
+
+export function isCodexRemoteExecPlacementSandbox(sandbox: unknown): boolean {
+  return (
+    typeof sandbox === "object" &&
+    sandbox !== null &&
+    "placementExecutionMode" in sandbox &&
+    sandbox.placementExecutionMode === "remote-exec"
+  );
+}
+
+export function isCodexPairedNodeRemoteExecPlacementSandbox(sandbox: unknown): boolean {
+  return (
+    isCodexRemoteExecPlacementSandbox(sandbox) &&
+    typeof sandbox === "object" &&
+    sandbox !== null &&
+    "placementNodeId" in sandbox &&
+    typeof sandbox.placementNodeId === "string" &&
+    sandbox.placementNodeId.length > 0
+  );
 }
 
 export function assertCodexAppServerCommandHasNoInlineArgs(params: {

@@ -405,7 +405,6 @@ elif [ "$SIGN" -eq 1 ]; then
     fail "No signing identity found. Use --no-sign or install a signing key."
   fi
   unset ALLOW_ADHOC_SIGNING
-  unset SIGN_IDENTITY
 fi
 
 # 3) Package and sign outside the live bundle. A failed package/sign operation

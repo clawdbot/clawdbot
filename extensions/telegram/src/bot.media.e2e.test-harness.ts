@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { finalizeInboundContext, resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeEach, vi, type Mock } from "vitest";
@@ -135,36 +138,14 @@ const defaultRuntimeConfig = (() =>
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
   }) as OpenClawConfig) as TelegramBotDeps["getRuntimeConfig"];
 
-type TopicNameEntry = {
-  name: string;
-  iconColor?: number;
-  iconCustomEmojiId?: string;
-  closed?: boolean;
-  updatedAt: number;
-};
-
-const topicNameStoresForTest = new Map<string, Map<string, TopicNameEntry>>();
-
 function installTopicNameRuntimeForTest(): void {
   setTelegramRuntime({
     state: {
-      openKeyedStore: (({ namespace }: { namespace: string }) => {
-        let store = topicNameStoresForTest.get(namespace);
-        if (!store) {
-          store = new Map();
-          topicNameStoresForTest.set(namespace, store);
-        }
-        return {
-          register: async (key: string, value: TopicNameEntry) => {
-            store.set(key, value);
-          },
-          entries: async () => [...store.entries()].map(([key, value]) => ({ key, value })),
-          delete: async (key: string) => store.delete(key),
-          clear: async () => {
-            store.clear();
-          },
-        };
-      }) as unknown as TelegramRuntime["state"]["openKeyedStore"],
+      openKeyedStore: ((options) =>
+        createPluginStateKeyedStoreForTests(
+          "telegram",
+          options,
+        )) as TelegramRuntime["state"]["openKeyedStore"],
     },
     channel: {},
   } as TelegramRuntime);
@@ -285,7 +266,6 @@ beforeEach(() => {
   process.env.OPENCLAW_STATE_DIR = ensureMediaHarnessStoreRoot();
   telegramBotDepsForTest.getRuntimeConfig = defaultRuntimeConfig;
   resetInboundDedupe();
-  topicNameStoresForTest.clear();
   resetTelegramTopicNameCacheForTest();
   installTopicNameRuntimeForTest();
   resetSaveMediaBufferMock();
@@ -361,14 +341,9 @@ vi.doMock("./bot-message-context.session.runtime.js", async () => {
   };
 });
 
-vi.mock("./bot.agent.runtime.js", () => ({
-  resolveDefaultAgentId: vi.fn(() => "default"),
-}));
-
 vi.mock("./bot-handlers.agent.runtime.js", () => ({
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveDefaultAgentId: vi.fn(() => "default"),
   resolveDefaultModelForAgent: vi.fn(() => ({
     provider: "openai",
     model: "gpt-test",

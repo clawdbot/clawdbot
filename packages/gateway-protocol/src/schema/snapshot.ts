@@ -130,6 +130,29 @@ const HealthSnapshotSchema = closedObject({
           oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
         }),
       ),
+      ingressFailed: Type.Optional(
+        Type.Array(
+          closedObject({
+            channelId: Type.String(),
+            accountId: Type.String(),
+            count: Type.Integer({ minimum: 0 }),
+            oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
+          }),
+        ),
+      ),
+      ingressPressure: Type.Optional(
+        Type.Array(
+          closedObject({
+            channelId: Type.String(),
+            accountId: Type.String(),
+            laneCount: Type.Integer({ minimum: 0 }),
+            pendingCount: Type.Integer({ minimum: 0 }),
+            claimedCount: Type.Integer({ minimum: 0 }),
+            blockedCount: Type.Integer({ minimum: 0 }),
+            oldestReceivedAt: Type.Integer({ minimum: 0 }),
+          }),
+        ),
+      ),
     }),
   ),
   modelPricing: Type.Optional(
@@ -190,6 +213,7 @@ const HealthSnapshotSchema = closedObject({
 /** Default session routing keys included in initial gateway snapshots. */
 const SessionDefaultsSchema = closedObject({
   defaultAgentId: NonEmptyString,
+  modelConfigured: Type.Optional(Type.Boolean()),
   ownership: Type.Optional(AgentOwnershipSchema),
   selectionRequired: Type.Optional(Type.Boolean()),
   mainKey: NonEmptyString,

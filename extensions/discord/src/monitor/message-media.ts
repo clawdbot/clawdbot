@@ -11,9 +11,9 @@ import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
+import { resolveDiscordCdnPolicy } from "./media-ssrf-policy.js";
 import {
   resolveDiscordMessageSnapshots,
   resolveDiscordMessageStickers,
@@ -21,19 +21,6 @@ import {
   resolveDiscordReferencedReplyMessage,
   resolveDiscordSnapshotStickers,
 } from "./message-forwarded.js";
-
-const DISCORD_CDN_HOSTNAMES = [
-  "cdn.discordapp.com",
-  "media.discordapp.net",
-  "*.discordapp.com",
-  "*.discordapp.net",
-];
-
-// Allow Discord CDN downloads when VPN/proxy DNS resolves to RFC2544 benchmark ranges.
-const DISCORD_MEDIA_SSRF_POLICY: SsrFPolicy = {
-  hostnameAllowlist: DISCORD_CDN_HOSTNAMES,
-  allowRfc2544BenchmarkRange: true,
-};
 
 const AUDIO_ATTACHMENT_EXTENSIONS = new Set([
   ".aac",
@@ -133,47 +120,13 @@ function resolveDiscordMediaClassification(params: {
   };
 }
 
-function mergeHostnameList(...lists: Array<string[] | undefined>): string[] | undefined {
-  const merged = lists
-    .flatMap((list) => list ?? [])
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  if (merged.length === 0) {
-    return undefined;
-  }
-  return uniqueStrings(merged);
-}
-
-function resolveDiscordMediaSsrFPolicy(policy?: SsrFPolicy): SsrFPolicy {
-  if (!policy) {
-    return DISCORD_MEDIA_SSRF_POLICY;
-  }
-  const hostnameAllowlist = mergeHostnameList(
-    DISCORD_MEDIA_SSRF_POLICY.hostnameAllowlist,
-    policy.hostnameAllowlist,
-  );
-  const allowedHostnames = mergeHostnameList(
-    DISCORD_MEDIA_SSRF_POLICY.allowedHostnames,
-    policy.allowedHostnames,
-  );
-  return {
-    ...DISCORD_MEDIA_SSRF_POLICY,
-    ...policy,
-    ...(allowedHostnames ? { allowedHostnames } : {}),
-    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
-    allowRfc2544BenchmarkRange:
-      Boolean(DISCORD_MEDIA_SSRF_POLICY.allowRfc2544BenchmarkRange) ||
-      Boolean(policy.allowRfc2544BenchmarkRange),
-  };
-}
-
 export async function resolveMediaList(
   message: Message,
   maxBytes: number,
   options?: DiscordMediaResolveOptions,
 ): Promise<DiscordMediaInfo[]> {
   const out: DiscordMediaInfo[] = [];
-  const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(options?.ssrfPolicy);
+  const resolvedSsrFPolicy = resolveDiscordCdnPolicy(options?.ssrfPolicy);
   await appendResolvedMediaFromAttachments({
     attachments: message.attachments ?? [],
     maxBytes,
@@ -206,7 +159,7 @@ export async function resolveForwardedMediaList(
 ): Promise<DiscordMediaInfo[]> {
   const snapshots = resolveDiscordMessageSnapshots(message);
   const out: DiscordMediaInfo[] = [];
-  const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(options?.ssrfPolicy);
+  const resolvedSsrFPolicy = resolveDiscordCdnPolicy(options?.ssrfPolicy);
   if (snapshots.length > 0) {
     for (const snapshot of snapshots) {
       await appendResolvedMediaFromAttachments({
@@ -273,7 +226,7 @@ export async function resolveReferencedReplyMediaList(
   if (!referencedReply) {
     return out;
   }
-  const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(options?.ssrfPolicy);
+  const resolvedSsrFPolicy = resolveDiscordCdnPolicy(options?.ssrfPolicy);
   await appendResolvedMediaFromAttachments({
     attachments: referencedReply.attachments,
     maxBytes,

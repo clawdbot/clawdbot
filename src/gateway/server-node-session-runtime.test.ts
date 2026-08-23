@@ -1,5 +1,9 @@
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
+import { updateNodeRunnerInventory } from "./node-registry-private.js";
 import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
@@ -23,7 +27,7 @@ function makeGatewayWsClient(connId: string, socket: TestSocket): GatewayWsClien
       role: "node",
       scopes: [],
       client: {
-        id: "node-client",
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
         version: "1.0.0",
         platform: "macos",
         mode: "node",
@@ -40,6 +44,9 @@ function createRuntime(
     Parameters<typeof createGatewayNodeSessionRuntime>[0]["isPairingStateCurrent"]
   > = (_nodeId, expected) =>
     expected.identity === "identity-a" && expected.generation === "generation-a",
+  onRunnerStateChanged?: Parameters<
+    typeof createGatewayNodeSessionRuntime
+  >[0]["onRunnerStateChanged"],
 ) {
   return createGatewayNodeSessionRuntime({
     broadcast,
@@ -48,6 +55,7 @@ function createRuntime(
       generation: await resolveCurrentPairingGeneration(),
     }),
     isPairingStateCurrent,
+    onRunnerStateChanged,
     sessionEventSubscribers: createSessionEventSubscriberRegistry(),
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
   });
@@ -89,6 +97,127 @@ describe("gateway node session runtime", () => {
       nextPairingGeneration: "generation-b",
       preserveSessionState: false,
     });
+  });
+
+  test("broadcasts and routes runner inventory changes from publication and replacement", () => {
+    const order: string[] = [];
+    const broadcast = vi.fn((event: string) => {
+      order.push(`broadcast:${event}`);
+    });
+    const onRunnerStateChanged = vi.fn((_nodeId, change) => {
+      if (change.availabilityChanged) {
+        order.push("availability");
+      }
+      if (change.inventoryChanged) {
+        order.push("inventory");
+      }
+    });
+    const runtime = createRuntime(
+      async () => "generation-a",
+      broadcast,
+      undefined,
+      onRunnerStateChanged,
+    );
+    registerNode(runtime, "conn-original", "generation-a", []);
+
+    expect(
+      updateNodeRunnerInventory({
+        registry: runtime.nodeRegistry,
+        nodeId: "node-a",
+        connId: "conn-original",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: { enabled: true, capacity: { total: 1, available: 0 } },
+        },
+      }),
+    ).toEqual({ changed: true });
+    expect(broadcast).toHaveBeenNthCalledWith(
+      1,
+      GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+      { nodeId: "node-a" },
+      { dropIfSlow: true },
+    );
+    expect(broadcast).toHaveBeenNthCalledWith(
+      2,
+      "sessions.changed",
+      { reason: "runner-availability" },
+      { dropIfSlow: true },
+    );
+    expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(true);
+    expect(onRunnerStateChanged).toHaveBeenLastCalledWith("node-a", {
+      inventoryChanged: true,
+      availabilityChanged: true,
+    });
+    expect(order).toEqual([
+      "availability",
+      "inventory",
+      `broadcast:${GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED}`,
+      "broadcast:sessions.changed",
+    ]);
+
+    registerNode(runtime, "conn-replacement", "generation-a", []);
+
+    expect(broadcast).toHaveBeenCalledTimes(4);
+    expect(onRunnerStateChanged).toHaveBeenCalledTimes(2);
+    expect(broadcast).toHaveBeenNthCalledWith(
+      3,
+      GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+      { nodeId: "node-a" },
+      { dropIfSlow: true },
+    );
+    expect(broadcast).toHaveBeenNthCalledWith(
+      4,
+      "sessions.changed",
+      { reason: "runner-availability" },
+      { dropIfSlow: true },
+    );
+    expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(false);
+    expect(order.slice(4)).toEqual([
+      "availability",
+      "inventory",
+      `broadcast:${GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED}`,
+      "broadcast:sessions.changed",
+    ]);
+  });
+
+  test("does not publish a session availability edge for a capacity-only update", () => {
+    const broadcast = vi.fn();
+    const onRunnerStateChanged = vi.fn();
+    const runtime = createRuntime(
+      async () => "generation-a",
+      broadcast,
+      undefined,
+      onRunnerStateChanged,
+    );
+    registerNode(runtime, "conn-original", "generation-a", []);
+    const publish = (available: number) =>
+      updateNodeRunnerInventory({
+        registry: runtime.nodeRegistry,
+        nodeId: "node-a",
+        connId: "conn-original",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: { enabled: true, capacity: { total: 1, available } },
+        },
+      });
+
+    expect(publish(1)).toEqual({ changed: true });
+    broadcast.mockClear();
+    onRunnerStateChanged.mockClear();
+
+    expect(publish(0)).toEqual({ changed: true });
+
+    expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(true);
+    expect(onRunnerStateChanged).toHaveBeenCalledExactlyOnceWith("node-a", {
+      inventoryChanged: true,
+      availabilityChanged: false,
+    });
+    expect(broadcast).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledWith(
+      GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+      { nodeId: "node-a" },
+      { dropIfSlow: true },
+    );
   });
 
   test("forwards subscribed payload json without parsing it again", async () => {
@@ -222,7 +351,6 @@ describe("gateway node session runtime", () => {
     const frames: string[] = [];
     registerNode(runtime, "conn-node-a", "generation-a", frames);
     runtime.nodeSubscribe("node-a", "main", "conn-node-a");
-
     currentPairingGeneration = "generation-b";
     expect(
       runtime.nodeRegistry.updateSurface(

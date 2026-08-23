@@ -109,19 +109,16 @@ vi.mock("../../config/paths.js", () => ({
   resolveIsNixMode: resolveIsNixModeMock,
 }));
 
-vi.mock("../../commands/gateway-install-token.persist.runtime.js", () => ({
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  readConfigFileSnapshotForWrite: vi.fn(async () => ({
-    snapshot: await readConfigFileSnapshotMock(),
-    writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
-  })),
-  replaceConfigFile: replaceConfigFileMock,
-}));
-
-vi.mock("../../config/types.secrets.js", () => ({
-  hasConfiguredSecretInput: hasConfiguredSecretInputMock,
-  resolveSecretInputRef: resolveSecretInputRefMock,
-}));
+vi.mock("../../config/types.secrets.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/types.secrets.js")>();
+  return {
+    ...actual,
+    coerceSecretRef: (value: unknown, defaults?: unknown) =>
+      resolveSecretInputRefMock({ value, defaults })?.ref ?? null,
+    hasConfiguredSecretInput: hasConfiguredSecretInputMock,
+    resolveSecretInputRef: resolveSecretInputRefMock,
+  };
+});
 
 vi.mock("../../gateway/auth.js", () => ({
   resolveGatewayAuth: resolveGatewayAuthMock,

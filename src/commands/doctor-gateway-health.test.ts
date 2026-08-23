@@ -165,6 +165,30 @@ describe("checkGatewayHealth", () => {
     expect(message.split("\n")).toHaveLength(2);
   });
 
+  it("reports sanitized exporter diagnostic failures with a retry command", async () => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    callGateway
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(
+        new Error(`\u001B[31mexporter probe failed\nAuthorization: Bearer ${token}`),
+      );
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
+
+    const [message, title] = note.mock.calls.at(-1) ?? [];
+    expect(title).toBe("Telemetry exporters");
+    expect(message).toContain("Exporter diagnostics failed: exporter probe failed");
+    expect(message).toContain("Retry: openclaw gateway stability --type telemetry.exporter");
+    expect(message).not.toContain(token);
+    expect(message).not.toContain("\u001B");
+    expect(message.split("\n")).toHaveLength(2);
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
   it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {
     callGateway.mockResolvedValueOnce({ runtimeVersion: "2026.4.23" }).mockResolvedValueOnce({});
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -287,11 +311,12 @@ describe("checkGatewayHealth", () => {
     );
   });
 
-  it("reports the typed close reason instead of claiming the gateway is not running", async () => {
+  it("reports a typed close without depending on gateway error wording", async () => {
     const error = Object.assign(
-      new Error("gateway closed (1008): \u001B]52;c;YXR0YWNr\u0007protocol version mismatch"),
+      new Error("transport closed: \u001B]52;c;YXR0YWNr\u0007protocol version mismatch"),
       {
         kind: "closed",
+        code: 1008,
       },
     );
     callGateway.mockRejectedValueOnce(error);
@@ -301,7 +326,7 @@ describe("checkGatewayHealth", () => {
     await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
 
     expect(note).toHaveBeenCalledWith(
-      "Gateway connect failed: gateway closed (1008): protocol version mismatch",
+      "Gateway connect failed: transport closed: protocol version mismatch",
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway not running.", "Gateway");

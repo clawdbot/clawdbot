@@ -1,8 +1,14 @@
 /** Session self-service tool. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
-import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
-import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import type {
+  SessionsAssignOwnerResult,
+  SessionsPatchResult,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  SESSION_AGENT_ATTENTION_ICON_IDS,
+  SESSION_ICON_GLYPH_IDS,
+} from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -15,11 +21,8 @@ import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { isTransientNetworkError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
-import {
-  getCurrentSessionWorkAdmissionRelease,
-  getSessionWorkAdmissionRelease,
-} from "../../sessions/session-lifecycle-admission.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -36,8 +39,8 @@ import {
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
   createAgentToAgentPolicy,
-  createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
+  resolveSessionToolAccess,
 } from "./sessions-access.js";
 import { resolveSessionToolContext } from "./sessions-helpers.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
@@ -46,6 +49,7 @@ const ACTIONS = [
   "patch",
   "reset",
   "delete",
+  "assign_owner",
   "group_list",
   "group_set",
   "group_rename",
@@ -56,6 +60,7 @@ const GROUP_NAMES_MAX_ITEMS = 200;
 const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
 const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
 const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
+const SESSION_ICON_GLYPH_DESCRIPTION = SESSION_ICON_GLYPH_IDS.join(", ");
 const log = createSubsystemLogger("agents/sessions");
 
 type SessionsResolved = NonNullable<SessionsPatchResult["resolved"]>;
@@ -103,6 +108,17 @@ const SessionsToolSchema = Type.Object(
     label: Type.Optional(
       Type.String({ description: "Sidebar title override. Empty string clears it." }),
     ),
+    icon: Type.Optional(
+      Type.String({
+        description: `Persistent sidebar icon: a single emoji, or a named icon: ${SESSION_ICON_GLYPH_DESCRIPTION}. Empty string clears it. Distinct from attention, which is temporary.`,
+      }),
+    ),
+    category: Type.Optional(
+      Type.Union([Type.String(), Type.Null()], {
+        description:
+          "Sidebar category membership. Null or an empty string clears it. This assigns one session; group_set only replaces the ordered category catalog.",
+      }),
+    ),
     statusNote: Type.Optional(
       Type.String({
         maxLength: 120,
@@ -129,7 +145,17 @@ const SessionsToolSchema = Type.Object(
     ),
     model: Type.Optional(Type.String({ description: "Model override" })),
     thinkingLevel: Type.Optional(Type.String({ description: "Thinking override" })),
-    names: Type.Optional(Type.Array(Type.String(), { description: "Ordered group names" })),
+    ownerType: Type.Optional(
+      stringEnum(["human", "agent"] as const, {
+        description: "New owner kind for assign_owner",
+      }),
+    ),
+    ownerId: Type.Optional(Type.String({ description: "New owner id for assign_owner" })),
+    names: Type.Optional(
+      Type.Array(Type.String(), {
+        description: "Ordered sidebar category catalog; does not assign sessions.",
+      }),
+    ),
     name: Type.Optional(Type.String({ description: "Group name" })),
     to: Type.Optional(Type.String({ description: "New group name" })),
   },
@@ -209,14 +235,16 @@ async function resolvePatchTarget(
   cfg: OpenClawConfig;
   isRequesterSession: boolean;
   key: string;
+  requesterAgentId: string;
+  requesterSessionKey: string;
 }> {
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
-  const requesterAgentId = resolveSessionAgentIds({
+  const requesterAgentId = resolveSessionAgentId({
     config: context.cfg,
     sessionKey: context.effectiveRequesterKey,
     agentId: opts.requesterAgentIdOverride,
-  }).sessionAgentId;
+  });
   const normalizedRawKey = rawKey.trim();
   const isCurrentSession = normalizedRawKey === "current";
   const isConfiguredMainAlias =
@@ -234,6 +262,7 @@ async function resolvePatchTarget(
           requesterAgentId,
         });
   const resolved = await resolveSessionReference({
+    action: "status",
     sessionKey: rawKey,
     agentId: inputAgentId,
     keyAgentId: requesterAgentId,
@@ -260,11 +289,19 @@ async function resolvePatchTarget(
   if (!isRequesterSession) {
     // Session visibility is the configured read/write scope for session tools;
     // the action only selects error copy. Owner gating remains separate.
-    const guard = await createSessionVisibilityGuard({
+    const authorizationKey =
+      agentId !== requesterAgentId && !parseAgentSessionKey(resolved.key)
+        ? `agent:${agentId}:${resolved.key}`
+        : resolved.key;
+    const access = await resolveSessionToolAccess({
       action: "status",
-      defaultAgentId: requesterAgentId,
       requesterSessionKey: context.effectiveRequesterKey,
+      mainSessionKey: context.mainSessionKey,
+      authorizationTargetSessionKey: authorizationKey,
       requesterAgentId,
+      targetAgentId: agentId,
+      targetSessionKey: resolved.key,
+      requesterOwned: resolved.requesterOwned === true,
       visibility: resolveEffectiveSessionToolsVisibility({
         cfg: context.cfg,
         sandboxed: opts.sandboxed === true,
@@ -272,11 +309,6 @@ async function resolvePatchTarget(
       a2aPolicy: createAgentToAgentPolicy(context.cfg),
       callGateway,
     });
-    const authorizationKey =
-      agentId !== requesterAgentId && !parseAgentSessionKey(resolved.key)
-        ? `agent:${agentId}:${resolved.key}`
-        : resolved.key;
-    const access = guard.check(authorizationKey);
     if (!access.allowed) {
       throw new ToolAuthorizationError(access.error);
     }
@@ -286,6 +318,8 @@ async function resolvePatchTarget(
     cfg: context.cfg,
     isRequesterSession,
     key: resolved.key,
+    requesterAgentId,
+    requesterSessionKey: context.effectiveRequesterKey,
   };
 }
 
@@ -299,7 +333,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, reset, delete, and groups: patch label/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
+      "Session settings, ownership, reset, delete, and sidebar categories: patch label/icon/category/status, pin, archive/restore, model/thinking override; category assigns one session while group_set replaces the ordered category catalog; assign_owner hands responsibility to a human or agent; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -357,6 +391,39 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       if (action === "group_list") {
         return jsonResult(await callGateway("sessions.groups.list", {}));
       }
+      if (action === "assign_owner") {
+        const ownerType = readToolStringParam(params, "ownerType", { required: true });
+        const ownerId = normalizeOptionalString(
+          readToolStringParam(params, "ownerId", { required: true }),
+        );
+        if ((ownerType !== "human" && ownerType !== "agent") || !ownerId) {
+          throw new ToolInputError("assign_owner requires ownerType and ownerId");
+        }
+        const { agentId, key, requesterAgentId, requesterSessionKey } = await resolvePatchTarget(
+          { ...opts, config: opts.config ?? getRuntimeConfig() },
+          normalizeOptionalString(readToolStringParam(params, "sessionKey")),
+          gatewayRequest,
+        );
+        const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
+        const result = await gatewayRequest<SessionsAssignOwnerResult>({
+          method: "sessions.assignOwner",
+          params: {
+            key,
+            ...agentScope,
+            owner: { type: ownerType, id: ownerId },
+          },
+          agentToolCaller: { agentId: requesterAgentId, sessionKey: requesterSessionKey },
+        });
+        return jsonResult({
+          status: "updated",
+          sessionKey: result.key,
+          owner: {
+            type: result.owner.actor.type,
+            id: result.owner.actor.id,
+            ...(result.owner.actor.label ? { label: result.owner.actor.label } : {}),
+          },
+        });
+      }
       // Group catalog is global by contract. Owner-only tool gating protects mutations.
       if (action === "group_set") {
         const names = readGroupNames(params.names);
@@ -404,6 +471,10 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         key,
         ...lifecycleIdentity,
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
+        ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
+        ...(params.category !== undefined
+          ? { category: readClearableString(params, "category") }
+          : {}),
         ...(params.statusNote !== undefined
           ? { statusNote: readClearableString(params, "statusNote") }
           : {}),
@@ -454,7 +525,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         if (key !== resolveAgentMainSessionKey({ cfg, agentId })) {
           const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
           const currentEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
-          const released = getCurrentSessionWorkAdmissionRelease({
+          const released = getSessionWorkAdmissionRelease({
             scope: storePath,
             identities: [key, currentEntry?.sessionId],
           });

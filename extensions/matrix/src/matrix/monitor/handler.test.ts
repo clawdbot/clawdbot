@@ -323,6 +323,55 @@ describe("matrix monitor handler pairing account scope", () => {
     );
   });
 
+  it("logs final delivery from the settled receipt instead of legacy counters", async () => {
+    const logVerboseMessage = vi.fn();
+    const { handler } = createMatrixHandlerTestHarness({
+      logVerboseMessage,
+      dispatchInboundMessage: async () => ({
+        queuedFinal: false,
+        counts: { final: 0, block: 0, tool: 0 },
+        settledReceipt: {
+          anyVisibleDelivered: true,
+          counts: {
+            tool: {
+              delivered: 0,
+              deliveredNotVisible: 0,
+              cancelled: 0,
+              failedBeforeSend: 0,
+              failedAfterSend: 0,
+            },
+            block: {
+              delivered: 0,
+              deliveredNotVisible: 0,
+              cancelled: 0,
+              failedBeforeSend: 0,
+              failedAfterSend: 0,
+            },
+            final: {
+              delivered: 1,
+              deliveredNotVisible: 0,
+              cancelled: 0,
+              failedBeforeSend: 0,
+              failedAfterSend: 0,
+            },
+          },
+        },
+      }),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$settled-final",
+        body: "hello",
+      }),
+    );
+
+    expect(logVerboseMessage).toHaveBeenCalledWith(
+      expect.stringMatching(/^matrix: delivered 1 reply to /),
+    );
+  });
+
   it("caches account-scoped allowFrom store reads on hot path", async () => {
     const readAllowFromStore = vi.fn(async () => [] as string[]);
     sendMessageMatrixMock.mockClear();
@@ -3618,11 +3667,11 @@ describe("matrix monitor handler draft streaming", () => {
 
   it.each([
     {
-      name: "redacts partial previews before normal final delivery for unchanged Matrix mentions",
+      name: "delivers the normal final before redacting unchanged Matrix mention previews",
       finalText: "hello @alice:example.org",
     },
     {
-      name: "redacts partial previews before normal final delivery for changed Matrix mentions",
+      name: "delivers the normal final before redacting changed Matrix mention previews",
       finalText: "hello @alice:example.org!",
     },
   ])("$name", async ({ finalText }) => {

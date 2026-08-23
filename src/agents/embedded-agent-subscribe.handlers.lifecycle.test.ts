@@ -10,6 +10,7 @@ import {
   handleAgentStart,
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 
 const { emitAgentEventMock } = vi.hoisted(() => ({
   emitAgentEventMock: vi.fn(),
@@ -728,7 +729,10 @@ describe("handleAgentEnd", () => {
     });
   });
 
-  it("marks token-limited terminal text as abandoned before runner finalization", async () => {
+  it("keeps token-limited terminal text replayable before runner finalization", async () => {
+    // The partial answer is delivered, so the turn must not be abandoned or
+    // marked replay-invalid — that is what lets the user ask to continue it
+    // instead of restarting the work.
     const onAgentEvent = vi.fn();
     const ctx = createContext(
       {
@@ -740,6 +744,60 @@ describe("handleAgentEnd", () => {
     );
     ctx.state.livenessState = "working";
     ctx.state.assistantTexts = ["Partial answer"];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
+        livenessState: "working",
+      },
+    });
+  });
+
+  it("keeps token-limited text replayable when it was never streamed", async () => {
+    // Non-streaming routes can end the turn with empty streamed assistant texts
+    // while the completed assistant message still carries the visible answer.
+    // Payload building falls back to that message, so the reply is delivered and
+    // classification must not call the turn abandoned.
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [{ type: "text", text: "Partial answer" }],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
+        livenessState: "working",
+      },
+    });
+  });
+
+  it("marks a token-limited turn with nothing to deliver as abandoned", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = [];
 
     await handleAgentEnd(ctx);
 
@@ -880,6 +938,9 @@ describe("handleAgentEnd", () => {
     const ctx = createContext(undefined);
     ctx.state.pendingToolMediaUrls = ["/tmp/reply.opus"];
     ctx.state.pendingToolAudioAsVoice = true;
+    vi.mocked(ctx.emitBlockReply).mockImplementation(
+      createReplyDelivery({ params: ctx.params, state: ctx.state, log: ctx.log }).emitBlockReply,
+    );
 
     await handleAgentEnd(ctx);
 

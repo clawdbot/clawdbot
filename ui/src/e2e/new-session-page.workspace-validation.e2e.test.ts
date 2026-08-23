@@ -50,7 +50,13 @@ function deviceEnvironment(nodeId: string) {
   return {
     id: `node:${nodeId}`,
     type: "node",
+    label: nodeId
+      .split("-")
+      .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+      .join(" "),
     status: "available",
+    sessionHost: true,
+    workerSlots: { total: 1, available: 1 },
   };
 }
 
@@ -69,8 +75,8 @@ async function withNewSessionPage(
 type MockGateway = Awaited<ReturnType<typeof installMockGateway>>;
 
 async function chooseCustomFolder(page: Page, gateway: MockGateway) {
-  const trigger = page.locator("#new-session-place-trigger");
-  const place = page.locator("wa-popover.new-session-page__place-popover");
+  const trigger = page.locator("#new-session-project-trigger");
+  const place = page.locator("wa-popover.new-session-page__project-popover");
   await trigger.click();
   await place.getByRole("button", { name: "Browse folders" }).click();
   await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
@@ -105,8 +111,8 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("worktrees.branches");
-      const trigger = page.locator("#new-session-place-trigger");
-      const place = page.locator("wa-popover.new-session-page__place-popover");
+      const trigger = page.locator("#new-session-detail-trigger");
+      const place = page.locator("wa-popover.new-session-page__detail-popover");
       await trigger.click();
       await place.getByRole("button", { name: "Worktree" }).click();
       await page.keyboard.press("Escape");
@@ -156,7 +162,9 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const { place, trigger } = await chooseCustomFolder(page, gateway);
+      await chooseCustomFolder(page, gateway);
+      const trigger = page.locator("#new-session-detail-trigger");
+      const place = page.locator("wa-popover.new-session-page__detail-popover");
       await trigger.click();
       await place.getByRole("button", { name: "Worktree" }).click();
       await page.keyboard.press("Escape");
@@ -168,7 +176,7 @@ suite.define(() => {
       });
       await reconnectForBranchRediscovery(page, gateway);
 
-      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("false");
+      await expect.poll(() => trigger.count()).toBe(0);
       const storedWorktree = await page.evaluate(() => {
         const key = Array.from({ length: localStorage.length }, (_, index) =>
           localStorage.key(index),
@@ -181,9 +189,6 @@ suite.define(() => {
         return value?.agents?.main?.worktree;
       });
       expect(storedWorktree).toBe(false);
-      await trigger.click();
-      expect(await place.getByRole("button", { name: "Worktree" }).count()).toBe(0);
-      await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("continue directly");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
@@ -204,7 +209,9 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const { place, trigger } = await chooseCustomFolder(page, gateway);
+      await chooseCustomFolder(page, gateway);
+      const trigger = page.locator("#new-session-detail-trigger");
+      const place = page.locator("wa-popover.new-session-page__detail-popover");
       await trigger.click();
       await place.getByRole("button", { name: "Worktree" }).click();
       await page.keyboard.press("Escape");
@@ -227,7 +234,7 @@ suite.define(() => {
         "Couldn't verify Git for this folder. Choose it again to retry.",
       );
       await worktree.click();
-      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("false");
+      await expect.poll(() => trigger.count()).toBe(0);
       await expect.poll(() => start.isEnabled()).toBe(true);
       await page.keyboard.press("Escape");
 
@@ -258,11 +265,14 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      const { place, trigger } = await chooseCustomFolder(page, gateway);
-      await trigger.click();
-      await place.getByRole("button", { name: "Cloud · aws" }).click();
-      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      const { place: project, trigger: projectTrigger } = await chooseCustomFolder(page, gateway);
+      const whereTrigger = page.locator("#new-session-where-trigger");
+      const where = page.locator("wa-popover.new-session-page__where-popover");
+      const detailTrigger = page.locator("#new-session-detail-trigger");
+      await whereTrigger.click();
+      await where.getByRole("button", { name: "Cloud · aws" }).click();
+      await expect.poll(() => whereTrigger.getAttribute("data-cloud-profile")).toBe("aws");
+      expect(await detailTrigger.count()).toBe(0);
 
       await gateway.setMethodResponse("worktrees.branches", {
         branches: [],
@@ -270,74 +280,23 @@ suite.define(() => {
       });
       await reconnectForBranchRediscovery(page, gateway);
 
-      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      await expect.poll(() => whereTrigger.getAttribute("data-cloud-profile")).toBe("aws");
+      expect(await detailTrigger.count()).toBe(0);
       await page.locator(".new-session-page__message").fill("do not run directly");
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
-      await trigger.click();
-      const cloud = place.getByRole("button", { name: "Cloud · aws" });
-      const worktree = place.getByRole("button", { name: "Worktree" });
+      await whereTrigger.click();
+      const cloud = where.getByRole("button", { name: "Cloud · aws" });
       expect(await cloud.isDisabled()).toBe(true);
       expect(await cloud.getAttribute("title")).toBe(
         "Couldn't verify Git for this folder. Choose it again to retry.",
       );
-      expect(await worktree.getAttribute("aria-pressed")).toBe("true");
-      expect(await worktree.isDisabled()).toBe(true);
+      await page.keyboard.press("Escape");
+      await projectTrigger.click();
+      await project.getByText("Advanced", { exact: true }).click();
+      await project.getByLabel("Base branch").waitFor();
+      await project.getByLabel("Checkout name").waitFor();
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-    });
-  });
-
-  it("validates a retained device before enabling submit after reconnect", async () => {
-    await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "agents.list": mainAgentList(),
-          "node.list": {
-            nodes: [
-              {
-                nodeId: "old-device",
-                displayName: "Old device",
-                connected: true,
-                commands: ["system.run", "fs.listDir"],
-              },
-            ],
-          },
-          "environments.list": {
-            environments: [deviceEnvironment("old-device")],
-            profiles: [],
-          },
-          "worktrees.branches": branchList(),
-          "sessions.create": { key: "agent:main:validated-device" },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("node.list");
-      await gateway.waitForRequest("environments.list");
-      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
-      await page.locator("#new-session-place-trigger").click();
-      await placeSelect.getByRole("button", { name: "Old device" }).click();
-      await page.locator(".new-session-page__message").fill("use a validated device");
-      const start = page.locator("button.chat-send-btn");
-      const nodeRequestsBefore = (await gateway.getRequests("node.list")).length;
-
-      await gateway.setOnline(false);
-      await waitForControlUiGatewayReconnecting(page);
-      await gateway.deferNext("node.list");
-      await gateway.setOnline(true);
-      await waitForControlUiGatewayReady(page);
-      await expect
-        .poll(async () => (await gateway.getRequests("node.list")).length)
-        .toBe(nodeRequestsBefore + 1);
-      await expect.poll(() => start.isDisabled()).toBe(true);
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-
-      await gateway.resolveDeferred("node.list", { nodes: [] });
-      await expect.poll(() => start.isEnabled()).toBe(true);
-      await start.click();
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).not.toHaveProperty("execNode");
-      expect(create.params).not.toHaveProperty("cwd");
     });
   });
 
@@ -346,16 +305,6 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "agents.list": mainAgentList("Original agent", SOURCE_REPO),
-          "node.list": {
-            nodes: [
-              {
-                nodeId: "old-device",
-                displayName: "Old device",
-                connected: true,
-                commands: ["system.run", "fs.listDir"],
-              },
-            ],
-          },
           "environments.list": {
             environments: [deviceEnvironment("old-device")],
             profiles: [],
@@ -365,45 +314,35 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await page.getByRole("heading", { name: "Original agent" }).waitFor();
-      await gateway.waitForRequest("node.list");
       await gateway.waitForRequest("environments.list");
       await gateway.waitForRequest("worktrees.branches");
 
       const message = page.locator(".new-session-page__message");
-      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
-      const placeTrigger = page.locator("#new-session-place-trigger");
+      const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
+      const whereTrigger = page.locator("#new-session-where-trigger");
+      const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
+      const projectTrigger = page.locator("#new-session-project-trigger");
       await message.fill("preserve this replacement draft");
-      await placeTrigger.click();
-      await placeSelect.getByRole("button", { name: "Old device" }).click();
+      await whereTrigger.click();
+      await whereSelect.getByRole("button", { name: "Old device" }).click();
 
       // Keep an old-client browser request in flight. Replacement must close
       // its menu and prevent its eventual completion from reviving old state.
       await gateway.deferNext("fs.listDir");
-      await placeTrigger.click();
-      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
+      await projectTrigger.click();
+      await projectSelect.getByRole("button", { name: "Browse folders" }).click();
       await gateway.waitForRequest("fs.listDir");
 
       await gateway.setMethodResponse(
         "agents.list",
         mainAgentList("Replacement agent", TARGET_REPO),
       );
-      await gateway.setMethodResponse("node.list", {
-        nodes: [
-          {
-            nodeId: "new-device",
-            displayName: "New device",
-            connected: true,
-            commands: ["system.run", "fs.listDir"],
-          },
-        ],
-      });
       await gateway.setMethodResponse("environments.list", {
         environments: [deviceEnvironment("new-device")],
         profiles: [],
       });
       await gateway.setMethodResponse("worktrees.branches", branchList("beta"));
       const socketsBefore = await gateway.getSocketCount();
-      const nodesBefore = (await gateway.getRequests("node.list")).length;
       const environmentsBefore = (await gateway.getRequests("environments.list")).length;
       const branchesBefore = (await gateway.getRequests("worktrees.branches")).length;
 
@@ -411,23 +350,24 @@ suite.define(() => {
 
       await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
       await expect
-        .poll(async () => (await gateway.getRequests("node.list")).length)
-        .toBe(nodesBefore + 1);
-      await expect
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBe(environmentsBefore + 1);
       await expect
-        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
-        .toBe(branchesBefore + 1);
+        .poll(async () =>
+          (await gateway.getRequests("worktrees.branches"))
+            .slice(branchesBefore)
+            .map((request) => request.params),
+        )
+        .toEqual([{ repoRoot: TARGET_REPO, includeRepositoryStatus: true }]);
       await page.getByRole("heading", { name: "Replacement agent" }).waitFor();
       await expect.poll(() => message.inputValue()).toBe("preserve this replacement draft");
       await expect
         .poll(() =>
-          placeSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+          projectSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(false);
-      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
-        "target-repo · Gateway · local",
+      await pollLocatorText(projectTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "target-repo",
       );
 
       const branchRequests = await gateway.getRequests("worktrees.branches");
@@ -435,11 +375,14 @@ suite.define(() => {
         repoRoot: TARGET_REPO,
         includeRepositoryStatus: true,
       });
-      await placeTrigger.click();
-      await placeSelect.getByRole("button", { name: "New device" }).waitFor();
-      expect(await placeSelect.getByRole("button", { name: "Old device" }).count()).toBe(0);
-      await placeSelect.getByRole("button", { name: "Worktree" }).click();
-      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("beta");
+      await whereTrigger.click();
+      await whereSelect.getByRole("button", { name: "New device" }).waitFor();
+      expect(await whereSelect.getByRole("button", { name: "Old device" }).count()).toBe(0);
+      await page.keyboard.press("Escape");
+      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      await projectTrigger.click();
+      await projectSelect.getByText("Advanced", { exact: true }).click();
+      await expect.poll(() => projectSelect.getByLabel("Base branch").inputValue()).toBe("beta");
       await page.keyboard.press("Escape");
 
       await gateway.resolveDeferred("fs.listDir", {
@@ -449,7 +392,7 @@ suite.define(() => {
       });
       await expect
         .poll(() =>
-          placeSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+          projectSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(false);
       await expect.poll(() => message.inputValue()).toBe("preserve this replacement draft");
@@ -499,10 +442,14 @@ suite.define(() => {
         await expect.poll(() => message.inputValue()).toBe("retry this draft after reconnect");
         await expect.poll(() => message.isEnabled()).toBe(true);
         await expect.poll(() => start.isDisabled()).toBe(true);
+        // The gate table also surfaces this reason in the Start tooltip, so
+        // scope to the page callout instead of a bare text match.
         await page
-          .getByText(
-            "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
-          )
+          .getByRole("alert")
+          .filter({
+            hasText:
+              "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
+          })
           .waitFor();
         expect(new URL(page.url()).pathname).toBe("/new");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
@@ -555,7 +502,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new?agent=research`);
       const folderLabel = page.locator(
-        "#new-session-place-trigger .new-session-page__trigger-label",
+        "#new-session-project-trigger .new-session-page__trigger-label",
       );
       await pollLocatorText(folderLabel).toBe("research");
 

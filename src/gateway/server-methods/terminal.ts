@@ -19,11 +19,15 @@ import {
   validateTerminalResizeParams,
   validateTerminalUploadResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { buildTerminalEnv, type TerminalLaunchResolution } from "../terminal/launch.js";
 import { createNodeRelayBackend } from "../terminal/node-relay.js";
 import {
@@ -31,6 +35,7 @@ import {
   TerminalOpenDeadlineError,
   waitForTerminalOpenDeadline,
 } from "../terminal/open-deadline.js";
+import type { AgentTerminalOwner } from "../terminal/session-manager.types.js";
 import { resolveSessionCatalogProvider } from "./session-catalog.js";
 import {
   authorizeCatalogTerminalNode,
@@ -135,6 +140,14 @@ function respondLaunchBlocked(
     );
     return;
   }
+  if (block.kind === "owner-required") {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, terminalFailureMessage(block.message, hint)),
+    );
+    return;
+  }
   // Fail closed: a sandboxed agent must never receive a host shell.
   respond(
     false,
@@ -155,10 +168,11 @@ export const CATALOG_TERMINAL_INITIAL_SIZE = { cols: 80, rows: 24 } as const;
 
 type TerminalSessionOpenRequest = {
   agentId?: string;
+  sessionKey?: string;
   cols: number;
   rows: number;
   requiredCwd?: string;
-  resolveCatalogPlan?: () => Promise<SessionCatalogTerminalPlan>;
+  resolveCatalogPlan?: (agentId: string) => Promise<SessionCatalogTerminalPlan>;
   catalogFailureMessage?: string;
   failureHint?: string;
 };
@@ -203,8 +217,12 @@ export async function openTerminalSession(
     | undefined;
   let stageUpload: ((file: TerminalUploadFile) => Promise<TerminalUploadResult>) | undefined;
   if (request.resolveCatalogPlan) {
+    const resolveCatalogPlan = request.resolveCatalogPlan;
     try {
-      catalogPlan = await waitForTerminalOpenDeadline(request.resolveCatalogPlan, deadline);
+      catalogPlan = await waitForTerminalOpenDeadline(
+        () => resolveCatalogPlan(launch.plan.agentId),
+        deadline,
+      );
     } catch (error) {
       if (error instanceof TerminalOpenDeadlineError) {
         respondTerminalOpenTimeout(respond, request.failureHint);
@@ -330,6 +348,49 @@ export async function openTerminalSession(
     respondLaunchBlocked(respond, refreshedLaunch.block, request.failureHint);
     return;
   }
+  let agentOwner: AgentTerminalOwner | undefined;
+  if (request.sessionKey) {
+    const runtimeConfig = context.getRuntimeConfig();
+    const requestedOwner = resolveRequestedSessionAgentId(
+      runtimeConfig,
+      request.sessionKey,
+      refreshedLaunch.plan.agentId,
+    );
+    if (!requestedOwner.ok) {
+      respond(false, undefined, requestedOwner.error);
+      return;
+    }
+    const agentSessionKey = resolveStoredSessionKeyForAgentStore({
+      cfg: runtimeConfig,
+      agentId: requestedOwner.agentId,
+      sessionKey: request.sessionKey,
+    });
+    const { entry } = loadGatewaySessionEntryReadOnly(agentSessionKey, {
+      agentId: requestedOwner.agentId,
+      clone: false,
+    });
+    const agentSessionId = entry?.sessionId?.trim();
+    if (!agentSessionId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          terminalFailureMessage(
+            "session is no longer available; refresh and retry",
+            request.failureHint,
+          ),
+        ),
+      );
+      return;
+    }
+    agentOwner = {
+      kind: "agent",
+      agentSessionKey,
+      agentSessionId,
+      agentId: requestedOwner.agentId,
+    };
+  }
   if (nodeRelay) {
     const relay = nodeRelay;
     const access = authorizeCatalogTerminalNode(context, relay.plan);
@@ -375,12 +436,15 @@ export async function openTerminalSession(
           catalogPlan.pathEnv ? { PATH: catalogPlan.pathEnv } : undefined,
         ])
       : buildTerminalEnv(process.env);
+  const closeOpenedSession = (sessionId: string) =>
+    agentOwner ? manager.closeAgent(agentOwner, sessionId) : manager.close(connId, sessionId);
   let openingTerminal: ReturnType<typeof manager.open> | undefined;
   let outcome: Awaited<ReturnType<typeof manager.open>>;
   try {
     outcome = await waitForTerminalOpenDeadline(() => {
       openingTerminal = manager.open({
-        owner: { kind: "conn", connId },
+        owner: agentOwner ?? { kind: "conn", connId },
+        ...(agentOwner ? { viewerConnId: connId } : {}),
         agentId: spawnPlan.agentId,
         cwd: spawnPlan.cwd,
         shell: spawnPlan.shell,
@@ -402,7 +466,7 @@ export async function openTerminalSession(
         void openingTerminal.then(
           (lateOutcome) => {
             if (lateOutcome.ok) {
-              manager.close(connId, lateOutcome.sessionId);
+              closeOpenedSession(lateOutcome.sessionId);
             }
           },
           () => undefined,
@@ -425,7 +489,7 @@ export async function openTerminalSession(
   if (context.isConnectionActive?.(connId) === false) {
     // A browser deadline can close the socket while PTY creation is still
     // finishing. Release the raced session instead of leaving an orphan.
-    manager.close(connId, outcome.sessionId);
+    closeOpenedSession(outcome.sessionId);
     respond(
       false,
       undefined,
@@ -458,7 +522,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params as TerminalOpenParams;
-    let resolveCatalogPlan: (() => Promise<SessionCatalogTerminalPlan>) | undefined;
+    let resolveCatalogPlan: ((agentId: string) => Promise<SessionCatalogTerminalPlan>) | undefined;
     if (p.catalog) {
       const provider = resolveSessionCatalogProvider(p.catalog.catalogId);
       if (!provider) {
@@ -479,14 +543,17 @@ export const terminalHandlers: GatewayRequestHandlers = {
       }
       const openTerminal = provider.openTerminal;
       const catalog = p.catalog;
-      resolveCatalogPlan = async () =>
+      resolveCatalogPlan = async (agentId) =>
         await openTerminal.call(provider, {
+          allowProcessHomeFallback: allowsProcessHomeSessionScan(),
+          agentId,
           hostId: catalog.hostId,
           threadId: catalog.threadId,
         });
     }
     await openTerminalSession(opts, {
       ...(p.agentId ? { agentId: p.agentId } : {}),
+      ...(p.sessionKey ? { sessionKey: p.sessionKey } : {}),
       cols: p.cols,
       rows: p.rows,
       ...(resolveCatalogPlan ? { resolveCatalogPlan } : {}),

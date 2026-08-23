@@ -7,6 +7,11 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import pMap from "p-map";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import {
+  type AgentRunResultView,
+  agentRunHasVisibleReply,
+  extractAgentRunTerminalError,
+} from "../../agents/agent-run-result.js";
+import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -30,7 +35,9 @@ import {
   prepareInternalSessionEffectsSession,
   removeInternalSessionEffectsSession,
 } from "../../agents/internal-session-effects.js";
+import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
+  hasSyntheticLocalProviderAuthConfig,
   hasUsableCustomProviderApiKey,
   resolveEnvApiKey,
   resolveProviderEntryApiKeyBinding,
@@ -42,12 +49,18 @@ import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { resolveMergedModelProviderEntry } from "../../config/model-provider-config.js";
+import {
+  copyConfigResolutionFacts,
+  copyConfigResolutionFactsExcept,
+  resolveConfigSecretRef,
+} from "../../config/resolution-facts.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  coerceSecretRef,
   hasConfiguredSecretInput,
   normalizeSecretInputString,
+  resolveSecretInputRef,
 } from "../../config/types.secrets.js";
 import type {
   EmbeddedStateLockHandle,
@@ -68,9 +81,22 @@ export function redactAuthProbeError(error: string): string {
   return redactStatusSecrets(error);
 }
 
-const embeddedRunnerModuleLoader = createLazyImportLoader(
-  () => import("../../agents/embedded-agent.js"),
-);
+/** Widened runner call shape for isolated auth probe generations (see setup-inference-core). */
+type ProbeRunEmbeddedAgentParams = Parameters<
+  (typeof import("../../agents/embedded-agent.js"))["runEmbeddedAgent"]
+>[0] & {
+  preparedModelRuntimeMode?: "isolated-read-only";
+};
+
+type ProbeRunEmbeddedAgent = (
+  params: ProbeRunEmbeddedAgentParams,
+) => ReturnType<(typeof import("../../agents/embedded-agent.js"))["runEmbeddedAgent"]>;
+
+// The probe only calls runEmbeddedAgent; the widened loader type lets the call
+// request the isolated-read-only runtime generation without a call-site cast.
+const embeddedRunnerModuleLoader = createLazyImportLoader<{
+  runEmbeddedAgent: ProbeRunEmbeddedAgent;
+}>(() => import("../../agents/embedded-agent.js"));
 
 function loadEmbeddedRunnerModule() {
   return embeddedRunnerModuleLoader.load();
@@ -212,16 +238,11 @@ function formatMissingCredentialProbeError(reasonCode: AuthProbeReasonCode): str
 function resolveProbeSecretRef(profile: ProfileEntry, cfg: OpenClawConfig) {
   const defaults = cfg.secrets?.defaults;
   if (profile.type === "api_key") {
-    if (normalizeSecretInputString(profile.key) !== undefined) {
-      return null;
-    }
-    return coerceSecretRef(profile.keyRef, defaults);
+    return resolveSecretInputRef({ value: profile.key, refValue: profile.keyRef, defaults }).ref;
   }
   if (profile.type === "token") {
-    if (normalizeSecretInputString(profile.token) !== undefined) {
-      return null;
-    }
-    return coerceSecretRef(profile.tokenRef, defaults);
+    return resolveSecretInputRef({ value: profile.token, refValue: profile.tokenRef, defaults })
+      .ref;
   }
   return null;
 }
@@ -238,14 +259,14 @@ function withDirectCredential(
   mode: string | undefined,
 ): OpenClawConfig {
   const providers = cfg.models?.providers ?? {};
-  const configKey =
-    Object.keys(providers).find((key) => normalizeProviderId(key) === provider) ?? provider;
-  const configured = providers[configKey];
+  const configuredEntry = resolveMergedModelProviderEntry(cfg, provider);
+  const configKey = configuredEntry?.providerKey ?? provider;
+  const configured = configuredEntry?.providerConfig;
   if (!configured) {
     return withoutProfileFallback(cfg, provider);
   }
   const auth = mode === "oauth" || mode === "token" ? mode : "api-key";
-  return {
+  const next: OpenClawConfig = {
     ...cfg,
     models: {
       ...cfg.models,
@@ -266,10 +287,12 @@ function withDirectCredential(
       },
     },
   };
+  copyConfigResolutionFactsExcept(cfg, next, [`models.providers.${configKey}.apiKey`]);
+  return next;
 }
 
 function withoutProfileFallback(cfg: OpenClawConfig, provider: string): OpenClawConfig {
-  return {
+  const next: OpenClawConfig = {
     ...cfg,
     auth: {
       ...cfg.auth,
@@ -279,20 +302,24 @@ function withoutProfileFallback(cfg: OpenClawConfig, provider: string): OpenClaw
       },
     },
   };
+  copyConfigResolutionFacts(cfg, next);
+  return next;
 }
 
 async function resolveConfiguredProbeCredential(params: {
   cfg: OpenClawConfig;
   input: unknown;
+  path: string;
   cache: SecretRefResolveCache;
 }): Promise<string | null> {
-  const literal = normalizeSecretInputString(params.input);
-  if (literal !== undefined) {
-    return literal;
-  }
-  const ref = coerceSecretRef(params.input, params.cfg.secrets?.defaults);
+  const ref = resolveConfigSecretRef({
+    config: params.cfg,
+    path: params.path,
+    value: params.input,
+    defaults: params.cfg.secrets?.defaults,
+  });
   if (!ref) {
-    return null;
+    return normalizeSecretInputString(params.input) ?? null;
   }
   try {
     return await resolveSecretRefString(ref, {
@@ -363,6 +390,10 @@ export async function buildProbeTargets(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
+    // A provider probe only needs candidate selection. Keep it request-scoped so it cannot
+    // supersede or be superseded by the Gateway's concurrent full-catalog materialization.
+    readOnly: true,
+    providerDiscoveryProviderIds: providers,
   });
   const candidates = buildProbeCandidateMap(modelCandidates);
   const targets: AuthProbeTarget[] = [];
@@ -380,7 +411,17 @@ export async function buildProbeTargets(params: {
       candidates,
       catalog,
     });
-    const configuredProvider = findNormalizedProviderValue(cfg.models?.providers, providerKey);
+    const configuredProviderEntry = resolveMergedModelProviderEntry(cfg, providerKey);
+    const configuredProvider = configuredProviderEntry?.providerConfig;
+    const hasConfiguredProviderSecretRef = Boolean(
+      configuredProviderEntry &&
+      resolveConfigSecretRef({
+        config: cfg,
+        path: `models.providers.${configuredProviderEntry.providerKey}.apiKey`,
+        value: configuredProvider?.apiKey,
+        defaults: cfg.secrets?.defaults,
+      }),
+    );
     const includeDirectKeys = options.includeDirectKeys === true && profileFilter.size === 0;
     const includeConfigKey =
       includeDirectKeys &&
@@ -411,6 +452,7 @@ export async function buildProbeTargets(params: {
           })
         : null;
     const configuredValue =
+      configuredProviderEntry &&
       includeConfigKey &&
       configuredReference.kind !== "profile" &&
       configuredReference.kind !== "profile-incompatible"
@@ -423,6 +465,7 @@ export async function buildProbeTargets(params: {
           : await resolveConfiguredProbeCredential({
               cfg,
               input: configuredProvider?.apiKey,
+              path: `models.providers.${configuredProviderEntry.providerKey}.apiKey`,
               cache: refResolveCache,
             })
         : null;
@@ -430,14 +473,21 @@ export async function buildProbeTargets(params: {
       configuredProvider?.auth === "oauth" || configuredProvider?.auth === "token"
         ? configuredProvider.auth
         : "api_key";
-    const resolvedEnvironmentValue = includeDirectKeys
-      ? resolveEnvApiKey(authProviderKey, process.env, {
-          config: cfg,
-          workspaceDir,
-        })
-      : null;
+    const resolvedEnvironmentValue =
+      includeDirectKeys && !hasConfiguredProviderSecretRef
+        ? resolveEnvApiKey(authProviderKey, process.env, {
+            config: cfg,
+            workspaceDir,
+          })
+        : null;
     const environmentValue =
       resolvedEnvironmentValue?.apiKey === configuredValue ? null : resolvedEnvironmentValue;
+    const configuredTargetLabel =
+      configuredReference.kind === "marker" &&
+      configuredValue &&
+      isNonSecretApiKeyMarker(configuredValue, { includeEnvVarName: false })
+        ? "provider"
+        : "config";
 
     const appendDirectTargets = () => {
       if (includeConfigKey) {
@@ -498,7 +548,7 @@ export async function buildProbeTargets(params: {
           targets.push({
             provider: providerKey,
             model,
-            label: "config",
+            label: configuredTargetLabel,
             source: "models.json",
             mode: configuredMode,
             boundValue: configuredValue,
@@ -511,7 +561,7 @@ export async function buildProbeTargets(params: {
           results.push({
             provider: providerKey,
             model: undefined,
-            label: "config",
+            label: configuredTargetLabel,
             source: "models.json",
             mode: configuredMode,
             status: "no_model",
@@ -676,17 +726,22 @@ export async function buildProbeTargets(params: {
       continue;
     }
     const hasUsableModelsJsonKey = hasUsableCustomProviderApiKey(cfg, providerKey);
-    if (orderResolution.hasExplicitOrder && !hasUsableModelsJsonKey) {
+    const hasSyntheticLocalAuth = hasSyntheticLocalProviderAuthConfig({
+      cfg,
+      provider: providerKey,
+    });
+    if (orderResolution.hasExplicitOrder && !hasUsableModelsJsonKey && !hasSyntheticLocalAuth) {
       continue;
     }
 
-    const envKey = orderResolution.hasExplicitOrder
-      ? null
-      : resolveEnvApiKey(authProviderKey, process.env, {
-          config: cfg,
-          workspaceDir,
-        });
-    if (!envKey && !hasUsableModelsJsonKey) {
+    const envKey =
+      orderResolution.hasExplicitOrder || hasConfiguredProviderSecretRef
+        ? null
+        : resolveEnvApiKey(authProviderKey, process.env, {
+            config: cfg,
+            workspaceDir,
+          });
+    if (!envKey && !hasUsableModelsJsonKey && !hasSyntheticLocalAuth) {
       continue;
     }
 
@@ -714,6 +769,9 @@ export async function buildProbeTargets(params: {
       label,
       source,
       mode,
+      ...(hasSyntheticLocalAuth && !envKey && !hasUsableModelsJsonKey
+        ? { useRuntimeAuth: true }
+        : {}),
     });
   }
 
@@ -736,10 +794,10 @@ async function probeTarget(params: {
   // "config" probe must reflect only that credential — empty the provider auth
   // order and isolate the agent dir so stored profiles cannot satisfy it via
   // failover. Direct bound values instead pin an isolated synthetic profile.
-  const probeConfig = !target.boundValue
-    ? cfg
-    : target.useRuntimeAuth
-      ? withoutProfileFallback(cfg, target.provider)
+  const probeConfig = target.useRuntimeAuth
+    ? withoutProfileFallback(cfg, target.provider)
+    : !target.boundValue
+      ? cfg
       : withDirectCredential(cfg, target.provider, target.boundValue, target.mode);
   if (!target.model) {
     return {
@@ -784,8 +842,11 @@ async function probeTarget(params: {
     // Any bound-value target runs in an empty agent dir so stored profiles are
     // absent and cannot satisfy the probe via failover. Direct values pin a
     // synthetic profile; marker values are resolved by the runtime from the
-    // profile-order-cleared config.
-    if (target.boundValue) {
+    // profile-order-cleared config. Inside a Gateway, the isolated-read-only
+    // runtime mode set on the runner call keeps this pinned generation
+    // authoritative: a run-provenance lease would rebind it to the committed
+    // configured owner and lose the synthetic profile.
+    if (target.boundValue || target.useRuntimeAuth) {
       // Canonicalize so the isolated agent DB registers and unregisters under
       // one path. os.tmpdir() is a symlink on macOS (/var -> /private/var), and
       // disposeOpenClawAgentDatabaseByPath's exact-path guard would otherwise
@@ -825,7 +886,7 @@ async function probeTarget(params: {
       agentId,
       "models.auth-probe",
     );
-    await runEmbeddedAgent({
+    const runResult = (await runEmbeddedAgent({
       preparedRunAdmission,
       sessionId: sessionTarget.sessionId,
       sessionKey: sessionTarget.sessionKey,
@@ -837,6 +898,7 @@ async function probeTarget(params: {
       prompt: PROBE_PROMPT,
       provider: target.model.provider,
       model: target.model.model,
+      modelFallbacksOverride: [],
       authProfileId: isolatedProfileId ?? target.profileId,
       authProfileIdSource: isolatedProfileId || target.profileId ? "user" : undefined,
       timeoutMs,
@@ -850,8 +912,23 @@ async function probeTarget(params: {
       disableTools: true,
       modelRun: true,
       cleanupBundleMcpOnRunEnd: true,
+      // Keep the isolated generation outside configured Gateway ownership: a
+      // run-provenance lease rebinds the pinned agentDir to the committed
+      // configured owner, losing the synthetic probe profile below.
+      ...(isolatedAgentDir ? { preparedModelRuntimeMode: "isolated-read-only" as const } : {}),
       abortSignal: params.abortSignal,
-    });
+    })) as AgentRunResultView;
+    const terminalError = extractAgentRunTerminalError(runResult);
+    if (terminalError) {
+      const described = describeFailoverError(new Error(terminalError));
+      return buildResult(
+        mapFailoverReasonToProbeStatus(described.reason),
+        redactAuthProbeError(described.message),
+      );
+    }
+    if (!agentRunHasVisibleReply(runResult)) {
+      return buildResult("format", "The model did not return a visible probe response.");
+    }
     return buildResult("ok");
   } catch (err) {
     const described = describeFailoverError(err);

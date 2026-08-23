@@ -1,6 +1,9 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
+import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
-import type { AssistantMessage, Model } from "../../llm/types.js";
+import type { AssistantMessage } from "../../llm/types.js";
+import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
+import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
   calculateContextTokens,
   compact,
@@ -14,16 +17,20 @@ import { AgentSessionInspection } from "./agent-session-inspection.js";
 import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
-import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { getLatestCompactionEntry, type CompactionEntry } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 
 type CompactionReason = "manual" | "threshold" | "overflow";
 type SummaryOutputPolicy = "none" | "retry-invalid-once";
 type CompactionWorkOutcome =
-  | { status: "compacted"; result: CompactionResult }
+  | { status: "completed"; result: CompactionResult; tokensAfter: number }
   | { status: "aborted" }
-  | { status: "skipped" };
+  | { status: "skipped"; reason: string };
+
+function compactionErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.trim() ? message : fallback;
+}
 
 /** @internal */
 export const agentSessionAutomaticCompaction: unique symbol = Symbol.for(
@@ -59,46 +66,58 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   ): Promise<CompactionResult> {
     this.disconnectFromAgent();
     await this.abort();
-    this.compactionAbortController = new AbortController();
+    const abortController = new AbortController();
+    this.compactionAbortController = abortController;
     this.emit({ type: "compaction_start", reason: "manual" });
 
     try {
       const settings = this.settingsManager.getCompactionSettings();
-      const outcome = await this.runCompactionWork({
-        customInstructions,
-        mode: "manual",
-        summaryOutputPolicy,
-        settings,
-        signal: this.compactionAbortController.signal,
-      });
-      if (outcome.status !== "compacted") {
+      let outcome: CompactionWorkOutcome;
+      try {
+        outcome = await this.runCompactionWork({
+          customInstructions,
+          mode: "manual",
+          summaryOutputPolicy,
+          settings,
+          signal: abortController.signal,
+        });
+      } catch (error) {
+        const message = compactionErrorMessage(error, "Compaction failed");
+        const aborted =
+          abortController.signal.aborted || (error instanceof Error && error.name === "AbortError");
+        this.emit({
+          type: "compaction_end",
+          reason: "manual",
+          outcome: aborted
+            ? { status: "aborted" }
+            : { status: "failed", reason: `Compaction failed: ${message}` },
+        });
+        throw error;
+      }
+      if (outcome.status === "skipped") {
+        this.emit({ type: "compaction_end", reason: "manual", outcome });
+        throw new Error(outcome.reason);
+      }
+      if (outcome.status === "aborted") {
+        this.emit({ type: "compaction_end", reason: "manual", outcome });
         throw new Error("Compaction cancelled");
       }
 
       this.emit({
         type: "compaction_end",
         reason: "manual",
-        result: outcome.result,
-        aborted: false,
-        willRetry: false,
+        outcome: {
+          status: "completed",
+          tokensBefore: outcome.result.tokensBefore,
+          tokensAfter: outcome.tokensAfter,
+          willRetry: false,
+        },
       });
       return outcome.result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const aborted =
-        message === "Compaction cancelled" ||
-        (error instanceof Error && error.name === "AbortError");
-      this.emit({
-        type: "compaction_end",
-        reason: "manual",
-        result: undefined,
-        aborted,
-        willRetry: false,
-        errorMessage: aborted ? undefined : `Compaction failed: ${message}`,
-      });
-      throw error;
     } finally {
-      this.compactionAbortController = undefined;
+      if (this.compactionAbortController === abortController) {
+        this.compactionAbortController = undefined;
+      }
       this.reconnectToAgent();
     }
   }
@@ -118,28 +137,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     this.branchSummaryAbortController?.abort();
   }
 
-  private async getAutoCompactionRequestAuth(model: Model): Promise<
-    | {
-        apiKey?: string;
-        headers?: Record<string, string>;
-      }
-    | undefined
-  > {
-    if (
-      this.agent.streamFn !==
-      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime.streamSimple
-    ) {
-      return this.getCompactionRequestAuth(model);
-    }
-
-    const authResult = await this.sessionModelRegistry.getApiKeyAndHeaders(model);
-    if (!authResult.ok || !authResult.apiKey) {
-      return undefined;
-    }
-    const { apiKey, headers } = authResult;
-    return { apiKey, headers };
-  }
-
   private async runCompactionWork(options: {
     settings: ReturnType<SettingsManager["getCompactionSettings"]>;
     signal: AbortSignal;
@@ -152,15 +149,21 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       if (isManual) {
         throw new Error(formatNoModelSelectedMessage());
       }
-      return { status: "skipped" };
+      return { status: "skipped", reason: formatNoModelSelectedMessage() };
     }
     const model = this.model;
 
-    const auth = isManual
-      ? await this.getCompactionRequestAuth(model)
-      : await this.getAutoCompactionRequestAuth(model);
-    if (!auth) {
-      return { status: "skipped" };
+    let auth: Awaited<ReturnType<typeof this.getCompactionRequestAuth>>;
+    try {
+      auth = await this.getCompactionRequestAuth(model);
+    } catch (error) {
+      if (isManual) {
+        throw error;
+      }
+      return {
+        status: "skipped",
+        reason: compactionErrorMessage(error, "Compaction authentication failed"),
+      };
     }
 
     const pathEntries = this.sessionManager.getBranch();
@@ -175,7 +178,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       preparation = unwrapCoreResult(prepareCompaction(pathEntries, options.settings));
     }
     if (!preparation) {
-      return { status: "skipped" };
+      return { status: "skipped", reason: "Nothing to compact (session too small)" };
     }
 
     let compactionResult: CompactionResult | undefined;
@@ -238,6 +241,11 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       return { status: "aborted" };
     }
 
+    compactionResult = {
+      ...compactionResult,
+      summary: capCompactionSummary(compactionResult.summary),
+    };
+
     this.sessionManager.appendCompaction(
       compactionResult.summary,
       compactionResult.firstKeptEntryId,
@@ -247,7 +255,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     );
     const newEntries = this.sessionManager.getEntries();
     const sessionContext = this.sessionManager.buildSessionContext();
-    this.agent.state.messages = sessionContext.messages;
+    // Compaction replaces the request prefix, invalidating retained usage and thinking signatures.
+    // Sanitize at assignment so every continuation driver receives replay-safe history.
+    this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
 
     const savedCompactionEntry = newEntries.find(
       (e) => e.type === "compaction" && e.summary === compactionResult.summary,
@@ -261,7 +271,8 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       });
     }
 
-    return { status: "compacted", result: compactionResult };
+    const tokensAfter = estimateContextTokens(this.agent.state.messages).tokens;
+    return { status: "completed", result: compactionResult, tokensAfter };
   }
 
   /**
@@ -321,20 +332,19 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       if (this.contextOverflowRecoveryOwner === "caller") {
         return false;
       }
-      if (this.overflowRecoveryAttempted) {
+      if (this.overflowRecoveryAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS) {
         this.emit({
           type: "compaction_end",
           reason: "overflow",
-          result: undefined,
-          aborted: false,
-          willRetry: false,
-          errorMessage:
-            "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
+          outcome: {
+            status: "failed",
+            reason: `Context overflow recovery failed after ${MAX_OVERFLOW_COMPACTION_ATTEMPTS} compact-and-retry attempts. Try reducing context or switching to a larger-context model.`,
+          },
         });
         return false;
       }
 
-      this.overflowRecoveryAttempted = true;
+      this.overflowRecoveryAttempts += 1;
       // Keep the failed response in history, but exclude it from the retry context.
       const messages = this.agent.state.messages;
       if (messages.at(-1)?.role === "assistant") {
@@ -353,17 +363,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       if (estimate.lastUsageIndex === null) {
         return false;
       } // No usage data at all
-      // Verify the usage source is post-compaction. Kept pre-compaction messages
-      // have stale usage reflecting the old (larger) context and would falsely
-      // trigger compaction right after one just finished.
-      const usageMsg = messages.at(estimate.lastUsageIndex);
-      if (
-        compactionEntry &&
-        usageMsg?.role === "assistant" &&
-        usageMsg.timestamp <= new Date(compactionEntry.timestamp).getTime()
-      ) {
-        return false;
-      }
       contextTokens = estimate.tokens;
     } else if (assistantMessage.usage.contextUsage?.state === "unavailable") {
       const estimatedContextTokens = this.getContextUsage()?.tokens;
@@ -390,41 +389,33 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     const settings = this.settingsManager.getCompactionSettings();
 
     this.emit({ type: "compaction_start", reason });
-    this.autoCompactionAbortController = new AbortController();
+    const abortController = new AbortController();
+    this.autoCompactionAbortController = abortController;
 
     try {
       const outcome = await this.runCompactionWork({
         mode: "auto",
         summaryOutputPolicy: "retry-invalid-once",
         settings,
-        signal: this.autoCompactionAbortController.signal,
+        signal: abortController.signal,
       });
       if (outcome.status === "skipped") {
-        this.emit({
-          type: "compaction_end",
-          reason,
-          result: undefined,
-          aborted: false,
-          willRetry: false,
-        });
+        this.emit({ type: "compaction_end", reason, outcome });
         return false;
       }
       if (outcome.status === "aborted") {
-        this.emit({
-          type: "compaction_end",
-          reason,
-          result: undefined,
-          aborted: true,
-          willRetry: false,
-        });
+        this.emit({ type: "compaction_end", reason, outcome });
         return false;
       }
       this.emit({
         type: "compaction_end",
         reason,
-        result: outcome.result,
-        aborted: false,
-        willRetry,
+        outcome: {
+          status: "completed",
+          tokensBefore: outcome.result.tokensBefore,
+          tokensAfter: outcome.tokensAfter,
+          willRetry,
+        },
       });
 
       if (willRetry) {
@@ -443,21 +434,27 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       // Continue once so queued messages are delivered.
       return this.agent.hasQueuedMessages();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "compaction failed";
+      if (abortController.signal.aborted) {
+        this.emit({ type: "compaction_end", reason, outcome: { status: "aborted" } });
+        return false;
+      }
+      const errorMessage = compactionErrorMessage(error, "compaction failed");
       this.emit({
         type: "compaction_end",
         reason,
-        result: undefined,
-        aborted: false,
-        willRetry: false,
-        errorMessage:
-          reason === "overflow"
-            ? `Context overflow recovery failed: ${errorMessage}`
-            : `Auto-compaction failed: ${errorMessage}`,
+        outcome: {
+          status: "failed",
+          reason:
+            reason === "overflow"
+              ? `Context overflow recovery failed: ${errorMessage}`
+              : `Auto-compaction failed: ${errorMessage}`,
+        },
       });
       return false;
     } finally {
-      this.autoCompactionAbortController = undefined;
+      if (this.autoCompactionAbortController === abortController) {
+        this.autoCompactionAbortController = undefined;
+      }
     }
   }
 

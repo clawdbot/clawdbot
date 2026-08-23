@@ -181,6 +181,10 @@ describe("plugin-sdk qa-runtime", () => {
       })
       .register(qa);
 
+    await qa.parseAsync(["node", "openclaw", "telegram"]);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ fastMode: undefined }));
+    run.mockClear();
+
     await qa.parseAsync([
       "node",
       "openclaw",

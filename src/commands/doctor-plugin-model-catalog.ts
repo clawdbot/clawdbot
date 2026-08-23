@@ -32,12 +32,12 @@ function resolveMigrationAgentDirs(params: {
     return [...new Set(params.agentDirs)].toSorted((left, right) => left.localeCompare(right));
   }
   const env = params.env ?? process.env;
-  return [
-    ...new Set([
-      resolveDefaultAgentDir(params.cfg, env),
-      ...listAgentIds(params.cfg).map((agentId) => resolveAgentDir(params.cfg, agentId, env)),
-    ]),
-  ].toSorted((left, right) => left.localeCompare(right));
+  const agentIds = listAgentIds(params.cfg);
+  const configuredAgentDirs =
+    agentIds.length > 0
+      ? agentIds.map((agentId) => resolveAgentDir(params.cfg, agentId, env))
+      : [resolveDefaultAgentDir(params.cfg, env)];
+  return [...new Set(configuredAgentDirs)].toSorted((left, right) => left.localeCompare(right));
 }
 
 async function readLegacyPluginCatalogContents(params: {

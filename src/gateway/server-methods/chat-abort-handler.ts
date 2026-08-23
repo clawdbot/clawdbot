@@ -29,6 +29,7 @@ import {
   cancelWorkerInferenceForSession,
   createChatAbortOps,
   persistAbortedPartials,
+  prepareControlledSubagentAbort,
 } from "./chat-abort-runtime.js";
 import {
   normalizeOptionalChatText as normalizeOptionalText,
@@ -40,12 +41,25 @@ import { assertValidParams } from "./validation.js";
 type ChatAbortLifecycle = {
   onAuthorizedAfterQueuedAbort?: () => boolean;
   excludeRunIds?: ReadonlySet<string>;
+  cascadeDescendants?: true;
 };
 
 type ChatAbortTarget = Pick<
   ChatAbortControllerEntry | QueuedChatTurnEntry,
   "sessionKey" | "agentId" | "ownerConnId" | "ownerDeviceId"
 >;
+
+function descendantAbortError(
+  result: Awaited<ReturnType<ReturnType<typeof prepareControlledSubagentAbort>>>,
+  subject: "Parent run" | "Session",
+) {
+  return result && result.status !== "ok"
+    ? errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${subject} stopped, but descendant cancellation was incomplete: ${result.error}`,
+      )
+    : undefined;
+}
 
 export async function handleChatAbortRequestWithLifecycle(
   { params, respond, context, client }: GatewayRequestHandlerOptions,
@@ -154,6 +168,19 @@ export async function handleChatAbortRequestWithLifecycle(
     if (res.unauthorized) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
       return;
+    }
+    if (lifecycle.cascadeDescendants) {
+      const descendants = await prepareControlledSubagentAbort({
+        cfg: abortCfg,
+        sessionKey: canonicalAbortSessionKey,
+        agentId: abortAgentId,
+      })();
+      const error = descendantAbortError(descendants, "Session");
+      if (error) {
+        respond(false, undefined, error);
+        return;
+      }
+      res.aborted ||= Boolean(descendants?.killed);
     }
     respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
     return;
@@ -292,6 +319,12 @@ export async function handleChatAbortRequestWithLifecycle(
   if (!authorizeRunTarget(active)) {
     return;
   }
+  const abortControlledSubagents = prepareControlledSubagentAbort({
+    cfg: abortCfg,
+    sessionKey: active.sessionKey,
+    agentId: active.agentId,
+    requesterTurnRunId: runId,
+  });
 
   const partialText = context.chatRunState.resolveBuffer(runId).text;
   const res = abortChatRunById(ops, {
@@ -313,6 +346,11 @@ export async function handleChatAbortRequestWithLifecycle(
         },
       ],
     });
+  }
+  const descendantError = descendantAbortError(await abortControlledSubagents(), "Parent run");
+  if (descendantError) {
+    respond(false, undefined, descendantError);
+    return;
   }
   respondWithWorkerRuns(res.aborted ? [runId] : [], active.sessionId);
 }

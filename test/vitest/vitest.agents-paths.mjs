@@ -5,6 +5,9 @@ const embeddedRoot = `${agentsRoot}/embedded-agent-runner`;
 // These suites mock shared runtime, network, or plugin modules and cannot
 // share the non-isolated core worker without leaking module state.
 const coreIsolatedFiles = [
+  "src/agents/failover/classify.legacy-provider-predicates.test.ts",
+  "src/agents/failover/failover-classification.corpus.test.ts",
+  "src/agents/failover/provider-structured-signals.test.ts",
   "src/agents/media-generation-task-status-shared.test.ts",
   "src/agents/media-generation-task-status.test.ts",
   "src/agents/mcp-http-fetch.test.ts",
@@ -18,17 +21,10 @@ const coreIsolatedFiles = [
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
 const incompleteTurnFiles = [
-  `${embeddedRoot}/run.incomplete-turn.attempt-lifecycle.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.delivery-resolution.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.empty-response-recovery.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.error-recovery.test.ts`,
   `${embeddedRoot}/run.incomplete-turn.payload-resolution.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.reasoning-recovery.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.settled-tool-continuation.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.settled-tool-recovery.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.silent-reply.test.ts`,
-  `${embeddedRoot}/run.incomplete-turn.terminal-evidence.test.ts`,
 ];
 const overflowCompactionFiles = [
   `${embeddedRoot}/run.overflow-compaction.test.ts`,

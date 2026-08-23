@@ -25,7 +25,6 @@ type QuickstartGatewayOptionOverrides = Pick<
   | "gatewayTokenRefEnv"
   | "gatewayPassword"
   | "tailscale"
-  | "tailscaleResetOnExit"
 >;
 
 export function hasQuickstartGatewayOverrides(
@@ -38,9 +37,43 @@ export function hasQuickstartGatewayOverrides(
     overrides.gatewayToken !== undefined ||
     overrides.gatewayTokenRefEnv !== undefined ||
     overrides.gatewayPassword !== undefined ||
-    overrides.tailscale !== undefined ||
-    overrides.tailscaleResetOnExit !== undefined
+    overrides.tailscale !== undefined
   );
+}
+
+export function formatQuickstartGatewaySummary(
+  defaults: QuickstartGatewayDefaults,
+  keepExisting: boolean,
+): string {
+  const bind = {
+    auto: t("wizard.gateway.bindAuto"),
+    custom: t("wizard.gateway.bindCustom"),
+    lan: t("wizard.gateway.bindLan"),
+    loopback: t("wizard.gateway.bindLoopback"),
+    tailnet: t("wizard.gateway.bindTailnet"),
+  }[defaults.bind];
+  return [
+    ...(keepExisting ? [t("wizard.setup.quickstartKeepSettings")] : []),
+    t("wizard.setup.quickstartGatewayPort", { port: defaults.port }),
+    t("wizard.setup.quickstartGatewayBind", { bind }),
+    ...(defaults.bind === "custom" && defaults.customBindHost
+      ? [
+          t("wizard.setup.quickstartGatewayCustomIp", {
+            host: defaults.customBindHost,
+          }),
+        ]
+      : []),
+    t("wizard.setup.quickstartGatewayAuth", {
+      auth:
+        defaults.authMode === "token"
+          ? t("wizard.setup.quickstartAuthTokenDefault")
+          : t("common.password"),
+    }),
+    t("wizard.setup.quickstartTailscaleExposure", {
+      exposure: t(`wizard.gatewayTailscale.${defaults.tailscaleMode}`),
+    }),
+    t("wizard.setup.quickstartDirectChannels"),
+  ].join("\n");
 }
 
 /**
@@ -199,7 +232,5 @@ export function resolveQuickstartGatewayDefaults(
         : (overrides.gatewayToken ?? baseConfig.gateway?.auth?.token),
     password: overrides.gatewayPassword ?? baseConfig.gateway?.auth?.password,
     customBindHost: baseConfig.gateway?.customBindHost,
-    tailscaleResetOnExit:
-      overrides.tailscaleResetOnExit ?? baseConfig.gateway?.tailscale?.resetOnExit ?? false,
   };
 }

@@ -24,7 +24,9 @@ import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
+import { ToolInputError } from "./tools/common.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
   command: string;
@@ -72,6 +74,14 @@ const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
   "ask",
   "node",
 ] as const;
+
+export function assertSupportedExecParams(args: unknown): void {
+  if (isRecord(args) && Object.hasOwn(args, "timeout")) {
+    throw new ToolInputError(
+      'exec parameter "timeout" is unsupported; use "timeoutSeconds" instead',
+    );
+  }
+}
 
 function buildSubprocessChannelContext(
   channelContext: PluginHookChannelContext | undefined,
@@ -172,6 +182,16 @@ export function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): bo
     return defaults.notifyOnExitEmptySuccess;
   }
   return normalizeChatChannelId(defaults?.messageProvider) !== null;
+}
+
+export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
+  return (
+    defaults?.preparedRunEnvironment ??
+    prepareGitHubToolEnvironment({
+      config: defaults?.config ?? {},
+      agentId: defaults?.agentId ?? "main",
+    })
+  );
 }
 
 export function createExecRequestPreparation(params: {
@@ -275,6 +295,7 @@ export function createExecRequestPreparation(params: {
     args: unknown,
     context: { hookContext?: unknown },
   ): Promise<ExecToolArgs> => {
+    assertSupportedExecParams(args);
     const execParams = await prepareParamsWithResolvedExecWorkdir(args);
     const workdirState = getResolvedExecWorkdirPreparedState(execParams);
     if (workdirState?.resolution.kind === "unavailable") {
@@ -356,9 +377,17 @@ export function resolvePreparedExecEnvironment(params: {
   defaultPathPrepend: string[];
   pluginEnv?: Record<string, string>;
   storeEnv?: Record<string, string>;
+  storeSecretEnv?: Record<string, string>;
+  secretEgressEnv?: Record<string, string>;
+  credentialScrubEnv?: Readonly<Record<string, string>>;
+  localIdentityEnv?: Readonly<Record<string, string>>;
+  managedLocalIdentity?: boolean;
   warnings: string[];
 }): { env: Record<string, string>; requestedEnv?: Record<string, string> } {
   const inheritedBaseEnv = coerceEnv(process.env);
+  if (params.secretEgressEnv) {
+    Object.assign(inheritedBaseEnv, params.secretEgressEnv);
+  }
   const channelContextEnv = buildChannelContextEnv(params.channelContext);
   const explicitEnv: Record<string, string> | undefined =
     params.execParams.env !== undefined ||
@@ -400,20 +429,23 @@ export function resolvePreparedExecEnvironment(params: {
     );
   }
   const hasStoreEnv = storeEnv && Object.keys(storeEnv).length > 0;
-  const requestedEnv: Record<string, string> | undefined = hasStoreEnv
+  const untrustedRequestedEnv: Record<string, string> | undefined = hasStoreEnv
     ? { ...storeEnv, ...explicitEnv }
     : explicitEnv;
+  const requestedEnv: Record<string, string> | undefined = params.storeSecretEnv
+    ? { ...storeEnv, ...params.storeSecretEnv, ...explicitEnv }
+    : untrustedRequestedEnv;
   const hostEnvResult =
     params.host === "sandbox"
       ? null
       : sanitizeHostExecEnvWithDiagnostics({
           baseEnv: inheritedBaseEnv,
-          overrides: requestedEnv,
+          overrides: untrustedRequestedEnv,
           blockPathOverrides: true,
         });
   if (
     hostEnvResult &&
-    requestedEnv &&
+    untrustedRequestedEnv &&
     (hostEnvResult.rejectedOverrideBlockedKeys.length > 0 ||
       hostEnvResult.rejectedOverrideInvalidKeys.length > 0)
   ) {
@@ -450,7 +482,7 @@ export function resolvePreparedExecEnvironment(params: {
     params.sandbox && params.host === "sandbox"
       ? buildSandboxEnv({
           defaultPath: DEFAULT_PATH,
-          paramsEnv: requestedEnv,
+          paramsEnv: untrustedRequestedEnv,
           sandboxEnv: params.sandbox.env,
           containerWorkdir: params.containerWorkdir ?? params.sandbox.containerWorkdir,
         })
@@ -474,5 +506,39 @@ export function resolvePreparedExecEnvironment(params: {
     applyPathPrepend(env, params.defaultPathPrepend);
   }
 
-  return { env, requestedEnv };
+  if (params.host === "gateway" && params.managedLocalIdentity === false) {
+    // Native GitHub identity is the explicit exception to the generic host-secret filter.
+    // Exact service-owner scrubs below still win; non-local hosts receive neither value.
+    for (const name of ["GH_TOKEN", "GITHUB_TOKEN"] as const) {
+      const value = process.env[name];
+      if (typeof value === "string") {
+        env[name] = value;
+      }
+    }
+  }
+  if (params.storeSecretEnv) {
+    // Secret-kind entries are authenticated ciphertext, not active credentials.
+    // Inject them after ordinary env filtering so names such as GH_TOKEN remain usable.
+    for (const [key, value] of Object.entries(params.storeSecretEnv)) {
+      if (!explicitEnv || !Object.hasOwn(explicitEnv, key)) {
+        env[key] = value;
+      }
+    }
+  }
+  if (params.secretEgressEnv) {
+    Object.assign(env, params.secretEgressEnv);
+  }
+  const preparedEnv = {
+    ...params.credentialScrubEnv,
+    ...(params.host === "gateway" ? params.localIdentityEnv : undefined),
+  };
+  // Prepared host values are authoritative over ambient, model, plugin, and store projections.
+  Object.assign(env, preparedEnv);
+
+  return {
+    env,
+    ...(Object.keys(preparedEnv).length > 0
+      ? { requestedEnv: { ...requestedEnv, ...preparedEnv } }
+      : { requestedEnv }),
+  };
 }

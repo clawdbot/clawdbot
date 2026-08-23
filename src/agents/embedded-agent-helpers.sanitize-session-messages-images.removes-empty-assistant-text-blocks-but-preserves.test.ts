@@ -152,10 +152,21 @@ describe("sanitizeSessionMessagesImages", () => {
 
   it("removes empty assistant text blocks but preserves tool calls", async () => {
     const input = castAgentMessages([
-      makeOpenAiResponsesAssistantMessage([
-        { type: "text", text: "" },
-        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-      ]),
+      {
+        ...makeOpenAiResponsesAssistantMessage([
+          { type: "text", text: "" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ]),
+        providerReplay: {
+          v: 1,
+          type: "openai-responses-compaction",
+          data: "opaque-checkpoint",
+          replayIndex: 1,
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.4",
+        },
+      } satisfies AssistantMessage,
     ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
@@ -163,6 +174,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expectSingleAssistantContentEntry(out, (entry) => {
       expect(entry.type).toBe("toolCall");
     });
+    expect(out[0]?.role === "assistant" ? out[0].providerReplay?.replayIndex : undefined).toBe(0);
   });
 
   it("sanitizes tool ids in strict mode (alphanumeric only)", async () => {
@@ -249,6 +261,24 @@ describe("sanitizeSessionMessagesImages", () => {
 
     expect(out).toHaveLength(1);
     expect(out[0]?.role).toBe("user");
+  });
+  it("strips an exact checkpoint when assistant content becomes empty", async () => {
+    const checkpoint = {
+      ...makeOpenAiResponsesAssistantMessage([{ type: "text", text: "" }], "stop"),
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        data: "opaque-checkpoint",
+        replayIndex: 0,
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.4",
+      },
+    } satisfies AssistantMessage;
+
+    const out = await sanitizeSessionMessagesImages([checkpoint], "test");
+
+    expect(out).toEqual([{ ...checkpoint, content: [], providerReplay: undefined }]);
   });
   it.each([
     ["full", "length"],

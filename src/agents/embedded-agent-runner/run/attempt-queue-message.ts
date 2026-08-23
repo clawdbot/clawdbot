@@ -318,9 +318,11 @@ async function steerAndWaitForTranscriptCommit(
     );
     function onAbort() {
       abortRequested = true;
-      if (accepted) {
-        rejectAfterCancellation("queued steering message was cancelled before delivery");
+      if (!accepted) {
+        rejectBeforeAcceptance("queued steering message was cancelled before acceptance");
+        return;
       }
+      rejectAfterCancellation("queued steering message was cancelled before delivery");
     }
     abortSignal?.addEventListener("abort", onAbort, { once: true });
   });
@@ -346,18 +348,12 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
       log.warn(`failed to cancel ask_user before image steering: ${String(error)}`);
     }
   }
+  // Non-user steering must install its transcript listener synchronously; an
+  // unnecessary await here lets callers emit before subscribe() runs.
   if (
     isInboundUserMessage &&
     isPlainTextAnswer &&
-    (await claimPendingAgentQuestionAnswer({
-      sessionKey,
-      text,
-      persist: options.userTurnTranscriptRecorder
-        ? async () => {
-            await options.userTurnTranscriptRecorder?.persistApproved();
-          }
-        : undefined,
-    }))
+    (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey))
   ) {
     options?.onQueueAccepted?.(true);
     return;
@@ -401,4 +397,24 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     }
     throw error;
   }
+}
+
+export async function claimEmbeddedPendingUserInputAnswer(
+  text: string,
+  options: EmbeddedAgentQueueMessageOptions | undefined,
+  sessionKey?: string,
+): Promise<boolean> {
+  if (options?.isInboundUserMessage !== true || options.images?.length) {
+    return false;
+  }
+  const claimed = await claimPendingAgentQuestionAnswer({
+    sessionKey,
+    text,
+    persist: options.userTurnTranscriptRecorder
+      ? async () => {
+          await options.userTurnTranscriptRecorder?.persistApproved();
+        }
+      : undefined,
+  });
+  return claimed;
 }

@@ -409,6 +409,47 @@ describe("artifacts RPC handlers", () => {
     expectFields(downloadPayload.artifact, { id: artifactId });
   });
 
+  it.each([
+    { type: "file", data: "", sizeBytes: 0, title: "direct.bin" },
+    {
+      type: "file",
+      source: { data: "", media_type: "application/octet-stream", sizeBytes: 0 },
+      title: "source.bin",
+    },
+    {
+      type: "file",
+      data: " data:application/octet-stream;base64, ",
+      sizeBytes: 0,
+      title: "data-url.bin",
+    },
+    { data: "", sizeBytes: 0, title: "untyped.bin" },
+  ])("lists, gets, and downloads the zero-byte $title artifact", async (block) => {
+    mockedMessages([{ role: "assistant", content: [block], __openclaw: { seq: 2 } }]);
+    const artifact = expectFirstArtifact(
+      (await listArtifacts({ sessionKey: "agent:main:main" })).calls,
+    );
+    const artifactId = requireNonEmptyString(artifact?.id, "expected zero-byte artifact id");
+    const expected = { id: artifactId, sizeBytes: 0, download: { mode: "bytes" } };
+    expect(artifact).toMatchObject(expected);
+    expect(artifact).not.toHaveProperty("data");
+    const get = await getArtifact({ sessionKey: "agent:main:main", artifactId });
+    const getPayload = expectOkPayload(get.calls) as { artifact?: Record<string, unknown> };
+    expect(getPayload.artifact).toMatchObject(expected);
+    expect(getPayload.artifact).not.toHaveProperty("data");
+    const download = await downloadArtifact({ sessionKey: "agent:main:main", artifactId });
+    const payload = expectOkPayload(download.calls) as { artifact?: Record<string, unknown> };
+    expectFields(payload, { encoding: "base64", data: "" });
+    expect(payload.artifact).toMatchObject(expected);
+  });
+  it.each([null, 0, false, {}])(
+    "does not discover untyped non-string data as an artifact: %j",
+    async (data) => {
+      mockedMessages([{ role: "assistant", content: [{ data }], __openclaw: { seq: 2 } }]);
+      const listed = await listArtifacts({ sessionKey: "agent:main:main" });
+      expect(expectArtifactList(listed.calls)).toEqual({ artifacts: [] });
+    },
+  );
+
   it("preserves managed artifact identity and returns a ticketed download URL", async () => {
     const artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111";
     mockedMessages([

@@ -52,12 +52,11 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
           install-trufflehog: "true"
-          # Real Testbox hydration reuses the protected dependency snapshot.
-          # Pull-request validation runs on GitHub-hosted runners instead.
-          sticky-disk: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
-          use-actions-cache: ${{ github.event_name == 'workflow_dispatch' && 'false' || 'true' }}
+          # Testbox hydration uses the ordinary pnpm store cache. Canonical CI
+          # owns the exact dependency archive and never delegates here.
       - name: Ensure Testbox base commit
         if: github.event_name == 'pull_request'
         uses: ./.github/actions/ensure-base-commit

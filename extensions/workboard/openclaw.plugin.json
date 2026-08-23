@@ -1,5 +1,12 @@
 {
   "id": "workboard",
+  "cliCommands": [
+    {
+      "name": "workboard",
+      "description": "Manage Workboard cards and worker dispatch",
+      "hasSubcommands": true
+    }
+  ],
   "doctorContract": {
     "stateMigrations": true
   },

@@ -19,8 +19,8 @@ import {
   generateMusic,
   listRuntimeMusicGenerationProviders,
 } from "../../music-generation/runtime.js";
-import type { MusicGenerationOutputFormat } from "../../music-generation/types.js";
 import type {
+  MusicGenerationOutputFormat,
   MusicGenerationProvider,
   MusicGenerationSourceImage,
 } from "../../music-generation/types.js";
@@ -401,9 +401,7 @@ type LoadedReferenceImage = Awaited<ReturnType<typeof loadReferenceImages>>[numb
 type ExecutedMusicGeneration = {
   provider: string;
   model: string;
-  savedPaths: string[];
   count: number;
-  paths: string[];
   attachments: AgentGeneratedAttachment[];
   contentText: string;
   details: Record<string, unknown>;
@@ -553,9 +551,7 @@ async function executeMusicGenerationJob(params: {
   return {
     provider: result.provider,
     model: result.model,
-    savedPaths: savedTracks.map((track) => track.path),
     count: savedTracks.length,
-    paths: savedTracks.map((track) => track.path),
     attachments,
     contentText: lines.join("\n"),
     wakeResult: lines.join("\n"),
@@ -891,8 +887,7 @@ export function createMusicGenerateTool(options?: {
           handle: taskHandle,
           provider: executed.provider,
           model: executed.model,
-          count: executed.savedPaths.length,
-          paths: executed.savedPaths,
+          count: executed.count,
         });
         return {
           content: [{ type: "text", text: executed.contentText }],

@@ -560,6 +560,7 @@ async function installClawPackagesUnlocked(
       options.onExternalMutation?.(pkg);
       await installPlugin({
         raw: `clawhub:${pkg.ref}@${pkg.version}`,
+        allowInstallPolicyWarningPrompt: false,
         opts: {
           acknowledgeClawHubRisk: true,
           expectedIntegrity: pkg.integrity,

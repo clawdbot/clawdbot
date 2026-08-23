@@ -1,4 +1,4 @@
-import { isEmbeddedAgentRunInProgress } from "../../agents/embedded-agent-runner/runs.js";
+import { resolveEmbeddedAgentRunProgressState } from "../../agents/embedded-agent-runner/runs.js";
 import {
   hasProjectedAgentRunForSession,
   type ProjectedAgentRunIndex,
@@ -13,6 +13,14 @@ type TrackedActiveSessionRun = {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  executionStarted: boolean;
+};
+
+type VisibleActiveSessionRunState = {
+  active: boolean;
+  /** Complete exact active set. Omitted when another active owner exposes only liveness. */
+  runIds?: string[];
+  status?: "queued";
 };
 
 export function collectTrackedActiveSessionRuns(
@@ -34,6 +42,8 @@ export function collectTrackedActiveSessionRuns(
         ...(sessionKey ? { sessionKey } : {}),
         ...(sessionId ? { sessionId } : {}),
         agentId: typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined,
+        // Entries created before this state existed are already executing.
+        executionStarted: active.executionStarted !== false,
       });
     }
   }
@@ -41,7 +51,7 @@ export function collectTrackedActiveSessionRuns(
 }
 
 function isTrackedActiveSessionRunForKey(
-  active: TrackedActiveSessionRun,
+  active: Pick<TrackedActiveSessionRun, "sessionKey" | "agentId">,
   key: string,
   agentId?: string,
   defaultAgentId?: string,
@@ -95,31 +105,18 @@ export function hasRegisteredChatRunForSessionKey(params: {
   agentId: string | undefined;
   defaultAgentId?: string;
 }): boolean {
-  if (!(params.context.chatAbortControllers instanceof Map)) {
-    return false;
-  }
-  const requestedAgentId = resolveChatRunOwnerAgentId({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    defaultAgentId: params.defaultAgentId,
-  });
-  if (!requestedAgentId) {
-    return false;
-  }
-  for (const active of params.context.chatAbortControllers.values()) {
-    if (active.sessionKey?.trim() !== params.sessionKey) {
-      continue;
-    }
-    const activeAgentId = resolveChatRunOwnerAgentId({
-      agentId: active.agentId,
-      sessionKey: active.sessionKey,
-      defaultAgentId: params.defaultAgentId,
-    });
-    if (!requestedAgentId || requestedAgentId === activeAgentId) {
-      return true;
-    }
-  }
-  return false;
+  const controllers = params.context.chatAbortControllers;
+  return (
+    controllers instanceof Map &&
+    [...controllers.values()].some((active) =>
+      isTrackedActiveSessionRunForKey(
+        active,
+        params.sessionKey,
+        params.agentId,
+        params.defaultAgentId,
+      ),
+    )
+  );
 }
 
 /** Returns true when either requested or canonical session key has a visible active run. */
@@ -159,37 +156,37 @@ export function resolveVisibleActiveSessionRunState(params: {
   defaultAgentId?: string;
   trackedActiveRuns?: readonly TrackedActiveSessionRun[];
   projectedAgentRunIndex?: ProjectedAgentRunIndex;
-}): { active: boolean; runIds: string[] } {
+}): VisibleActiveSessionRunState {
   const sessionId = params.sessionId?.trim();
   const resolvedAgentId =
     params.agentId ??
     parseAgentSessionKey(params.canonicalKey)?.agentId ??
     parseAgentSessionKey(params.requestedKey)?.agentId;
-  const runIds = (params.trackedActiveRuns ?? collectTrackedActiveSessionRuns(params.context))
-    .filter(
-      (active) =>
-        isTrackedActiveSessionRunForKey(
+  const matchingTrackedRuns = (
+    params.trackedActiveRuns ?? collectTrackedActiveSessionRuns(params.context)
+  ).filter(
+    (active) =>
+      isTrackedActiveSessionRunForKey(
+        active,
+        params.canonicalKey,
+        resolvedAgentId,
+        params.defaultAgentId,
+      ) ||
+      isTrackedActiveSessionRunForKey(
+        active,
+        params.requestedKey,
+        resolvedAgentId,
+        params.defaultAgentId,
+      ) ||
+      (sessionId !== undefined &&
+        isTrackedActiveSessionRunForSessionId(
           active,
-          params.canonicalKey,
+          sessionId,
           resolvedAgentId,
           params.defaultAgentId,
-        ) ||
-        isTrackedActiveSessionRunForKey(
-          active,
-          params.requestedKey,
-          resolvedAgentId,
-          params.defaultAgentId,
-        ) ||
-        (sessionId !== undefined &&
-          isTrackedActiveSessionRunForSessionId(
-            active,
-            sessionId,
-            resolvedAgentId,
-            params.defaultAgentId,
-          )),
-    )
-    .map((active) => active.runId)
-    .toSorted();
+        )),
+  );
+  const runIds = matchingTrackedRuns.map((active) => active.runId).toSorted();
   const hasProjectedRun = hasProjectedAgentRunForSession({
     sessionKeys: [params.requestedKey, params.canonicalKey],
     ...(sessionId ? { sessionId } : {}),
@@ -197,22 +194,19 @@ export function resolveVisibleActiveSessionRunState(params: {
     ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
     ...(params.projectedAgentRunIndex ? { index: params.projectedAgentRunIndex } : {}),
   });
-  const embeddedRunInProgress = sessionId !== undefined && isEmbeddedAgentRunInProgress(sessionId);
+  const embeddedRunState =
+    sessionId === undefined ? undefined : resolveEmbeddedAgentRunProgressState(sessionId);
   // Connection, worker-lifecycle, and embedded registries are independent owners.
   // Settlement in one must not hide live work owned by another.
+  const running =
+    matchingTrackedRuns.some((active) => active.executionStarted) ||
+    hasProjectedRun ||
+    embeddedRunState === "running";
+  const active = running || matchingTrackedRuns.length > 0 || embeddedRunState === "queued";
+  const identitiesComplete = !hasProjectedRun && embeddedRunState === undefined;
   return {
-    active: runIds.length > 0 || hasProjectedRun || embeddedRunInProgress,
-    runIds,
+    active,
+    ...(identitiesComplete ? { runIds } : {}),
+    ...(active && !running ? { status: "queued" as const } : {}),
   };
-}
-
-export function hasVisibleActiveSessionRun(params: {
-  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
-  requestedKey: string;
-  canonicalKey: string;
-  sessionId?: string;
-  agentId?: string;
-  defaultAgentId?: string;
-}): boolean {
-  return resolveVisibleActiveSessionRunState(params).active;
 }

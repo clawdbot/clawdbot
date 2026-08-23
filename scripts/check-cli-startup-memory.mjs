@@ -405,13 +405,11 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
  */
 export const testing = {
   cases,
-  nodeImportSpecifierForPath,
   parseArgs,
   readPositiveIntEnv,
   readPositiveNumberEnv,
   repoRoot,
   resolveDefaultLimitsMb,
-  runCase,
   runStartupMemoryCheck,
   sampleCount: STARTUP_MEMORY_SAMPLE_COUNT,
 };

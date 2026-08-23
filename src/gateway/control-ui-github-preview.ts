@@ -7,12 +7,12 @@ import {
   fetchGitHubApi,
   GITHUB_API_ORIGIN,
   GITHUB_REQUEST_TIMEOUT_MS,
-  githubApiToken,
   isRecord,
   optionalNumber,
   readOptionalGitHubString,
   readBoundedResponse,
   readGitHubJsonResponse,
+  resolveGitHubApiCredentialScope,
   requiredString,
   withOptionalGitHubAuth,
 } from "./control-ui-github-api.js";
@@ -270,15 +270,16 @@ async function fetchPreview(
   return avatarDataUrl ? { ...preview, avatarDataUrl } : preview;
 }
 
-function cacheKey(target: ControlUiGitHubPreviewTarget): string {
-  return `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
+function cacheKey(target: ControlUiGitHubPreviewTarget, credentialScope: string): string {
+  return `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}\0${credentialScope}`;
 }
 
 export function loadControlUiGitHubPreview(
   target: ControlUiGitHubPreviewTarget,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ControlUiGitHubPreview> {
-  const key = cacheKey(target);
+  const { token, cacheScope } = resolveGitHubApiCredentialScope();
+  const key = cacheKey(target, cacheScope);
   const now = Date.now();
   const cached = previewCache.get(key);
   if (cached && cached.expiresAt > now) {
@@ -290,7 +291,6 @@ export function loadControlUiGitHubPreview(
     previewCache.delete(key);
   }
 
-  const token = githubApiToken();
   const successCacheMs = token ? AUTHENTICATED_SUCCESS_CACHE_MS : ANONYMOUS_SUCCESS_CACHE_MS;
   const entry: CacheEntry<ControlUiGitHubPreview> = {
     expiresAt: now + successCacheMs,

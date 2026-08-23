@@ -1,5 +1,6 @@
 // Control UI module implements usage helpers behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { formatUiError } from "../../lib/format-error.ts";
 
 type UsageQueryTerm = {
   key?: string;
@@ -40,20 +41,7 @@ export function currentLocalDate(): string {
 }
 
 export function toUsageErrorMessage(error: unknown): string {
-  if (typeof error === "string") {
-    return error;
-  }
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  if (error && typeof error === "object") {
-    try {
-      return JSON.stringify(error) || "request failed";
-    } catch {
-      // Fall through to the stable generic message.
-    }
-  }
-  return "request failed";
+  return formatUiError(error, "request failed");
 }
 
 export function toggleUsageRangeSelection<T>(

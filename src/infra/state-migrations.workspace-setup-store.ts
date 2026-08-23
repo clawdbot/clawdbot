@@ -1,5 +1,6 @@
 // SQLite import and receipt semantics for retired workspace state.
 import { createHash } from "node:crypto";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { LEGACY_WORKSPACE_ATTESTATION_HEADER } from "../agents/workspace-legacy-state.js";
 import {
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
@@ -201,6 +202,14 @@ function attestationFingerprint(params: {
   });
 }
 
+function receiptPreservesAuthority(
+  receipt: { reportJson: string } | null,
+  expectedFingerprint: string,
+): boolean {
+  const report = receipt ? safeParseJsonRecord(receipt.reportJson) : undefined;
+  return report?.authoritative === true && report.canonicalFingerprint === expectedFingerprint;
+}
+
 function findMigrationAuthority(params: {
   db: ReturnType<typeof openOpenClawStateDatabase>["db"];
   kysely: ReturnType<typeof getNodeSqliteKysely<WorkspaceMigrationDatabase>>;
@@ -332,6 +341,7 @@ export function importAndRecordReceipt(params: {
   snapshot: SourceSnapshot;
   parsed: ParsedSource;
   env: NodeJS.ProcessEnv;
+  replaceRemovedReceipt?: boolean;
 }): { sourceKey: string; imported: boolean } {
   const key = resolveWorkspaceMigrationSourceKey(params.source);
   const runId = `${key}:${params.snapshot.sha256.slice(0, 16)}`;
@@ -341,7 +351,8 @@ export function importAndRecordReceipt(params: {
       const { db } = database;
       const kysely = getNodeSqliteKysely<WorkspaceMigrationDatabase>(db);
       const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, key);
-      if (existingReceipt) {
+      // Only a receipt whose source was fully removed can be replaced by a later generation.
+      if (existingReceipt && (!params.replaceRemovedReceipt || !existingReceipt.removedSource)) {
         throw new Error("workspace migration receipt appeared concurrently; retry Doctor");
       }
 
@@ -654,7 +665,10 @@ export function importAndRecordReceipt(params: {
         // Only a whole-source insert or precedence replacement can establish
         // authority. Verification and complementary merges may cover cleanup,
         // but must not let a legacy source overwrite unrelated canonical data.
-        authoritative: resolution === "inserted" || resolution === "replaced",
+        authoritative:
+          resolution === "inserted" ||
+          resolution === "replaced" ||
+          receiptPreservesAuthority(existingReceipt, verifiedFingerprint),
         resolution,
         imported,
       });
@@ -669,6 +683,7 @@ export function importAndRecordReceipt(params: {
         runId,
         now,
         reportJson,
+        upsert: existingReceipt !== null,
       });
       return { sourceKey: key, imported };
     },

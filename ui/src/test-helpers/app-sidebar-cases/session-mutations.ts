@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGatewayHarness,
   createSessionState,
@@ -11,6 +10,7 @@ import {
   successfulSessionPatch,
   type TestSessionMenu,
 } from "../app-sidebar.ts";
+import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
@@ -150,13 +150,101 @@ describe("AppSidebar session mutation feedback", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  it("assigns owners from the row menu and updates the owner chip", async () => {
+    const request = vi.fn(async (method: string, params: unknown) => {
+      if (method !== "sessions.assignOwner") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      const owner = (params as { owner: { type: "human"; id: string } }).owner;
+      const label = owner.id === "profile-ada" ? "Ada" : "Bob";
+      return {
+        ok: true,
+        key: "agent:main:a",
+        owner: {
+          actor: { ...owner, label },
+          assignedBy: { type: "human", id: "profile-ada", label: "Ada" },
+          assignedAt: 10,
+        },
+      };
+    });
+    const { gateway, harness, sidebar } = await mountMutationHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
+    gateway.publish({
+      selfUser: { id: "profile-ada", name: "Ada" },
+      hello: gatewayHelloForMethods(["sessions.assignOwner"], ["operator.write"]),
+    });
+    const result = harness.sessions.state.result;
+    const row = result?.sessions.find((session) => session.key === "agent:main:a");
+    if (!result || !row) {
+      throw new Error("expected session owner fixture");
+    }
+    row.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
+    row.owner = { actor: row.createdActor };
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+    ];
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+
+    const menu = await openSessionMenu(sidebar, row.key);
+    expect(menu.textContent).toContain("Assign to me");
+    expect(menu.textContent).toContain("Assign to…");
+    menu.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: "assign-owner:human:profile-bob" } },
+      }),
+    );
+
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("sessions.assignOwner", {
+      key: row.key,
+      agentId: "main",
+      owner: { type: "human", id: "profile-bob" },
+    });
+    await waitForFast(() => {
+      expect(
+        sidebar
+          .querySelector(`[data-session-key="${row.key}"] .session-owner-chip`)
+          ?.getAttribute("title"),
+      ).toBe("Owned by Bob");
+    });
+
+    const selfMenu = await openSessionMenu(sidebar, row.key);
+    const selfItem = selfMenu.querySelector<HTMLElement>(
+      ':scope > wa-dropdown > wa-dropdown-item[value="assign-owner:human:profile-ada"]',
+    );
+    selfMenu.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: selfItem?.getAttribute("value") } },
+      }),
+    );
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.assignOwner", {
+      key: row.key,
+      agentId: "main",
+      owner: { type: "human", id: "profile-ada" },
+    });
+    await waitForFast(() => {
+      expect(
+        sidebar
+          .querySelector(`[data-session-key="${row.key}"] .session-owner-chip`)
+          ?.getAttribute("title"),
+      ).toBe("Owned by Ada");
+    });
+  });
+
   it("reconciles and stops an idle active cloud worker through its session", async () => {
     const request = vi.fn(() => Promise.resolve({ ok: true }));
     const { gateway, harness, sidebar } = await mountMutationHarness({
       request,
     } as unknown as GatewayBrowserClient);
     gateway.publish({
-      hello: { features: { methods: ["sessions.reclaim"] } } as ApplicationGatewaySnapshot["hello"],
+      hello: gatewayHelloForMethods(["sessions.reclaim"]),
     });
     const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
     const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
@@ -195,17 +283,13 @@ describe("AppSidebar session mutation feedback", () => {
     await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
   });
 
-  it("destroys a pending cloud worker through its session", async () => {
-    const request = vi.fn(() =>
-      Promise.resolve({ status: "unavailable", worker: { state: "destroyed" } }),
-    );
+  it("reclaims a pending cloud worker through its session", async () => {
+    const request = vi.fn(() => Promise.resolve({ ok: true }));
     const { gateway, harness, sidebar } = await mountMutationHarness({
       request,
     } as unknown as GatewayBrowserClient);
     gateway.publish({
-      hello: {
-        features: { methods: ["environments.destroy"] },
-      } as ApplicationGatewaySnapshot["hello"],
+      hello: gatewayHelloForMethods(["sessions.reclaim"]),
     });
     const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
     const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
@@ -222,7 +306,6 @@ describe("AppSidebar session mutation feedback", () => {
     };
     row.hasActiveRun = true;
     harness.publishList({ result: state.result, agentId: state.agentId });
-    const toast = await mountToastHost();
     await sidebar.updateComplete;
 
     const menu = await openSessionMenu(sidebar, row.key);
@@ -230,15 +313,12 @@ describe("AppSidebar session mutation feedback", () => {
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    expect(request).toHaveBeenCalledWith("environments.destroy", {
-      environmentId: "environment-1",
-    });
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
-    await waitForFast(() =>
-      expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
-        'Cloud worker for "a" is destroyed.',
-      ),
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: "agent:main:a", agentId: "main" },
+      { timeoutMs: 10 * 60_000 },
     );
+    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
   });
 
   it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
@@ -418,7 +498,12 @@ describe("AppSidebar session mutation feedback", () => {
     } as unknown as GatewayBrowserClient);
     harness.deleteSession.mockResolvedValueOnce({
       deleted: true,
-      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+      worktreePreserved: {
+        id: "wt-1",
+        branch: "feature",
+        path: "/tmp/worktree",
+        reason: "busy",
+      },
     });
     const menu = await openSessionMenu(sidebar, "agent:main:a");
     menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();

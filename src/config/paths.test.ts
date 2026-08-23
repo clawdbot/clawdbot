@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { resolveLegacyOAuthPath } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
+  allowsProcessHomeSessionScan,
   CONFIG_PATH,
   DEFAULT_GATEWAY_PORT,
   isDefaultInstallIdentity,
@@ -50,6 +51,7 @@ describe("default install identity", () => {
     const configPath = path.join(stateDir, "openclaw.json");
 
     expect(isDefaultInstallIdentity({ HOME: home }, () => home)).toBe(true);
+    expect(allowsProcessHomeSessionScan({ HOME: home }, () => home)).toBe(true);
     expect(
       isDefaultInstallIdentity(
         { HOME: home, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
@@ -161,6 +163,17 @@ describe("default install identity", () => {
           () => home,
         ),
       ).toBe(true);
+      expect(
+        allowsProcessHomeSessionScan(
+          {
+            HOME: home,
+            OPENCLAW_PROFILE: "work",
+            OPENCLAW_STATE_DIR: profileStateDir,
+            OPENCLAW_CONFIG_PATH: path.join(profileStateDir, "openclaw.json"),
+          },
+          () => home,
+        ),
+      ).toBe(false);
       expect(
         isDefaultInstallIdentity(
           {

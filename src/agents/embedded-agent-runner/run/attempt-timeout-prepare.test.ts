@@ -63,6 +63,14 @@ describe("prepareEmbeddedAttemptTimeout", () => {
 
     expect(harness.markTimedOutByRunBudget).toHaveBeenCalledOnce();
     expect(harness.abortRun).toHaveBeenCalledWith(true);
+    // The run-budget marker must be recorded before the abort so settlement
+    // can re-confirm terminal ownership before committing partial output; the
+    // timeout callback itself never commits buffered text.
+    const markOrder = harness.markTimedOutByRunBudget.mock.invocationCallOrder[0];
+    const abortOrder = harness.abortRun.mock.invocationCallOrder[0];
+    expect(markOrder).toBeDefined();
+    expect(abortOrder).toBeDefined();
+    expect(markOrder ?? -1).toBeLessThan(abortOrder ?? -1);
     harness.timeout.clearTimers();
   });
 
