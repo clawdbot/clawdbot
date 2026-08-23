@@ -1,4 +1,3 @@
-import type { ClaudeSessionScanResult } from "./session-catalog-discovery.js";
 import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import { readDesktopOverlay } from "./session-catalog-desktop.js";
 import {
@@ -13,25 +12,40 @@ const CLAUDE_SESSION_SCAN_HARD_TTL_MS = 5 * 60_000;
 const CLAUDE_PARTIAL_SCAN_TTL_MS = 15_000;
 const CLAUDE_DESKTOP_SCAN_TTL_MS = 60_000;
 
-type ClaudeSessionScanCacheEntry = {
+type ClaudeSessionScanResultLike = { complete: boolean };
+
+type ClaudeSessionScanCacheEntry<TResult extends ClaudeSessionScanResultLike> = {
   treeStamp: string;
   hardExpiresAt: number;
   desktopStoreAvailable: boolean;
   desktopExpiresAt: number;
-  result: Promise<ClaudeSessionScanResult>;
+  result: Promise<TResult>;
 };
 
-const claudeSessionScanCache = new Map<string, ClaudeSessionScanCacheEntry>();
+const claudeSessionScanCache = new Map<
+  string,
+  ClaudeSessionScanCacheEntry<ClaudeSessionScanResultLike>
+>();
+
+export function listClaudeSessionsWithStatus<TResult extends ClaudeSessionScanResultLike>(
+  scanClaudeSessions: (
+    homeDir: string,
+    snapshot: ClaudeProjectsTreeSnapshot,
+    includeDesktop: boolean,
+  ) => Promise<TResult>,
+  homeDir?: string,
+  options?: { forceRefresh?: boolean; configDir?: string; includeDesktop?: boolean },
+): Promise<TResult>;
 
 export async function listClaudeSessionsWithStatus(
   scanClaudeSessions: (
     homeDir: string,
     snapshot: ClaudeProjectsTreeSnapshot,
     includeDesktop: boolean,
-  ) => Promise<ClaudeSessionScanResult>,
+  ) => Promise<ClaudeSessionScanResultLike>,
   homeDir = resolveClaudeCatalogHomeDir(),
   options: { forceRefresh?: boolean; configDir?: string; includeDesktop?: boolean } = {},
-): Promise<ClaudeSessionScanResult> {
+): Promise<ClaudeSessionScanResultLike> {
   const root = projectsDir(homeDir, options.configDir);
   const includeDesktop = options.includeDesktop !== false;
   const cacheKey = `${root}\0${includeDesktop ? "desktop" : "cli"}`;

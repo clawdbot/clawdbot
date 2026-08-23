@@ -110,7 +110,7 @@ export type CatalogRecord = ClaudeSessionCatalogSession & {
   filePath: string;
 };
 
-export type ClaudeSessionScanResult = {
+type ClaudeSessionScanResult = {
   records: CatalogRecord[];
   complete: boolean;
   error?: ClaudeSessionCatalogError;
@@ -145,11 +145,11 @@ async function readIndexRecords(
       signature: files.get("sessions-index.json"),
     }))
     .toSorted((left, right) => left.filePath.localeCompare(right.filePath));
-  const admissions = [] as Array<{
+  const admissions: Array<{
     directory: string;
     filePath: string;
     reservedBytes: number | undefined;
-  }>;
+  }> = [];
   for (const { directory, filePath } of indexReads) {
     admissions.push({
       directory,

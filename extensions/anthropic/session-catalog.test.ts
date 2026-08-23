@@ -2907,6 +2907,40 @@ describe("Claude session catalog", () => {
     expect(readCalls).toBeGreaterThan(1);
   });
 
+  it("reports a partial catalog when a descriptor read ends before its reserved size", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const filePath = path.join(projectDir, "sessions-index.json");
+    const prefix = JSON.stringify({ version: 1, entries: [] });
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(filePath, `${prefix}${"x".repeat(8)}`);
+
+    const open = fs.open.bind(fs);
+    let readCalls = 0;
+    const onIoFailure = vi.fn();
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] === filePath) {
+        const realRead = handle.read.bind(handle);
+        Object.defineProperty(handle, "read", {
+          configurable: true,
+          value: (buffer: Buffer, offset: number, length: number, position: number) => {
+            readCalls += 1;
+            if (readCalls === 1) {
+              return realRead(buffer, offset, prefix.length, position);
+            }
+            return { bytesRead: 0, buffer };
+          },
+        });
+      }
+      return handle;
+    });
+
+    await expect(readJsonFile(filePath, { onIoFailure })).resolves.toBeUndefined();
+    expect(readCalls).toBe(2);
+    expect(onIoFailure).toHaveBeenCalledOnce();
+  });
+
   it("retries transient index reads without waiting for the file metadata to change", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");
