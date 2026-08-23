@@ -113,6 +113,7 @@ const frozenLegacyCoreScenarioIds = frozenCoreScenarioIds.filter(
 const frozenLegacyTargetShas = [
   "ee5ead24b1b46a3560f28f8d57e0afcd911acacb",
   "9a83cbf29d8f637cbe566d809811cb6a13c93664",
+  "3203a6f7f8d79644fde2b4f091a694f4c1698538",
 ] as const;
 
 function frozenCoreSummary() {
