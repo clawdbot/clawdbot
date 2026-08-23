@@ -3906,12 +3906,10 @@ openclaw-sidebar-attention {
 
 .sidebar-issues-panel__summary:hover,
 .sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary {
-  border-radius: var(--radius-md);
   background: var(--bg-hover);
 }
 
 .sidebar-issues-panel__details[open] {
-  border-radius: var(--radius-md);
   background: var(--bg-hover);
 }
 
@@ -4203,7 +4201,6 @@ openclaw-sidebar-attention {
 
 .sidebar-approval-row:hover,
 .sidebar-approval-row:focus-within {
-  border-radius: var(--radius-md);
   background: var(--bg-hover);
 }
 
