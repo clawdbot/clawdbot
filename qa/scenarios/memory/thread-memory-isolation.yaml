@@ -1,0 +1,152 @@
+title: Thread memory isolation
+
+scenario:
+  id: thread-memory-isolation
+  surface: session-memory
+  runtimePairLane: core
+  coverage:
+    primary:
+      - session-memory.cross-client-history-thread-isolation
+    secondary:
+      - channels.native-threads
+  objective: Verify a memory-backed answer requested inside a thread stays in-thread and does not leak into the root channel.
+  successCriteria:
+    - Agent uses memory tools inside the thread.
+    - The hidden fact is answered correctly in the thread.
+    - No root-channel outbound message leaks during the threaded memory reply.
+  docsRefs:
+    - docs/concepts/memory-search.md
+    - docs/channels/qa-channel.md
+    - docs/channels/group-messages.md
+  codeRefs:
+    - extensions/memory-core/src/tools.ts
+    - extensions/qa-channel/src/protocol.ts
+    - extensions/qa-lab/src/suite.ts
+  execution:
+    kind: flow
+    summary: Verify a memory-backed answer requested inside a thread stays in-thread and does not leak into the root channel.
+    channel: qa-channel
+    providerMode: mock-openai
+    retryCount: 0
+    config:
+      memoryFact: "Thread-hidden codename: ORBIT-22."
+      memoryQuery: "hidden thread codename ORBIT-22"
+      expectedMemoryPath: MEMORY.md
+      expectedNeedle: "ORBIT-22"
+      channelId: qa-room
+      channelTitle: QA Room
+      threadTitle: "Thread memory QA"
+      prompt: "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread."
+      promptSnippet: "Thread memory check"
+
+flow:
+  steps:
+    - name: answers the memory-backed fact inside the thread only
+      actions:
+        - call: reset
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
+            - expr: "`${config.memoryFact}\\n`"
+            - utf8
+        - call: forceMemoryIndex
+          args:
+            - env:
+                ref: env
+              query:
+                expr: config.memoryQuery
+              expectedNeedle:
+                expr: config.expectedNeedle
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: handleQaAction
+          saveAs: threadPayload
+          args:
+            - env:
+                ref: env
+              action: thread-create
+              args:
+                channelId:
+                  expr: config.channelId
+                title:
+                  expr: config.threadTitle
+        - set: threadId
+          value:
+            expr: "threadPayload?.thread?.id"
+        - assert:
+            expr: Boolean(threadId)
+            message: missing thread id for memory isolation check
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: outboundStartIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.channelId
+              kind: channel
+              title:
+                expr: config.channelTitle
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.prompt
+            threadId:
+              ref: threadId
+            threadTitle:
+              expr: config.threadTitle
+        - call: waitForCondition
+          saveAs: scenarioRequests
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const requests = (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)); return requests.length >= 3 ? requests : undefined; })()"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - 100
+        - assert:
+            expr: scenarioRequests.length === 3
+            message:
+              expr: "`expected one memory_search plan, one memory_get plan, and one final request: ${JSON.stringify(scenarioRequests)}`"
+        - set: searchPlanRequest
+          value:
+            expr: scenarioRequests[0]
+        - set: searchResultRequest
+          value:
+            expr: scenarioRequests[1]
+        - set: finalRequest
+          value:
+            expr: scenarioRequests[2]
+        - assert:
+            expr: "searchPlanRequest.plannedToolName === 'memory_search' && searchPlanRequest.plannedToolArgs?.query === config.memoryQuery && typeof searchPlanRequest.plannedToolCallId === 'string' && searchPlanRequest.plannedToolCallId.length > 0 && !searchPlanRequest.toolOutputCallId && !String(searchPlanRequest.allInputText ?? '').includes(config.expectedNeedle)"
+            message:
+              expr: "`initial thread request exposed the hidden fact, disabled memory_search, or routed incorrectly: ${JSON.stringify(searchPlanRequest)}`"
+        - assert:
+            expr: "searchResultRequest.cursor > searchPlanRequest.cursor && searchResultRequest.toolOutputCallId === searchPlanRequest.plannedToolCallId && searchResultRequest.toolOutputStructuredError !== true && String(searchResultRequest.toolOutput ?? '').includes(config.expectedMemoryPath) && String(searchResultRequest.toolOutput ?? '').includes(config.expectedNeedle) && searchResultRequest.plannedToolName === 'memory_get' && searchResultRequest.plannedToolArgs?.path === config.expectedMemoryPath && typeof searchResultRequest.plannedToolCallId === 'string' && searchResultRequest.plannedToolCallId.length > 0 && searchResultRequest.plannedToolCallId !== searchPlanRequest.plannedToolCallId"
+            message:
+              expr: "`memory_search result did not causally plan memory_get: ${JSON.stringify(searchResultRequest)}`"
+        - assert:
+            expr: "finalRequest.cursor > searchResultRequest.cursor && finalRequest.toolOutputCallId === searchResultRequest.plannedToolCallId && finalRequest.toolOutputStructuredError !== true && String(finalRequest.toolOutput ?? '').includes(config.expectedNeedle) && !finalRequest.plannedToolName"
+            message:
+              expr: "`final thread request did not consume the matching memory_get result: ${JSON.stringify(finalRequest)}`"
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "((candidate.conversation.id === config.channelId && candidate.threadId === threadId) || candidate.conversation.id === threadId) && candidate.text.includes(config.expectedNeedle)"
+            - expr: liveTurnTimeoutMs(env, 300000)
+            - sinceIndex:
+                ref: outboundStartIndex
+        - assert:
+            expr: "!state.getSnapshot().messages.slice(outboundStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.channelId && !candidate.threadId)"
+            message: threaded memory answer leaked into root channel
+      detailsExpr: outbound.text

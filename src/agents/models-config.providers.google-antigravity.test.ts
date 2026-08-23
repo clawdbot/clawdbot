@@ -1,0 +1,150 @@
+// Verifies provider-owned Google Antigravity and Vertex model id normalization.
+import { describe, expect, it, vi } from "vitest";
+import { normalizeProviderSpecificConfig } from "./models-config.providers.policy.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
+
+vi.mock("../plugins/provider-runtime.js", () => {
+  function normalizeGoogleModelIdForProvider(provider: string, modelId: string): string {
+    // Mirrors the provider plugin normalization contract used by config
+    // planning without importing the bundled plugin runtime.
+    if (provider === "google-antigravity") {
+      return /^(gemini-3(?:[.-]1)?-pro)$/.test(modelId) ? `${modelId}-low` : modelId;
+    }
+    if (provider === "google-vertex" && modelId === "gemini-3.1-flash-lite-preview") {
+      return "gemini-3.1-flash-lite";
+    }
+    return modelId;
+  }
+
+  return {
+    applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
+    normalizeProviderConfigWithPlugin: (params: {
+      context: { provider: string; providerConfig?: ProviderConfig };
+    }) => {
+      const providerConfig = params.context.providerConfig;
+      if (!providerConfig?.models) {
+        return undefined;
+      }
+      let changed = false;
+      const models = providerConfig.models.map((model) => {
+        const normalizedId = normalizeGoogleModelIdForProvider(params.context.provider, model.id);
+        if (normalizedId === model.id) {
+          return model;
+        }
+        changed = true;
+        return { ...model, id: normalizedId, name: normalizedId };
+      });
+      return changed ? { ...providerConfig, models } : undefined;
+    },
+    resolveProviderConfigApiKeyWithPlugin: () => undefined,
+  };
+});
+
+function buildModel(id: string): NonNullable<ProviderConfig["models"]>[number] {
+  return {
+    id,
+    name: id,
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1,
+    maxTokens: 1,
+  };
+}
+
+function buildProvider(
+  modelIds: string[],
+  overrides: Partial<ProviderConfig> = {},
+): ProviderConfig {
+  return {
+    baseUrl: "https://example.invalid/v1",
+    api: "openai-completions",
+    apiKey: "EXAMPLE_KEY", // pragma: allowlist secret
+    models: modelIds.map((id) => buildModel(id)),
+    ...overrides,
+  };
+}
+
+function normalizeProviderMap(
+  providers: Record<string, ProviderConfig>,
+): Record<string, ProviderConfig> {
+  // Normalization should preserve object identity when no provider changed so
+  // callers can cheaply detect no-op config planning.
+  let changed = false;
+  const next: Record<string, ProviderConfig> = {};
+  for (const [providerKey, provider] of Object.entries(providers)) {
+    const normalized = normalizeProviderSpecificConfig(providerKey, provider);
+    next[providerKey] = normalized;
+    changed ||= normalized !== provider;
+  }
+  return changed ? next : providers;
+}
+
+describe("google-antigravity provider normalization", () => {
+  it("normalizes bare gemini pro IDs only for google-antigravity providers", () => {
+    const providers = {
+      "google-antigravity": buildProvider([
+        "gemini-3-pro",
+        "gemini-3.1-pro",
+        "gemini-3-1-pro",
+        "gemini-3-pro-high",
+        "claude-opus-4-6-thinking",
+      ]),
+      openai: buildProvider(["gpt-5"]),
+    };
+
+    const normalized = normalizeProviderMap(providers);
+
+    expect(normalized).not.toBe(providers);
+    expect(normalized?.["google-antigravity"]?.models.map((model) => model.id)).toEqual([
+      "gemini-3-pro-low",
+      "gemini-3.1-pro-low",
+      "gemini-3-1-pro-low",
+      "gemini-3-pro-high",
+      "claude-opus-4-6-thinking",
+    ]);
+    expect(normalized?.openai).toBe(providers.openai);
+  });
+
+  it("returns original providers object when no antigravity IDs need normalization", () => {
+    const providers = {
+      "google-antigravity": buildProvider(["gemini-3-pro-low", "claude-opus-4-6-thinking"]),
+    };
+
+    const normalized = normalizeProviderMap(providers);
+
+    expect(normalized).toBe(providers);
+  });
+});
+
+describe("google-vertex provider normalization", () => {
+  it("normalizes deprecated flash-lite-preview to GA flash-lite for google-vertex", () => {
+    const providers = {
+      "google-vertex": buildProvider(["gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"], {
+        api: undefined,
+      }),
+      openai: buildProvider(["gpt-5"]),
+    };
+
+    const normalized = normalizeProviderMap(providers);
+
+    expect(normalized).not.toBe(providers);
+    expect(normalized?.["google-vertex"]?.models.map((model) => model.id)).toEqual([
+      "gemini-3.1-flash-lite",
+      "gemini-3-flash-preview",
+    ]);
+    expect(normalized?.openai).toBe(providers.openai);
+  });
+
+  it("returns original providers object when no google-vertex IDs need normalization", () => {
+    const providers = {
+      "google-vertex": buildProvider(["gemini-3.1-flash-lite", "gemini-3-flash-preview"], {
+        api: undefined,
+      }),
+    };
+
+    const normalized = normalizeProviderMap(providers);
+
+    expect(normalized).toBe(providers);
+  });
+});

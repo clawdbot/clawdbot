@@ -1,0 +1,78 @@
+{
+  "name": "@openclaw/gateway-client",
+  "version": "2026.8.1",
+  "description": "Reference WebSocket client for the OpenClaw Gateway protocol",
+  "keywords": [
+    "client",
+    "gateway",
+    "openclaw",
+    "websocket"
+  ],
+  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "license": "MIT",
+  "author": "OpenClaw Foundation (https://openclaw.org)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git",
+    "directory": "packages/gateway-client"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.mts",
+      "import": "./dist/browser.mjs",
+      "default": "./dist/browser.mjs"
+    },
+    "./readiness": {
+      "types": "./dist/readiness.d.mts",
+      "import": "./dist/readiness.mjs",
+      "default": "./dist/readiness.mjs"
+    },
+    "./timeouts": {
+      "types": "./dist/timeouts.d.mts",
+      "import": "./dist/timeouts.mjs",
+      "default": "./dist/timeouts.mjs"
+    },
+    "./websocket-data": {
+      "types": "./dist/websocket-data.d.mts",
+      "import": "./dist/websocket-data.mjs",
+      "default": "./dist/websocket-data.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/browser.ts src/readiness.ts src/timeouts.ts src/websocket-data.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  },
+  "dependencies": {
+    "@openclaw/gateway-protocol": "workspace:*",
+    "ipaddr.js": "2.4.0",
+    "ws": "8.21.1"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "openclaw": {
+    "release": {
+      "publishToNpm": true
+    }
+  }
+}

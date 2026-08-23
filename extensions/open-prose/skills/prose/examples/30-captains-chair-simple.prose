@@ -1,0 +1,42 @@
+# Simple Captain's Chair
+#
+# The minimal captain's chair pattern: a coordinating agent that dispatches
+# subagents for all execution. The captain only plans and validates.
+
+input task: "What to accomplish"
+
+# The captain coordinates but never executes
+agent captain:
+  model: opus
+  prompt: "You are a project coordinator. Never write code directly. Break down tasks, dispatch to specialists, validate results."
+
+agent executor:
+  model: opus
+  prompt: "You are a skilled implementer. Execute the assigned task precisely."
+
+agent critic:
+  model: opus
+  prompt: "You are a critic. Find issues, suggest improvements. Be thorough."
+
+# Step 1: Captain creates the plan
+let plan = session: captain
+  prompt: "Break down this task into work items: {task}"
+
+# Step 2: Dispatch parallel execution
+parallel:
+  work = session: executor
+    prompt: "Execute the plan"
+    context: plan
+  review = session: critic
+    prompt: "Identify potential issues with this approach"
+    context: plan
+
+# Step 3: Captain synthesizes and validates
+if **critic found issues that affect the work**:
+  output result = session: captain
+    prompt: "Integrate the work while addressing critic's concerns"
+    context: { work, review }
+else:
+  output result = session: captain
+    prompt: "Validate and summarize the completed work"
+    context: { work, review }

@@ -1,0 +1,246 @@
+// Shared MCP channel helpers normalize channel tool payloads and responses.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString as toText,
+} from "@openclaw/normalization-core/string-coerce";
+import { z } from "zod";
+
+/**
+ * Shared channel MCP contracts and normalization helpers.
+ *
+ * These shapes are intentionally smaller than raw Gateway payloads so MCP tools
+ * can return stable structured content without exposing every session detail.
+ */
+/** Controls whether the MCP server advertises Claude channel extensions. */
+export type ClaudeChannelMode = "off" | "on" | "auto";
+
+/** Conversation route information required to read and reply through a channel session. */
+export type ConversationDescriptor = {
+  sessionKey: string;
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
+  label?: string;
+  displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
+  updatedAt?: number | null;
+};
+
+type SessionRow = {
+  key: string;
+  channel?: string;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
+  origin?: {
+    provider?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
+  label?: string;
+  displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
+  updatedAt?: number | null;
+};
+
+/** Minimal Gateway response shape used by conversation listing. */
+export type SessionListResult = {
+  sessions?: SessionRow[];
+};
+
+/** Minimal Gateway response shape used by conversation lookup. */
+export type SessionDescribeResult = {
+  session?: SessionRow | null;
+};
+
+/** Minimal Gateway response shape used by message reads. */
+export type ChatHistoryResult = {
+  messages?: Array<{ id?: string; role?: string; content?: unknown; [key: string]: unknown }>;
+};
+
+/** Gateway session.message payload fields consumed by the MCP event bridge. */
+export type SessionMessagePayload = {
+  sessionKey?: string;
+  senderIsOwner?: boolean;
+  messageId?: string;
+  messageSeq?: number;
+  message?: { role?: string; content?: unknown; [key: string]: unknown };
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+  [key: string]: unknown;
+};
+
+/** Gateway approval family exposed through MCP. */
+export type ApprovalKind = "exec" | "plugin";
+/** Decision values accepted by Gateway approval resolvers. */
+export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
+
+/** Approval request tracked locally while waiting for an MCP client decision. */
+export type PendingApproval = {
+  kind: ApprovalKind;
+  id: string;
+  request?: Record<string, unknown>;
+  createdAtMs?: number;
+  expiresAtMs?: number;
+};
+
+/** Cursor-addressed event returned by MCP event polling and waiting tools. */
+export type QueueEvent =
+  | {
+      cursor: number;
+      type: "message";
+      sessionKey: string;
+      conversation?: ConversationDescriptor;
+      messageId?: string;
+      messageSeq?: number;
+      role?: string;
+      text?: string;
+      raw: SessionMessagePayload;
+    }
+  | {
+      cursor: number;
+      type: "claude_permission_request";
+      requestId: string;
+      toolName: string;
+      description: string;
+      inputPreview: string;
+    }
+  | {
+      cursor: number;
+      type: "exec_approval_requested" | "exec_approval_resolved";
+      raw: Record<string, unknown>;
+    }
+  | {
+      cursor: number;
+      type: "plugin_approval_requested" | "plugin_approval_resolved";
+      raw: Record<string, unknown>;
+    };
+
+/** Cursor and optional session filter used by event polling and waiting. */
+export type WaitFilter = {
+  afterCursor: number;
+  sessionKey?: string;
+};
+
+/** Raw MCP notification schema emitted by Claude channel clients for permission prompts. */
+export const ClaudePermissionRequestSchema = z.object({
+  method: z.literal("notifications/claude/channel/permission_request"),
+  params: z.object({
+    request_id: z.string(),
+    tool_name: z.string(),
+    description: z.string(),
+    input_preview: z.string(),
+  }),
+});
+
+export { toText };
+
+/** Resolve the visible message id, including OpenClaw metadata attached to raw entries. */
+export function resolveMessageId(entry: Record<string, unknown>): string | undefined {
+  return (
+    toText(entry.id) ??
+    (entry["__openclaw"] && typeof entry["__openclaw"] === "object"
+      ? toText((entry["__openclaw"] as { id?: unknown }).id)
+      : undefined)
+  );
+}
+
+/** Build the text summary format expected by simple MCP tool results. */
+export function summarizeResult(
+  label: string,
+  count: number,
+): { content: Array<{ type: "text"; text: string }> } {
+  return {
+    content: [{ type: "text", text: `${label}: ${count}` }],
+  };
+}
+
+/** Build a text summary plus pretty JSON payload for MCP clients without structured rendering. */
+export function summarizeStructuredResult(
+  label: string,
+  count: number,
+  payload: unknown,
+): { content: Array<{ type: "text"; text: string }> } {
+  return {
+    content: [{ type: "text", text: `${label}: ${count}\n\n${JSON.stringify(payload, null, 2)}` }],
+  };
+}
+
+function resolveConversationChannel(row: SessionRow): string | undefined {
+  return normalizeOptionalLowercaseString(
+    toText(row.deliveryContext?.channel) ??
+      toText(row.lastChannel) ??
+      toText(row.channel) ??
+      toText(row.origin?.provider),
+  );
+}
+
+/** Convert a Gateway session row into a reply-capable conversation descriptor. */
+export function toConversation(row: SessionRow): ConversationDescriptor | null {
+  const channel = resolveConversationChannel(row);
+  const to = toText(row.deliveryContext?.to) ?? toText(row.lastTo);
+  if (!channel || !to) {
+    return null;
+  }
+  return {
+    sessionKey: row.key,
+    channel,
+    to,
+    accountId:
+      toText(row.deliveryContext?.accountId) ??
+      toText(row.lastAccountId) ??
+      toText(row.origin?.accountId),
+    threadId: row.deliveryContext?.threadId ?? row.lastThreadId ?? row.origin?.threadId,
+    label: toText(row.label),
+    displayName: toText(row.displayName),
+    derivedTitle: toText(row.derivedTitle),
+    lastMessagePreview: toText(row.lastMessagePreview),
+    updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : null,
+  };
+}
+
+/** Check whether a queued event should be visible to a poll or wait call. */
+export function matchEventFilter(event: QueueEvent, filter: WaitFilter): boolean {
+  if (event.cursor <= filter.afterCursor) {
+    return false;
+  }
+  if (!filter.sessionKey) {
+    return true;
+  }
+  return "sessionKey" in event && event.sessionKey === filter.sessionKey;
+}
+
+/** Return non-text content blocks from a raw message payload. */
+export function extractAttachmentsFromMessage(message: unknown): unknown[] {
+  if (!message || typeof message !== "object") {
+    return [];
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.filter((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return false;
+    }
+    return toText((entry as { type?: unknown }).type) !== "text";
+  });
+}
+
+/** Normalize approval identifiers before local tracking or resolution. */
+export function normalizeApprovalId(value: unknown): string | undefined {
+  const id = toText(value);
+  return id ? id.trim() : undefined;
+}

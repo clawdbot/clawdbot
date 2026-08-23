@@ -1,0 +1,156 @@
+name: Dated TODO sweep
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Log the fresh report without creating or updating the tracking issue.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dated-todo-sweep
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  analyze:
+    # Manual runs may select a ref; secrets are available only when that ref is
+    # the trusted default branch. Scheduled runs already target that branch.
+    if: github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    outputs:
+      sweep-date: ${{ steps.sweep-date.outputs.date }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+
+      - name: Collect dated TODO candidates
+        run: node --import tsx scripts/dated-todo-scan.mts
+
+      - name: Capture sweep date
+        id: sweep-date
+        run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Run Codex dated TODO sweep
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        env:
+          DATED_TODO_SWEEP_DATE: ${{ steps.sweep-date.outputs.date }}
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/dated-todo-sweep.md
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: medium
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+
+      # Only the report crosses into the privileged job. The app token is minted
+      # on a fresh runner and checkout, never beside Codex or its child processes.
+      - name: Upload dated TODO report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dated-todo-report
+          path: .artifacts/dated-todo-report.md
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+  upsert:
+    if: github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: analyze
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted workflow code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download dated TODO report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dated-todo-report
+          path: .artifacts
+
+      - name: Validate dated TODO report
+        env:
+          DATED_TODO_SWEEP_DATE: ${{ needs.analyze.outputs.sweep-date }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { pathToFileURL } from "node:url";
+
+          const reportPath = ".artifacts/dated-todo-report.md";
+          const report = fs.readFileSync(reportPath, "utf8");
+          const moduleUrl = pathToFileURL(
+            `${process.env.GITHUB_WORKSPACE}/scripts/github/dated-todo-upsert.mjs`,
+          );
+          const { validateDatedTodoReport } = await import(moduleUrl.href);
+          validateDatedTodoReport(report, {
+            expectedDate: process.env.DATED_TODO_SWEEP_DATE,
+            repoRoot: process.env.GITHUB_WORKSPACE,
+          });
+          NODE
+
+      - name: Log dry-run report
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: cat .artifacts/dated-todo-report.md
+
+      # No permission-* subset here: requesting a permission the installation
+      # does not grant fails token minting outright. No inputs uses the app's
+      # full granted set, matching the proven Barnacle fallback workflow.
+      - name: Create Barnacle app token
+        if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Create fallback Barnacle app token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
+        id: app-token-fallback
+        if: (github.event_name != 'workflow_dispatch' || !inputs.dry_run) && steps.app-token.outcome == 'failure'
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+
+      - name: Upsert dated TODO tracking issue
+        if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const { pathToFileURL } = require("node:url");
+            const moduleUrl = pathToFileURL(
+              `${process.env.GITHUB_WORKSPACE}/scripts/github/dated-todo-upsert.mjs`,
+            );
+            const { runDatedTodoUpsert } = await import(moduleUrl.href);
+
+            await runDatedTodoUpsert({
+              github,
+              context,
+              core,
+            });

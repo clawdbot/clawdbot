@@ -1,0 +1,58 @@
+name: PR context and evidence
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] trusted base checkout only; no untrusted PR code execution
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+permissions: {}
+
+jobs:
+  real-behavior-proof:
+    name: PR context and evidence
+    if: >-
+      ${{
+        github.event.action != 'edited' ||
+        github.event.changes.body ||
+        github.event.changes.base
+      }}
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # Old PR events can carry a stale base SHA that predates current
+          # trusted checker scripts. Use the workflow revision instead.
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-issues: read
+          permission-members: read
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        continue-on-error: true
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-issues: read
+          permission-members: read
+      - name: Check PR context and evidence
+        env:
+          GH_APP_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/github/real-behavior-proof-check.mjs

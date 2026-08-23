@@ -1,0 +1,166 @@
+// Memory Core plugin module implements mmr behavior.
+import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
+
+/**
+ * Maximal Marginal Relevance (MMR) re-ranking algorithm.
+ *
+ * MMR balances relevance with diversity by iteratively selecting results
+ * that maximize: λ * relevance - (1-λ) * max_similarity_to_selected
+ *
+ * @see Carbonell & Goldstein, "The Use of MMR, Diversity-Based Reranking" (1998)
+ */
+
+type MMRItem = {
+  id: string;
+  score: number;
+  content: string;
+};
+
+export type MMRConfig = {
+  /** Enable/disable MMR re-ranking. Default: false (opt-in) */
+  enabled: boolean;
+  /** Lambda parameter: 0 = max diversity, 1 = max relevance. Default: 0.7 */
+  lambda: number;
+};
+
+export const DEFAULT_MMR_CONFIG: MMRConfig = {
+  enabled: false,
+  lambda: 0.7,
+};
+
+/**
+ * Compute MMR score for a candidate item.
+ * MMR = λ * relevance - (1-λ) * max_similarity_to_selected
+ */
+function computeMMRScore(relevance: number, maxSimilarity: number, lambda: number): number {
+  return lambda * relevance - (1 - lambda) * maxSimilarity;
+}
+
+/**
+ * Re-rank items using Maximal Marginal Relevance (MMR).
+ *
+ * The algorithm iteratively selects items that balance relevance with diversity:
+ * 1. Start with the highest-scoring item
+ * 2. For each remaining slot, select the item that maximizes the MMR score
+ * 3. MMR score = λ * relevance - (1-λ) * max_similarity_to_already_selected
+ *
+ * @param items - Items to re-rank, must have score and content
+ * @param config - MMR configuration (lambda, enabled)
+ * @returns Re-ranked items in MMR order
+ */
+function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
+  const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
+
+  // Early exits
+  if (!enabled || items.length <= 1) {
+    return [...items];
+  }
+
+  // Clamp lambda to valid range
+  const clampedLambda = Math.max(0, Math.min(1, lambda));
+
+  // If lambda is 1, just return sorted by relevance (no diversity penalty)
+  if (clampedLambda === 1) {
+    return [...items].toSorted((a, b) => b.score - a.score);
+  }
+
+  // Pre-tokenize all items for efficiency
+  const tokenCache = new Map<string, Set<string>>();
+  for (const item of items) {
+    tokenCache.set(item.id, tokenize(item.content));
+  }
+
+  // Normalize scores to [0, 1] for fair comparison with similarity
+  const maxScore = Math.max(...items.map((i) => i.score));
+  const minScore = Math.min(...items.map((i) => i.score));
+  const scoreRange = maxScore - minScore;
+
+  const normalizeScore = (score: number): number => {
+    if (scoreRange === 0) {
+      return 1; // All scores equal
+    }
+    return (score - minScore) / scoreRange;
+  };
+
+  const selected: T[] = [];
+  const remaining = new Set(items);
+  // Once an item has been selected, its similarity contribution to each
+  // remaining candidate never changes. Keep the running maximum so each pair
+  // is compared exactly once instead of rescanning all previously selected
+  // items on every selection round.
+  const maxSimilarityByItem = new Map<T, number>();
+
+  // Select items iteratively
+  while (remaining.size > 0) {
+    let bestItem: T | null = null;
+    let bestMMRScore = -Infinity;
+
+    for (const candidate of remaining) {
+      const normalizedRelevance = normalizeScore(candidate.score);
+      const maxSim = maxSimilarityByItem.get(candidate) ?? 0;
+      const mmrScore = computeMMRScore(normalizedRelevance, maxSim, clampedLambda);
+
+      // Use original score as tiebreaker (higher is better)
+      if (
+        mmrScore > bestMMRScore ||
+        (mmrScore === bestMMRScore && candidate.score > (bestItem?.score ?? -Infinity))
+      ) {
+        bestMMRScore = mmrScore;
+        bestItem = candidate;
+      }
+    }
+
+    if (bestItem) {
+      selected.push(bestItem);
+      remaining.delete(bestItem);
+      const selectedTokens = tokenCache.get(bestItem.id) ?? tokenize(bestItem.content);
+      for (const candidate of remaining) {
+        const candidateTokens = tokenCache.get(candidate.id) ?? tokenize(candidate.content);
+        const similarity =
+          candidateTokens.size === 0 && selectedTokens.size === 0
+            ? textSimilarity(candidate.content, bestItem.content)
+            : jaccardSimilarity(candidateTokens, selectedTokens);
+        const previousMax = maxSimilarityByItem.get(candidate) ?? 0;
+        if (similarity > previousMax) {
+          maxSimilarityByItem.set(candidate, similarity);
+        }
+      }
+    } else {
+      // Should never happen, but safety exit
+      break;
+    }
+  }
+
+  return selected;
+}
+
+/**
+ * Apply MMR re-ranking to hybrid search results.
+ * Adapts the generic MMR function to work with the hybrid search result format.
+ */
+export function applyMMRToHybridResults<
+  T extends { score: number; snippet: string; path: string; startLine: number },
+>(results: T[], config: Partial<MMRConfig> = {}): T[] {
+  if (results.length === 0) {
+    return results;
+  }
+
+  // Create a map from ID to original item for type-safe retrieval
+  const itemById = new Map<string, T>();
+
+  // Create MMR items with unique IDs
+  const mmrItems: MMRItem[] = results.map((r, index) => {
+    const id = `${r.path}:${r.startLine}:${index}`;
+    itemById.set(id, r);
+    return {
+      id,
+      score: r.score,
+      content: r.snippet,
+    };
+  });
+
+  const reranked = mmrRerank(mmrItems, config);
+
+  // Map back to original items using the ID
+  return reranked.map((item) => itemById.get(item.id)!);
+}

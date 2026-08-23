@@ -1,0 +1,155 @@
+name: Bug report
+description: Report defects, including regressions, crashes, and behavior bugs.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing this report. Keep every answer concise, reproducible, and grounded in observed evidence.
+        Do not speculate or infer beyond the evidence. If a narrative section cannot be answered from the available evidence, respond with exactly `NOT_ENOUGH_INFO`.
+
+        If this is a plugin beta-release blocker, rename the issue title to `Beta blocker: <plugin-name> - <summary>` and apply the `beta-blocker` label after filing.
+
+        Please only report one issue per submission. Break multiple issues up into separate submissions.
+  - type: dropdown
+    id: bug_type
+    attributes:
+      label: Bug type
+      description: Choose the category that best matches this report.
+      options:
+        - Regression (worked before, now fails)
+        - Crash (process/app exits or hangs)
+        - Behavior bug (incorrect output/state without crash)
+    validations:
+      required: true
+  - type: dropdown
+    id: beta_blocker
+    attributes:
+      label: Beta release blocker
+      description: >
+        Choose `Yes` only if this blocks plugin compatibility during the current beta release window.
+        Selecting `Yes` does not apply the label automatically. You must also rename the issue title
+        to `Beta blocker: <plugin-name> - <summary>` for the automation to apply the `beta-blocker` label.
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One-sentence statement of what is broken, based only on observed evidence. If the evidence is insufficient, respond with exactly `NOT_ENOUGH_INFO`.
+      placeholder: After upgrading from 2026.2.10 to 2026.2.17, Telegram thread replies stopped posting; reproduced twice and confirmed by gateway logs.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Provide the shortest deterministic repro path supported by direct observation. If the repro path cannot be grounded from the evidence, respond with exactly `NOT_ENOUGH_INFO`.
+      placeholder: |
+        1. Start OpenClaw 2026.2.17 with the attached config.
+        2. Send a Telegram thread reply in the affected chat.
+        3. Observe no reply and confirm the attached `reply target not found` log line.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: State the expected result using a concrete reference such as prior observed behavior, attached docs, or a known-good version. If no grounded reference exists, respond with exactly `NOT_ENOUGH_INFO`.
+      placeholder: In 2026.2.10, the agent posted replies in the same Telegram thread under the same workflow.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Describe only the observed result, including user-visible errors and cited evidence. If the observed result cannot be grounded from the evidence, respond with exactly `NOT_ENOUGH_INFO`.
+      placeholder: No reply is posted in the thread; the attached gateway log shows `reply target not found` at 14:23:08 UTC.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: OpenClaw version
+      description: Exact version/build tested.
+      placeholder: <version such as 2026.2.17>
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: OS and version where this occurs.
+      placeholder: macOS 15.4 / Ubuntu 24.04 / Windows 11
+    validations:
+      required: true
+  - type: input
+    id: install_method
+    attributes:
+      label: Install method
+      description: How OpenClaw was installed or launched.
+      placeholder: npm global / pnpm dev / docker / mac app
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Effective model under test.
+      placeholder: minimax/text-01 / openrouter/anthropic/claude-opus-4.1 / anthropic/claude-sonnet-4.5
+    validations:
+      required: true
+  - type: input
+    id: provider_chain
+    attributes:
+      label: Provider / routing chain
+      description: Effective request path through gateways, proxies, providers, or model routers.
+      placeholder: openclaw -> cloudflare-ai-gateway -> minimax
+    validations:
+      required: true
+  - type: textarea
+    id: provider_setup_details
+    attributes:
+      label: Additional provider/model setup details
+      description: Optional. Include redacted routing details, per-agent overrides, auth-profile interactions, env/config context, or anything else needed to explain the effective provider/model setup. Do not include API keys, tokens, or passwords.
+      placeholder: |
+        Default route is openclaw -> cloudflare-ai-gateway -> minimax.
+        Previous setup was openclaw -> cloudflare-ai-gateway -> openrouter -> minimax.
+        Relevant config lives in ~/.openclaw/openclaw.json under models.providers.minimax and models.providers.cloudflare-ai-gateway.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Include the redacted logs or version comparisons that support the grounded answers above.
+      render: shell
+  - type: textarea
+    id: screenshots_evidence
+    attributes:
+      label: Screenshots, recordings, and evidence
+      description: Include screenshots, recordings, docs, or other evidence that support the grounded answers above.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and severity
+      description: |
+        Explain who is affected, how severe it is, how often it happens, and the practical consequence using only observed evidence.
+        If any part cannot be grounded from the evidence, respond with exactly `NOT_ENOUGH_INFO`.
+        Include:
+        - Affected users/systems/channels
+        - Severity (annoying, blocks workflow, data risk, etc.)
+        - Frequency (always/intermittent/edge case)
+        - Consequence (missed messages, failed onboarding, extra cost, etc.)
+      placeholder: |
+        Affected: Telegram group users on 2026.2.17
+        Severity: High (blocks thread replies)
+        Frequency: 4/4 observed attempts
+        Consequence: Agents do not respond in the affected threads
+  - type: textarea
+    id: additional_information
+    attributes:
+      label: Additional information
+      description: Add any remaining grounded context that helps triage but does not fit above. If this is a regression, include the last known good and first known bad versions when observed. If there is not enough evidence, respond with exactly `NOT_ENOUGH_INFO`.
+      placeholder: Last known good version 2026.2.10, first known bad version 2026.2.17, temporary workaround is sending a top-level message instead of a thread reply.

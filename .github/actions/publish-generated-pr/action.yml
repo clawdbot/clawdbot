@@ -1,0 +1,566 @@
+name: Publish generated pull request
+description: Commit generated files to an automation branch and open or update its pull request.
+
+inputs:
+  contents-client-id:
+    description: GitHub App client id with contents write access.
+    required: true
+  contents-private-key:
+    description: GitHub App private key with contents write access.
+    required: true
+  pull-request-client-id:
+    description: GitHub App client id with pull-request write access.
+    required: true
+  pull-request-private-key:
+    description: GitHub App private key with pull-request write access.
+    required: true
+  base-branch:
+    description: Target branch for the generated pull request.
+    required: true
+  head-branch:
+    description: Automation-owned branch for the generated commit.
+    required: true
+  commit-message:
+    description: Generated commit message.
+    required: true
+  pr-title:
+    description: Generated pull request title.
+    required: true
+  pr-body:
+    description: Generated pull request body.
+    required: true
+  generated-paths:
+    description: Newline-delimited generated paths to commit.
+    required: true
+  invalidation-paths:
+    description: Newline-delimited generator input paths that make an older run stale.
+    required: true
+  working-directory:
+    description: Repository root containing the generated files.
+    required: false
+    default: .
+  overlap-policy:
+    description: Whether stale inputs or owned-path overlap defer to a successor run or fail.
+    required: false
+    default: defer
+  auto-merge:
+    description: Enable squash auto-merge; false rejects an inherited auto-merge request.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Create generated PR tokens
+      id: tokens
+      uses: ./.github/actions/create-generated-pr-tokens
+      with:
+        contents-client-id: ${{ inputs.contents-client-id }}
+        contents-private-key: ${{ inputs.contents-private-key }}
+        pull-request-client-id: ${{ inputs.pull-request-client-id }}
+        pull-request-private-key: ${{ inputs.pull-request-private-key }}
+        pull-request-contents-permission: ${{ inputs.auto-merge == 'true' && 'write' || '' }}
+
+    - name: Publish generated pull request
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CONTENTS_TOKEN: ${{ steps.tokens.outputs.contents-token }}
+        GH_TOKEN: ${{ steps.tokens.outputs.pull-request-token }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+        HEAD_BRANCH: ${{ inputs.head-branch }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        PR_TITLE: ${{ inputs.pr-title }}
+        PR_BODY: ${{ inputs.pr-body }}
+        GENERATED_PATHS: ${{ inputs.generated-paths }}
+        INVALIDATION_PATHS: ${{ inputs.invalidation-paths }}
+        OVERLAP_POLICY: ${{ inputs.overlap-policy }}
+        AUTO_MERGE: ${{ inputs.auto-merge }}
+      run: |
+        set -euo pipefail
+        export GH_PROMPT_DISABLED=1
+        export GIT_ASKPASS=/bin/false
+        export GIT_EDITOR=true
+        export GIT_SEQUENCE_EDITOR=true
+        export GIT_TERMINAL_PROMPT=0
+
+        if [[ -z "${CONTENTS_TOKEN:-}" ]]; then
+          echo "Generated branch publication requires a contents-write App token." >&2
+          exit 1
+        fi
+        if [[ -z "${GH_TOKEN:-}" ]]; then
+          echo "Generated PR publication requires a pull-request-write App token." >&2
+          exit 1
+        fi
+        case "${OVERLAP_POLICY}" in
+          defer | fail) ;;
+          *)
+            echo "Generated PR publication overlap policy must be 'defer' or 'fail'." >&2
+            exit 1
+            ;;
+        esac
+        case "${AUTO_MERGE}" in
+          true | false) ;;
+          *)
+            echo "Generated PR publication auto-merge must be 'true' or 'false'." >&2
+            exit 1
+            ;;
+        esac
+
+        generated_paths=()
+        while IFS= read -r generated_path; do
+          if [[ -n "${generated_path}" ]]; then
+            generated_paths+=("${generated_path}")
+          fi
+        done <<< "${GENERATED_PATHS}"
+        if [[ "${#generated_paths[@]}" -eq 0 ]]; then
+          echo "Generated PR publication requires at least one generated path." >&2
+          exit 1
+        fi
+        invalidation_paths=()
+        while IFS= read -r invalidation_path; do
+          if [[ -n "${invalidation_path}" ]]; then
+            invalidation_paths+=("${invalidation_path}")
+          fi
+        done <<< "${INVALIDATION_PATHS}"
+        if [[ "${#invalidation_paths[@]}" -eq 0 ]]; then
+          echo "Generated PR publication requires at least one invalidation path." >&2
+          exit 1
+        fi
+
+        find_open_pr() {
+          timeout --signal=TERM --kill-after=10s 60s \
+            gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls" \
+            -f state=open -f base="${BASE_BRANCH}" \
+            -f "head=${GITHUB_REPOSITORY_OWNER}:${HEAD_BRANCH}" \
+            --jq '[.[] | select(.base.repo.full_name == env.GITHUB_REPOSITORY and .head.repo.full_name == env.GITHUB_REPOSITORY and .base.ref == env.BASE_BRANCH and .head.ref == env.HEAD_BRANCH)][0] | if . == null then "" else [.html_url, .head.sha] | @tsv end'
+        }
+        neutralize_stale_pr() {
+          local base_head current_head stale_pr_head stale_pr_record stale_pr_url
+          neutralize_outcome=current
+          fetch_base
+          if ! git merge-base --is-ancestor "${source_commit}" "${base_ref}"; then
+            echo "::error::Resolved workflow source is not an ancestor of latest ${BASE_BRANCH}."
+            return 1
+          fi
+          if ! git diff --quiet "${source_commit}" "${base_ref}" -- "${invalidation_paths[@]}"; then
+            neutralize_outcome=stale-input
+          elif find_owned_path_overlap; then
+            neutralize_outcome=overlap
+          fi
+          stale_pr_record="$(find_open_pr)"
+          stale_pr_url="${stale_pr_record%%$'\t'*}"
+          if [[ -z "${stale_pr_url}" ]]; then
+            return 0
+          fi
+          stale_pr_head="${stale_pr_record#*$'\t'}"
+          current_head="$(read_remote_head)"
+          if [[ -z "${current_head}" ]]; then
+            echo "Stale generated pull request is already unmergeable because its branch is absent." \
+              >> "${GITHUB_STEP_SUMMARY}"
+            return 0
+          fi
+          if [[ "${current_head}" != "${stale_pr_head}" ]]; then
+            echo "::error::Generated branch moved before stale pull request retirement."
+            return 1
+          fi
+
+          # Move the exact stale branch to base under a lease. This makes the PR unmergeable without
+          # an unsafe close mutation that could race a newer publisher using the deterministic branch.
+          git switch -C "${HEAD_BRANCH}" "${base_ref}"
+          push_log="${RUNNER_TEMP}/generated-pr-push.log"
+          if ! push_generated_branch "${stale_pr_head}"; then
+            report_push_failure
+            return "${push_status}"
+          fi
+          base_head="$(git rev-parse "${base_ref}")"
+          current_head="$(read_remote_head)"
+          if [[ "${current_head}" != "${base_head}" ]]; then
+            echo "::error::Generated branch moved during stale pull request retirement."
+            return 1
+          fi
+          echo "Neutralized stale generated pull request: ${stale_pr_url}" \
+            >> "${GITHUB_STEP_SUMMARY}"
+        }
+        finish_nonpublication() {
+          local reason="$1"
+          neutralize_stale_pr
+          if [[ "${reason}" = "no-change" || "${reason}" = "merged" ]]; then
+            case "${neutralize_outcome}" in
+              current) return 0 ;;
+              overlap) reason=overlap ;;
+              stale-input) reason=stale-input ;;
+            esac
+          fi
+
+          local detail summary
+          case "${reason}" in
+            stale-input)
+              detail="generator inputs changed on ${BASE_BRANCH}"
+              ;;
+            overlap)
+              detail="owned generated paths changed on ${BASE_BRANCH}"
+              ;;
+            *)
+              echo "::error::Unknown generated PR nonpublication reason: ${reason}."
+              return 1
+              ;;
+          esac
+          if [[ "${OVERLAP_POLICY}" = "fail" ]]; then
+            echo "::error::Refusing stale generated output because ${detail}."
+            return 1
+          fi
+          summary="Deferred stale generated output because ${detail}."
+          echo "${summary}" >> "${GITHUB_STEP_SUMMARY}"
+        }
+        read_remote_head() {
+          timeout --signal=TERM --kill-after=10s 60s \
+            git ls-remote --heads origin "refs/heads/${HEAD_BRANCH}" |
+            awk 'NR == 1 { print $1 }'
+        }
+        fetch_base() {
+          timeout --signal=TERM --kill-after=10s 120s \
+            git fetch --no-tags origin \
+            "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+          base_ref="refs/remotes/origin/${BASE_BRANCH}"
+        }
+        entry_at() {
+          local commit="$1"
+          local entry
+          local path="$2"
+          entry="$(git ls-tree "${commit}" -- "${path}" | awk -F '\t' 'NR == 1 { print $1 }')"
+          printf '%s' "${entry:-__missing__}"
+        }
+        find_owned_path_overlap() {
+          local base_entry desired_entry overlap_candidates_file path source_entry
+          overlap_path=""
+          overlap_candidates_file="${RUNNER_TEMP}/generated-pr-overlap-candidates"
+          {
+            git diff --name-only -z --no-renames \
+              "${source_commit}" "${desired_commit}" -- "${generated_paths[@]}"
+            git diff --name-only -z --no-renames \
+              "${source_commit}" "${base_ref}" -- "${generated_paths[@]}"
+          } | sort -zu > "${overlap_candidates_file}"
+          while IFS= read -r -d '' path; do
+            source_entry="$(entry_at "${source_commit}" "${path}")"
+            desired_entry="$(entry_at "${desired_commit}" "${path}")"
+            base_entry="$(entry_at "${base_ref}" "${path}")"
+            if [[ "${source_entry}" != "${base_entry}" && "${desired_entry}" != "${base_entry}" ]]; then
+              overlap_path="${path}"
+              return 0
+            fi
+          done < "${overlap_candidates_file}"
+          return 1
+        }
+        desired_matches_tree() {
+          local actual_entry desired_entry path treeish="$1"
+          while IFS= read -r -d '' path; do
+            desired_entry="$(entry_at "${desired_commit}" "${path}")"
+            actual_entry="$(entry_at "${treeish}" "${path}")"
+            if [[ "${desired_entry}" != "${actual_entry}" ]]; then
+              return 1
+            fi
+          done < "${changed_paths_file}"
+          return 0
+        }
+        prepare_branch() {
+          local desired_entry path
+          prepare_outcome=ready
+          fetch_base
+          if ! git merge-base --is-ancestor "${source_commit}" "${base_ref}"; then
+            echo "::error::Resolved workflow source is not an ancestor of latest ${BASE_BRANCH}."
+            return 1
+          fi
+
+          # A completed older run must never publish output after a newer base changed generator
+          # inputs. The caller chooses whether a guaranteed successor can own reconciliation.
+          if ! git diff --quiet "${source_commit}" "${base_ref}" -- "${invalidation_paths[@]}"; then
+            echo "::notice::Stale generated output detected because generator inputs changed on ${BASE_BRANCH}."
+            prepare_outcome=stale-input
+            return 0
+          fi
+
+          # Never overwrite a generated path that changed on the base after this workflow's source SHA.
+          # The overlap policy decides whether a successor run owns reconciliation or this run fails.
+          if find_owned_path_overlap; then
+            echo "::notice::Stale generated output detected because ${overlap_path} changed on ${BASE_BRANCH}."
+            prepare_outcome=deferred
+            return 0
+          fi
+
+          git switch -C "${HEAD_BRANCH}" "${base_ref}"
+          while IFS= read -r -d '' path; do
+            desired_entry="$(entry_at "${desired_commit}" "${path}")"
+            if [[ "${desired_entry}" = "__missing__" ]]; then
+              git rm -f --ignore-unmatch -- "${path}"
+            else
+              git restore --source="${desired_commit}" --staged --worktree -- "${path}"
+            fi
+          done < "${changed_paths_file}"
+          git add -A -- "${generated_paths[@]}"
+
+          if git diff --cached --quiet -- "${generated_paths[@]}"; then
+            prepare_outcome=merged
+            return 0
+          fi
+          git commit --no-gpg-sign --no-verify -m "${COMMIT_MESSAGE}"
+        }
+        push_generated_branch() {
+          local expected_head="$1"
+          set +e
+          push_output="$(
+            timeout --signal=TERM --kill-after=10s 60s \
+              git push \
+              "--force-with-lease=refs/heads/${HEAD_BRANCH}:${expected_head}" \
+              origin "HEAD:refs/heads/${HEAD_BRANCH}" 2>&1
+          )"
+          push_status="$?"
+          set -e
+          printf '%s\n' "${push_output}" | tee "${push_log}"
+          return "${push_status}"
+        }
+        report_push_failure() {
+          if grep -Eiq 'GH013|repository rule violations|required status check' "${push_log}"; then
+            echo "::error::Generated branch push was rejected by repository rules; refusing a doomed retry."
+          elif grep -Eiq 'stale info|non-fast-forward|fetch first' "${push_log}"; then
+            echo "::error::Generated branch moved concurrently; refusing to overwrite the newer head."
+          fi
+        }
+        verify_publication() {
+          local final_pr_head final_pr_record final_pr_url
+          for attempt in 1 2 3; do
+            final_pr_record="$(find_open_pr)"
+            final_pr_url="${final_pr_record%%$'\t'*}"
+            if [[ -n "${final_pr_url}" ]]; then
+              final_pr_head="${final_pr_record#*$'\t'}"
+              if [[ "${final_pr_head}" = "${published_commit}" ]]; then
+                published_pr_url="${final_pr_url}"
+                echo "Generated pull request: ${final_pr_url}" >> "${GITHUB_STEP_SUMMARY}"
+                return 0
+              fi
+              echo "::notice::Generated pull request head has not converged yet; rechecking."
+            fi
+            sleep "${attempt}"
+          done
+
+          fetch_base
+          if desired_matches_tree "${base_ref}"; then
+            echo "Generated output was merged while publication was being reconciled." \
+              >> "${GITHUB_STEP_SUMMARY}"
+            return 0
+          fi
+          final_pr_head="$(read_remote_head)"
+          if [[ "${final_pr_head}" != "${published_commit}" ]]; then
+            echo "::error::Generated automation branch moved during pull request reconciliation."
+            return 1
+          fi
+          echo "::error::Generated branch has no open same-repository pull request."
+          return 1
+        }
+        read_auto_merge_record_for_head() {
+          local attempt auto_merge_record observed_head
+          local expected_head="$1"
+          local pr_url="$2"
+          for attempt in 1 2 3; do
+            auto_merge_record="$(
+              timeout --signal=TERM --kill-after=10s 60s \
+                gh pr view "${pr_url}" --repo "${GITHUB_REPOSITORY}" \
+                  --json autoMergeRequest,headRefOid \
+                  --jq '[.headRefOid, (.autoMergeRequest.mergeMethod // "")] | @tsv'
+            )"
+            observed_head="${auto_merge_record%%$'\t'*}"
+            if [[ "${observed_head}" = "${expected_head}" ]]; then
+              printf '%s\n' "${auto_merge_record}"
+              return 0
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              return 1
+            fi
+            echo "::notice::Generated pull request head has not converged yet; rechecking." >&2
+            sleep "${attempt}"
+          done
+        }
+        ensure_auto_merge_compatible() {
+          local attempt auto_merge_method auto_merge_record existing_pr_head existing_pr_record
+          local existing_pr_url
+          local expected_head="$1"
+          for attempt in 1 2 3; do
+            existing_pr_record="$(find_open_pr)"
+            existing_pr_url="${existing_pr_record%%$'\t'*}"
+            if [[ -z "${existing_pr_url}" ]]; then
+              return 0
+            fi
+            existing_pr_head="${existing_pr_record#*$'\t'}"
+            if [[ "${existing_pr_head}" = "${expected_head}" ]]; then
+              break
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "::error::Generated pull request head does not match the observed automation branch."
+              return 1
+            fi
+            echo "::notice::Generated pull request head has not converged yet; rechecking."
+            sleep "${attempt}"
+          done
+          if ! auto_merge_record="$(
+            read_auto_merge_record_for_head "${expected_head}" "${existing_pr_url}"
+          )"; then
+            echo "::error::Generated pull request moved during auto-merge compatibility validation."
+            return 1
+          fi
+          auto_merge_method="${auto_merge_record#*$'\t'}"
+          if [[ "${AUTO_MERGE}" != "true" && -n "${auto_merge_method}" ]]; then
+            echo "::error::Generated pull request still has auto-merge enabled while publication opted out."
+            return 1
+          fi
+          if [[ -n "${auto_merge_method}" && "${auto_merge_method}" != "SQUASH" ]]; then
+            echo "::error::Generated pull request already uses incompatible ${auto_merge_method} auto-merge."
+            return 1
+          fi
+        }
+        enable_auto_merge() {
+          local auto_merge_method auto_merge_record current_remote_head
+          if [[ "${AUTO_MERGE}" != "true" || -z "${published_pr_url:-}" ]]; then
+            return 0
+          fi
+          if ! auto_merge_record="$(
+            read_auto_merge_record_for_head "${published_commit}" "${published_pr_url}"
+          )"; then
+            current_remote_head="$(read_remote_head)"
+            if [[ "${current_remote_head}" != "${published_commit}" ]]; then
+              echo "Generated pull request moved before auto-merge reconciliation." \
+                >> "${GITHUB_STEP_SUMMARY}"
+              return 0
+            fi
+            echo "::error::Generated pull request head did not converge for auto-merge reconciliation."
+            return 1
+          fi
+          auto_merge_method="${auto_merge_record#*$'\t'}"
+          if [[ "${auto_merge_method}" = "SQUASH" ]]; then
+            echo "Squash auto-merge already enabled for generated pull request: ${published_pr_url}" \
+              >> "${GITHUB_STEP_SUMMARY}"
+            return 0
+          fi
+          if [[ -n "${auto_merge_method}" ]]; then
+            echo "::error::Generated pull request already uses incompatible ${auto_merge_method} auto-merge."
+            return 1
+          fi
+          timeout --signal=TERM --kill-after=10s 60s \
+            gh pr merge "${published_pr_url}" --repo "${GITHUB_REPOSITORY}" \
+              --auto --squash --match-head-commit "${published_commit}"
+          echo "Enabled squash auto-merge for exact generated head: ${published_pr_url}" \
+            >> "${GITHUB_STEP_SUMMARY}"
+        }
+
+        source_commit="$(git rev-parse HEAD)"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        # Keep branch transport and PR mutations on separate least-privilege App identities.
+        # App-authored branch pushes preserve pull_request synchronize workflow events.
+        git_auth="$(printf 'x-access-token:%s' "${CONTENTS_TOKEN}" | base64 | tr -d '\n')"
+        printf '::add-mask::%s\n' "${git_auth}"
+        git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${git_auth}"
+        unset git_auth
+        cleanup_git_auth() {
+          git config --local --unset-all http.https://github.com/.extraheader || true
+        }
+        trap cleanup_git_auth EXIT
+        git add -A -- "${generated_paths[@]}"
+        if git diff --cached --quiet -- "${generated_paths[@]}"; then
+          echo "No generated changes."
+          desired_commit="${source_commit}"
+          finish_nonpublication no-change
+          exit 0
+        fi
+
+        # Snapshot the generator's desired blobs before moving to the latest base.
+        git commit --no-gpg-sign --no-verify -m "${COMMIT_MESSAGE}"
+        desired_commit="$(git rev-parse HEAD)"
+        changed_paths_file="${RUNNER_TEMP}/generated-pr-changed-paths"
+        git diff --name-only -z --no-renames "${source_commit}" "${desired_commit}" -- "${generated_paths[@]}" \
+          > "${changed_paths_file}"
+
+        prepare_branch
+        if [[ "${prepare_outcome}" = "stale-input" ]]; then
+          finish_nonpublication stale-input
+          exit 0
+        fi
+        if [[ "${prepare_outcome}" = "deferred" ]]; then
+          finish_nonpublication overlap
+          exit 0
+        fi
+        if [[ "${prepare_outcome}" = "merged" ]]; then
+          finish_nonpublication merged
+          exit 0
+        fi
+
+        # Lease the exact observed automation head so a cancelled run cannot overwrite newer output.
+        remote_head="$(read_remote_head)"
+        ensure_auto_merge_compatible "${remote_head}"
+        push_log="${RUNNER_TEMP}/generated-pr-push.log"
+        if ! push_generated_branch "${remote_head}"; then
+          current_remote_head="$(read_remote_head)"
+          branch_was_deleted="$([[ -n "${remote_head}" && -z "${current_remote_head}" ]] && echo true || echo false)"
+          if [[ "${branch_was_deleted}" != "true" ]] ||
+            ! grep -Eiq 'stale info|non-fast-forward|fetch first' "${push_log}"; then
+            report_push_failure
+            exit "${push_status}"
+          fi
+
+          # A merge can consume and delete the branch after observation. Rebuild from latest base;
+          # overlap policy decides whether stale output defers or fails.
+          prepare_branch
+          if [[ "${prepare_outcome}" = "stale-input" ]]; then
+            finish_nonpublication stale-input
+            exit 0
+          fi
+          if [[ "${prepare_outcome}" = "deferred" ]]; then
+            finish_nonpublication overlap
+            exit 0
+          fi
+          if [[ "${prepare_outcome}" = "merged" ]]; then
+            finish_nonpublication merged
+            exit 0
+          fi
+          if ! push_generated_branch ""; then
+            report_push_failure
+            exit "${push_status}"
+          fi
+        fi
+        published_commit="$(git rev-parse HEAD)"
+        current_remote_head="$(read_remote_head)"
+        if [[ "${current_remote_head}" != "${published_commit}" ]]; then
+          fetch_base
+          if desired_matches_tree "${base_ref}"; then
+            echo "Generated output was merged before pull request reconciliation." \
+              >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          echo "::error::Generated automation branch moved after publication."
+          exit 1
+        fi
+
+        body_file="${RUNNER_TEMP}/generated-pr-body.md"
+        printf '%s\n' "${PR_BODY}" > "${body_file}"
+        pr_record="$(find_open_pr)"
+        pr_url="${pr_record%%$'\t'*}"
+        set +e
+        if [[ -n "${pr_url}" ]]; then
+          timeout --signal=TERM --kill-after=10s 60s \
+            gh pr edit "${pr_url}" --title "${PR_TITLE}" --body-file "${body_file}"
+          pr_mutation_status="$?"
+        else
+          timeout --signal=TERM --kill-after=10s 60s \
+            gh pr create --repo "${GITHUB_REPOSITORY}" \
+            --base "${BASE_BRANCH}" --head "${HEAD_BRANCH}" \
+            --title "${PR_TITLE}" --body-file "${body_file}"
+          pr_mutation_status="$?"
+        fi
+        set -e
+
+        if ! verify_publication; then
+          if [[ "${pr_mutation_status:-0}" -ne 0 ]]; then
+            exit "${pr_mutation_status}"
+          fi
+          exit 1
+        fi
+        enable_auto_merge

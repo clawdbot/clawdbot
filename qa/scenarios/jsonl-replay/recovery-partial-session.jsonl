@@ -1,0 +1,4 @@
+{"message":{"role":"system","content":"Curated JSONL replay fixture: partial recovery session. Synthetic data only."}}
+{"message":{"role":"user","content":"A runtime produced an empty assistant response after a safe read. Summarize the recovery plan."}}
+{"message":{"role":"assistant","content":"Retry once with the same safe read, preserve tool results, and avoid mutating actions."}}
+{"message":{"role":"user","content":"Now replay the follow-up with only the safe read context and no network dependency."}}

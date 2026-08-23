@@ -1,0 +1,218 @@
+# The Captain's Chair
+#
+# A project management orchestration pattern where a prime agent dispatches
+# specialized subagents for all coding, validation, and task execution.
+# The captain never writes code directly—only coordinates, validates, and
+# maintains strategic oversight.
+#
+# Key principles:
+# - Context isolation: Subagents receive targeted context, not everything
+# - Parallel execution: Multiple subagents work concurrently where possible
+# - Critic agents: Continuous review of plans and outputs
+# - Checkpoint validation: User approval at key decision points
+
+input task: "The feature or task to implement"
+input codebase_context: "Brief description of the codebase and relevant files"
+
+# ============================================================================
+# Agent Definitions: The Crew
+# ============================================================================
+
+# The Captain: Orchestrates but never codes
+agent captain:
+  model: opus
+  prompt: """You are a senior engineering manager. You NEVER write code directly.
+Your job is to:
+- Break down complex tasks into discrete work items
+- Dispatch work to appropriate specialists
+- Validate that outputs meet requirements
+- Maintain strategic alignment with user intent
+- Identify blockers and escalate decisions to the user
+
+Always think about: What context does each subagent need? What can run in parallel?
+What needs human validation before proceeding?"""
+
+# Research agents - fast, focused information gathering
+agent researcher:
+  model: haiku
+  prompt: """You are a research specialist. Find specific information quickly.
+Provide concise, actionable findings. Cite file paths and line numbers."""
+
+# Coding agents - implementation specialists
+agent coder:
+  model: sonnet
+  prompt: """You are an expert software engineer. Write clean, idiomatic code.
+Follow existing patterns in the codebase. No over-engineering."""
+
+# Critic agents - continuous quality review
+agent critic:
+  model: sonnet
+  prompt: """You are a senior code reviewer and architect. Your job is to find:
+- Logic errors and edge cases
+- Security vulnerabilities
+- Performance issues
+- Deviations from best practices
+- Unnecessary complexity
+Be constructive but thorough. Prioritize issues by severity."""
+
+# Test agent - validation specialist
+agent tester:
+  model: sonnet
+  prompt: """You are a QA engineer. Write comprehensive tests.
+Focus on edge cases and failure modes. Ensure test isolation."""
+
+# ============================================================================
+# Block Definitions: Reusable Operations
+# ============================================================================
+
+# Parallel research sweep - gather all context simultaneously
+block research-sweep(topic):
+  parallel (on-fail: "continue"):
+    docs = session: researcher
+      prompt: "Find relevant documentation and README files for: {topic}"
+    code = session: researcher
+      prompt: "Find existing code patterns and implementations related to: {topic}"
+    tests = session: researcher
+      prompt: "Find existing tests that cover functionality similar to: {topic}"
+    issues = session: researcher
+      prompt: "Search for related issues, TODOs, or known limitations for: {topic}"
+
+# Parallel code review - multiple perspectives simultaneously
+block review-cycle(code_changes):
+  parallel:
+    security = session: critic
+      prompt: "Review for security vulnerabilities and injection risks"
+      context: code_changes
+    correctness = session: critic
+      prompt: "Review for logic errors, edge cases, and correctness"
+      context: code_changes
+    style = session: critic
+      prompt: "Review for code style, readability, and maintainability"
+      context: code_changes
+    perf = session: critic
+      prompt: "Review for performance issues and optimization opportunities"
+      context: code_changes
+
+# Implementation cycle with built-in critic
+block implement-with-review(implementation_plan):
+  let code = session: coder
+    prompt: "Implement according to the plan"
+    context: implementation_plan
+
+  let review = do review-cycle(code)
+
+  if **critical issues found in review**:
+    let fixed = session: coder
+      prompt: "Address the critical issues identified in the review"
+      context: { code, review }
+    output result = fixed
+  else:
+    output result = code
+
+# ============================================================================
+# Main Workflow: The Captain's Chair in Action
+# ============================================================================
+
+# Phase 1: Strategic Planning
+# ---------------------------
+# The captain breaks down the task and identifies what information is needed
+
+let breakdown = session: captain
+  prompt: """Analyze this task and create a strategic plan:
+
+Task: {task}
+Codebase: {codebase_context}
+
+Output:
+1. List of discrete work items (what code needs to be written/changed)
+2. Dependencies between work items (what must complete before what)
+3. What can be parallelized
+4. Key questions that need user input before proceeding
+5. Risks and potential blockers"""
+
+# Phase 2: Parallel Research Sweep
+# --------------------------------
+# Dispatch researchers to gather all necessary context simultaneously
+
+do research-sweep(task)
+
+# Phase 3: Plan Synthesis and Critic Review
+# -----------------------------------------
+# Captain synthesizes research into implementation plan, critic reviews it
+
+let implementation_plan = session: captain
+  prompt: """Synthesize the research into a detailed implementation plan.
+
+Research findings:
+{docs}
+{code}
+{tests}
+{issues}
+
+For each work item, specify:
+- Exact files to modify
+- Code patterns to follow
+- Tests to add or update
+- Integration points"""
+  context: { breakdown, docs, code, tests, issues }
+
+# Critic reviews the plan BEFORE implementation begins
+let plan_review = session: critic
+  prompt: """Review this implementation plan for:
+- Missing edge cases
+- Architectural concerns
+- Testability issues
+- Scope creep
+- Unclear requirements that need user clarification"""
+  context: implementation_plan
+
+# Checkpoint: User validates plan before execution
+if **the plan review raised critical concerns**:
+  let revised_plan = session: captain
+    prompt: "Revise the plan based on critic feedback"
+    context: { implementation_plan, plan_review }
+  # Continue with revised plan
+  let final_plan = revised_plan
+else:
+  let final_plan = implementation_plan
+
+# Phase 4: Parallel Implementation
+# --------------------------------
+# Identify independent work items and execute in parallel where possible
+
+let work_items = session: captain
+  prompt: "Extract the independent work items that can be done in parallel from this plan"
+  context: final_plan
+
+# Execute independent items in parallel, each with its own review cycle
+parallel (on-fail: "continue"):
+  impl_a = do implement-with-review(work_items)
+  impl_b = session: tester
+    prompt: "Write tests for the planned functionality"
+    context: { final_plan, code }
+
+# Phase 5: Integration and Final Review
+# -------------------------------------
+# Captain validates all pieces fit together
+
+let integration = session: captain
+  prompt: """Review all implementation results and verify:
+1. All work items completed successfully
+2. Tests cover the new functionality
+3. No merge conflicts or integration issues
+4. Documentation updated if needed
+
+Summarize what was done and any remaining items."""
+  context: { impl_a, impl_b, final_plan }
+
+# Final critic pass on complete implementation
+let final_review = do review-cycle(integration)
+
+if **final review passed**:
+  output result = session: captain
+    prompt: "Prepare final summary for user: what was implemented, tests added, and next steps"
+    context: { integration, final_review }
+else:
+  output result = session: captain
+    prompt: "Summarize what was completed and what issues remain for user attention"
+    context: { integration, final_review }

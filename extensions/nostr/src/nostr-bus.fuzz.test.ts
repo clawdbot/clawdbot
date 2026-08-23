@@ -1,0 +1,237 @@
+// Nostr tests cover nostr bus.fuzz plugin behavior.
+import { describe, expect, it } from "vitest";
+import { createMetrics } from "./metrics.js";
+import { validatePrivateKey, normalizePubkey } from "./nostr-key-utils.js";
+import { TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";
+
+function createPlainMetrics() {
+  return createMetrics();
+}
+
+function createCollectingMetrics() {
+  const events: unknown[] = [];
+  return {
+    events,
+    metrics: createMetrics((event) => events.push(event)),
+  };
+}
+
+function expectThrowsError(run: () => unknown): void {
+  let error: unknown;
+  try {
+    run();
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+}
+
+// ============================================================================
+// Fuzz Tests for validatePrivateKey
+// ============================================================================
+
+describe("validatePrivateKey fuzz", () => {
+  describe("validatePrivateKey type confusion", () => {
+    it("rejects non-string input", () => {
+      for (const value of [null, undefined, 123, true, {}, [], () => {}]) {
+        expectThrowsError(() => validatePrivateKey(value as unknown as string));
+      }
+    });
+  });
+
+  describe("unicode attacks", () => {
+    it("rejects unicode and control-character attacks", () => {
+      const invalidKeys = [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\u200Bf",
+        `\u202E${TEST_HEX_PRIVATE_KEY}`,
+        "0123456789\u0430bcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab😀",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\u0301",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\x00f",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\nf",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\rf",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\tf",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\ff",
+      ];
+
+      for (const key of invalidKeys) {
+        expectThrowsError(() => validatePrivateKey(key));
+      }
+    });
+  });
+
+  describe("edge cases", () => {
+    it("rejects very long string", () => {
+      const veryLong = "a".repeat(10000);
+      expectThrowsError(() => validatePrivateKey(veryLong));
+    });
+
+    it("rejects string of spaces matching length", () => {
+      const spaces = " ".repeat(64);
+      expectThrowsError(() => validatePrivateKey(spaces));
+    });
+
+    it("rejects hex with spaces between characters", () => {
+      const withSpaces =
+        "01 23 45 67 89 ab cd ef 01 23 45 67 89 ab cd ef 01 23 45 67 89 ab cd ef 01 23 45 67 89 ab cd ef";
+      expectThrowsError(() => validatePrivateKey(withSpaces));
+    });
+  });
+
+  describe("nsec format edge cases", () => {
+    it("rejects nsec with invalid bech32 characters", () => {
+      // 'b', 'i', 'o' are not valid bech32 characters
+      const invalidBech32 = "nsec1qypqxpq9qtpqscx7peytbfwtdjmcv0mrz5rjpej8vjppfkqfqy8skqfv3l";
+      expectThrowsError(() => validatePrivateKey(invalidBech32));
+    });
+
+    it("rejects nsec with wrong prefix", () => {
+      expectThrowsError(() => validatePrivateKey("nsec0aaaa"));
+    });
+
+    it("rejects partial nsec", () => {
+      expectThrowsError(() => validatePrivateKey("nsec1"));
+    });
+  });
+});
+
+describe("normalizePubkey fuzz", () => {
+  describe("prototype pollution attempts", () => {
+    it("throws for prototype property names", () => {
+      for (const value of ["__proto__", "constructor", "prototype"]) {
+        expectThrowsError(() => normalizePubkey(value));
+      }
+    });
+  });
+
+  describe("case sensitivity", () => {
+    it("normalizes uppercase to lowercase", () => {
+      const upper = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+      expect(normalizePubkey(upper)).toBe(TEST_HEX_PRIVATE_KEY);
+    });
+
+    it("normalizes mixed case to lowercase", () => {
+      const mixed = "0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf";
+      expect(normalizePubkey(mixed)).toBe(TEST_HEX_PRIVATE_KEY);
+    });
+  });
+});
+
+// ============================================================================
+// Fuzz Tests for Metrics
+// ============================================================================
+
+describe("Metrics fuzz", () => {
+  describe("invalid metric names", () => {
+    it("handles unknown metric names gracefully", () => {
+      const metrics = createPlainMetrics();
+
+      // Cast to bypass type checking - testing runtime behavior
+      type EmitMetricName = Parameters<typeof metrics.emit>[0];
+      expect(metrics.emit("invalid.metric.name" as EmitMetricName)).toBeUndefined();
+    });
+  });
+
+  describe("invalid label values", () => {
+    it("handles null relay label", () => {
+      const metrics = createPlainMetrics();
+      expect(
+        metrics.emit("relay.connect", 1, { relay: null as unknown as string }),
+      ).toBeUndefined();
+    });
+
+    it("handles undefined relay label", () => {
+      const metrics = createPlainMetrics();
+      expect(
+        metrics.emit("relay.connect", 1, { relay: undefined as unknown as string }),
+      ).toBeUndefined();
+    });
+
+    it("handles very long relay URL", () => {
+      const metrics = createPlainMetrics();
+      const longUrl = "wss://" + "a".repeat(10000) + ".com";
+      expect(metrics.emit("relay.connect", 1, { relay: longUrl })).toBeUndefined();
+
+      const snapshot = metrics.getSnapshot();
+      expect(snapshot.relays[longUrl]).toEqual({
+        connects: 1,
+        disconnects: 0,
+        reconnects: 0,
+        errors: 0,
+        messagesReceived: {
+          event: 0,
+          eose: 0,
+          closed: 0,
+          notice: 0,
+          ok: 0,
+          auth: 0,
+        },
+        circuitBreakerState: "closed",
+        circuitBreakerOpens: 0,
+        circuitBreakerCloses: 0,
+      });
+    });
+  });
+
+  describe("extreme values", () => {
+    it("handles NaN value", () => {
+      const metrics = createPlainMetrics();
+      expect(metrics.emit("event.received", Number.NaN)).toBeUndefined();
+
+      const snapshot = metrics.getSnapshot();
+      expect(Number.isNaN(snapshot.eventsReceived)).toBe(true);
+    });
+
+    it("handles Infinity value", () => {
+      const metrics = createPlainMetrics();
+      expect(metrics.emit("event.received", Infinity)).toBeUndefined();
+
+      const snapshot = metrics.getSnapshot();
+      expect(snapshot.eventsReceived).toBe(Infinity);
+    });
+
+    it("handles negative value", () => {
+      const metrics = createPlainMetrics();
+      metrics.emit("event.received", -1);
+
+      const snapshot = metrics.getSnapshot();
+      expect(snapshot.eventsReceived).toBe(-1);
+    });
+
+    it("handles very large value", () => {
+      const metrics = createPlainMetrics();
+      metrics.emit("event.received", Number.MAX_SAFE_INTEGER);
+
+      const snapshot = metrics.getSnapshot();
+      expect(snapshot.eventsReceived).toBe(Number.MAX_SAFE_INTEGER);
+    });
+  });
+
+  describe("rapid emissions", () => {
+    it("handles many rapid emissions", () => {
+      const { events, metrics } = createCollectingMetrics();
+
+      for (let i = 0; i < 10000; i++) {
+        metrics.emit("event.received");
+      }
+
+      expect(events).toHaveLength(10000);
+      const snapshot = metrics.getSnapshot();
+      expect(snapshot.eventsReceived).toBe(10000);
+    });
+  });
+
+  describe("reset during operation", () => {
+    it("handles reset mid-operation safely", () => {
+      const metrics = createPlainMetrics();
+
+      metrics.emit("event.received");
+      metrics.emit("event.received");
+      metrics.reset();
+      metrics.emit("event.received");
+
+      const snapshot = metrics.getSnapshot();
+      expect(snapshot.eventsReceived).toBe(1);
+    });
+  });
+});

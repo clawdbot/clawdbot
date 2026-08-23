@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "arguments": true,
+    "callId": {
+      "type": "string"
+    },
+    "namespace": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "threadId": {
+      "type": "string"
+    },
+    "tool": {
+      "type": "string"
+    },
+    "turnId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "arguments",
+    "callId",
+    "threadId",
+    "tool",
+    "turnId"
+  ],
+  "title": "DynamicToolCallParams",
+  "type": "object"
+}

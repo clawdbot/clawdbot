@@ -1,0 +1,92 @@
+title: Model switch follow-up
+
+scenario:
+  id: model-switch-follow-up
+  surface: models
+  coverage:
+    primary:
+      - agent-runtime.runtime-override-switching
+    secondary:
+      - session-memory.session-parity-session-continuity
+  objective: Verify the agent can switch to a different configured model and continue coherently.
+  successCriteria:
+    - Agent reflects the model switch request.
+    - Follow-up answer remains coherent with prior context.
+    - Final report notes whether the switch actually happened.
+  docsRefs:
+    - docs/help/testing.md
+    - docs/web/dashboard.md
+  codeRefs:
+    - extensions/qa-lab/src/report.ts
+  execution:
+    kind: flow
+    summary: Verify the agent can switch to a different configured model and continue coherently.
+    config:
+      initialPrompt: "Say hello from the default configured model."
+      followupPrompt: "Continue the exchange after switching models and note the handoff."
+
+flow:
+  steps:
+    - name: runs on the default configured model
+      actions:
+        - set: expectedAlternate
+          value:
+            expr: normalizeModelRef(env.alternateModel)
+        - assert:
+            expr: "normalizeModelRef(env.primaryModel) && expectedAlternate && (normalizeModelRef(env.primaryModel).provider !== expectedAlternate.provider || normalizeModelRef(env.primaryModel).model !== expectedAlternate.model)"
+            message: primary and alternate models must normalize to different refs
+        - call: reset
+        - call: runAgentPrompt
+          saveAs: primaryRun
+          args:
+            - ref: env
+            - sessionKey: agent:qa:model-switch
+              message:
+                expr: config.initialPrompt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 30000)
+        - assert:
+            expr: "(() => { const expected = normalizeModelRef(env.primaryModel); const receipt = primaryRun?.waited?.terminalReceipt; return receipt?.runId === primaryRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expected.provider && receipt.requested?.model === expected.model && receipt.effective?.model === receipt.effective?.responseModel && receipt.terminalDisposition === 'visible' && typeof receipt.rerouted === 'boolean'; })()"
+            message: default-model run did not return an exact owned terminal receipt
+        - assert:
+            expr: "primaryRun?.waited?.terminalReply?.disposition === 'visible'"
+            message: default-model run did not return an owned visible terminal reply
+        - assert:
+            expr: "primaryRun?.waited?.terminalDelivery?.status === 'sent' && typeof primaryRun.waited.terminalDelivery.resultCount === 'number' && primaryRun.waited.terminalDelivery.resultCount > 0"
+            message: default-model run did not return owned sent delivery evidence
+      detailsExpr: primaryRun.waited.terminalReply.text
+    - name: switches to the alternate model and continues
+      actions:
+        - call: runAgentPrompt
+          saveAs: alternateRun
+          args:
+            - ref: env
+            - sessionKey: agent:qa:model-switch
+              message:
+                expr: config.followupPrompt
+              provider:
+                expr: expectedAlternate.provider
+              model:
+                expr: expectedAlternate.model
+              timeoutMs:
+                expr: resolveQaLiveTurnTimeoutMs(env, 30000, env.alternateModel)
+        - assert:
+            expr: "(() => { const receipt = alternateRun?.waited?.terminalReceipt; return receipt?.runId === alternateRun?.started?.runId && Boolean(receipt.sessionId) && Boolean(receipt.turnId) && normalizeLowercaseStringOrEmpty(receipt.requested?.provider) === expectedAlternate.provider && receipt.requested?.model === expectedAlternate.model && receipt.effective?.model === receipt.effective?.responseModel && receipt.terminalDisposition === 'visible' && typeof receipt.rerouted === 'boolean' && `${receipt.effective?.provider}/${receipt.effective?.responseModel}` !== `${primaryRun.waited.terminalReceipt.effective?.provider}/${primaryRun.waited.terminalReceipt.effective?.responseModel}`; })()"
+            message: alternate-model run did not return distinct exact owned model evidence
+        - assert:
+            expr: "(() => { const reply = alternateRun?.waited?.terminalReply; if (reply?.disposition !== 'visible') return false; const lower = normalizeLowercaseStringOrEmpty(reply.text); return lower.includes('switch') || lower.includes('handoff'); })()"
+            message: alternate-model terminal reply missed switch continuity
+        - assert:
+            expr: "alternateRun?.waited?.terminalDelivery?.status === 'sent' && typeof alternateRun.waited.terminalDelivery.resultCount === 'number' && alternateRun.waited.terminalDelivery.resultCount > 0"
+            message: alternate-model run did not return owned sent delivery evidence
+        - set: modelSwitchEvidence
+          value:
+            primary:
+              ref: primaryRun.waited.terminalReceipt
+            alternate:
+              ref: alternateRun.waited.terminalReceipt
+            terminalReply:
+              ref: alternateRun.waited.terminalReply
+            terminalDelivery:
+              ref: alternateRun.waited.terminalDelivery
+      detailsExpr: alternateRun.waited.terminalReply.text

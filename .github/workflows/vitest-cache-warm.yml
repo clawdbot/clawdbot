@@ -1,0 +1,61 @@
+name: Vitest Cache Warm
+
+on:
+  repository_dispatch:
+    types: [vitest-cache-warm]
+  schedule:
+    - cron: "17 8 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vitest-cache-warm
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    # Dependency snapshots are serialized before main CI fanout. This workflow
+    # writes only the transform and compile caches from scheduled/trusted runs.
+    if: github.repository == 'openclaw/openclaw'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          node-compile-cache: "true"
+          node-compile-cache-scope: "test"
+          save-actions-cache: "true"
+          save-node-compile-cache: "true"
+          save-vitest-fs-cache: "true"
+          sticky-disk: "false"
+          use-actions-cache: "true"
+          vitest-fs-cache: "true"
+
+      - name: Select broad cache seed
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+          import { createVitestCacheWarmGroups } from "./scripts/lib/ci-node-test-plan.mts";
+
+          // Warm the selected planner envelopes for the striped unit-fast graph
+          // plus import-bound graphs that remained cold in protected-cache readers.
+          const groups = createVitestCacheWarmGroups();
+          appendFileSync(
+            process.env.GITHUB_ENV,
+            [
+              `OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`,
+              "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1",
+            ].join("\n") + "\n",
+          );
+          EOF
+
+      - name: Warm transform and compile caches
+        run: node --import tsx scripts/ci-run-node-test-shard.mts

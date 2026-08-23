@@ -1,0 +1,56 @@
+title: "Runtime tool fixture — image_generate"
+
+scenario:
+  id: runtime-tool-image-generate
+  surface: runtime-tools
+  runtimePairLane: extended
+  coverage:
+    primary:
+      - media.image-tool-image-generate
+  objective: Verify image_generate preserves arguments and result shape across OpenClaw and Codex.
+  successCriteria:
+    - Scenario is mock-openai only because live image generation uses async task lifecycle proof outside this direct failure-path fixture.
+    - Effective tools expose image_generate after QA image-generation config is applied.
+    - The mock provider plans exactly one happy-path image_generate call.
+    - The mock provider plans one denied-input failure-path image_generate call.
+    - Runtime parity coverage records async image start/result drift outside the core direct-loading lane.
+  docsRefs:
+    - docs/tools/image-generation.md
+  codeRefs:
+    - src/agents/tools/image-generate-tool.ts
+    - extensions/qa-lab/src/runtime-tool-fixture.ts
+  execution:
+    kind: flow
+    summary: Exercise the image_generate runtime tool family.
+    config:
+      requiredProviderMode: mock-openai
+      toolName: image_generate
+      ensureImageGeneration: true
+      toolCoverage:
+        family: image_generate
+        actualTool: image_generate
+        bucket: openclaw-dynamic-integration
+        expectedLayer: openclaw-dynamic
+        capabilityLayer: openclaw-dynamic-direct
+        required: false
+        codexDefaultImpact: P4
+        qaImpact: P1
+        action: extended runtime-pair coverage with async image completion proof
+        reason: image_generate is an OpenClaw integration tool whose happy path yields for async completion, so the core lane's direct call/result parity would compare different lifecycle phases.
+      promptSnippet: "target=image_generate"
+      failurePromptSnippet: "failure target=image_generate"
+      happyPathOutputRequired: false
+
+flow:
+  steps:
+    - name: exercises image_generate happy and failure paths
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: runRuntimeToolFixture
+          saveAs: result
+          args:
+            - ref: env
+            - ref: config
+      detailsExpr: result

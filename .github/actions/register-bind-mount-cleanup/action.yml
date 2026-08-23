@@ -1,0 +1,11 @@
+name: Register bind mount cleanup
+description: Unmount a bind mount during post-job cleanup.
+inputs:
+  path:
+    description: Absolute bind-mount target to unmount.
+    required: true
+runs:
+  using: node24
+  main: main.cjs
+  post: post.cjs
+  post-if: always()

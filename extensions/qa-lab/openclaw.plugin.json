@@ -1,0 +1,22 @@
+{
+  "id": "qa-lab",
+  "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner.",
+  "activation": {
+    "onStartup": false
+  },
+  "contracts": {
+    "webSearchProviders": ["qa-lab-search"],
+    "workerProviders": ["static-ssh"],
+    "tools": ["qa_restart_wait", "qa_restart_unsafe_probe"]
+  },
+  "toolMetadata": {
+    "qa_restart_wait": {
+      "replaySafe": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

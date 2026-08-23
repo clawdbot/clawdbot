@@ -1,0 +1,358 @@
+{
+  "id": "volcengine",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "providers": [
+    "volcengine",
+    "volcengine-plan"
+  ],
+  "setup": {
+    "providers": [
+      {
+        "id": "volcengine",
+        "envVars": [
+          "VOLCANO_ENGINE_API_KEY"
+        ]
+      },
+      {
+        "id": "volcengine-tts",
+        "envVars": [
+          "VOLCENGINE_TTS_API_KEY",
+          "BYTEPLUS_SEED_SPEECH_API_KEY",
+          "VOLCENGINE_TTS_APPID",
+          "VOLCENGINE_TTS_TOKEN"
+        ]
+      }
+    ]
+  },
+  "providerAuthAliases": {
+    "volcengine-plan": "volcengine"
+  },
+  "providerRequest": {
+    "providers": {
+      "volcengine": {
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      },
+      "volcengine-plan": {
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "volcengine": {
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "doubao-seed-evolving",
+            "name": "Doubao Seed Evolving",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1024000,
+            "maxTokens": 256000,
+            "cost": {
+              "input": 0.885478,
+              "output": 4.427391,
+              "cacheRead": 0.177096,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "doubao-seed-2-1-pro-260628",
+            "name": "Doubao Seed 2.1 Pro",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 256000,
+            "cost": {
+              "input": 0.885478,
+              "output": 4.427391,
+              "cacheRead": 0.177096,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "doubao-seed-2-1-turbo-260628",
+            "name": "Doubao Seed 2.1 Turbo",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 256000,
+            "cost": {
+              "input": 0.442739,
+              "output": 2.213695,
+              "cacheRead": 0.088548,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "glm-5-2-260617",
+            "name": "GLM 5.2",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1024000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 1.180638,
+              "output": 4.132231,
+              "cacheRead": 0.295159,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "deepseek-v4-pro-260425",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1024000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 1.770956,
+              "output": 3.541913,
+              "cacheRead": 0.14758,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "deepseek-v4-flash-260425",
+            "name": "DeepSeek V4 Flash",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1024000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0.14758,
+              "output": 0.295159,
+              "cacheRead": 0.029516,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "kimi-k2-5-260127",
+            "name": "Kimi K2.5",
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 4096,
+            "cost": {
+              "input": 0.0001,
+              "output": 0.0002,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "status": "deprecated",
+            "replacedBy": "doubao-seed-evolving"
+          },
+          {
+            "id": "glm-4-7-251222",
+            "name": "GLM 4.7",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0.0001,
+              "output": 0.0002,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "status": "deprecated",
+            "replacedBy": "glm-5-2-260617"
+          },
+          {
+            "id": "deepseek-v3-2-251201",
+            "name": "DeepSeek V3.2",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 32000,
+            "cost": {
+              "input": 0.295159,
+              "output": 0.442739,
+              "cacheRead": 0.059032,
+              "cacheWrite": 0,
+              "tieredPricing": [
+                {
+                  "input": 0.295159,
+                  "output": 0.442739,
+                  "cacheRead": 0.059032,
+                  "cacheWrite": 0,
+                  "range": [
+                    0,
+                    32000
+                  ]
+                },
+                {
+                  "input": 0.590319,
+                  "output": 0.885478,
+                  "cacheRead": 0.059032,
+                  "cacheWrite": 0,
+                  "range": [
+                    32000
+                  ]
+                }
+              ]
+            },
+            "status": "deprecated",
+            "replacedBy": "deepseek-v4-flash-260425"
+          }
+        ]
+      },
+      "volcengine-plan": {
+        "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "api": "openai-completions",
+        "defaultModel": "ark-code-latest",
+        "models": [
+          {
+            "id": "ark-code-latest",
+            "name": "Ark Coding Plan",
+            "input": [
+              "text"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 4096,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "doubao-seed-2.1-turbo",
+            "name": "Doubao Seed 2.1 Turbo",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 256000,
+            "maxTokens": 256000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "glm-5.2",
+            "name": "GLM 5.2",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1024000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "deepseek-v4-pro",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1024000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "deepseek-v4-flash",
+            "name": "DeepSeek V4 Flash",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 1024000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "volcengine": "refreshable",
+      "volcengine-plan": "refreshable"
+    }
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "volcengine",
+      "method": "api-key",
+      "choiceId": "volcengine-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Volcano Engine API key",
+      "groupId": "volcengine",
+      "groupLabel": "Volcano Engine",
+      "groupHint": "API key",
+      "optionKey": "volcengineApiKey",
+      "cliFlag": "--volcengine-api-key",
+      "cliOption": "--volcengine-api-key <key>",
+      "cliDescription": "Volcano Engine API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "contracts": {
+    "speechProviders": [
+      "volcengine"
+    ]
+  }
+}

@@ -1,0 +1,106 @@
+// Openai plugin module implements openai chatgpt auth identity behavior.
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { trimNonEmptyString } from "./openai-chatgpt-shared.js";
+
+type CodexJwtPayload = {
+  exp?: unknown;
+  iss?: unknown;
+  sub?: unknown;
+  "https://api.openai.com/profile"?: {
+    email?: unknown;
+  };
+  "https://api.openai.com/auth"?: {
+    chatgpt_account_id?: unknown;
+    chatgpt_account_user_id?: unknown;
+    chatgpt_plan_type?: unknown;
+    chatgpt_user_id?: unknown;
+    user_id?: unknown;
+  };
+};
+
+function normalizeFutureEpochSeconds(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string") {
+    return parseStrictPositiveInteger(value);
+  }
+  return undefined;
+}
+
+function decodeCodexJwtPayload(accessToken: string): CodexJwtPayload | null {
+  const parts = accessToken.split(".");
+  if (parts.length !== 3) {
+    return null;
+  }
+
+  try {
+    const payload = parts.at(1);
+    if (!payload) {
+      return null;
+    }
+    const decoded = Buffer.from(payload, "base64url").toString("utf8");
+    const parsed = JSON.parse(decoded);
+    return parsed && typeof parsed === "object" ? (parsed as CodexJwtPayload) : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveCodexStableSubject(payload: CodexJwtPayload | null): string | undefined {
+  const auth = payload?.["https://api.openai.com/auth"];
+  const accountUserId = trimNonEmptyString(auth?.chatgpt_account_user_id);
+  if (accountUserId) {
+    return accountUserId;
+  }
+
+  const userId = trimNonEmptyString(auth?.chatgpt_user_id) ?? trimNonEmptyString(auth?.user_id);
+  if (userId) {
+    return userId;
+  }
+
+  const iss = trimNonEmptyString(payload?.iss);
+  const sub = trimNonEmptyString(payload?.sub);
+  if (iss && sub) {
+    return `${iss}|${sub}`;
+  }
+  return sub;
+}
+
+export function resolveCodexAccessTokenExpiry(accessToken: string): number | undefined {
+  const payload = decodeCodexJwtPayload(accessToken);
+  const exp = normalizeFutureEpochSeconds(payload?.exp);
+  return exp ? exp * 1000 : undefined;
+}
+
+export function resolveCodexAuthIdentity(params: { accessToken: string; email?: string | null }): {
+  accountId?: string;
+  chatgptPlanType?: string;
+  email?: string;
+  profileName?: string;
+} {
+  const payload = decodeCodexJwtPayload(params.accessToken);
+  const auth = payload?.["https://api.openai.com/auth"];
+  const accountId = trimNonEmptyString(auth?.chatgpt_account_id);
+  const chatgptPlanType = trimNonEmptyString(auth?.chatgpt_plan_type);
+  const email =
+    trimNonEmptyString(payload?.["https://api.openai.com/profile"]?.email) ??
+    trimNonEmptyString(params.email);
+  const metadata = {
+    ...(accountId ? { accountId } : {}),
+    ...(chatgptPlanType ? { chatgptPlanType } : {}),
+  };
+  if (email) {
+    return { ...metadata, email, profileName: email };
+  }
+
+  const stableSubject = resolveCodexStableSubject(payload);
+  if (!stableSubject) {
+    return metadata;
+  }
+
+  return {
+    ...metadata,
+    profileName: `id-${Buffer.from(stableSubject).toString("base64url")}`,
+  };
+}

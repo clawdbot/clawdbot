@@ -1,0 +1,109 @@
+name: OpenGrep — PR Diff
+
+# Runs the high-precision OpenGrep rule super-config against only first-party
+# source paths changed by a pull request. Keeping PR scans diff-scoped makes
+# findings attributable to the proposed change instead of surfacing unrelated
+# repository-wide backlog.
+#
+# For a repository-wide scan, use the manual OpenGrep — Full workflow.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/actions/ensure-base-commit/**"
+      - ".github/workflows/opengrep-precise.yml"
+      - ".github/workflows/opengrep-precise-full.yml"
+      - ".semgrepignore"
+      - "apps/**"
+      - "extensions/**"
+      - "packages/**"
+      - "scripts/**"
+      - "security/opengrep/**"
+      - "src/**"
+
+concurrency:
+  group: opengrep-pr-diff-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    name: Scan changed paths (precise)
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Ensure PR base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Install opengrep
+        env:
+          # Pin the official Linux asset and its published digest. The upstream
+          # installer validates tags through an unauthenticated GitHub API and
+          # can fail before scanning even when this fixed release is available.
+          OPENGREP_VERSION: v1.25.0
+          OPENGREP_LINUX_X64_SHA256: 9ac4aebb47ba3f7b0d8fc641ac8749cb6c2f253f616131a67d9631e00d4bea33
+        run: |
+          set -euo pipefail
+          binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"
+          trap 'rm -f "$binary"' EXIT
+          curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 \
+            --connect-timeout 10 --max-time 300 \
+            -o "$binary" \
+            "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          printf '%s  %s\n' "$OPENGREP_LINUX_X64_SHA256" "$binary" | sha256sum --check
+          install_dir="${RUNNER_TEMP}/openclaw-opengrep"
+          mkdir -p "$install_dir"
+          install -m 0755 "$binary" "$install_dir/opengrep"
+          echo "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Verify opengrep
+        run: opengrep --version
+
+      - name: Run opengrep on PR diff
+        env:
+          OPENCLAW_OPENGREP_BASE_REF: ${{ github.event.pull_request.base.sha }}...HEAD
+          OPENCLAW_OPENGREP_MERGE_HEAD_FIRST_PARENT: "1"
+        # Findings from precise rules block this workflow. Pull requests scan
+        # changed first-party source paths only so findings stay attributable to
+        # the PR diff. Test/fixture/QA path exclusions live in `.semgrepignore`
+        # at the repo root and are picked up automatically.
+        run: |
+          mkdir -p .opengrep-out
+          scripts/run-opengrep.sh --changed --sarif --error
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a
+        # Only upload if the scan actually produced a SARIF file.
+        if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
+        with:
+          sarif_file: .opengrep-out/precise.sarif
+          category: opengrep-pr-diff
+
+      - name: Upload SARIF as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: opengrep-pr-diff-sarif
+          path: .opengrep-out/precise.sarif
+          if-no-files-found: error
+          retention-days: 30

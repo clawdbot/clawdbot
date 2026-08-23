@@ -1,0 +1,250 @@
+import { GatewayRequestError } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
+import {
+  chatQueueMovableSegments,
+  isMovableChatQueueItem,
+  reorderChatQueueItems,
+} from "../../lib/chat/chat-queue-order.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { generateUUID } from "../../lib/uuid.ts";
+import { loadChatBranches, loadChatHistory, type ChatState } from "./chat-history.ts";
+import {
+  flushStoredChatOutbox,
+  resumeStoredChatOutboxes as resumeStoredChatOutboxesDrain,
+  scheduleStoredChatOutboxDrain,
+} from "./chat-outbox-drain.ts";
+import {
+  admitQueuedMessageForSession,
+  isVolatileQueuedMessage,
+  readChatQueueForScope,
+  readQueuedMessageById,
+  updateQueuedMessage,
+  updateQueuedMessageForSession,
+  updateVolatileQueuedMessage,
+} from "./chat-queue.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
+import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
+import {
+  canSendVolatileQueueItem,
+  reconnectSafeQueuedSendState,
+  setChatError,
+} from "./chat-send-queue-state.ts";
+import {
+  isActiveLeafChangedError,
+  requestChatSend,
+  resolveDisplayedLeafEntryId,
+} from "./chat-send-request.ts";
+import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import { formatConnectError } from "./connect-error.ts";
+import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import {
+  OFFLINE_QUEUE_STORAGE_ERROR,
+  steerQueuedChatMessage as steerQueuedChatMessageLifecycle,
+  type SteerSendDependencies,
+} from "./steer-lifecycle.ts";
+import { isInflightSteer } from "./steered-chip.ts";
+
+function applyChatSendError(state: ChatState, err: unknown, canApplyError: () => boolean): string {
+  const error = isActiveLeafChangedError(err)
+    ? t("chat.sendErrors.activeLeafChanged")
+    : formatConnectError(err);
+  if (canApplyError()) {
+    setChatError(state, error);
+    if (isActiveLeafChangedError(err)) {
+      void Promise.all([loadChatHistory(state), loadChatBranches(state)]);
+    }
+  }
+  return error;
+}
+
+export async function sendChatMessageWithGeneratedRunId(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+  options: Partial<Parameters<SteerSendDependencies["sendChatMessage"]>[3]> = {},
+) {
+  const msg = message.trim();
+  if (!state.client || !state.connected || (!msg && !attachments?.length)) {
+    return null;
+  }
+  const canApplyError = options.canApplyError ?? (() => true);
+  if (canApplyError()) {
+    setChatError(state, null);
+  }
+  const runId = options.runId ?? generateUUID();
+  // Direct sends fail closed on the authoritative leaf; restored drains omit it.
+  const expectedLeafEntryId = resolveDisplayedLeafEntryId(state);
+  try {
+    return await requestChatSend(state, {
+      message: msg,
+      attachments,
+      runId,
+      ...(options.expectedLeafEntryId !== undefined
+        ? { expectedLeafEntryId: options.expectedLeafEntryId }
+        : expectedLeafEntryId !== undefined
+          ? { expectedLeafEntryId }
+          : {}),
+      ...(options.expectedRunId ? { expectedRunId: options.expectedRunId } : {}),
+      ...(options.queueMode ? { queueMode: options.queueMode } : {}),
+      ...(options.replyToId ? { replyToId: options.replyToId } : {}),
+    });
+  } catch (err) {
+    const error = applyChatSendError(state, err, canApplyError);
+    return err instanceof GatewayRequestError ? { kind: "rejected" as const, error } : null;
+  }
+}
+
+function findStoredOutbox(host: ChatHost, id: string) {
+  return listStoredChatOutboxes(host).find(({ queue }) => queue.some((item) => item.id === id));
+}
+
+const resetRetryState = (
+  entry: ChatQueueItem,
+  sendState: ChatQueueItem["sendState"],
+): ChatQueueItem => ({
+  ...entry,
+  sendAttempts: 0,
+  sendError: undefined,
+  sendRequestStartedAtMs: undefined,
+  sendRunId: entry.sendState === "failed" ? generateUUID() : entry.sendRunId,
+  sendState,
+});
+
+export const steerSendDependencies: SteerSendDependencies = {
+  loadChatHistory: (host) => void loadChatHistory(host as unknown as ChatState),
+  resumeRestoredOutbox: (host, itemId) => {
+    const restoredOutbox = findStoredOutbox(host as ChatHost, itemId);
+    if (!host.chatRunId && restoredOutbox) {
+      void scheduleStoredChatOutboxDrain(
+        host as ChatHost,
+        restoredOutbox,
+        chatOutboxDrainDependencies,
+      );
+    }
+  },
+  sendChatMessage: (host, message, attachments, options) =>
+    sendChatMessageWithGeneratedRunId(host as unknown as ChatState, message, attachments, options),
+};
+
+export const steerQueuedChatMessage = (host: ChatHost, id: string) =>
+  steerQueuedChatMessageLifecycle(host, id, steerSendDependencies);
+
+export const resumeStoredChatOutboxes = (host: ChatHost) =>
+  resumeStoredChatOutboxesDrain(host, chatOutboxDrainDependencies);
+
+export const flushChatQueueForEvent = (host: ChatHost) =>
+  flushStoredChatOutbox(host, chatOutboxDrainDependencies);
+
+export const retryReconnectableQueuedChatSends = resumeStoredChatOutboxes;
+
+/**
+ * Moves a queued row to `toIndex` within its own movable segment. A locked row
+ * ends that segment, so the move can never carry a message past work the drain
+ * is still waiting on. Each changed row is persisted individually so a partial
+ * storage failure leaves a readable queue and a visible error instead of a
+ * silent reshuffle.
+ */
+export function moveQueuedChatMessage(host: ChatHost, id: string, toIndex: number): void {
+  const item = readQueuedMessageById(host, id);
+  if (!item || !isMovableChatQueueItem(item)) {
+    return;
+  }
+  const sessionKey = item.sessionKey ?? host.sessionKey;
+  const scope = readChatQueueForScope(host, sessionKey, item.agentId);
+  const segment = chatQueueMovableSegments(scope).find((rows) => rows.some((row) => row.id === id));
+  for (const moved of reorderChatQueueItems(segment ?? [], id, toIndex)) {
+    const applied = updateQueuedMessageForSession(
+      host,
+      moved.sessionKey ?? sessionKey,
+      moved.id,
+      (entry) => ({ ...entry, orderKey: moved.orderKey }),
+      moved.agentId,
+    );
+    if (!applied) {
+      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+      return;
+    }
+  }
+}
+
+export async function retryQueuedChatMessage(host: ChatHost, id: string) {
+  const item = host.chatQueue.find((entry) => entry.id === id);
+  if (
+    !item ||
+    item.pendingRunId ||
+    item.sendState === "executing-command" ||
+    isInflightSteer(item) ||
+    item.sendState === "sending" ||
+    item.sendState === "waiting-model"
+  ) {
+    return;
+  }
+  if (item.kind === "steered") {
+    if (!host.connected || !host.client || !hasAbortableSessionRun(host)) {
+      setChatError(host, t("chat.sendErrors.steerRunNoLongerActive"));
+      return;
+    }
+    const retry = updateQueuedMessage(host, id, (entry) => ({
+      ...entry,
+      sendAttempts: 0,
+      sendError: undefined,
+      sendRequestStartedAtMs: undefined,
+      sendState: "waiting-idle",
+    }));
+    if (!retry) {
+      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+      return;
+    }
+    await steerQueuedChatMessageLifecycle(host, id, steerSendDependencies);
+    return;
+  }
+  let outbox = findStoredOutbox(host, item.id);
+  if (!outbox) {
+    const wasVolatile = isVolatileQueuedMessage(host, item.id);
+    if (!admitQueuedMessageForSession(host, item.sessionKey ?? host.sessionKey, item)) {
+      if (
+        wasVolatile &&
+        !item.localCommandName &&
+        item.sendRunId &&
+        (item.sendState === "failed" || item.sendState === "unconfirmed") &&
+        canSendVolatileQueueItem(host, item)
+      ) {
+        const retry = updateVolatileQueuedMessage(host, id, (entry) =>
+          resetRetryState(entry, undefined),
+        );
+        if (!retry) {
+          setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+          return;
+        }
+        await deliverChatQueueItem(host, retry, {
+          routingSessionKey: retry.sessionKey ?? host.sessionKey,
+          storageMode: "memory",
+        });
+        return;
+      }
+      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+      return;
+    }
+  }
+  const retry = updateQueuedMessage(host, id, (entry) =>
+    resetRetryState(entry, reconnectSafeQueuedSendState(host)),
+  );
+  if (!retry) {
+    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    return;
+  }
+  outbox = findStoredOutbox(host, retry.id);
+  if (!outbox) {
+    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    return;
+  }
+  const drain = scheduleStoredChatOutboxDrain(host, outbox, chatOutboxDrainDependencies);
+  if (host.chatSending && host.chatSendingScopeKey === storedChatOutboxScopeKey(outbox)) {
+    void drain;
+    return;
+  }
+  await drain;
+  if (!host.chatRunId) {
+    void flushStoredChatOutbox(host, chatOutboxDrainDependencies);
+  }
+}

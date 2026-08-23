@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>OpenClaw</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="brand" aria-label="OpenClaw">
+        <img class="brand-mark" src="mascot.svg" alt="" aria-hidden="true" />
+        <span>OPENCLAW</span>
+      </section>
+
+      <section class="panel" aria-live="polite">
+        <section id="update-banner" class="update-banner hidden" aria-live="polite">
+          <div class="update-row">
+            <div class="update-copy">
+              <strong id="update-title">OpenClaw update</strong>
+              <span id="update-message"></span>
+            </div>
+            <div class="update-actions">
+              <button id="update-action" class="update-action hidden" type="button"></button>
+              <button id="update-dismiss" class="update-dismiss" type="button" aria-label="Dismiss update notice">×</button>
+            </div>
+          </div>
+          <progress id="update-progress" class="update-progress hidden"></progress>
+        </section>
+
+        <div class="status-row">
+          <span id="status-dot" class="status-dot working"></span>
+          <span id="eyebrow" class="eyebrow">DESKTOP COMPANION</span>
+        </div>
+        <h1 id="title">Connecting to OpenClaw</h1>
+        <p id="description">
+          Finding your gateway and preparing the Control UI.
+        </p>
+
+        <div id="activity" class="activity">
+          <span class="spinner" aria-hidden="true"></span>
+          <span id="activity-label">Checking local services…</span>
+        </div>
+
+        <div id="install-controls" class="controls hidden">
+          <label for="channel">Release channel</label>
+          <div class="control-row">
+            <select id="channel">
+              <option value="stable">Stable</option>
+              <option value="beta">Beta</option>
+              <option value="dev">Development</option>
+            </select>
+            <button id="install-button" class="primary">Install OpenClaw</button>
+          </div>
+          <p class="hint">Installs the CLI and managed Node runtime in ~/.openclaw.</p>
+        </div>
+
+        <div id="action-controls" class="controls hidden">
+          <button id="primary-action" class="primary">Try again</button>
+        </div>
+
+        <section id="discovery" class="discovery" aria-labelledby="discovery-title">
+          <div class="discovery-head">
+            <span id="discovery-title">GATEWAYS ON THIS NETWORK</span>
+            <span id="discovery-status">SEARCHING</span>
+          </div>
+          <div id="gateway-list" class="gateway-list">
+            <p class="discovery-empty">Looking for nearby OpenClaw gateways…</p>
+          </div>
+        </section>
+
+        <div id="log-wrap" class="log-wrap hidden">
+          <div class="log-head">
+            <span>INSTALL LOG</span>
+            <span id="log-status">RUNNING</span>
+          </div>
+          <pre id="install-log"></pre>
+        </div>
+      </section>
+
+      <footer>
+        <span>LOCAL GATEWAY</span>
+        <span class="footer-separator"></span>
+        <span>CLOSE TO TRAY</span>
+      </footer>
+    </main>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

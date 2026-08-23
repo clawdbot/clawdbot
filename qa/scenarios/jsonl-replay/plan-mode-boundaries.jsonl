@@ -1,0 +1,8 @@
+{"message":{"role":"system","content":"Curated JSONL replay fixture: plan-mode boundary smoke. Synthetic data only."}}
+{"message":{"role":"tool","toolName":"status","content":"prelude status row before any user turn"}}
+{"message":{"role":"user","content":"Enter plan mode and report the mode fields only."}}
+{"message":{"role":"assistant","content":"inPlanMode=true mode=plan"}}
+{"message":{"role":"user","content":[{"type":"text","text":"Attempt a write while plan approval is pending."},{"type":"tool_result","content":"ignored tool result block"}]}}
+{"message":{"role":"assistant","content":"The write is blocked while plan approval is pending."}}
+{"message":{"role":"user","content":"Exit plan mode and stop after reporting status."}}
+{"message":{"role":"assistant","content":"inPlanMode=false mode=normal"}}

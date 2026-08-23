@@ -1,0 +1,106 @@
+{
+  "id": "cerebras",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["cerebras"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "cerebras-native",
+      "hosts": ["api.cerebras.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "cerebras": {
+        "family": "cerebras"
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "cerebras": {
+        "baseUrl": "https://api.cerebras.ai/v1",
+        "api": "openai-completions",
+        "defaultModel": "gemma-4-31b",
+        "models": [
+          {
+            "id": "zai-glm-4.7",
+            "name": "Z.ai GLM 4.7",
+            "input": ["text"],
+            "reasoning": true,
+            "contextWindow": 131072,
+            "maxTokens": 40960,
+            "cost": {
+              "input": 2.25,
+              "output": 2.75,
+              "cacheRead": 2.25,
+              "cacheWrite": 2.75
+            }
+          },
+          {
+            "id": "gpt-oss-120b",
+            "name": "GPT OSS 120B",
+            "input": ["text"],
+            "reasoning": true,
+            "contextWindow": 131072,
+            "maxTokens": 40960,
+            "cost": {
+              "input": 0.35,
+              "output": 0.75,
+              "cacheRead": 0.35,
+              "cacheWrite": 0.75
+            }
+          },
+          {
+            "id": "gemma-4-31b",
+            "name": "Gemma 4 31B",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 131072,
+            "maxTokens": 40960,
+            "cost": {
+              "input": 0.99,
+              "output": 1.49,
+              "cacheRead": 0.99,
+              "cacheWrite": 1.49
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "cerebras": "static"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "cerebras",
+        "envVars": ["CEREBRAS_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "cerebras",
+      "method": "api-key",
+      "choiceId": "cerebras-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Cerebras API key",
+      "groupId": "cerebras",
+      "groupLabel": "Cerebras",
+      "groupHint": "Fast OpenAI-compatible inference",
+      "optionKey": "cerebrasApiKey",
+      "cliFlag": "--cerebras-api-key",
+      "cliOption": "--cerebras-api-key <key>",
+      "cliDescription": "Cerebras API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

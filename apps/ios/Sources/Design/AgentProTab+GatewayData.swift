@@ -1,0 +1,310 @@
+import OpenClawKit
+import OpenClawProtocol
+import SwiftUI
+
+extension AgentProTab {
+    func agentName(for agent: AgentSummary) -> String {
+        self.normalized(agent.name) ?? agent.id
+    }
+
+    func agentBadge(for agent: AgentSummary) -> String {
+        if let identity = agent.identity,
+           let emoji = identity["emoji"]?.value as? String,
+           let normalizedEmoji = self.normalized(emoji)
+        {
+            return normalizedEmoji
+        }
+
+        let words = self.agentName(for: agent)
+            .split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" })
+            .prefix(2)
+        let initials = words.compactMap(\.first).map(String.init).joined()
+        return initials.isEmpty ? "OC" : initials.uppercased()
+    }
+
+    func agentTint(for agent: AgentSummary, state: AgentRosterState) -> Color {
+        if agent.id == self.activeAgentID { return OpenClawBrand.accent }
+        return state.color.opacity(0.62)
+    }
+
+    func agentDetail(for agent: AgentSummary) -> String {
+        let parts = [
+            self.modelLabel(for: agent),
+            agent.id == self.appModel.gatewayDefaultAgentId ? "Default" : nil,
+        ].compactMap(\.self)
+        return parts.isEmpty ? agent.id : parts.joined(separator: " • ")
+    }
+
+    func agentAccessibilityLabel(
+        _ agent: AgentSummary,
+        isActive: Bool,
+        state: AgentRosterState) -> String
+    {
+        let status = state == .online ? "Online" : "Ready"
+        let selection = isActive ? "Selected" : "Not selected"
+        return "\(self.agentName(for: agent)), \(self.agentDetail(for: agent)), \(status), \(selection)"
+    }
+
+    func agentRosterState(for agent: AgentSummary) -> AgentRosterState {
+        guard self.gatewayConnected else { return .ready }
+        if agent.id == self.activeAgentID { return .online }
+        return .ready
+    }
+
+    func modelLabel(for agent: AgentSummary) -> String? {
+        guard let model = agent.model else { return nil }
+        for key in ["primary", "name", "id", "model"] {
+            if let value = model[key]?.value as? String,
+               let normalized = self.normalized(value)
+            {
+                return normalized
+            }
+        }
+        return nil
+    }
+
+    func presenceLabel(_ entry: PresenceEntry) -> String? {
+        self.normalized(entry.host)
+            ?? self.normalized(entry.devicefamily)
+            ?? self.normalized(entry.platform)
+            ?? self.normalized(entry.mode)
+    }
+
+    func cronJobDetail(_ job: CronJob) -> String {
+        if let nextRunAtMs = AgentProValueReader.intValue(job.state["nextRunAtMs"]) {
+            return "Next \(Self.relativeTime(fromMilliseconds: nextRunAtMs))"
+        }
+        if let description = self.normalized(job.description) {
+            return description
+        }
+        if let agentId = self.normalized(job.agentid) {
+            return agentId
+        }
+        return job.id
+    }
+
+    func cronJobState(_ job: CronJob) -> String {
+        if !job.enabled {
+            return "paused"
+        }
+        if let status = Self.stringValue(job.state["lastStatus"]) ?? Self.stringValue(job.state["lastRunStatus"]) {
+            return status
+        }
+        return "enabled"
+    }
+
+    @MainActor
+    func refreshOverview(force: Bool) async {
+        if self.appModel.isScreenshotFixtureModeEnabled {
+            self.overview = .screenshotFixture
+            self.overviewErrorText = nil
+            self.overviewLoading = false
+            return
+        }
+        guard self.scenePhase == .active, self.liveGatewayConnected else {
+            _ = self.overviewRefreshGate.begin()
+            self.overview = nil
+            self.overviewErrorText = nil
+            self.overviewLoading = false
+            return
+        }
+        if self.overviewLoading, !force {
+            return
+        }
+        let generation = self.overviewRefreshGate.begin()
+        let requestContext = self.overviewTaskID
+        guard let gatewayID = self.appModel.connectedGatewayID else { return }
+
+        self.overviewLoading = true
+        self.overviewErrorText = nil
+        defer {
+            if self.overviewRefreshGate.isCurrent(generation) {
+                self.overviewLoading = false
+            }
+        }
+
+        let activeAgentID = self.activeAgentID
+        let skillsParams = Self.agentScopedParams(agentId: activeAgentID)
+        async let skills = self.requestOptional(
+            SkillStatusReportLite.self,
+            method: "skills.status",
+            paramsJSON: skillsParams)
+        async let config = self.requestOptional(ConfigSnapshotLite.self, method: "config.get")
+        async let presence = self.requestOptional([PresenceEntry].self, method: "system-presence")
+        async let cronStatus = self.requestOptional(CronStatusLite.self, method: "cron.status")
+        async let cronJobs = self.requestAllCronJobs()
+        async let dreaming = self.requestOptional(DreamingStatusEnvelope.self, method: "doctor.memory.status")
+        async let dreamDiary = self.requestOptional(DreamDiaryLite.self, method: "doctor.memory.dreamDiary")
+        async let usage = self.requestOptional(
+            CostUsageSummaryLite.self,
+            method: "usage.cost",
+            paramsJSON: "{\"days\":31}",
+            timeoutSeconds: 12)
+
+        let loadedSkills = await skills
+        let loadedConfig = await config
+        let loadedPresence = await presence
+        let loadedCronStatus = await cronStatus
+        let loadedCronJobs = await cronJobs
+        let loadedDreaming = await dreaming
+        let loadedDreamDiary = await dreamDiary
+        let loadedUsage = await usage
+        let snapshot = AgentOverviewSnapshot(
+            gatewayID: gatewayID,
+            skills: loadedSkills,
+            presence: loadedPresence ?? [],
+            cronStatus: loadedCronStatus,
+            cronJobs: loadedCronJobs?.jobs ?? [],
+            dreaming: loadedDreaming?.dreaming,
+            dreamDiary: loadedDreamDiary,
+            usage: loadedUsage,
+            agentSkillFilter: loadedSkills?.agentSkillFilter
+                ?? loadedConfig?.effectiveSkillFilter(agentId: activeAgentID))
+
+        guard self.overviewRefreshGate.isCurrent(generation),
+              self.overviewTaskID == requestContext
+        else {
+            return
+        }
+        if snapshot.hasAnyLiveData {
+            self.overview = snapshot
+        } else {
+            self.overview = snapshot
+            self.overviewErrorText = "Live overview could not load yet."
+        }
+    }
+
+    func requestOptional<T: Decodable>(
+        _ type: T.Type,
+        method: String,
+        paramsJSON: String = "{}",
+        timeoutSeconds: Int = 8) async -> T?
+    {
+        do {
+            let data = try await self.appModel.operatorSession.request(
+                method: method,
+                paramsJSON: paramsJSON,
+                timeoutSeconds: timeoutSeconds)
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
+    func requestAllCronJobs() async -> CronJobsListLite? {
+        for _ in 0..<3 {
+            if let snapshot = await self.requestCronJobsSnapshot() {
+                return snapshot
+            }
+        }
+        return nil
+    }
+
+    private func requestCronJobsSnapshot() async -> CronJobsListLite? {
+        let pageLimit = 100
+        let jobLimit = 20000
+        var jobs: [CronJob] = []
+        var seenJobIDs: Set<String> = []
+        var expectedIdentity: CronJobsSnapshotIdentity?
+        var offset = 0
+        for _ in 0..<pageLimit {
+            guard let paramsJSON = try? Self.automationParams([
+                "includeDisabled": true,
+                "limit": 200,
+                "offset": offset,
+                "sortBy": "name",
+                "sortDir": "asc",
+            ]) else { return nil }
+            guard let page = await self.requestOptional(
+                CronJobsListLite.self,
+                method: "cron.list",
+                paramsJSON: paramsJSON,
+                timeoutSeconds: 12)
+            else { return nil }
+            guard let identity = cronJobsSnapshotIdentity(page: page, maximumCount: jobLimit) else { return nil }
+            if let expectedIdentity, identity != expectedIdentity {
+                // Offset pages are separately locked by the Gateway. Restart instead of
+                // combining pages when a concurrent mutation changes the snapshot.
+                return nil
+            }
+            expectedIdentity = identity
+            let pageJobIDs = Set(page.jobs.map(\.id))
+            guard pageJobIDs.count == page.jobs.count,
+                  seenJobIDs.isDisjoint(with: pageJobIDs)
+            else { return nil }
+            seenJobIDs.formUnion(pageJobIDs)
+            jobs.append(contentsOf: page.jobs)
+            guard jobs.count <= jobLimit else { return nil }
+            if let total = identity.total {
+                guard total >= jobs.count else { return nil }
+                if jobs.count == total {
+                    guard !page.hasMore else { return nil }
+                    return CronJobsListLite(
+                        jobs: jobs,
+                        snapshotRevision: identity.revision,
+                        total: total,
+                        hasMore: false,
+                        nextOffset: nil)
+                }
+            }
+            guard page.hasMore else {
+                return CronJobsListLite(
+                    jobs: jobs,
+                    snapshotRevision: identity.revision,
+                    total: nil,
+                    hasMore: false,
+                    nextOffset: nil)
+            }
+            guard let nextOffset = nextCronJobsListOffset(page: page, currentOffset: offset),
+                  nextOffset <= jobLimit
+            else {
+                return nil
+            }
+            offset = nextOffset
+        }
+        return nil
+    }
+
+    func normalized(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func stringValue(_ value: AnyCodable?) -> String? {
+        guard let string = value?.value as? String else { return nil }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func relativeTime(fromMilliseconds milliseconds: Int) -> String {
+        let date = Date(timeIntervalSince1970: Double(milliseconds) / 1000)
+        return date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
+    }
+
+    static func compactNumber(_ value: Int) -> String {
+        value.formatted(.number.notation(.compactName))
+    }
+
+    static func currency(_ value: Double) -> String {
+        value.formatted(.currency(code: "USD").precision(.fractionLength(0...2)))
+    }
+
+    static func duration(milliseconds: Int) -> String {
+        let seconds = max(0, milliseconds / 1000)
+        if seconds < 60 { return "\(seconds)s" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)m" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)h" }
+        return "\(hours / 24)d"
+    }
+
+    static func agentScopedParams(agentId: String) -> String {
+        guard let data = try? JSONEncoder().encode(["agentId": agentId]),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return "{}"
+        }
+        return json
+    }
+}

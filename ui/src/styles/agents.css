@@ -1,0 +1,23 @@
+/* Agents page escape hatches for the settings design language.
+ * Custom panel content (file editor, tool catalog, skill groups) lives
+ * inside one .settings-group per section; this wrapper matches the
+ * .settings-row padding so escape-hatch content aligns with rows. */
+
+.agents-panel-body {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+
+.agents-panel-body + .agents-panel-body,
+.settings-kv + .agents-panel-body,
+.agents-panel-body + .settings-kv {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+/* .agents-main is a 14px-gap grid (components.css); settings sections need
+   more whitespace between each other than panel chrome does. */
+.agents-main > .settings-section:not(:first-child) {
+  margin-top: var(--space-4);
+}

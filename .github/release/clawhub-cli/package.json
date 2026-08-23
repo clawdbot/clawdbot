@@ -1,0 +1,8 @@
+{
+  "name": "openclaw-release-clawhub-cli",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "clawhub": "0.23.1"
+  }
+}

@@ -1,0 +1,2693 @@
+name: OpenClaw Release Checks
+
+run-name: ${{ inputs.dispatch_id != '' && format('OpenClaw Release Checks {0}', inputs.dispatch_id) || 'OpenClaw Release Checks' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or full commit SHA to validate
+        required: true
+        type: string
+      target_context_ref:
+        description: Optional canonical release branch or tag context for an exact-SHA target
+        required: false
+        default: ""
+        type: string
+      expected_sha:
+        description: Optional full SHA that ref must resolve to
+        required: false
+        default: ""
+        type: string
+      provider:
+        description: Provider lane for cross-OS onboarding and the end-to-end agent turn
+        required: false
+        default: openai
+        type: choice
+        options:
+          - openai
+          - anthropic
+          - minimax
+      mode:
+        description: Which cross-OS release lanes to run
+        required: false
+        default: both
+        type: choice
+        options:
+          - fresh
+          - upgrade
+          - both
+      release_profile:
+        description: Release coverage profile for live/Docker/provider breadth
+        required: false
+        default: stable
+        type: choice
+        options:
+          - beta
+          - stable
+          - full
+      run_release_soak:
+        description: Run exhaustive live/Docker and upgrade-survivor soak lanes; forced on for release_profile=stable and full
+        required: false
+        default: false
+        type: boolean
+      fail_fast:
+        description: Stop the Matrix QA lane after its first failed check or scenario
+        required: false
+        default: false
+        type: boolean
+      run_maturity_scorecard:
+        description: Render advisory maturity scorecard release docs; default release checks rely on dedicated package, QA, live, and E2E gates
+        required: false
+        default: false
+        type: boolean
+      allow_unreleased_changelog:
+        description: Allow explicitly opted-in current-tree packaging to use Unreleased notes
+        required: false
+        default: false
+        type: boolean
+      skip_package_telegram_e2e:
+        description: Defer beta Package Acceptance Telegram E2E
+        required: false
+        default: false
+        type: boolean
+      allow_frozen_target_scenario_omissions:
+        description: Allow trusted compatibility filtering for a canonical frozen release target
+        required: false
+        default: false
+        type: boolean
+      rerun_group:
+        description: Release check group to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - install-smoke
+          - cross-os
+          - live-e2e
+          - package
+          - qa
+          - qa-parity
+          - qa-live
+      live_suite_filter:
+        description: Optional exact live/E2E suite id, or comma-separated QA live lane ids (qa-live-matrix, qa-live-buzz, qa-live-telegram, qa-live-discord, qa-live-whatsapp, qa-live-slack); blank runs all selected live suites
+        required: false
+        default: ""
+        type: string
+      cross_os_suite_filter:
+        description: Optional focused cross-OS suite filter, e.g. windows/packaged-upgrade or packaged-fresh
+        required: false
+        default: ""
+        type: string
+      release_package_spec:
+        description: Optional published package spec for release checks; blank builds the selected SHA package artifact
+        required: false
+        default: ""
+        type: string
+      package_acceptance_package_spec:
+        description: Optional published package spec for Package Acceptance; blank uses the prepared release artifact
+        required: false
+        default: ""
+        type: string
+      codex_plugin_spec:
+        description: Optional Codex plugin install spec for live Docker package checks; blank derives from release_package_spec or packs the selected ref
+        required: false
+        default: ""
+        type: string
+      dispatch_id:
+        description: Optional parent workflow dispatch identifier
+        required: false
+        default: ""
+        type: string
+      candidate_artifact_json:
+        description: Immutable package and Docker image artifact tuple from Full Release Validation
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.16.0"
+  OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
+
+jobs:
+  resolve_target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      ref: ${{ steps.inputs.outputs.ref }}
+      revision: ${{ steps.ref.outputs.sha }}
+      provider: ${{ steps.inputs.outputs.provider }}
+      mode: ${{ steps.inputs.outputs.mode }}
+      release_profile: ${{ steps.inputs.outputs.release_profile }}
+      run_release_soak: ${{ steps.inputs.outputs.run_release_soak }}
+      qa_live_scheduled: ${{ steps.inputs.outputs.qa_live_scheduled }}
+      fail_fast: ${{ steps.inputs.outputs.fail_fast }}
+      run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
+      allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
+      skip_package_telegram_e2e: ${{ steps.inputs.outputs.skip_package_telegram_e2e }}
+      rerun_group: ${{ steps.inputs.outputs.rerun_group }}
+      live_suite_filter: ${{ steps.inputs.outputs.live_suite_filter }}
+      repo_live_suite_filter: ${{ steps.inputs.outputs.repo_live_suite_filter }}
+      cross_os_suite_filter: ${{ steps.inputs.outputs.cross_os_suite_filter }}
+      qa_live_matrix_enabled: ${{ steps.inputs.outputs.qa_live_matrix_enabled }}
+      qa_live_buzz_enabled: ${{ steps.inputs.outputs.qa_live_buzz_enabled }}
+      qa_live_telegram_enabled: ${{ steps.inputs.outputs.qa_live_telegram_enabled }}
+      qa_live_discord_enabled: ${{ steps.inputs.outputs.qa_live_discord_enabled }}
+      qa_live_whatsapp_enabled: ${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}
+      qa_live_slack_enabled: ${{ steps.inputs.outputs.qa_live_slack_enabled }}
+      release_package_spec: ${{ steps.inputs.outputs.release_package_spec }}
+      package_acceptance_package_spec: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
+      codex_plugin_spec: ${{ steps.inputs.outputs.codex_plugin_spec }}
+      cross_os_scheduled: ${{ steps.inputs.outputs.cross_os_scheduled }}
+      docker_release_scheduled: ${{ steps.inputs.outputs.docker_release_scheduled }}
+    steps:
+      - name: Require trusted workflow ref for release checks
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          tideclaw_alpha_check=false
+          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            workflow_branch="${WORKFLOW_REF#refs/heads/}"
+            if [[ "${RELEASE_REF}" == *"-alpha."* || "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ || "${RELEASE_REF}" == "${workflow_branch}" || "${RELEASE_REF}" == "refs/heads/${workflow_branch}" ]]; then
+              tideclaw_alpha_check=true
+            fi
+          fi
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release-ci/[0-9a-f]{12}-[0-9]+$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33$ ]] && [[ "${tideclaw_alpha_check}" != "true" ]]; then
+            echo "Release checks must be dispatched from main, release/YYYY.M.PATCH, extended-stable/YYYY.M.33, a Full Release Validation release-ci/<sha>-<timestamp> ref, or a Tideclaw alpha branch for alpha prereleases." >&2
+            exit 1
+          fi
+
+      - name: Validate ref input
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_REF// }" ]] || [[ "${RELEASE_REF}" == -* ]]; then
+            echo "Expected a branch, tag, or full commit SHA; got: ${RELEASE_REF}" >&2
+            exit 1
+          fi
+          if [[ -n "${EXPECTED_SHA// }" ]] && [[ ! "${EXPECTED_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Expected expected_sha to be a full commit SHA; got: ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+
+      - name: Checkout trusted workflow helper
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: workflow
+          fetch-depth: 1
+
+      - name: Fast-resolve selected ref
+        id: fast_ref
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          bash workflow/scripts/github/resolve-openclaw-ref.sh \
+            --ref "$RELEASE_REF" \
+            --expected-sha "$EXPECTED_SHA" \
+            --fallback-ok \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Checkout selected ref for reachability fallback
+        if: steps.fast_ref.outputs.fallback == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+          path: source
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve checked-out fallback SHA
+        if: steps.fast_ref.outputs.fallback == 'true'
+        id: fallback_ref
+        working-directory: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate selected ref belongs to this repository
+        if: steps.fast_ref.outputs.fallback == 'true'
+        working-directory: source
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SELECTED_SHA="$(git rev-parse HEAD)"
+          git_fetch_with_checkout_auth() {
+            local -a git_args=(git)
+            if ! git config --get-all http.https://github.com/.extraheader >/dev/null; then
+              local auth_header
+              auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+              git_args+=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}")
+            fi
+            timeout --signal=TERM --kill-after=10s 120s "${git_args[@]}" fetch "$@"
+          }
+          git_fetch_with_checkout_auth --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git_fetch_with_checkout_auth --tags origin '+refs/tags/*:refs/tags/*'
+
+          if git tag --points-at "${SELECTED_SHA}" | grep -Eq '^v'; then
+            exit 0
+          fi
+
+          if git for-each-ref --format='%(refname:short)' --contains "${SELECTED_SHA}" refs/remotes/origin | grep -Eq '^origin/'; then
+            exit 0
+          fi
+
+          echo "Ref '${RELEASE_REF}' resolved to ${SELECTED_SHA}, but that commit is not reachable from an OpenClaw branch or release tag." >&2
+          echo "Secret-bearing release checks only run repository-owned branch/tag history, not arbitrary unreferenced commits." >&2
+          exit 1
+
+      - name: Finalize resolved SHA
+        id: ref
+        env:
+          FAST_SHA: ${{ steps.fast_ref.outputs.sha }}
+          FALLBACK_SHA: ${{ steps.fallback_ref.outputs.sha }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          USED_FALLBACK: ${{ steps.fast_ref.outputs.fallback }}
+        run: |
+          set -euo pipefail
+          selected_sha="$FAST_SHA"
+          if [[ "$USED_FALLBACK" == "true" ]]; then
+            selected_sha="$FALLBACK_SHA"
+          fi
+          if [[ -z "$selected_sha" ]]; then
+            echo "Failed to resolve selected ref SHA." >&2
+            exit 1
+          fi
+          if [[ -n "${EXPECTED_SHA// }" ]] && [[ "${selected_sha,,}" != "${EXPECTED_SHA,,}" ]]; then
+            echo "Ref resolved to ${selected_sha}, expected ${EXPECTED_SHA}." >&2
+            exit 1
+          fi
+          echo "sha=${selected_sha,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Tideclaw alpha target matches workflow branch
+        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
+        working-directory: workflow
+        env:
+          SELECTED_SHA: ${{ steps.ref.outputs.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            echo "Tideclaw alpha release checks must run from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
+            exit 1
+          fi
+          alpha_branch="${WORKFLOW_REF#refs/heads/}"
+          git_fetch_with_checkout_auth() {
+            local -a git_args=(git)
+            if ! git config --get-all http.https://github.com/.extraheader >/dev/null; then
+              local auth_header
+              auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+              git_args+=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}")
+            fi
+            timeout --signal=TERM --kill-after=10s 120s "${git_args[@]}" fetch "$@"
+          }
+          git_fetch_with_checkout_auth --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+          if ! git merge-base --is-ancestor "${SELECTED_SHA}" "refs/remotes/origin/${alpha_branch}"; then
+            echo "Alpha release target ${SELECTED_SHA} must be reachable from ${alpha_branch}." >&2
+            exit 1
+          fi
+
+      - name: Capture selected inputs
+        id: inputs
+        env:
+          RELEASE_REF_INPUT: ${{ inputs.ref }}
+          RELEASE_PROVIDER_INPUT: ${{ inputs.provider }}
+          RELEASE_MODE_INPUT: ${{ inputs.mode }}
+          RELEASE_PROFILE_INPUT: ${{ inputs.release_profile }}
+          RELEASE_RUN_RELEASE_SOAK_INPUT: ${{ inputs.run_release_soak }}
+          RELEASE_FAIL_FAST_INPUT: ${{ inputs.fail_fast }}
+          RELEASE_RUN_MATURITY_SCORECARD_INPUT: ${{ inputs.run_maturity_scorecard }}
+          RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: ${{ inputs.allow_unreleased_changelog }}
+          RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: ${{ inputs.skip_package_telegram_e2e }}
+          RELEASE_RERUN_GROUP_INPUT: ${{ inputs.rerun_group }}
+          RELEASE_LIVE_SUITE_FILTER_INPUT: ${{ inputs.live_suite_filter }}
+          RELEASE_CROSS_OS_SUITE_FILTER_INPUT: ${{ inputs.cross_os_suite_filter }}
+          RELEASE_QA_DISCORD_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_RELEASE_QA_DISCORD_LIVE_CI_ENABLED || 'false' }}
+          RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED || 'false' }}
+          RELEASE_QA_SLACK_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_RELEASE_QA_SLACK_LIVE_CI_ENABLED || 'false' }}
+          RELEASE_PACKAGE_SPEC_INPUT: ${{ inputs.release_package_spec }}
+          RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: ${{ inputs.package_acceptance_package_spec }}
+          RELEASE_CODEX_PLUGIN_SPEC_INPUT: ${{ inputs.codex_plugin_spec }}
+          CANDIDATE_ARTIFACT_JSON_INPUT: ${{ inputs.candidate_artifact_json }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${CANDIDATE_ARTIFACT_JSON_INPUT// }" ]] &&
+            { [[ -n "${RELEASE_PACKAGE_SPEC_INPUT// }" ]] ||
+              [[ -n "${RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT// }" ]]; }; then
+            echo "candidate_artifact_json cannot be combined with release package specs." >&2
+            exit 1
+          fi
+          qa_live_matrix_enabled=true
+          qa_live_buzz_enabled=true
+          qa_live_telegram_enabled=true
+          qa_live_discord_ci_enabled="$(printf '%s' "$RELEASE_QA_DISCORD_LIVE_CI_ENABLED" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$qa_live_discord_ci_enabled" != "true" && "$qa_live_discord_ci_enabled" != "1" && "$qa_live_discord_ci_enabled" != "yes" ]]; then
+            qa_live_discord_ci_enabled=false
+          else
+            qa_live_discord_ci_enabled=true
+          fi
+          qa_live_whatsapp_ci_enabled="$(printf '%s' "$RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$qa_live_whatsapp_ci_enabled" != "true" && "$qa_live_whatsapp_ci_enabled" != "1" && "$qa_live_whatsapp_ci_enabled" != "yes" ]]; then
+            qa_live_whatsapp_ci_enabled=false
+          else
+            qa_live_whatsapp_ci_enabled=true
+          fi
+          qa_live_slack_ci_enabled="$(printf '%s' "$RELEASE_QA_SLACK_LIVE_CI_ENABLED" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$qa_live_slack_ci_enabled" != "true" && "$qa_live_slack_ci_enabled" != "1" && "$qa_live_slack_ci_enabled" != "yes" ]]; then
+            qa_live_slack_ci_enabled=false
+          else
+            qa_live_slack_ci_enabled=true
+          fi
+          qa_live_discord_enabled="$qa_live_discord_ci_enabled"
+          qa_live_whatsapp_enabled="$qa_live_whatsapp_ci_enabled"
+          qa_live_slack_enabled="$qa_live_slack_ci_enabled"
+          run_release_soak="$(printf '%s' "$RELEASE_RUN_RELEASE_SOAK_INPUT" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$run_release_soak" != "true" && "$run_release_soak" != "1" && "$run_release_soak" != "yes" ]]; then
+            run_release_soak=false
+          else
+            run_release_soak=true
+          fi
+          fail_fast="$(printf '%s' "$RELEASE_FAIL_FAST_INPUT" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$fail_fast" != "true" && "$fail_fast" != "1" && "$fail_fast" != "yes" ]]; then
+            fail_fast=false
+          else
+            fail_fast=true
+          fi
+          run_maturity_scorecard="$(printf '%s' "$RELEASE_RUN_MATURITY_SCORECARD_INPUT" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$run_maturity_scorecard" != "true" && "$run_maturity_scorecard" != "1" && "$run_maturity_scorecard" != "yes" ]]; then
+            run_maturity_scorecard=false
+          else
+            run_maturity_scorecard=true
+          fi
+          release_profile="$RELEASE_PROFILE_INPUT"
+          if [[ "$release_profile" == "minimum" ]]; then
+            release_profile=beta
+          fi
+          case "$release_profile" in
+            beta|stable|full) ;;
+            *)
+              echo "release_profile must be one of: beta, stable, full" >&2
+              exit 1
+              ;;
+          esac
+          if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then
+            run_release_soak=true
+          fi
+          allow_unreleased_changelog="$(printf '%s' "$RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$RELEASE_REF_INPUT" == "main" || "$RELEASE_REF_INPUT" == "refs/heads/main" ]]; then
+            allow_unreleased_changelog=true
+          elif [[ "$allow_unreleased_changelog" == "true" || "$allow_unreleased_changelog" == "1" || "$allow_unreleased_changelog" == "yes" ]]; then
+            allow_unreleased_changelog=true
+          elif [[ "$RELEASE_REF_INPUT" =~ ^(refs/heads/)?(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33|tideclaw/alpha/) ]] || [[ "$RELEASE_REF_INPUT" =~ ^(refs/tags/)?v[0-9]{4}\.[0-9]+\.[0-9]+ ]]; then
+            allow_unreleased_changelog=false
+          else
+            allow_unreleased_changelog=false
+          fi
+          skip_package_telegram_e2e="$(printf '%s' "$RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$skip_package_telegram_e2e" != "true" && "$skip_package_telegram_e2e" != "1" && "$skip_package_telegram_e2e" != "yes" ]]; then
+            skip_package_telegram_e2e=false
+          else
+            skip_package_telegram_e2e=true
+          fi
+          if [[ "$skip_package_telegram_e2e" == "true" && "$release_profile" != "beta" ]]; then
+            echo "skip_package_telegram_e2e is allowed only for release_profile=beta." >&2
+            exit 1
+          fi
+          codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"
+          if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then
+            codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"
+          fi
+
+          qa_filter_seen=false
+          filter="$(printf '%s' "$RELEASE_LIVE_SUITE_FILTER_INPUT" | tr '[:upper:]' '[:lower:]')"
+          repo_live_suite_filter="$filter"
+          if [[ -n "${filter// }" ]]; then
+            repo_filter_tokens=()
+            matrix_selected=false
+            buzz_selected=false
+            telegram_selected=false
+            discord_selected=false
+            whatsapp_selected=false
+            slack_selected=false
+            disabled_required_lanes=()
+
+            IFS=', ' read -r -a filter_tokens <<< "$filter"
+            for token in "${filter_tokens[@]}"; do
+              token="${token//$'\t'/}"
+              token="${token//$'\r'/}"
+              token="${token//$'\n'/}"
+              [[ -z "$token" ]] && continue
+              case "$token" in
+                qa-live|qa-live-all|qa-all)
+                  qa_filter_seen=true
+                  matrix_selected=true
+                  buzz_selected=true
+                  telegram_selected=true
+                  discord_selected="$qa_live_discord_ci_enabled"
+                  whatsapp_selected="$qa_live_whatsapp_ci_enabled"
+                  slack_selected="$qa_live_slack_ci_enabled"
+                  [[ "$qa_live_discord_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-discord")
+                  [[ "$qa_live_whatsapp_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-whatsapp")
+                  [[ "$qa_live_slack_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-slack")
+                  ;;
+                qa-live-non-slack|qa-non-slack|non-slack|no-slack|without-slack)
+                  qa_filter_seen=true
+                  matrix_selected=true
+                  buzz_selected=true
+                  telegram_selected=true
+                  discord_selected="$qa_live_discord_ci_enabled"
+                  whatsapp_selected="$qa_live_whatsapp_ci_enabled"
+                  [[ "$qa_live_discord_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-discord")
+                  [[ "$qa_live_whatsapp_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-whatsapp")
+                  ;;
+                qa-live-matrix|qa-matrix|matrix)
+                  qa_filter_seen=true
+                  matrix_selected=true
+                  ;;
+                qa-live-buzz|qa-buzz|buzz)
+                  qa_filter_seen=true
+                  buzz_selected=true
+                  ;;
+                qa-live-telegram|qa-telegram|telegram)
+                  qa_filter_seen=true
+                  telegram_selected=true
+                  ;;
+                qa-live-discord|qa-discord|discord)
+                  qa_filter_seen=true
+                  discord_selected="$qa_live_discord_ci_enabled"
+                  [[ "$qa_live_discord_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-discord")
+                  ;;
+                qa-live-whatsapp|qa-whatsapp|whatsapp)
+                  qa_filter_seen=true
+                  whatsapp_selected="$qa_live_whatsapp_ci_enabled"
+                  [[ "$qa_live_whatsapp_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-whatsapp")
+                  ;;
+                qa-live-slack|qa-slack|slack)
+                  qa_filter_seen=true
+                  slack_selected="$qa_live_slack_ci_enabled"
+                  [[ "$qa_live_slack_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-slack")
+                  ;;
+                *)
+                  repo_filter_tokens+=("$token")
+                  ;;
+              esac
+            done
+
+            if [[ "$qa_filter_seen" == "true" ]]; then
+              repo_live_suite_filter="$(IFS=,; printf '%s' "${repo_filter_tokens[*]-}")"
+            fi
+
+            if [[ "${#disabled_required_lanes[@]}" -gt 0 ]]; then
+              echo "live_suite_filter explicitly requested disabled QA live lane(s): ${disabled_required_lanes[*]}" >&2
+              echo "Enable the matching OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED repo variable or remove the lane from live_suite_filter." >&2
+              exit 1
+            fi
+
+            if [[ "$qa_filter_seen" == "true" ]]; then
+              qa_live_matrix_enabled="$matrix_selected"
+              qa_live_buzz_enabled="$buzz_selected"
+              qa_live_telegram_enabled="$telegram_selected"
+              qa_live_discord_enabled="$discord_selected"
+              qa_live_whatsapp_enabled="$whatsapp_selected"
+              qa_live_slack_enabled="$slack_selected"
+            fi
+          fi
+
+          qa_live_scheduled=false
+          if [[ "$RELEASE_RERUN_GROUP_INPUT" == "qa" || "$RELEASE_RERUN_GROUP_INPUT" == "qa-live" ]] ||
+            [[ "$RELEASE_RERUN_GROUP_INPUT" == "all" && ( "$run_release_soak" == "true" || "$qa_filter_seen" == "true" ) ]]; then
+            qa_live_scheduled=true
+          fi
+
+          cross_os_scheduled=false
+          if [[ "$RELEASE_RERUN_GROUP_INPUT" == "all" || "$RELEASE_RERUN_GROUP_INPUT" == "cross-os" ]]; then
+            cross_os_scheduled=true
+          fi
+          docker_release_scheduled=false
+          if { [[ "$RELEASE_RERUN_GROUP_INPUT" == "live-e2e" ]] ||
+              { [[ "$RELEASE_RERUN_GROUP_INPUT" == "all" ]] && [[ "$run_release_soak" == "true" ]]; }; } &&
+            [[ -z "${repo_live_suite_filter// }" ]]; then
+            docker_release_scheduled=true
+          fi
+
+          {
+            printf 'ref=%s\n' "$RELEASE_REF_INPUT"
+            printf 'provider=%s\n' "$RELEASE_PROVIDER_INPUT"
+            printf 'mode=%s\n' "$RELEASE_MODE_INPUT"
+            printf 'release_profile=%s\n' "$release_profile"
+            printf 'run_release_soak=%s\n' "$run_release_soak"
+            printf 'qa_live_scheduled=%s\n' "$qa_live_scheduled"
+            printf 'fail_fast=%s\n' "$fail_fast"
+            printf 'run_maturity_scorecard=%s\n' "$run_maturity_scorecard"
+            printf 'allow_unreleased_changelog=%s\n' "$allow_unreleased_changelog"
+            printf 'skip_package_telegram_e2e=%s\n' "$skip_package_telegram_e2e"
+            printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
+            printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
+            printf 'repo_live_suite_filter=%s\n' "$repo_live_suite_filter"
+            printf 'cross_os_suite_filter=%s\n' "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT"
+            printf 'qa_live_matrix_enabled=%s\n' "$qa_live_matrix_enabled"
+            printf 'qa_live_buzz_enabled=%s\n' "$qa_live_buzz_enabled"
+            printf 'qa_live_telegram_enabled=%s\n' "$qa_live_telegram_enabled"
+            printf 'qa_live_discord_enabled=%s\n' "$qa_live_discord_enabled"
+            printf 'qa_live_whatsapp_enabled=%s\n' "$qa_live_whatsapp_enabled"
+            printf 'qa_live_slack_enabled=%s\n' "$qa_live_slack_enabled"
+            printf 'release_package_spec=%s\n' "$RELEASE_PACKAGE_SPEC_INPUT"
+            printf 'package_acceptance_package_spec=%s\n' "$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT"
+            printf 'codex_plugin_spec=%s\n' "$codex_plugin_spec"
+            printf 'cross_os_scheduled=%s\n' "$cross_os_scheduled"
+            printf 'docker_release_scheduled=%s\n' "$docker_release_scheduled"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Summarize validated ref
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_SHA: ${{ steps.ref.outputs.sha }}
+          RELEASE_REF_FAST_PATH: ${{ steps.fast_ref.outputs.fast }}
+          RELEASE_PROVIDER: ${{ inputs.provider }}
+          RELEASE_MODE: ${{ inputs.mode }}
+          RELEASE_PROFILE: ${{ steps.inputs.outputs.release_profile }}
+          RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
+          QA_LIVE_SCHEDULED: ${{ steps.inputs.outputs.qa_live_scheduled }}
+          FAIL_FAST: ${{ steps.inputs.outputs.fail_fast }}
+          RUN_MATURITY_SCORECARD: ${{ steps.inputs.outputs.run_maturity_scorecard }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ steps.inputs.outputs.skip_package_telegram_e2e }}
+          ALLOW_UNRELEASED_CHANGELOG: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
+          RELEASE_RERUN_GROUP: ${{ inputs.rerun_group }}
+          RELEASE_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          RELEASE_CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
+          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ steps.inputs.outputs.codex_plugin_spec }}
+        run: |
+          {
+            echo "## Release checks"
+            echo
+            echo "- Requested ref: \`${RELEASE_REF}\`"
+            echo "- Validated SHA: \`${RELEASE_SHA}\`"
+            echo "- Ref resolution fast path: \`${RELEASE_REF_FAST_PATH}\`"
+            echo "- Cross-OS provider: \`${RELEASE_PROVIDER}\`"
+            echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
+            echo "- Release profile: \`${RELEASE_PROFILE}\`"
+            echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
+            echo "- QA-live scheduled: \`${QA_LIVE_SCHEDULED}\`"
+            echo "- Matrix QA fail fast: \`${FAIL_FAST}\`"
+            echo "- Maturity scorecard docs: \`${RUN_MATURITY_SCORECARD}\`"
+            echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
+            echo "- Allow Unreleased changelog packaging: \`${ALLOW_UNRELEASED_CHANGELOG}\`"
+            echo "- Rerun group: \`${RELEASE_RERUN_GROUP}\`"
+            if [[ -n "${RELEASE_LIVE_SUITE_FILTER// }" ]]; then
+              echo "- Live suite filter: \`${RELEASE_LIVE_SUITE_FILTER}\`"
+            fi
+            if [[ -n "${RELEASE_CROSS_OS_SUITE_FILTER// }" ]]; then
+              echo "- Cross-OS suite filter: \`${RELEASE_CROSS_OS_SUITE_FILTER}\`"
+            fi
+            echo "- QA-live lane eligibility: Matrix \`${{ steps.inputs.outputs.qa_live_matrix_enabled }}\`, Buzz \`${{ steps.inputs.outputs.qa_live_buzz_enabled }}\`, Telegram \`${{ steps.inputs.outputs.qa_live_telegram_enabled }}\`, Discord \`${{ steps.inputs.outputs.qa_live_discord_enabled }}\`, WhatsApp \`${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}\`, Slack \`${{ steps.inputs.outputs.qa_live_slack_enabled }}\`"
+            if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+              echo "- Release package spec: \`${RELEASE_PACKAGE_SPEC}\`"
+            fi
+            if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
+              echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
+            elif [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+              echo "- Package Acceptance package spec: \`${RELEASE_PACKAGE_SPEC}\`"
+            else
+              echo "- Package Acceptance package spec: prepared release artifact"
+            fi
+            if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+              echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
+            else
+              echo "- Codex plugin spec: packed from selected ref"
+            fi
+            if [[ "$RUN_RELEASE_SOAK" == "true" ]]; then
+              echo "- This run will execute blocking release validation plus exhaustive live/Docker soak coverage."
+            else
+              echo "- This run will execute blocking release validation. Exhaustive live/Docker soak lanes are skipped unless \`run_release_soak=true\`, \`release_profile=full\`, or \`rerun_group=live-e2e\` is selected."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  prepare_release_package:
+    name: Prepare release package artifact
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.cross_os_scheduled == 'true' || needs.resolve_target.outputs.docker_release_scheduled == 'true' || needs.resolve_target.outputs.rerun_group == 'package'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    outputs:
+      artifact_digest: ${{ steps.release_package_upload.outputs.artifact-digest || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactDigest }}
+      artifact_id: ${{ steps.release_package_upload.outputs.artifact-id || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId }}
+      artifact_name: ${{ steps.artifact.outputs.name || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactName }}
+      artifact_run_attempt: ${{ steps.artifact.outputs.run_attempt || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunAttempt }}
+      artifact_run_id: ${{ steps.artifact.outputs.run_id || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunId }}
+      package_file_name: ${{ steps.artifact.outputs.file_name || fromJSON(inputs.candidate_artifact_json || '{}').packageFileName }}
+      package_sha256: ${{ steps.package.outputs.sha256 || fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 }}
+      package_version: ${{ steps.package.outputs.package_version || fromJSON(inputs.candidate_artifact_json || '{}').packageVersion }}
+      prepublish_plugin_registry_json: ${{ steps.registry_identity.outputs.json }}
+      source_sha: ${{ steps.package.outputs.source_sha || fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha }}
+    steps:
+      - name: Checkout trusted workflow ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Set artifact metadata
+        id: artifact
+        if: inputs.candidate_artifact_json == ''
+        run: |
+          {
+            echo "file_name=openclaw-current.tgz"
+            echo "name=release-package-under-test-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+            echo "run_id=${GITHUB_RUN_ID}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node environment
+        if: inputs.candidate_artifact_json == ''
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+          install-deps: "true"
+
+      - name: Resolve release package artifact
+        id: package
+        if: inputs.candidate_artifact_json == ''
+        shell: bash
+        env:
+          CROSS_OS_SCHEDULED: ${{ needs.resolve_target.outputs.cross_os_scheduled }}
+          DOCKER_RELEASE_SCHEDULED: ${{ needs.resolve_target.outputs.docker_release_scheduled }}
+          PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
+          PROVIDER: ${{ needs.resolve_target.outputs.provider }}
+          RELEASE_PACKAGE_SPEC: ${{ needs.resolve_target.outputs.release_package_spec }}
+          RELEASE_PROFILE: ${{ needs.resolve_target.outputs.release_profile }}
+        run: |
+          set -euo pipefail
+          source_args=(--source ref --package-ref "$PACKAGE_REF")
+          package_label="ref:${PACKAGE_REF}"
+          if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+            source_args=(--source npm --package-spec "$RELEASE_PACKAGE_SPEC" --package-ref "$PACKAGE_REF")
+            package_label="$RELEASE_PACKAGE_SPEC"
+          fi
+          provider_packages='[]'
+          if [[ "$CROSS_OS_SCHEDULED" == "true" ]]; then
+            provider_packages="$(
+              OPENCLAW_RELEASE_CHECKS_SCRIPT=scripts/openclaw-cross-os-release-checks.ts \
+                bash scripts/github/run-openclaw-cross-os-release-checks.sh \
+                --resolve-provider-required-companion-packages \
+                --provider "$PROVIDER"
+            )"
+          fi
+          docker_packages='[]'
+          if [[ "$DOCKER_RELEASE_SCHEDULED" == "true" && -z "${RELEASE_PACKAGE_SPEC// }" ]]; then
+            export OPENCLAW_DOCKER_ALL_PROFILE=release-path
+            export OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL=1
+            export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="${{ needs.resolve_target.outputs.release_profile != 'beta' }}"
+            export OPENCLAW_DOCKER_ALL_RELEASE_PROFILE="$RELEASE_PROFILE"
+            docker_packages="$(
+              node scripts/test-docker-all.mjs --plan-json |
+                jq -c '.requiredPrepublishPluginPackages'
+            )"
+          fi
+          required_packages="$(
+            jq -cnr \
+              --argjson provider "$provider_packages" \
+              --argjson docker "$docker_packages" \
+              '$provider + $docker | unique | sort'
+          )"
+          registry_args=()
+          if [[ "$required_packages" != '[]' ]]; then
+            registry_args=(
+              --plugin-registry-output-dir .artifacts/prepublish-plugin-registry
+              --required-plugin-packages-json "$required_packages"
+            )
+          fi
+          node --import tsx scripts/resolve-openclaw-package-candidate.mts \
+            "${source_args[@]}" \
+            "${registry_args[@]}" \
+            --output-dir .artifacts/docker-e2e-package \
+            --output-name openclaw-current.tgz \
+            --metadata .artifacts/docker-e2e-package/package-candidate.json \
+            --github-output "$GITHUB_OUTPUT"
+          digest="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).sha256")"
+          version="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).version")"
+          source_sha="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).packageSourceSha")"
+          plugin_registry_manifest_sha256="$(node -p "JSON.parse(require('fs').readFileSync('.artifacts/docker-e2e-package/package-candidate.json', 'utf8')).pluginRegistryManifestSha256 || ''")"
+          if [[ "$source_sha" != "$PACKAGE_REF" ]]; then
+            echo "Release package source SHA differs from the selected release SHA: expected $PACKAGE_REF, found ${source_sha:-<missing>}." >&2
+            exit 1
+          fi
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "plugin_registry_manifest_sha256=$plugin_registry_manifest_sha256" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Release package artifact"
+            echo
+            echo "- Artifact: \`${{ steps.artifact.outputs.name }}\`"
+            echo "- Package: \`$package_label\`"
+            echo "- SHA-256: \`$digest\`"
+            echo "- Version: \`$version\`"
+            echo "- Source SHA: \`$source_sha\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release package artifact
+        id: release_package_upload
+        if: inputs.candidate_artifact_json == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: |
+            .artifacts/docker-e2e-package/${{ steps.artifact.outputs.file_name }}
+            .artifacts/docker-e2e-package/package-candidate.json
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload shared prerelease plugin registry artifact
+        id: prepublish_plugin_registry_upload
+        if: inputs.candidate_artifact_json == '' && steps.package.outputs.plugin_registry_manifest_sha256 != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: docker-e2e-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/prepublish-plugin-registry/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Validate release package artifact binding
+        if: inputs.candidate_artifact_json == ''
+        env:
+          ARTIFACT_DIGEST: ${{ steps.release_package_upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.release_package_upload.outputs.artifact-id }}
+          ARTIFACT_NAME: ${{ steps.artifact.outputs.name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ steps.artifact.outputs.run_attempt }}
+          ARTIFACT_RUN_ID: ${{ steps.artifact.outputs.run_id }}
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_FILE_NAME: ${{ steps.artifact.outputs.file_name }}
+          PACKAGE_SHA256: ${{ steps.package.outputs.sha256 }}
+          PACKAGE_SOURCE_SHA: ${{ steps.package.outputs.source_sha }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          [[ "$PACKAGE_FILE_NAME" == "openclaw-current.tgz" ]] || {
+            echo "Release package tarball filename is invalid." >&2
+            exit 1
+          }
+          [[ "$PACKAGE_SHA256" =~ ^[a-f0-9]{64}$ &&
+            "$PACKAGE_SOURCE_SHA" =~ ^[a-f0-9]{40}$ &&
+            -n "${PACKAGE_VERSION// }" ]] || {
+            echo "Release package identity is incomplete." >&2
+            exit 1
+          }
+          bash scripts/docker/shared-image-artifact.sh \
+            verify-upload "Release package" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Validate shared prerelease plugin registry binding
+        if: inputs.candidate_artifact_json == '' && steps.package.outputs.plugin_registry_manifest_sha256 != ''
+        env:
+          ARTIFACT_DIGEST: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-id }}
+          ARTIFACT_NAME: docker-e2e-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
+          ARTIFACT_RUN_ATTEMPT: ${{ github.run_attempt }}
+          ARTIFACT_RUN_ID: ${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+          MANIFEST_SHA256: ${{ steps.package.outputs.plugin_registry_manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$MANIFEST_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Shared prerelease plugin registry manifest identity is incomplete." >&2
+            exit 1
+          }
+          bash scripts/docker/shared-image-artifact.sh \
+            verify-upload "Prerelease plugin registry" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Validate shared release candidate identity
+        if: inputs.candidate_artifact_json != ''
+        env:
+          CANDIDATE_ARTIFACT_JSON: ${{ inputs.candidate_artifact_json }}
+          GH_TOKEN: ${{ github.token }}
+          SELECTED_SHA: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          jq -e \
+            --arg sha "$SELECTED_SHA" \
+            'def digits: test("^[1-9][0-9]*$");
+             def hex40: test("^[a-f0-9]{40}$");
+             def hex64: test("^[a-f0-9]{64}$");
+             (.packageArtifactName | type == "string" and length > 0) and
+             (.packageArtifactId | tostring | digits) and
+             (.packageArtifactDigest | hex64) and
+             (.packageArtifactRunId | tostring | digits) and
+             (.packageArtifactRunAttempt | tostring | digits) and
+             (.packageFileName | test("^[A-Za-z0-9][A-Za-z0-9._-]*\\.tgz$")) and
+             (.packageSourceSha | hex40) and
+             .packageSourceSha == $sha and
+             (.packageSha256 | hex64) and
+             (.packageVersion | type == "string" and length > 0) and
+             (.imageArtifactName | type == "string" and length > 0) and
+             (.imageArtifactId | tostring | digits) and
+             (.imageArtifactDigest | hex64) and
+             (.imageArtifactRunId | tostring | digits) and
+             (.imageArtifactRunAttempt | tostring | digits) and
+             (.imageArchiveSha256 | hex64) and
+             (
+               (
+                 (has("prepublishPluginRegistryArtifactName") | not) and
+                 (has("prepublishPluginRegistryArtifactId") | not) and
+                 (has("prepublishPluginRegistryArtifactDigest") | not) and
+                 (has("prepublishPluginRegistryArtifactRunId") | not) and
+                 (has("prepublishPluginRegistryArtifactRunAttempt") | not) and
+                 (has("prepublishPluginRegistryManifestSha256") | not)
+               ) or
+               (
+                 (.prepublishPluginRegistryArtifactName | type == "string" and length > 0) and
+                 (.prepublishPluginRegistryArtifactId | type == "string" and digits) and
+                 (.prepublishPluginRegistryArtifactDigest | hex64) and
+                 (.prepublishPluginRegistryArtifactRunId | type == "string" and digits) and
+                 (.prepublishPluginRegistryArtifactRunAttempt | type == "string" and digits) and
+                 (.prepublishPluginRegistryManifestSha256 | hex64) and
+                 .prepublishPluginRegistryArtifactName ==
+                   ("docker-e2e-prepublish-plugin-registry-" +
+                     (.prepublishPluginRegistryArtifactRunId | tostring) + "-" +
+                     (.prepublishPluginRegistryArtifactRunAttempt | tostring))
+               )
+             )' \
+            <<< "$CANDIDATE_ARTIFACT_JSON" >/dev/null
+          bash scripts/docker/shared-image-artifact.sh \
+            verify-upload "Release package" \
+            "$(jq -r '.packageArtifactId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+            "$(jq -r '.packageArtifactName' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+            "$(jq -r '.packageArtifactDigest' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+            "$(jq -r '.packageArtifactRunId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+            "$(jq -r '.packageArtifactRunAttempt' <<< "$CANDIDATE_ARTIFACT_JSON")"
+          if jq -e 'has("prepublishPluginRegistryArtifactId")' \
+            <<< "$CANDIDATE_ARTIFACT_JSON" >/dev/null; then
+            bash scripts/docker/shared-image-artifact.sh \
+              verify-upload "Prerelease plugin registry" \
+              "$(jq -r '.prepublishPluginRegistryArtifactId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -r '.prepublishPluginRegistryArtifactName' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -r '.prepublishPluginRegistryArtifactDigest' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -r '.prepublishPluginRegistryArtifactRunId' <<< "$CANDIDATE_ARTIFACT_JSON")" \
+              "$(jq -r '.prepublishPluginRegistryArtifactRunAttempt' <<< "$CANDIDATE_ARTIFACT_JSON")"
+          fi
+
+      - name: Prepare prerelease plugin registry identity
+        id: registry_identity
+        env:
+          CANDIDATE_ARTIFACT_JSON: ${{ inputs.candidate_artifact_json }}
+          GENERATED_ARTIFACT_DIGEST: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-digest }}
+          GENERATED_ARTIFACT_ID: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-id }}
+          GENERATED_MANIFEST_SHA256: ${{ steps.package.outputs.plugin_registry_manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$GENERATED_ARTIFACT_ID" ]]; then
+            jq -cnr \
+              --arg digest "$GENERATED_ARTIFACT_DIGEST" \
+              --arg id "$GENERATED_ARTIFACT_ID" \
+              --arg manifest "$GENERATED_MANIFEST_SHA256" \
+              --arg name "docker-e2e-prepublish-plugin-registry-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              --arg attempt "$GITHUB_RUN_ATTEMPT" \
+              --arg run "$GITHUB_RUN_ID" \
+              '{
+                prepublishPluginRegistryArtifactName: $name,
+                prepublishPluginRegistryArtifactId: $id,
+                prepublishPluginRegistryArtifactDigest: $digest,
+                prepublishPluginRegistryArtifactRunId: $run,
+                prepublishPluginRegistryArtifactRunAttempt: $attempt,
+                prepublishPluginRegistryManifestSha256: $manifest
+              } | "json=\(.)"' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -n "$CANDIDATE_ARTIFACT_JSON" ]] &&
+            jq -e 'has("prepublishPluginRegistryArtifactId")' \
+              <<< "$CANDIDATE_ARTIFACT_JSON" >/dev/null; then
+            jq -cr '{
+              prepublishPluginRegistryArtifactName,
+              prepublishPluginRegistryArtifactId,
+              prepublishPluginRegistryArtifactDigest,
+              prepublishPluginRegistryArtifactRunId,
+              prepublishPluginRegistryArtifactRunAttempt,
+              prepublishPluginRegistryManifestSha256
+            } | "json=\(.)"' <<< "$CANDIDATE_ARTIFACT_JSON" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "json=" >> "$GITHUB_OUTPUT"
+
+  install_smoke_release_checks:
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","install-smoke"]'), needs.resolve_target.outputs.rerun_group)
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+    uses: ./.github/workflows/install-smoke-reusable.yml
+    with:
+      allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
+      ref: ${{ needs.resolve_target.outputs.revision }}
+      run_bun_global_install_smoke: true
+
+  cross_os_release_checks:
+    needs: [resolve_target, prepare_release_package]
+    if: needs.resolve_target.outputs.cross_os_scheduled == 'true'
+    permissions: read-all
+    uses: ./.github/workflows/openclaw-cross-os-release-checks-reusable.yml
+    with:
+      advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      ref: ${{ needs.resolve_target.outputs.revision }}
+      provider: ${{ needs.resolve_target.outputs.provider }}
+      mode: ${{ needs.resolve_target.outputs.mode }}
+      suite_filter: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
+      candidate_artifact_digest: ${{ needs.prepare_release_package.outputs.artifact_digest }}
+      candidate_artifact_id: ${{ needs.prepare_release_package.outputs.artifact_id }}
+      candidate_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
+      candidate_artifact_run_attempt: ${{ needs.prepare_release_package.outputs.artifact_run_attempt }}
+      candidate_artifact_run_id: ${{ needs.prepare_release_package.outputs.artifact_run_id }}
+      candidate_file_name: ${{ needs.prepare_release_package.outputs.package_file_name }}
+      candidate_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
+      candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
+      candidate_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
+      prepublish_plugin_registry_json: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_json }}
+      openai_model: openai/gpt-5.6-luna
+      ubuntu_runner: ubuntu-24.04
+      windows_runner: windows-2025
+      macos_runner: macos-26
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: ${{ secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN }}
+      OPENCLAW_DISCORD_SMOKE_GUILD_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_GUILD_ID }}
+      OPENCLAW_DISCORD_SMOKE_CHANNEL_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID }}
+
+  live_repo_e2e_release_checks:
+    name: Run repo/live E2E validation
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
+      allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
+      # Live-provider suites depend on third-party model deployments; beta
+      # treats only those as advisory while repo E2E stays blocking and
+      # stable/full keep everything blocking.
+      live_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
+      ref: ${{ needs.resolve_target.outputs.revision }}
+      include_repo_e2e: true
+      include_release_path_suites: false
+      include_openwebui: false
+      include_live_suites: true
+      release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
+      live_suite_filter: ${{ needs.resolve_target.outputs.repo_live_suite_filter }}
+      shared_image_artifact_namespace: release-live
+      shared_image_policy: no-push-artifact
+    secrets: &live_e2e_release_secrets
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+      OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      FAL_KEY: ${{ secrets.FAL_KEY }}
+      RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
+      BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+
+  docker_e2e_release_checks:
+    name: Run Docker release-path validation
+    needs: [resolve_target, prepare_release_package]
+    if: needs.resolve_target.outputs.docker_release_scheduled == 'true'
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
+      allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
+      ref: ${{ needs.resolve_target.outputs.revision }}
+      include_repo_e2e: false
+      include_release_path_suites: true
+      include_openwebui: ${{ needs.resolve_target.outputs.release_profile != 'beta' }}
+      include_live_suites: false
+      release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
+      package_artifact_digest: ${{ needs.prepare_release_package.outputs.artifact_digest }}
+      package_artifact_id: ${{ needs.prepare_release_package.outputs.artifact_id }}
+      package_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
+      package_artifact_run_attempt: ${{ needs.prepare_release_package.outputs.artifact_run_attempt }}
+      package_artifact_run_id: ${{ needs.prepare_release_package.outputs.artifact_run_id }}
+      package_file_name: ${{ needs.prepare_release_package.outputs.package_file_name }}
+      package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
+      package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
+      package_version: ${{ needs.prepare_release_package.outputs.package_version }}
+      enable_prepublish_plugin_registry: ${{ needs.resolve_target.outputs.release_package_spec == '' }}
+      prepublish_plugin_registry_artifact_name: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '' }}
+      prepublish_plugin_registry_artifact_id: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+      prepublish_plugin_registry_artifact_digest: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
+      prepublish_plugin_registry_artifact_run_id: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
+      prepublish_plugin_registry_artifact_run_attempt: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
+      prepublish_plugin_registry_manifest_sha256: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
+      codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}
+      shared_image_artifact_namespace: release-docker
+      shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
+      shared_image_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
+      shared_image_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}
+      shared_image_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunId || '' }}
+      shared_image_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunAttempt || '' }}
+      shared_image_archive_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArchiveSha256 || '' }}
+      shared_image_policy: no-push-artifact
+    secrets: *live_e2e_release_secrets
+
+  package_acceptance_release_checks:
+    name: Run package acceptance
+    needs: [resolve_target, prepare_release_package]
+    if: contains(fromJSON('["all","package"]'), needs.resolve_target.outputs.rerun_group)
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pull-requests: read
+    uses: ./.github/workflows/package-acceptance.yml
+    with:
+      advisory: false
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
+      workflow_ref: ${{ github.sha }}
+      source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}
+      package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}
+      artifact_digest: ${{ needs.prepare_release_package.outputs.artifact_digest }}
+      artifact_id: ${{ needs.prepare_release_package.outputs.artifact_id }}
+      artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
+      artifact_run_attempt: ${{ needs.prepare_release_package.outputs.artifact_run_attempt }}
+      artifact_run_id: ${{ needs.prepare_release_package.outputs.artifact_run_id }}
+      package_file_name: ${{ needs.prepare_release_package.outputs.package_file_name }}
+      package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}
+      package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
+      package_version: ${{ needs.prepare_release_package.outputs.package_version }}
+      suite_profile: custom
+      docker_lanes: release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
+      published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
+      published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
+      telegram_mode: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e == 'true' && 'none' || 'mock-openai' }}
+      telegram_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
+      shared_image_artifact_namespace: release-package
+      candidate_artifact_json: ${{ inputs.candidate_artifact_json }}
+      shared_image_policy: no-push-artifact
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+      OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      FAL_KEY: ${{ secrets.FAL_KEY }}
+      RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
+      BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+      OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+      OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+
+  maturity_scorecard_release_checks:
+    name: Render maturity scorecard release docs
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","qa"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.run_maturity_scorecard == 'true'
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/maturity-scorecard.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.ref }}
+      expected_sha: ${{ needs.resolve_target.outputs.revision }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+      OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+
+  qa_lab_parity_lane_release_checks:
+    name: Run QA Lab parity lane (${{ matrix.lane }})
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: candidate
+            output_dir: openai-candidate
+          - lane: baseline
+            output_dir: anthropic-baseline
+    env:
+      QA_PARITY_CONCURRENCY: "1"
+      OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      OPENCLAW_LIVE_OPENAI_KEY: ""
+      OPENCLAW_LIVE_ANTHROPIC_KEY: ""
+      OPENCLAW_LIVE_GEMINI_KEY: ""
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build qaRuntime
+
+      - name: Run parity lane
+        id: run_lane
+        env:
+          QA_PARITY_LANE: ${{ matrix.lane }}
+          QA_PARITY_OUTPUT_DIR: ${{ matrix.output_dir }}
+        run: |
+          set -euo pipefail
+
+          case "${QA_PARITY_LANE}" in
+            candidate)
+              model="${OPENCLAW_CI_OPENAI_MODEL}"
+              alt_model="openai/gpt-5.6-luna-alt"
+              ;;
+            baseline)
+              model="anthropic/claude-opus-4-8"
+              alt_model="anthropic/claude-sonnet-4-6"
+              ;;
+            *)
+              echo "Unknown QA parity lane: ${QA_PARITY_LANE}" >&2
+              exit 1
+              ;;
+          esac
+
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --parity-pack agentic \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model "${model}" \
+            --alt-model "${alt_model}" \
+            --output-dir ".artifacts/qa-e2e/${QA_PARITY_OUTPUT_DIR}"
+
+      - name: Upload parity lane artifacts
+        id: upload_parity_lane_artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-qa-parity-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_lab_parity_lane_release_checks
+          RELEASE_CHECK_VARIANT: ${{ matrix.lane }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_parity_lane_artifacts.outcome }}
+        run: &record_release_check_advisory_status |
+          set -euo pipefail
+          status="success"
+          mark_status() {
+            case "$1" in
+              failure) status="failure" ;;
+              cancelled)
+                if [[ "$status" != "failure" ]]; then
+                  status="cancelled"
+                fi
+                ;;
+              success|skipped|"") ;;
+              *) status="failure" ;;
+            esac
+          }
+          mark_status "${JOB_STATUS:-}"
+          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
+            mark_status "$outcome"
+          done
+          mkdir -p .artifacts/release-check-status
+          status_name="$RELEASE_CHECK_JOB"
+          if [[ -n "${RELEASE_CHECK_VARIANT:-}" ]]; then
+            status_name="${status_name}-${RELEASE_CHECK_VARIANT}"
+          fi
+          status_path=".artifacts/release-check-status/${status_name}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
+          {
+            printf 'run_id=%s\n' "${GITHUB_RUN_ID:?}"
+            printf 'run_attempt=%s\n' "${GITHUB_RUN_ATTEMPT:?}"
+            printf 'target_sha=%s\n' "${RELEASE_CHECK_TARGET_SHA:?}"
+            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
+            printf 'variant=%s\n' "${RELEASE_CHECK_VARIANT:-}"
+            printf 'status=%s\n' "$status"
+            printf 'job_status=%s\n' "${JOB_STATUS:-}"
+            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
+          } > "$status_path"
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-parity-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_lab_parity_lane_release_checks-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}.env
+          retention-days: 14
+          if-no-files-found: error
+
+  qa_lab_parity_report_release_checks:
+    name: Run QA Lab parity report
+    needs: [resolve_target, qa_lab_parity_lane_release_checks]
+    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Checkout trusted release artifact resolver
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted-release-check-artifacts
+          sparse-checkout: scripts/github/resolve-release-check-artifacts.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - name: Resolve parity lane artifacts
+        id: resolve_parity_lane_artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          selection_file=".artifacts/release-check-selection/parity-lanes.json"
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh resolve \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --consumer-attempt "$GITHUB_RUN_ATTEMPT" \
+            --target-sha "$RELEASE_CHECK_TARGET_SHA" \
+            --pair "qa_lab_parity_lane_release_checks|candidate|release-check-status-qa-parity-candidate-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-parity-candidate-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}" \
+            --pair "qa_lab_parity_lane_release_checks|baseline|release-check-status-qa-parity-baseline-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-parity-baseline-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}" \
+            --selection-file "$selection_file" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Download parity lane statuses
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.resolve_parity_lane_artifacts.outputs.status_ids }}
+          path: .artifacts/release-check-status/
+          merge-multiple: true
+
+      - name: Download parity lane artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.resolve_parity_lane_artifacts.outputs.payload_ids }}
+          path: .artifacts/qa-e2e/
+          merge-multiple: true
+
+      - name: Verify parity lane statuses
+        shell: bash
+        run: |
+          set -euo pipefail
+          validated_file=".artifacts/release-check-selection/parity-lanes-validated.json"
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh validate \
+            --selection-file "${{ steps.resolve_parity_lane_artifacts.outputs.selection_file }}" \
+            --status-dir .artifacts/release-check-status \
+            --validated-file "$validated_file"
+          jq -e 'length == 2 and all(.[]; .status == "success")' "$validated_file" >/dev/null
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build qaRuntime
+
+      - name: Generate parity report
+        id: generate_report
+        run: |
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --candidate-summary .artifacts/qa-e2e/openai-candidate/qa-suite-summary.json \
+            --baseline-summary .artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json \
+            --candidate-label "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --baseline-label anthropic/claude-opus-4-8 \
+            --output-dir .artifacts/qa-e2e/parity
+
+      - name: Upload parity artifacts
+        id: upload_parity_artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-qa-parity-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_lab_parity_report_release_checks
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.generate_report.outcome }} ${{ steps.upload_parity_artifacts.outcome }}
+        run: *record_release_check_advisory_status
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-parity-report-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_lab_parity_report_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
+          retention-days: 14
+          if-no-files-found: error
+
+  qa_lab_runtime_pair_lane_release_checks:
+    name: Run QA Lab runtime-pair lane (${{ matrix.lane }})
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    continue-on-error: true
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJSON(needs.resolve_target.outputs.run_release_soak == 'true' && '["core","soak"]' || '["core"]') }}
+    permissions:
+      contents: read
+    env:
+      QA_PARITY_CONCURRENCY: "1"
+      OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      OPENCLAW_LIVE_OPENAI_KEY: ""
+      OPENCLAW_LIVE_ANTHROPIC_KEY: ""
+      OPENCLAW_LIVE_GEMINI_KEY: ""
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build qaRuntime
+
+      - name: Run runtime-pair lane
+        id: candidate_runtime_pair
+        continue-on-error: true
+        env:
+          RUNTIME_PAIR_LANE: ${{ matrix.lane }}
+        run: |
+          set -euo pipefail
+
+          output_dir="runtime-pair-${RUNTIME_PAIR_LANE}"
+          runtime_pair_args=(
+            --provider-mode mock-openai
+            --concurrency "${QA_PARITY_CONCURRENCY}"
+            --model "${OPENCLAW_CI_OPENAI_MODEL}"
+            --alt-model "openai/gpt-5.6-luna-alt"
+            --runtime-pair openclaw,codex
+            --output-dir ".artifacts/qa-e2e/${output_dir}"
+          )
+
+          if pnpm openclaw qa suite --help | grep -Fq -- "--runtime-pair-lane"; then
+            runtime_pair_args+=(--runtime-pair-lane "$RUNTIME_PAIR_LANE")
+          elif [[ "$RUNTIME_PAIR_LANE" == "core" ]]; then
+            # Legacy explicit-tier selection bypasses its provider eligibility
+            # filter. live-only scenarios require a live provider, so the mock
+            # core lane must select only the eligible standard tier.
+            runtime_pair_args+=(--runtime-parity-tier standard)
+          elif [[ "$RUNTIME_PAIR_LANE" == "soak" ]]; then
+            runtime_pair_args+=(--runtime-parity-tier soak)
+          else
+            echo "Frozen candidate cannot select runtime-pair lane: $RUNTIME_PAIR_LANE" >&2
+            exit 1
+          fi
+
+          pnpm openclaw qa suite "${runtime_pair_args[@]}"
+
+      - name: Checkout trusted validator after candidate suite
+        if: always()
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted-suite-validator
+          fetch-depth: 1
+
+      - name: Validate runtime-pair lane
+        id: runtime_parity_validation
+        if: always()
+        env:
+          CANDIDATE_SUITE_OUTCOME: ${{ steps.candidate_runtime_pair.outcome }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          RUNTIME_PAIR_LANE: ${{ matrix.lane }}
+        run: |
+          set -euo pipefail
+          output_dir="runtime-pair-${RUNTIME_PAIR_LANE}"
+          summary=".artifacts/qa-e2e/${output_dir}/qa-suite-summary.json"
+          validator_args=(
+            --summary "$summary"
+            --target-sha "$RELEASE_CHECK_TARGET_SHA"
+            --lane "$RUNTIME_PAIR_LANE"
+          )
+          if [[ "$CANDIDATE_SUITE_OUTCOME" != "success" ]]; then
+            validator_args+=(--require-explicit-gap)
+          fi
+          node --import tsx trusted-suite-validator/scripts/validate-qa-runtime-pair-summary.mts "${validator_args[@]}"
+          if [[ "$CANDIDATE_SUITE_OUTCOME" != "success" ]]; then
+            echo "::notice::Trusted workflow validation accepted frozen-candidate runtime-pair evidence after its suite failed."
+          fi
+
+      - name: Run OpenClaw core restart proof
+        id: runtime_core_restart
+        if: matrix.lane == 'core' && steps.runtime_parity_validation.outcome == 'success'
+        run: |
+          # Restart recovery owns an OpenClaw Gateway lifecycle; it is release-critical
+          # but cannot be compared against the Codex app-server runtime.
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "openai/gpt-5.6-luna-alt" \
+            --scenario gateway-restart-inflight-run \
+            --output-dir ".artifacts/qa-e2e/openclaw-core-restart"
+
+      - name: Generate runtime-pair lane report
+        id: candidate_runtime_parity_report
+        if: always()
+        continue-on-error: true
+        env:
+          RUNTIME_PAIR_LANE: ${{ matrix.lane }}
+        run: |
+          set -euo pipefail
+
+          output_dir="runtime-pair-${RUNTIME_PAIR_LANE}"
+          summary=".artifacts/qa-e2e/${output_dir}/qa-suite-summary.json"
+          if [[ "$RUNTIME_PAIR_LANE" == "soak" && ! -f "$summary" ]]; then
+            echo "No soak runtime-pair summary was produced."
+            exit 0
+          fi
+          report_dir=".artifacts/qa-e2e/${output_dir}-report"
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --runtime-axis \
+            --summary "$summary" \
+            --output-dir "$report_dir"
+
+      - name: Checkout trusted validator after candidate report
+        if: always()
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted-report-validator
+          fetch-depth: 1
+
+      - name: Validate runtime-pair lane report
+        id: generate_runtime_parity_report
+        if: always()
+        env:
+          CANDIDATE_REPORT_OUTCOME: ${{ steps.candidate_runtime_parity_report.outcome }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          RUNTIME_PAIR_LANE: ${{ matrix.lane }}
+        run: |
+          set -euo pipefail
+          output_dir="runtime-pair-${RUNTIME_PAIR_LANE}"
+          summary=".artifacts/qa-e2e/${output_dir}/qa-suite-summary.json"
+          report_dir=".artifacts/qa-e2e/${output_dir}-report"
+          validator_args=(
+            --summary "$summary"
+            --report-summary "$report_dir/qa-runtime-parity-summary.json"
+            --report-markdown "$report_dir/qa-runtime-parity-report.md"
+            --target-sha "$RELEASE_CHECK_TARGET_SHA"
+            --lane "$RUNTIME_PAIR_LANE"
+          )
+          if [[ "$CANDIDATE_REPORT_OUTCOME" != "success" ]]; then
+            validator_args+=(--require-explicit-gap)
+          fi
+          node --import tsx trusted-report-validator/scripts/validate-qa-runtime-pair-summary.mts "${validator_args[@]}"
+          if [[ "$CANDIDATE_REPORT_OUTCOME" != "success" ]]; then
+            echo "::notice::Trusted workflow validation accepted the frozen-candidate runtime-pair report after its reporter failed."
+          fi
+
+      - name: Upload runtime-pair lane artifacts
+        id: upload_runtime_parity_artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-qa-runtime-pair-lane-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Record runtime-pair lane status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_lab_runtime_pair_lane_release_checks
+          RELEASE_CHECK_VARIANT: ${{ matrix.lane }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.runtime_parity_validation.outcome }} ${{ steps.runtime_core_restart.outcome }} ${{ steps.generate_runtime_parity_report.outcome }} ${{ steps.upload_runtime_parity_artifacts.outcome }}
+        run: *record_release_check_advisory_status
+
+      - name: Upload runtime-pair lane status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-internal-status-qa-runtime-pair-lane-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_lab_runtime_pair_lane_release_checks-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}.env
+          retention-days: 14
+          if-no-files-found: error
+
+  qa_lab_runtime_parity_release_checks:
+    name: Verify QA Lab runtime-pair lanes
+    needs: [resolve_target, qa_lab_runtime_pair_lane_release_checks]
+    if: always() && contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout trusted release artifact resolver
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted-release-check-artifacts
+          sparse-checkout: scripts/github/resolve-release-check-artifacts.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Resolve runtime-pair lane artifacts
+        id: resolve_runtime_pair_artifacts
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          RUN_RELEASE_SOAK: ${{ needs.resolve_target.outputs.run_release_soak }}
+        run: |
+          set -euo pipefail
+          selection_file=".artifacts/release-check-selection/runtime-pair-lanes.json"
+          args=(
+            resolve
+            --repository "$GITHUB_REPOSITORY"
+            --run-id "$GITHUB_RUN_ID"
+            --consumer-attempt "$GITHUB_RUN_ATTEMPT"
+            --target-sha "$RELEASE_CHECK_TARGET_SHA"
+            --pair "qa_lab_runtime_pair_lane_release_checks|core|release-internal-status-qa-runtime-pair-lane-core-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-runtime-pair-lane-core-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            --selection-file "$selection_file"
+            --github-output "$GITHUB_OUTPUT"
+          )
+          if [[ "$RUN_RELEASE_SOAK" == "true" ]]; then
+            args+=(
+              --pair "qa_lab_runtime_pair_lane_release_checks|soak|release-internal-status-qa-runtime-pair-lane-soak-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-runtime-pair-lane-soak-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh "${args[@]}"
+
+      - name: Download runtime-pair lane statuses
+        id: download_runtime_pair_statuses
+        if: always() && steps.resolve_runtime_pair_artifacts.outcome == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.resolve_runtime_pair_artifacts.outputs.status_ids }}
+          path: .artifacts/release-check-status/
+          merge-multiple: true
+
+      - name: Download runtime-pair lane artifacts
+        id: download_runtime_pair_artifacts
+        if: always() && steps.resolve_runtime_pair_artifacts.outcome == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.resolve_runtime_pair_artifacts.outputs.payload_ids }}
+          path: .artifacts/qa-e2e/
+          merge-multiple: true
+
+      - name: Verify runtime-pair lane statuses
+        id: verify_runtime_parity_statuses
+        if: always()
+        shell: bash
+        env:
+          RUN_RELEASE_SOAK: ${{ needs.resolve_target.outputs.run_release_soak }}
+        run: |
+          set -euo pipefail
+          validated_file=".artifacts/release-check-selection/runtime-pair-lanes-validated.json"
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh validate \
+            --selection-file "${{ steps.resolve_runtime_pair_artifacts.outputs.selection_file }}" \
+            --status-dir .artifacts/release-check-status \
+            --validated-file "$validated_file"
+          expected_count=1
+          if [[ "$RUN_RELEASE_SOAK" == "true" ]]; then
+            expected_count=2
+          fi
+          jq -e --argjson expected_count "$expected_count" \
+            'length == $expected_count and all(.[]; .status == "success")' \
+            "$validated_file" >/dev/null
+
+      - name: Upload runtime parity artifacts
+        id: upload_runtime_parity_artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_lab_runtime_parity_release_checks
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.resolve_runtime_pair_artifacts.outcome }} ${{ steps.download_runtime_pair_statuses.outcome }} ${{ steps.download_runtime_pair_artifacts.outcome }} ${{ steps.verify_runtime_parity_statuses.outcome }} ${{ steps.upload_runtime_parity_artifacts.outcome }}
+        run: *record_release_check_advisory_status
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_lab_runtime_parity_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
+          retention-days: 14
+          if-no-files-found: error
+
+  runtime_tool_coverage_release_checks:
+    name: Enforce QA Lab runtime tool coverage
+    needs: [resolve_target, qa_lab_runtime_parity_release_checks]
+    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Checkout trusted release artifact resolver
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted-release-check-artifacts
+          sparse-checkout: scripts/github/resolve-release-check-artifacts.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - name: Resolve runtime parity artifacts
+        id: resolve_runtime_parity_artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          selection_file=".artifacts/release-check-selection/runtime-parity.json"
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh resolve \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-id "$GITHUB_RUN_ID" \
+            --consumer-attempt "$GITHUB_RUN_ATTEMPT" \
+            --target-sha "$RELEASE_CHECK_TARGET_SHA" \
+            --pair "qa_lab_runtime_parity_release_checks||release-check-status-qa-runtime-parity-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-runtime-parity-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}" \
+            --selection-file "$selection_file" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Download runtime parity status
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.resolve_runtime_parity_artifacts.outputs.status_ids }}
+          path: .artifacts/release-check-status/
+
+      - name: Verify runtime parity producer status
+        id: verify_runtime_parity_status
+        shell: bash
+        run: |
+          set -euo pipefail
+          validated_file=".artifacts/release-check-selection/runtime-parity-validated.json"
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh validate \
+            --selection-file "${{ steps.resolve_runtime_parity_artifacts.outputs.selection_file }}" \
+            --status-dir .artifacts/release-check-status \
+            --validated-file "$validated_file"
+          status="$(jq -r 'if length == 1 then .[0].status else empty end' "$validated_file")"
+          [[ -n "$status" ]] || {
+            echo "Runtime parity producer status selection is incomplete." >&2
+            exit 1
+          }
+          if [[ "$status" != "success" ]]; then
+            echo "Runtime parity producer status is ${status:-missing}; skipping coverage artifact consumer."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Download runtime parity artifacts
+        if: steps.verify_runtime_parity_status.outputs.ready == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.resolve_runtime_parity_artifacts.outputs.payload_ids }}
+          path: .artifacts/qa-e2e/
+
+      - name: Enforce core runtime tool coverage
+        if: steps.verify_runtime_parity_status.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          pnpm openclaw qa coverage \
+            --repo-root . \
+            --tools \
+            --summary .artifacts/qa-e2e/runtime-pair-core/qa-suite-summary.json \
+            --output .artifacts/qa-e2e/runtime-pair-core-report/qa-runtime-tool-coverage-report.md
+
+      - name: Upload runtime tool coverage artifacts
+        if: ${{ always() && steps.verify_runtime_parity_status.outputs.ready == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-qa-runtime-tool-coverage-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/qa-e2e/runtime-pair-core-report/
+          retention-days: 14
+          if-no-files-found: error
+
+  qa_live_release_checks:
+    name: Run QA Live Matrix catalog
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/qa-live-transports-convex.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.revision }}
+      expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      run_matrix: true
+      fail_fast: ${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+      OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+
+  qa_live_buzz_release_checks:
+    name: Run QA Lab live Buzz lane
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_buzz_enabled == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/qa-live-transports-convex.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.revision }}
+      expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      run_buzz: true
+      buzz_scenario: channel-canary,channel-mention-gating
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+      OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+
+  # The dispatched child owns Telegram evidence/status artifacts; this blocking job
+  # carries its exact conclusion into the parent summary without copying secrets or artifacts.
+  qa_live_telegram_release_checks:
+    name: Run QA Lab live Telegram lane
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 210
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch and await trusted Telegram QA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          workflow="openclaw-release-telegram-qa.yml"
+          run_id=""
+          run_name=""
+          find_child_runs() {
+            RUN_NAME="$run_name" gh api -X GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
+              -F event=workflow_dispatch \
+              -F branch=main \
+              -F per_page=100 \
+              --jq '[.workflow_runs[] | select(.display_title == env.RUN_NAME) | {id, head_sha}]'
+          }
+          cancel_child() {
+            if [[ -n "${run_id:-}" ]]; then
+              gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>&1 || true
+            fi
+          }
+          cancel_child_on_failure() {
+            status="$?"
+            trap - EXIT
+            if [[ "$status" -ne 0 ]]; then
+              set +e
+              if [[ -z "${run_id:-}" && -n "${run_name:-}" ]]; then
+                # The nonce makes delayed discovery safe after an ambiguous dispatch response.
+                for _ in $(seq 1 6); do
+                  matches_json="$(find_child_runs 2>/dev/null)" || matches_json="[]"
+                  if [[ "$(jq 'length' <<<"$matches_json" 2>/dev/null)" == "1" ]]; then
+                    run_id="$(jq -r '.[0].id' <<<"$matches_json")"
+                    break
+                  fi
+                  sleep 2
+                done
+              fi
+              cancel_child
+            fi
+            exit "$status"
+          }
+          trap cancel_child_on_failure EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          for dispatch_attempt in 1 2 3 4 5; do
+            expected_trusted_workflow_sha="$(
+              gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha
+            )"
+            dispatch_id="release-checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${dispatch_attempt}-$(openssl rand -hex 16)"
+            run_name="OpenClaw Release Telegram QA ${dispatch_id}"
+            run_id=""
+            child_head_sha=""
+
+            gh workflow run "$workflow" \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref main \
+              -f dispatch_id="$dispatch_id" \
+              -f expected_trusted_workflow_sha="$expected_trusted_workflow_sha" \
+              -f target_context_ref="$TARGET_CONTEXT_REF" \
+              -f target_ref="$TARGET_SHA" \
+              -f target_sha="$TARGET_SHA"
+
+            for _ in $(seq 1 60); do
+              matches_json="$(find_child_runs)"
+              match_count="$(jq 'length' <<<"$matches_json")"
+              if ((match_count > 1)); then
+                echo "Multiple Telegram QA runs matched ${run_name}; refusing to guess." >&2
+                exit 1
+              fi
+              if ((match_count == 1)); then
+                run_id="$(jq -r '.[0].id' <<<"$matches_json")"
+                child_head_sha="$(jq -r '.[0].head_sha' <<<"$matches_json")"
+                break
+              fi
+              sleep 5
+            done
+            if [[ -z "$run_id" ]]; then
+              echo "Could not find exact dispatched Telegram QA run ${run_name}." >&2
+              exit 1
+            fi
+            if [[ "$child_head_sha" == "$expected_trusted_workflow_sha" ]]; then
+              break
+            fi
+            echo "Trusted main moved from ${expected_trusted_workflow_sha} to ${child_head_sha} during dispatch attempt ${dispatch_attempt}; retrying." >&2
+            cancel_child
+            run_id=""
+          done
+          if [[ -z "$run_id" ]]; then
+            echo "Trusted main kept moving during Telegram QA dispatch; refusing an unpinned child." >&2
+            exit 1
+          fi
+
+          child_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "Dispatched trusted Telegram QA: ${child_url}"
+          for _ in $(seq 1 1080); do
+            run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")"
+            status="$(jq -r .status <<<"$run_json")"
+            if [[ "$status" == "completed" ]]; then
+              conclusion="$(jq -r .conclusion <<<"$run_json")"
+              if [[ "$conclusion" != "success" ]]; then
+                echo "Trusted Telegram QA concluded ${conclusion}: ${child_url}" >&2
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Timed out awaiting trusted Telegram QA: ${child_url}" >&2
+          exit 1
+
+  qa_live_discord_release_checks:
+    name: Run QA Lab live Discord lane
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_discord_enabled == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    environment: qa-live-shared
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - &release_qa_required_credentials_step
+        name: Validate required QA credential env
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local key="$1"
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          }
+
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build qaRuntime
+
+      - name: Run Discord live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/discord-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          for attempt in 1 2; do
+            attempt_output_dir="${output_dir}/attempt-${attempt}"
+            if pnpm openclaw qa discord \
+              --repo-root . \
+              --output-dir "${attempt_output_dir}" \
+              --provider-mode mock-openai \
+              --model mock-openai/gpt-5.6-luna \
+              --alt-model mock-openai/gpt-5.6-luna-alt \
+              --fast \
+              --credential-source convex \
+              --credential-role ci; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "2" ]]; then
+              exit 1
+            fi
+            echo "Discord live lane failed on attempt ${attempt}; retrying once..." >&2
+            sleep 10
+          done
+
+      - name: Upload Discord QA artifacts
+        id: upload_discord_qa_artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-qa-live-discord-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_live_discord_release_checks
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_discord_qa_artifacts.outcome }}
+        run: *record_release_check_advisory_status
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-live-discord-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_live_discord_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
+          retention-days: 14
+          if-no-files-found: error
+
+  qa_live_whatsapp_release_checks:
+    name: Run QA Lab live WhatsApp lane
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    concurrency:
+      group: qa-live-whatsapp-shared
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
+    environment: qa-live-shared
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - *release_qa_required_credentials_step
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build qaRuntime
+
+      - name: Run WhatsApp live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/whatsapp-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          for attempt in 1 2; do
+            attempt_output_dir="${output_dir}/attempt-${attempt}"
+            if pnpm openclaw qa whatsapp \
+              --repo-root . \
+              --output-dir "${attempt_output_dir}" \
+              --provider-mode mock-openai \
+              --model mock-openai/gpt-5.6-luna \
+              --alt-model mock-openai/gpt-5.6-luna-alt \
+              --fast \
+              --credential-source convex \
+              --credential-role ci; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "2" ]]; then
+              exit 1
+            fi
+            echo "WhatsApp live lane failed on attempt ${attempt}; retrying once..." >&2
+            sleep 10
+          done
+
+      - name: Upload WhatsApp QA artifacts
+        id: upload_whatsapp_qa_artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_live_whatsapp_release_checks
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_whatsapp_qa_artifacts.outcome }}
+        run: *record_release_check_advisory_status
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_live_whatsapp_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
+          retention-days: 14
+          if-no-files-found: error
+
+  qa_live_slack_release_checks:
+    name: Run QA Lab live Slack lane
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_slack_enabled == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    environment: qa-live-shared
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - *release_qa_required_credentials_step
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build qaRuntime
+
+      - name: Run Slack live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/slack-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          for attempt in 1 2; do
+            attempt_output_dir="${output_dir}/attempt-${attempt}"
+            if pnpm openclaw qa slack \
+              --repo-root . \
+              --output-dir "${attempt_output_dir}" \
+              --provider-mode mock-openai \
+              --model mock-openai/gpt-5.6-luna \
+              --alt-model mock-openai/gpt-5.6-luna-alt \
+              --fast \
+              --credential-source convex \
+              --credential-role ci; then
+              exit 0
+            fi
+            if [[ "${attempt}" == "2" ]]; then
+              exit 1
+            fi
+            echo "Slack live lane failed on attempt ${attempt}; retrying once..." >&2
+            sleep 10
+          done
+
+      - name: Upload Slack QA artifacts
+        id: upload_slack_qa_artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-qa-live-slack-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Record advisory status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_live_slack_release_checks
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_lane.outcome }} ${{ steps.upload_slack_qa_artifacts.outcome }}
+        run: *record_release_check_advisory_status
+
+      - name: Upload advisory status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-check-status-qa-live-slack-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_live_slack_release_checks-${{ github.run_id }}-${{ github.run_attempt }}.env
+          retention-days: 14
+          if-no-files-found: error
+
+  summary:
+    name: Verify release checks
+    needs:
+      - resolve_target
+      - prepare_release_package
+      - install_smoke_release_checks
+      - cross_os_release_checks
+      - live_repo_e2e_release_checks
+      - docker_e2e_release_checks
+      - package_acceptance_release_checks
+      - qa_lab_parity_lane_release_checks
+      - maturity_scorecard_release_checks
+      - qa_lab_parity_report_release_checks
+      - qa_lab_runtime_parity_release_checks
+      - runtime_tool_coverage_release_checks
+      - qa_live_release_checks
+      - qa_live_buzz_release_checks
+      - qa_live_telegram_release_checks
+      - qa_live_discord_release_checks
+      - qa_live_whatsapp_release_checks
+      - qa_live_slack_release_checks
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted release artifact resolver
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: trusted-release-check-artifacts
+          sparse-checkout: scripts/github/resolve-release-check-artifacts.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Resolve advisory evidence artifacts
+        id: resolve_advisory_evidence
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_parity_lane_release_checks.result }}
+          QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_parity_report_release_checks.result }}
+          QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_runtime_parity_release_checks.result }}
+          QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_discord_release_checks.result }}
+          QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_whatsapp_release_checks.result }}
+          QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_slack_release_checks.result }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          selection_file=".artifacts/release-check-selection/advisory-evidence.json"
+          args=(
+            resolve
+            --repository "$GITHUB_REPOSITORY"
+            --run-id "$GITHUB_RUN_ID"
+            --consumer-attempt "$GITHUB_RUN_ATTEMPT"
+            --target-sha "$RELEASE_CHECK_TARGET_SHA"
+          )
+          if [[ "$QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT" != "skipped" ]]; then
+            args+=(
+              --pair "qa_lab_parity_lane_release_checks|candidate|release-check-status-qa-parity-candidate-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-parity-candidate-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+              --pair "qa_lab_parity_lane_release_checks|baseline|release-check-status-qa-parity-baseline-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-parity-baseline-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          if [[ "$QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT" != "skipped" ]]; then
+            args+=(
+              --pair "qa_lab_parity_report_release_checks||release-check-status-qa-parity-report-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-parity-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          if [[ "$QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT" != "skipped" ]]; then
+            args+=(
+              --pair "qa_lab_runtime_parity_release_checks||release-check-status-qa-runtime-parity-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-runtime-parity-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          if [[ "$QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT" != "skipped" ]]; then
+            args+=(
+              --pair "qa_live_discord_release_checks||release-check-status-qa-live-discord-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-live-discord-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          if [[ "$QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT" != "skipped" ]]; then
+            args+=(
+              --pair "qa_live_whatsapp_release_checks||release-check-status-qa-live-whatsapp-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-live-whatsapp-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          if [[ "$QA_LIVE_SLACK_RELEASE_CHECKS_RESULT" != "skipped" ]]; then
+            args+=(
+              --pair "qa_live_slack_release_checks||release-check-status-qa-live-slack-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}|release-qa-live-slack-${RELEASE_CHECK_TARGET_SHA}-${GITHUB_RUN_ID}"
+            )
+          fi
+          args+=(
+            --selection-file "$selection_file"
+            --github-output "$GITHUB_OUTPUT"
+          )
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh "${args[@]}"
+
+      - name: Download advisory status artifacts
+        id: download_advisory_statuses
+        if: steps.resolve_advisory_evidence.outcome == 'success' && steps.resolve_advisory_evidence.outputs.status_ids != ''
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.resolve_advisory_evidence.outputs.status_ids }}
+          path: .artifacts/release-check-status
+          merge-multiple: true
+
+      - name: Validate advisory status artifacts
+        id: validate_advisory_statuses
+        if: steps.resolve_advisory_evidence.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/release-check-status
+          bash trusted-release-check-artifacts/scripts/github/resolve-release-check-artifacts.sh validate \
+            --selection-file "${{ steps.resolve_advisory_evidence.outputs.selection_file }}" \
+            --status-dir .artifacts/release-check-status \
+            --validated-file .artifacts/release-check-selection/advisory-evidence-validated.json
+
+      - name: Verify release check results
+        shell: bash
+        env:
+          RESOLVE_ADVISORY_EVIDENCE_OUTCOME: ${{ steps.resolve_advisory_evidence.outcome }}
+          VALIDATE_ADVISORY_STATUSES_OUTCOME: ${{ steps.validate_advisory_statuses.outcome }}
+          RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
+          PREPARE_RELEASE_PACKAGE_RESULT: ${{ needs.prepare_release_package.result }}
+          INSTALL_SMOKE_RELEASE_CHECKS_RESULT: ${{ needs.install_smoke_release_checks.result }}
+          CROSS_OS_RELEASE_CHECKS_RESULT: ${{ needs.cross_os_release_checks.result }}
+          LIVE_REPO_E2E_RELEASE_CHECKS_RESULT: ${{ needs.live_repo_e2e_release_checks.result }}
+          DOCKER_E2E_RELEASE_CHECKS_RESULT: ${{ needs.docker_e2e_release_checks.result }}
+          PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT: ${{ needs.package_acceptance_release_checks.result }}
+          QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_parity_lane_release_checks.result }}
+          MATURITY_SCORECARD_RELEASE_CHECKS_RESULT: ${{ needs.maturity_scorecard_release_checks.result }}
+          QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_parity_report_release_checks.result }}
+          QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: ${{ needs.qa_lab_runtime_parity_release_checks.result }}
+          RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT: ${{ needs.runtime_tool_coverage_release_checks.result }}
+          QA_LIVE_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_release_checks.result }}
+          QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_buzz_release_checks.result }}
+          QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_telegram_release_checks.result }}
+          QA_LIVE_TELEGRAM_SELECTED: ${{ needs.resolve_target.outputs.qa_live_scheduled == 'true' && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true' }}
+          QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_discord_release_checks.result }}
+          QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_whatsapp_release_checks.result }}
+          QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: ${{ needs.qa_live_slack_release_checks.result }}
+          RELEASE_CHECK_RUN_ID: ${{ github.run_id }}
+          RELEASE_CHECK_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          failed=0
+          release_check_items=(
+            "resolve_target=${RESOLVE_TARGET_RESULT}"
+            "prepare_release_package=${PREPARE_RELEASE_PACKAGE_RESULT}"
+            "install_smoke_release_checks=${INSTALL_SMOKE_RELEASE_CHECKS_RESULT}"
+            "cross_os_release_checks=${CROSS_OS_RELEASE_CHECKS_RESULT}"
+            "live_repo_e2e_release_checks=${LIVE_REPO_E2E_RELEASE_CHECKS_RESULT}"
+            "docker_e2e_release_checks=${DOCKER_E2E_RELEASE_CHECKS_RESULT}"
+            "package_acceptance_release_checks=${PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT}"
+            "qa_lab_parity_lane_release_checks=${QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT}"
+            "maturity_scorecard_release_checks=${MATURITY_SCORECARD_RELEASE_CHECKS_RESULT}"
+            "qa_lab_parity_report_release_checks=${QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT}"
+            "qa_lab_runtime_parity_release_checks=${QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT}"
+            "runtime_tool_coverage_release_checks=${RUNTIME_TOOL_COVERAGE_RELEASE_CHECKS_RESULT}"
+            "qa_live_release_checks=${QA_LIVE_RELEASE_CHECKS_RESULT}"
+            "qa_live_buzz_release_checks=${QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT}"
+            "qa_live_telegram_release_checks=${QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT}"
+            "qa_live_discord_release_checks=${QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT}"
+            "qa_live_whatsapp_release_checks=${QA_LIVE_WHATSAPP_RELEASE_CHECKS_RESULT}"
+            "qa_live_slack_release_checks=${QA_LIVE_SLACK_RELEASE_CHECKS_RESULT}"
+          )
+          tideclaw_alpha=false
+          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            tideclaw_alpha=true
+          fi
+          validated_status_file=".artifacts/release-check-selection/advisory-evidence-validated.json"
+          if [[ "$RESOLVE_ADVISORY_EVIDENCE_OUTCOME" != "success" ||
+                "$VALIDATE_ADVISORY_STATUSES_OUTCOME" != "success" ]]; then
+            status_resolution_message="Advisory evidence resolution or validation failed for run ${RELEASE_CHECK_RUN_ID} through attempt ${RELEASE_CHECK_RUN_ATTEMPT}."
+            if [[ "$tideclaw_alpha" == "true" ]]; then
+              echo "::warning::${status_resolution_message} Tideclaw alpha treats non-package-safety release-check lanes as advisory."
+            else
+              echo "::error::${status_resolution_message}"
+              failed=1
+            fi
+          fi
+          validated_status() {
+            local expected_job="$1"
+            local expected_variant="$2"
+            [[ -f "$validated_status_file" ]] || return 1
+            jq -er \
+              --arg job "$expected_job" \
+              --arg variant "$expected_variant" \
+              '
+                [.[] | select(.job == $job and .variant == $variant)] as $matches |
+                if ($matches | length) == 1 and
+                   ($matches[0].status | type) == "string"
+                then $matches[0].status
+                else error("missing or duplicate validated status")
+                end
+              ' "$validated_status_file"
+          }
+          release_check_result() {
+            local name="$1"
+            local fallback="$2"
+            # Skipped lanes produce no status variants; Bash 3 treats an empty
+            # array expansion as unbound when nounset is enabled.
+            if [[ "$fallback" == "skipped" ]]; then
+              printf 'skipped\n'
+              return
+            fi
+            local saw=0
+            local saw_failure=0
+            local saw_cancelled=0
+            local saw_skipped=0
+            local variants=("")
+            if [[ "$name" == "qa_lab_parity_lane_release_checks" ]]; then
+              variants=(candidate baseline)
+            fi
+            for variant in "${variants[@]}"; do
+              if ! status="$(validated_status "$name" "$variant")"; then
+                saw_failure=1
+                continue
+              fi
+              saw=1
+              case "$status" in
+                success) ;;
+                skipped) saw_skipped=1 ;;
+                cancelled) saw_cancelled=1 ;;
+                failure|"") saw_failure=1 ;;
+                *) saw_failure=1 ;;
+              esac
+            done
+            if [[ "$saw_failure" == "1" ]]; then
+              printf 'failure\n'
+            elif [[ "$saw_cancelled" == "1" ]]; then
+              printf 'cancelled\n'
+            elif [[ "$saw_skipped" == "1" ]]; then
+              printf 'skipped\n'
+            elif [[ "$fallback" != "success" && "$fallback" != "skipped" ]]; then
+              printf '%s\n' "$fallback"
+            elif [[ "$saw" == "1" ]]; then
+              printf 'success\n'
+            elif [[ "$fallback" == "success" ]]; then
+              printf 'failure\n'
+            else
+              printf '%s\n' "$fallback"
+            fi
+          }
+          advisory_status_override_allowed() {
+            case "$1" in
+              qa_lab_parity_lane_release_checks|qa_lab_parity_report_release_checks|qa_lab_runtime_parity_release_checks|qa_live_discord_release_checks|qa_live_whatsapp_release_checks|qa_live_slack_release_checks)
+                return 0
+                ;;
+              *)
+                return 1
+                ;;
+            esac
+          }
+          for item in "${release_check_items[@]}"; do
+            name="${item%%=*}"
+            raw_result="${item#*=}"
+            if advisory_status_override_allowed "$name"; then
+              result="$(release_check_result "$name" "$raw_result")"
+            else
+              result="$raw_result"
+            fi
+            require_success=false
+            if [[ "$name" == "qa_live_telegram_release_checks" &&
+                  "$QA_LIVE_TELEGRAM_SELECTED" == "true" ]]; then
+              require_success=true
+            fi
+            if [[ "$result" != "success" &&
+                  ( "$result" != "skipped" || "$require_success" == "true" ) ]]; then
+              if [[ "$tideclaw_alpha" == "true" ]]; then
+                case "$name" in
+                  resolve_target|prepare_release_package|install_smoke_release_checks|package_acceptance_release_checks) ;;
+                  *)
+                    echo "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory."
+                    continue
+                    ;;
+                esac
+              fi
+              echo "::error::${name} ended with ${result}"
+              failed=1
+            fi
+          done
+          exit "$failed"

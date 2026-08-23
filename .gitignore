@@ -1,0 +1,234 @@
+node_modules
+**/node_modules/
+.env
+docker-compose.override.yml
+docker-compose.extra.yml
+docker-compose.sandbox.yml
+dist
+dist-runtime/
+dist-sea/
+pnpm-lock.yaml
+bun.lock
+bun.lockb
+coverage
+__openclaw_vitest__/
+__pycache__/
+*.pyc
+*.tsbuildinfo
+.pnpm-store
+.worktrees/
+.DS_Store
+**/.DS_Store
+ui/src/ui/__screenshots__/
+ui/playwright-report/
+ui/test-results/
+packages/dashboard-next/.next/
+packages/dashboard-next/out/
+
+# Mise configuration files
+mise.toml
+
+# Android build artifacts
+apps/android/.gradle/
+apps/android/app/build/
+apps/android/.cxx/
+apps/android/.kotlin/
+apps/android/benchmark/results/
+
+# Bun build artifacts
+*.bun-build
+apps/macos/.build/
+apps/macos-mlx-tts/.build/
+apps/shared/MoltbotKit/.build/
+apps/shared/OpenClawKit/.build/
+apps/shared/*/.build/
+packages/*/dist/
+apps/shared/OpenClawKit/Package.resolved
+# Xcode rewrites local-package Package.resolved with the iOS app supergraph on
+# every resolve; swabble's only runtime dep is exact-pinned in Package.swift.
+apps/swabble/Package.resolved
+**/ModuleCache/
+bin/
+bin/clawdbot-mac
+apps/macos/.build-local/
+apps/macos/.swiftpm/
+apps/shared/MoltbotKit/.swiftpm/
+apps/shared/OpenClawKit/.swiftpm/
+apps/shared/*/.swiftpm/
+Core/
+apps/ios/*.xcodeproj/
+apps/ios/*.xcworkspace/
+apps/ios/.swiftpm/
+apps/ios/.derivedData/
+apps/ios/.local-signing.xcconfig
+vendor/
+apps/ios/Clawdbot.xcodeproj/
+apps/ios/Clawdbot.xcodeproj/**
+apps/macos/.build/**
+apps/macos-mlx-tts/.build/**
+**/*.bun-build
+apps/ios/*.xcfilelist
+
+# Vendor build artifacts
+vendor/a2ui/renderers/lit/dist/
+src/canvas-host/a2ui/*.bundle.js
+src/canvas-host/a2ui/*.map
+extensions/canvas/src/host/a2ui/*.bundle.js
+extensions/canvas/src/host/a2ui/*.map
+.bundle.hash
+
+# fastlane (iOS)
+apps/ios/fastlane/README.md
+apps/android/fastlane/README.md
+apps/ios/fastlane/report.xml
+apps/ios/fastlane/Preview.html
+apps/ios/fastlane/screenshots/
+apps/ios/fastlane/metadata/*/release_notes.txt
+apps/ios/fastlane/test_output/
+apps/ios/fastlane/logs/
+apps/ios/fastlane/.env
+apps/android/fastlane/report.xml
+apps/android/fastlane/Preview.html
+apps/android/fastlane/test_output/
+apps/android/fastlane/logs/
+apps/android/fastlane/.env
+apps/android/fastlane/metadata/android/**/images/
+
+# fastlane build artifacts (local)
+apps/ios/*.ipa
+apps/ios/*.dSYM.zip
+
+# provisioning profiles (local)
+apps/ios/*.mobileprovision
+
+# Local untracked files
+.local/
+docs/.local/
+docs/internal/
+tmp/
+IDENTITY.md
+USER.md
+# Keep packaged workspace templates visible to Git-aware remote syncs.
+!docs/reference/templates/IDENTITY.md
+!docs/reference/templates/USER.md
+# Exception: oc-path real-world test fixtures need to be tracked even
+# though the bare names match the local-untracked rule above.
+!extensions/oc-path/src/oc-path/tests/fixtures/real/IDENTITY.md
+!extensions/oc-path/src/oc-path/tests/fixtures/real/USER.md
+*.tgz
+*.tar.gz
+*.zip
+.idea
+.vscode/
+
+# local tooling
+.antigravitycli/
+.serena/
+.crabbox/
+/.openclaw/trajectory-exports/
+
+# local QA evidence mirrors; CI publishes canonical Mantis files as Actions artifacts
+/mantis/
+
+# Keep repository skills visible to Git-aware syncs; local-only skill ignores
+# belong in .git/info/exclude.
+.agents/skills/**/*.orig
+.agents/skills/**/__pycache__/
+.agents/skills/**/*.py[cod]
+
+# Agent credentials and memory (NEVER COMMIT)
+/memory/
+.agent/*.json
+!.agent/workflows/
+/local/
+/client_secret_*.json
+package-lock.json
+!.github/release/clawhub-cli/package-lock.json
+!src/commands/copilot-sdk-install-manifest/package-lock.json
+.claude/*
+# Track the shared Claude Code project config (worktree auto-install hook) and the
+# skills symlink into .agents/skills; keep everything else under .claude/
+# (worktrees, settings.local.json) ignored.
+!.claude/settings.json
+!.claude/skills
+.agent/
+skills-lock.json
+
+# Local iOS signing overrides
+apps/ios/LocalSigning.xcconfig
+
+# Xcode build directories (xcodebuild output)
+apps/ios/build/
+apps/shared/OpenClawKit/build/
+apps/swabble/build/
+*.xcresult
+*.trace
+*.profraw
+
+# Generated protocol schema (produced via pnpm protocol:gen)
+dist/protocol.schema.json
+packages/gateway-protocol/protocol.schema.json
+.ant-colony/
+
+# Eclipse
+**/.project
+**/.classpath
+**/.settings/
+**/.gradle/
+
+# Synthing
+**/.stfolder/
+.dev-state
+docs/superpowers
+.superpowers/
+test/config-form.analyze.telegram.test.ts
+ui/src/ui/theme-variants.browser.test.ts
+ui/src/ui/__screenshots__
+ui/src/ui/views/__screenshots__
+ui/.vitest-attachments
+
+# Generated docs baseline artifacts (locally generated, only drift detectors tracked)
+docs/.generated/*.json
+!docs/.generated/config-baseline.counts.json
+docs/.generated/*.jsonl
+!docs/.generated/plugin-sdk-api-baseline/
+!docs/.generated/plugin-sdk-api-baseline/*.json
+
+# Deprecated changelog fragment workflow
+changelog/fragments/
+
+# Local scratch workspace
+.tmp/
+.cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.vmux*
+.artifacts/
+.openclaw-config-doc-cache/
+openclaw-path-alias-*/
+/.pi/
+/C:\\openclaw/
+*.log
+*.tmp
+*.heapsnapshot
+*.cpuprofile
+*.prof
+test/fixtures/openclaw-vitest-unit-report.json
+analysis/
+.artifacts/qa-e2e/
+/runs/
+/data/rtt.jsonl
+extensions/qa-lab/web/dist/
+
+# Generated bundled plugin runtime dependency manifests
+extensions/**/.openclaw-runtime-deps.json
+extensions/**/.openclaw-runtime-deps-stamp.json
+extensions/diffs/assets/viewer-runtime.js
+extensions/diffs-language-pack/assets/viewer-runtime.js
+extensions/discord/assets/embedded-app-sdk.mjs
+
+# Output dir for scripts/run-opengrep.sh (local opengrep scans)
+/.opengrep-out/
+/.crabbox-artifacts
+.comux*

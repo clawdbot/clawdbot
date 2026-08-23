@@ -1,0 +1,170 @@
+import { isEmbeddedAgentRunInProgress } from "../../agents/embedded-agent-runner/runs.js";
+import {
+  hasProjectedAgentRunForSession,
+  type ProjectedAgentRunIndex,
+} from "../../infra/agent-run-registry.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import type { GatewayRequestContext } from "./types.js";
+
+/** Active-run matcher including hidden remote lifecycle projections. */
+type TrackedActiveSessionRun = {
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+};
+
+export function collectTrackedActiveSessionRuns(
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
+): TrackedActiveSessionRun[] {
+  const runs: TrackedActiveSessionRun[] = [];
+  if (!(context.chatAbortControllers instanceof Map)) {
+    return runs;
+  }
+  for (const [runId, active] of context.chatAbortControllers) {
+    if (active.projectSessionActive !== false && active.controlUiVisible !== false) {
+      const sessionKey = active.sessionKey?.trim();
+      const sessionId = active.sessionId?.trim();
+      if (!sessionKey && !sessionId) {
+        continue;
+      }
+      runs.push({
+        runId,
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(sessionId ? { sessionId } : {}),
+        agentId: typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined,
+      });
+    }
+  }
+  return runs;
+}
+
+function isTrackedActiveSessionRunForKey(
+  active: TrackedActiveSessionRun,
+  key: string,
+  agentId?: string,
+  defaultAgentId?: string,
+): boolean {
+  if (!active.sessionKey || active.sessionKey !== key) {
+    return false;
+  }
+  if (key !== "global") {
+    return true;
+  }
+  const requestedAgentId = agentId ?? defaultAgentId;
+  if (!requestedAgentId) {
+    return true;
+  }
+  const activeAgentId = active.agentId ?? defaultAgentId;
+  return activeAgentId
+    ? normalizeAgentId(activeAgentId) === normalizeAgentId(requestedAgentId)
+    : false;
+}
+
+export function hasRegisteredChatRunForSessionKey(params: {
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
+  sessionKey: string;
+  agentId: string | undefined;
+}): boolean {
+  if (!(params.context.chatAbortControllers instanceof Map)) {
+    return false;
+  }
+  const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  for (const active of params.context.chatAbortControllers.values()) {
+    if (active.sessionKey?.trim() !== params.sessionKey) {
+      continue;
+    }
+    if (params.sessionKey !== "global") {
+      return true;
+    }
+    const activeAgentId =
+      typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined;
+    if (!requestedAgentId || !activeAgentId || requestedAgentId === activeAgentId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Returns true when either requested or canonical session key has a visible active run. */
+export function hasTrackedActiveSessionRun(params: {
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
+  requestedKey: string;
+  canonicalKey: string;
+  agentId?: string;
+  defaultAgentId?: string;
+  excludeRunIds?: ReadonlySet<string>;
+}): boolean {
+  const activeRuns = collectTrackedActiveSessionRuns(params.context);
+  return activeRuns.some(
+    (active) =>
+      !params.excludeRunIds?.has(active.runId) &&
+      (isTrackedActiveSessionRunForKey(
+        active,
+        params.canonicalKey,
+        params.agentId,
+        params.defaultAgentId,
+      ) ||
+        isTrackedActiveSessionRunForKey(
+          active,
+          params.requestedKey,
+          params.agentId,
+          params.defaultAgentId,
+        )),
+  );
+}
+
+export function resolveVisibleActiveSessionRunState(params: {
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
+  requestedKey: string;
+  canonicalKey: string;
+  sessionId?: string;
+  agentId?: string;
+  defaultAgentId?: string;
+  trackedActiveRuns?: readonly TrackedActiveSessionRun[];
+  projectedAgentRunIndex?: ProjectedAgentRunIndex;
+}): { active: boolean; runIds: string[] } {
+  const sessionId = params.sessionId?.trim();
+  const runIds = (params.trackedActiveRuns ?? collectTrackedActiveSessionRuns(params.context))
+    .filter(
+      (active) =>
+        isTrackedActiveSessionRunForKey(
+          active,
+          params.canonicalKey,
+          params.agentId,
+          params.defaultAgentId,
+        ) ||
+        isTrackedActiveSessionRunForKey(
+          active,
+          params.requestedKey,
+          params.agentId,
+          params.defaultAgentId,
+        ) ||
+        (sessionId !== undefined && active.sessionId === sessionId),
+    )
+    .map((active) => active.runId)
+    .toSorted();
+  const hasProjectedRun = hasProjectedAgentRunForSession({
+    sessionKeys: [params.requestedKey, params.canonicalKey],
+    ...(sessionId ? { sessionId } : {}),
+    ...(params.projectedAgentRunIndex ? { index: params.projectedAgentRunIndex } : {}),
+  });
+  const embeddedRunInProgress = sessionId !== undefined && isEmbeddedAgentRunInProgress(sessionId);
+  // Connection, worker-lifecycle, and embedded registries are independent owners.
+  // Settlement in one must not hide live work owned by another.
+  return {
+    active: runIds.length > 0 || hasProjectedRun || embeddedRunInProgress,
+    runIds,
+  };
+}
+
+export function hasVisibleActiveSessionRun(params: {
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
+  requestedKey: string;
+  canonicalKey: string;
+  sessionId?: string;
+  agentId?: string;
+  defaultAgentId?: string;
+}): boolean {
+  return resolveVisibleActiveSessionRunState(params).active;
+}

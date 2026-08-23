@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.test.json",
+  "compilerOptions": {
+    // Retained plain-Node script exceptions are imported by their owner tests.
+    "allowJs": true
+  },
+  "include": [
+    "../../src/**/*.d.ts",
+    "../../src/**/*.test.ts",
+    "../../src/**/*.test.tsx",
+    "../../ui/**/*.d.ts",
+    "../../ui/src/main.ts",
+    "../../extensions/**/*.d.ts",
+    "../../packages/**/*.d.ts"
+  ]
+}

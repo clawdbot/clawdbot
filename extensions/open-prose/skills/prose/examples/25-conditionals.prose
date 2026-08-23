@@ -1,0 +1,114 @@
+# Conditionals Example
+# Demonstrates if/elif/else patterns with AI-evaluated conditions
+
+# Simple if statement
+let health_check = session "Check system health status"
+
+if **the system is unhealthy**:
+  session "Alert on-call engineer"
+    context: health_check
+  session "Begin incident response"
+
+# If/else for binary decisions
+let review = session "Review the pull request changes"
+
+if **the code changes are safe and well-tested**:
+  session "Approve and merge the pull request"
+    context: review
+else:
+  session "Request changes with detailed feedback"
+    context: review
+
+# If/elif/else for multiple conditions
+let status = session "Check project milestone status"
+
+if **the project is ahead of schedule**:
+  session "Document success factors"
+  session "Consider adding stretch goals"
+elif **the project is on track**:
+  session "Continue with current plan"
+  session "Prepare status report"
+elif **the project is slightly delayed**:
+  session "Identify bottlenecks"
+  session "Adjust timeline and communicate to stakeholders"
+else:
+  session "Escalate to management"
+  session "Create recovery plan"
+  session "Schedule daily standups"
+
+# Multi-line conditions
+let test_results = session "Run full test suite"
+
+if ***
+  all tests pass
+  and code coverage is above 80%
+  and there are no linting errors
+***:
+  session "Deploy to production"
+else:
+  session "Fix issues before deploying"
+    context: test_results
+
+# Nested conditionals
+let request = session "Analyze the API request"
+
+if **the request is authenticated**:
+  if **the user has admin privileges**:
+    session "Process admin request with full access"
+      context: request
+  else:
+    session "Process standard user request"
+      context: request
+else:
+  session "Return 401 authentication error"
+
+# Conditionals with error handling
+let operation_result = session "Attempt complex operation"
+
+if **the operation succeeded partially**:
+  session "Complete remaining steps"
+    context: operation_result
+
+try:
+  session "Perform another risky operation"
+catch as err:
+  if **the error is recoverable**:
+    session "Apply automatic recovery procedure"
+      context: err
+  else:
+    throw "Unrecoverable error encountered"
+
+# Conditionals inside loops
+let items = ["item1", "item2", "item3"]
+
+for item in items:
+  session "Analyze this item"
+    context: item
+
+  if **the item needs processing**:
+    session "Process the item"
+      context: item
+  elif **the item should be skipped**:
+    session "Log skip reason"
+      context: item
+  else:
+    session "Archive the item"
+      context: item
+
+# Conditionals with parallel blocks
+parallel:
+  security = session "Run security scan"
+  performance = session "Run performance tests"
+  style = session "Run style checks"
+
+if **security issues were found**:
+  session "Fix security issues immediately"
+    context: security
+elif **performance issues were found**:
+  session "Optimize performance bottlenecks"
+    context: performance
+elif **style issues were found**:
+  session "Clean up code style"
+    context: style
+else:
+  session "All checks passed - ready for review"

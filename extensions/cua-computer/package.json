@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/cua-computer",
+  "version": "2026.8.1",
+  "description": "Experimental CUA Driver SDK computer control for Windows and Linux node hosts",
+  "type": "module",
+  "dependencies": {
+    "@trycua/cua-driver": "0.14.1",
+    "rastermill": "0.3.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

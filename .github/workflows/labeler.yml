@@ -1,0 +1,939 @@
+name: Labeler
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned triage workflow; no untrusted checkout or PR code execution
+    types: [opened, synchronize, reopened, edited]
+  issues:
+    types: [opened, edited]
+  workflow_dispatch:
+    inputs:
+      max_prs:
+        description: "Maximum number of open PRs to process (0 = all)"
+        required: false
+        default: "200"
+      per_page:
+        description: "PRs per page (1-100)"
+        required: false
+        default: "50"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+permissions: {}
+
+jobs:
+  label:
+    if: >-
+      ${{
+        github.event_name == 'pull_request_target' &&
+        (
+          github.event.action != 'edited' ||
+          github.event.changes.title ||
+          github.event.changes.base
+        )
+      }}
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-issues: write
+          permission-members: read
+          permission-metadata: read
+          permission-pull-requests: write
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-contents: read
+          permission-issues: write
+          permission-members: read
+          permission-metadata: read
+          permission-pull-requests: write
+      - uses: actions/labeler@b8dd2d9be0f68b860e7dae5dae7d772984eacd6d # v6
+        if: ${{ github.event.action != 'edited' || github.event.changes.base }}
+        with:
+          configuration-path: .github/labeler.yml
+          repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          sync-labels: true
+      - name: Apply PR size label
+        if: ${{ github.event.action != 'edited' || github.event.changes.base }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const pullRequest = context.payload.pull_request;
+            if (!pullRequest) {
+              return;
+            }
+
+            const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
+            const labelColor = "b76e79";
+
+            for (const label of sizeLabels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label,
+                  color: labelColor,
+                });
+              }
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullRequest.number,
+              per_page: 100,
+            });
+
+            const excludedLockfiles = new Set(["pnpm-lock.yaml", "yarn.lock", "bun.lockb"]);
+            const totalChangedLines = files.reduce((total, file) => {
+              const path = file.filename ?? "";
+              if (path.startsWith("docs/") || excludedLockfiles.has(path)) {
+                return total;
+              }
+              return total + (file.additions ?? 0) + (file.deletions ?? 0);
+            }, 0);
+
+            let targetSizeLabel = "size: XL";
+            if (totalChangedLines < 50) {
+              targetSizeLabel = "size: XS";
+            } else if (totalChangedLines < 200) {
+              targetSizeLabel = "size: S";
+            } else if (totalChangedLines < 500) {
+              targetSizeLabel = "size: M";
+            } else if (totalChangedLines < 1000) {
+              targetSizeLabel = "size: L";
+            }
+
+            const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullRequest.number,
+              per_page: 100,
+            });
+
+            for (const label of currentLabels) {
+              const name = label.name ?? "";
+              if (!sizeLabels.includes(name)) {
+                continue;
+              }
+              if (name === targetSizeLabel) {
+                continue;
+              }
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                name,
+              });
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullRequest.number,
+              labels: [targetSizeLabel],
+            });
+      - name: Apply maintainer or trusted-contributor label
+        if: ${{ github.event.action != 'edited' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const login = context.payload.pull_request?.user?.login;
+            if (!login) {
+              return;
+            }
+
+            const repo = `${context.repo.owner}/${context.repo.repo}`;
+            // const trustedLabel = "trusted-contributor";
+            // const experiencedLabel = "experienced-contributor";
+            // const trustedThreshold = 4;
+            // const experiencedThreshold = 10;
+
+            let isMaintainer = false;
+            try {
+              const membership = await github.rest.teams.getMembershipForUserInOrg({
+                org: context.repo.owner,
+                team_slug: "maintainer",
+                username: login,
+              });
+              isMaintainer = membership?.data?.state === "active";
+            } catch (error) {
+              if (error?.status !== 404) {
+                throw error;
+              }
+            }
+
+            if (isMaintainer) {
+              await github.rest.issues.addLabels({
+                ...context.repo,
+                issue_number: context.payload.pull_request.number,
+                labels: ["maintainer"],
+              });
+              return;
+            }
+
+            // trusted-contributor and experienced-contributor labels disabled.
+            // const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
+            // let mergedCount = 0;
+            // try {
+            //   const merged = await github.rest.search.issuesAndPullRequests({
+            //     q: mergedQuery,
+            //     per_page: 1,
+            //   });
+            //   mergedCount = merged?.data?.total_count ?? 0;
+            // } catch (error) {
+            //   if (error?.status !== 422) {
+            //     throw error;
+            //   }
+            //   core.warning(`Skipping merged search for ${login}; treating as 0.`);
+            // }
+            //
+            // if (mergedCount >= experiencedThreshold) {
+            //   await github.rest.issues.addLabels({
+            //     ...context.repo,
+            //     issue_number: context.payload.pull_request.number,
+            //     labels: [experiencedLabel],
+            //   });
+            //   return;
+            // }
+            //
+            // if (mergedCount >= trustedThreshold) {
+            //   await github.rest.issues.addLabels({
+            //     ...context.repo,
+            //     issue_number: context.payload.pull_request.number,
+            //     labels: [trustedLabel],
+            //   });
+            // }
+      - name: Apply beta-blocker title label
+        if: ${{ github.event.action != 'edited' || github.event.changes.title }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const pullRequest = context.payload.pull_request;
+            if (!pullRequest) {
+              return;
+            }
+
+            const labelName = "beta-blocker";
+            const matchesBetaBlocker = /\bbeta blocker\b/i.test(pullRequest.title ?? "");
+
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: labelName,
+              });
+            } catch (error) {
+              if (error?.status !== 404) {
+                throw error;
+              }
+              core.info(`Skipping ${labelName} labeling because the label does not exist in the repository.`);
+              return;
+            }
+
+            const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullRequest.number,
+              per_page: 100,
+            });
+            const hasLabel = currentLabels.some((label) => label.name === labelName);
+
+            if (matchesBetaBlocker && !hasLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                labels: [labelName],
+              });
+              return;
+            }
+
+            if (!matchesBetaBlocker && hasLabel) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                name: labelName,
+              });
+            }
+      - name: Apply too-many-prs label
+        if: ${{ github.event.action != 'edited' }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const pullRequest = context.payload.pull_request;
+            if (!pullRequest) {
+              return;
+            }
+
+            const activePrLimitLabel = "r: too-many-prs";
+            const activePrLimitOverrideLabel = "r: too-many-prs-override";
+            const activePrLimit = 20;
+            const labelColor = "B60205";
+            const labelDescription = `Author has more than ${activePrLimit} active PRs in this repo`;
+            const authorLogin = pullRequest.user?.login;
+            const headRefName = pullRequest.head?.ref ?? "";
+            if (!authorLogin) {
+              return;
+            }
+
+            const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullRequest.number,
+              per_page: 100,
+            });
+
+            const labelNames = new Set(
+              currentLabels
+                .map((label) => (typeof label === "string" ? label : label?.name))
+                .filter((name) => typeof name === "string"),
+            );
+
+            if (pullRequest.user?.type === "Bot" || /\[bot\]$/i.test(authorLogin) || authorLogin.startsWith("app/")) {
+              if (labelNames.has(activePrLimitLabel)) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pullRequest.number,
+                    name: activePrLimitLabel,
+                  });
+                } catch (error) {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                }
+              }
+              core.info(`Skipping active PR limit for GitHub App author ${authorLogin}.`);
+              return;
+            }
+
+            if (labelNames.has(activePrLimitOverrideLabel)) {
+              if (labelNames.has(activePrLimitLabel)) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pullRequest.number,
+                    name: activePrLimitLabel,
+                  });
+                } catch (error) {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                }
+              }
+              return;
+            }
+
+            const ensureLabelExists = async () => {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: activePrLimitLabel,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: activePrLimitLabel,
+                  color: labelColor,
+                  description: labelDescription,
+                });
+              }
+            };
+
+            const isPrivilegedAuthor = async () => {
+              if (pullRequest.author_association === "OWNER") {
+                return true;
+              }
+
+              let isMaintainer = false;
+              try {
+                const membership = await github.rest.teams.getMembershipForUserInOrg({
+                  org: context.repo.owner,
+                  team_slug: "maintainer",
+                  username: authorLogin,
+                });
+                isMaintainer = membership?.data?.state === "active";
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+
+              if (isMaintainer) {
+                return true;
+              }
+
+              try {
+                const permission = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username: authorLogin,
+                });
+                const roleName = (permission?.data?.role_name ?? "").toLowerCase();
+                return roleName === "admin" || roleName === "maintain";
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+
+              return false;
+            };
+
+            const automationPrHeadPrefixes = ["clawsweeper/", "clownfish/"];
+            const isAutomationPullRequest =
+              typeof headRefName === "string" &&
+              automationPrHeadPrefixes.some((prefix) => headRefName.startsWith(prefix));
+
+            if ((await isPrivilegedAuthor()) || isAutomationPullRequest) {
+              if (labelNames.has(activePrLimitLabel)) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pullRequest.number,
+                    name: activePrLimitLabel,
+                  });
+                } catch (error) {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                }
+              }
+              return;
+            }
+
+            let openPrCount = 0;
+            try {
+              const result = await github.rest.search.issuesAndPullRequests({
+                q: `repo:${context.repo.owner}/${context.repo.repo} is:pr is:open author:${authorLogin}`,
+                per_page: 1,
+              });
+              openPrCount = result?.data?.total_count ?? 0;
+            } catch (error) {
+              if (error?.status !== 422) {
+                throw error;
+              }
+              core.warning(`Skipping open PR count for ${authorLogin}; treating as 0.`);
+            }
+
+            if (openPrCount > activePrLimit) {
+              await ensureLabelExists();
+              if (!labelNames.has(activePrLimitLabel)) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  labels: [activePrLimitLabel],
+                });
+              }
+              return;
+            }
+
+            if (labelNames.has(activePrLimitLabel)) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pullRequest.number,
+                  name: activePrLimitLabel,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+
+  backfill-pr-labels:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-members: read
+          permission-metadata: read
+          permission-pull-requests: write
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-issues: write
+          permission-members: read
+          permission-metadata: read
+          permission-pull-requests: write
+      - name: Backfill PR labels
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const repoFull = `${owner}/${repo}`;
+            const inputs = context.payload.inputs ?? {};
+            const maxPrsInput = inputs.max_prs ?? "200";
+            const perPageInput = inputs.per_page ?? "50";
+            const parsedMaxPrs = Number.parseInt(maxPrsInput, 10);
+            const parsedPerPage = Number.parseInt(perPageInput, 10);
+            const maxPrs = Number.isFinite(parsedMaxPrs) ? parsedMaxPrs : 200;
+            const perPage = Number.isFinite(parsedPerPage) ? Math.min(100, Math.max(1, parsedPerPage)) : 50;
+            const processAll = maxPrs <= 0;
+            const maxCount = processAll ? Number.POSITIVE_INFINITY : Math.max(1, maxPrs);
+
+            const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
+            const betaBlockerLabel = "beta-blocker";
+            const labelColor = "b76e79";
+            // const trustedLabel = "trusted-contributor";
+            // const experiencedLabel = "experienced-contributor";
+            // const trustedThreshold = 4;
+            // const experiencedThreshold = 10;
+
+            const contributorCache = new Map();
+
+            async function ensureSizeLabels() {
+              for (const label of sizeLabels) {
+                try {
+                  await github.rest.issues.getLabel({
+                    owner,
+                    repo,
+                    name: label,
+                  });
+                } catch (error) {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                  await github.rest.issues.createLabel({
+                    owner,
+                    repo,
+                    name: label,
+                    color: labelColor,
+                  });
+                }
+              }
+            }
+
+            async function hasBetaBlockerLabel() {
+              try {
+                await github.rest.issues.getLabel({
+                  owner,
+                  repo,
+                  name: betaBlockerLabel,
+                });
+                return true;
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+                return false;
+              }
+            }
+
+            async function resolveContributorLabel(login) {
+              if (contributorCache.has(login)) {
+                return contributorCache.get(login);
+              }
+
+              let isMaintainer = false;
+              try {
+                const membership = await github.rest.teams.getMembershipForUserInOrg({
+                  org: owner,
+                  team_slug: "maintainer",
+                  username: login,
+                });
+                isMaintainer = membership?.data?.state === "active";
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+              }
+
+              if (isMaintainer) {
+                contributorCache.set(login, "maintainer");
+                return "maintainer";
+              }
+
+              // trusted-contributor and experienced-contributor labels disabled.
+              // const mergedQuery = `repo:${repoFull} is:pr is:merged author:${login}`;
+              // let mergedCount = 0;
+              // try {
+              //   const merged = await github.rest.search.issuesAndPullRequests({
+              //     q: mergedQuery,
+              //     per_page: 1,
+              //   });
+              //   mergedCount = merged?.data?.total_count ?? 0;
+              // } catch (error) {
+              //   if (error?.status !== 422) {
+              //     throw error;
+              //   }
+              //   core.warning(`Skipping merged search for ${login}; treating as 0.`);
+              // }
+
+              const label = null;
+              // if (mergedCount >= experiencedThreshold) {
+              //   label = experiencedLabel;
+              // } else if (mergedCount >= trustedThreshold) {
+              //   label = trustedLabel;
+              // }
+
+              contributorCache.set(login, label);
+              return label;
+            }
+
+            async function applySizeLabel(pullRequest, currentLabels, labelNames) {
+              const files = await github.paginate(github.rest.pulls.listFiles, {
+                owner,
+                repo,
+                pull_number: pullRequest.number,
+                per_page: 100,
+              });
+
+              const excludedLockfiles = new Set(["pnpm-lock.yaml", "yarn.lock", "bun.lockb"]);
+              const totalChangedLines = files.reduce((total, file) => {
+                const path = file.filename ?? "";
+                if (path.startsWith("docs/") || excludedLockfiles.has(path)) {
+                  return total;
+                }
+                return total + (file.additions ?? 0) + (file.deletions ?? 0);
+              }, 0);
+
+              let targetSizeLabel = "size: XL";
+              if (totalChangedLines < 50) {
+                targetSizeLabel = "size: XS";
+              } else if (totalChangedLines < 200) {
+                targetSizeLabel = "size: S";
+              } else if (totalChangedLines < 500) {
+                targetSizeLabel = "size: M";
+              } else if (totalChangedLines < 1000) {
+                targetSizeLabel = "size: L";
+              }
+
+              for (const label of currentLabels) {
+                const name = label.name ?? "";
+                if (!sizeLabels.includes(name)) {
+                  continue;
+                }
+                if (name === targetSizeLabel) {
+                  continue;
+                }
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: pullRequest.number,
+                  name,
+                });
+                labelNames.delete(name);
+              }
+
+              if (!labelNames.has(targetSizeLabel)) {
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: pullRequest.number,
+                  labels: [targetSizeLabel],
+                });
+                labelNames.add(targetSizeLabel);
+              }
+            }
+
+            async function applyContributorLabel(pullRequest, labelNames) {
+              const login = pullRequest.user?.login;
+              if (!login) {
+                return;
+              }
+
+              const label = await resolveContributorLabel(login);
+              if (!label) {
+                return;
+              }
+
+              if (labelNames.has(label)) {
+                return;
+              }
+
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: pullRequest.number,
+                labels: [label],
+              });
+              labelNames.add(label);
+            }
+
+            async function applyBetaBlockerTitleLabel(pullRequest, labelNames) {
+              const matchesBetaBlocker = /\bbeta blocker\b/i.test(pullRequest.title ?? "");
+
+              if (matchesBetaBlocker) {
+                if (!labelNames.has(betaBlockerLabel)) {
+                  await github.rest.issues.addLabels({
+                    owner,
+                    repo,
+                    issue_number: pullRequest.number,
+                    labels: [betaBlockerLabel],
+                  });
+                  labelNames.add(betaBlockerLabel);
+                }
+                return;
+              }
+
+              if (!labelNames.has(betaBlockerLabel)) {
+                return;
+              }
+
+              await github.rest.issues.removeLabel({
+                owner,
+                repo,
+                issue_number: pullRequest.number,
+                name: betaBlockerLabel,
+              });
+              labelNames.delete(betaBlockerLabel);
+            }
+
+            await ensureSizeLabels();
+            const betaBlockerLabelExists = await hasBetaBlockerLabel();
+
+            let page = 1;
+            let processed = 0;
+
+            while (processed < maxCount) {
+              const remaining = maxCount - processed;
+              const pageSize = processAll ? perPage : Math.min(perPage, remaining);
+              const { data: pullRequests } = await github.rest.pulls.list({
+                owner,
+                repo,
+                state: "open",
+                per_page: pageSize,
+                page,
+              });
+
+              if (pullRequests.length === 0) {
+                break;
+              }
+
+              for (const pullRequest of pullRequests) {
+                if (!processAll && processed >= maxCount) {
+                  break;
+                }
+
+                const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+                  owner,
+                  repo,
+                  issue_number: pullRequest.number,
+                  per_page: 100,
+                });
+
+                const labelNames = new Set(
+                  currentLabels.map((label) => label.name).filter((name) => typeof name === "string"),
+                );
+
+                await applySizeLabel(pullRequest, currentLabels, labelNames);
+                await applyContributorLabel(pullRequest, labelNames);
+                if (betaBlockerLabelExists) {
+                  await applyBetaBlockerTitleLabel(pullRequest, labelNames);
+                }
+
+                processed += 1;
+              }
+
+              if (pullRequests.length < pageSize) {
+                break;
+              }
+
+              page += 1;
+            }
+
+            core.info(`Processed ${processed} pull requests.`);
+
+  label-issues:
+    if: github.event_name == 'issues'
+    permissions:
+      issues: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-members: read
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-issues: write
+          permission-members: read
+      - name: Apply maintainer or trusted-contributor label
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const login = context.payload.issue?.user?.login;
+            if (!login) {
+              return;
+            }
+
+            const repo = `${context.repo.owner}/${context.repo.repo}`;
+            // const trustedLabel = "trusted-contributor";
+            // const experiencedLabel = "experienced-contributor";
+            // const trustedThreshold = 4;
+            // const experiencedThreshold = 10;
+
+            let isMaintainer = false;
+            try {
+              const membership = await github.rest.teams.getMembershipForUserInOrg({
+                org: context.repo.owner,
+                team_slug: "maintainer",
+                username: login,
+              });
+              isMaintainer = membership?.data?.state === "active";
+            } catch (error) {
+              if (error?.status !== 404) {
+                throw error;
+              }
+            }
+
+            if (isMaintainer) {
+              await github.rest.issues.addLabels({
+                ...context.repo,
+                issue_number: context.payload.issue.number,
+                labels: ["maintainer"],
+              });
+              return;
+            }
+
+            // trusted-contributor and experienced-contributor labels disabled.
+            // const mergedQuery = `repo:${repo} is:pr is:merged author:${login}`;
+            // let mergedCount = 0;
+            // try {
+            //   const merged = await github.rest.search.issuesAndPullRequests({
+            //     q: mergedQuery,
+            //     per_page: 1,
+            //   });
+            //   mergedCount = merged?.data?.total_count ?? 0;
+            // } catch (error) {
+            //   if (error?.status !== 422) {
+            //     throw error;
+            //   }
+            //   core.warning(`Skipping merged search for ${login}; treating as 0.`);
+            // }
+            //
+            // if (mergedCount >= experiencedThreshold) {
+            //   await github.rest.issues.addLabels({
+            //     ...context.repo,
+            //     issue_number: context.payload.issue.number,
+            //     labels: [experiencedLabel],
+            //   });
+            //   return;
+            // }
+            //
+            // if (mergedCount >= trustedThreshold) {
+            //   await github.rest.issues.addLabels({
+            //     ...context.repo,
+            //     issue_number: context.payload.issue.number,
+            //     labels: [trustedLabel],
+            //   });
+            // }
+      - name: Apply beta-blocker title label
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const issue = context.payload.issue;
+            if (!issue || issue.pull_request) {
+              return;
+            }
+
+            const labelName = "beta-blocker";
+            const matchesBetaBlocker = /^beta blocker:/i.test(issue.title ?? "");
+
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: labelName,
+              });
+            } catch (error) {
+              if (error?.status !== 404) {
+                throw error;
+              }
+              core.info(`Skipping ${labelName} labeling because the label does not exist in the repository.`);
+              return;
+            }
+
+            const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              per_page: 100,
+            });
+            const hasLabel = currentLabels.some((label) => label.name === labelName);
+
+            if (matchesBetaBlocker && !hasLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: [labelName],
+              });
+              return;
+            }
+
+            if (!matchesBetaBlocker && hasLabel) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                name: labelName,
+              });
+            }

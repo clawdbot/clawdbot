@@ -1,0 +1,275 @@
+# Program Improver
+# Analyzes inspection reports and proposes improvements to .prose source code
+#
+# Usage:
+#   prose run @openprose/lib/program-improver
+#
+# Inputs:
+#   inspection_path: Path to inspection binding
+#   run_path: Path to the inspected run (to find program.prose)
+#
+# Output: PR to source repo if accessible, otherwise proposal file
+
+input inspection_path: "Path to inspection output (bindings/inspection.md)"
+input run_path: "Path to the inspected run directory"
+
+# ============================================================
+# Agents
+# ============================================================
+
+agent locator:
+  model: sonnet
+  prompt: """
+    You find the source location of .prose programs.
+
+    Check:
+    - Registry reference in program header (e.g., @handle/slug)
+    - Local file paths
+    - Whether source repo is accessible for PRs
+  """
+
+agent analyst:
+  model: opus
+  prompt: """
+    You analyze OpenProse inspection reports for program improvement opportunities.
+
+    Look for:
+    - Wrong model tier (using opus where sonnet suffices, or vice versa)
+    - Missing error handling (no try/catch around risky operations)
+    - Suboptimal control flow (sequential where parallel would work)
+    - Context passing issues (passing too much, or missing context)
+    - Unnecessary complexity (over-engineered for the task)
+    - Missing parallelization (independent operations run sequentially)
+    - Agent prompt issues (vague, missing constraints, wrong role)
+
+    Be specific. Quote evidence from inspection.
+  """
+
+agent implementer:
+  model: opus
+  prompt: """
+    You improve .prose programs while preserving their intent.
+
+    Rules:
+    - Keep the same overall structure
+    - Make minimal, targeted changes
+    - Follow OpenProse idioms
+    - Preserve comments and documentation
+    - One logical improvement per change
+  """
+
+agent pr_author:
+  model: sonnet
+  prompt: """
+    You create branches and pull requests or write proposal files.
+  """
+
+# ============================================================
+# Phase 1: Locate Program Source
+# ============================================================
+
+let source_info = session: locator
+  prompt: """
+    Find the source of the inspected program.
+
+    Run path: {run_path}
+
+    Steps:
+    1. Read {run_path}/program.prose
+    2. Check header for registry reference (e.g., # from: @handle/slug)
+    3. Check if it's a lib/ program (part of OpenProse)
+    4. Determine if we can create a PR
+
+    Return JSON:
+    {
+      "program_name": "name from header or filename",
+      "registry_ref": "@handle/slug or null",
+      "source_type": "lib" | "local" | "registry" | "unknown",
+      "source_path": "path to original source or null",
+      "source_repo": "git repo URL or null",
+      "can_pr": true/false,
+      "program_content": "full program source"
+    }
+  """
+  context: run_path
+
+# ============================================================
+# Phase 2: Analyze for Improvements
+# ============================================================
+
+let analysis = session: analyst
+  prompt: """
+    Analyze this program and its inspection for improvement opportunities.
+
+    Program source:
+    {source_info.program_content}
+
+    Inspection report: {inspection_path}
+
+    For each opportunity:
+    - category: model-tier | error-handling | flow | context | complexity | parallel | prompts
+    - description: what could be better
+    - severity: low | medium | high
+    - location: which part of program (agent name, phase, line range)
+    - evidence: what in the inspection suggests this
+    - proposed_fix: brief description of the change
+
+    Return JSON:
+    {
+      "program_name": "{source_info.program_name}",
+      "opportunities": [...],
+      "priority_order": [indices by impact]
+    }
+  """
+  context: { source_info, inspection_path }
+
+if **no actionable opportunities found**:
+  output result = {
+    status: "no-improvements-needed",
+    source_info: source_info,
+    analysis: analysis,
+    message: "Program executed well, no obvious improvements"
+  }
+
+# ============================================================
+# Phase 3: User Selection
+# ============================================================
+
+input selection: """
+  ## Program Improvement Opportunities
+
+  Program: {source_info.program_name}
+  Source: {source_info.source_type} ({source_info.source_path})
+  Can PR: {source_info.can_pr}
+
+  ### Opportunities Found:
+  {analysis.opportunities}
+
+  ---
+
+  Which improvements should I implement?
+  - List by number
+  - Or "all" for everything
+  - Or "none" to skip
+"""
+
+if **user selected none or wants to skip**:
+  output result = {
+    status: "skipped",
+    source_info: source_info,
+    analysis: analysis
+  }
+
+let selected = session "Parse selection"
+  prompt: "Extract selected opportunity indices"
+  context: { selection, analysis }
+
+# ============================================================
+# Phase 4: Implement Changes
+# ============================================================
+
+let implementation = session: implementer
+  prompt: """
+    Implement the selected improvements to this program.
+
+    Original program:
+    {source_info.program_content}
+
+    Selected opportunities: {selected}
+    Full analysis: {analysis}
+
+    Write the improved program. Make all selected changes.
+
+    Return JSON:
+    {
+      "improved_program": "full .prose source with improvements",
+      "changes_made": [
+        {
+          "opportunity_index": N,
+          "description": "what was changed",
+          "lines_affected": "before/after summary"
+        }
+      ],
+      "branch_name": "program/{program_name}-improvements"
+    }
+  """
+  context: { source_info, selected, analysis }
+
+# ============================================================
+# Phase 5: Create PR or Proposal
+# ============================================================
+
+if **source_info.can_pr is true**:
+  let pr = session: pr_author
+    prompt: """
+      Create a PR for this program improvement.
+
+      Source path: {source_info.source_path}
+      Source repo: {source_info.source_repo}
+      Branch: {implementation.branch_name}
+      Changes: {implementation.changes_made}
+      Improved program: {implementation.improved_program}
+
+      Steps:
+      1. cd to repo containing source
+      2. Create branch
+      3. Write improved program to source path
+      4. Commit with clear message
+      5. Push and create PR
+
+      PR body should explain each improvement.
+
+      Return: { pr_url, branch, title }
+    """
+    context: { source_info, implementation }
+    permissions:
+      bash: allow
+      write: ["**/*.prose"]
+
+  output result = {
+    status: "pr-created",
+    source_info: source_info,
+    analysis: analysis,
+    implementation: implementation,
+    pr: pr
+  }
+
+else:
+  # Write proposal file since we can't PR
+  let proposal_path = session: pr_author
+    prompt: """
+      Write a proposal file for this improvement.
+
+      Since we can't create a PR directly, write a proposal to:
+      .prose/proposals/{source_info.program_name}-improvements.md
+
+      Include:
+      # Improvement Proposal: {source_info.program_name}
+
+      ## Original Source
+      {source_info.source_path or source_info.registry_ref}
+
+      ## Changes Proposed
+      {implementation.changes_made}
+
+      ## Improved Program
+      ```prose
+      {implementation.improved_program}
+      ```
+
+      ## How to Apply
+      Instructions for manually applying or submitting upstream.
+
+      Return: { proposal_path }
+    """
+    context: { source_info, implementation }
+    permissions:
+      write: [".prose/proposals/*.md"]
+
+  output result = {
+    status: "proposal-written",
+    source_info: source_info,
+    analysis: analysis,
+    implementation: implementation,
+    proposal: proposal_path
+  }

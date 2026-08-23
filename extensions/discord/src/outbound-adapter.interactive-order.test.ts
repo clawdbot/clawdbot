@@ -1,0 +1,83 @@
+// Discord tests cover outbound adapter.interactive order plugin behavior.
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  createDiscordOutboundHoisted,
+  installDiscordOutboundModuleSpies,
+  resetDiscordOutboundMocks,
+} from "./outbound-adapter.test-harness.js";
+
+const hoisted = createDiscordOutboundHoisted();
+await installDiscordOutboundModuleSpies(hoisted);
+
+const { discordOutbound } = await import("./outbound-adapter.js");
+
+type DiscordSendPayload = NonNullable<typeof discordOutbound.sendPayload>;
+
+function requireDiscordSendPayload(): DiscordSendPayload {
+  const sendPayload = discordOutbound.sendPayload;
+  if (!sendPayload) {
+    throw new Error("Expected Discord outbound sendPayload");
+  }
+  return sendPayload;
+}
+
+describe("discordOutbound shared interactive ordering", () => {
+  beforeEach(() => {
+    resetDiscordOutboundMocks(hoisted);
+    hoisted.sendDiscordComponentMessageMock.mockResolvedValue({
+      messageId: "msg-1",
+      channelId: "123456",
+    });
+  });
+
+  it("keeps shared text blocks in authored order without hoisting fallback text", async () => {
+    const sendPayload = requireDiscordSendPayload();
+    const result = await sendPayload({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        interactive: {
+          blocks: [
+            { type: "text", text: "First" },
+            {
+              type: "buttons",
+              buttons: [{ label: "Approve", value: "approve" }],
+            },
+            { type: "text", text: "Last" },
+          ],
+        },
+      },
+    });
+
+    expect(hoisted.sendDiscordComponentMessageMock).toHaveBeenCalledWith(
+      "channel:123456",
+      expect.objectContaining({
+        blocks: [
+          { type: "text", text: "First" },
+          {
+            type: "actions",
+            buttons: [{ label: "Approve", style: "secondary", callbackData: "approve" }],
+          },
+          { type: "text", text: "Last" },
+        ],
+      }),
+      expect.objectContaining({
+        accountId: undefined,
+        chunkMode: undefined,
+        cfg: {},
+        maxLinesPerMessage: undefined,
+        reply: undefined,
+        silent: undefined,
+        tableMode: undefined,
+        textLimit: undefined,
+      }),
+    );
+    expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "msg-1",
+      channelId: "123456",
+    });
+  });
+});

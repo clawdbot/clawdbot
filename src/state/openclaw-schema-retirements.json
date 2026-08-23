@@ -1,0 +1,26 @@
+{
+  "retirements": [
+    {
+      "database": "state",
+      "status": "planned",
+      "targetVersion": 7,
+      "table": "commitments",
+      "indexes": [
+        "idx_commitments_scope_due",
+        "idx_commitments_status_due",
+        "idx_commitments_scope_dedupe",
+        "idx_commitments_agent_due",
+        "idx_commitments_agent_sent"
+      ],
+      "note": "Remove the retired commitments feature in the next shared-state schema."
+    },
+    {
+      "database": "agent",
+      "status": "completed",
+      "targetVersion": 17,
+      "table": "state_leases",
+      "indexes": ["idx_agent_state_leases_expiry", "idx_agent_state_leases_owner"],
+      "note": "Removed from the canonical per-agent schema in version 17."
+    }
+  ]
+}

@@ -1,0 +1,482 @@
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
+import {
+  defineChannelSetupContract,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/channel-setup";
+import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
+// Slack plugin module implements setup core behavior.
+import {
+  createAccountScopedAllowFromSection,
+  createAccountScopedGroupAccessSection,
+  createAllowlistSetupWizardProxy,
+  createPatchedAccountSetupAdapter,
+  createStandardChannelSetupStatus,
+  DEFAULT_ACCOUNT_ID,
+  defineTokenCredential,
+  parseMentionOrPrefixedId,
+  patchChannelConfigForAccount,
+  setSetupChannelEnabled,
+  createSetupTranslator,
+  type ChannelSetupAdapter,
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizard,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/setup-runtime";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { inspectSlackAccount } from "./account-inspect.js";
+import {
+  buildSlackManifest,
+  buildSlackSetupLines,
+  SLACK_CHANNEL as channel,
+  setSlackChannelAllowlist,
+} from "./setup-shared.js";
+
+const t = createSetupTranslator();
+
+type SlackSetupInput = ChannelSetupInput & {
+  botToken?: string;
+  appToken?: string;
+  userToken?: string;
+  signingSecret?: string;
+  identity?: "bot" | "user";
+  mode?: "socket" | "http" | "relay";
+};
+
+function enableSlackAccount(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
+  return patchChannelConfigForAccount({
+    cfg,
+    channel,
+    accountId,
+    patch: { enabled: true },
+  });
+}
+
+function setSlackSetupIdentity(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  identity: "bot" | "user";
+}): OpenClawConfig {
+  const next = patchChannelConfigForAccount({
+    cfg: params.cfg,
+    channel,
+    accountId: params.accountId,
+    patch: params.identity === "user" ? { postAs: "user" } : {},
+  });
+  if (params.identity === "user") {
+    return next;
+  }
+
+  const slack = next.channels?.slack as
+    | (Record<string, unknown> & { accounts?: Record<string, Record<string, unknown>> })
+    | undefined;
+  if (!slack) {
+    return next;
+  }
+  if (params.accountId === DEFAULT_ACCOUNT_ID) {
+    const nextSlack = { ...slack };
+    delete nextSlack.postAs;
+    return {
+      ...next,
+      channels: {
+        ...next.channels,
+        slack: nextSlack,
+      },
+    } as OpenClawConfig;
+  }
+
+  const account = slack.accounts?.[params.accountId];
+  if (!account) {
+    return next;
+  }
+  const nextAccount = { ...account };
+  if (slack.postAs === "user") {
+    // Named accounts inherit the root identity, so an explicit bot value is
+    // required only when overriding a user-identity channel default.
+    nextAccount.postAs = "bot";
+  } else {
+    delete nextAccount.postAs;
+  }
+  return {
+    ...next,
+    channels: {
+      ...next.channels,
+      slack: {
+        ...slack,
+        accounts: {
+          ...slack.accounts,
+          [params.accountId]: nextAccount,
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function createSlackTokenCredential(params: {
+  inputKey: "botToken" | "appToken" | "userToken" | "signingSecret";
+  providerHint: string;
+  credentialLabel: string;
+  preferredEnvVar?: "SLACK_BOT_TOKEN" | "SLACK_APP_TOKEN" | "SLACK_USER_TOKEN";
+  keepPrompt: string;
+  inputPrompt: string;
+  shouldPrompt: NonNullable<ChannelSetupWizard["credentials"]>[number]["shouldPrompt"];
+}) {
+  return defineTokenCredential({
+    inputKey: params.inputKey,
+    configKey: params.inputKey,
+    providerHint: params.providerHint,
+    credentialLabel: params.credentialLabel,
+    preferredEnvVar: params.preferredEnvVar,
+    envPrompt: params.preferredEnvVar
+      ? `${params.preferredEnvVar} detected. Use env var?`
+      : "Use the configured Slack credential?",
+    keepPrompt: params.keepPrompt,
+    inputPrompt: params.inputPrompt,
+    allowEnv: ({ accountId }: { accountId: string }) =>
+      Boolean(params.preferredEnvVar) && accountId === DEFAULT_ACCOUNT_ID,
+    resolveAccount: ({ cfg, accountId }) => inspectSlackAccount({ cfg, accountId }),
+    resolvedValue: (account) =>
+      params.inputKey === "signingSecret"
+        ? normalizeSecretInputString(account.config.signingSecret)
+        : normalizeOptionalString(account[params.inputKey]),
+    envValue: ({ accountId }) =>
+      params.preferredEnvVar && accountId === DEFAULT_ACCOUNT_ID
+        ? normalizeOptionalString(process.env[params.preferredEnvVar])
+        : undefined,
+    patchAccount: ({ cfg, accountId, mode, patch }) =>
+      mode === "env"
+        ? enableSlackAccount(cfg, accountId)
+        : patchChannelConfigForAccount({
+            cfg,
+            channel,
+            accountId,
+            patch: { enabled: true, ...patch },
+          }),
+    useEnv: { clearFields: [] },
+    set: {},
+    shouldPrompt: params.shouldPrompt,
+  });
+}
+
+function hasSlackSetupCredentials(params: {
+  input: SlackSetupInput;
+  identity: "bot" | "user";
+  mode: "socket" | "http" | "relay";
+}): boolean {
+  if (params.identity !== "user") {
+    const { input } = params;
+    return Boolean(input.botToken && input.appToken);
+  }
+  if (params.mode === "http") {
+    return Boolean(params.input.userToken && params.input.signingSecret);
+  }
+  return params.mode === "socket" && Boolean(params.input.userToken && params.input.appToken);
+}
+
+const slackSetupAdapterBase = createPatchedAccountSetupAdapter({
+  channelKey: channel,
+  validateInput: ({ cfg, accountId, input }) => {
+    const setupInput = input as SlackSetupInput;
+    if (setupInput.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+      return "Slack env tokens can only be used for the default account.";
+    }
+    const account = inspectSlackAccount({ cfg, accountId });
+    const identity = setupInput.identity ?? account.config.postAs ?? "bot";
+    const mode = setupInput.mode ?? account.config.mode ?? "socket";
+    if (identity === "user" && mode === "relay") {
+      return 'Slack user identity setup supports mode "socket" or "http", not "relay".';
+    }
+    if (setupInput.useEnv) {
+      return identity === "user"
+        ? "Slack user identity setup does not support --use-env; configure userToken and the transport credential explicitly."
+        : null;
+    }
+    if (hasSlackSetupCredentials({ input: setupInput, identity, mode })) {
+      return null;
+    }
+    if (identity === "user") {
+      return mode === "http"
+        ? "Slack user identity requires --user-token and --signing-secret."
+        : "Slack user identity requires --user-token and --app-token.";
+    }
+    return "Slack requires --bot-token and --app-token (or --use-env).";
+  },
+  buildPatch: (input) => {
+    const setupInput = input as SlackSetupInput;
+    return {
+      ...(setupInput.identity ? { postAs: setupInput.identity } : {}),
+      ...(setupInput.identity === "user" && setupInput.mode ? { mode: setupInput.mode } : {}),
+      ...(setupInput.botToken ? { botToken: setupInput.botToken } : {}),
+      ...(setupInput.appToken ? { appToken: setupInput.appToken } : {}),
+      ...(setupInput.userToken ? { userToken: setupInput.userToken } : {}),
+      ...(setupInput.signingSecret ? { signingSecret: setupInput.signingSecret } : {}),
+    };
+  },
+});
+
+const slackSetupAdapter: ChannelSetupAdapter = {
+  ...slackSetupAdapterBase,
+  singleAccountKeysToMove: ["appToken"],
+  applyAccountConfig: ({ cfg, accountId, input }) => {
+    const setupInput = input as SlackSetupInput;
+    const identity = setupInput.identity ?? inspectSlackAccount({ cfg, accountId }).config.postAs;
+    return slackSetupAdapterBase.applyAccountConfig({
+      cfg,
+      accountId,
+      input: identity === "user" ? { ...setupInput, identity } : setupInput,
+    });
+  },
+};
+
+export const slackSetupContract = defineChannelSetupContract({
+  fields: {
+    botToken: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--bot-token <token>", description: "Slack bot token" },
+    },
+    appToken: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--app-token <token>", description: "Slack app token" },
+    },
+    userToken: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--user-token <token>", description: "Slack user token" },
+    },
+    signingSecret: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--signing-secret <secret>", description: "Slack signing secret" },
+    },
+    identity: {
+      kind: "choice",
+      choices: ["bot", "user"],
+      cli: { flags: "--identity <kind>", description: "Slack identity" },
+    },
+    mode: {
+      kind: "choice",
+      choices: ["socket", "http"],
+      cli: { flags: "--mode <mode>", description: "Slack connection mode" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use Slack environment credentials" },
+    },
+  },
+  legacyAdapter: slackSetupAdapter,
+});
+
+export function createSlackSetupWizardBase(handlers: {
+  promptAllowFrom: NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>;
+  resolveAllowFromEntries: NonNullable<
+    NonNullable<ChannelSetupWizard["allowFrom"]>["resolveEntries"]
+  >;
+  resolveGroupAllowlist: NonNullable<
+    NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
+  >;
+}) {
+  const slackDmPolicy = createChannelDmPolicy({
+    label: "Slack",
+    channel,
+    resolveAccount: (cfg, accountId) => inspectSlackAccount({ cfg, accountId }),
+    buildPatch: ({ account, policy, allowFrom }) => ({
+      dmPolicy: policy,
+      ...(allowFrom === undefined ? {} : { allowFrom }),
+      dm: {
+        ...account.config.dm,
+        enabled: typeof account.config.dm?.enabled === "boolean" ? account.config.dm.enabled : true,
+      },
+    }),
+    promptAllowFrom: handlers.promptAllowFrom,
+  });
+
+  return {
+    channel,
+    status: createStandardChannelSetupStatus({
+      channelLabel: "Slack",
+      configuredLabel: t("wizard.channels.statusConfigured"),
+      unconfiguredLabel: t("wizard.channels.statusNeedsTokens"),
+      configuredHint: t("wizard.channels.statusConfigured"),
+      unconfiguredHint: t("wizard.channels.statusNeedsTokens"),
+      configuredScore: 2,
+      unconfiguredScore: 1,
+      resolveConfigured: ({ cfg, accountId }) => inspectSlackAccount({ cfg, accountId }).configured,
+    }),
+    prepare: async ({ cfg, accountId, prompter }) => {
+      const currentAccount = inspectSlackAccount({ cfg, accountId });
+      // Configured implicit-bot accounts historically skip this step. An
+      // explicit user identity still needs the selector to return to bot.
+      if (currentAccount.configured && currentAccount.config.postAs !== "user") {
+        return { cfg };
+      }
+      const identity = await prompter.select<"bot" | "user">({
+        message: "How should OpenClaw appear in Slack?",
+        options: [
+          { value: "bot", label: "Slack bot", hint: "Post as the Slack app (default)" },
+          { value: "user", label: "Slack user", hint: "Post as the authorizing human" },
+        ],
+        initialValue: currentAccount.config.postAs ?? "bot",
+      });
+      const next = setSlackSetupIdentity({
+        cfg,
+        accountId,
+        identity,
+      });
+      if (currentAccount.configured && identity === currentAccount.config.postAs) {
+        return { cfg: next };
+      }
+      if (identity === "user") {
+        if (currentAccount.config.mode === "relay") {
+          throw new Error(
+            'Slack user identity setup supports mode "socket" or "http", not "relay".',
+          );
+        }
+        await prompter.note(
+          [
+            "Use a Slack user OAuth token with the User Token Scopes listed in the Slack docs.",
+            "Subscribe the companion app under 'Subscribe to events on behalf of users' using the documented user events.",
+            "Socket Mode needs an app-level token; HTTP mode needs the app signing secret.",
+            "No bot token or bot user is required.",
+            `Docs: ${formatDocsLink(
+              "/channels/slack#user-identity-post-as-a-real-person",
+              "channels/slack",
+            )}`,
+          ].join("\n"),
+          "Slack user identity",
+        );
+      } else {
+        await prompter.note(
+          buildSlackSetupLines().join("\n"),
+          t("wizard.slack.socketModeTokensTitle"),
+        );
+        const manifest = buildSlackManifest();
+        if (prompter.plain) {
+          await prompter.plain(manifest);
+        } else {
+          await prompter.note(manifest, "Slack manifest JSON");
+        }
+      }
+      return { cfg: next };
+    },
+    envShortcut: {
+      prompt: t("wizard.slack.envPrompt"),
+      preferredEnvVar: "SLACK_BOT_TOKEN",
+      isAvailable: ({ cfg, accountId }) =>
+        accountId === DEFAULT_ACCOUNT_ID &&
+        (inspectSlackAccount({ cfg, accountId }).config.postAs ?? "bot") === "bot" &&
+        Boolean(process.env.SLACK_BOT_TOKEN?.trim()) &&
+        Boolean(process.env.SLACK_APP_TOKEN?.trim()) &&
+        !inspectSlackAccount({ cfg, accountId }).configured,
+      apply: ({ cfg, accountId }) => enableSlackAccount(cfg, accountId),
+    },
+    credentials: [
+      createSlackTokenCredential({
+        inputKey: "botToken",
+        providerHint: "slack-bot",
+        credentialLabel: t("wizard.slack.botToken"),
+        preferredEnvVar: "SLACK_BOT_TOKEN",
+        keepPrompt: t("wizard.slack.botTokenKeep"),
+        inputPrompt: t("wizard.slack.botTokenInput"),
+        shouldPrompt: ({ cfg, accountId }) =>
+          (inspectSlackAccount({ cfg, accountId }).config.postAs ?? "bot") === "bot",
+      }),
+      createSlackTokenCredential({
+        inputKey: "userToken",
+        providerHint: "slack-user",
+        credentialLabel: "Slack user OAuth token",
+        preferredEnvVar: "SLACK_USER_TOKEN",
+        keepPrompt: "Slack user OAuth token already configured. Keep it?",
+        inputPrompt: "Enter Slack user OAuth token",
+        shouldPrompt: ({ cfg, accountId }) =>
+          inspectSlackAccount({ cfg, accountId }).config.postAs === "user",
+      }),
+      createSlackTokenCredential({
+        inputKey: "appToken",
+        providerHint: "slack-app",
+        credentialLabel: t("wizard.slack.appToken"),
+        preferredEnvVar: "SLACK_APP_TOKEN",
+        keepPrompt: t("wizard.slack.appTokenKeep"),
+        inputPrompt: t("wizard.slack.appTokenInput"),
+        shouldPrompt: ({ cfg, accountId }) => {
+          const account = inspectSlackAccount({ cfg, accountId });
+          return (
+            (account.config.postAs ?? "bot") === "bot" ||
+            (account.config.mode ?? "socket") === "socket"
+          );
+        },
+      }),
+      createSlackTokenCredential({
+        inputKey: "signingSecret",
+        providerHint: "slack-signing-secret",
+        credentialLabel: "Slack signing secret",
+        keepPrompt: "Slack signing secret already configured. Keep it?",
+        inputPrompt: "Enter Slack signing secret",
+        shouldPrompt: ({ cfg, accountId }) => {
+          const account = inspectSlackAccount({ cfg, accountId });
+          return account.config.postAs === "user" && account.config.mode === "http";
+        },
+      }),
+    ],
+    dmPolicy: slackDmPolicy,
+    allowFrom: createAccountScopedAllowFromSection({
+      channel,
+      helpTitle: t("wizard.slack.allowlistTitle"),
+      helpLines: [
+        t("wizard.slack.allowlistIntro"),
+        t("wizard.slack.examples"),
+        "- U12345678",
+        "- @alice",
+        t("wizard.slack.multipleEntries"),
+        t("wizard.channels.docs", { link: formatDocsLink("/slack", "slack") }),
+      ],
+      message: t("wizard.slack.allowFromPrompt"),
+      placeholder: "@alice, U12345678",
+      invalidWithoutCredentialNote: t("wizard.slack.allowFromInvalidWithoutToken"),
+      parseId: (value: string) =>
+        parseMentionOrPrefixedId({
+          value,
+          mentionPattern: /^<@([A-Z0-9]+)>$/i,
+          prefixPattern: /^(slack:|user:)/i,
+          idPattern: /^[A-Z][A-Z0-9]+$/i,
+          normalizeId: (id) => id.toUpperCase(),
+        }),
+      resolveEntries: handlers.resolveAllowFromEntries,
+    }),
+    groupAccess: createAccountScopedGroupAccessSection({
+      channel,
+      label: t("wizard.slack.channelsLabel"),
+      placeholder: "#general, #private, C123",
+      currentPolicy: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
+        inspectSlackAccount({ cfg, accountId }).config.groupPolicy ?? "allowlist",
+      currentEntries: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
+        Object.entries(inspectSlackAccount({ cfg, accountId }).config.channels ?? {})
+          .filter(([, value]) => value?.enabled !== false)
+          .map(([key]) => key),
+      updatePrompt: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
+        Boolean(inspectSlackAccount({ cfg, accountId }).config.channels),
+      resolveAllowlist: handlers.resolveGroupAllowlist,
+      fallbackResolved: (entries) => entries,
+      applyAllowlist: ({
+        cfg,
+        accountId,
+        resolved,
+      }: {
+        cfg: OpenClawConfig;
+        accountId: string;
+        resolved: unknown;
+      }) => setSlackChannelAllowlist(cfg, accountId, resolved as string[]),
+    }),
+    disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
+  } satisfies ChannelSetupWizard;
+}
+export function createSlackSetupWizardProxy(
+  loadWizard: () => Promise<{ slackSetupWizard: ChannelSetupWizard }>,
+) {
+  return createAllowlistSetupWizardProxy({
+    loadWizard: async () => (await loadWizard()).slackSetupWizard,
+    createBase: createSlackSetupWizardBase,
+    fallbackResolvedGroupAllowlist: (entries) => entries,
+  });
+}

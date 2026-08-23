@@ -1,0 +1,19 @@
+# Parallel Research
+# Gather information from multiple sources concurrently
+
+agent researcher:
+  model: sonnet
+  prompt: "You are a research assistant"
+
+# Research multiple aspects in parallel
+parallel:
+  history = session: researcher
+    prompt: "Research the historical background"
+  current = session: researcher
+    prompt: "Research the current state of the field"
+  future = session: researcher
+    prompt: "Research future trends and predictions"
+
+# Combine all research
+session "Write comprehensive research summary"
+  context: { history, current, future }

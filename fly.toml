@@ -1,0 +1,34 @@
+# OpenClaw Fly.io deployment configuration
+# See https://fly.io/docs/reference/configuration/
+
+app = "openclaw"
+primary_region = "iad" # change to your closest region
+
+[build]
+dockerfile = "Dockerfile"
+
+[env]
+NODE_ENV = "production"
+# Fly uses x86, but keep this for consistency
+OPENCLAW_PREFER_PNPM = "1"
+OPENCLAW_STATE_DIR = "/data"
+NODE_OPTIONS = "--max-old-space-size=1536"
+
+[processes]
+app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
+
+[http_service]
+internal_port = 3000
+force_https = true
+auto_stop_machines = false # Keep running for persistent connections
+auto_start_machines = true
+min_machines_running = 1
+processes = ["app"]
+
+[[vm]]
+size = "shared-cpu-2x"
+memory = "2048mb"
+
+[mounts]
+source = "openclaw_data"
+destination = "/data"

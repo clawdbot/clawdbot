@@ -1,0 +1,56 @@
+/**
+ * Runtime SDK subpath for channel setup wizards, prompts, and allowlist helpers.
+ */
+export type { OpenClawConfig } from "../config/config.js";
+export type { WizardPrompter } from "../wizard/prompts.js";
+export { createClackPrompter } from "../wizard/clack-prompter.js";
+export { createSetupTranslator } from "../wizard/i18n/index.js";
+export type { SetupTranslator, WizardI18nParams } from "../wizard/i18n/index.js";
+export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
+export type {
+  ChannelSetupDmPolicy,
+  ChannelSetupWizard,
+  ChannelSetupWizardAllowFromEntry,
+  ChannelSetupWizardCredential,
+  ChannelSetupWizardTextInput,
+} from "../channels/plugins/setup-wizard-types.js";
+
+export { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+
+export {
+  createEnvPatchedAccountSetupAdapter,
+  createPatchedAccountSetupAdapter,
+  createSetupInputPresenceValidator,
+} from "../channels/plugins/setup-helpers.js";
+
+export {
+  createAccountScopedAllowFromSection,
+  createAccountScopedGroupAccessSection,
+  createTopLevelChannelDmPolicy,
+  createStandardChannelSetupStatus,
+  mergeAllowFromEntries,
+  noteChannelLookupFailure,
+  noteChannelLookupSummary,
+  parseSetupEntriesAllowingWildcard,
+  parseMentionOrPrefixedId,
+  patchChannelConfigForAccount,
+  promptResolvedAllowFrom,
+  promptParsedAllowFromForAccount,
+  resolveEntriesWithOptionalToken,
+  resolveSetupAccountId,
+  setAccountAllowFromForChannel,
+  setSetupChannelEnabled,
+  splitSetupEntries,
+} from "../channels/plugins/setup-wizard-helpers.js";
+
+export {
+  createLegacyCompatChannelDmPolicy,
+  promptLegacyChannelAllowFromForAccount,
+} from "../channels/plugins/setup-wizard-legacy-compat.js";
+export { createAllowlistSetupWizardProxy } from "../channels/plugins/setup-wizard-proxy.js";
+export {
+  createCliPathTextInput,
+  createDelegatedTextInputShouldPrompt,
+} from "../channels/plugins/setup-wizard-binary.js";
+export { createDelegatedSetupWizardProxy } from "../channels/plugins/setup-wizard-proxy.js";
+export { baseUrlTextInput, defineTokenCredential } from "./setup-credential.js";

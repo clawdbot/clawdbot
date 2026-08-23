@@ -1,0 +1,120 @@
+---
+doc-schema-version: 1
+summary: "Overview of automation mechanisms: tasks, automations, hooks, standing orders, and Task Flow"
+read_when:
+  - Deciding how to automate work with OpenClaw
+  - Choosing between heartbeat, automations, hooks, and standing orders
+  - Looking for the right automation entry point
+title: "Automation"
+---
+
+OpenClaw runs work in the background through tasks, scheduled jobs, event hooks,
+and standing instructions. Use this page to pick the right mechanism.
+
+## Quick decision guide
+
+```mermaid
+flowchart TD
+    START([What do you need?]) --> Q1{Schedule work?}
+    START --> Q2{Track detached work?}
+    START --> Q3{Orchestrate multi-step flows?}
+    START --> Q4{React to lifecycle events?}
+    START --> Q5{Give the agent persistent instructions?}
+
+    Q1 -->|Yes| Q1a{Exact timing or flexible?}
+    Q1a -->|Exact| CRON["Automations"]
+    Q1a -->|Flexible| HEARTBEAT[Heartbeat]
+
+    Q2 -->|Yes| TASKS[Background Tasks]
+    Q3 -->|Yes| FLOW[Task Flow]
+    Q4 -->|Yes| HOOKS[Hooks]
+    Q5 -->|Yes| SO[Standing Orders]
+```
+
+| Use case                                | Recommended      | Why                                              |
+| --------------------------------------- | ---------------- | ------------------------------------------------ |
+| Send daily report at 9 AM sharp         | Automations      | Exact timing, isolated execution                 |
+| Remind me in 20 minutes                 | Automations      | One-shot with precise timing (`--at`)            |
+| Run weekly deep analysis                | Automations      | Standalone task, can use different model         |
+| Check inbox every 30 min                | Heartbeat        | Batches with other checks, context-aware         |
+| Monitor calendar for upcoming events    | Heartbeat        | Natural fit for periodic awareness               |
+| Inspect status of a subagent or ACP run | Background Tasks | Tasks ledger tracks all detached work            |
+| Audit what ran and when                 | Background Tasks | `openclaw tasks list` and `openclaw tasks audit` |
+| Multi-step research then summarize      | Task Flow        | Durable orchestration with revision tracking     |
+| Run a script on session reset           | Hooks            | Event-driven, fires on lifecycle events          |
+| Execute code on every tool call         | Plugin hooks     | In-process hooks can intercept tool calls        |
+| Always check compliance before replying | Standing Orders  | Injected into every session automatically        |
+
+### Automations vs Heartbeat
+
+| Dimension       | Automations                         | Heartbeat                             |
+| --------------- | ----------------------------------- | ------------------------------------- |
+| Timing          | Exact (cron expressions, one-shot)  | Approximate (default every 30 min)    |
+| Session context | Fresh (isolated) or shared          | Full main-session context             |
+| Task records    | Always created                      | Never created                         |
+| Delivery        | Channel, webhook, or silent         | Inline in main session                |
+| Best for        | Reports, reminders, background jobs | Inbox checks, calendar, notifications |
+
+Use Automations when you need precise timing or isolated execution. Use Heartbeat when the work benefits from full session context and approximate timing is fine.
+
+## Core concepts
+
+### Automations
+
+Automations are OpenClaw's built-in scheduler for precise timing. The scheduler persists jobs, wakes the agent at the right time, and can deliver output to a chat channel or webhook endpoint. Supports one-shot reminders, recurring cron expressions, and inbound webhook triggers.
+
+See [Automations](/automation/cron-jobs).
+
+### Tasks
+
+The background task ledger tracks all detached work: ACP runs, subagent spawns, isolated automation runs, and CLI operations. Tasks are records, not schedulers. Use `openclaw tasks list` and `openclaw tasks audit` to inspect them.
+
+See [Background Tasks](/automation/tasks).
+
+### Task Flow
+
+Task Flow is the flow orchestration substrate above background tasks. It manages durable multi-step flows with managed and mirrored sync modes, revision tracking, and `openclaw tasks flow list|show|cancel` for inspection.
+
+See [Task Flow](/automation/taskflow).
+
+### Standing orders
+
+Standing orders grant the agent permanent operating authority for defined programs. They live in workspace files (typically `AGENTS.md`) and are injected into every session. Combine with automations for time-based enforcement.
+
+See [Standing Orders](/automation/standing-orders).
+
+### Hooks
+
+Internal hooks are event-driven scripts triggered by agent lifecycle events
+(`/new`, `/reset`, `/stop`), session compaction, gateway startup, and message
+flow. They are discovered from hook directories and managed with
+`openclaw hooks`. For in-process tool-call interception, use
+[Plugin hooks](/plugins/hooks).
+
+See [Hooks](/automation/hooks).
+
+### Heartbeat
+
+Heartbeat is a periodic main-session turn (default every 30 minutes). It batches checklist-style monitoring (inbox, calendar, notifications) in one agent turn with full session context. Heartbeat turns do not create task records and do not extend daily/idle session reset freshness. Heartbeat monitor scratch is small prompt context; schedule recurring work as automation jobs. Empty scratch skips as `empty-heartbeat-file`. Scheduled heartbeats automatically defer while the main queue or automation work is busy, another reply or embedded run for the same agent is active, or the resolved target session has active or queued work.
+
+See [Heartbeat](/gateway/heartbeat).
+
+## How they work together
+
+- **Automations** handle precise schedules (daily reports, weekly reviews) and one-shot reminders. All automation runs create task records.
+- **Heartbeat** handles one batched monitoring checklist every 30 minutes; automations own checks that need independent cadences.
+- **Hooks** react to specific events (session resets, compaction, message flow) with custom scripts. Plugin hooks cover tool calls.
+- **Standing orders** give the agent persistent context and authority boundaries.
+- **Task Flow** coordinates multi-step flows above individual tasks.
+- **Tasks** automatically track all detached work so you can inspect and audit it.
+
+## Related
+
+- [Automations](/automation/cron-jobs) — precise scheduling and one-shot reminders
+- [Background Tasks](/automation/tasks) — task ledger for all detached work
+- [Task Flow](/automation/taskflow) — durable multi-step flow orchestration
+- [Hooks](/automation/hooks) — event-driven lifecycle scripts
+- [Plugin hooks](/plugins/hooks) — in-process tool, prompt, message, and lifecycle hooks
+- [Standing Orders](/automation/standing-orders) — persistent agent instructions
+- [Heartbeat](/gateway/heartbeat) — periodic main-session turns
+- [Configuration Reference](/gateway/configuration-reference) — all config keys

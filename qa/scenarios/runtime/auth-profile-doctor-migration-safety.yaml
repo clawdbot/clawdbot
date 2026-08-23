@@ -1,0 +1,25 @@
+title: Codex doctor migration safety matrix
+
+scenario:
+  id: auth-profile-doctor-migration-safety
+  surface: runtime
+  coverage:
+    primary:
+      - openai.codex-oauth-profiles-doctor-repair
+    secondary:
+      - observability.doctor-codex-plugin-auth
+  objective: Prove that the real doctor command migrates legacy Codex OAuth stores into canonical per-agent SQLite state.
+  successCriteria:
+    - OAuth-only legacy stores become canonical openai OAuth profiles in per-agent SQLite.
+    - Mixed legacy stores keep the migrated OAuth profile ahead of an existing openai API-key profile.
+    - The obsolete JSON auth store is removed after each successful migration.
+  docsRefs:
+    - docs/cli/doctor.md
+  codeRefs:
+    - src/commands/doctor-auth-flat-profiles.ts
+    - src/agents/auth-profiles/persisted.ts
+    - test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts
+    summary: Run the real doctor migration over OAuth-only and mixed legacy stores, then inspect canonical SQLite state.

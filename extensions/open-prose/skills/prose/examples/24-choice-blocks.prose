@@ -1,0 +1,86 @@
+# Choice Blocks Example
+# Demonstrates AI-selected branching based on runtime criteria
+
+# Simple choice based on analysis
+let analysis = session "Analyze the current codebase quality"
+
+choice **the severity of issues found**:
+  option "Critical":
+    session "Stop all work and fix critical issues immediately"
+      context: analysis
+    session "Create incident report"
+  option "Moderate":
+    session "Schedule fixes for next sprint"
+      context: analysis
+  option "Minor":
+    session "Add to technical debt backlog"
+      context: analysis
+
+# Choice for user experience level
+choice **the user's technical expertise based on their question**:
+  option "Beginner":
+    session "Explain concepts from first principles"
+    session "Provide step-by-step tutorial"
+    session "Include helpful analogies"
+  option "Intermediate":
+    session "Give concise explanation with examples"
+    session "Link to relevant documentation"
+  option "Expert":
+    session "Provide technical deep-dive"
+    session "Include advanced configuration options"
+
+# Choice for project approach
+let requirements = session "Gather project requirements"
+
+choice **the best development approach given the requirements**:
+  option "Rapid prototype":
+    session "Create quick MVP focusing on core features"
+      context: requirements
+    session "Plan iteration cycle"
+  option "Production-ready":
+    session "Design complete architecture"
+      context: requirements
+    session "Set up CI/CD pipeline"
+    session "Implement with full test coverage"
+  option "Research spike":
+    session "Explore technical feasibility"
+      context: requirements
+    session "Document findings and recommendations"
+
+# Multi-line criteria for complex decisions
+let market_data = session "Gather market research data"
+let tech_analysis = session "Analyze technical landscape"
+
+choice ***
+  the optimal market entry strategy
+  considering both market conditions
+  and technical readiness
+***:
+  option "Aggressive launch":
+    session "Prepare for immediate market entry"
+      context: [market_data, tech_analysis]
+  option "Soft launch":
+    session "Plan limited beta release"
+      context: [market_data, tech_analysis]
+  option "Wait and iterate":
+    session "Continue development and monitor market"
+      context: [market_data, tech_analysis]
+
+# Nested choices for detailed decision trees
+let request = session "Analyze incoming customer request"
+
+choice **the type of request**:
+  option "Technical support":
+    choice **the complexity of the technical issue**:
+      option "Simple":
+        session "Provide self-service solution"
+          context: request
+      option "Complex":
+        session "Escalate to senior engineer"
+          context: request
+  option "Sales inquiry":
+    session "Forward to sales team with context"
+      context: request
+  option "Feature request":
+    session "Add to product backlog and notify PM"
+      context: request

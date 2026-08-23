@@ -1,0 +1,32 @@
+import { safeParseJson } from "@openclaw/normalization-core";
+import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
+
+/** Normalizes SQLite number/bigint columns into JavaScript numbers. */
+export { normalizeSqliteNumber as normalizeNumber };
+
+/** Converts optional booleans into nullable SQLite integer flags. */
+export function booleanToInteger(value: boolean | undefined): number | null {
+  return typeof value === "boolean" ? (value ? 1 : 0) : null;
+}
+
+/** Converts SQLite integer flags into booleans while preserving missing columns as undefined. */
+export function integerToBoolean(value: number | bigint | null): boolean | undefined {
+  const normalized = normalizeSqliteNumber(value);
+  return normalized == null ? undefined : normalized !== 0;
+}
+
+/** Serializes optional structured values for JSON columns. */
+export function serializeJson(value: unknown): string | null {
+  return value == null ? null : JSON.stringify(value);
+}
+
+/** Parses a JSON string-array column and drops non-string entries from legacy data. */
+export function parseJsonArray(raw: string | null): string[] | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = safeParseJson(raw);
+  return Array.isArray(parsed)
+    ? parsed.filter((item): item is string => typeof item === "string")
+    : undefined;
+}

@@ -1,0 +1,527 @@
+// Discord plugin module implements gateway behavior.
+import { EventEmitter } from "node:events";
+import {
+  GatewayCloseCodes,
+  GatewayDispatchEvents,
+  GatewayIntentBits,
+  GatewayOpcodes,
+  type APIGatewayBotInfo,
+  type APIVoiceState,
+  type GatewayDispatchPayload,
+  type GatewayHeartbeat,
+  type GatewayIdentify,
+  type GatewayPresenceUpdateData,
+  type GatewayReceivePayload,
+  type GatewaySendPayload,
+  type GatewayVoiceStateUpdateData,
+} from "discord-api-types/v10";
+import * as ws from "ws";
+import { Plugin, type Client } from "./client.js";
+import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-close-codes.js";
+import { dispatchVoiceGatewayEvent, mapGatewayDispatchData } from "./gateway-dispatch.js";
+import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
+import { GatewayHeartbeatTimers, GatewayReconnectTimer } from "./gateway-lifecycle.js";
+import { decodeGatewayMessage, ensureGatewayParams } from "./gateway-payload.js";
+import { GatewaySendLimiter } from "./gateway-rate-limit.js";
+import { DiscordGatewayVoiceStateCache } from "./gateway-voice-state-cache.js";
+import type { DiscordGatewayVoiceStateTransition } from "./gateway-voice-state-cache.js";
+
+export { GatewayCloseCodes };
+export const GatewayIntents = GatewayIntentBits;
+export type Activity = NonNullable<GatewayPresenceUpdateData["activities"]>[number];
+export type UpdatePresenceData = Omit<GatewayPresenceUpdateData, "status"> & {
+  status: "online" | "idle" | "dnd" | "invisible" | "offline";
+};
+type RequestGuildMembersData = {
+  guild_id: string;
+  query?: string;
+  limit: number;
+  presences?: boolean;
+  user_ids?: string | string[];
+  nonce?: string;
+};
+type GatewayPluginOptions = {
+  reconnect?: { maxAttempts?: number };
+  intents?: number;
+  autoInteractions?: boolean;
+  shard?: [number, number];
+  url?: string;
+};
+type GatewayReconnectReason =
+  | "close"
+  | "identify"
+  | "invalid-session"
+  | "reconnect-opcode"
+  | "zombie";
+type GatewayReconnectOptions = {
+  reason: GatewayReconnectReason;
+  preferResume: boolean;
+  closeCode?: number;
+  minDelayMs?: number;
+};
+
+const READY_STATE_OPEN = 1;
+const DEFAULT_GATEWAY_URL = "wss://gateway.discord.gg/";
+const DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES = 4096;
+// Discord can send multi-megabyte member chunks. Keep generous headroom while
+// bounding ws's 100 MiB default before an inbound payload reaches JSON parsing.
+export const DISCORD_GATEWAY_WS_CLIENT_OPTIONS = Object.freeze({
+  maxPayload: 16 * 1024 * 1024,
+}) satisfies ws.ClientOptions;
+const INVALID_SESSION_MIN_DELAY_MS = 1_000;
+const INVALID_SESSION_JITTER_MS = 4_000;
+const RESUME_FAILURE_THRESHOLD = 3;
+
+export class GatewayPlugin extends Plugin {
+  readonly id = "gateway";
+  protected client?: Client;
+  readonly options: Required<Pick<GatewayPluginOptions, "autoInteractions">> & GatewayPluginOptions;
+  public ws: ws.WebSocket | null = null;
+  public sequence: number | null = null;
+  public lastHeartbeatAck = true;
+  public emitter = new EventEmitter();
+  public shardId?: number;
+  public totalShards?: number;
+  protected gatewayInfo?: APIGatewayBotInfo;
+  public isConnected = false;
+  private sessionId: string | null = null;
+  private resumeGatewayUrl: string | null = null;
+  private reconnectAttempts = 0;
+  private consecutiveResumeFailures = 0;
+  private shouldReconnect = false;
+  private isConnecting = false;
+  private readonly heartbeatTimers = new GatewayHeartbeatTimers();
+  private readonly reconnectTimer = new GatewayReconnectTimer();
+  private readonly voiceStateCache = new DiscordGatewayVoiceStateCache();
+  private outboundLimiter = new GatewaySendLimiter(
+    (payload) => this.sendSerializedGatewayEvent(payload),
+    (error) => this.emitter.emit("error", error),
+    (warning) =>
+      this.emitter.emit(
+        "warning",
+        `Gateway outbound queue overflow policy=${warning.policy} droppedEvents=${warning.droppedEvents} queuedEvents=${warning.queuedEvents} maxQueuedEvents=${warning.maxQueuedEvents}`,
+      ),
+  );
+
+  constructor(options: GatewayPluginOptions, gatewayInfo?: APIGatewayBotInfo) {
+    super();
+    this.options = {
+      ...options,
+      reconnect: { maxAttempts: 50, ...options.reconnect },
+      autoInteractions: options.autoInteractions ?? true,
+      intents: options.intents ?? 0,
+    };
+    this.gatewayInfo = gatewayInfo;
+  }
+
+  get ping(): number | null {
+    return null;
+  }
+
+  listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] {
+    return this.voiceStateCache.listVoiceChannelStates(guildId, channelId);
+  }
+
+  takeVoiceStateTransition(state: APIVoiceState): DiscordGatewayVoiceStateTransition | null {
+    return this.voiceStateCache.takeTransition(state);
+  }
+
+  get heartbeatInterval(): NodeJS.Timeout | undefined {
+    return this.heartbeatTimers.heartbeatInterval;
+  }
+
+  set heartbeatInterval(timer: NodeJS.Timeout | undefined) {
+    this.heartbeatTimers.heartbeatInterval = timer;
+  }
+
+  get firstHeartbeatTimeout(): NodeJS.Timeout | undefined {
+    return this.heartbeatTimers.firstHeartbeatTimeout;
+  }
+
+  set firstHeartbeatTimeout(timer: NodeJS.Timeout | undefined) {
+    this.heartbeatTimers.firstHeartbeatTimeout = timer;
+  }
+
+  override async registerClient(client: Client): Promise<void> {
+    this.client = client;
+    if (this.options.shard) {
+      client.shardId = this.options.shard[0];
+      client.totalShards = this.options.shard[1];
+      this.shardId = this.options.shard[0];
+      this.totalShards = this.options.shard[1];
+    }
+    this.shouldReconnect = true;
+    this.connect(false);
+  }
+
+  connect(resume = false): void {
+    this.stopReconnectTimer();
+    this.stopHeartbeat();
+    if (this.isConnecting) {
+      return;
+    }
+    this.shouldReconnect = true;
+    this.lastHeartbeatAck = true;
+    this.ws?.close(1000, "Reconnecting");
+    const baseUrl =
+      resume && this.resumeGatewayUrl
+        ? this.resumeGatewayUrl
+        : (this.gatewayInfo?.url ?? this.options.url ?? DEFAULT_GATEWAY_URL);
+    this.ws = this.createWebSocket(ensureGatewayParams(baseUrl));
+    this.isConnecting = true;
+    this.isConnected = false;
+    this.setupWebSocket(resume);
+  }
+
+  disconnect(): void {
+    this.shouldReconnect = false;
+    this.stopReconnectTimer();
+    this.stopHeartbeat();
+    this.outboundLimiter.clear();
+    this.ws?.close(1000, "Client disconnect");
+    this.ws = null;
+    this.isConnecting = false;
+    this.isConnected = false;
+    this.reconnectAttempts = 0;
+    this.consecutiveResumeFailures = 0;
+    this.voiceStateCache.clear();
+  }
+
+  protected createWebSocket(url: string): ws.WebSocket {
+    return new ws.WebSocket(url, DISCORD_GATEWAY_WS_CLIENT_OPTIONS);
+  }
+
+  private setupWebSocket(resume: boolean): void {
+    const socket = this.ws;
+    if (!socket) {
+      return;
+    }
+    socket.on("open", () => {
+      if (socket !== this.ws) {
+        return;
+      }
+      this.isConnecting = false;
+      this.emitter.emit("debug", "Gateway websocket opened");
+    });
+    socket.on("message", (incoming) => {
+      if (socket !== this.ws) {
+        return;
+      }
+      const payload = decodeGatewayMessage(incoming);
+      if (!payload) {
+        this.emitter.emit("error", new Error("Invalid gateway payload"));
+        return;
+      }
+      this.handlePayload(payload, resume, socket);
+    });
+    socket.on("close", (code) => {
+      if (socket !== this.ws) {
+        return;
+      }
+      const closeCode = code as GatewayCloseCodes;
+      this.stopHeartbeat();
+      this.outboundLimiter.clear();
+      this.isConnecting = false;
+      this.isConnected = false;
+      this.emitter.emit("debug", `Gateway websocket closed: ${code}`);
+      if (!this.shouldReconnect) {
+        return;
+      }
+      if (isFatalGatewayCloseCode(closeCode)) {
+        this.shouldReconnect = false;
+        this.emitter.emit("error", new Error(`Fatal gateway close code: ${code}`));
+        return;
+      }
+      const canResume = canResumeAfterGatewayClose(closeCode);
+      if (!canResume) {
+        this.resetSessionState();
+      }
+      this.scheduleReconnect({
+        reason: "close",
+        preferResume: canResume,
+        closeCode,
+      });
+    });
+    socket.on("error", (error) => {
+      if (socket !== this.ws) {
+        return;
+      }
+      this.emitter.emit("error", error);
+    });
+  }
+
+  private handlePayload(
+    payload: GatewayReceivePayload,
+    resume: boolean,
+    sourceSocket?: ws.WebSocket,
+  ): void {
+    if (payload.s !== null && payload.s !== undefined) {
+      this.sequence = payload.s;
+    }
+    switch (payload.op) {
+      case GatewayOpcodes.Hello: {
+        this.startHeartbeat(
+          (payload.d as { heartbeat_interval?: number }).heartbeat_interval ?? 45_000,
+        );
+        const resumeState = resume ? this.getResumeState() : null;
+        if (resumeState) {
+          this.send(
+            {
+              op: GatewayOpcodes.Resume,
+              d: {
+                token: this.client?.options.token ?? "",
+                session_id: resumeState.sessionId,
+                seq: resumeState.sequence,
+              },
+            } as GatewaySendPayload,
+            true,
+          );
+        } else {
+          void this.identifyWithConcurrency(sourceSocket).catch((error: unknown) => {
+            this.emitter.emit(
+              "error",
+              error instanceof Error ? error : new Error(String(error), { cause: error }),
+            );
+          });
+        }
+        break;
+      }
+      case GatewayOpcodes.HeartbeatAck:
+        this.lastHeartbeatAck = true;
+        break;
+      case GatewayOpcodes.Heartbeat:
+        this.sendHeartbeat();
+        break;
+      case GatewayOpcodes.Dispatch:
+        void this.handleDispatch(payload).catch((error: unknown) => {
+          this.emitter.emit(
+            "error",
+            error instanceof Error ? error : new Error(String(error), { cause: error }),
+          );
+        });
+        break;
+      case GatewayOpcodes.InvalidSession:
+        if (!payload.d) {
+          this.resetSessionState();
+        }
+        this.scheduleReconnect({
+          reason: "invalid-session",
+          preferResume: payload.d,
+          minDelayMs:
+            INVALID_SESSION_MIN_DELAY_MS + Math.floor(Math.random() * INVALID_SESSION_JITTER_MS),
+        });
+        break;
+      case GatewayOpcodes.Reconnect:
+        this.scheduleReconnect({ reason: "reconnect-opcode", preferResume: true });
+        break;
+    }
+  }
+
+  private startHeartbeat(intervalMs: number): void {
+    this.heartbeatTimers.start({
+      intervalMs,
+      isAcked: () => this.lastHeartbeatAck,
+      onHeartbeat: () => this.sendHeartbeat(),
+      onAckTimeout: () => {
+        this.emitter.emit("error", new Error("Gateway heartbeat ACK timeout"));
+        this.scheduleReconnect({ reason: "zombie", preferResume: true });
+      },
+    });
+  }
+
+  private stopHeartbeat(): void {
+    this.heartbeatTimers.stop();
+  }
+
+  private stopReconnectTimer(): void {
+    this.reconnectTimer.stop();
+  }
+
+  private sendHeartbeat(): void {
+    if (!this.ws || this.ws.readyState !== READY_STATE_OPEN) {
+      return;
+    }
+    this.lastHeartbeatAck = false;
+    this.send({ op: GatewayOpcodes.Heartbeat, d: this.sequence } as GatewayHeartbeat, true);
+  }
+
+  private identify(): void {
+    this.send(
+      {
+        op: GatewayOpcodes.Identify,
+        d: {
+          token: this.client?.options.token ?? "",
+          intents: this.options.intents ?? 0,
+          properties: { os: process.platform, browser: "openclaw", device: "openclaw" },
+          shard: this.options.shard,
+        },
+      } as GatewayIdentify,
+      true,
+    );
+  }
+
+  private async identifyWithConcurrency(sourceSocket?: ws.WebSocket): Promise<void> {
+    await sharedGatewayIdentifyLimiter.wait({
+      shardId: this.shardId,
+      maxConcurrency: this.gatewayInfo?.session_start_limit.max_concurrency,
+    });
+    const socket = sourceSocket ?? this.ws;
+    if (!socket || socket !== this.ws) {
+      return;
+    }
+    if (socket.readyState !== READY_STATE_OPEN) {
+      this.scheduleReconnect({ reason: "identify", preferResume: false });
+      return;
+    }
+    this.identify();
+  }
+
+  send(payload: GatewaySendPayload | GatewayReceivePayload, skipRateLimit = false): void {
+    if (!this.ws || this.ws.readyState !== READY_STATE_OPEN) {
+      throw new Error("Discord gateway socket is not open");
+    }
+    const serialized = JSON.stringify(payload);
+    const payloadSize =
+      typeof Buffer !== "undefined"
+        ? Buffer.byteLength(serialized, "utf8")
+        : new TextEncoder().encode(serialized).byteLength;
+    if (payloadSize > DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES) {
+      throw new Error(
+        `Discord gateway payload exceeds ${DISCORD_GATEWAY_PAYLOAD_LIMIT_BYTES}-byte limit`,
+      );
+    }
+    this.outboundLimiter.send(serialized, { critical: skipRateLimit });
+  }
+
+  private sendSerializedGatewayEvent(serialized: string): void {
+    if (!this.ws || this.ws.readyState !== READY_STATE_OPEN) {
+      throw new Error("Discord gateway socket is not open");
+    }
+    this.ws.send(serialized);
+  }
+
+  private async handleDispatch(payload: GatewayDispatchPayload): Promise<void> {
+    if (!this.client || !payload.t) {
+      return;
+    }
+    if (payload.t === GatewayDispatchEvents.Ready) {
+      const ready = payload.d as { session_id?: string; resume_gateway_url?: string };
+      this.sessionId = ready.session_id ?? null;
+      this.resumeGatewayUrl = ready.resume_gateway_url ?? null;
+      this.reconnectAttempts = 0;
+      this.consecutiveResumeFailures = 0;
+      this.isConnected = true;
+    }
+    if (payload.t === GatewayDispatchEvents.Resumed) {
+      this.reconnectAttempts = 0;
+      this.consecutiveResumeFailures = 0;
+      this.isConnected = true;
+    }
+    this.voiceStateCache.apply(payload);
+    dispatchVoiceGatewayEvent(this.client, payload.t, payload.d);
+    // MESSAGE_CREATE is the durable-ingress raw-envelope boundary. Its listener
+    // maps structures only after the queue claim; other events retain eager mapping.
+    const data =
+      payload.t === GatewayDispatchEvents.MessageCreate
+        ? payload.d
+        : mapGatewayDispatchData(this.client, payload.t, payload.d);
+    await this.client.dispatchGatewayEvent(payload.t, data);
+    if (payload.t === GatewayDispatchEvents.InteractionCreate && this.options.autoInteractions) {
+      await this.client.handleInteraction(payload.d);
+    }
+  }
+
+  private resetSessionState(): void {
+    this.sessionId = null;
+    this.resumeGatewayUrl = null;
+    this.sequence = null;
+    this.consecutiveResumeFailures = 0;
+    this.voiceStateCache.clear();
+  }
+
+  private getResumeState(): { sessionId: string; sequence: number } | null {
+    return this.sessionId && this.sequence !== null
+      ? { sessionId: this.sessionId, sequence: this.sequence }
+      : null;
+  }
+
+  private scheduleReconnect(options: GatewayReconnectOptions): void {
+    if (!this.shouldReconnect) {
+      return;
+    }
+    this.stopHeartbeat();
+    this.stopReconnectTimer();
+    this.ws?.close();
+    this.ws = null;
+    this.isConnecting = false;
+    this.isConnected = false;
+    this.outboundLimiter.clear();
+    this.reconnectAttempts += 1;
+    if (this.reconnectAttempts > (this.options.reconnect?.maxAttempts ?? 50)) {
+      const maxAttempts = this.options.reconnect?.maxAttempts ?? 50;
+      this.emitter.emit(
+        "error",
+        new Error(
+          `Max reconnect attempts (${maxAttempts}) reached${options.closeCode !== undefined ? ` after close code ${options.closeCode}` : ""}`,
+        ),
+      );
+      return;
+    }
+    let shouldResume = options.preferResume && this.getResumeState() !== null;
+    // Abnormal closes can leave a cached session permanently rejected. READY or RESUMED
+    // resets this streak; after the threshold, discard the poisoned session and IDENTIFY.
+    if (shouldResume && this.consecutiveResumeFailures >= RESUME_FAILURE_THRESHOLD) {
+      this.resetSessionState();
+      shouldResume = false;
+      this.emitter.emit(
+        "debug",
+        `Gateway forcing fresh IDENTIFY after ${RESUME_FAILURE_THRESHOLD} failed resume attempts`,
+      );
+    }
+    if (shouldResume) {
+      this.consecutiveResumeFailures += 1;
+    } else {
+      this.consecutiveResumeFailures = 0;
+    }
+    const delay = Math.max(
+      options.minDelayMs ?? 0,
+      Math.min(30_000, 1_000 * 2 ** Math.min(this.reconnectAttempts, 5)),
+    );
+    this.emitter.emit(
+      "debug",
+      `Gateway reconnect scheduled in ${delay}ms (${options.reason}, resume=${String(shouldResume)})`,
+    );
+    this.reconnectTimer.schedule(delay, () => {
+      this.connect(shouldResume);
+    });
+  }
+
+  updatePresence(data: UpdatePresenceData): void {
+    this.send({ op: GatewayOpcodes.PresenceUpdate, d: data } as GatewaySendPayload);
+  }
+
+  updateVoiceState(data: GatewayVoiceStateUpdateData): void {
+    this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data } as GatewaySendPayload, true);
+  }
+
+  requestGuildMembers(data: RequestGuildMembersData): void {
+    if (!this.hasIntent(GatewayIntentBits.GuildMembers)) {
+      throw new Error("GUILD_MEMBERS intent is required for requestGuildMembers");
+    }
+    if (data.presences && !this.hasIntent(GatewayIntentBits.GuildPresences)) {
+      throw new Error("GUILD_PRESENCES intent is required when requesting presences");
+    }
+    if (!data.query && data.query !== "" && !data.user_ids) {
+      throw new Error("Either query or user_ids is required for requestGuildMembers");
+    }
+    this.send({ op: GatewayOpcodes.RequestGuildMembers, d: data } as GatewaySendPayload);
+  }
+
+  getRateLimitStatus() {
+    return this.outboundLimiter.getStatus();
+  }
+
+  hasIntent(intent: number): boolean {
+    return Boolean((this.options.intents ?? 0) & intent);
+  }
+}

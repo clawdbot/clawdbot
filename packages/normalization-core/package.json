@@ -1,0 +1,105 @@
+{
+  "name": "@openclaw/normalization-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./agent-id": {
+      "types": "./dist/agent-id.d.mts",
+      "import": "./dist/agent-id.mjs",
+      "default": "./dist/agent-id.mjs"
+    },
+    "./boolean-coercion": {
+      "types": "./dist/boolean-coercion.d.mts",
+      "import": "./dist/boolean-coercion.mjs",
+      "default": "./dist/boolean-coercion.mjs"
+    },
+    "./cjk-chars": {
+      "types": "./dist/cjk-chars.d.mts",
+      "import": "./dist/cjk-chars.mjs",
+      "default": "./dist/cjk-chars.mjs"
+    },
+    "./error-coercion": {
+      "types": "./dist/error-coercion.d.mts",
+      "import": "./dist/error-coercion.mjs",
+      "default": "./dist/error-coercion.mjs"
+    },
+    "./expect": {
+      "types": "./dist/expect.d.mts",
+      "import": "./dist/expect.mjs",
+      "default": "./dist/expect.mjs"
+    },
+    "./number-coercion": {
+      "types": "./dist/number-coercion.d.mts",
+      "import": "./dist/number-coercion.mjs",
+      "default": "./dist/number-coercion.mjs"
+    },
+    "./json-schema": {
+      "types": "./dist/json-schema.d.mts",
+      "import": "./dist/json-schema.mjs",
+      "default": "./dist/json-schema.mjs"
+    },
+    "./phone-presentation": {
+      "types": "./dist/phone-presentation.d.mts",
+      "import": "./dist/phone-presentation.mjs",
+      "default": "./dist/phone-presentation.mjs"
+    },
+    "./promise-like": {
+      "types": "./dist/promise-like.d.mts",
+      "import": "./dist/promise-like.mjs",
+      "default": "./dist/promise-like.mjs"
+    },
+    "./record-coerce": {
+      "types": "./dist/record-coerce.d.mts",
+      "import": "./dist/record-coerce.mjs",
+      "default": "./dist/record-coerce.mjs"
+    },
+    "./result": {
+      "types": "./dist/result.d.mts",
+      "import": "./dist/result.mjs",
+      "default": "./dist/result.mjs"
+    },
+    "./string-coerce": {
+      "types": "./dist/string-coerce.d.mts",
+      "import": "./dist/string-coerce.mjs",
+      "default": "./dist/string-coerce.mjs"
+    },
+    "./string-normalization": {
+      "types": "./dist/string-normalization.d.mts",
+      "import": "./dist/string-normalization.mjs",
+      "default": "./dist/string-normalization.mjs"
+    },
+    "./stable-node-path": {
+      "types": "./dist/stable-node-path.d.mts",
+      "import": "./dist/stable-node-path.mjs",
+      "default": "./dist/stable-node-path.mjs"
+    },
+    "./stable-stringify": {
+      "types": "./dist/stable-stringify.d.mts",
+      "import": "./dist/stable-stringify.mjs",
+      "default": "./dist/stable-stringify.mjs"
+    },
+    "./utf16-slice": {
+      "types": "./dist/utf16-slice.d.mts",
+      "import": "./dist/utf16-slice.mjs",
+      "default": "./dist/utf16-slice.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/cjk-chars.ts src/error-coercion.ts src/expect.ts src/json-schema.ts src/number-coercion.ts src/phone-presentation.ts src/promise-like.ts src/record-coerce.ts src/result.ts src/stable-node-path.ts src/stable-stringify.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  },
+  "dependencies": {
+    "libphonenumber-js": "1.13.9",
+    "typebox": "1.3.6"
+  }
+}

@@ -1,0 +1,1137 @@
+/* ===========================================
+   Dreams Tab – Sleeping Lobster Animation
+   =========================================== */
+
+.dreams-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.agent-memory-panel__header {
+  justify-content: flex-end;
+}
+
+.dreams__topbar {
+  padding: 6px 8px;
+  flex-shrink: 0;
+}
+
+.dreams__panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dreams {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 64px);
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ---- Breathing lobster ---- */
+
+.dreams__lobster {
+  animation: dreams-breathe 4s ease-in-out infinite;
+  filter: drop-shadow(0 0 40px rgba(255, 77, 77, 0.25));
+  transition: filter 0.6s ease;
+}
+
+.dreams__lobster svg {
+  width: 160px;
+  height: 160px;
+}
+
+/* Stirring: press the sleeper and it half-opens one eye, without quite
+   waking. The peek eye ships hidden inside the sleeping svg. */
+.dreams__lobster .lob-eye-peek {
+  display: none;
+}
+
+.dreams__lobster:active .lob-eye-peek {
+  display: block;
+}
+
+.dreams__lobster:active .lob-eye-closed path:first-of-type {
+  opacity: 0;
+}
+
+.dreams__lobster:active {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .dreams__lobster:active .lob-antennae {
+    animation: dreams-stir-antennae 0.9s ease-in-out infinite;
+    transform-origin: 60px 14px;
+  }
+}
+
+@keyframes dreams-stir-antennae {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+}
+
+@keyframes dreams-breathe {
+  0%,
+  100% {
+    transform: scale(1) translateY(0);
+  }
+  50% {
+    transform: scale(1.04) translateY(-4px);
+  }
+}
+
+/* ---- Sleeping eyes overlay ---- */
+
+.dreams__eyes {
+  animation: dreams-blink 6s ease-in-out infinite;
+}
+
+@keyframes dreams-blink {
+  0%,
+  90%,
+  100% {
+    opacity: 1;
+  }
+  95% {
+    opacity: 0;
+  }
+}
+
+/* ---- Floating Z's ---- */
+
+.dreams__z {
+  position: absolute;
+  font-family: var(--mono);
+  font-weight: 700;
+  color: var(--accent);
+  opacity: 0;
+  animation: dreams-float-z 4s ease-out infinite;
+}
+
+/* Z's originate from the lobster's head and float up-right at an angle.
+   Use nth-of-type because Z's are <span> while stars/moon/glow are <div>. */
+.dreams__z:nth-of-type(1) {
+  font-size: 14px;
+  left: calc(50% + 70px);
+  top: calc(50% - 90px);
+  animation-delay: 0s;
+}
+
+.dreams__z:nth-of-type(2) {
+  font-size: 20px;
+  left: calc(50% + 100px);
+  top: calc(50% - 130px);
+  animation-delay: 1.2s;
+}
+
+.dreams__z:nth-of-type(3) {
+  font-size: 28px;
+  left: calc(50% + 130px);
+  top: calc(50% - 175px);
+  animation-delay: 2.4s;
+}
+
+@keyframes dreams-float-z {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0) rotate(-10deg);
+  }
+  15% {
+    opacity: 0.7;
+  }
+  80% {
+    opacity: 0.3;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(20px, -40px) rotate(15deg);
+  }
+}
+
+/* ---- Stars ---- */
+
+.dreams__star {
+  position: absolute;
+  border-radius: 50%;
+  animation: dreams-twinkle 3s ease-in-out infinite alternate;
+}
+
+@keyframes dreams-twinkle {
+  0% {
+    opacity: 0.15;
+    transform: scale(0.8);
+  }
+  100% {
+    opacity: 0.7;
+    transform: scale(1.2);
+  }
+}
+
+/* ---- Dream thought bubble ---- */
+
+.dreams__bubble {
+  position: absolute;
+  top: calc(50% - 260px);
+  left: calc(50% - 200px);
+  padding: 16px 20px;
+  background: var(--accent-subtle);
+  border: 1px solid rgba(255, 92, 92, 0.12);
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  animation: dreams-bubble-float 6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.dreams__bubble-label {
+  font-size: 12px; /* was 11px */
+  color: var(--accent-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.dreams__bubble-text {
+  font-size: 16px;
+  color: var(--accent);
+  font-style: italic;
+  opacity: 0.8;
+  min-width: 180px;
+  text-align: center;
+}
+
+@keyframes dreams-bubble-float {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.8;
+  }
+  50% {
+    transform: translateY(-8px);
+    opacity: 1;
+  }
+}
+
+/* Bubble trail dots */
+.dreams__bubble-dot {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--accent-subtle);
+  border: 1px solid rgba(255, 92, 92, 0.1);
+  animation: dreams-bubble-float 6s ease-in-out infinite;
+}
+
+/* ---- Moon ---- */
+
+.dreams__moon {
+  position: absolute;
+  top: 40px;
+  right: 80px;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fef3c7, #fbbf24);
+  box-shadow:
+    0 0 40px rgba(251, 191, 36, 0.2),
+    0 0 80px rgba(251, 191, 36, 0.08);
+  opacity: 0.7;
+  animation: dreams-moon-glow 8s ease-in-out infinite alternate;
+}
+
+@keyframes dreams-moon-glow {
+  0% {
+    box-shadow:
+      0 0 40px rgba(251, 191, 36, 0.2),
+      0 0 80px rgba(251, 191, 36, 0.08);
+    opacity: 0.6;
+  }
+  100% {
+    box-shadow:
+      0 0 50px rgba(251, 191, 36, 0.3),
+      0 0 100px rgba(251, 191, 36, 0.12);
+    opacity: 0.8;
+  }
+}
+
+/* ---- Ambient glow under lobster ---- */
+
+.dreams__glow {
+  position: absolute;
+  top: calc(50% + 40px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 240px;
+  height: 100px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(255, 77, 77, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+  animation: dreams-glow-pulse 4s ease-in-out infinite;
+}
+
+@keyframes dreams-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ---- Sleep phase cards ---- */
+
+.dreams__phases {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 32px;
+  z-index: 1;
+}
+
+.dreams__phase {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--panel) 70%, transparent);
+  border: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+}
+
+.dreams__phase--off {
+  opacity: 0.4;
+}
+
+.dreams__phase-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.4;
+}
+
+.dreams__phase-dot--on {
+  background: var(--ok);
+  opacity: 1;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.3);
+}
+
+.dreams__phase-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.dreams__phase-next {
+  font-size: 12px; /* was 11px */
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Dreaming on/off toggle (header bar) ---- */
+
+.dreams__phase-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--panel) 70%, transparent);
+  color: var(--muted);
+  font-size: 12px; /* was 11px */
+  font-family: inherit;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition:
+    border-color 200ms ease,
+    color 200ms ease;
+}
+
+.dreams__phase-toggle:hover {
+  border-color: color-mix(in oklab, var(--accent) 30%, var(--border));
+}
+
+.dreams__phase-toggle-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.4;
+  transition:
+    background 200ms ease,
+    opacity 200ms ease,
+    box-shadow 200ms ease;
+}
+
+.dreams__phase-toggle--on .dreams__phase-toggle-dot {
+  background: var(--ok);
+  opacity: 1;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.3);
+}
+
+.dreams__phase-toggle--on {
+  color: var(--text);
+  border-color: color-mix(in oklab, var(--ok) 20%, var(--border));
+}
+
+.dreams__phase-toggle-label {
+  font-weight: 500;
+}
+
+.dreams__controls-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* ---- Status line ---- */
+
+.dreams__status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 32px;
+}
+
+.dreams__status-label {
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.dreams__status-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ok-muted);
+}
+
+.dreams__status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: dreams-dot-pulse 2s ease-in-out infinite;
+}
+
+@keyframes dreams-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
+  }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 0 8px 2px rgba(34, 197, 94, 0.2);
+  }
+}
+
+/* ---- Idle / inactive state ---- */
+
+.dreams--idle .dreams__lobster {
+  filter: drop-shadow(0 0 20px rgba(255, 77, 77, 0.1));
+}
+
+.dreams--idle .dreams__status-dot {
+  background: var(--muted);
+  animation: none;
+}
+
+.dreams--idle .dreams__status-detail {
+  color: var(--muted);
+}
+
+/* ===========================================
+   Dreaming Advanced – Operator Review
+   =========================================== */
+
+.dreams-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 24px 32px 40px;
+  flex: 1;
+  min-height: 320px;
+  min-width: 0;
+  overflow: auto;
+}
+
+.dreams-advanced__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.dreams-advanced__intro {
+  max-width: 720px;
+}
+
+.dreams-advanced__eyebrow {
+  display: block;
+  font-size: 12px; /* was 10px */
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-muted);
+  margin-bottom: 10px;
+}
+
+.dreams-advanced__title {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.1;
+  color: var(--text);
+}
+
+.dreams-advanced__description {
+  margin: 10px 0 0;
+  max-width: 60ch;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.dreams-advanced__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dreams-advanced__summary {
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.dreams-advanced__sections {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dreams-advanced__section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: 16px;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--panel) 86%, transparent);
+  overflow: hidden;
+}
+
+.dreams-advanced__section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+  flex-wrap: wrap;
+}
+
+.dreams-advanced__section-copy {
+  min-width: 0;
+  max-width: 56ch;
+}
+
+.dreams-advanced__section-title {
+  font-size: 12px; /* was 11px */
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dreams-advanced__section-description {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.dreams-advanced__section-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dreams-advanced__section-count {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in oklab, var(--accent-subtle) 85%, transparent);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.dreams-advanced__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+  background: color-mix(in oklab, var(--panel) 92%, transparent);
+}
+
+.dreams-advanced__sort-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px; /* was 11px */
+  line-height: 1;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
+}
+
+.dreams-advanced__sort-btn:hover {
+  color: var(--text);
+}
+
+.dreams-advanced__sort-btn--active {
+  background: color-mix(in oklab, var(--accent-subtle) 85%, transparent);
+  color: var(--accent);
+}
+
+.dreams-advanced__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.dreams-advanced__item {
+  padding: 14px 16px;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+}
+
+.dreams-advanced__badge {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent-subtle) 72%, transparent);
+  color: var(--accent);
+  font-size: 12px; /* was 10px */
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dreams-advanced__item:first-child {
+  border-top: none;
+}
+
+.dreams-advanced__snippet {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.dreams-advanced__source,
+.dreams-advanced__meta,
+.dreams-advanced__empty {
+  font-size: 12px; /* was 11px */
+  line-height: 1.45;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.dreams-advanced__source {
+  font-family: var(--mono);
+}
+
+.dreams-advanced__empty {
+  padding: 16px;
+}
+
+/* ===========================================
+   Dream Diary – Scroll section below hero
+   =========================================== */
+
+.dreams-diary {
+  display: flex;
+  flex-direction: column;
+  padding: 24px 32px 64px;
+  flex: 1;
+  min-height: 320px;
+  min-width: 0;
+  overflow: auto;
+  position: relative;
+  isolation: isolate;
+}
+
+/* ---- Diary header ---- */
+
+.dreams-diary__chrome {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  width: min(100%, 920px);
+  max-width: 100%;
+  min-width: 0;
+  padding-bottom: 14px;
+  margin-bottom: 10px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--bg) 98%, transparent) 0%,
+    color-mix(in oklab, var(--bg) 94%, transparent) 72%,
+    color-mix(in oklab, var(--bg) 0%, transparent) 100%
+  );
+}
+
+.dreams-diary__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.dreams-diary__title {
+  font-size: 12px; /* was 10px */
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  flex: 1;
+}
+
+.dreams-diary__explainer {
+  width: min(100%, 920px);
+  margin: 0 0 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ---- Diary entry ---- */
+
+.dreams-diary__entry {
+  position: relative;
+  z-index: 1;
+  max-width: 920px;
+  width: min(100%, 920px);
+  min-width: 0;
+  padding: 0 0 0 16px;
+  flex-shrink: 0;
+  overflow-x: clip;
+  contain: paint;
+  animation: diary-entry-reveal 1.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes diary-entry-reveal {
+  0% {
+    opacity: 0;
+    transform: translateY(16px);
+    filter: blur(8px);
+  }
+  50% {
+    filter: blur(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+/* Left accent glow line */
+.dreams-diary__accent {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  width: 2px;
+  height: calc(100% - 8px);
+  border-radius: 2px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--accent) 40%, transparent) 0%,
+    color-mix(in oklab, var(--accent) 8%, transparent) 100%
+  );
+  animation: diary-glow-pulse 6s ease-in-out infinite alternate;
+}
+
+@keyframes diary-glow-pulse {
+  0% {
+    opacity: 0.25;
+  }
+  100% {
+    opacity: 0.65;
+  }
+}
+
+.dreams-diary__date {
+  display: block;
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+.dreams-diary__daychips {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  width: min(100%, 920px);
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  position: relative;
+  z-index: 1;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding-bottom: 2px;
+}
+
+.dreams-diary__daychips::-webkit-scrollbar {
+  display: none;
+}
+
+.dreams-diary__day-chip {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--panel) 84%, transparent);
+  color: var(--muted);
+  font-size: 12px; /* was 11px */
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.dreams-diary__day-chip:hover {
+  color: var(--text);
+  border-color: color-mix(in oklab, var(--accent) 30%, var(--border));
+}
+
+.dreams-diary__day-chip--active {
+  border-color: color-mix(in oklab, var(--accent) 44%, transparent);
+  background: color-mix(in oklab, var(--accent-subtle) 88%, transparent);
+  color: var(--text);
+}
+
+.dreams-diary__prose {
+  /* no styling container needed, just prose spacing */
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: clip;
+}
+
+.dreams-diary__insights {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.dreams-diary__insight-card {
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--panel) 86%, transparent);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.dreams-diary__insight-card--clickable {
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.dreams-diary__insight-card--clickable:hover {
+  border-color: color-mix(in oklab, var(--accent) 24%, var(--border));
+  background: color-mix(in oklab, var(--panel) 92%, transparent);
+  transform: translateY(-1px);
+}
+
+.dreams-diary__insight-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.dreams-diary__insight-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dreams-diary__insight-meta {
+  font-size: 12px; /* was 11px */
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.dreams-diary__insight-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px; /* was 10px */
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+}
+
+.dreams-diary__insight-badge--high {
+  color: color-mix(in oklab, var(--danger) 82%, white);
+  background: color-mix(in oklab, var(--danger) 10%, transparent);
+}
+
+.dreams-diary__insight-badge--low,
+.dreams-diary__insight-badge--medium,
+.dreams-diary__insight-badge--unknown {
+  color: var(--muted);
+}
+
+.dreams-diary__insight-badge--wiki {
+  color: var(--accent);
+  background: color-mix(in oklab, var(--accent-subtle) 72%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 24%, transparent);
+}
+
+.dreams-diary__insight-line {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.dreams-diary__insight-list {
+  margin-top: 10px;
+}
+
+.dreams-diary__insight-list strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px; /* was 11px */
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dreams-diary__insight-signals {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.dreams-diary__insight-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.dreams-diary__insight-signal {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px; /* was 11px */
+  color: var(--text);
+  background: color-mix(in oklab, var(--accent-subtle) 84%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 24%, transparent);
+}
+
+.dreams-diary__preview-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(1120px, 100%);
+  height: min(840px, calc(100dvh - 64px));
+  min-height: 0;
+  border-radius: 18px;
+  border: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  background: color-mix(in oklab, var(--panel) 96%, transparent);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+
+.dreams-diary__preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 62%, transparent);
+}
+
+.dreams-diary__preview-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dreams-diary__preview-meta {
+  margin-top: 6px;
+  font-size: 12px; /* was 11px */
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.dreams-diary__preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+}
+
+.dreams-diary__preview-hint {
+  margin-bottom: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.dreams-diary__preview-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.dreams-diary__para {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  animation: diary-text-stream 2.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.dreams-diary__para:last-child {
+  margin-bottom: 0;
+}
+
+@keyframes diary-text-stream {
+  0% {
+    opacity: 0;
+    mask-image: linear-gradient(90deg, black 0%, transparent 0%);
+    -webkit-mask-image: linear-gradient(90deg, black 0%, transparent 0%);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    mask-image: linear-gradient(90deg, black 100%, transparent 100%);
+    -webkit-mask-image: linear-gradient(90deg, black 100%, transparent 100%);
+  }
+}
+
+/* ---- Empty / error states ---- */
+
+.dreams-diary__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 0;
+  z-index: 1;
+}
+
+.dreams-diary__empty-moon {
+  color: var(--muted);
+  opacity: 0.4;
+  margin-bottom: 4px;
+}
+
+.dreams-diary__empty-text {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.dreams-diary__empty-hint {
+  font-size: 12px; /* was 11px */
+  color: var(--muted);
+  opacity: 0.4;
+}
+
+.dreams-diary__error {
+  font-size: 12px;
+  color: var(--danger);
+  text-align: center;
+  padding: 20px 0;
+  z-index: 1;
+}
+
+/* ---- Responsive ---- */
+
+@media (max-width: 880px) {
+  .dreams {
+    min-height: calc(100vh - 96px);
+  }
+
+  .dreams-advanced {
+    padding: 20px 16px 32px;
+  }
+
+  .dreams__phases {
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .dreams-diary {
+    padding: 20px 16px 48px;
+  }
+
+  .dreams-diary__preview-header {
+    flex-direction: column;
+  }
+}
