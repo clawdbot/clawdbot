@@ -89,6 +89,7 @@ suite.define(() => {
         await row.hover();
         await card.waitFor({ state: "visible" });
 
+        await captureProof(page, "hovercard-identity-rest.png");
         const trigger = row.locator("a.sidebar-recent-session__link");
         const identity = card.locator("a.session-hovercard__identity-name");
         const participant = card.locator("a.session-hovercard__participant-name");
