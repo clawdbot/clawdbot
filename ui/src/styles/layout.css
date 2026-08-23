@@ -4248,6 +4248,9 @@ openclaw-sidebar-attention {
 
 openclaw-tooltip.sidebar-hover-tooltip {
   --openclaw-tooltip-max-width: min(340px, calc(100vw - 24px));
+  --openclaw-tooltip-open-animation: openclaw-tooltip-hover-card-in 100ms var(--ease-out);
+  --openclaw-tooltip-popup-show-duration: 0ms;
+  --openclaw-tooltip-popup-hide-duration: 0ms;
 }
 
 .sidebar-hover-card {
@@ -4271,16 +4274,14 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-hover-card__metadata {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: max-content max-content;
+  gap: 4px 12px;
   margin: 0;
 }
 
 .sidebar-hover-card__metadata-row {
-  display: grid;
-  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
-  gap: 10px;
+  display: contents;
 }
 
 .sidebar-hover-card__metadata-row dt {
@@ -4288,15 +4289,73 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-hover-card__metadata-row dd {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-width: 0;
   margin: 0;
-  overflow-wrap: anywhere;
   color: var(--text);
 }
 
 .sidebar-hover-card__metadata-value--mono {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
+}
+
+.sidebar-build-hover-card {
+  width: max-content;
+}
+
+.sidebar-build-hover-card__copy {
+  position: relative;
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.sidebar-build-hover-card__copy:hover,
+.sidebar-build-hover-card__copy:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-build-hover-card__copy:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-build-hover-card__copy svg {
+  width: 12px;
+  height: 12px;
+}
+
+.sidebar-build-hover-card__copy-idle,
+.sidebar-build-hover-card__copy-done {
+  display: inline-flex;
+  grid-area: 1 / 1;
+}
+
+.sidebar-build-hover-card__copy-done,
+.sidebar-build-hover-card__copy[data-copied="1"] .sidebar-build-hover-card__copy-idle {
+  opacity: 0;
+}
+
+.sidebar-build-hover-card__copy[data-copied="1"] .sidebar-build-hover-card__copy-done {
+  opacity: 1;
+}
+
+.sidebar-build-hover-card__gateway-state {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--ok);
 }
 
 .sidebar-footer-bar__status {
