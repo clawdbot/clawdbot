@@ -1,4 +1,5 @@
 // Resolves one concrete agent owner for onboarding auth, model, workspace, and session effects.
+import { isDeepStrictEqual } from "node:util";
 import {
   listAgentEntries,
   resolveAgentDir,
@@ -12,6 +13,7 @@ import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
   resolveAgentModelFallbackValues,
+  toAgentModelListLike,
 } from "../config/model-input.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { AgentEntryConfig } from "../config/types.agents.js";
@@ -183,12 +185,34 @@ export function projectAgentModelDefaults(
     return updated;
   }
   const updatedDefaults = updated.agents?.defaults;
+  const originalDefaults = config.agents?.defaults;
+  const agentModels =
+    entry?.models !== undefined
+      ? updatedDefaults?.models
+      : Object.fromEntries(
+          Object.entries(updatedDefaults?.models ?? {}).filter(
+            ([modelRef, model]) =>
+              !Object.hasOwn(originalDefaults?.models ?? {}, modelRef) ||
+              !isDeepStrictEqual(model, originalDefaults?.models?.[modelRef]),
+          ),
+        );
+  const hasAgentModel =
+    entry?.model !== undefined ||
+    !isDeepStrictEqual(
+      toAgentModelListLike(updatedDefaults?.model),
+      toAgentModelListLike(originalDefaults?.model),
+    );
+  const hasAgentModelPolicy =
+    entry?.modelPolicy !== undefined ||
+    !isDeepStrictEqual(updatedDefaults?.modelPolicy, originalDefaults?.modelPolicy);
   const { model: _model, models: _models, modelPolicy: _modelPolicy, ...entryRest } = entry ?? {};
   const nextEntry = {
     ...entryRest,
-    ...(updatedDefaults?.model !== undefined ? { model: updatedDefaults.model } : {}),
-    ...(updatedDefaults?.models !== undefined ? { models: updatedDefaults.models } : {}),
-    ...(updatedDefaults?.modelPolicy !== undefined
+    ...(hasAgentModel && updatedDefaults?.model !== undefined
+      ? { model: updatedDefaults.model }
+      : {}),
+    ...(agentModels && Object.keys(agentModels).length > 0 ? { models: agentModels } : {}),
+    ...(hasAgentModelPolicy && updatedDefaults?.modelPolicy !== undefined
       ? { modelPolicy: updatedDefaults.modelPolicy }
       : {}),
   };
@@ -198,7 +222,6 @@ export function projectAgentModelDefaults(
     modelPolicy: _updatedModelPolicy,
     ...sharedDefaults
   } = updatedDefaults ?? {};
-  const originalDefaults = config.agents?.defaults;
   const baseConfig = {
     ...config,
     agents: {

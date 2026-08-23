@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -257,6 +258,37 @@ describe("onboarding agent target", () => {
       },
     });
     expect(updated.plugins?.entries?.fixture?.enabled).toBe(true);
+  });
+
+  it.each([
+    { selectModel: false, expectedModel: undefined, expectedModels: undefined },
+    {
+      selectModel: true,
+      expectedModel: { primary: "provider/selected" },
+      expectedModels: { "provider/selected": {} },
+    },
+  ])("keeps fleet model aliases and policy inherited (select model: $selectModel)", (scenario) => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: {
+          model: "openai/global",
+          models: { "openai/global": { alias: "Global" } },
+          modelPolicy: { allow: ["openai/global"] },
+        },
+        entries: { main: { model: "openai/main" }, ops: {} },
+      },
+    };
+    const target = resolveOnboardingAgentTarget(config, "ops");
+    const updated = applyAgentModelDefaults(config, target, (projected) =>
+      scenario.selectModel ? applyPrimaryModel(projected, "provider/selected") : projected,
+    );
+
+    expect(updated.agents?.defaults).toEqual(config.agents.defaults);
+    expect(updated.agents?.entries?.ops?.model).toEqual(scenario.expectedModel);
+    expect(updated.agents?.entries?.ops?.models).toEqual(scenario.expectedModels);
+    expect(updated.agents?.entries?.ops?.modelPolicy).toBeUndefined();
+    expect(updated.agents?.entries?.main?.model).toEqual("openai/main");
   });
 
   it("preserves every list-form agent when applying the primary model", () => {
