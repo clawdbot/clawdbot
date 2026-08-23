@@ -416,6 +416,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
       <span class="sidebar-identity-card__status" role="status" aria-live="polite"
         >${host.offline ? t("connection.reconnecting") : ""}</span
       >
+      ${host.activeRouteId === "chat" ? renderAppSidebarAttention(host) : nothing}
       ${availableUpdate
         ? html`<span class="sidebar-footer-update-slot">
             <button
@@ -443,7 +444,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
             </button>
           </span>`
         : nothing}
-      ${host.activeRouteId === "chat" ? renderAppSidebarAttention(host) : nothing}
     </div>
   `;
 }
