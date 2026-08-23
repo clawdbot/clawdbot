@@ -32,6 +32,7 @@ const PROOF_CHANNEL_ID = "runtime-only-inbound-proof";
 const RUNTIME_EVENT_STUB = "Continue the OpenClaw runtime event.";
 const ISOLATED_GATEWAY_ENV_KEYS = [
   "HOME",
+  "NODE_ENV",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_TOKEN",
@@ -288,8 +289,11 @@ describe("Gateway runtime-only inbound context", () => {
       ]);
 
       const token = nextId("runtime-only-proof-token");
+      // Resolve the plugin runtime through the exact-head dist artifact, matching production
+      // instead of synchronously recompiling the entire SDK graph inside the Vitest worker.
       for (const [key, value] of Object.entries({
         HOME: tempHome,
+        NODE_ENV: "production",
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_GATEWAY_TOKEN: token,
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
@@ -366,6 +370,9 @@ describe("Gateway runtime-only inbound context", () => {
             },
           },
           gateway: { auth: { mode: "token", token } },
+          // This proof exercises provider-bound and transcript behavior only. Denying source
+          // delivery keeps an intentionally bodyless synthetic turn out of recovery custody.
+          session: { sendPolicy: { default: "deny" } },
           plugins: {
             enabled: true,
             allow: [PROOF_CHANNEL_ID],
