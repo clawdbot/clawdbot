@@ -430,8 +430,11 @@ export function deriveContextPromptTokens(params: {
       ? params.usage.contextUsage.promptTokens
       : undefined;
   }
-  const usagePromptTokens = derivePromptTokens(params.usage);
-  return withinWindow(usagePromptTokens) ? usagePromptTokens : undefined;
+  // Raw input+cache-token summation from aggregate/cumulative usage is a different
+  // accounting concept than a single-call context snapshot (cache tokens can legitimately
+  // exceed the window across a session), so it is intentionally left unbounded here —
+  // matching the pre-existing contract this branch has always had.
+  return derivePromptTokens(params.usage);
 }
 
 /** Derive the session prompt-token snapshot stored for context display. */
