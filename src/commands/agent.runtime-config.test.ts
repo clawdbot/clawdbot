@@ -4,6 +4,10 @@ import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentRuntimeConfig } from "../agents/agent-runtime-config.js";
 import { resolveSession } from "../agents/command/session.js";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -445,6 +449,36 @@ describe("agentCommand runtime config", () => {
       await resolveAgentRuntimeConfig(runtime);
 
       expect(resolveCommandConfigWithSecretsMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("routes pending MCP templates through standalone command resolution", async () => {
+    await withTempHome(async (home) => {
+      const loadedConfig = mockConfig(home, path.join(home, "sessions.json"));
+      loadedConfig.mcp = {
+        servers: { local: { command: "example-mcp", env: { API_TOKEN: "${MCP_TOKEN}" } } },
+      };
+      setConfigResolutionFacts(
+        loadedConfig,
+        createConfigResolutionFacts(
+          [{ configPath: "mcp.servers.local.env.API_TOKEN", varName: "MCP_TOKEN" }],
+          new Map([["mcp.servers.local.env.API_TOKEN", "MCP_TOKEN"]]),
+        ),
+      );
+      getActiveSecretsRuntimeSnapshotMock.mockReturnValue(null);
+      readConfigFileSnapshotForWriteMock.mockResolvedValue({
+        snapshot: { valid: true, resolved: loadedConfig },
+        writeOptions: {},
+      });
+      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
+        resolvedConfig: loadedConfig,
+        effectiveConfig: loadedConfig,
+        diagnostics: [],
+      });
+
+      await resolveAgentRuntimeConfig(runtime);
+
+      expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledTimes(1);
     });
   });
 

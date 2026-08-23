@@ -751,7 +751,7 @@ Core MCP `headers` and `env` entries accept structured SecretRef objects. HTTP h
 }
 ```
 
-MCP fields intentionally require the structured object form: strings such as `$MCP_API_TOKEN` remain literal for backward compatibility. A resolved stdio value is injected into the configured child process, so trust that MCP server with the credential. OpenClaw still drops blocked process-control env keys before launch.
+MCP fields accept structured SecretRef objects while preserving scalar config semantics. Bare `$MCP_API_TOKEN` remains literal, `${MCP_API_TOKEN}` uses standard environment substitution, and `$${MCP_API_TOKEN}` escapes substitution so the MCP transport receives literal `${MCP_API_TOKEN}`. If an authored `${NAME}` is unavailable, OpenClaw isolates the affected selected server before transport launch. A resolved stdio value is injected into the configured child process, so trust that MCP server with the credential. OpenClaw still drops blocked process-control env keys before launch.
 
 `openclaw doctor --allow-exec` materializes MCP exec SecretRefs before its live runtime tool-schema check. Without `--allow-exec`, Doctor keeps its normal non-executing SecretRef posture.
 
