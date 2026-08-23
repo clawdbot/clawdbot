@@ -204,6 +204,7 @@ describe("gateway pre-auth hardening", () => {
       httpServer,
       wss,
       clients,
+      bootId: "preauth-hardening-test-boot",
       preauthConnectionBudget: createPreauthConnectionBudget(1),
       resolvedAuth,
       workerIngressEnabled: true,

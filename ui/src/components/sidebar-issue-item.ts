@@ -99,7 +99,7 @@ export function renderSidebarApprovalItem(params: {
 
 export function renderSidebarUpdateSurface(params: {
   context: ApplicationContext | undefined;
-  onDismiss: () => void;
+  onDismiss?: () => void;
   onNavigate: () => void;
   visible: boolean;
   watchUpdateProgress: ((listener: (progress: UpdateProgress) => void) => () => void) | undefined;

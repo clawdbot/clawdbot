@@ -76,6 +76,7 @@ const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
 type GatewayWsSharedHandlerParams = {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
+  bootId: string;
   preauthConnectionBudget: PreauthConnectionBudget;
   port: number;
   gatewayHost?: string;
@@ -175,6 +176,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
   const {
     wss,
     clients,
+    bootId,
     preauthConnectionBudget,
     port,
     pluginSurfaceScheme,
@@ -702,6 +704,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       upgradeReq,
       ingressAttribution,
       connId,
+      bootId,
       remoteAddr,
       remotePort,
       localAddr,

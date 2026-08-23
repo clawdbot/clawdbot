@@ -2,21 +2,22 @@
 // Deliberately client-side chrome (like nav width / dock layout), not gateway
 // state: dismissing a nag on one device should not acknowledge it everywhere.
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
-const SIDEBAR_ATTENTION_KINDS = [
-  "updateAvailable",
-  "cronFailed",
-  "cronOverdue",
-  "modelAuthExpired",
-] as const;
+const SIDEBAR_ATTENTION_ITEM_KINDS = ["cronFailed", "cronOverdue", "modelAuthExpired"] as const;
+const SIDEBAR_ATTENTION_KINDS = ["updateAvailable", ...SIDEBAR_ATTENTION_ITEM_KINDS] as const;
 export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_KINDS)[number];
+type SidebarAttentionItemKind = (typeof SIDEBAR_ATTENTION_ITEM_KINDS)[number];
 
-export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string[]>>;
+export type UpdateAttentionDismissal = { version: string; gatewayBootId: string };
+export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionItemKind, string[]>> & {
+  updateAvailable?: UpdateAttentionDismissal;
+};
 
 // Minimal chip shape the snooze logic needs; keeps this module free of the
 // component's item type so the two files cannot form an import cycle.
-type DismissableChip = { kind: SidebarAttentionKind; signature: string };
+type DismissableChip = { kind: SidebarAttentionItemKind; signature: string };
 
 const DISMISSED_STORE_PREFIX = "openclaw.control.sidebarAttention.v1:";
 
@@ -35,7 +36,7 @@ export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
       return {};
     }
     const result: SidebarAttentionDismissals = {};
-    for (const kind of SIDEBAR_ATTENTION_KINDS) {
+    for (const kind of SIDEBAR_ATTENTION_ITEM_KINDS) {
       const value = (parsed as Record<string, unknown>)[kind];
       const signatures = Array.isArray(value)
         ? value.filter((entry): entry is string => typeof entry === "string")
@@ -45,6 +46,18 @@ export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
       if (signatures.length > 0) {
         result[kind] = [...new Set(signatures)];
       }
+    }
+    const updateAvailable = (parsed as Record<string, unknown>).updateAvailable;
+    if (
+      updateAvailable &&
+      typeof updateAvailable === "object" &&
+      typeof (updateAvailable as Record<string, unknown>).version === "string" &&
+      typeof (updateAvailable as Record<string, unknown>).gatewayBootId === "string"
+    ) {
+      result.updateAvailable = {
+        version: (updateAvailable as Record<string, string>).version,
+        gatewayBootId: (updateAvailable as Record<string, string>).gatewayBootId,
+      };
     }
     return result;
   } catch {
@@ -75,11 +88,48 @@ export function saveDismissals(gatewayUrl: string, dismissals: SidebarAttentionD
  */
 export function addDismissal(
   gatewayUrl: string,
-  kind: SidebarAttentionKind,
+  kind: SidebarAttentionItemKind,
   signature: string,
 ): SidebarAttentionDismissals {
   const stored = loadDismissals(gatewayUrl);
   const next = { ...stored, [kind]: [...new Set([...(stored[kind] ?? []), signature])] };
+  saveDismissals(gatewayUrl, next);
+  return next;
+}
+
+export function resolveUpdateAttentionDismissal(params: {
+  gatewayBootId?: string | null;
+  updateAvailable?: UpdateAvailable | null;
+  updateSchedule?: UpdateScheduleState | null;
+}): UpdateAttentionDismissal | null {
+  const target = params.updateSchedule?.target;
+  const version =
+    (target?.kind === "package" ? target.version : target?.upstreamSha) ??
+    params.updateAvailable?.upstreamSha ??
+    params.updateAvailable?.latestVersion;
+  const gatewayBootId = params.gatewayBootId?.trim();
+  const normalizedVersion = version?.trim();
+  return gatewayBootId && normalizedVersion ? { version: normalizedVersion, gatewayBootId } : null;
+}
+
+export function isUpdateAttentionDismissed(
+  dismissals: SidebarAttentionDismissals,
+  current: UpdateAttentionDismissal | null,
+): boolean {
+  const stored = dismissals.updateAvailable;
+  return Boolean(
+    stored &&
+    current &&
+    stored.version === current.version &&
+    stored.gatewayBootId === current.gatewayBootId,
+  );
+}
+
+export function dismissUpdateAttention(
+  gatewayUrl: string,
+  dismissal: UpdateAttentionDismissal,
+): SidebarAttentionDismissals {
+  const next = { ...loadDismissals(gatewayUrl), updateAvailable: dismissal };
   saveDismissals(gatewayUrl, next);
   return next;
 }
@@ -92,10 +142,11 @@ export function addDismissal(
 export function pruneDismissals(
   dismissals: SidebarAttentionDismissals,
   items: readonly DismissableChip[],
+  updateAvailable: UpdateAttentionDismissal | null = null,
 ): SidebarAttentionDismissals {
   const next: SidebarAttentionDismissals = {};
   let changed = false;
-  for (const kind of SIDEBAR_ATTENTION_KINDS) {
+  for (const kind of SIDEBAR_ATTENTION_ITEM_KINDS) {
     const stored = dismissals[kind];
     if (!stored) {
       continue;
@@ -109,6 +160,11 @@ export function pruneDismissals(
     if (current.length !== stored.length) {
       changed = true;
     }
+  }
+  if (isUpdateAttentionDismissed(dismissals, updateAvailable)) {
+    next.updateAvailable = dismissals.updateAvailable;
+  } else if (dismissals.updateAvailable) {
+    changed = true;
   }
   return changed ? next : dismissals;
 }

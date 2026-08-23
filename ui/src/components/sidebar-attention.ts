@@ -9,10 +9,11 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import {
+  hasNativeUpdateBridge,
   NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
   NATIVE_UPDATE_DECLINED_EVENT,
 } from "../app/native-link-routing.ts";
-import type { UpdateProgress } from "../app/update-confirmation.ts";
+import { confirmAndStartUpdate, type UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -23,11 +24,15 @@ import { icons } from "./icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
   addDismissal,
+  dismissUpdateAttention,
   dismissalStoreKey,
+  isUpdateAttentionDismissed,
   loadDismissals,
   pruneDismissals,
+  resolveUpdateAttentionDismissal,
   saveDismissals,
   type SidebarAttentionDismissals,
+  type UpdateAttentionDismissal,
 } from "./sidebar-attention-dismissals.ts";
 import {
   buildSidebarAttentionItems,
@@ -320,12 +325,8 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       return;
     }
     const items = this.buildItems();
-    const updateSurfaceSignature = this.updateSurfaceSignature();
-    const dismissableItems = updateSurfaceSignature
-      ? [...items, { kind: "updateAvailable" as const, signature: updateSurfaceSignature }]
-      : items;
     const stored = loadDismissals(this.dismissedScope);
-    const pruned = pruneDismissals(stored, dismissableItems);
+    const pruned = pruneDismissals(stored, items, this.updateAttentionDismissal());
     if (pruned !== stored) {
       saveDismissals(this.dismissedScope, pruned);
     }
@@ -377,35 +378,62 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     );
   }
 
-  private updateSurfaceSignature(): string | null {
-    if (!this.hasUpdateSurface()) {
-      return null;
-    }
+  private updateAttentionDismissal(): UpdateAttentionDismissal | null {
     const snapshot = this.context?.overlays.snapshot;
-    const campaign = snapshot?.updateSchedule?.campaign;
-    return [
-      snapshot?.updateRunning ? "running" : "",
-      campaign?.id ?? "",
-      campaign?.state ?? "",
-      campaign?.updatedAtMs ?? "",
-      snapshot?.updateAvailable?.upstreamSha ?? snapshot?.updateAvailable?.latestVersion ?? "",
-      snapshot?.updateStatusBanner?.tone ?? "",
-      snapshot?.updateStatusBanner?.text ?? "",
-    ].join("\n");
+    return resolveUpdateAttentionDismissal({
+      gatewayBootId: this.context?.gateway.snapshot.hello?.server.bootId,
+      updateAvailable: snapshot?.updateAvailable,
+      updateSchedule: snapshot?.updateSchedule,
+    });
+  }
+
+  private updateSurfaceForced(): boolean {
+    const tone = this.context?.overlays.snapshot.updateStatusBanner?.tone;
+    return tone === "warning" || tone === "danger";
   }
 
   private updateSurfaceVisible(): boolean {
-    const signature = this.updateSurfaceSignature();
-    return Boolean(signature && !this.dismissed.updateAvailable?.includes(signature));
+    return Boolean(
+      this.hasUpdateSurface() &&
+      (this.updateSurfaceForced() ||
+        !isUpdateAttentionDismissed(this.dismissed, this.updateAttentionDismissal())),
+    );
   }
 
   private dismissUpdateSurface() {
-    const signature = this.updateSurfaceSignature();
-    if (!this.dismissedScope || !signature) {
+    const dismissal = this.updateAttentionDismissal();
+    if (
+      !this.dismissedScope ||
+      !dismissal ||
+      this.updateSurfaceForced() ||
+      !canCallGatewayMethod(this.context?.gateway.snapshot, "update.run", "operator.admin")
+    ) {
       return;
     }
-    this.dismissed = addDismissal(this.dismissedScope, "updateAvailable", signature);
+    this.dismissed = dismissUpdateAttention(this.dismissedScope, dismissal);
   }
+
+  private readonly startUpdate = () => {
+    const context = this.context;
+    const snapshot = context?.overlays.snapshot;
+    const campaign = snapshot?.updateSchedule?.campaign;
+    const busy = snapshot?.updateRunning || campaign?.state === "applying";
+    if (
+      !context ||
+      !snapshot ||
+      busy ||
+      !canCallGatewayMethod(context.gateway.snapshot, "update.run", "operator.admin")
+    ) {
+      return;
+    }
+    void confirmAndStartUpdate({
+      startGatewayUpdate: () => void context.overlays.runUpdate(),
+      ...(this.watchUpdateProgress ? { watchUpdateProgress: this.watchUpdateProgress } : {}),
+      updateAvailable: snapshot.updateAvailable,
+      updateSchedule: snapshot.updateSchedule,
+      viaNativeApp: !this.nativeUpdateDeclined && hasNativeUpdateBridge(),
+    });
+  };
 
   private readonly closeOnOutsidePointer = (event: PointerEvent) => {
     if (!this.panelOpen || event.composedPath().includes(this)) {
@@ -563,6 +591,17 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       return nothing;
     }
     const updateSurface = this.updateSurfaceVisible();
+    const updateDismissal = this.updateAttentionDismissal();
+    const updateForced = this.updateSurfaceForced();
+    const overlaySnapshot = this.context.overlays.snapshot;
+    const updateBusy =
+      overlaySnapshot.updateRunning ||
+      overlaySnapshot.updateSchedule?.campaign?.state === "applying";
+    const canUpdate = canCallGatewayMethod(
+      this.context.gateway.snapshot,
+      "update.run",
+      "operator.admin",
+    );
     const approvalQueue = this.approvalQueue();
     const items = this.currentItems().toSorted(
       (left, right) => ITEM_PRIORITY[left.kind] - ITEM_PRIORITY[right.kind],
@@ -599,6 +638,39 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
             >`
           : nothing}
       </button>
+      ${updateSurface
+        ? html`<span class="sidebar-footer-update-slot">
+            <button
+              type="button"
+              class="sidebar-footer-update"
+              aria-label=${t("updates.sidebar.availableTitle")}
+              ?disabled=${updateBusy || !canUpdate}
+              @click=${this.startUpdate}
+            >
+              <span class="sidebar-footer-update__icon" aria-hidden="true"
+                >${updateBusy ? icons.refresh : icons.download}</span
+              >
+              <span class="sidebar-footer-update__label">${t("updates.sidebar.action")}</span>
+            </button>
+            ${canUpdate && updateDismissal && !updateForced
+              ? html`<openclaw-tooltip
+                  class="sidebar-hover-tooltip"
+                  .content=${t("updates.sidebar.dismissUntilRestartOrVersion")}
+                  .delay=${600}
+                  .closeDelay=${300}
+                >
+                  <button
+                    type="button"
+                    class="sidebar-footer-update__dismiss"
+                    aria-label=${t("updates.sidebar.dismissUntilRestartOrVersion")}
+                    @click=${() => this.dismissUpdateSurface()}
+                  >
+                    ${icons.x}
+                  </button>
+                </openclaw-tooltip>`
+              : nothing}
+          </span>`
+        : nothing}
       ${this.panelOpen && this.panelRenderer
         ? this.panelRenderer({
             approvalQueue,
@@ -608,7 +680,10 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
               void this.decideApproval(event, approvalId, decision),
             onClose: (restoreFocus) => this.closePanel(restoreFocus),
             onDismiss: (item) => this.dismiss(item),
-            onDismissUpdate: () => this.dismissUpdateSurface(),
+            onDismissUpdate:
+              canUpdate && updateDismissal && !updateForced
+                ? () => this.dismissUpdateSurface()
+                : undefined,
             onKeydown: this.handlePanelKeydown,
             onNavigate: (routeId) => {
               this.closePanel(false);

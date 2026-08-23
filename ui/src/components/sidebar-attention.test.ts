@@ -9,9 +9,12 @@ import { createStorageMock as createTestStorageMock } from "../test-helpers/stor
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   addDismissal,
+  dismissUpdateAttention,
   dismissalStoreKey,
+  isUpdateAttentionDismissed,
   loadDismissals,
   pruneDismissals,
+  resolveUpdateAttentionDismissal,
   type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
 import { buildSidebarAttentionItems } from "./sidebar-attention-items.ts";
@@ -57,6 +60,8 @@ type SidebarAttentionElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   cronJobs: CronJob[];
   hasUpdateSurface(): boolean;
+  updateSurfaceVisible(): boolean;
+  dismissUpdateSurface(): void;
   modelAuthStatus: ModelAuthStatusResult | null;
   loadedAtMs: number;
 };
@@ -526,10 +531,103 @@ describe("update attention", () => {
     overlaySnapshot.updateCampaignStatusHydrated = true;
     expect(element.hasUpdateSurface()).toBe(true);
   });
+
+  it("dismisses one target for one Gateway boot and resurfaces on either change", () => {
+    vi.stubGlobal("localStorage", createTestStorageMock());
+    const overlaySnapshot = {
+      updateAvailable: {
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.2",
+        channel: "latest",
+      },
+      updateSchedule: {
+        channel: "stable",
+        autoEnabled: false,
+        target: { kind: "package" as const, version: "2026.8.2" },
+      },
+      updateCampaignStatusHydrated: true,
+      updateRunning: false,
+      updateStatusBanner: null,
+    };
+    const gatewaySnapshot = {
+      client: {} as GatewayBrowserClient,
+      phase: "connected" as const,
+      hello: {
+        server: { bootId: "boot-a" },
+        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+        features: { methods: ["update.run"] },
+      },
+    };
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    element.context = {
+      gateway: {
+        connection: { gatewayUrl: "ws://gateway.test" },
+        snapshot: gatewaySnapshot,
+      },
+      overlays: { snapshot: overlaySnapshot },
+    } as unknown as ApplicationContext;
+    (element as unknown as { dismissedScope: string }).dismissedScope = "ws://gateway.test";
+
+    expect(element.updateSurfaceVisible()).toBe(true);
+    element.dismissUpdateSurface();
+    expect(element.updateSurfaceVisible()).toBe(false);
+    expect(loadDismissals("ws://gateway.test").updateAvailable).toEqual({
+      version: "2026.8.2",
+      gatewayBootId: "boot-a",
+    });
+
+    overlaySnapshot.updateSchedule.target.version = "2026.8.3";
+    expect(element.updateSurfaceVisible()).toBe(true);
+    overlaySnapshot.updateSchedule.target.version = "2026.8.2";
+    gatewaySnapshot.hello.server.bootId = "boot-b";
+    expect(element.updateSurfaceVisible()).toBe(true);
+  });
+
+  it("forces a dismissed update back for warning and failure outcomes", () => {
+    vi.stubGlobal("localStorage", createTestStorageMock());
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    const overlaySnapshot = {
+      updateAvailable: {
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.2",
+        channel: "latest",
+      },
+      updateSchedule: null,
+      updateCampaignStatusHydrated: true,
+      updateRunning: false,
+      updateStatusBanner: null as null | { tone: "warning" | "danger"; text: string },
+    };
+    element.context = {
+      gateway: {
+        connection: { gatewayUrl: "ws://gateway.test" },
+        snapshot: {
+          client: {} as GatewayBrowserClient,
+          phase: "connected",
+          hello: {
+            server: { bootId: "boot-a" },
+            auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+            features: { methods: ["update.run"] },
+          },
+        },
+      },
+      overlays: { snapshot: overlaySnapshot },
+    } as unknown as ApplicationContext;
+    (element as unknown as { dismissedScope: string }).dismissedScope = "ws://gateway.test";
+    element.dismissUpdateSurface();
+    expect(element.updateSurfaceVisible()).toBe(false);
+
+    overlaySnapshot.updateStatusBanner = { tone: "warning", text: "Update blocked" };
+    expect(element.updateSurfaceVisible()).toBe(true);
+    overlaySnapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
+    expect(element.updateSurfaceVisible()).toBe(true);
+  });
 });
 
 describe("pruneDismissals", () => {
-  const chip = (kind: SidebarAttentionKind, signature: string) => ({ kind, signature });
+  const chip = (kind: Exclude<SidebarAttentionKind, "updateAvailable">, signature: string) => ({
+    kind,
+    signature,
+  });
 
   it("keeps a dismissal while the same entity set is still affected", () => {
     const dismissals = { cronFailed: ["alpha", "beta"] };
@@ -589,5 +687,57 @@ describe("addDismissal", () => {
     );
 
     expect(loadDismissals(gatewayUrl)).toEqual({ cronFailed: ["legacy-signature"] });
+  });
+});
+
+describe("update dismissal fact", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the canonical package target and persists the literal boot binding", () => {
+    vi.stubGlobal("localStorage", createTestStorageMock());
+    const dismissal = resolveUpdateAttentionDismissal({
+      gatewayBootId: "boot-a",
+      updateAvailable: {
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.2",
+        channel: "latest",
+      },
+      updateSchedule: {
+        channel: "stable",
+        autoEnabled: false,
+        target: { kind: "package", version: "2026.8.3" },
+      },
+    });
+    expect(dismissal).toEqual({ version: "2026.8.3", gatewayBootId: "boot-a" });
+    const stored = dismissUpdateAttention("ws://gateway.test", dismissal!);
+    expect(isUpdateAttentionDismissed(stored, dismissal)).toBe(true);
+    expect(
+      JSON.parse(localStorage.getItem(dismissalStoreKey("ws://gateway.test")) ?? "null"),
+    ).toEqual({ updateAvailable: { version: "2026.8.3", gatewayBootId: "boot-a" } });
+  });
+
+  it("uses the git target SHA instead of an unchanged package version", () => {
+    expect(
+      resolveUpdateAttentionDismissal({
+        gatewayBootId: "boot-a",
+        updateAvailable: {
+          currentVersion: "2026.8.1",
+          latestVersion: "2026.8.1",
+          channel: "dev",
+        },
+        updateSchedule: {
+          channel: "dev",
+          autoEnabled: true,
+          target: {
+            kind: "git",
+            upstreamRef: "origin/main",
+            upstreamSha: "abcdef1234567890",
+            commitsBehind: 2,
+          },
+        },
+      }),
+    ).toEqual({ version: "abcdef1234567890", gatewayBootId: "boot-a" });
   });
 });

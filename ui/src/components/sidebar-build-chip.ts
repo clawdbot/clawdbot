@@ -16,6 +16,7 @@ import "./tooltip.ts";
 class SidebarBuildChip extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) gatewayVersion: string | null = null;
+  @property({ attribute: false }) updateAttentionDismissed = false;
   @property({ attribute: false }) onNavigate?: (routeId: "about") => void;
   @property({ attribute: false }) variant: "compact" | "identity" | "settings" = "compact";
 
@@ -24,9 +25,11 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
       this.variant === "settings"
         ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, this.gatewayVersion)
         : this.variant === "identity"
-          ? formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO)
+          ? this.updateAttentionDismissed
+            ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, this.gatewayVersion)
+            : formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO)
           : formatBuildChipText(CONTROL_UI_BUILD_INFO);
-    if (!text) {
+    if (!text && !this.updateAttentionDismissed) {
       return nothing;
     }
     return html`
@@ -34,7 +37,9 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
         <a
           class="sidebar-footer-build"
           href=${pathForRoute("about", this.basePath)}
-          aria-label=${t("aboutPage.artifactDetails")}
+          aria-label=${this.updateAttentionDismissed
+            ? `${t("aboutPage.artifactDetails")}. ${t("updates.sidebar.availableTitle")}`
+            : t("aboutPage.artifactDetails")}
           @click=${(event: MouseEvent) => {
             if (!shouldHandleNavigationClick(event)) {
               return;
@@ -42,7 +47,12 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
             event.preventDefault();
             this.onNavigate?.("about");
           }}
-          >${text}</a
+          >${text ? html`<span class="sidebar-footer-build__text">${text}</span>` : nothing}
+          ${this.updateAttentionDismissed
+            ? html`<span class="sidebar-footer-build__update"
+                >${t("updates.sidebar.availableTitle")}</span
+              >`
+            : nothing}</a
         >
         <div slot="content" class="sidebar-hover-card sidebar-build-hover-card">
           ${renderSidebarServerDetails(CONTROL_UI_BUILD_INFO, this.gatewayVersion)}

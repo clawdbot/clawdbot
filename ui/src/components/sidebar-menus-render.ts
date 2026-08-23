@@ -28,6 +28,11 @@ import {
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import { listAssignableSessionOwners } from "./session-owner-chip.ts";
+import {
+  isUpdateAttentionDismissed,
+  loadDismissals,
+  resolveUpdateAttentionDismissal,
+} from "./sidebar-attention-dismissals.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 
 export function renderSidebarCustomizeMenuForController(controller: SidebarMenusController) {
@@ -117,11 +122,29 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
     presenceInstanceId: host.sessionData.presenceInstanceId,
   });
+  const context = host.sessionDataContext;
+  const overlaySnapshot = context?.overlays.snapshot;
+  const updateAttentionDismissal = resolveUpdateAttentionDismissal({
+    gatewayBootId: context?.gateway.snapshot.hello?.server.bootId,
+    updateAvailable: overlaySnapshot?.updateAvailable,
+    updateSchedule: overlaySnapshot?.updateSchedule,
+  });
+  const updateAttentionDismissed = Boolean(
+    context &&
+    updateAttentionDismissal &&
+    overlaySnapshot?.updateStatusBanner?.tone !== "warning" &&
+    overlaySnapshot?.updateStatusBanner?.tone !== "danger" &&
+    isUpdateAttentionDismissed(
+      loadDismissals(context.gateway.connection.gatewayUrl),
+      updateAttentionDismissal,
+    ),
+  );
   return renderSidebarIdentityMenu({
     position,
     canPairDevice: host.canPairDevice,
     basePath: host.basePath,
     gatewayVersion: host.gatewayVersion,
+    updateAttentionDismissed,
     profileViewer: selfUser ? { ...selfUser, watchedSessions: [] } : undefined,
     offline: host.offline,
     themeMode: host.themeMode,
