@@ -2233,9 +2233,8 @@ async function createChatPickerScenario(
           },
         ],
       },
-      // Pending exec approvals reopen as a blocking modal on every page load
-      // (connect-time exec.approval.list recovery), so the demo approval is
-      // opt-in via --fixture=approval instead of polluting the default mock.
+      // Pending exec approvals recover through the same list seam as the real
+      // Inbox. Keep this fixture small enough to inspect both rows at once.
       "exec.approval.list":
         fixture === "approval"
           ? [
@@ -2252,7 +2251,7 @@ async function createChatPickerScenario(
                   allowedDecisions: ["allow-once", "allow-always", "deny"],
                 },
                 createdAtMs: updateFixtureNow - 7 * 60_000,
-                expiresAtMs: updateFixtureNow + 83 * 60_000,
+                expiresAtMs: updateFixtureNow + 4 * 60 * 60_000,
               },
               {
                 id: "mock-worktree-cleanup-approval",
@@ -2267,111 +2266,12 @@ async function createChatPickerScenario(
                   allowedDecisions: ["allow-once", "deny"],
                 },
                 createdAtMs: updateFixtureNow - 6 * 60_000,
-                expiresAtMs: updateFixtureNow + 78 * 60_000,
-              },
-              {
-                id: "mock-long-command-approval",
-                request: {
-                  command:
-                    "node scripts/reconcile-release-artifacts.mjs --workspace /mock/workspace --channel dev --verify-generated-files --preserve-on-failure --report-format detailed",
-                  agentId: "build-custodian",
-                  sessionKey: "agent:main:release-readiness-and-artifact-reconciliation",
-                  host: "build-runner-07",
-                  cwd: "/mock/workspace",
-                  resolvedPath: "/usr/local/bin/node",
-                  security: "workspace-write",
-                  ask: "on-miss",
-                  allowedDecisions: ["allow-once", "deny"],
-                },
-                createdAtMs: updateFixtureNow - 5 * 60_000,
-                expiresAtMs: updateFixtureNow + 75 * 60_000,
-              },
-              {
-                id: "mock-database-backup-approval",
-                request: {
-                  command: "openclaw backup verify --latest --restore-manifest",
-                  agentId: "backup-auditor",
-                  sessionKey: "agent:main:backup-verification",
-                  host: "backup-worker-02",
-                  cwd: "/var/lib/openclaw/backups",
-                  security: "read-only",
-                  ask: "on-miss",
-                  allowedDecisions: ["allow-once", "allow-always", "deny"],
-                },
-                createdAtMs: updateFixtureNow - 4 * 60_000,
-                expiresAtMs: updateFixtureNow + 72 * 60_000,
-              },
-              {
-                id: "mock-release-notification-approval",
-                request: {
-                  command: "openclaw message send --channel slack --target '#release-operations'",
-                  agentId: "release-comms",
-                  sessionKey: "agent:main:release-notification",
-                  host: "peters-mac-studio.local",
-                  cwd: "/Users/peter/Projects/openclaw",
-                  security: "network",
-                  ask: "always",
-                  allowedDecisions: ["allow-once", "deny"],
-                },
-                createdAtMs: updateFixtureNow - 3 * 60_000,
-                expiresAtMs: updateFixtureNow + 69 * 60_000,
-              },
-              {
-                id: "mock-gateway-restart-approval",
-                request: {
-                  command: "openclaw gateway restart --reason 'apply repaired channel config'",
-                  agentId: "operations",
-                  sessionKey: "agent:main:gateway-recovery",
-                  host: "peters-mac-studio.local",
-                  cwd: "/Users/peter/Projects/openclaw",
-                  security: "full",
-                  ask: "always",
-                  allowedDecisions: ["allow-once", "deny"],
-                },
-                createdAtMs: updateFixtureNow - 2 * 60_000,
-                expiresAtMs: updateFixtureNow + 67 * 60_000,
+                expiresAtMs: updateFixtureNow + 4 * 60 * 60_000,
               },
             ]
           : [],
-      "plugin.approval.list":
-        fixture === "approval"
-          ? [
-              {
-                id: "mock-plugin-publish-approval",
-                request: {
-                  title: "Publish the release summary",
-                  description:
-                    "The Slack plugin will post the final deployment status to #release-operations.",
-                  severity: "warning",
-                  pluginId: "slack",
-                  agentId: "release-comms",
-                  sessionKey: "agent:main:release-notification",
-                  allowedDecisions: ["allow-once", "deny"],
-                },
-                createdAtMs: updateFixtureNow - 90_000,
-                expiresAtMs: updateFixtureNow + 66 * 60_000,
-              },
-            ]
-          : [],
-      "openclaw.approval.list":
-        fixture === "approval"
-          ? [
-              {
-                id: "mock-system-agent-approval",
-                request: {
-                  title: "Apply the proposed recovery plan",
-                  description:
-                    "The operations agent proposes restarting the failed release notification workflow after preserving its queued payload.",
-                  command: "openclaw cron run mock-cron-release-notify --preserve-payload",
-                  proposalHash: "mock-recovery-plan-v1",
-                  agentId: "operations",
-                  sessionKey: "agent:main:gateway-recovery",
-                },
-                createdAtMs: updateFixtureNow - 60_000,
-                expiresAtMs: updateFixtureNow + 65 * 60_000,
-              },
-            ]
-          : [],
+      "plugin.approval.list": [],
+      "openclaw.approval.list": [],
       "exec.approval.resolve": { ok: true },
       "plugin.approval.resolve": { ok: true },
       "approval.resolve": { ok: true },
