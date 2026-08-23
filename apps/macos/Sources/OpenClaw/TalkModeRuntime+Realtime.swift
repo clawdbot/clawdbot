@@ -176,18 +176,21 @@ extension TalkModeRuntime {
 
     private func startNativeFallback(generation: Int, status: String? = nil) async {
         let relayGeneration = realtimeRelayGeneration
-        guard await startRecognition(lifecycleGeneration: generation),
-              await self.commitNativeFallback(
-                  lifecycleGeneration: generation,
-                  recognitionGeneration: recognitionGeneration,
-                  relayGeneration: relayGeneration,
-                  status: status)
+        let recognitionStarted = await startRecognition(lifecycleGeneration: generation)
+        guard await self.commitNativeFallback(
+            recognitionStarted: recognitionStarted,
+            lifecycleGeneration: generation,
+            recognitionGeneration: recognitionGeneration,
+            relayGeneration: relayGeneration,
+            status: status)
         else { return }
+        guard recognitionStarted else { return }
         startAudioInputObserver()
         startSilenceMonitor()
     }
 
     func commitNativeFallback(
+        recognitionStarted: Bool,
         lifecycleGeneration: Int,
         recognitionGeneration: Int,
         relayGeneration: UInt64,
@@ -201,12 +204,15 @@ extension TalkModeRuntime {
                 self.realtimeRelayStartGeneration == nil && self.realtimeSession == nil
         }
         guard ownsFallback() else { return false }
-        phase = .listening
+        phase = recognitionStarted ? .listening : .idle
         return await self.projectRealtimeRelay(relayGeneration, nil) {
-            if let status {
+            if recognitionStarted, let status {
                 TalkModeController.shared.updatePartialTranscript(status)
+            } else if !recognitionStarted {
+                TalkModeController.shared.updatePartialTranscript(
+                    String(localized: "Realtime unavailable — native speech could not start"))
             }
-            TalkModeController.shared.updatePhase(.listening)
+            TalkModeController.shared.updatePhase(recognitionStarted ? .listening : .idle)
         }
     }
 

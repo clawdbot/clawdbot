@@ -39604,6 +39604,17 @@
       ]
     },
     {
+      "id": "native.apple.babb170df3172374",
+      "source": "Realtime unavailable — native speech could not start",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/TalkModeRuntime+Realtime.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.ddb5344f621cd627",
       "source": "Realtime unavailable — using native speech",
       "surface": "apple",

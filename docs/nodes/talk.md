@@ -91,7 +91,7 @@ Any other combination — including a partially set one — keeps the native pat
 }
 ```
 
-The Mac must also opt in locally with **Settings > Voice Wake > Use realtime Gateway relay**.
+The Mac must also opt in locally with **Settings > Voice & Talk > Use realtime Gateway relay**.
 This preference defaults off and stays on that Mac; Gateway config alone never activates the
 streamed path. Keep `transport: "webrtc"` for browser or iOS client-owned sessions; macOS uses
 the relay only when the config explicitly selects `gateway-relay`.

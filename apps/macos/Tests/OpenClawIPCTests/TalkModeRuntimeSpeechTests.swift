@@ -1140,11 +1140,33 @@ struct TalkModeRuntimeSpeechTests {
         let relayGeneration = await runtime.realtimeRelayGeneration
 
         #expect(await runtime.commitNativeFallback(
+            recognitionStarted: true,
             lifecycleGeneration: lifecycleGeneration,
             recognitionGeneration: recognitionGeneration,
             relayGeneration: relayGeneration,
             status: "native"))
         #expect(TalkModeController.shared.partialTranscript == "native")
+
+        await runtime.setEnabled(false)
+    }
+
+    @Test @MainActor func `failed native fallback start publishes terminal status`() async throws {
+        let runtime = TalkModeRuntime()
+        let lifecycleGeneration = await runtime._test_prepareEnabledLifecycle()
+        let recognitionGeneration = try #require(await runtime._test_beginRecognitionAttempt(
+            lifecycleGeneration: lifecycleGeneration))
+        let relayGeneration = await runtime.realtimeRelayGeneration
+
+        #expect(await runtime.commitNativeFallback(
+            recognitionStarted: false,
+            lifecycleGeneration: lifecycleGeneration,
+            recognitionGeneration: recognitionGeneration,
+            relayGeneration: relayGeneration,
+            status: "unused"))
+        #expect(await runtime.phase == .idle)
+        #expect(TalkModeController.shared.phase == .idle)
+        #expect(TalkModeController.shared.partialTranscript ==
+            String(localized: "Realtime unavailable — native speech could not start"))
 
         await runtime.setEnabled(false)
     }
@@ -1160,6 +1182,7 @@ struct TalkModeRuntimeSpeechTests {
         TalkModeController.shared.updatePartialTranscript("successor")
 
         let accepted = await runtime.commitNativeFallback(
+            recognitionStarted: true,
             lifecycleGeneration: lifecycleGeneration,
             recognitionGeneration: staleRecognition,
             relayGeneration: relayGeneration,
@@ -1197,6 +1220,7 @@ struct TalkModeRuntimeSpeechTests {
 
         let staleCommit = Task {
             await runtime.commitNativeFallback(
+                recognitionStarted: true,
                 lifecycleGeneration: lifecycleGeneration,
                 recognitionGeneration: recognitionGeneration,
                 relayGeneration: relayGeneration,
