@@ -628,7 +628,15 @@ suite.define(() => {
         const updatedAtRequestCountBefore = avatarRequests.filter(
           (url) => new URL(url).searchParams.get("v") === updatedAtRevision,
         ).length;
-        await page.locator('input[type="file"]').setInputFiles({
+        const chooser = page.locator(".identity-avatar-control > button");
+        await expect(chooser).toHaveAccessibleName("Choose image");
+        await chooser.focus();
+        await expect(chooser).toBeFocused();
+        await screenshot(page, "11-avatar-keyboard-focus.png");
+        const fileChooserPromise = page.waitForEvent("filechooser");
+        await page.keyboard.press("Enter");
+        const fileChooser = await fileChooserPromise;
+        await fileChooser.setFiles({
           name: "avatar.png",
           mimeType: "image/png",
           buffer: Buffer.from(
@@ -639,9 +647,8 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("users.setAvatar")).length)
           .toBe(requestCountBefore + 1);
-        const chooser = page.locator(".identity-avatar-control > label");
-        await screenshot(page, "11-avatar-action-disabled.png");
-        await expect(chooser).toHaveAttribute("aria-disabled", "true");
+        await screenshot(page, "12-avatar-action-disabled.png");
+        await expect(chooser).toBeDisabled();
         await expect
           .poll(() => chooser.evaluate((element) => getComputedStyle(element).opacity))
           .toBe("0.5");
