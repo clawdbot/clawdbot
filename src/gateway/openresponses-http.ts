@@ -393,6 +393,9 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
   senderIsOwner: boolean;
   deps: CliDeps;
   resolveGatewayContext?: GatewayContextResolver;
@@ -410,6 +413,13 @@ async function runResponsesAgentCommand(params: {
       runId: params.runId,
       deliver: false,
       messageChannel: params.messageChannel,
+      // Routing context only — same contract as the WS `agent` method's
+      // to/accountId/threadId params: later out-of-turn deliveries (subagent
+      // completion announces) resolve a route, while the turn's own reply
+      // stays HTTP-only (deliver stays false).
+      to: params.to,
+      accountId: params.accountId,
+      threadId: params.threadId,
       senderIsOwner: params.senderIsOwner,
       bestEffortDeliver: false,
       allowModelOverride: params.modelOverride !== undefined,
@@ -722,6 +732,9 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        to: resolved.to,
+        accountId: resolved.accountId,
+        threadId: resolved.threadId,
         senderIsOwner,
         deps,
         resolveGatewayContext: opts.resolveGatewayContext,
@@ -1189,6 +1202,9 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
+        to: resolved.to,
+        accountId: resolved.accountId,
+        threadId: resolved.threadId,
         senderIsOwner,
         deps,
         resolveGatewayContext: opts.resolveGatewayContext,

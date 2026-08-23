@@ -100,6 +100,7 @@ explicitly unsupported even though the ACP spawn and child are observable.
     - Automatic completion delivery retries for up to 30 minutes, starting around 15 seconds and capping the backoff at 5 minutes. Permanent failure or deadline expiry leaves the successful child task visibly blocked instead of discarding its result.
     - Blocked canonical results are retained for 7 days. Operators can retry or intentionally dismiss them from the Tasks page or with `openclaw tasks retry` / `openclaw tasks dismiss`; retry can duplicate a visible result after an ambiguous provider acknowledgement.
     - Delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available. If the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
+    - API-driven requester sessions (`POST /v1/responses`, `POST /v1/chat/completions`) have no inbound channel message to record a route from; pass `x-openclaw-message-to` (see [OpenAI chat completions](/gateway/openai-http-api)) so direct completion delivery can engage.
 
   </Accordion>
   <Accordion title="Completion handoff metadata">

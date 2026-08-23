@@ -814,6 +814,31 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await ensureResponseConsumed(resChannelHeader);
 
       mockAgentOnce([{ text: "hello" }]);
+      const resTargetHeaders = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        {
+          "x-openclaw-message-to": "channel:24514",
+          "x-openclaw-account-id": "acct-7",
+          "x-openclaw-thread-id": "thread-42",
+        },
+      );
+      expect(resTargetHeaders.status).toBe(200);
+      const optsTargetHeaders = firstAgentOpts() as {
+        to?: string;
+        accountId?: string;
+        threadId?: string;
+        deliver?: boolean;
+      };
+      expect(optsTargetHeaders.to).toBe("channel:24514");
+      expect(optsTargetHeaders.accountId).toBe("acct-7");
+      expect(optsTargetHeaders.threadId).toBe("thread-42");
+      // Target headers only seed the session delivery route for later
+      // out-of-turn deliveries; the turn's own reply stays HTTP-only.
+      expect(optsTargetHeaders.deliver).toBe(false);
+      await ensureResponseConsumed(resTargetHeaders);
+
+      mockAgentOnce([{ text: "hello" }]);
       const resModelOverride = await postResponses(
         port,
         {

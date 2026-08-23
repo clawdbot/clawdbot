@@ -46,6 +46,36 @@ describe("resolveGatewayRequestContext", () => {
     expect(result.messageChannel).toBe("custom-channel");
   });
 
+  it("resolves optional delivery-target headers like /tools/invoke", () => {
+    const result = resolveGatewayRequestContext({
+      req: createReq({
+        "x-openclaw-message-to": "channel:24514",
+        "x-openclaw-account-id": "acct-7",
+        "x-openclaw-thread-id": "thread-42",
+      }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.to).toBe("channel:24514");
+    expect(result.accountId).toBe("acct-7");
+    expect(result.threadId).toBe("thread-42");
+  });
+
+  it("treats blank or missing delivery-target headers as absent", () => {
+    const result = resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-message-to": "   " }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.to).toBeUndefined();
+    expect(result.accountId).toBeUndefined();
+    expect(result.threadId).toBeUndefined();
+  });
+
   it("uses default messageChannel when header support is disabled", () => {
     const result = resolveGatewayRequestContext({
       req: createReq({ "x-openclaw-message-channel": "custom-channel" }),

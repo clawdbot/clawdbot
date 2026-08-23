@@ -162,6 +162,10 @@ type FirstAgentCommandOptions = {
   onAdmittedRunContext?: (context: object) => void | Promise<void>;
   senderIsOwner?: boolean;
   sessionKey?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
+  deliver?: boolean;
   streamParams?: {
     frequencyPenalty?: number;
     maxTokens?: number;
@@ -475,6 +479,31 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         );
         expect(res.status).toBe(200);
         expect(getFirstAgentCall()?.messageChannel).toBe("custom-client-channel");
+        await res.text();
+      }
+
+      {
+        mockAgentOnce([{ text: "hello" }]);
+        const res = await postChatCompletions(
+          port,
+          {
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          {
+            "x-openclaw-message-to": "channel:24514",
+            "x-openclaw-account-id": "acct-7",
+            "x-openclaw-thread-id": "thread-42",
+          },
+        );
+        expect(res.status).toBe(200);
+        const targetOpts = getFirstAgentCall();
+        expect(targetOpts?.to).toBe("channel:24514");
+        expect(targetOpts?.accountId).toBe("acct-7");
+        expect(targetOpts?.threadId).toBe("thread-42");
+        // Target headers only seed the session delivery route for later
+        // out-of-turn deliveries; the turn's own reply stays HTTP-only.
+        expect(targetOpts?.deliver).toBe(false);
         await res.text();
       }
 

@@ -294,7 +294,14 @@ export function resolveGatewayRequestContext(params: {
   sessionPrefix: string;
   defaultMessageChannel: string;
   useMessageChannelHeader?: boolean;
-}): { agentId: string; sessionKey: string; messageChannel: string } {
+}): {
+  agentId: string;
+  sessionKey: string;
+  messageChannel: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
+} {
   const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
   const sessionKey = resolveSessionKey({
     req: params.req,
@@ -308,7 +315,17 @@ export function resolveGatewayRequestContext(params: {
       params.defaultMessageChannel)
     : params.defaultMessageChannel;
 
-  return { agentId, sessionKey, messageChannel };
+  return {
+    agentId,
+    sessionKey,
+    messageChannel,
+    // Same optional target-header family as /tools/invoke; the WS `agent`
+    // method exposes the same to/accountId/threadId params under the same
+    // endpoint authority. Empty or whitespace-only values are absent.
+    to: normalizeOptionalString(getHeader(params.req, "x-openclaw-message-to")),
+    accountId: normalizeOptionalString(getHeader(params.req, "x-openclaw-account-id")),
+    threadId: normalizeOptionalString(getHeader(params.req, "x-openclaw-thread-id")),
+  };
 }
 
 export function authorizeOpenAiCompatibleHttpSession(params: {
