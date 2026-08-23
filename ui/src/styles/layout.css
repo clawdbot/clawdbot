@@ -4754,7 +4754,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 .sidebar-identity-menu .theme-mode-toggle {
-  justify-content: flex-end;
+  justify-content: center;
   border: 0;
 }
 
