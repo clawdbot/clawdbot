@@ -177,6 +177,67 @@ export function createGatewayBrowserClientFixture(
   return overrides as typeof overrides & GatewayBrowserClient;
 }
 
+export function createInitializationContext(): ApplicationContext {
+  return {
+    basePath: "",
+    gateway: {
+      snapshot: {
+        client: null,
+        phase: "stopped",
+        offlineStable: false,
+        hello: null,
+        canvasPluginSurfaceUrl: null,
+        assistantAgentId: null,
+        sessionKey: "",
+        lastError: null,
+        lastErrorCode: null,
+      },
+      subscribe: () => () => {},
+      subscribeEvents: () => () => {},
+    },
+    config: {
+      current: {
+        assistantIdentity: {
+          agentId: null,
+          name: "Assistant",
+          avatar: null,
+          avatarSource: null,
+          avatarStatus: null,
+          avatarReason: null,
+        },
+        serverVersion: null,
+        localMediaPreviewRoots: [],
+        embedSandboxMode: "strict",
+        allowExternalEmbedUrls: false,
+        terminalEnabled: false,
+      },
+    },
+    agentSelection: { state: { selectedId: "main" } },
+    agents: { state: { agentsList: null } },
+    runtimeConfig: {
+      state: { configNeedsApply: false, configSnapshot: null },
+      subscribe: () => () => {},
+    },
+    placementStartup: {
+      get: () => null,
+      retry: () => undefined,
+      subscribe: () => () => {},
+    },
+    navigate: () => undefined,
+    initialUserMessage: createInitialUserMessageHandoff(),
+    chatAttachmentHandoff: createChatAttachmentHandoff(),
+    sessions: { state: { modelOverrides: {} } },
+  } as unknown as ApplicationContext;
+}
+
+export function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
+  return {
+    role: seq % 2 === 0 ? "assistant" : "user",
+    content: [{ type: "text", text }],
+    __openclaw: { seq },
+  };
+}
+
 type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch" | "state"> & {
   patch?: (...args: Parameters<NonNullable<SessionCapability["patch"]>>) => unknown;
   state?: Partial<SessionCapability["state"]>;
