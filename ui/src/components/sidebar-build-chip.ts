@@ -30,12 +30,7 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
       return nothing;
     }
     return html`
-      <openclaw-tooltip
-        class="sidebar-hover-tooltip"
-        .delay=${600}
-        .closeDelay=${300}
-        .openOnClick=${true}
-      >
+      <openclaw-tooltip class="sidebar-hover-tooltip" .delay=${600} .closeDelay=${300}>
         <a
           class="sidebar-footer-build"
           href=${pathForRoute("about", this.basePath)}

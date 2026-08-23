@@ -163,4 +163,36 @@ suite.define(() => {
       await suite.closeBrowserContext(opened.context);
     }
   });
+
+  it("navigates from the build link without opening its hovercard", async () => {
+    const opened = await openSidebarFooterProofPage(suite);
+    try {
+      const { page, sidebar } = opened;
+      await sidebar.locator(".sidebar-identity-card").click();
+      const buildLink = sidebar.getByRole("link", {
+        name: "Control UI build details",
+        exact: true,
+      });
+      const tooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip");
+      await tooltip.evaluate((element) => {
+        document.documentElement.dataset.buildTooltipOpenedByClick = "false";
+        element.addEventListener(
+          "wa-show",
+          () => {
+            document.documentElement.dataset.buildTooltipOpenedByClick = "true";
+          },
+          { once: true },
+        );
+      });
+
+      await buildLink.click();
+
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/about");
+      expect(await page.locator("html").getAttribute("data-build-tooltip-opened-by-click")).toBe(
+        "false",
+      );
+    } finally {
+      await suite.closeBrowserContext(opened.context);
+    }
+  });
 });

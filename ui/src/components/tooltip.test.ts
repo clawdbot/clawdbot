@@ -303,12 +303,11 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(1);
   });
 
-  it("honors per-tooltip hover intent while focus and click stay immediate", async () => {
+  it("honors per-tooltip hover intent while keyboard focus stays immediate", async () => {
     const provider = createProvider();
     const { tooltip, trigger } = createRichTooltip("Intentional hovercard");
     tooltip.delay = 600;
     tooltip.closeDelay = 300;
-    tooltip.openOnClick = true;
     provider.append(tooltip);
     document.body.append(provider);
     await tooltip.updateComplete;
@@ -338,9 +337,6 @@ describe("openclaw-tooltip", () => {
     vi.advanceTimersByTime(0);
     expectOpenCount(0);
     dispatchMousePointer(trigger, "pointerleave");
-
-    trigger.click();
-    expectOpenCount(1);
   });
 
   it("keeps the accessible description in the trigger document tree", async () => {
