@@ -1,5 +1,6 @@
 // Ollama plugin entrypoint registers its OpenClaw integration.
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
+import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
@@ -815,12 +816,14 @@ const createOllamaSharedProviderHooks = (
       if (model.api !== "ollama") {
         return undefined;
       }
+      const configuredProviderId =
+        findNormalizedProviderKey(config?.models?.providers, provider) ?? provider;
       return createLazyConfiguredOllamaStreamFn({
         model,
-        localService: { providerId: provider, acquire: acquireLocalService },
+        localService: { providerId: configuredProviderId, acquire: acquireLocalService },
         providerBaseUrl:
           readProviderBaseUrl(
-            resolveConfiguredOllamaProviderConfig({ config, providerId: provider }),
+            resolveConfiguredOllamaProviderConfig({ config, providerId: configuredProviderId }),
           ) ?? (provider === OLLAMA_CLOUD_PROVIDER_ID ? OLLAMA_CLOUD_BASE_URL : undefined),
       });
     },

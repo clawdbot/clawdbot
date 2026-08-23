@@ -2453,6 +2453,37 @@ describe("ollama plugin", () => {
     expect(requireConfiguredStreamParams().providerBaseUrl).toBe(expectedBaseUrl);
   });
 
+  it("preserves the configured provider key for local-service acquisition", () => {
+    const provider = registerProvider();
+    provider.createStreamFn?.({
+      config: {
+        models: {
+          providers: {
+            "Ollama-GPU": {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11435",
+              models: [],
+            },
+          },
+        },
+      },
+      model: {
+        id: "llama3.2",
+        provider: "ollama-gpu",
+        api: "ollama",
+      },
+      provider: "ollama-gpu",
+    } as never);
+
+    expect(requireConfiguredStreamParams()).toMatchObject({
+      providerBaseUrl: "http://127.0.0.1:11435",
+      localService: {
+        providerId: "Ollama-GPU",
+        acquire: expect.any(Function),
+      },
+    });
+  });
+
   it.each([
     {
       name: "wraps native Ollama payloads with top-level think=false when thinking is off",

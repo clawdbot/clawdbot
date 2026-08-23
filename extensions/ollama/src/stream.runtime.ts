@@ -1066,7 +1066,7 @@ function createRawOllamaStreamFn(
           ...(options?.signal ? { signal: options.signal } : {}),
           timeoutMs: requestTimeoutMs,
           auditContext: "ollama-stream.chat",
-        }).catch((error) => {
+        }).catch((error: unknown) => {
           localServiceLease?.release();
           throw error;
         });

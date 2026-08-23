@@ -1615,19 +1615,13 @@ type OllamaLocalService = NonNullable<
   Parameters<typeof createConfiguredOllamaStreamFn>[0]["localService"]
 >;
 
-type ManagedOllamaTestOptions = NonNullable<
-  Parameters<ReturnType<typeof createConfiguredOllamaStreamFn>>[2]
-> & {
-  requestTimeoutMs?: number;
-};
-
 async function createManagedOllamaTestStream(params: {
   baseUrl: string;
   providerId?: string;
   defaultHeaders?: Record<string, string>;
   model?: Record<string, unknown>;
   context?: Record<string, unknown>;
-  options?: ManagedOllamaTestOptions;
+  options?: Parameters<ReturnType<typeof createConfiguredOllamaStreamFn>>[2];
   acquire: OllamaLocalService["acquire"];
 }) {
   const streamFn = createConfiguredOllamaStreamFn({
@@ -1666,7 +1660,8 @@ async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
 
 function rejectWhenAborted(signal: AbortSignal): Promise<never> {
   return new Promise((_, reject) => {
-    const rejectWithReason = () => reject(signal.reason ?? new Error("aborted"));
+    const rejectWithReason = () =>
+      reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
     if (signal.aborted) {
       rejectWithReason();
       return;
@@ -3427,7 +3422,7 @@ describe("createConfiguredOllamaStreamFn", () => {
       const eventsPromise = collectStreamEvents(
         await createManagedOllamaTestStream({
           baseUrl: "http://provider-host:11434",
-          options: { requestTimeoutMs: 25 },
+          model: { requestTimeoutMs: 25 },
           acquire,
         }),
       );
@@ -3461,7 +3456,8 @@ describe("createConfiguredOllamaStreamFn", () => {
     const eventsPromise = collectStreamEvents(
       await createManagedOllamaTestStream({
         baseUrl: "http://provider-host:11434",
-        options: { requestTimeoutMs: 5_000, signal: caller.signal },
+        model: { requestTimeoutMs: 5_000 },
+        options: { signal: caller.signal },
         acquire,
       }),
     );
@@ -3500,7 +3496,7 @@ describe("createConfiguredOllamaStreamFn", () => {
       const eventsPromise = collectStreamEvents(
         await createManagedOllamaTestStream({
           baseUrl: "http://provider-host:11434",
-          options: { requestTimeoutMs: 25 },
+          model: { requestTimeoutMs: 25 },
           acquire,
         }),
       );
