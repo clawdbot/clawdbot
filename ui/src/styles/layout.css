@@ -4193,7 +4193,7 @@ openclaw-sidebar-attention {
   margin-block-start: 7px;
   padding: 6px 10px;
   border-radius: var(--radius-sm);
-  background: var(--secondary);
+  background: color-mix(in srgb, var(--bg-hover) 95%, var(--text) 5%);
   color: var(--text);
   font-size: var(--control-ui-text-xs);
   line-height: 1.3;
