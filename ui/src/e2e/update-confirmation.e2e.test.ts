@@ -40,7 +40,12 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
     await updateButton.waitFor({ timeout: 10_000 });
     return { compact, gateway, updateButton };
   }
-  const updateButton = page.locator(".sidebar-footer-update:visible");
+  await page.locator(".sidebar-issues-button").click();
+  const updateIssue = page.locator(
+    'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+  );
+  await updateIssue.locator("summary").click();
+  const updateButton = updateIssue.locator(".sidebar-update-card__action");
   await updateButton.waitFor({ timeout: 10_000 });
   return { compact, gateway, updateButton };
 }

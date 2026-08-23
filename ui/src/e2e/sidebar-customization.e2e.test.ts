@@ -844,10 +844,13 @@ suite.define(() => {
         });
 
         const sidebar = page.locator("openclaw-app-sidebar");
-        const sidebarUpdate = sidebar.locator(".sidebar-footer-update");
+        const sidebarUpdate = sidebar.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
         const sidebarAutomation = sidebar.locator('[data-attention-kind="cronFailed"]');
-        await expect.poll(() => sidebarUpdate.count()).toBe(1);
+        await expect.poll(() => sidebar.locator(".sidebar-footer-update").count()).toBe(0);
         await sidebar.locator(".sidebar-issues-button").click();
+        await expect.poll(() => sidebarUpdate.count()).toBe(1);
         await expect.poll(() => sidebarAutomation.count()).toBe(1);
         await captureUiProof(page, "08-desktop-attention-unchanged.png");
         await sidebar.locator(".sidebar-issues-button").click();

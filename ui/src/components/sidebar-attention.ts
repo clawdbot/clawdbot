@@ -321,6 +321,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     return Boolean(
       snapshot?.updateRunning ||
       snapshot?.updateStatusBanner ||
+      snapshot?.updateAvailable ||
       (snapshot?.updateCampaignStatusHydrated && snapshot.updateSchedule?.campaign),
     );
   }
