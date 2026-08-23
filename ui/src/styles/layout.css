@@ -3796,7 +3796,7 @@ openclaw-sidebar-attention {
 }
 
 .sidebar-issues-panel__list > [data-attention-kind] + [data-attention-kind] {
-  border-block-start: 2px solid var(--sidebar-bg);
+  border-block-start: 3px solid var(--sidebar-bg);
 }
 
 .sidebar-issues-panel__list:focus-visible {
@@ -4174,10 +4174,6 @@ openclaw-sidebar-attention {
 .sidebar-approval-row:focus-within {
   border-radius: var(--radius-md);
   background: var(--bg-hover);
-}
-
-.sidebar-approval-row + :not(.sidebar-approval-row) {
-  margin-top: 6px;
 }
 
 .sidebar-approval-row__header {
