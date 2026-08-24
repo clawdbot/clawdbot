@@ -62,6 +62,7 @@ export function createCrabboxHeartbeatManager(dependencies: {
     const controller = new AbortController();
     entry.controller = controller;
     let result: SpawnResult;
+    const startedAt = Date.now();
     try {
       result = await dependencies.run(entry, controller.signal);
     } catch (error) {
@@ -93,7 +94,8 @@ export function createCrabboxHeartbeatManager(dependencies: {
     }
     if (!entry.failureWarned) {
       entry.failureWarned = true;
-      warn(entry, crabboxCommandError("heartbeat", result).message);
+      const message = crabboxCommandError("heartbeat", result).message;
+      warn(entry, message.replace("(timeout)", `(timeout after ${Date.now() - startedAt} ms)`));
     }
     schedule(entry);
   };

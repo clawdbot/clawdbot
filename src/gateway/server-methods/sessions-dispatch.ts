@@ -171,7 +171,7 @@ async function validateDispatchExecutionMode(params: {
   }
   respondInvalidWorkerSession(
     params.respond,
-    `runtime ${params.sessionRuntime} requires an SSH-backed cloud worker provider; choose a provider that supports remote-exec, or select an agent/model route with agentRuntime.id "openclaw"`,
+    `selected cloud worker provider does not support the remote-exec execution mode required by runtime ${params.sessionRuntime}; use an approved paired device or a provider that advertises remote-exec`,
   );
   return false;
 }
