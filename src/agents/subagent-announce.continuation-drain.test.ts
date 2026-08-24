@@ -80,6 +80,9 @@ type DelegateSpawnFenceResult =
   | { allowed: false; reason: "cancelled" | "stale"; summary: string };
 const consumePendingDelegatesMock = vi.fn((_sessionKey: string): ConsumedToolDelegate[] => []);
 const markPendingDelegateFailedMock = vi.fn();
+const markPendingDelegateSpawnAcceptedMock = vi.fn(
+  (_delegate: ConsumedToolDelegate, _childSessionKey: string) => true,
+);
 const revalidatePendingDelegateForSpawnMock = vi.fn(
   (_delegate: ConsumedToolDelegate, _controller: "pending"): DelegateSpawnFenceResult => ({
     allowed: true,
@@ -261,6 +264,8 @@ vi.mock("../auto-reply/continuation/delegate-store.js", async (importOriginal) =
   ...(await importOriginal<typeof import("../auto-reply/continuation/delegate-store.js")>()),
   consumePendingDelegates: (sessionKey: string) => consumePendingDelegatesMock(sessionKey),
   markPendingDelegateFailed: (...args: unknown[]) => markPendingDelegateFailedMock(...args),
+  markPendingDelegateSpawnAccepted: (delegate: ConsumedToolDelegate, childSessionKey: string) =>
+    markPendingDelegateSpawnAcceptedMock(delegate, childSessionKey),
   revalidatePendingDelegateForSpawn: (delegate: ConsumedToolDelegate, controller: "pending") =>
     revalidatePendingDelegateForSpawnMock(delegate, controller),
   enqueuePendingDelegate: (sessionKey: string, delegate: unknown) =>
@@ -368,6 +373,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       .mockResolvedValue({ delivered: true, path: "direct" });
     consumePendingDelegatesMock.mockReset().mockReturnValue([]);
     markPendingDelegateFailedMock.mockReset();
+    markPendingDelegateSpawnAcceptedMock.mockReset().mockReturnValue(true);
     revalidatePendingDelegateForSpawnMock.mockReset().mockReturnValue({ allowed: true });
     enqueuePendingDelegateMock.mockReset();
     clearQueuedDelegatesChainTokensFoldMock.mockReset().mockReturnValue(0);

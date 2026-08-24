@@ -77,6 +77,9 @@ type ConsumedToolDelegate = {
 };
 const consumePendingDelegatesMock = vi.fn((_sessionKey: string): ConsumedToolDelegate[] => []);
 const markPendingDelegateFailedMock = vi.fn();
+const markPendingDelegateSpawnAcceptedMock = vi.fn(
+  (_delegate: ConsumedToolDelegate, _childSessionKey: string) => true,
+);
 // capture durable delayed-bracket delegate enqueues (replaces the old
 // volatile setTimeout path).
 const enqueuePendingDelegateMock = vi.fn((_sessionKey: string, _delegate: unknown) => {});
@@ -253,6 +256,8 @@ vi.mock("../auto-reply/continuation/delegate-store.js", async (importOriginal) =
   ...(await importOriginal<typeof import("../auto-reply/continuation/delegate-store.js")>()),
   consumePendingDelegates: (sessionKey: string) => consumePendingDelegatesMock(sessionKey),
   markPendingDelegateFailed: (...args: unknown[]) => markPendingDelegateFailedMock(...args),
+  markPendingDelegateSpawnAccepted: (delegate: ConsumedToolDelegate, childSessionKey: string) =>
+    markPendingDelegateSpawnAcceptedMock(delegate, childSessionKey),
   revalidatePendingDelegateForSpawn: vi.fn(() => ({ allowed: true })),
   enqueuePendingDelegate: (sessionKey: string, delegate: unknown) =>
     enqueuePendingDelegateMock(sessionKey, delegate),
@@ -359,6 +364,7 @@ describe("subagent-announce continuation drain (F7)", () => {
       .mockResolvedValue({ delivered: true, path: "direct" });
     consumePendingDelegatesMock.mockReset().mockReturnValue([]);
     markPendingDelegateFailedMock.mockReset();
+    markPendingDelegateSpawnAcceptedMock.mockReset().mockReturnValue(true);
     enqueuePendingDelegateMock.mockReset();
     clearQueuedDelegatesChainTokensFoldMock.mockReset().mockReturnValue(0);
     stagePostCompactionDelegateMock.mockReset();
