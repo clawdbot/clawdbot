@@ -797,8 +797,22 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
+      - name: Resolve source package requirement
+        id: package_source
+        env:
+          CANDIDATE_ARTIFACT_JSON: ${{ inputs.candidate_artifact_json }}
+          RELEASE_PACKAGE_SPEC: ${{ needs.resolve_target.outputs.release_package_spec }}
+        run: |
+          set -euo pipefail
+          source_package_required=false
+          if [[ ! "$CANDIDATE_ARTIFACT_JSON" =~ [^[:space:]] &&
+                ! "$RELEASE_PACKAGE_SPEC" =~ [^[:space:]] ]]; then
+            source_package_required=true
+          fi
+          echo "required=$source_package_required" >> "$GITHUB_OUTPUT"
+
       - name: Validate release package source metadata
-        if: inputs.candidate_artifact_json == '' && needs.resolve_target.outputs.release_package_spec == ''
+        if: steps.package_source.outputs.required == 'true'
         env:
           ALLOW_UNRELEASED_CHANGELOG: ${{ needs.resolve_target.outputs.allow_unreleased_changelog }}
           PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
@@ -812,7 +826,7 @@ jobs:
 
       - name: Set artifact metadata
         id: artifact
-        if: inputs.candidate_artifact_json == ''
+        if: steps.package_source.outputs.required == 'true' || needs.resolve_target.outputs.release_package_spec != ''
         run: |
           {
             echo "file_name=openclaw-current.tgz"
@@ -822,7 +836,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Setup Node environment
-        if: inputs.candidate_artifact_json == ''
+        if: steps.package_source.outputs.required == 'true' || needs.resolve_target.outputs.release_package_spec != ''
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
@@ -832,7 +846,7 @@ jobs:
 
       - name: Resolve release package artifact
         id: package
-        if: inputs.candidate_artifact_json == ''
+        if: steps.package_source.outputs.required == 'true' || needs.resolve_target.outputs.release_package_spec != ''
         shell: bash
         env:
           CROSS_OS_SCHEDULED: ${{ needs.resolve_target.outputs.cross_os_scheduled }}
@@ -841,11 +855,12 @@ jobs:
           PROVIDER: ${{ needs.resolve_target.outputs.provider }}
           RELEASE_PACKAGE_SPEC: ${{ needs.resolve_target.outputs.release_package_spec }}
           RELEASE_PROFILE: ${{ needs.resolve_target.outputs.release_profile }}
+          SOURCE_PACKAGE_REQUIRED: ${{ steps.package_source.outputs.required }}
         run: |
           set -euo pipefail
           source_args=(--source ref --package-ref "$PACKAGE_REF")
           package_label="ref:${PACKAGE_REF}"
-          if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+          if [[ "$SOURCE_PACKAGE_REQUIRED" != "true" ]]; then
             source_args=(--source npm --package-spec "$RELEASE_PACKAGE_SPEC" --package-ref "$PACKAGE_REF")
             package_label="$RELEASE_PACKAGE_SPEC"
           fi

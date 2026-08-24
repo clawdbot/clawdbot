@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractCurrentPackageChangelog } from "./package-changelog.mjs";
+import { validateBundledPackageDependencyAlignment } from "./package-source-dependencies.mjs";
 
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/u;
 const ROOT_MANIFEST_PATH = "package.json";
@@ -14,6 +16,7 @@ function parseArgs(argv) {
   const options = {
     allowUnreleasedChangelog: false,
     ref: "",
+    sourceDir: "",
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -26,10 +29,21 @@ function parseArgs(argv) {
       index += 1;
       continue;
     }
+    if (arg === "--source-dir") {
+      options.sourceDir = argv[index + 1] ?? "";
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown package source preflight option: ${arg}`);
   }
-  if (!FULL_GIT_COMMIT_RE.test(options.ref)) {
-    throw new Error(`--ref must be a full lowercase commit SHA; got ${options.ref || "<missing>"}`);
+  if (options.ref && options.sourceDir) {
+    throw new Error("Use exactly one of --ref or --source-dir.");
+  }
+  if (options.ref && !FULL_GIT_COMMIT_RE.test(options.ref)) {
+    throw new Error(`--ref must be a full lowercase commit SHA; got ${options.ref}`);
+  }
+  if (!options.ref && !options.sourceDir) {
+    throw new Error("Use exactly one of --ref or --source-dir.");
   }
   return options;
 }
@@ -77,13 +91,12 @@ export function validatePackageSource({
     );
   }
 
-  for (const [name, version] of Object.entries(aiManifest.dependencies ?? {})) {
-    if (rootDependencies[name] !== version) {
-      throw new Error(
-        `${ROOT_MANIFEST_PATH} must match ${AI_MANIFEST_PATH} dependency ${name}@${version}; found ${JSON.stringify(rootDependencies[name])}.`,
-      );
-    }
-  }
+  validateBundledPackageDependencyAlignment({
+    bundledDependencies: aiManifest.dependencies,
+    bundledPackageLabel: AI_MANIFEST_PATH,
+    rootDependencies,
+    rootPackageLabel: ROOT_MANIFEST_PATH,
+  });
   return rootManifest.version;
 }
 
@@ -111,9 +124,32 @@ export function validatePackageSourceRef(ref, options = {}) {
   });
 }
 
+function readSourceFile(sourceDir, file, { optional = false } = {}) {
+  try {
+    return readFileSync(path.join(sourceDir, file), "utf8");
+  } catch (error) {
+    if (optional && error?.code === "ENOENT") {
+      return null;
+    }
+    throw new Error(`Unable to read ${file} from ${sourceDir}.`, { cause: error });
+  }
+}
+
+export function validatePackageSourceDir(sourceDir, options = {}) {
+  const resolvedSourceDir = path.resolve(sourceDir);
+  return validatePackageSource({
+    aiManifestContent: readSourceFile(resolvedSourceDir, AI_MANIFEST_PATH, { optional: true }),
+    allowUnreleasedChangelog: options.allowUnreleasedChangelog,
+    changelogContent: readSourceFile(resolvedSourceDir, CHANGELOG_PATH),
+    rootManifestContent: readSourceFile(resolvedSourceDir, ROOT_MANIFEST_PATH),
+  });
+}
+
 function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const version = validatePackageSourceRef(options.ref, options);
+  const version = options.ref
+    ? validatePackageSourceRef(options.ref, options)
+    : validatePackageSourceDir(options.sourceDir, options);
   console.log(`package-source-preflight: source manifests and changelog are valid (${version}).`);
 }
 

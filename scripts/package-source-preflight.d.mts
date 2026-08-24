@@ -12,3 +12,7 @@ export function validatePackageSourceRef(
   ref: string,
   options?: PackageSourcePreflightOptions,
 ): string;
+export function validatePackageSourceDir(
+  sourceDir: string,
+  options?: PackageSourcePreflightOptions,
+): string;
