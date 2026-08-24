@@ -44,26 +44,26 @@ async function expectGolden(
 describe("claws add-plan goldens", () => {
   it("golden: minimal agent with legacy profile pointer", async () => {
     await expectGolden("src/claws/fixtures/minimal-agent.claw.json", {
-      digest: "sha256:46f120f23541deeb29f4e6e74eaec977d414ba61fd0f4e41ce5ef2b2b7d30faf",
+      digest: "sha256:840cbae590e661fc2ee9e8b75dff59876e63195d880d726565ae6efbd640595b",
     });
   });
 
   it("golden: incident response with packages, mcp, and cron", async () => {
     await expectGolden("src/claws/fixtures/incident-response.claw.json", {
-      digest: "sha256:22487ec20f40ccbbc29f6acd2dbbf2b9ad50dc8662334e5c8eab85de8ae7dbfb",
+      digest: "sha256:1440bf886441b5172d7586858248ac92a6c26e8f78a67ed761e1471cf0a0c845",
     });
   });
 
   it("golden: workspace agent with managed files", async () => {
     await expectGolden("src/claws/fixtures/workspace-agent.claw.json", {
-      digest: "sha256:55023259f9f38cfc90956a9d725033fb2ba09117787e6978d9241b290530dcc1",
+      digest: "sha256:04e2aacd3ed0675bc7579f16d40733fff7f6c4c56668856d8fbee7b962959c5e",
     });
   });
 
   it("golden: agent id collision blocks the plan", async () => {
     await expectGolden("src/claws/fixtures/minimal-agent.claw.json", {
       context: { existingAgentIds: ["internal-triage"] },
-      digest: "sha256:be3d3df945d915c15cd58f8ea19bad3e6abf5ce9a0a4f9e9bfd52777141cd9e8",
+      digest: "sha256:7315e43e2344971fd4fa7f7d732437d8961e147107d859f592c29388f6c4244c",
     });
   });
 });
