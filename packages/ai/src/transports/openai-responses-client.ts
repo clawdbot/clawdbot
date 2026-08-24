@@ -51,6 +51,7 @@ import {
   buildOpenAIResponsesParams,
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
+import { resolveOpenAIResponsesPayloadPolicy } from "./openai-responses-payload-policy.js";
 import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import {
   createOpenAIResponsesAssistantOutput,
@@ -396,6 +397,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
               sessionId,
             ),
             request: params as ResponsesContinuationRequest,
+            idleTtlMs: resolveOpenAIResponsesPayloadPolicy(model).httpContinuationIdleTtlMs,
           });
         }
         const observePrompt = createResponsesPromptEgressObserver(

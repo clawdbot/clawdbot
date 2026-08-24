@@ -57,6 +57,7 @@ type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number | undefined;
   explicitStore: boolean | undefined;
+  httpContinuationIdleTtlMs: number;
   shouldStripDisabledReasoningPayload: boolean;
   shouldStripInputStatus: boolean;
   shouldStripPromptCache: boolean;
@@ -226,6 +227,25 @@ function readCompatPayloadBoolean(
   }
   const value = (compat as Record<string, unknown>)[key];
   return typeof value === "boolean" ? value : undefined;
+}
+
+/**
+ * Minutes an HTTP continuation baseline stays cached since its last use
+ * before eviction, once resolved from `compat.responsesContinuationIdleMinutes`
+ * (or the shipped default). A real chat conversation's turns are commonly
+ * minutes to hours apart, well past a short TTL, so this exists as a
+ * per-model override rather than a fixed constant.
+ */
+export const DEFAULT_HTTP_CONTINUATION_IDLE_MINUTES = 90;
+
+function readCompatContinuationIdleMinutes(compat: unknown): number {
+  if (!compat || typeof compat !== "object") {
+    return DEFAULT_HTTP_CONTINUATION_IDLE_MINUTES;
+  }
+  const value = (compat as Record<string, unknown>).responsesContinuationIdleMinutes;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_HTTP_CONTINUATION_IDLE_MINUTES;
 }
 
 function resolveOpenAIResponsesPayloadCapabilities(
@@ -433,6 +453,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
     compactThreshold: serverCompactionPlan.threshold,
     explicitStore,
+    httpContinuationIdleTtlMs: readCompatContinuationIdleMinutes(model.compat) * 60 * 1000,
     shouldStripDisabledReasoningPayload,
     shouldStripInputStatus,
     shouldStripPromptCache:
