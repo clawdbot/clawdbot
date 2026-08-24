@@ -8,6 +8,7 @@ import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js
 import { resolveSecretRefValues } from "./resolve.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
 import { applyResolvedAssignments, createResolverContext } from "./runtime-shared.js";
+import { getSecretTargetRegistry } from "./target-registry-data.js";
 
 function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
@@ -18,6 +19,48 @@ const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
 };
 
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
+  it("inventories the Comfy cloud API key once under its plugin-provider owner", () => {
+    const config = {
+      agents: explicitMainRoster,
+      plugins: {
+        entries: {
+          comfy: {
+            enabled: true,
+            config: {
+              mode: "cloud",
+              baseUrl: "https://cloud.example.invalid",
+              apiKey: envRef("COMFY_OWNER_KEY"),
+              image: { workflow: { "6": { inputs: { text: "" } } }, promptNodeId: "6" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const context = createResolverContext({ sourceConfig: config, env: {} });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["comfy", "bundled"]]),
+    });
+
+    expect(context.assignments).toMatchObject([
+      {
+        path: "plugins.entries.comfy.config.apiKey",
+        ownerKind: "plugin-provider",
+        ownerId: "comfy:comfy",
+        requiredForGateway: false,
+        disposition: "isolate",
+      },
+    ]);
+    expect(
+      getSecretTargetRegistry({ config, env: {} }).filter(
+        (entry) => entry.id === "plugins.entries.comfy.config.apiKey",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("assigns each webhooks route SecretRef to its exact runtime owner", () => {
     expect(
       findBundledPluginMetadataById("webhooks", {

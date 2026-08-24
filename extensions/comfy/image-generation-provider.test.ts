@@ -289,7 +289,7 @@ describe("comfy image-generation provider", () => {
     ).toBe(true);
   });
 
-  it("treats cloud comfy workflows as configured with a plugin config env SecretRef", () => {
+  it("does not resolve cloud SecretRefs from the ambient environment during discovery", () => {
     vi.stubEnv("COMFY_TEST_API_KEY", "comfy-secret-ref-key");
     const provider = buildComfyImageGenerationProvider();
     expect(
@@ -305,7 +305,7 @@ describe("comfy image-generation provider", () => {
           },
         }),
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("uses provider-owned config auth for a complete Comfy Cloud workflow", () => {
@@ -1122,8 +1122,8 @@ describe("comfy image-generation provider", () => {
     });
   });
 
-  it("uses plugin config env SecretRef auth for cloud workflows", async () => {
-    vi.stubEnv("COMFY_TEST_API_KEY", "comfy-secret-ref-key");
+  it("uses the snapshot-materialized plugin API key for cloud workflows", async () => {
+    vi.stubEnv("COMFY_TEST_API_KEY", "ambient-key-must-not-be-used");
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
       body: Buffer.from("cloud-data"),
       contentType: "image/png",
@@ -1140,7 +1140,7 @@ describe("comfy image-generation provider", () => {
       prompt: "cloud workflow prompt",
       cfg: buildComfyConfig({
         mode: "cloud",
-        apiKey: { source: "env", provider: "default", id: "COMFY_TEST_API_KEY" },
+        apiKey: "comfy-secret-ref-key",
         workflow: {
           "6": { inputs: { text: "" } },
           "9": { inputs: {} },

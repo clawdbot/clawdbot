@@ -35,6 +35,18 @@
     "musicGenerationProviders": ["comfy"],
     "videoGenerationProviders": ["comfy"]
   },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "apiKey",
+          "expected": "string",
+          "ownerKind": "provider",
+          "ownerId": "comfy"
+        }
+      ]
+    }
+  },
   "imageGenerationProviderMetadata": {
     "comfy": {
       "configSignals": [
@@ -182,6 +194,48 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
+    "$defs": {
+      "secretRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": ["env", "file", "exec", "store"]
+          },
+          "provider": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+          "id": { "type": "string" }
+        },
+        "required": ["source", "provider", "id"],
+        "oneOf": [
+          {
+            "properties": {
+              "source": { "enum": ["env", "store"] },
+              "id": { "pattern": "^[A-Z][A-Z0-9_]{0,127}$" }
+            }
+          },
+          {
+            "properties": {
+              "source": { "const": "file" },
+              "id": {
+                "anyOf": [{ "const": "value" }, { "pattern": "^/(?:[^~]|~0|~1)*$" }]
+              }
+            }
+          },
+          {
+            "properties": {
+              "source": { "const": "exec" },
+              "id": {
+                "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$"
+              }
+            }
+          }
+        ]
+      },
+      "secretInput": {
+        "anyOf": [{ "type": "string" }, { "$ref": "#/$defs/secretRef" }]
+      }
+    },
     "properties": {
       "mode": {
         "type": "string",
@@ -190,9 +244,7 @@
       "baseUrl": {
         "type": "string"
       },
-      "apiKey": {
-        "type": ["string", "object"]
-      },
+      "apiKey": { "$ref": "#/$defs/secretInput" },
       "allowPrivateNetwork": {
         "type": "boolean"
       },

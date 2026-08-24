@@ -16,11 +16,7 @@ import {
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import {
-  normalizeSecretInputString,
-  resolveSecretInputString,
-} from "openclaw/plugin-sdk/secret-input-runtime";
-import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
+import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
   fetchWithSsrFGuard,
   isPrivateOrLoopbackHost,
@@ -160,37 +156,14 @@ function resolveComfyApiKey(
     mode: "inspect",
   });
   if (resolved.status === "available") {
-    const apiKey = normalizeSecretInputString(resolved.value);
-    return apiKey
-      ? {
-          status: "available",
-          apiKey,
-          source: "plugins.entries.comfy.config.apiKey",
-        }
-      : { status: "missing" };
+    return {
+      status: "available",
+      apiKey: resolved.value,
+      source: "plugins.entries.comfy.config.apiKey",
+    };
   }
   if (resolved.status === "configured_unavailable") {
-    if (resolved.ref.source !== "env") {
-      return { status: "configured_unavailable" };
-    }
-    const envVarName = resolved.ref.id.trim();
-    if (
-      !canResolveEnvSecretRefInReadOnlyPath({
-        cfg,
-        provider: resolved.ref.provider,
-        id: envVarName,
-      })
-    ) {
-      return { status: "configured_unavailable" };
-    }
-    const apiKey = normalizeSecretInputString(process.env[envVarName]);
-    return apiKey
-      ? {
-          status: "available",
-          apiKey,
-          source: `plugins.entries.comfy.config.apiKey (${envVarName})`,
-        }
-      : { status: "configured_unavailable" };
+    return { status: "configured_unavailable" };
   }
   return { status: "missing" };
 }

@@ -15,7 +15,7 @@ type ComfyCloudJobResponseOptions = {
   body: BodyInit;
   contentType: string;
   filename: string;
-  outputKind: "gifs" | "images";
+  outputKind: "audio" | "gifs" | "images";
   promptId: string;
   redirectLocation?: string;
 };
