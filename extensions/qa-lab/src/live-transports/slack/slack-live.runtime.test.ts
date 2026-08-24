@@ -29,6 +29,7 @@ import {
   buildSlackApprovalCheckpointMessage,
   collectSlackActionValues,
   extractSlackNativeApprovalId,
+  listSlackMessages,
   runSlackTableInvalidBlocksFallbackScenario,
 } from "./slack-live.observations.js";
 import * as slackScenarioImplementations from "./slack-live.scenario-implementations.js";
@@ -126,6 +127,32 @@ describe("Slack live QA runtime helpers", () => {
     expect(testing.resolveSlackRateLimitDelayMs({ retryAfter: 10 })).toBe(10_000);
     expect(testing.resolveSlackRateLimitDelayMs({ retryAfter: 0 })).toBeUndefined();
     expect(testing.resolveSlackRateLimitDelayMs(new Error("network failed"))).toBeUndefined();
+  });
+
+  it("bounds paginated history work and surfaces Slack rate limits for poller backoff", async () => {
+    const history = vi
+      .fn()
+      .mockResolvedValueOnce({ messages: [], response_metadata: { next_cursor: "page-2" } })
+      .mockResolvedValueOnce({ messages: [], response_metadata: { next_cursor: "page-3" } })
+      .mockRejectedValueOnce({ retryAfter: 10 });
+
+    await expect(
+      listSlackMessages({
+        channelId: "C123456789",
+        client: { conversations: { history } } as never,
+        oldestTs: "1.000000",
+      }),
+    ).rejects.toEqual({ retryAfter: 10 });
+    expect(history).toHaveBeenCalledTimes(3);
+
+    history.mockReset();
+    history.mockResolvedValue({ messages: [], response_metadata: { next_cursor: "more" } });
+    await listSlackMessages({
+      channelId: "C123456789",
+      client: { conversations: { history } } as never,
+      oldestTs: "1.000000",
+    });
+    expect(history).toHaveBeenCalledTimes(5);
   });
 
   beforeEach(() => {
