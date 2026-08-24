@@ -254,11 +254,22 @@ export const WORKSPACE_BOOTSTRAP_FILENAMES = [
 
 export type WorkspaceBootstrapFileName = (typeof WORKSPACE_BOOTSTRAP_FILENAMES)[number];
 
+/**
+ * Provenance of a workspace bootstrap file.
+ * - `"root"` — loaded from a recognized root-relative path (e.g. workspace root AGENTS.md).
+ * - `"hook"` — injected by the `bootstrap-extra-files` hook from a configured pattern
+ *   (e.g. `packages/*\/AGENTS.md`). Used by the `standard` tier to exclude hook-loaded
+ *   extras even when their basename matches a root allowlist entry.
+ */
+export type WorkspaceBootstrapFileSource = "root" | "hook";
+
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
   path: string;
   content?: string;
   missing: boolean;
+  /** Provenance tag. Absent values are treated as `"root"` for back-compat. */
+  source?: WorkspaceBootstrapFileSource;
 };
 
 export type ExtraBootstrapLoadDiagnosticCode =
@@ -1194,11 +1205,15 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
         path: entry.filePath,
         content: loaded.content,
         missing: false,
+        // Provenance: files discovered at the workspace root. Extras loaded by the
+        // bootstrap-extra-files hook carry `source: "hook"` instead, so lower tiers
+        // can exclude them without relying on basename matching alone.
+        source: "root",
       };
       setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
       result.push(file);
     } else if (isRootFileMissingFailure(loaded)) {
-      result.push({ name: entry.name, path: entry.filePath, missing: true });
+      result.push({ name: entry.name, path: entry.filePath, missing: true, source: "root" });
     } else {
       const fallbackReason = `workspace file could not be read (${loaded.reason})`;
       const rawReason = loaded.error instanceof Error ? loaded.error.message : fallbackReason;
@@ -1214,6 +1229,7 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
         path: entry.filePath,
         content: `[UNREADABLE: ${reason}]`,
         missing: false,
+        source: "root",
       });
     }
   }
@@ -1222,6 +1238,50 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
 
 const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME]);
 
+/**
+ * Bootstrap loading tiers control which workspace files are injected
+ * into a session's context window.
+ *
+ * - `"minimal"` — AGENTS.md, TOOLS.md, SOUL.md, IDENTITY.md, USER.md.
+ *   Used by subagent and cron sessions to keep context lean.
+ * - `"standard"` — All recognized bootstrap files (SOUL.md, IDENTITY.md,
+ *   USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md, plus minimal set).
+ *   Default for main sessions.
+ * - `"full"` — Standard set plus any extra bootstrap file patterns
+ *   configured via the `bootstrap-extra-files` hook (paths/patterns/files).
+ *
+ * Opt-in: when no `bootstrapTier` is configured, the existing session-type
+ * defaults above (including the tighter subagent allowlist) are used unchanged.
+ */
+export type BootstrapTier = "minimal" | "standard" | "full";
+
+const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+]);
+
+const STANDARD_BOOTSTRAP_ALLOWLIST = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+]);
+
+// Session-type allowlist used ONLY when no explicit `bootstrapTier` override is
+// configured, so the no-override path stays byte-for-byte compatible for users
+// who have not opted into the tier system.
+//
+// ⚠️ Values here must track upstream, not this PR's original snapshot. The
+// subagent allowlist is declared above and has since narrowed to {AGENTS} —
+// an earlier revision of this branch carried a stale {AGENTS, TOOLS} copy and
+// silently widened it back. Do not redeclare it here.
 const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_SOUL_FILENAME,
@@ -1267,9 +1327,29 @@ function filterRootMemoryBootstrapFiles(
   });
 }
 
+/**
+ * Resolve the effective bootstrap tier for a session.
+ *
+ * Priority: explicit tier override > session-type heuristic.
+ * Subagent and cron sessions default to `"minimal"`; all others to `"standard"`.
+ */
+export function resolveBootstrapTier(
+  sessionKey?: string,
+  tierOverride?: BootstrapTier,
+): BootstrapTier {
+  if (tierOverride) {
+    return tierOverride;
+  }
+  if (sessionKey && (isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey))) {
+    return "minimal";
+  }
+  return "standard";
+}
+
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   session?: string | BootstrapSessionContext,
+  tierOverride?: BootstrapTier,
 ): WorkspaceBootstrapFile[] {
   const { sessionKey, chatType, workspaceDir } = resolveBootstrapSessionContext(session);
   const isSubagent = isSubagentSessionKey(sessionKey);
@@ -1280,6 +1360,35 @@ export function filterBootstrapFilesForSession(
   const privacyFilteredFiles = isNonPrivate
     ? filterRootMemoryBootstrapFiles(files, workspaceDir)
     : files;
+
+  /*
+   * Tier override path — opt-in via `agents.defaults.bootstrapTier`.
+   *
+   * ⚠️ Deliberately placed AFTER the privacy filter, never before it. The tiers
+   * decide how much context to spend; they must not be able to widen what a
+   * non-private session is allowed to see. Ordering it the other way would let
+   * `tier: "full"` leak the root MEMORY.md into a group or channel session.
+   *
+   * The `source !== "hook"` guard keeps hook-loaded extras out of the leaner
+   * tiers even when their basename collides with the root allowlist (e.g. a
+   * `packages/*\/AGENTS.md` picked up by the bootstrap-extra-files hook), so the
+   * `minimal ⊂ standard ⊂ full` inclusion order holds.
+   */
+  if (tierOverride) {
+    if (tierOverride === "minimal") {
+      return privacyFilteredFiles.filter(
+        (file) => file.source !== "hook" && MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name),
+      );
+    }
+    if (tierOverride === "standard") {
+      return privacyFilteredFiles.filter(
+        (file) => file.source !== "hook" && STANDARD_BOOTSTRAP_ALLOWLIST.has(file.name),
+      );
+    }
+    return privacyFilteredFiles; // "full" — everything that survived the privacy filter
+  }
+
+  // No override: keep upstream's session-type behaviour exactly as it was.
   if (isSubagent) {
     return privacyFilteredFiles.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
@@ -1518,6 +1627,10 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
         path: file.path,
         content: file.content,
         missing: false,
+        // Provenance for the tier filter. These come from configured patterns,
+        // not the workspace root, so a nested `packages/*/AGENTS.md` must not be
+        // mistaken for the root AGENTS.md just because the basename matches.
+        source: "hook",
       };
       const sourceIdentity = getWorkspaceFileSourceIdentity(file);
       if (sourceIdentity) {

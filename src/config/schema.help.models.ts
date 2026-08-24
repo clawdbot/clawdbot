@@ -157,6 +157,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, IDENTITY.md (HEARTBEAT.md is accepted but a no-op).",
   "agents.defaults.contextInjection":
     'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+  "agents.defaults.bootstrapTier":
+    'Which workspace bootstrap files to inject: "minimal" (AGENTS.md, TOOLS.md, SOUL.md, IDENTITY.md, USER.md), "standard" (all recognized files), or "full" (standard plus extra patterns from the bootstrap-extra-files hook). Omit to keep the existing session-type behaviour — subagent and cron sessions stay lean, main sessions get everything.',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":

@@ -49,6 +49,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         path: path.join(packageDir, "SOUL.md"),
         content: "soul",
         missing: false,
+        source: "hook",
       },
     ]);
   });
@@ -67,6 +68,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         path: path.join(packageDir, "AGENTS.md"),
         content: "agents",
         missing: false,
+        source: "hook",
       },
     ]);
   });
@@ -85,6 +87,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         path: path.join(packageDir, "AGENTS.md"),
         content: "literal agents",
         missing: false,
+        source: "hook",
       },
     ]);
   });
@@ -103,6 +106,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         path: path.join(packageDir, "AGENTS.md"),
         content: "agents",
         missing: false,
+        source: "hook",
       },
     ]);
   });
@@ -140,6 +144,7 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         path: path.join(linkedWorkspace, "AGENTS.md"),
         content: "linked agents",
         missing: false,
+        source: "hook",
       },
     ]);
   });

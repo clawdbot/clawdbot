@@ -26,6 +26,7 @@ import {
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_USER_FILENAME,
+  type BootstrapTier,
   filterBootstrapFilesForSession,
   isWorkspaceSetupCompleted,
   loadWorkspaceBootstrapFiles,
@@ -211,8 +212,18 @@ function filterBootstrapFilesAfterHooks(params: {
     workspaceDir: string;
   };
   protectedFiles?: WorkspaceBootstrapFile[];
+  /**
+   * Optional `agents.defaults.bootstrapTier`. Applied here rather than inside the
+   * bootstrap-extra-files hook so that tier policy stays in the same place as the
+   * rest of the session policy — after every hook has contributed its files.
+   */
+  tierOverride?: BootstrapTier;
 }): WorkspaceBootstrapFile[] {
-  const sessionFiltered = filterBootstrapFilesForSession(params.files, params.session);
+  const sessionFiltered = filterBootstrapFilesForSession(
+    params.files,
+    params.session,
+    params.tierOverride,
+  );
   const protectedFiles = params.protectedFiles ?? [];
   if (protectedFiles.length === 0) {
     return sessionFiltered;
@@ -364,6 +375,7 @@ export async function resolveBootstrapFilesForRun(params: {
       files: updated,
       session,
       protectedFiles,
+      tierOverride: params.config?.agents?.defaults?.bootstrapTier as BootstrapTier | undefined,
     }),
     workspaceSetupCompleted,
     params.workspaceDir,
