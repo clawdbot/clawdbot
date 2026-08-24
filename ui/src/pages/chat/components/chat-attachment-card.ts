@@ -186,7 +186,7 @@ export function renderAttachmentCardHeader(
               @click=${options.onExpand}
               >${compactPreview
                 ? icons.arrowUpRight
-                : html`<span>${t("chat.attachments.open")}</span>${icons.arrowUpRight}`}</button
+                : html`<span>${t("chat.attachments.open")}</span>`}</button
             >`
           : null}
       </span>
