@@ -24,7 +24,8 @@ export const CRABBOX_HEARTBEAT_TIMEOUT_MS = 150_000;
 // promptly instead of stalling the whole cloud picker.
 export const CRABBOX_MACHINE_CATALOG_TIMEOUT_MS = 5_000;
 // Setup gets its own budget on top of provision so a slow warmup cannot starve it.
-export const CRABBOX_SETUP_TIMEOUT_MS = 300_000;
+// Setup may install an exact candidate CLI and official plugins on a minimal cloud image.
+export const CRABBOX_SETUP_TIMEOUT_MS = 15 * 60_000;
 export const CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS = 15 * 60_000;
 
 export function resolveCrabboxProvisionBaseTimeoutMs(

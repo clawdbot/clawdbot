@@ -1325,13 +1325,13 @@ describe("Crabbox worker provider", () => {
     {
       name: "normal with setup",
       profile: { ...PROFILE, setup: "install-node" },
-      minutes: 72,
+      minutes: 82,
     },
-    { name: "desktop without setup", profile: { ...PROFILE, desktop: true }, minutes: 122 },
+    { name: "desktop without setup", profile: { ...PROFILE, desktop: true }, minutes: 132 },
     {
       name: "desktop with setup",
       profile: { ...PROFILE, desktop: true, setup: "install-node" },
-      minutes: 127,
+      minutes: 147,
     },
   ] satisfies Array<{ name: string; profile: WorkerProfile; minutes: number }>;
   it.each(provisionTimeoutCases)(
@@ -1436,7 +1436,7 @@ describe("Crabbox worker provider", () => {
         provider: providerId,
         desktop: true,
       }),
-    ).toBe(122 * 60_000);
+    ).toBe(132 * 60_000);
     expect(setupOrder).toEqual(["desktop", "enrollment"]);
   });
 
