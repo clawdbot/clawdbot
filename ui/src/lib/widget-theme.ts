@@ -15,6 +15,11 @@ const WIDGET_THEME_TOKENS = [
   "danger",
   "info",
   "radius",
+  "radius-full",
+  "scrollbar-size",
+  "scrollbar-thumb-inset",
+  "scrollbar-thumb",
+  "scrollbar-thumb-hover",
   "font-body",
   "font-mono",
 ] as const;
@@ -38,6 +43,11 @@ const HOST_TOKEN_SOURCES: Record<WidgetThemeToken, string> = {
   danger: "--danger",
   info: "--info",
   radius: "--radius",
+  "radius-full": "--radius-full",
+  "scrollbar-size": "--scrollbar-size",
+  "scrollbar-thumb-inset": "--scrollbar-thumb-inset",
+  "scrollbar-thumb": "--scrollbar-thumb",
+  "scrollbar-thumb-hover": "--scrollbar-thumb-hover",
   "font-body": "--font-body",
   "font-mono": "--mono",
 };

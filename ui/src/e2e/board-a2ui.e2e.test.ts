@@ -23,7 +23,14 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const sessionKey = "agent:main:board-a2ui";
-const screenshotPath = "/tmp/pr-b-shots/a2ui-board.png";
+const scrollbarProofLabel = process.env.OPENCLAW_WIDGET_SCROLLBAR_PROOF_LABEL;
+const screenshotPath = scrollbarProofLabel
+  ? path.resolve(
+      process.cwd(),
+      ".artifacts/control-ui-e2e/widget-scrollbar",
+      `${scrollbarProofLabel}.png`,
+    )
+  : "/tmp/pr-b-shots/a2ui-board.png";
 const basicCatalog = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json";
 
 let browser: Browser;
@@ -80,7 +87,10 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
     await new Promise<void>((resolve) => {
       sandboxServer.listen(sandboxPort, "127.0.0.1", resolve);
     });
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    browser = await chromium.launch({
+      executablePath: chromiumExecutablePath,
+      ignoreDefaultArgs: ["--hide-scrollbars"],
+    });
   }, 120_000);
 
   afterAll(async () => {
@@ -138,7 +148,7 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
     const boot = JSON.stringify({ messages, actionTier: "state" }).replaceAll("<", "\\u003c");
     const documentHtml = buildWidgetDocument(
       "A2UI controls",
-      `<script>globalThis.openclawA2UIBoot=${boot};</script><style>html,body{height:100%;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script src="${rendererUrl}"></script>`,
+      `<script>globalThis.openclawA2UIBoot=${boot};</script><style>html,body{height:100%;background:transparent}body{min-height:1400px}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script src="${rendererUrl}"></script>`,
       { scriptOrigins: [rendererOrigin] },
     );
     const frameUrl = `${origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/a2ui-controls/index.html?bt=ticket`;
@@ -163,6 +173,7 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
               kindLabel: "A2UI",
               sizeW: 8,
               sizeH: 5,
+              heightMode: "fixed",
               position: 0,
               grantState: "none",
               revision: 1,
@@ -226,7 +237,24 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
         ),
       )
       .not.toBe("");
+    expect(
+      await widgetFrame.evaluate(() => ({
+        color: getComputedStyle(document.documentElement).scrollbarColor,
+        size: getComputedStyle(document.documentElement).getPropertyValue("--scrollbar-size"),
+        thumbBackground: getComputedStyle(document.documentElement, "::-webkit-scrollbar-thumb")
+          .backgroundColor,
+        trackBackground: getComputedStyle(document.documentElement, "::-webkit-scrollbar-track")
+          .backgroundColor,
+        width: getComputedStyle(document.documentElement, "::-webkit-scrollbar").width,
+      })),
+    ).toEqual({
+      color: expect.not.stringMatching(/^auto$/),
+      size: "12px",
+      thumbBackground: expect.not.stringMatching(/^(?:rgba\(0, 0, 0, 0\)|transparent)$/),
+      trackBackground: "rgba(0, 0, 0, 0)",
+      width: "12px",
+    });
     await mkdir(path.dirname(screenshotPath), { recursive: true });
-    await page.screenshot({ path: screenshotPath, fullPage: true });
+    await page.screenshot({ animations: "disabled", path: screenshotPath, fullPage: true });
   });
 });
