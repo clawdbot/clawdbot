@@ -50,17 +50,17 @@ type SqliteReadOnlyWorkerResult = { ok: true; location: string } | { ok: false; 
 
 class SqliteSourceChangedError extends Error {}
 
-function sqliteSnapshotStagingError(stagingRoot: string, cause: unknown): unknown {
+function sqliteSnapshotStagingError(root: string, cause: unknown, destination = false): unknown {
   for (let depth = 0, error = cause; depth < 8 && error instanceof Error; depth += 1) {
-    const details: NodeJS.ErrnoException & { errcode?: unknown } = error;
-    const errcode = details.errcode;
+    const { code, errcode, path: errorPath }: NodeJS.ErrnoException & { errcode?: unknown } = error;
     // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
     if (
-      ["ENOSPC", "EDQUOT"].includes(details.code ?? "") ||
+      destination ||
+      ["ENOSPC", "EDQUOT"].includes(code ?? "") ||
       (typeof errcode === "number" && [13, 778, 1034, 1290].includes(errcode)) ||
-      `${details.path ?? ""}${path.sep}`.startsWith(`${stagingRoot}${path.sep}`)
+      `${errorPath ?? ""}${path.sep}`.startsWith(`${root}${path.sep}`)
     ) {
-      const message = `${cause instanceof Error ? cause.message : String(cause)}${typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : ""}; snapshot staging root ${stagingRoot}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`;
+      const message = `${cause instanceof Error ? cause.message : String(cause)}${typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : ""}; snapshot staging root ${root}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`;
       return new Error(message, { cause });
     }
     error = error.cause;
@@ -406,7 +406,7 @@ function createStableReadOnlyCopyInTempDirectory(
     if (tempDir) {
       removeTempDirectory(tempDir);
     }
-    throw sqliteSnapshotStagingError(stagingRoot, error);
+    throw sqliteSnapshotStagingError(stagingRoot, error, !tempDir);
   }
 }
 
@@ -415,7 +415,7 @@ async function createSqliteSnapshotStagingDirectory(): Promise<string> {
   try {
     return await createPrivateSqliteTempDirectory(stagingRoot, SQLITE_SNAPSHOT_STAGING_PREFIX);
   } catch (error) {
-    throw sqliteSnapshotStagingError(stagingRoot, error);
+    throw sqliteSnapshotStagingError(stagingRoot, error, true);
   }
 }
 
