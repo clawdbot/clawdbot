@@ -526,6 +526,20 @@ describe("cli json stdout contract", () => {
       tty: true,
     },
     {
+      name: "trajectory export invalid explicit store",
+      args: [
+        "sessions",
+        "export-trajectory",
+        "--session-key",
+        "agent:main:trajectory-process",
+        "--store",
+        "$MISSING_STORE",
+        "--json",
+      ],
+      message:
+        "Session store target does not exist: $MISSING_STORE. Pass a selector whose resolved SQLite target exists.",
+    },
+    {
       name: "trajectory exporter operational failure",
       args: [
         "sessions",
@@ -622,7 +636,15 @@ describe("cli json stdout contract", () => {
               : []),
           ].join("\n"),
         ).toString("base64");
-        const args = testCase.args.map((arg) => (arg === "$TRAJECTORY_WORKSPACE" ? tempHome : arg));
+        const missingStore = path.join(tempHome, "missing-store.sqlite");
+        const args = testCase.args.map((arg) =>
+          arg === "$TRAJECTORY_WORKSPACE"
+            ? tempHome
+            : arg === "$MISSING_STORE"
+              ? missingStore
+              : arg,
+        );
+        const message = testCase.message.replace("$MISSING_STORE", missingStore);
         const result = runBuiltCli(tempHome, args, {
           NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
           OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
@@ -640,11 +662,11 @@ describe("cli json stdout contract", () => {
         } else {
           expect(JSON.parse(result.stdout)).toEqual({
             ok: false,
-            error: { type: "cli_error", message: testCase.message },
+            error: { type: "cli_error", message },
           });
         }
-        expect(result.stderr).toContain(testCase.message);
-        expect(result.stderr.split(testCase.message)).toHaveLength(2);
+        expect(result.stderr).toContain(message);
+        expect(result.stderr.split(message)).toHaveLength(2);
         expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
         if ("tty" in testCase) {
           expect(result.stderr).toContain("\u001B[?25h");

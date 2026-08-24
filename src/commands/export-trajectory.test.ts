@@ -44,7 +44,7 @@ vi.mock("../config/sessions/paths.js", async (importOriginal) => {
 });
 
 vi.mock("./session-store-targets.js", () => ({
-  resolveExplicitSessionStorePathOrExit: mocks.resolveExplicitStorePath,
+  resolveExplicitSessionStorePath: mocks.resolveExplicitStorePath,
 }));
 
 function createRuntime(): RuntimeEnv {
@@ -202,6 +202,30 @@ describe("exportTrajectoryCommand", () => {
     expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
   });
 
+  it("routes invalid explicit stores through the command failure owner", async () => {
+    const runtime = createRuntime();
+    mocks.resolveStorePath.mockReturnValue("/tmp/missing.sqlite");
+    mocks.resolveExplicitStorePath.mockImplementationOnce(() => {
+      throw new Error("Session store target does not exist: /tmp/missing.sqlite");
+    });
+
+    await expectTrajectoryFailure(
+      exportTrajectoryCommand(
+        {
+          sessionKey: "agent:main:telegram:direct:123",
+          store: "/tmp/missing.sqlite",
+          json: true,
+        },
+        runtime,
+      ),
+      runtime,
+      "Session store target does not exist: /tmp/missing.sqlite",
+    );
+
+    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
+  });
+
   it("keeps a configured explicit agent as the session store owner", async () => {
     const runtime = createRuntime();
     mocks.getRuntimeConfig.mockReturnValue({
@@ -250,8 +274,6 @@ describe("exportTrajectoryCommand", () => {
         storePath: resolvedStore,
         inputStorePath: store,
         agentId: "work",
-        runtime,
-        json: undefined,
       });
       expect(mocks.loadSessionEntryReadOnly).toHaveBeenCalledWith({
         agentId: "work",
