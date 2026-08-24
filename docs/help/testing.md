@@ -281,11 +281,15 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`,
     `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
     `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the run.
-    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` selects the Telegram QA scenario to
-    sample; the supported RTT target is `channel-canary`. The package runner
-    promotes that portable canary once to the first position, making
-    canary+RTT the preflight before the remaining taxonomy-backed fail-fast
-    release scenarios.
+    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts zero or exactly one canonical
+    Telegram QA scenario id. When omitted, the normal lane samples
+    `channel-canary`; focused non-RTT scenario runs stay probe-free. An explicit
+    RTT scenario is included in scenario selection automatically, so callers do
+    not need to repeat it in `OPENCLAW_NPM_TELEGRAM_SCENARIOS`. Multiple ids
+    fail immediately, while unknown or inapplicable ids fail canonical scenario
+    validation. The package runner promotes the selected RTT scenario once to
+    the first position before the remaining taxonomy-backed fail-fast release
+    scenarios.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
