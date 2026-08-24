@@ -17,3 +17,12 @@
 - `ui/src/e2e/session-management.groups.e2e.test.ts` composes candidate hover-control pointer-event assertions with upstream command-palette/catalog/search coverage; neither intent replaces the other.
 - Upstream moves the bounded raw-tail scan into `src/gateway/session-history-tail.ts` and shares it across chat history, SSE, and HTTP snapshot owners. Both incremental and imported projections retain `includeCommentaryFallbacks: true`; candidate continuation code does not modify these owners, so transcript continuation consumers remain compatible with the centralized projection.
 - The only upstream `src/skills` change is `src/skills/discovery/chat-command-invocation.ts`; it is upstream-only and must absorb byte-exact. Candidate `src/skills` and `r: skill` label deltas remain forbidden.
+
+## §2 — merge and preservation gates
+
+- Merge checkpoint `4ae73a4b969639a7182a990dc0264849ff86656b` has first parent `fbcaef0b9ab6f615bcf4c5206a8ed5e7232bdab5` and exact frozen-upstream second parent `0d4e369b1c3df59cd77b59bba87aac17884742b1`.
+- Gate 2 passed all 40 primitive-core invariants: zero failures, zero upstream projections, three protected tombstones, and zero empty patterns.
+- Canonical-19d Gate 2.7 examined 945 files while this journal is tracked: 639 GENUINE, 300 SAFE-NEW, the canonical six MIXED-CLOBBER rows, and zero FROZEN-STALE. Journal removal must return the terminal count to 944 files and 299 SAFE-NEW.
+- The six rows retain their reviewed dispositions: descendant-wake role-policy rehome (22), compaction-hook exact core (14), closed Code Mode trust rehome (2), nested lifecycle provenance rehome (1), message-tool `withTestDir` (2), and Telegram QA `withTestDir` (2). Latest upstream touched none.
+- Gate 2.5 enumerated 47 upstream-touched test/support paths and two candidate-feature intersections: install-sh and UI session-management groups. Both files passed, 152/152 tests.
+- Focused history, cron, HTTP, continuation reconciliation, commentary, and shutdown proof passed 276 tests. Five commentary stream-phase assertions failed identically on exact reviewed parent `9794b4a` in an isolated archive (20 pass, same five fail), and every local owner/dependency byte is unchanged by the third absorb; this is a proven pre-existing candidate baseline, not third-cycle drift.
