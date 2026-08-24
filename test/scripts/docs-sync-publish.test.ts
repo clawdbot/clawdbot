@@ -34,6 +34,18 @@ function collectPages(entry: unknown, pages: string[] = []): string[] {
   return pages;
 }
 
+function findNestedGroup(pages: unknown, groupName: string) {
+  if (!Array.isArray(pages)) {
+    return undefined;
+  }
+  return pages.find((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+    return "group" in entry && entry.group === groupName;
+  });
+}
+
 describe("docs-sync-publish", () => {
   it("materializes the public docs map only in the publish tree", () => {
     const targetDocsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-map-publish-"));
@@ -128,10 +140,12 @@ describe("docs-sync-publish", () => {
       (entry) => entry.language === "zh-Hans",
     );
     const german = config.navigation.languages.find((entry) => entry.language === "de");
+    const turkish = config.navigation.languages.find((entry) => entry.language === "tr");
 
     expect(english).toBeDefined();
     expect(simplifiedChinese).toBeDefined();
     expect(german).toBeDefined();
+    expect(turkish).toBeDefined();
     expect(english!.tabs.slice(-4).map((tab) => tab.tab)).toEqual([
       "Gateway & Ops",
       "Reference",
@@ -199,6 +213,44 @@ describe("docs-sync-publish", () => {
     expect(collectPages(german)).toHaveLength(collectPages(englishWithoutClawHub).length);
     expect(german!.tabs[0]?.tab).toBe("Loslegen");
     expect(german!.tabs[0]?.groups?.[0]?.group).toBe("Überblick");
+
+    expect(turkish!.tabs[0]?.tab).toBe("Başlangıç");
+    expect(turkish!.tabs[0]?.groups?.[0]?.group).toBe("Genel bakış");
+    const nestedTurkishCases = [
+      {
+        child: "Geçiş",
+        parent: "Bakım",
+        page: "tr/install/migrating",
+        tab: "Kurulum",
+      },
+      {
+        child: "Web tarayıcısı",
+        parent: "Araçlar",
+        page: "tr/tools/browser",
+        tab: "Yetenekler",
+      },
+      {
+        child: "Yapılandırma",
+        parent: "Gateway",
+        page: "tr/gateway/configuration",
+        tab: "Gateway ve operasyonlar",
+      },
+      {
+        child: "Gateway ve hizmet",
+        parent: "CLI komutları",
+        page: "tr/cli/backup",
+        tab: "Başvuru",
+      },
+    ];
+    for (const testCase of nestedTurkishCases) {
+      const tab = turkish!.tabs.find((entry) => entry.tab === testCase.tab);
+      const parent = tab?.groups?.find((entry) => entry.group === testCase.parent);
+      expect(findNestedGroup(parent?.pages, testCase.child)).toEqual(
+        expect.objectContaining({
+          pages: expect.arrayContaining([testCase.page]),
+        }),
+      );
+    }
 
     for (const locale of config.navigation.languages.filter(
       (entry) => entry.language !== "en" && entry.language !== "zh-Hans",

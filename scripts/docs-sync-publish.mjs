@@ -479,16 +479,46 @@ export function applyLocaleNavLabelOverlay(fullNav, labelOverlay) {
     if (!Array.isArray(tab.groups) || !Array.isArray(overlayTab.groups)) {
       continue;
     }
-    const matchedGroupIndexes = new Set();
-    for (const overlayGroup of overlayTab.groups) {
-      const groupIndex = findBestNavMatchIndex(tab.groups, overlayGroup, matchedGroupIndexes);
-      if (groupIndex >= 0 && typeof overlayGroup.group === "string") {
-        tab.groups[groupIndex].group = overlayGroup.group;
-        matchedGroupIndexes.add(groupIndex);
-      }
-    }
+    applyNavGroupLabelOverlay(tab.groups, overlayTab.groups);
   }
   return composed;
+}
+
+function isNavGroup(entry) {
+  return (
+    Boolean(entry) &&
+    typeof entry === "object" &&
+    !Array.isArray(entry) &&
+    typeof entry.group === "string"
+  );
+}
+
+function applyNavGroupLabelOverlay(candidateGroups, overlayGroups) {
+  if (!Array.isArray(candidateGroups) || !Array.isArray(overlayGroups)) {
+    return;
+  }
+
+  const matchedGroupIndexes = new Set();
+  for (const overlayGroup of overlayGroups) {
+    const groupIndex = findBestNavMatchIndex(candidateGroups, overlayGroup, matchedGroupIndexes);
+    if (groupIndex < 0) {
+      continue;
+    }
+
+    const candidateGroup = candidateGroups[groupIndex];
+    if (typeof overlayGroup.group === "string") {
+      candidateGroup.group = overlayGroup.group;
+    }
+    matchedGroupIndexes.add(groupIndex);
+
+    const candidateNestedGroups = Array.isArray(candidateGroup.pages)
+      ? candidateGroup.pages.filter(isNavGroup)
+      : [];
+    const overlayNestedGroups = Array.isArray(overlayGroup.pages)
+      ? overlayGroup.pages.filter(isNavGroup)
+      : [];
+    applyNavGroupLabelOverlay(candidateNestedGroups, overlayNestedGroups);
+  }
 }
 
 function composeLocaleNav(locale, englishNav) {

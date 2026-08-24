@@ -27,7 +27,13 @@
         },
         {
           "group": "Bakım",
-          "pages": ["tr/install/backups"]
+          "pages": [
+            "tr/install/backups",
+            {
+              "group": "Geçiş",
+              "pages": ["tr/install/migrating"]
+            }
+          ]
         },
         {
           "group": "Kapsayıcılar",
@@ -77,7 +83,13 @@
         },
         {
           "group": "Oturumlar ve bellek",
-          "pages": ["tr/concepts/main-session"]
+          "pages": [
+            "tr/concepts/main-session",
+            {
+              "group": "Bellek",
+              "pages": ["tr/concepts/memory"]
+            }
+          ]
         },
         {
           "group": "Çoklu ajan",
@@ -118,7 +130,17 @@
         },
         {
           "group": "Araçlar",
-          "pages": ["tr/tools/apply-patch"]
+          "pages": [
+            "tr/tools/apply-patch",
+            {
+              "group": "Web tarayıcısı",
+              "pages": ["tr/tools/browser"]
+            },
+            {
+              "group": "Web araçları",
+              "pages": ["tr/tools/web-fetch"]
+            }
+          ]
         },
         {
           "group": "Ajan koordinasyonu",
@@ -152,7 +174,21 @@
         },
         {
           "group": "macOS eşlikçi uygulaması",
-          "pages": ["tr/platforms/mac/dev-setup"]
+          "pages": [
+            "tr/platforms/mac/dev-setup",
+            {
+              "group": "Kurulum",
+              "pages": ["tr/platforms/mac/dev-setup"]
+            },
+            {
+              "group": "Çalışma zamanı",
+              "pages": ["tr/platforms/mac/bundled-gateway"]
+            },
+            {
+              "group": "Özellikler",
+              "pages": ["tr/platforms/mac/voicewake"]
+            }
+          ]
         }
       ]
     },
@@ -161,7 +197,37 @@
       "groups": [
         {
           "group": "Gateway",
-          "pages": ["tr/gateway/index"]
+          "pages": [
+            "tr/gateway/index",
+            {
+              "group": "Yapılandırma",
+              "pages": ["tr/gateway/configuration"]
+            },
+            {
+              "group": "Kimlik doğrulama ve gizli bilgiler",
+              "pages": ["tr/gateway/authentication"]
+            },
+            {
+              "group": "Sağlık ve tanılama",
+              "pages": ["tr/gateway/health"]
+            },
+            {
+              "group": "Ölçeklendirme ve operasyonlar",
+              "pages": ["tr/gateway/gateway-lock"]
+            },
+            {
+              "group": "Güvenlik ve sandbox",
+              "pages": ["tr/gateway/security/index"]
+            },
+            {
+              "group": "Protokoller ve API'ler",
+              "pages": ["tr/gateway/protocol"]
+            },
+            {
+              "group": "Ağ ve keşif",
+              "pages": ["tr/network"]
+            }
+          ]
         },
         {
           "group": "Uzaktan erişim",
@@ -173,7 +239,17 @@
         },
         {
           "group": "Node'lar ve medya",
-          "pages": ["tr/nodes/index"]
+          "pages": [
+            "tr/nodes/index",
+            {
+              "group": "Medya yetenekleri",
+              "pages": ["tr/nodes/media-understanding"]
+            },
+            {
+              "group": "Node özellikleri",
+              "pages": ["tr/nodes/computer-use"]
+            }
+          ]
         },
         {
           "group": "Web arayüzleri",
@@ -186,7 +262,41 @@
       "groups": [
         {
           "group": "CLI komutları",
-          "pages": ["tr/cli/index"]
+          "pages": [
+            "tr/cli/index",
+            {
+              "group": "Gateway ve hizmet",
+              "pages": ["tr/cli/backup"]
+            },
+            {
+              "group": "Ajanlar ve oturumlar",
+              "pages": ["tr/cli/agent"]
+            },
+            {
+              "group": "Kanallar ve mesajlaşma",
+              "pages": ["tr/cli/channels"]
+            },
+            {
+              "group": "Araçlar ve yürütme",
+              "pages": ["tr/cli/approvals"]
+            },
+            {
+              "group": "Yapılandırma",
+              "pages": ["tr/cli/config"]
+            },
+            {
+              "group": "Pluginler ve Skills",
+              "pages": ["tr/cli/plugins"]
+            },
+            {
+              "group": "Arayüzler",
+              "pages": ["tr/cli/attach"]
+            },
+            {
+              "group": "Yardımcı araçlar",
+              "pages": ["tr/cli/acp"]
+            }
+          ]
         },
         {
           "group": "RPC ve API",

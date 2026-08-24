@@ -166,5 +166,93 @@
   {
     "source": "Tip",
     "target": "İpucu"
+  },
+  {
+    "source": "Migrating",
+    "target": "Geçiş"
+  },
+  {
+    "source": "Memory",
+    "target": "Bellek"
+  },
+  {
+    "source": "Web browser",
+    "target": "Web tarayıcısı"
+  },
+  {
+    "source": "Web tools",
+    "target": "Web araçları"
+  },
+  {
+    "source": "Setup",
+    "target": "Kurulum"
+  },
+  {
+    "source": "Runtime",
+    "target": "Çalışma zamanı"
+  },
+  {
+    "source": "Features",
+    "target": "Özellikler"
+  },
+  {
+    "source": "Authentication and secrets",
+    "target": "Kimlik doğrulama ve gizli bilgiler"
+  },
+  {
+    "source": "Health and diagnostics",
+    "target": "Sağlık ve tanılama"
+  },
+  {
+    "source": "Scaling and operations",
+    "target": "Ölçeklendirme ve operasyonlar"
+  },
+  {
+    "source": "Security and sandboxing",
+    "target": "Güvenlik ve sandbox"
+  },
+  {
+    "source": "Protocols and APIs",
+    "target": "Protokoller ve API'ler"
+  },
+  {
+    "source": "Networking and discovery",
+    "target": "Ağ ve keşif"
+  },
+  {
+    "source": "Media capabilities",
+    "target": "Medya yetenekleri"
+  },
+  {
+    "source": "Node features",
+    "target": "Node özellikleri"
+  },
+  {
+    "source": "Gateway and service",
+    "target": "Gateway ve hizmet"
+  },
+  {
+    "source": "Agents and sessions",
+    "target": "Ajanlar ve oturumlar"
+  },
+  {
+    "source": "Channels and messaging",
+    "target": "Kanallar ve mesajlaşma"
+  },
+  {
+    "source": "Tools and execution",
+    "target": "Araçlar ve yürütme"
+  },
+  {
+    "source": "Plugins and skills",
+    "target": "Pluginler ve Skills"
+  },
+  {
+    "source": "Interfaces",
+    "target": "Arayüzler"
+  },
+  {
+    "source": "Utility",
+    "target": "Yardımcı araçlar"
   }
 ]
