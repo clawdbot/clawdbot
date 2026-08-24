@@ -7,7 +7,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import { t } from "../../i18n/index.ts";
 
@@ -215,7 +215,9 @@ async function evaluateInBrowser<T>(
 
 /** True when the failure is the config-gated `browser.evaluateEnabled=false` rejection. */
 export function isBrowserEvaluateDisabledError(err: unknown): boolean {
-  return err instanceof Error && err.message.includes("evaluateEnabled=false");
+  return (
+    err instanceof GatewayRequestError && asRecord(err.details)?.code === "ACT_EVALUATE_DISABLED"
+  );
 }
 
 export async function scrollBrowserBy(

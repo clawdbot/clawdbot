@@ -3,7 +3,11 @@ import type { ResolvedBrowserProfile } from "./browser/config.js";
 /**
  * Browser node-proxy response envelope shared by the node host and Gateway.
  */
-import { parseBrowserErrorPayload, type BrowserNoDisplayErrorMetadata } from "./browser/errors.js";
+import {
+  parseBrowserErrorPayload,
+  type BrowserActErrorCode,
+  type BrowserNoDisplayErrorMetadata,
+} from "./browser/errors.js";
 
 /** Additive opt-in for structured browser route errors over node.invoke. */
 export const BROWSER_PROXY_ERROR_ENVELOPE = "browser-v1" as const;
@@ -105,8 +109,8 @@ export function visitBrowserProxyFilePaths(
 }
 
 type BrowserProxyErrorBody =
-  | { error: string }
-  | ({ error: string } & BrowserNoDisplayErrorMetadata);
+  | { error: string; code?: BrowserActErrorCode }
+  | ({ error: string; code?: BrowserActErrorCode } & BrowserNoDisplayErrorMetadata);
 
 export type BrowserProxySuccess = {
   result: unknown;

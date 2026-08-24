@@ -1,6 +1,7 @@
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
@@ -618,7 +619,11 @@ describe("BrowserPanelController capture and input ownership", () => {
 
   it("preserves the localized disabled-evaluation inspection outcome", async () => {
     const { client } = createBrowserClient(async () => {
-      throw new Error("browser evaluateEnabled=false");
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "evaluation disabled",
+        details: { code: "ACT_EVALUATE_DISABLED" },
+      });
     });
     const controller = createBrowserPanelTestController(client, "tab-a");
     controller.setMode("inspect");
