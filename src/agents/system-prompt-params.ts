@@ -67,15 +67,6 @@ export function buildSystemPromptParams(params: {
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
   const userDate = formatDateStamp(Date.now(), userTimezone);
   const { runId } = parseCronRunScopeSuffix(params.runtime.sessionKey);
-  const agentName =
-    params.config && params.agentId
-      ? truncateUtf16Safe(
-          sanitizeForPromptLiteral(
-            resolveAgentIdentity(params.config, params.agentId)?.name ?? "",
-          ).trim(),
-          MAX_RUNTIME_AGENT_NAME_CHARS,
-        ).trimEnd()
-      : "";
   // Exact isolated-cron URLs expose a volatile run id before prompt rendering can normalize it,
   // defeating byte-identical prompt-prefix reuse across runs of the same job.
   const sessionUrl =
@@ -89,7 +80,10 @@ export function buildSystemPromptParams(params: {
   return {
     runtimeInfo: {
       agentId: params.agentId,
-      agentName: agentName && agentName !== params.agentId ? agentName : undefined,
+      agentName:
+        params.config && params.agentId
+          ? resolveRuntimeAgentName(params.config, params.agentId)
+          : undefined,
       ...params.runtime,
       // Published links must be externally usable and bounded before entering model context.
       sessionUrl:
@@ -103,6 +97,12 @@ export function buildSystemPromptParams(params: {
     userTimezone,
     userDate,
   };
+}
+
+export function resolveRuntimeAgentName(config: OpenClawConfig, agentId: string) {
+  const name = sanitizeForPromptLiteral(resolveAgentIdentity(config, agentId)?.name ?? "").trim();
+  const bounded = truncateUtf16Safe(name, MAX_RUNTIME_AGENT_NAME_CHARS).trimEnd();
+  return bounded && bounded !== agentId ? bounded : undefined;
 }
 
 export function resolveSystemPromptRepoRoot(params: {
