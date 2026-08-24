@@ -105,6 +105,12 @@ describe("Discord forum outbound payload ownership", () => {
     const onDeliveryResult = vi.fn();
     const sendPayload = requireDiscordSendPayload();
     const voiceError = params.voiceError;
+    const sendDiscord: typeof sendMessageDiscord = async (target, text, options) =>
+      await sendMessageDiscord(target, text, {
+        ...options,
+        rest,
+        token: "discord-fixture-token",
+      });
     const run = () =>
       sendPayload({
         cfg: { channels: { discord: { token: "discord-fixture-token" } } },
@@ -121,12 +127,7 @@ describe("Discord forum outbound payload ownership", () => {
         mediaLocalRoots: mediaAccess.localRoots,
         mediaReadFile: readFile,
         deps: {
-          discord: async (target, text, options) =>
-            await sendMessageDiscord(target, text, {
-              ...options,
-              rest,
-              token: "discord-fixture-token",
-            }),
+          discord: sendDiscord,
           ...(voiceError
             ? {
                 discordVoice: async () => {
