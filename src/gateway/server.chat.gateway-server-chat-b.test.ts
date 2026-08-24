@@ -53,6 +53,7 @@ import {
   createTextTranscriptEvent,
 } from "./server-chat.agent-events.test-helpers.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
+import { createGatewayChatMetadataRuntime } from "./server-methods/chat-metadata-runtime.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -1322,7 +1323,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.startup returns chat history with the initial agents list and provenance", async () => {
+  test("chat.startup returns warm metadata while agents.list owns roster provenance", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await writeGatewayConfig({
         agents: {
@@ -1361,18 +1362,10 @@ describe("gateway server chat", () => {
       await writeMainSessionTranscript([
         createTextTranscriptEvent("user", "startup hydrate", { timestamp: updatedAt }),
       ]);
+      const preparedMetadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
+      expect(preparedMetadata.ok).toBe(true);
 
       const startup = await rpcReq<{
-        agentsList?: {
-          agents?: Array<{
-            id?: string;
-            createdVia?: string;
-            creatorAgentId?: string | null;
-            createdAt?: number;
-          }>;
-          defaultId?: string | null;
-          mainKey?: string | null;
-        };
         metadata?: {
           commands?: Array<{ name?: string; textAliases?: string[] }>;
           models?: Array<{ id?: string; provider?: string }>;
@@ -1380,14 +1373,24 @@ describe("gateway server chat", () => {
         messages?: unknown[];
         sessionInfo?: { key?: string; sessionId?: string };
       }>(ws, "chat.startup", makeMainSessionParams());
+      const agents = await rpcReq<{
+        agents?: Array<{
+          id?: string;
+          createdVia?: string;
+          creatorAgentId?: string | null;
+          createdAt?: number;
+        }>;
+        defaultId?: string | null;
+        mainKey?: string | null;
+      }>(ws, "agents.list", {});
 
       expect(startup.ok).toBe(true);
-      expect(startup.payload?.agentsList?.defaultId).toBe("main");
-      expect(startup.payload?.agentsList?.mainKey).toBe("main");
-      expect(startup.payload?.agentsList?.agents?.map((agent) => agent.id)).toContain("main");
-      expect(
-        startup.payload?.agentsList?.agents?.find((agent) => agent.id === "research"),
-      ).toMatchObject({
+      expect(startup.payload).not.toHaveProperty("agentsList");
+      expect(agents.ok).toBe(true);
+      expect(agents.payload?.defaultId).toBe("main");
+      expect(agents.payload?.mainKey).toBe("main");
+      expect(agents.payload?.agents?.map((agent) => agent.id)).toContain("main");
+      expect(agents.payload?.agents?.find((agent) => agent.id === "research")).toMatchObject({
         createdVia: "agent",
         creatorAgentId: "main",
         createdAt: 42,
@@ -1492,14 +1495,59 @@ describe("gateway server chat", () => {
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
         | {
-            agentsList?: { agents?: Array<{ id?: string }> };
             metadata?: unknown;
             sessionInfo?: { sessionId?: string };
           }
         | undefined;
       expect(payload?.sessionInfo?.sessionId).toBe("sess-main");
-      expect(payload?.agentsList?.agents?.map((agent) => agent.id)).toContain("main");
       expect(payload?.metadata).toBeUndefined();
+    } finally {
+      testState.sessionStorePath = undefined;
+    }
+  });
+
+  test("chat.startup returns a profile-neutral transcript while metadata replacement is pending", async () => {
+    openDirectChatSession();
+    try {
+      await writeStoredMainSession();
+      await writeMainSessionTranscript([
+        createTextTranscriptEvent("user", "paint without metadata"),
+      ]);
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+      const metadataRuntime = createGatewayChatMetadataRuntime({
+        getConfig: () => ({}),
+        getContext: () => context,
+        log: context.logGateway,
+      });
+      context.readChatStartupProjection = metadataRuntime.readStartup;
+      metadataRuntime.invalidate();
+
+      const startup = callDirectChat("chat.startup", {
+        id: "startup-neutral-pending-metadata",
+        params: makeMainSessionParams(),
+        respond: captureChatResponse(responses),
+        context,
+      });
+
+      try {
+        await vi.waitFor(() => expect(responses).toHaveLength(1), FAST_WAIT_OPTS);
+        expect(responses[0]).toMatchObject({
+          ok: true,
+          payload: {
+            messages: [
+              expect.objectContaining({
+                role: "user",
+                content: [{ type: "text", text: "paint without metadata" }],
+              }),
+            ],
+          },
+        });
+        expect(responses[0]?.payload).not.toHaveProperty("metadata");
+      } finally {
+        metadataRuntime.fail(new Error("test metadata replacement stopped"));
+        await startup;
+      }
     } finally {
       testState.sessionStorePath = undefined;
     }
@@ -1722,7 +1770,6 @@ describe("gateway server chat", () => {
           const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
           const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
             await import("./server-methods/models-list-result.js");
-          const { listAgentsForGateway } = await import("./session-utils.js");
           const projectionByKey = new Map<
             string,
             Promise<{
@@ -1793,10 +1840,9 @@ describe("gateway server chat", () => {
                 ...catalogSnapshot,
               }),
             getRuntimeConfig: () => persistedConfig,
-            readChatStartupProjection: vi.fn(async ({ agentId, sessionEntry, includeSystem }) => {
-              const [mainProjection, workProjection, sessionProjection] = await Promise.all([
-                projectAgent(context, "main"),
-                projectAgent(context, "work"),
+            readChatStartupProjection: vi.fn(async ({ agentId, sessionEntry }) => {
+              const [neutralProjection, sessionProjection] = await Promise.all([
+                projectAgent(context, agentId),
                 projectAgent(context, agentId, sessionEntry),
               ]);
               preparedThinkingPolicy.fallback = sessionProjection.modelCatalog.some(
@@ -1807,14 +1853,7 @@ describe("gateway server chat", () => {
               return {
                 metadata: sessionProjection.metadata,
                 sessionModelCatalog: sessionProjection.modelCatalog,
-                defaultModelCatalog: mainProjection.modelCatalog,
-                agentsList: listAgentsForGateway(persistedConfig, mainProjection.modelCatalog, {
-                  modelCatalogByAgentId: new Map([
-                    ["main", mainProjection.modelCatalog],
-                    ["work", workProjection.modelCatalog],
-                  ]),
-                  includeSystem,
-                }),
+                defaultModelCatalog: neutralProjection.modelCatalog,
               };
             }),
           });
@@ -1846,9 +1885,6 @@ describe("gateway server chat", () => {
                 metadata?: { models?: unknown[] };
                 sessionInfo?: { thinkingLevels?: Array<{ id?: string }> };
                 defaults?: { thinkingLevels?: Array<{ id?: string }> };
-                agentsList?: {
-                  agents?: Array<{ id?: string; thinkingLevels?: Array<{ id?: string }> }>;
-                };
               }
             | undefined;
           expect(payload?.metadata?.models).toEqual([
@@ -1869,10 +1905,6 @@ describe("gateway server chat", () => {
           ]);
           expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
           expect(payload?.defaults?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
-          const mainAgent = payload?.agentsList?.agents?.find((agent) => agent.id === "main");
-          const workAgent = payload?.agentsList?.agents?.find((agent) => agent.id === "work");
-          expect(mainAgent?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
-          expect(workAgent?.thinkingLevels?.map((level) => level.id)).toContain("high");
           const serialized = JSON.stringify(responses[0]?.payload);
           expect(serialized).not.toContain("private-route-token");
           expect(serialized).not.toContain("platform-api-key");
@@ -1949,6 +1981,8 @@ describe("gateway server chat", () => {
         },
       });
       await connectOk(ws);
+      const preparedMetadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
+      expect(preparedMetadata.ok).toBe(true);
 
       const startup = await rpcReq<{
         metadata?: { models?: Array<{ id?: string; provider?: string }> };
@@ -2014,7 +2048,7 @@ describe("gateway server chat", () => {
       } as unknown as OpenClawConfig;
       await writeGatewayConfig(config);
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-      const readChatMetadata = vi.fn(async () => ({
+      const metadata = {
         models: [
           {
             id: "MiniMax-M2.7-highspeed",
@@ -2023,6 +2057,11 @@ describe("gateway server chat", () => {
           },
         ],
         swarmEnabled: false,
+      };
+      const readChatStartupProjection = vi.fn(async () => ({
+        metadata,
+        sessionModelCatalog: metadata.models,
+        defaultModelCatalog: metadata.models,
       }));
       const context = createDirectChatContext({
         loadGatewayModelCatalogSnapshot: vi
@@ -2053,7 +2092,7 @@ describe("gateway server chat", () => {
             };
           }),
         getRuntimeConfig: () => config,
-        readChatMetadata,
+        readChatStartupProjection,
       });
       await callDirectChat("chat.startup", {
         id: "startup-agent-scoped-metadata",
@@ -2063,12 +2102,13 @@ describe("gateway server chat", () => {
       });
 
       expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-      expect(readChatMetadata).toHaveBeenCalledWith(
+      expect(readChatStartupProjection).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "work",
           sessionEntry: expect.objectContaining({ sessionId: "sess-work" }),
         }),
       );
+      expect(context.readChatMetadata).not.toHaveBeenCalled();
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as

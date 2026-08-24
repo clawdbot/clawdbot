@@ -407,27 +407,16 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       const startupClient = snapshot.client;
       const startupGeneration = this.connectionGeneration;
       const startupSessionKey = state.sessionKey;
-      const agentsListBeforeStartup = this.context.agents.state.agentsList;
-      const rosterRevisionBeforeStartup = this.context.agents.state.listRevision;
       const clientIsCurrent = () =>
         this.connectionGeneration === startupGeneration &&
         this.connectedClient === startupClient &&
         state.client === startupClient &&
         state.connected;
-      state.onAgentsList = (agentsList, client) => {
-        const ownsRoster =
-          clientIsCurrent() &&
-          this.context.agents.adoptList(agentsList, client, rosterRevisionBeforeStartup);
-        return ownsRoster;
-      };
       const finishStartup = async () => {
         if (!clientIsCurrent()) {
           return;
         }
-        let agentsList = this.context.agents.state.agentsList;
-        if (agentsList === agentsListBeforeStartup) {
-          agentsList = await this.context.agents.ensureList();
-        }
+        const agentsList = await this.context.agents.ensureList();
         if (!clientIsCurrent()) {
           return;
         }
@@ -457,9 +446,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       });
       this.deferSessionHydrationUntilTranscript(startupSessionKey, historyRefresh);
       void historyRefresh.finally(() => {
-        if (clientIsCurrent()) {
-          state.onAgentsList = undefined;
-        }
         void finishStartup();
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());

@@ -48,7 +48,6 @@ export type ChatState = {
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
-  onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => boolean;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;
   agentsList?: ChatAgentsListSnapshot | null;

@@ -1,11 +1,6 @@
 // Read-side chat handlers own history projection, startup metadata, and message lookup.
 import {
-  GATEWAY_CLIENT_CAPS,
-  hasGatewayClientCap,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   ErrorCodes,
-  type AgentsListResult,
   errorShape,
   validateChatHistoryParams,
   validateChatMetadataParams,
@@ -37,7 +32,6 @@ import {
   getSessionDefaults,
   loadGatewaySessionEntryReadOnly,
   loadGatewaySessionRow,
-  listAgentsForGateway,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { prepareSessionWorkspaceIcon } from "../workspace-icon-http.js";
@@ -56,9 +50,7 @@ import {
   readChatHistoryPage,
   readChatHistoryMessageSeq,
 } from "./chat-history-pages.js";
-import type { ChatMetadataResult } from "./chat-metadata-runtime.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
-import type { ChatStartupProjectionResult } from "./chat-startup-projection-contract.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import {
   loadOptionalServerMethodModelCatalogSnapshot,
@@ -165,14 +157,9 @@ async function handleChatHistoryRequest({
   params,
   respond,
   context,
-  client,
   method,
-  includeAgentsList,
-  includeMetadata,
 }: GatewayRequestHandlerOptions & {
   method: ChatHistoryMethod;
-  includeAgentsList?: boolean;
-  includeMetadata?: boolean;
 }) {
   if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
     return;
@@ -314,58 +301,28 @@ async function handleChatHistoryRequest({
           return load;
         })()
       : Promise.resolve(undefined);
-  const startupProjectionsPromise =
-    method === "chat.startup"
-      ? (() => {
-          const includeSystem = hasGatewayClientCap(
-            client?.connect.caps,
-            GATEWAY_CLIENT_CAPS.AGENT_KIND,
+  const readStartupProjection = () =>
+    measureDiagnosticsTimelineSpan(
+      `gateway.${method}.startup_projection`,
+      async () => {
+        try {
+          return await context.readChatStartupProjection?.({
+            agentId: sessionAgentId,
+            sessionEntry: entry,
+          });
+        } catch (error) {
+          context.logGateway.debug(
+            `chat.startup continuing without prepared startup projection: ${formatErrorMessage(error)}`,
           );
-          return measureDiagnosticsTimelineSpan(
-            `gateway.${method}.startup_projections`,
-            async () => {
-              const projection = context.readChatStartupProjection
-                ? await context
-                    .readChatStartupProjection({
-                      agentId: sessionAgentId,
-                      sessionEntry: entry,
-                      includeSystem,
-                    })
-                    .catch((error: unknown) => {
-                      context.logGateway.debug(
-                        `chat.startup continuing without prepared startup projection: ${formatErrorMessage(error)}`,
-                      );
-                      return undefined;
-                    })
-                : undefined;
-              const metadata = includeMetadata
-                ? (projection?.metadata ??
-                  (await context
-                    .readChatMetadata({
-                      agentId: sessionAgentId,
-                      sessionEntry: entry,
-                    })
-                    .catch((error: unknown) => {
-                      context.logGateway.debug(
-                        `chat.startup continuing without metadata: ${formatErrorMessage(error)}`,
-                      );
-                      return undefined;
-                    })))
-                : undefined;
-              const agentsList = includeAgentsList
-                ? (projection?.agentsList ??
-                  listAgentsForGateway(cfg, undefined, { includeSystem }))
-                : undefined;
-              return { agentsList, projection, metadata };
-            },
-            {
-              config: cfg,
-              phase: method,
-              attributes: { agentId: sessionAgentId, includeSystem },
-            },
-          );
-        })()
-      : Promise.resolve(undefined);
+          return undefined;
+        }
+      },
+      { config: cfg, phase: method, attributes: { agentId: sessionAgentId } },
+    );
+  const startupProjectionPromise =
+    method === "chat.startup" && entry?.authProfileOverride?.trim()
+      ? readStartupProjection()
+      : undefined;
   const sessionId = requestedSessionId ?? entry?.sessionId;
   const historyEntry =
     requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
@@ -466,10 +423,11 @@ async function handleChatHistoryRequest({
   const catalogOwnedBySessionAgent = modelCatalogSnapshot?.agentId === sessionAgentId;
   const modelCatalog = catalogOwnedBySessionAgent ? modelCatalogSnapshot.entries : undefined;
   const compatibilityOwnerAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
-  const startupProjections = await startupProjectionsPromise;
-  const startupProjection: ChatStartupProjectionResult | undefined = startupProjections?.projection;
-  const startupMetadata: ChatMetadataResult | undefined = startupProjections?.metadata;
-  const startupAgentsList: AgentsListResult | undefined = startupProjections?.agentsList;
+  const startupProjection =
+    method === "chat.startup"
+      ? await (startupProjectionPromise ?? readStartupProjection())
+      : undefined;
+  const startupMetadata = startupProjection?.metadata;
   const sessionModelCatalog = startupProjection?.sessionModelCatalog ?? modelCatalog;
   const defaultModelCatalog = startupProjection?.defaultModelCatalog ?? modelCatalog;
   const sessionInfo = measureDiagnosticsTimelineSpanSync(
@@ -588,7 +546,6 @@ async function handleChatHistoryRequest({
       messages: delta.messages,
       deltaCursor: delta.deltaCursor,
       sessionInfo,
-      ...(includeAgentsList && startupAgentsList ? { agentsList: startupAgentsList } : {}),
       ...(startupMetadata ? { metadata: startupMetadata } : {}),
     });
     return;
@@ -612,7 +569,6 @@ async function handleChatHistoryRequest({
     toolOverrides: entry?.toolOverrides,
     verboseLevel,
     ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
-    ...(includeAgentsList && startupAgentsList ? { agentsList: startupAgentsList } : {}),
     ...(startupMetadata ? { metadata: startupMetadata } : {}),
   };
   respond(true, payload);
@@ -623,12 +579,7 @@ export const chatHistoryHandlers: GatewayRequestHandlers = {
     await handleChatHistoryRequest({ ...opts, method: "chat.history" });
   },
   "chat.startup": async (opts) => {
-    await handleChatHistoryRequest({
-      ...opts,
-      method: "chat.startup",
-      includeAgentsList: true,
-      includeMetadata: true,
-    });
+    await handleChatHistoryRequest({ ...opts, method: "chat.startup" });
   },
   "chat.metadata": handleChatMetadataRequest,
 };

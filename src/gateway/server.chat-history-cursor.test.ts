@@ -483,7 +483,11 @@ describe("chat.history cursor catch-up", () => {
 
   test("chat.startup returns startup projections with a delta", async () => {
     const { context, storePath } = await createCursorSession();
-    context.readChatMetadata = async () => ({}) as never;
+    context.readChatStartupProjection = async () => ({
+      metadata: { swarmEnabled: false },
+      sessionModelCatalog: [],
+      defaultModelCatalog: [],
+    });
     const page = await callChat<{ deltaCursor?: string }>(context, "chat.startup");
     await appendTranscriptMessage(currentScope(storePath), {
       eventId: "startup-append",
@@ -491,7 +495,6 @@ describe("chat.history cursor catch-up", () => {
       message: { role: "assistant", content: "startup delta", timestamp: 2 },
     });
     const delta = await callChat<{
-      agentsList?: unknown;
       kind?: string;
       messages?: unknown[];
       metadata?: unknown;
@@ -503,9 +506,9 @@ describe("chat.history cursor catch-up", () => {
         kind: "delta",
         messages: [expect.any(Object)],
         sessionInfo: expect.any(Object),
-        agentsList: expect.any(Object),
         metadata: expect.any(Object),
       },
     });
+    expect(delta.payload).not.toHaveProperty("agentsList");
   });
 });

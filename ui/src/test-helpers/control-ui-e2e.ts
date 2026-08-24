@@ -1317,12 +1317,6 @@ function installControlUiMockGateway(
     if (method === "agents.list") {
       return applyAgentsList(value);
     }
-    if (method === "chat.startup" && hasOwn(value, "agentsList")) {
-      return {
-        ...value,
-        agentsList: applyAgentsList(value.agentsList),
-      };
-    }
     return value;
   }
 
@@ -1793,21 +1787,6 @@ function installControlUiMockGateway(
         };
       case "chat.startup":
         return {
-          agentsList: {
-            agents: [
-              {
-                id: scenario.defaultAgentId,
-                identity: { name: scenario.assistantName },
-                ...(scenario.agentModel ? { model: { primary: scenario.agentModel } } : {}),
-                name: scenario.assistantName,
-                ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
-                workspaceGit: scenario.workspaceGit,
-              },
-            ],
-            defaultId: scenario.defaultAgentId,
-            mainKey: "main",
-            scope: "agent",
-          },
           messages: scenario.historyMessages,
           metadata: {
             models: scenario.models,

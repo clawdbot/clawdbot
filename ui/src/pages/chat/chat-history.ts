@@ -290,7 +290,6 @@ export type ChatHistoryResult = {
   verboseLevel?: string;
   defaults?: GatewaySessionsDefaults;
   sessionInfo?: GatewaySessionRow;
-  agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
   inFlightRun?: {
     runId: string;
@@ -313,7 +312,6 @@ type ChatHistoryDeltaResult = {
   messages: unknown[];
   deltaCursor: string;
   sessionInfo: GatewaySessionRow;
-  agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
 };
 
@@ -1455,9 +1453,6 @@ export function applyChatAgentsList(
   if (!agentsList || state.client !== client || !state.connected) {
     return;
   }
-  if (state.onAgentsList && !state.onAgentsList(agentsList, client)) {
-    return;
-  }
   state.agentsList = agentsList;
   state.agentsError = null;
   const selectedId =
@@ -1565,7 +1560,6 @@ async function loadChatHistoryUncached(
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
       }
-      applyChatAgentsList(state, response.agentsList, client);
       if (Object.hasOwn(response.sessionInfo, "activeLeafEntryId")) {
         state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
       }
@@ -1586,7 +1580,6 @@ async function loadChatHistoryUncached(
         messages: state.chatMessages,
         deltaCursor: response.deltaCursor,
         sessionInfo: response.sessionInfo,
-        ...(response.agentsList ? { agentsList: response.agentsList } : {}),
         ...(response.metadata ? { metadata: response.metadata } : {}),
         sourceCanonicalListRevision: response.sourceCanonicalListRevision,
       };
@@ -1608,7 +1601,6 @@ async function loadChatHistoryUncached(
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const nextPagination = resolveChatHistoryPagination(res);
     const nextSessionId = resolveChatHistorySessionId(res);
-    applyChatAgentsList(state, res.agentsList, client);
     const visibleMessages = visibleChatHistoryMessages(messages);
     const previousTerminalMessages = reconcileAuthoritativeTerminalHistory({
       host: state,
