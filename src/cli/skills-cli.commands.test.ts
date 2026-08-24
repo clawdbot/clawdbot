@@ -102,6 +102,7 @@ const mocks = vi.hoisted(() => {
   return {
     callGatewayMock: vi.fn(),
     loadConfigMock: vi.fn((_options?: unknown) => ({})),
+    readBestEffortConfigMock: vi.fn(async (_options?: unknown) => ({})),
     resolveDefaultAgentIdMock: vi.fn(
       (_configForTest: unknown, _context?: AgentSelectionContext) => "main",
     ),
@@ -138,6 +139,7 @@ const mocks = vi.hoisted(() => {
 const {
   callGatewayMock,
   loadConfigMock,
+  readBestEffortConfigMock,
   resolveDefaultAgentIdMock,
   resolveAgentIdByWorkspacePathMock,
   resolveConfiguredAgentIdMock,
@@ -280,6 +282,7 @@ vi.mock("../utils.js", async (importOriginal) => ({
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: (...args: unknown[]) => mocks.loadConfigMock(...args),
   loadConfig: () => mocks.loadConfigMock(),
+  readBestEffortConfig: async (...args: unknown[]) => mocks.readBestEffortConfigMock(...args),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -360,6 +363,7 @@ describe("skills cli commands", () => {
     runtimeErrors.length = 0;
     callGatewayMock.mockReset();
     loadConfigMock.mockReset();
+    readBestEffortConfigMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentIdByWorkspacePathMock.mockReset();
     resolveConfiguredAgentIdMock.mockReset();
@@ -392,6 +396,7 @@ describe("skills cli commands", () => {
       }),
     );
     loadConfigMock.mockReturnValue({});
+    readBestEffortConfigMock.mockResolvedValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentIdByWorkspacePathMock.mockReturnValue(undefined);
     resolveConfiguredAgentIdMock.mockImplementation((_config, agentId: string) => agentId);
@@ -1903,12 +1908,31 @@ describe("skills cli commands", () => {
   it("keeps non-JSON skills list output on stdout with human-readable formatting", async () => {
     await runCommand(["skills", "list"]);
 
-    expect(loadConfigMock).toHaveBeenCalledWith({ skipPluginValidation: true });
+    expect(readBestEffortConfigMock).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: true,
+    });
     expect(defaultRuntime.writeStdout).toHaveBeenCalledTimes(1);
     expect(defaultRuntime.log).not.toHaveBeenCalled();
     expect(runtimeErrors).toStrictEqual([]);
     expect(runtimeStdout.at(-1)).toContain("calendar");
     expect(runtimeStdout.at(-1)).toContain("openclaw skills search");
+  });
+
+  it("renders skills browse output when the strict config load fails", async () => {
+    loadConfigMock.mockImplementation(() => {
+      throw new Error("Invalid config: unrecognized key");
+    });
+
+    await runCommand(["skills", "list"]);
+
+    expect(readBestEffortConfigMock).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: true,
+    });
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(runtimeErrors).toStrictEqual([]);
+    expect(runtimeStdout.at(-1)).toContain("calendar");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
