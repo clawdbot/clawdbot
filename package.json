@@ -2004,6 +2004,7 @@
     "tui:pty:test:watch:all": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode all",
     "tui:pty:test:watch:fake": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode fake",
     "tui:pty:test:watch:local": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode local",
+    "ui:boot-manifest:gen": "node --import tsx scripts/control-ui-boot-manifest.mts",
     "ui:build": "node scripts/ui.js build",
     "ui:dev": "node scripts/ui.js dev",
     "ui:i18n:baseline": "node --import tsx scripts/control-ui-i18n-verify.ts baseline",
