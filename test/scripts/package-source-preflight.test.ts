@@ -10,6 +10,7 @@ import {
   validatePackageSourceDir,
   validatePackageSourceRef,
 } from "../../scripts/package-source-preflight.mjs";
+import { writeRunSummary } from "../../scripts/test-docker-all.mts";
 
 const changelog = `# Changelog
 
@@ -54,7 +55,12 @@ type WorkflowStep = {
 type Workflow = {
   jobs: Record<
     string,
-    { outputs?: Record<string, unknown>; steps: WorkflowStep[]; with?: Record<string, unknown> }
+    {
+      env?: Record<string, string>;
+      outputs?: Record<string, unknown>;
+      steps: WorkflowStep[];
+      with?: Record<string, unknown>;
+    }
   >;
 };
 
@@ -597,7 +603,7 @@ describe("package source preflight", () => {
     expect(output.package_artifact_present).toBe("false");
   });
 
-  it("builds and validates a source package for a whitespace-only artifact tuple", () => {
+  it("keeps a whitespace-only artifact tuple in source mode through Docker reports", async () => {
     const whitespace = " \t\n ";
     const result = runLiveSourcePackageBuildAndValidation({
       PACKAGE_ARTIFACT_DIGEST: whitespace,
@@ -634,6 +640,68 @@ describe("package source preflight", () => {
       source_sha: "a".repeat(40),
       version: "2026.8.1",
     });
+
+    const workflow = readWorkflow(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
+    const prepared = workflow.jobs.prepare_docker_e2e_image!;
+    expect(prepared.outputs).toMatchObject({
+      package_artifact_id:
+        "${{ steps.upload_package.outputs.artifact-id || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_id || '') }}",
+      package_artifact_name:
+        "${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_name || '') }}",
+    });
+    const reportArtifactName =
+      "${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}";
+    for (const jobId of [
+      "validate_docker_e2e",
+      "validate_docker_lanes",
+      "validate_docker_openwebui",
+    ]) {
+      expect(workflow.jobs[jobId]!.env?.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME).toBe(
+        reportArtifactName,
+      );
+    }
+    const candidateManifest = workflowStep(
+      workflow,
+      "prepare_docker_e2e_image",
+      "Emit immutable release candidate tuple",
+    );
+    for (const name of [
+      "PACKAGE_ARTIFACT_DIGEST",
+      "PACKAGE_ARTIFACT_ID",
+      "PACKAGE_ARTIFACT_NAME",
+      "PACKAGE_ARTIFACT_RUN_ATTEMPT",
+      "PACKAGE_ARTIFACT_RUN_ID",
+    ]) {
+      expect(candidateManifest.env?.[name]).toContain(
+        "needs.validate_selected_ref.outputs.package_artifact_present == 'true'",
+      );
+    }
+
+    const noPackageArtifactName =
+      result.artifactTuple.output.package_artifact_present === "true" ? whitespace : "";
+    expect(noPackageArtifactName).toBe("");
+    const reportDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-live-source-report-"));
+    try {
+      await writeRunSummary(
+        reportDir,
+        {
+          failures: [{ name: "live-models", status: 1 }],
+          lanes: [],
+          status: "failed",
+        },
+        {
+          OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: noPackageArtifactName || "docker-e2e-package",
+          OPENCLAW_DOCKER_E2E_SELECTED_SHA: "a".repeat(40),
+        },
+      );
+      const summary = JSON.parse(readFileSync(path.join(reportDir, "summary.json"), "utf8"));
+      const failures = JSON.parse(readFileSync(path.join(reportDir, "failures.json"), "utf8"));
+      expect(summary.packageArtifactName).toBe("docker-e2e-package");
+      expect(failures.packageArtifactName).toBe("docker-e2e-package");
+      expect(JSON.stringify({ failures, summary })).not.toContain(whitespace);
+    } finally {
+      rmSync(reportDir, { force: true, recursive: true });
+    }
   });
 
   it("guards install-smoke candidate packaging before its dependency install", () => {

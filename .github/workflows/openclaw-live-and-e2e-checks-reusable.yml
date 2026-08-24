@@ -1237,7 +1237,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
-      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_DOCKER_ALL_RELEASE_PROFILE: ${{ inputs.release_test_profile }}
@@ -1624,7 +1624,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
-      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CODEX_NPM_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
@@ -1924,7 +1924,7 @@ jobs:
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
-      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
@@ -2135,8 +2135,8 @@ jobs:
       needs_registry_build: ${{ steps.image_exists.outputs.needs_build }}
       package_sha256: ${{ steps.package.outputs.sha256 }}
       package_version: ${{ steps.package.outputs.version }}
-      package_artifact_name: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || inputs.package_artifact_name }}
-      package_artifact_id: ${{ steps.upload_package.outputs.artifact-id || inputs.package_artifact_id }}
+      package_artifact_name: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_name || '') }}
+      package_artifact_id: ${{ steps.upload_package.outputs.artifact-id || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_id || '') }}
       package_artifact_digest: ${{ steps.upload_package.outputs.artifact-digest || steps.input_package_artifact.outputs.artifact_digest }}
       package_artifact_run_id: ${{ steps.upload_package.outputs.artifact-id && github.run_id || steps.input_package_artifact.outputs.run_id }}
       package_artifact_run_attempt: ${{ steps.upload_package.outputs.artifact-id && github.run_attempt || steps.input_package_artifact.outputs.run_attempt }}
@@ -2745,11 +2745,11 @@ jobs:
           IMAGE_ARTIFACT_NAME: ${{ steps.image_artifact.outputs.artifact_name || inputs.shared_image_artifact_name }}
           IMAGE_ARTIFACT_RUN_ATTEMPT: ${{ steps.upload_image_artifact.outputs.artifact-id && github.run_attempt || inputs.shared_image_artifact_run_attempt }}
           IMAGE_ARTIFACT_RUN_ID: ${{ steps.upload_image_artifact.outputs.artifact-id && github.run_id || inputs.shared_image_artifact_run_id }}
-          PACKAGE_ARTIFACT_DIGEST: ${{ steps.upload_package.outputs.artifact-digest || inputs.package_artifact_digest }}
-          PACKAGE_ARTIFACT_ID: ${{ steps.upload_package.outputs.artifact-id || inputs.package_artifact_id }}
-          PACKAGE_ARTIFACT_NAME: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || inputs.package_artifact_name }}
-          PACKAGE_ARTIFACT_RUN_ATTEMPT: ${{ steps.upload_package.outputs.artifact-id && github.run_attempt || inputs.package_artifact_run_attempt }}
-          PACKAGE_ARTIFACT_RUN_ID: ${{ steps.upload_package.outputs.artifact-id && github.run_id || inputs.package_artifact_run_id }}
+          PACKAGE_ARTIFACT_DIGEST: ${{ steps.upload_package.outputs.artifact-digest || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_digest || '') }}
+          PACKAGE_ARTIFACT_ID: ${{ steps.upload_package.outputs.artifact-id || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_id || '') }}
+          PACKAGE_ARTIFACT_NAME: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_name || '') }}
+          PACKAGE_ARTIFACT_RUN_ATTEMPT: ${{ steps.upload_package.outputs.artifact-id && github.run_attempt || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_run_attempt || '') }}
+          PACKAGE_ARTIFACT_RUN_ID: ${{ steps.upload_package.outputs.artifact-id && github.run_id || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_run_id || '') }}
           PACKAGE_FILE_NAME: ${{ steps.package.outputs.file_name }}
           PACKAGE_SHA256: ${{ steps.package.outputs.sha256 }}
           PACKAGE_SOURCE_SHA: ${{ steps.package.outputs.source_sha }}
