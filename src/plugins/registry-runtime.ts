@@ -29,18 +29,18 @@ import {
   isAgentHarnessSessionKeyOwnedBy,
 } from "../sessions/agent-harness-session-key.js";
 import {
-  PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS,
-  PLUGIN_GATEWAY_SESSION_MUTATION_METHODS,
-  resetPluginChannelSessionEntryLifecycle,
-  resetPluginSessionEntryLifecycle,
-} from "./registry-runtime-session-policy.js";
-import {
   activatePluginRecordLifecycleEpoch,
   isPluginRecordLifecycleEpochActive,
   isPluginRegistryActivated,
   isPluginRegistryRetired,
   revokePluginRecordLifecycleEpoch,
 } from "./registry-lifecycle.js";
+import {
+  PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS,
+  PLUGIN_GATEWAY_SESSION_MUTATION_METHODS,
+  resetPluginChannelSessionEntryLifecycle,
+  resetPluginSessionEntryLifecycle,
+} from "./registry-runtime-session-policy.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import {
@@ -795,6 +795,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           const scopedChannel = Object.create(
             Object.getPrototypeOf(channel),
             Object.getOwnPropertyDescriptors(channel),
+            // SAFETY: Object.create preserves the complete channel runtime prototype and
+            // own-property descriptors before the session capability is replaced below.
           ) as PluginRuntime["channel"];
           Object.defineProperty(scopedChannel, "session", {
             configurable: true,

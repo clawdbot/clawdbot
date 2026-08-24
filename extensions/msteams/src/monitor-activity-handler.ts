@@ -37,6 +37,8 @@ export function buildMSTeamsActivityHandler(): MSTeamsActivityHandler {
       return handler;
     },
     async run(context: unknown, turnAdoptionLifecycle) {
+      // SAFETY: The Bot Framework adapter supplies a turn context; this shim reads only
+      // the optional activity discriminator before forwarding the original object.
       const ctx = context as { activity?: { type?: string } };
       const activityType = ctx.activity?.type;
       const noop = async () => {};
@@ -49,6 +51,8 @@ export function buildMSTeamsActivityHandler(): MSTeamsActivityHandler {
           }
         }
       } else if (activityType === "conversationUpdate") {
+        // SAFETY: The activity discriminator above narrows the only conversation-update
+        // fields inspected by this adapter shim.
         const activity = ctx.activity as
           | { membersAdded?: unknown[]; membersRemoved?: unknown[] }
           | undefined;
@@ -67,6 +71,8 @@ export function buildMSTeamsActivityHandler(): MSTeamsActivityHandler {
           await callback(context, noop);
         }
       } else if (activityType === "messageReaction") {
+        // SAFETY: The activity discriminator above narrows the only reaction fields
+        // inspected by this adapter shim.
         const activity = ctx.activity as
           | { reactionsAdded?: unknown[]; reactionsRemoved?: unknown[] }
           | undefined;

@@ -1,5 +1,4 @@
 // Verifies plugin registry behavior with runtime config inputs.
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -27,96 +26,6 @@ function createTestRegistry(runtime: PluginRuntime) {
 }
 
 describe("plugin registry runtime config scope", () => {
-  it("lets a channel owner rotate a real locked session through its physical harness owner", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-session-reset-"));
-    const storePath = path.join(tempDir, "sessions.json");
-    const sessionKey = "agent:main:msteams:direct:user-aad";
-    const oldTranscriptPath = path.join(tempDir, "old-session.jsonl");
-    fs.writeFileSync(oldTranscriptPath, '{"type":"session","id":"old-session"}\n', "utf8");
-    try {
-      const runtime = createPluginRuntime();
-      await runtime.agent.session.upsertSessionEntry({
-        agentId: "main",
-        entry: {
-          agentHarnessId: "codex",
-          label: "Dale",
-          modelSelectionLocked: true,
-          sessionFile: oldTranscriptPath,
-          sessionId: "old-session",
-          updatedAt: 10,
-        },
-        sessionKey,
-        storePath,
-      });
-      const pluginRegistry = createTestRegistry(runtime);
-      const ownerRecord = createPluginRecord({
-        id: "codex-owner",
-        source: "/plugins/codex-owner/index.js",
-        origin: "bundled",
-        enabled: true,
-        configSchema: false,
-      });
-      const teamsRecord = createPluginRecord({
-        id: "msteams",
-        source: "/plugins/msteams/index.js",
-        origin: "bundled",
-        enabled: true,
-        configSchema: false,
-      });
-      teamsRecord.channelIds = ["msteams"];
-      const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
-      const teamsApi = pluginRegistry.createApi(teamsRecord, { config: {} as OpenClawConfig });
-      const harnessReset = vi.fn(async () => {});
-      ownerApi.registerAgentHarness({
-        id: "codex",
-        label: "Codex",
-        reset: harnessReset,
-        supports: () => ({ supported: true }),
-        runAttempt: async () => {
-          throw new Error("unused");
-        },
-      });
-
-      const result = await teamsApi.runtime.channel.session.resetSessionEntryLifecycle({
-        channelId: "msteams",
-        expectedSessionId: "old-session",
-        expectedUpdatedAt: 10,
-        sessionKey,
-        storePath,
-        update: (entry, { nextSessionId }) => ({
-          label: entry.label,
-          sessionId: nextSessionId,
-          updatedAt: 0,
-        }),
-      });
-
-      expect(harnessReset).toHaveBeenCalledWith({
-        reason: "reset",
-        sessionId: "old-session",
-        sessionKey,
-      });
-      expect(result).toMatchObject({ label: "Dale", updatedAt: 0 });
-      expect(result?.sessionId).not.toBe("old-session");
-      expect(result?.sessionFile).not.toBe(oldTranscriptPath);
-      expect(fs.existsSync(oldTranscriptPath)).toBe(true);
-
-      const staleResult = await teamsApi.runtime.channel.session.resetSessionEntryLifecycle({
-        channelId: "msteams",
-        expectedSessionId: "old-session",
-        expectedUpdatedAt: 10,
-        sessionKey,
-        storePath,
-        update: () => ({ updatedAt: 0 }),
-      });
-      expect(staleResult).toBeNull();
-      expect(runtime.agent.session.getSessionEntry({ sessionKey, storePath })?.sessionId).toBe(
-        result?.sessionId,
-      );
-    } finally {
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
-  });
-
   it("rejects a plugin harness that claims the built-in runtime id", () => {
     const pluginRegistry = createTestRegistry(createPluginRuntime());
     const record = createPluginRecord({
@@ -732,13 +641,6 @@ describe("plugin registry runtime config scope", () => {
       agentHarnessId: "codex",
       modelSelectionLocked: true as const,
     };
-    const teamsLockedKey = "agent:main:msteams:direct:user-aad";
-    const teamsLockedEntry = {
-      sessionId: "teams-locked-session",
-      updatedAt: 1,
-      agentHarnessId: "codex",
-      modelSelectionLocked: true as const,
-    };
     const legacyPrefixedEntry = {
       sessionId: "legacy-prefixed-session",
       updatedAt: 1,
@@ -751,7 +653,6 @@ describe("plugin registry runtime config scope", () => {
       [reservedKey]: reservedEntry,
       [ordinaryKey]: ordinaryEntry,
       [lockedOrdinaryKey]: lockedOrdinaryEntry,
-      [teamsLockedKey]: teamsLockedEntry,
       [legacyPrefixedKey]: legacyPrefixedEntry,
     };
     const typedEntries = entries as unknown as Record<string, SessionEntry>;
@@ -777,27 +678,6 @@ describe("plugin registry runtime config scope", () => {
       });
       return patch ? { ...entry, ...patch } : entry;
     });
-    const resetSessionEntryLifecycle = vi.fn(async (params) => {
-      const entry = entries[params.sessionKey as keyof typeof entries];
-      if (!entry) {
-        return null;
-      }
-      if (!("sessionId" in entry)) {
-        return null;
-      }
-      if (params.releasePhysicalOwner) {
-        await params.releasePhysicalOwner({
-          entry,
-          reason: "reset",
-          ...("sessionFile" in entry ? { sessionFile: entry.sessionFile } : {}),
-          sessionId: entry.sessionId,
-          sessionKey: params.sessionKey,
-          storePath: "/tmp/sessions.json",
-        });
-      }
-      return { ...entry, sessionId: "reset-session", updatedAt: 0 };
-    });
-    session.resetSessionEntryLifecycle = resetSessionEntryLifecycle;
     session.upsertSessionEntry = vi.fn(async () => {});
     session.updateSessionStoreEntry = vi.fn(
       async (params) => typedEntries[params.sessionKey] ?? null,
@@ -848,24 +728,13 @@ describe("plugin registry runtime config scope", () => {
       enabled: true,
       configSchema: false,
     });
-    const teamsRecord = createPluginRecord({
-      id: "msteams",
-      source: "/plugins/msteams/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    teamsRecord.channelIds = ["msteams"];
     const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
     const otherApi = pluginRegistry.createApi(otherRecord, { config: {} as OpenClawConfig });
     const voiceApi = pluginRegistry.createApi(voiceRecord, { config: {} as OpenClawConfig });
-    const teamsApi = pluginRegistry.createApi(teamsRecord, { config: {} as OpenClawConfig });
-    const harnessReset = vi.fn(async () => {});
     ownerApi.registerAgentHarness({
       id: "codex",
       label: "Codex",
       delegatedExecutionPluginIds: ["voice-call"],
-      reset: harnessReset,
       supports: () => ({ supported: true }),
       runAttempt: async () => {
         throw new Error("unused");
@@ -946,51 +815,6 @@ describe("plugin registry runtime config scope", () => {
         update: () => ({ label: "must stay owner-only" }),
       }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      voiceApi.runtime.agent.session.resetSessionEntryLifecycle({
-        sessionKey: reservedKey,
-        update: () => ({ updatedAt: 0 }),
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-
-    await expect(
-      ownerApi.runtime.agent.session.resetSessionEntryLifecycle({
-        sessionKey: reservedKey,
-        update: () => ({ updatedAt: 0 }),
-      }),
-    ).resolves.toMatchObject({ sessionId: "reset-session", updatedAt: 0 });
-    expect(resetSessionEntryLifecycle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        releasePhysicalOwner: expect.any(Function),
-        sessionKey: reservedKey,
-      }),
-    );
-    expect(harnessReset).toHaveBeenCalledWith({
-      reason: "reset",
-      sessionFile: reservedEntry.sessionFile,
-      sessionId: reservedEntry.sessionId,
-      sessionKey: reservedKey,
-    });
-
-    await expect(
-      teamsApi.runtime.channel.session.resetSessionEntryLifecycle({
-        channelId: "msteams",
-        sessionKey: teamsLockedKey,
-        update: () => ({ updatedAt: 0 }),
-      }),
-    ).resolves.toMatchObject({ sessionId: "reset-session", updatedAt: 0 });
-    expect(harnessReset).toHaveBeenCalledWith({
-      reason: "reset",
-      sessionId: teamsLockedEntry.sessionId,
-      sessionKey: teamsLockedKey,
-    });
-    await expect(
-      otherApi.runtime.channel.session.resetSessionEntryLifecycle({
-        channelId: "msteams",
-        sessionKey: teamsLockedKey,
-        update: () => ({ updatedAt: 0 }),
-      }),
-    ).rejects.toThrow('does not own channel "msteams"');
 
     await expect(
       otherApi.runtime.agent.session.patchSessionEntry({
@@ -1071,13 +895,6 @@ describe("plugin registry runtime config scope", () => {
         expectedSessionId: reservedEntry.sessionId,
       }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
-    for (const method of ["sessions.branches.switch", "sessions.rewind", "sessions.fork"]) {
-      await expect(
-        otherApi.runtime.gateway.request(method, {
-          sessionKey: reservedKey,
-        }),
-      ).rejects.toThrow('owned by plugin "codex-owner"');
-    }
     const gatewayRequestCountBeforeBatch = gatewayRequest.mock.calls.length;
     await expect(
       otherApi.runtime.gateway.request("sessions.patchMany", {

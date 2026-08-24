@@ -156,6 +156,8 @@ function copyDefinedResetField<T extends MSTeamsResetCandidateEntry>(
   key: keyof MSTeamsResetCandidateEntry,
 ): void {
   if (source[key] !== undefined) {
+    // SAFETY: key is shared by T and MSTeamsResetCandidateEntry, and the value is copied
+    // unchanged from the same T instance into its Partial<T> projection.
     target[key as keyof T] = source[key] as T[keyof T];
   }
 }
@@ -188,6 +190,8 @@ function copyResetPreservedSelection<T extends MSTeamsResetCandidateEntry>(
   if (preserveLegacyUserModelOverride && normalizeOptionalResetString(source.modelOverride)) {
     copyDefinedResetField(target, source, "providerOverride");
     copyDefinedResetField(target, source, "modelOverride");
+    // SAFETY: T extends the reset-candidate shape whose modelOverrideSource slot accepts
+    // the preserved user provenance value.
     target.modelOverrideSource = "user" as T[keyof T];
   }
 
@@ -205,6 +209,8 @@ function createMSTeamsLifecycleResetEntry<T extends MSTeamsResetCandidateEntry>(
   entry: T,
   nextSessionId: string,
 ): Partial<T> {
+  // SAFETY: T extends the reset-candidate shape, so these two canonical lifecycle fields
+  // form a valid partial projection of every admissible T.
   const next: Partial<T> = {
     sessionId: nextSessionId,
     updatedAt: 0,

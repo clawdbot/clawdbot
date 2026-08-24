@@ -864,7 +864,7 @@ extensions/msteams/src/monitor-handler.ts	5
 extensions/msteams/src/monitor-handler/inbound-content.ts	1
 extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
-extensions/msteams/src/monitor.ts	8
+extensions/msteams/src/monitor.ts	6
 extensions/msteams/src/msteams-ingress.ts	1
 extensions/msteams/src/outbound.ts	1
 extensions/msteams/src/polls.ts	1
