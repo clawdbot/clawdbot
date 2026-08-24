@@ -92,7 +92,15 @@ export function isPluginPolicyDisabled(
   return asOptionalRecord(channels?.[builtInChannelId])?.enabled === false;
 }
 
-function hasMaterialPluginEntryConfig(entry: unknown): boolean {
+/**
+ * Whether an authored `plugins.entries.<id>` value carries configuration beyond a bare enable
+ * flag. Read from the AUTHORED entry on purpose: normalization drops an empty `hooks`/`subagent`/
+ * `llm` object and the `apiKey`/`env` fields outright, so the normalized entry cannot answer
+ * this. Exported for the plugin load cache key (`buildActivationMetadataHash` in
+ * `loader-load-context.ts`), which must cover every input of `isPluginExplicitlySelectedByAlias`
+ * below or a cached registry keeps a cede map computed under the previous ownership.
+ */
+export function hasMaterialPluginEntryConfig(entry: unknown): boolean {
   if (!isRecord(entry)) {
     return false;
   }

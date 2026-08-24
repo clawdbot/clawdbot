@@ -1,8 +1,10 @@
 // Verifies plugin loader runtime registry behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
+import { isPluginExplicitlySelectedByAlias } from "../config/plugin-replacement-eligibility.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { normalizePluginId, normalizePluginsConfig } from "./config-state.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import {
   getRegisteredEmbeddingProvider,
@@ -181,6 +183,51 @@ describe("resolvePluginLoadCacheContext", () => {
 
     expect(setupKey).not.toBe(fullKey);
     expect(resolvePluginLoadCacheContext({ config: {} }).channelPluginLoadIntent).toBe("full");
+  });
+
+  // Codex P1 3845532973: explicit selection reads the AUTHORED entry, and normalization drops
+  // exactly the shapes `hasMaterialPluginEntryConfig` counts — an empty `hooks` object, an
+  // `apiKey` — so a key hashing only normalized entries and `enabled` flags stayed identical
+  // while `isPluginExplicitlySelectedByAlias` flipped, suppressed the replacement's `preferOver`
+  // edge, and a cache hit returned `cededChannelIds` computed under the previous ownership.
+  it.each([
+    { name: "an empty hooks object normalization empties", entry: { hooks: {} } },
+    { name: "an apiKey normalization drops", entry: { apiKey: "zz-proof" } },
+  ])("partitions material entry presence carried only by $name", ({ entry }) => {
+    const bareConfig: OpenClawConfig = { plugins: { entries: { "zzcache-material": {} } } };
+    const materialConfig: OpenClawConfig = {
+      plugins: { entries: { "zzcache-material": entry } },
+    };
+    // Fixture reachability through the production readers: normalization really erases the
+    // difference (the outer cache key hashes normalized entries), while explicit selection —
+    // the ownership input the cede map follows — really flips on it.
+    expect(normalizePluginsConfig(materialConfig.plugins)).toEqual(
+      normalizePluginsConfig(bareConfig.plugins),
+    );
+    expect(
+      isPluginExplicitlySelectedByAlias(bareConfig, "zzcache-material", normalizePluginId),
+    ).toBe(false);
+    expect(
+      isPluginExplicitlySelectedByAlias(materialConfig, "zzcache-material", normalizePluginId),
+    ).toBe(true);
+
+    expect(resolvePluginLoadCacheContext({ config: materialConfig }).cacheKey).not.toBe(
+      resolvePluginLoadCacheContext({ config: bareConfig }).cacheKey,
+    );
+  });
+
+  // The guard against the over-invalidating fix: hashing whole authored entry bodies would
+  // rebuild the registry on edits that move no activation input. Two spellings that normalize
+  // identically and agree on material presence must share one cache key.
+  it("keeps the cache key stable across immaterial authored entry edits", () => {
+    const emptyHooksKey = resolvePluginLoadCacheContext({
+      config: { plugins: { entries: { "zzcache-material": { hooks: {} } } } },
+    }).cacheKey;
+    const droppedTimeoutKey = resolvePluginLoadCacheContext({
+      config: { plugins: { entries: { "zzcache-material": { hooks: { timeoutMs: -5 } } } } },
+    }).cacheKey;
+
+    expect(droppedTimeoutKey).toBe(emptyHooksKey);
   });
 
   it("keys concrete runtime bindings by identity", () => {
