@@ -260,7 +260,7 @@ process.exit(result.status ?? 1);
     },
   );
 
-  it("removes a registered worktree after its checkout path disappears", async () => {
+  it("fails closed when a registered worktree checkout path disappears", async () => {
     await initializeGitRepo(repoRoot);
     const worktreeDir = path.join(repoRoot, ".artifacts", "missing-worktree", "baseline");
     await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
@@ -275,18 +275,25 @@ process.exit(result.status ?? 1);
         runner: defaultMantisCommandRunner,
         worktreeDir,
       }),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("baseline worktree cleanup left registered path");
 
-    expect(await listGitWorktreePaths(repoRoot)).toEqual([repoRoot]);
+    expect(await listGitWorktreePaths(repoRoot)).toEqual([repoRoot, worktreeDir]);
     await expect(fs.lstat(worktreeDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("migrates registered worktrees from the legacy output layout", async () => {
+  it("migrates only the exact historical worktrees from the legacy output layout", async () => {
     await initializeGitRepo(repoRoot);
     const outputDir = path.join(repoRoot, ".artifacts", "legacy-output");
-    const worktreeDir = path.join(outputDir, "worktrees", "baseline");
-    await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
-    await runGit(repoRoot, ["worktree", "add", "--detach", "--", worktreeDir, "HEAD"]);
+    const legacyRoot = path.join(outputDir, "worktrees");
+    const baselineDir = path.join(legacyRoot, "baseline");
+    const candidateDir = path.join(legacyRoot, "candidate");
+    const unrelatedDir = path.join(legacyRoot, "unrelated-checkout");
+    const unrelatedSentinel = path.join(unrelatedDir, "preserve-me.txt");
+    await fs.mkdir(legacyRoot, { recursive: true });
+    for (const worktreeDir of [baselineDir, candidateDir, unrelatedDir]) {
+      await runGit(repoRoot, ["worktree", "add", "--detach", "--", worktreeDir, "HEAD"]);
+    }
+    await fs.writeFile(unrelatedSentinel, "unrelated", "utf8");
 
     await expect(
       removeLegacyMantisWorktrees({
@@ -297,8 +304,10 @@ process.exit(result.status ?? 1);
       }),
     ).resolves.toBeUndefined();
 
-    expect(await listGitWorktreePaths(repoRoot)).toEqual([repoRoot]);
-    await expect(fs.lstat(worktreeDir)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await listGitWorktreePaths(repoRoot)).toEqual([repoRoot, unrelatedDir]);
+    await expect(fs.lstat(baselineDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(candidateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(unrelatedSentinel, "utf8")).resolves.toBe("unrelated");
   });
 
   it("stops an active injected lane command when aborted", async () => {

@@ -419,10 +419,11 @@ describe("mantis before/after runtime", () => {
     }
   });
 
-  it("does not dispatch worktree add when already aborted and still verifies cleanup", async () => {
+  it("does not prepare or dispatch a worktree when already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
     const runner = vi.fn(async () => successfulCommandResult());
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "pre-aborted");
 
     await expect(
       runMantisBeforeAfter({
@@ -436,16 +437,8 @@ describe("mantis before/after runtime", () => {
         skipInstall: true,
       }),
     ).rejects.toThrow("baseline worktree-add aborted");
-    expect(runner.mock.calls.map((call) => ({ args: call[1], stage: call[2]?.stage }))).toEqual([
-      {
-        args: ["worktree", "remove", "--force", "--", "."],
-        stage: "worktree-cleanup",
-      },
-      {
-        args: ["worktree", "list", "--porcelain", "-z"],
-        stage: "worktree-cleanup",
-      },
-    ]);
+    expect(runner).not.toHaveBeenCalled();
+    await expect(fs.readdir(`${outputDir}.worktrees`)).resolves.toEqual([]);
   });
 
   it("cleans up the exact worktree path after worktree-add times out", async () => {

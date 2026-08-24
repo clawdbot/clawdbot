@@ -207,6 +207,12 @@ async function runLane(params: {
   let cleanupFailed = false;
   let cleanupError: unknown;
 
+  assertMantisCommandNotAborted({
+    command: "git",
+    args: worktreeAddArgs,
+    execution: worktreeAddExecution,
+    lane: params.lane,
+  });
   try {
     await fs.mkdir(worktreeDir, { mode: 0o700 });
     worktreeOwnership = await captureMantisDirectoryOwnership({

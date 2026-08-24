@@ -136,7 +136,7 @@ describe("Mantis worktree cleanup", () => {
         runner,
         worktreeDir,
       }),
-    ).rejects.toThrow("Mantis preserved the path because Git no longer owns it");
+    ).rejects.toThrow("baseline worktree cleanup left registered path");
     await expect(fs.lstat(worktreeDir)).resolves.toBeDefined();
   });
 

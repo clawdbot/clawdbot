@@ -102,22 +102,12 @@ function isWorktreeListCommand(command: string, args: readonly string[]): boolea
   );
 }
 
-function capturesMantisCommandOutput(command: string, args: readonly string[]): boolean {
-  return (
-    isWorktreeListCommand(command, args) ||
-    (command === "git" &&
-      args.length === 2 &&
-      args[0] === "rev-parse" &&
-      args[1] === "--git-common-dir")
-  );
-}
-
 export async function defaultMantisCommandRunner(
   command: string,
   args: readonly string[],
   execution: MantisCommandExecution,
 ): Promise<MantisCommandResult> {
-  const capturesOutput = capturesMantisCommandOutput(command, args);
+  const capturesWorktreeList = isWorktreeListCommand(command, args);
   const commandArgv = execution.expectedCwdIdentity
     ? [
         process.execPath,
@@ -134,10 +124,10 @@ export async function defaultMantisCommandRunner(
     cwd: execution.cwd,
     env: execution.env,
     killProcessTree: true,
-    outputCapture: capturesOutput ? { stdout: "head", stderr: "tail" } : "discard",
+    outputCapture: capturesWorktreeList ? { stdout: "head", stderr: "tail" } : "discard",
     signal: execution.signal,
     timeoutMs: execution.timeoutMs,
-    ...(capturesOutput
+    ...(capturesWorktreeList
       ? {}
       : {
           onOutputChunk(chunk, stream) {
