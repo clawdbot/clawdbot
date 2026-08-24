@@ -364,6 +364,32 @@ function listScopedExternalCliProfileIds(params: {
  * be detected without a network call; that matches existing behavior for a CLI
  * credential inside its validity window.
  */
+// Auth health is rebuilt per request, so concurrent status calls land on the
+// same expired profile and would each spawn their own credential-store read.
+// Share the read already in flight and drop the entry the moment it settles.
+// This deduplicates concurrent work without caching a result, so a logout that
+// lands between two requests is still seen by the second one.
+const inFlightExternalCliCredentialReads = new Map<string, Promise<OAuthCredential | null>>();
+
+function readCurrentExternalCliCredentialOnce(
+  profileId: string,
+  read: () => Promise<OAuthCredential | null>,
+): Promise<OAuthCredential | null> {
+  const inFlight = inFlightExternalCliCredentialReads.get(profileId);
+  if (inFlight) {
+    return inFlight;
+  }
+  // Deferred through Promise.resolve so a synchronous throw still clears the
+  // entry rather than wedging every later read behind a rejected promise.
+  const pending = Promise.resolve()
+    .then(read)
+    .finally(() => {
+      inFlightExternalCliCredentialReads.delete(profileId);
+    });
+  inFlightExternalCliCredentialReads.set(profileId, pending);
+  return pending;
+}
+
 async function isLiveExternalCliRefreshOwner(params: {
   profileId: string;
   credential: AuthProfileCredential | undefined;
@@ -384,7 +410,10 @@ async function isLiveExternalCliRefreshOwner(params: {
   if (hasUsableOAuthCredential(credential)) {
     return false;
   }
-  const live = await providerConfig.readCurrentCredentials();
+  const live = await readCurrentExternalCliCredentialOnce(
+    params.profileId,
+    providerConfig.readCurrentCredentials,
+  );
   if (live?.type !== "oauth" || !live.refresh?.trim()) {
     return false;
   }
