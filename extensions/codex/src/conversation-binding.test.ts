@@ -789,6 +789,13 @@ describe("codex conversation binding", () => {
     async ({ sourceSessionKey, destinationSessionKey, ephemeral, turnFails }) => {
       const sessionFile = path.join(tempDir, "mixed-source-lifecycle.jsonl");
       const bindingId = "binding-mixed-source-lifecycle";
+      const storePath = path.join(tempDir, "mixed-source-lifecycle.sqlite");
+      await upsertSessionEntry({
+        agentId: "main",
+        sessionKey: sourceSessionKey ?? "agent:main:source-without-key",
+        storePath,
+        entry: { sessionId: "source-mixed-lifecycle", updatedAt: Date.now() },
+      });
       const operations: Array<{ method: string; params: Record<string, unknown> }> = [];
       const notificationHandlers = new Set<(notification: unknown) => void>();
       const client = {
@@ -853,7 +860,11 @@ describe("codex conversation binding", () => {
       };
       ctx.pluginBinding.data = data;
 
-      await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toMatchObject({
+      await expect(
+        handleCodexConversationInboundClaim(event, ctx, {
+          config: { session: { store: storePath } },
+        }),
+      ).resolves.toMatchObject({
         handled: true,
         reply: {
           text: turnFails
@@ -923,6 +934,56 @@ describe("codex conversation binding", () => {
       await expect(
         testCodexAppServerBindingStore.read({ kind: "conversation", bindingId }),
       ).resolves.toBeUndefined();
+    },
+  );
+
+  it.each(["missing", "rebound"] as const)(
+    "fails closed before client startup when the source session is %s",
+    async (sourceState) => {
+      const bindingId = `binding-${sourceState}-source`;
+      const sessionFile = path.join(tempDir, `${sourceState}-source.jsonl`);
+      const storePath = path.join(tempDir, `${sourceState}-source.sqlite`);
+      const source = {
+        agentId: "main",
+        sessionId: "source-session",
+        sessionKey: "agent:main:source-session",
+        threadId: "thread-source",
+      };
+      if (sourceState === "rebound") {
+        await upsertSessionEntry({
+          agentId: source.agentId,
+          sessionKey: source.sessionKey,
+          storePath,
+          entry: { sessionId: "replacement-session", updatedAt: Date.now() },
+        });
+      }
+      await testCodexAppServerBindingStore.mutate(
+        { kind: "conversation", bindingId },
+        { kind: "set", binding: { threadId: "thread-bound", cwd: tempDir } },
+      );
+      const { event, ctx } = boundConversationClaim(sessionFile);
+      ctx.pluginBinding.data = {
+        kind: "codex-app-server-session",
+        version: 2,
+        bindingId,
+        workspaceDir: tempDir,
+        source,
+      };
+      sharedClientMocks.getSharedCodexAppServerClient.mockRejectedValue(
+        new Error("Codex client must not start"),
+      );
+
+      await expect(
+        handleCodexConversationInboundClaim(event, ctx, {
+          config: { session: { store: storePath } },
+        }),
+      ).resolves.toMatchObject({
+        handled: true,
+        reply: {
+          text: expect.stringContaining("source session is missing or no longer current"),
+        },
+      });
+      expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
     },
   );
 
@@ -2702,6 +2763,13 @@ describe("codex conversation binding", () => {
       sessionId: source.sessionId,
       sessionKey: source.sessionKey,
     };
+    const storePath = path.join(tempDir, "active-source.sqlite");
+    await upsertSessionEntry({
+      agentId: source.agentId,
+      sessionKey: source.sessionKey,
+      storePath,
+      entry: { sessionId: source.sessionId, updatedAt: Date.now() },
+    });
     await testCodexAppServerBindingStore.mutate(sourceIdentity, {
       kind: "set",
       binding: { threadId: source.threadId, clientId: "active-client", cwd: tempDir },
@@ -2749,7 +2817,10 @@ describe("codex conversation binding", () => {
     };
 
     try {
-      const result = await handleCodexConversationInboundClaim(event, ctx, { timeoutMs: 500 });
+      const result = await handleCodexConversationInboundClaim(event, ctx, {
+        config: { session: { store: storePath } },
+        timeoutMs: 500,
+      });
 
       expect(result?.reply?.text).toContain("active run");
       expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);

@@ -209,6 +209,11 @@ async function resolveConversationAppServerRuntime(params: {
       ? getSessionEntry({ agentId, storePath, sessionKey, readConsistency: "latest" })
       : undefined;
   const entry = !source || storedEntry?.sessionId === source.sessionId ? storedEntry : undefined;
+  if (source && !entry) {
+    throw new Error(
+      "Codex conversation source session is missing or no longer current; rebind this conversation before retrying.",
+    );
+  }
   const permissionMode = entry?.permissionMode;
   const sessionRoot = permissionMode ? entry?.sessionRoot : undefined;
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
