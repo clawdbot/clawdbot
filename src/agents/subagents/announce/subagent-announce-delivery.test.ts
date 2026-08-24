@@ -44,7 +44,6 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.test-support.js";
-import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
@@ -1987,42 +1986,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       timeoutMs: 120_000,
       resolveGatewayContext,
     });
-  });
-
-  it("wakes settled descendant runs under restrictive gateway roles", async () => {
-    const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
-      runId: "descendant-wake-run",
-    });
-    const replaceSubagentRunAfterSteer = vi.fn(async () => true);
-    testing.setDepsForTest({
-      getRuntimeConfig: () => cfg,
-      loadSessionEntry: () => ({ sessionId: "nested-session", updatedAt: 1 }),
-    });
-
-    const woke = await runDescendantWake({
-      runId: "nested-parent-run",
-      childSessionKey: "agent:main:subagent:nested-parent",
-      taskLabel: "collect descendant findings",
-      findings: "The descendant completed successfully.",
-      announceId: "descendant-completion",
-      isChildSessionEffectsAllowed: () => true,
-      hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
-        typeof entry === "object" && entry !== null,
-      deps: {
-        callGateway: createGatewayMock(),
-        dispatchGatewayMethodInProcess,
-        getRuntimeConfig: () => cfg,
-        replaceSubagentRunAfterSteer,
-      },
-    });
-
-    expect(woke).toBe(true);
-    expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        previousRunId: "nested-parent-run",
-        nextRunId: "descendant-wake-run",
-      }),
-    );
   });
 
   it("does not dispatch child-derived completion after source lifecycle ownership changes", async () => {

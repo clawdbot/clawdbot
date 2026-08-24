@@ -97,3 +97,21 @@ Therefore the mechanically safe resolution is:
 The restored blob is
 `9b9a3004ed1fc0050cd96a4768f35526dbf6e79f`, exactly matching reviewed parent
 `2891a08d61520623ccf93ddf0a05747d26a615ed`.
+
+## §2.5 — 2026-08-24T16:44Z — touched-test semantic enumeration
+
+Enumerated 558 upstream-touched test/support paths and reduced them to 26 real
+candidate-vs-upstream intersections using `git ls-tree` existence checks.
+Exact frozen-upstream baseline reproduced all 12 QA Lab failures while reviewed
+parent passed 40/40; these are upstream-class and remain outside this lane.
+
+The agents group found one candidate-only failure:
+`subagent-announce-delivery.test.ts` auto-merged upstream's
+`runDescendantWake` role-policy test against the reviewed descendant-wake
+owner, where that obsolete API no longer exists. Exact upstream passed 187/187
+and reviewed parent passed 188/188.
+
+Preserved upstream's `operatorRoleActor: { kind: "system" }` contract at the
+canonical reviewed `wakeSubagentRunAfterDescendants` boundary by extending its
+existing successful-wake test. Removed only the stale delivery-test import and
+duplicate old call shape; no production API or behavior changed.

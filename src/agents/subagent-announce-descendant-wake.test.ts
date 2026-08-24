@@ -171,6 +171,11 @@ describe("wakeSubagentRunAfterDescendants", () => {
     expect(harness.recordAcceptedSubagentSteerDispatch.mock.invocationCallOrder[0]).toBeLessThan(
       harness.dispatchGatewayMethodInProcess.mock.invocationCallOrder[0] ?? Infinity,
     );
+    expect(harness.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
+      "agent",
+      expect.any(Object),
+      expect.objectContaining({ operatorRoleActor: { kind: "system" } }),
+    );
     expect(harness.replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
       expect.objectContaining({
         previousRunId: wakeParams.runId,
