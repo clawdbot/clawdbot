@@ -26,11 +26,33 @@ export function normalizeManifestChannelId(channelId: string): string {
   return normalizeChatChannelId(channelId) ?? channelId;
 }
 
+type ConfiguredChannelCandidateSet = {
+  pluginIds: string[];
+  /**
+   * True when some claim carries a resolved non-self `preferOver` edge — the same edges the
+   * displacement walk applies, whether or not the named target itself claims the channel. On such
+   * a channel the loader normally cedes each non-winner claimant's registration to the computed
+   * winner (a registration survives only when the winner is inactive or outside a scoped load, or
+   * the pair's declaration was set aside), so the candidate set is the closest static proxy for
+   * the serving set. An unnarrowed set names the single claim auto-enable would turn on and says
+   * nothing about claimants startup loads anyway.
+   */
+  narrowedByDeclaration: boolean;
+};
+
 export function collectPluginIdsForConfiguredChannel(
   channelId: string,
   registry: PluginManifestRegistry,
   env: NodeJS.ProcessEnv,
 ): string[] {
+  return collectConfiguredChannelCandidateSet(channelId, registry, env).pluginIds;
+}
+
+export function collectConfiguredChannelCandidateSet(
+  channelId: string,
+  registry: PluginManifestRegistry,
+  env: NodeJS.ProcessEnv,
+): ConfiguredChannelCandidateSet {
   const normalizedChannelId = normalizeManifestChannelId(channelId);
   const builtInId = normalizeChatChannelId(normalizedChannelId);
   const claims: Array<{ plugin: PluginManifestRecord; preferOver: readonly string[] }> = [];
@@ -54,7 +76,7 @@ export function collectPluginIdsForConfiguredChannel(
   }
 
   if (claims.length === 0) {
-    return builtInId ? [builtInId] : [];
+    return { pluginIds: builtInId ? [builtInId] : [], narrowedByDeclaration: false };
   }
 
   // Claim ids and the ids a declaration names are both canonical here: `resolveChannelPreferOverIds`
@@ -65,6 +87,7 @@ export function collectPluginIdsForConfiguredChannel(
     claimIds.add(resolveAlias(builtInId));
   }
   const preferredIds = new Set<string>();
+  let narrowedByDeclaration = false;
   for (const claim of claims) {
     for (const canonicalPreferredOverId of claim.preferOver) {
       // A claimant naming one of its own aliases resolves to itself. A manifest that names itself
@@ -74,6 +97,12 @@ export function collectPluginIdsForConfiguredChannel(
       if (canonicalPreferredOverId === claim.plugin.id) {
         continue;
       }
+      // The flag follows the displacement walk in `channel-config-metadata.ts`, which applies
+      // every resolved non-self edge whether or not the named target claims the channel: an edge
+      // to a non-claimant still marks the channel contested, and the loader then cedes the other
+      // claimants to the computed winner. Candidate MEMBERSHIP below stays gated on the target
+      // being a claimant, so what auto-enable selects is unchanged.
+      narrowedByDeclaration = true;
       if (claimIds.has(canonicalPreferredOverId)) {
         // Keep both sides as candidates. The preferOver filter later disables
         // the lower-priority plugin unless the preferred plugin is explicitly
@@ -85,9 +114,15 @@ export function collectPluginIdsForConfiguredChannel(
   }
 
   if (preferredIds.size > 0) {
-    return [...preferredIds].toSorted((left, right) => left.localeCompare(right));
+    return {
+      pluginIds: [...preferredIds].toSorted((left, right) => left.localeCompare(right)),
+      narrowedByDeclaration: true,
+    };
   }
-  return [claims[0]?.plugin.id ?? builtInId ?? normalizedChannelId];
+  return {
+    pluginIds: [claims[0]?.plugin.id ?? builtInId ?? normalizedChannelId],
+    narrowedByDeclaration,
+  };
 }
 
 function isAutoEnableConfiguredChannelSignal(params: {

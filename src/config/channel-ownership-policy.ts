@@ -2,11 +2,13 @@ import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 // Assembles the channel ownership policy from operator config so config validation and the
 // operator-facing runtime schema pick the same channel owner plugin activation does.
 import { normalizeChatChannelId } from "../channels/registry.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   collectAutoEnableConfiguredChannelIds,
-  collectPluginIdsForConfiguredChannel,
+  collectConfiguredChannelCandidateSet,
 } from "./channel-activation-candidates.js";
 import {
   type ChannelOwnershipPolicy,
@@ -83,8 +85,54 @@ export function createConfiguredChannelOwnershipPolicy(params: {
     );
     return configuredChannelIds.has(channelId);
   };
-  const candidatesByChannel = new Map<string, Set<string>>();
-  const channelCandidates = (channelId: string): Set<string> | undefined => {
+  // Candidacy is what auto-enable SELECTS, not everything startup LOADS. The shared activation
+  // contract (`resolvePluginActivationDecisionShared`) also enables plugins no candidate set ever
+  // names: an installed config/global plugin with no adverse policy and a bundled plugin with
+  // default enablement load anyway and register their claimed channels.
+  // `isActivatedManifestOwner` is that decision without the auto-enable arm, read from the
+  // effective config like `isPluginActive`'s policy check: a claimant only candidacy would load
+  // stays inactive, while one the runtime serves regardless stays active.
+  let normalizedPluginsPolicy: ReturnType<typeof normalizePluginsConfig> | undefined;
+  // Memoized like `configuredChannelIds` and `candidatesByChannel`: the displacement walk's
+  // fixpoint asks per claimant per pass, so a linear registry scan per call is quadratic on large
+  // registries. First manifest record per canonical id wins, matching the `.find` it replaces,
+  // and the per-alias answer is cached because the walk re-asks for the same claimant.
+  let recordByCanonicalId: Map<string, PluginManifestRecord> | undefined;
+  const activatedWithoutCandidacyByAlias = new Map<string, boolean>();
+  const isActivatedWithoutCandidacy = (canonicalPluginId: string): boolean => {
+    const cached = activatedWithoutCandidacyByAlias.get(canonicalPluginId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (recordByCanonicalId === undefined) {
+      recordByCanonicalId = new Map();
+      for (const plugin of params.registry.plugins) {
+        const key = canonicalId(plugin.id);
+        if (!recordByCanonicalId.has(key)) {
+          recordByCanonicalId.set(key, plugin);
+        }
+      }
+    }
+    const record = recordByCanonicalId.get(canonicalPluginId);
+    let activated = false;
+    if (record) {
+      normalizedPluginsPolicy ??= normalizePluginsConfig(params.config.plugins);
+      activated = isActivatedManifestOwner({
+        plugin: record,
+        normalizedConfig: normalizedPluginsPolicy,
+        rootConfig: params.config,
+      });
+    }
+    activatedWithoutCandidacyByAlias.set(canonicalPluginId, activated);
+    return activated;
+  };
+  const candidatesByChannel = new Map<
+    string,
+    { ids: Set<string>; narrowedByDeclaration: boolean }
+  >();
+  const channelCandidates = (
+    channelId: string,
+  ): { ids: Set<string>; narrowedByDeclaration: boolean } | undefined => {
     const key = normalizeChatChannelId(channelId) ?? channelId;
     const cached = candidatesByChannel.get(key);
     if (cached) {
@@ -93,9 +141,11 @@ export function createConfiguredChannelOwnershipPolicy(params: {
     if (!isChannelConfiguredForActivation(key)) {
       return undefined;
     }
-    const candidates = new Set(
-      collectPluginIdsForConfiguredChannel(key, params.registry, params.env),
-    );
+    const candidateSet = collectConfiguredChannelCandidateSet(key, params.registry, params.env);
+    const candidates = {
+      ids: new Set(candidateSet.pluginIds),
+      narrowedByDeclaration: candidateSet.narrowedByDeclaration,
+    };
     candidatesByChannel.set(key, candidates);
     return candidates;
   };
@@ -119,7 +169,24 @@ export function createConfiguredChannelOwnershipPolicy(params: {
         // narrow with. Policy disablement stays the only signal, as before.
         return true;
       }
-      return candidates.has(pluginId) || candidates.has(alias);
+      if (candidates.ids.has(pluginId) || candidates.ids.has(alias)) {
+        return true;
+      }
+      // Once a claimant declares `preferOver`, the loader normally cedes the other claimants'
+      // registrations to the channel's computed winner — a registration survives only when the
+      // winner is inactive or outside a scoped load, or the pair's declaration was set aside —
+      // so on a declared channel the candidate set is the closest static proxy for the serving
+      // set, and everything outside it is treated as inactive however it loads.
+      if (candidates.narrowedByDeclaration) {
+        return false;
+      }
+      // With nothing declared there are no cedes at all: the channel goes to whichever loaded
+      // claimant registers, and the unnarrowed candidate set names only the claim auto-enable
+      // would turn on — it never asks whether that claimant is disabled. Equating the two
+      // reported the default-loaded fallback inactive exactly when the first claim is
+      // policy-disabled, and validation kept the disabled claimant's strict schema for a channel
+      // the fallback serves.
+      return isActivatedWithoutCandidacy(alias);
     },
     isPluginExplicitlySelected: (pluginId) =>
       isPluginExplicitlySelectedByAlias(sourceConfig, pluginId, canonicalId, params.registry),

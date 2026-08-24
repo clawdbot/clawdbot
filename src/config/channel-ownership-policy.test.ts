@@ -1,5 +1,6 @@
 /** Covers how the configured channel ownership policy reads operator intent. */
 import { afterEach, describe, expect, it } from "vitest";
+import { collectCededChannelIdsByPlugin } from "../plugins/loader-shared.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { collectRuntimeChannelOwnership } from "./channel-config-metadata.js";
 import { createConfiguredChannelOwnershipPolicy } from "./channel-ownership-policy.js";
@@ -247,5 +248,131 @@ describe("createConfiguredChannelOwnershipPolicy", () => {
 
     const { winners } = collectRuntimeChannelOwnership(chainRegistry, loaderPolicy);
     expect(winners.get("zzchainchat")).toBe("zzchain-alpha");
+  });
+
+  // Codex review P1: with no `preferOver` declared, the candidate set names only the first claim
+  // and never asks whether that claimant is disabled. Equating candidacy with activation then
+  // reported the fallback inactive exactly when the operator disabled the first claimant, while
+  // startup default-loads an installed plugin with no adverse policy — so validation kept the
+  // disabled claimant's strict schema for a channel the fallback actually serves.
+  it("keeps the default-loaded fallback active when the first claim is disabled", () => {
+    const config = {
+      channels: { zzproofchat: { accountLabel: "zz-proof" } },
+      plugins: { entries: { "zzproof-core": { enabled: false } } },
+    } as unknown as OpenClawConfig;
+
+    const policy = policyFor({ config, sourceConfig: config });
+
+    expect(policy.isPluginActive("zzproof-plus", "zzproofchat")).toBe(true);
+    // Both planes then hand the channel to the claimant the runtime actually serves.
+    const { winners } = collectRuntimeChannelOwnership(registry, policy);
+    expect(winners.get("zzproofchat")).toBe("zzproof-plus");
+  });
+
+  // The narrowing this fallback must not undo: a claimant startup leaves off — a bundled plugin
+  // without default enablement, a workspace plugin nothing trusts — never loads, so reporting it
+  // active would surface a schema the runtime never serves.
+  it.each([
+    { name: "a bundled claimant without default enablement", origin: "bundled" },
+    { name: "a workspace claimant nothing trusts", origin: "workspace" },
+  ])("keeps $name narrowed out of a configured channel", ({ origin }) => {
+    const narrowedRegistry = {
+      diagnostics: [],
+      plugins: [
+        { id: "zzproof-core", origin: "config", channels: ["zzproofchat"] },
+        { id: "zzproof-extra", origin, channels: ["zzproofchat"] },
+      ],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      channels: { zzproofchat: { accountLabel: "zz-proof" } },
+    } as unknown as OpenClawConfig;
+
+    const policy = createConfiguredChannelOwnershipPolicy({
+      config,
+      sourceConfig: config,
+      registry: narrowedRegistry,
+      env: {},
+    });
+
+    expect(policy.isPluginActive("zzproof-extra", "zzproofchat")).toBe(false);
+  });
+
+  // The declared contest keeps the narrowing too: once a claimant declares `preferOver`, the
+  // loader cedes every claimant outside the declaring pair to its winner, so a default-loaded
+  // claimant outside the pair still never serves the channel and must not be reported active.
+  it("keeps a default-loaded claimant outside a declared pair narrowed out", () => {
+    const claimant = (id: string, preferOver?: readonly string[]) => ({
+      id,
+      origin: "config",
+      channels: ["zzproofchat"],
+      channelConfigs: { zzproofchat: preferOver ? { preferOver } : {} },
+    });
+    const declaredRegistry = {
+      diagnostics: [],
+      plugins: [
+        claimant("zzproof-plus", ["zzproof-core"]),
+        claimant("zzproof-core"),
+        claimant("zzproof-other"),
+      ],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      channels: { zzproofchat: { accountLabel: "zz-proof" } },
+    } as unknown as OpenClawConfig;
+
+    const policy = createConfiguredChannelOwnershipPolicy({
+      config,
+      sourceConfig: config,
+      registry: declaredRegistry,
+      env: {},
+    });
+
+    expect(policy.isPluginActive("zzproof-plus", "zzproofchat")).toBe(true);
+    expect(policy.isPluginActive("zzproof-other", "zzproofchat")).toBe(false);
+  });
+
+  // The displacement walk in `channel-config-metadata.ts` applies every resolved non-self
+  // `preferOver` edge without asking whether the named target claims the channel, so an edge to
+  // an uninstalled plugin still marks the channel contested and the loader cedes the bare
+  // claimant's registration to the declarant. Deriving the narrowing flag from claimant-target
+  // edges only reported that ceded claimant active — the schema/runtime split this policy exists
+  // to close, reintroduced by the default-loaded fallback above.
+  it("agrees with the loader cede when a preferOver edge names a non-claimant", () => {
+    const edgeRegistry = {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "zzedge-a",
+          origin: "config",
+          channels: ["zzedgechat"],
+          channelConfigs: { zzedgechat: { preferOver: ["zzedge-ghost"] } },
+        },
+        { id: "zzedge-b", origin: "config", channels: ["zzedgechat"] },
+      ],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      channels: { zzedgechat: { accountLabel: "zz-proof" } },
+    } as unknown as OpenClawConfig;
+
+    const { cededChannelIdsByPlugin } = collectCededChannelIdsByPlugin({
+      registry: edgeRegistry,
+      config,
+      sourceConfig: config,
+      env: {},
+      onlyPluginIdSet: null,
+      dreamingSidecar: null,
+    });
+    // The loader really cedes the bare claimant on this edge; the fixture must keep exercising
+    // the displacement it pins.
+    expect(cededChannelIdsByPlugin.get("zzedge-b")).toEqual(["zzedgechat"]);
+
+    const policy = createConfiguredChannelOwnershipPolicy({
+      config,
+      sourceConfig: config,
+      registry: edgeRegistry,
+      env: {},
+    });
+    // A claimant whose registration startup cedes away must not be reported active.
+    expect(policy.isPluginActive("zzedge-b", "zzedgechat")).toBe(false);
+    expect(policy.isPluginActive("zzedge-a", "zzedgechat")).toBe(true);
   });
 });
