@@ -71,3 +71,29 @@ projection, and `codex-rs/app-server/tests/suite/v2/dynamic_tools.rs` request /
 response lifecycle. The contract carries exact thread, turn, call, namespace,
 tool, arguments, content items, and success fields; the absorbed OpenClaw
 changes remain aligned with that pinned runtime contract.
+
+## §2 — 2026-08-24T15:46Z — primitive-core preservation correction
+
+The first Gate 2 run rejected
+`src/agents/embedded-agent-runner/compact.hooks.test.ts`: the manually combined
+test blob preserved both assertions semantically, but the canonical walker
+could not reproduce it as reviewed bytes plus an exact clean upstream
+projection. This is a real Gate 2 failure, not a waiver candidate.
+
+History localized upstream's conflict to `a435cf6840c` and showed that its
+production permission-policy fix is independently covered by new
+`src/agents/embedded-agent-runner/run.session-permissions.test.ts` plus the
+Codex `session-permission-policy` and `run-attempt-connection` suites. The
+conflicting primitive-core change only strengthened an overlapping assertion.
+Therefore the mechanically safe resolution is:
+
+1. preserve the reviewed `compact.hooks.test.ts` blob exactly, including the
+   nested-compaction continuation-disable proof;
+2. retain all upstream production permission-policy bytes and the independent
+   upstream tests outside that primitive core;
+3. rerun Gate 2 against the committed correction, then run both reviewed and
+   upstream permission test owners.
+
+The restored blob is
+`9b9a3004ed1fc0050cd96a4768f35526dbf6e79f`, exactly matching reviewed parent
+`2891a08d61520623ccf93ddf0a05747d26a615ed`.
