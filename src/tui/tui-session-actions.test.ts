@@ -1663,6 +1663,36 @@ describe("tui session actions", () => {
     expect(renderedUsers).toContain("message from B");
   });
 
+  it.each([
+    {
+      scenario: "shutdown cancellation",
+      error: new DOMException("history loading stopped", "AbortError"),
+      expectedMessages: [],
+      expectedRenders: [],
+    },
+    {
+      scenario: "backend failure",
+      error: new Error("gateway unavailable"),
+      expectedMessages: [["history failed: gateway unavailable"]],
+      expectedRenders: [[true]],
+    },
+  ])(
+    "renders only genuine history errors for $scenario",
+    async ({ error, expectedMessages, expectedRenders }) => {
+      const addSystem = vi.fn();
+      const requestRender = vi.fn();
+      const { loadHistory } = createTestSessionActions({
+        client: makeTuiBackend({ loadHistory: vi.fn().mockRejectedValue(error) }),
+        chatLog: makeChatLog({ addSystem }),
+        tui: makeTui({ requestRender }),
+      });
+
+      await expect(loadHistory()).resolves.toEqual({ loaded: false });
+      expect(addSystem.mock.calls).toEqual(expectedMessages);
+      expect(requestRender.mock.calls).toEqual(expectedRenders);
+    },
+  );
+
   it("keeps the newer session when an earlier history load awaits session info", async () => {
     const historyA = createDeferred<unknown>();
     const historyB = createDeferred<unknown>();

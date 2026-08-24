@@ -54,7 +54,18 @@ const {
   >(async () => ({ status: "ran", durationMs: 1 })),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
-  sendCronAnnouncePayloadStrictMock: vi.fn(async () => {}),
+  sendCronAnnouncePayloadStrictMock: vi.fn<
+    typeof import("../cron/delivery.js").sendCronAnnouncePayloadStrict
+  >(async () => ({
+    status: "sent",
+    results: [{ channel: "telegram", messageId: "cron-message" }],
+    receipt: {
+      primaryPlatformMessageId: "cron-message",
+      platformMessageIds: ["cron-message"],
+      parts: [{ platformMessageId: "cron-message", kind: "text", index: 0 }],
+      sentAt: 0,
+    },
+  })),
   runCronIsolatedAgentTurnMock: vi.fn<RunCronIsolatedAgentTurnMock>(async () => ({
     status: "ok",
     summary: "ok",
@@ -1753,6 +1764,102 @@ describe("buildGatewayCronService", () => {
       } finally {
         state.cron.stop();
         vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it.each(
+    (
+      [
+        { reason: "no_visible_result", recipientReached: false },
+        { reason: "no_visible_payload", recipientReached: false },
+        { reason: "cancelled_by_message_sending_hook", recipientReached: false },
+        { reason: "adapter_returned_no_identity", recipientReached: true },
+      ] as const
+    ).flatMap((suppression) =>
+      (["command", "script"] as const).flatMap((payloadKind) =>
+        (["default", "optional", "required"] as const).map((policy) => ({
+          reason: suppression.reason,
+          recipientReached: suppression.recipientReached,
+          payloadKind,
+          policy,
+        })),
+      ),
+    ),
+  )(
+    "records $payloadKind $reason suppression without retry under $policy delivery",
+    async ({ reason, recipientReached, payloadKind, policy }) => {
+      const cfg = createCronConfig(`cron-${payloadKind}-${reason}-${policy}`);
+      cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+      loadConfigMock.mockReturnValue(cfg);
+      cronScriptExecutorMock.mockResolvedValueOnce({
+        kind: "completed",
+        notify: "scheduled result",
+        stateChanged: false,
+      });
+      sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const attempt = requireRecord(args[0], "suppressed cron announcement");
+        if (typeof attempt.onDeliveryAttempt === "function") {
+          attempt.onDeliveryAttempt(recipientReached);
+        }
+        return {
+          status: "suppressed",
+          reason,
+          results: [],
+          receipt: { platformMessageIds: [], parts: [], sentAt: 0 },
+        };
+      });
+
+      const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
+      try {
+        const job = await state.cron.add({
+          name: `${payloadKind} ${reason} ${policy}`,
+          enabled: true,
+          deleteAfterRun: true,
+          schedule: { kind: "at", at: new Date(1).toISOString() },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload:
+            payloadKind === "command"
+              ? {
+                  kind: "command" as const,
+                  argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
+                }
+              : { kind: "script" as const, script: "return { notify: 'scheduled result' }" },
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "123",
+            ...(policy === "default" ? {} : { bestEffort: policy === "optional" }),
+          },
+        });
+
+        await state.cron.run(job.id, "force");
+
+        expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce();
+        const expectedDeliveryStatus = recipientReached ? "unknown" : "not-delivered";
+        const required = policy === "required";
+        const updated = state.cron.getJob(job.id);
+        expect(Boolean(updated)).toBe(required);
+        if (updated) {
+          expect(updated.state.lastDeliveryStatus).toBe(expectedDeliveryStatus);
+          expect(updated.state.lastDeliveryError).toBeUndefined();
+        }
+        const finished = runCronChangedMock.mock.calls
+          .map(([event]) => requireRecord(event, "cron_changed event"))
+          .find((event) => event.action === "finished" && event.jobId === job.id);
+        expect(finished).toMatchObject({
+          status: "ok",
+          completionStatus: required ? (recipientReached ? "unknown" : "failed") : "succeeded",
+          deliveryStatus: expectedDeliveryStatus,
+        });
+        if (recipientReached) {
+          expect(finished).not.toHaveProperty("delivered");
+        } else {
+          expect(finished).toHaveProperty("delivered", false);
+        }
+      } finally {
+        state.cron.stop();
       }
     },
   );

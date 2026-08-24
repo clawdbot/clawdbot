@@ -394,7 +394,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
                 },
               }
             : undefined,
-        defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
         modelCatalogState: managedCatalog,

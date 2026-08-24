@@ -36,6 +36,12 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
       key: params.key,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(creation.actor ? { actor: creation.actor } : {}),
+      ...(client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: client.internal.operatorRoleActor }
+        : {}),
       authorizedPluginId: client?.internal?.pluginRuntimeOwnerId,
       ...(commitGuard ? { commitGuard } : {}),
       launchContinuation: async (continuation) =>

@@ -148,7 +148,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
       await import("../../tasks/task-executor-cancel.runtime.js");
     const cfg = context.getRuntimeConfig();
     const task = getTaskById(taskId);
-    if (task && !canAccessTaskRequesterSession({ cfg, client, task })) {
+    if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
       respond(true, { found: false, cancelled: false });
       return;
     }
@@ -172,7 +172,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     for (const taskId of params.taskIds) {
       const task = getTaskById(taskId);
-      if (task && !canAccessTaskRequesterSession({ cfg, client, task })) {
+      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
         results.push({ taskId, ok: false, reason: "task not found" });
         continue;
       }
@@ -197,7 +197,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     for (const taskId of params.taskIds) {
       const task = getTaskById(taskId);
-      if (task && !canAccessTaskRequesterSession({ cfg, client, task })) {
+      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
         results.push({ taskId, ok: false, reason: "task not found" });
         continue;
       }

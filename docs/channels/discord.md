@@ -1141,9 +1141,29 @@ Discord message actions cover messaging, channel admin, moderation, presence, an
 Core examples:
 
 - messaging: `sendMessage`, `readMessages`, `editMessage`, `deleteMessage`, `threadReply`
-- reactions: `react`, `reactions`, `emojiList`
+- reactions: `react`, `reactions`, `emoji-list`
 - moderation: `timeout`, `kick`, `ban`
 - presence: `setPresence`
+
+Use `emoji-list` to discover the current server's custom emoji:
+
+```json
+{ "action": "emoji-list", "channel": "discord", "limit": 25 }
+```
+
+`guildId` defaults to the current conversation's server; provide it explicitly to query another server. Results are sorted by name, and `limit` defaults to and cannot exceed 100:
+
+```json
+{
+  "ok": true,
+  "emojis": [
+    { "name": "dance", "identifier": "dance:456", "animated": true },
+    { "name": "party", "identifier": "party:123" }
+  ]
+}
+```
+
+Pass `identifier` directly to `react`. Discord accepts Unicode emoji, custom `name:id` identifiers, and the `<:name:id>` or `<a:name:id>` forms. `emoji-list`, `react`, and `reactions` are all controlled by `channels.discord.actions.reactions`.
 
 The `event-create` action accepts an optional `image` parameter (URL or local file path) to set the scheduled event cover image.
 

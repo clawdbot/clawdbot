@@ -506,28 +506,82 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(resolveProviderInstallCatalogEntry).not.toHaveBeenCalled();
   });
 
-  it("fails explicitly when a provider-plugin auth choice resolves to no trusted setup provider", async () => {
-    const runtime = createRuntime();
+  it.each([false, true])(
+    "rejects an unmatched provider-plugin auth choice while honoring json=%s",
+    async (json) => {
+      const runtime = createRuntime();
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "provider-plugin:workspace-provider:api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
+      const result = await applyNonInteractivePluginProviderChoice({
+        nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+        authChoice: "provider-plugin:workspace-provider:api-key",
+        opts: { json } as never,
+        runtime: runtime as never,
+        baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+        target,
+        resolveApiKey: vi.fn(),
+        toApiKeyCredential: vi.fn(),
+      });
 
-    expect(result).toBeNull();
-    expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
-    expectRuntimeErrorIncludes(
-      runtime,
-      'Auth choice "provider-plugin:workspace-provider:api-key" was not matched to a trusted provider plugin.',
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
+      expect(result).toBeNull();
+      expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
+      expectRuntimeErrorIncludes(
+        runtime,
+        'Auth choice "provider-plugin:workspace-provider:api-key" was not matched to a trusted provider plugin.',
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      if (json) {
+        expect(runtime.log).toHaveBeenCalledOnce();
+        expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+          ok: false,
+          phase: "options",
+          message: expect.stringContaining("was not matched to a trusted provider plugin"),
+        });
+      } else {
+        expect(runtime.log).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([
+    { authChoice: "provider-plugin:", json: false },
+    { authChoice: "provider-plugin:", json: true },
+    { authChoice: "provider-plugin:   ", json: false },
+    { authChoice: "provider-plugin::method", json: false },
+  ])(
+    "rejects a missing provider id before provider discovery (%j)",
+    async ({ authChoice, json }) => {
+      const runtime = createRuntime();
+      const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+
+      const result = await applyNonInteractivePluginProviderChoice({
+        nextConfig,
+        authChoice,
+        opts: { json } as never,
+        runtime: runtime as never,
+        baseConfig: nextConfig,
+        target,
+        resolveApiKey: vi.fn(),
+        toApiKeyCredential: vi.fn(),
+      });
+
+      expect(result).toBeNull();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expectRuntimeErrorIncludes(runtime, "is missing a provider id");
+      expectRuntimeErrorIncludes(runtime, '"provider-plugin:<provider-id>"');
+      expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
+      expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
+      if (json) {
+        expect(runtime.log).toHaveBeenCalledOnce();
+        expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+          ok: false,
+          phase: "options",
+          message: expect.stringContaining("is missing a provider id"),
+        });
+      } else {
+        expect(runtime.log).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("fails explicitly when a non-prefixed auth choice resolves only with untrusted providers", async () => {
     const runtime = createRuntime();

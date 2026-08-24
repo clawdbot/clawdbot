@@ -40,6 +40,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -257,6 +258,96 @@ test("sessions.create assigns and registers its requested group", async () => {
     new Set(["conn-1"]),
     { dropIfSlow: true },
   );
+});
+
+test("operator role agent allowlists protect creation without blocking existing sessions", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const profile = ensureProfileForEmail("restricted-session-creator@example.com");
+  setUserProfileRole(profile.id, "guest");
+  const cfg = {
+    ...getRuntimeConfig(),
+    session: { ...getRuntimeConfig().session, store: storePath },
+    gateway: {
+      ...getRuntimeConfig().gateway,
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            sessions: { others: "view" as const },
+            agents: ["guest-only"],
+            scopes: ["operator.read" as const, "operator.write" as const],
+          },
+        },
+      },
+    },
+  };
+  const client = {
+    connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
+    authenticatedUserProfile: {
+      profileId: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    },
+  } as never;
+  const requestOptions = { client, context: { getRuntimeConfig: () => cfg } };
+  const deniedKey = "agent:main:dashboard:role-denied";
+
+  const created = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", key: deniedKey },
+    requestOptions,
+  );
+  expect(created).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN", message: expect.stringContaining('agent "main"') },
+  });
+  expect(loadSessionEntry({ agentId: "main", sessionKey: deniedKey, storePath })).toBeUndefined();
+
+  const patched = await directSessionReq(
+    "sessions.patch",
+    { key: deniedKey, label: "bypass attempt" },
+    requestOptions,
+  );
+  expect(patched).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+
+  const patchedMany = await directSessionReq<{ outcomes: Array<{ ok: boolean; error?: unknown }> }>(
+    "sessions.patchMany",
+    { patch: { label: "bulk bypass attempt" }, targets: [{ key: deniedKey }] },
+    requestOptions,
+  );
+  expect(patchedMany).toMatchObject({
+    ok: true,
+    payload: { outcomes: [{ ok: false, error: { code: "FORBIDDEN" } }] },
+  });
+  expect(loadSessionEntry({ agentId: "main", sessionKey: deniedKey, storePath })).toBeUndefined();
+
+  const existingKey = "agent:main:dashboard:role-existing";
+  await writeSessionStore({
+    entries: {
+      [existingKey]: sessionStoreEntry("role-existing-session", {
+        createdActor: { type: "human", id: profile.id },
+      }),
+    },
+  });
+  expect(loadSessionEntry({ agentId: "main", sessionKey: existingKey, storePath })).toMatchObject({
+    sessionId: "role-existing-session",
+  });
+  expect(
+    resolveGatewaySessionStoreTarget({ cfg, key: existingKey, agentId: "main" }).storePath,
+  ).toBe(storePath);
+  const adopted = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", key: existingKey },
+    requestOptions,
+  );
+  expect(adopted.ok).toBe(true);
+  const existingPatch = await directSessionReq(
+    "sessions.patch",
+    { key: existingKey, label: "still allowed" },
+    requestOptions,
+  );
+  expect(existingPatch.ok).toBe(true);
 });
 
 test("sessions.create carries keyed adoption authorization through the durable commit", async () => {

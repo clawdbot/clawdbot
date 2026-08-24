@@ -9,6 +9,7 @@ import {
   renderScopeUpgradeTrigger,
   scopeUpgradeStatusUsesSessionHeader,
 } from "../../app/device-scope-upgrade.ts";
+import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   formatUpdateCampaignLabel,
@@ -556,7 +557,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .sessionLabel=${normalizeOptionalString(row.label) ??
               normalizeOptionalString(this.paneTitle) ??
               row.key}
-              .worktreePath=${row.execNode ? null : workspace.root}
+              .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}
               .archived=${row.archived === true}
               .onboarding=${this.onboarding}
               .preferencesBrowserOnly=${this.context.runtimeConfig?.state.connected &&

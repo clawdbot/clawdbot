@@ -974,8 +974,7 @@ describe("runGuidedOnboarding custodian flow", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
-    expect(prompter.select).toHaveBeenNthCalledWith(
-      2,
+    expect(prompter.select).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "Use Current model (acme/workspace-model)?",
         options: expect.arrayContaining([

@@ -336,6 +336,8 @@ export {
   UsersSetAvatarResultSchema,
   UsersSetDisplayNameParamsSchema,
   UsersSetDisplayNameResultSchema,
+  UsersSetRoleParamsSchema,
+  UsersSetRoleResultSchema,
   TaskSuggestionSchema,
   TaskSuggestionEventSchema,
   TaskSuggestionResolutionSchema,

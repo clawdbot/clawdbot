@@ -1457,12 +1457,11 @@ extensions/xai/realtime-voice-config.ts	2
 extensions/xai/runtime-model-compat.ts	1
 extensions/xai/speech-provider-metadata.ts	3
 extensions/xai/src/code-execution-config.ts	10
-extensions/xai/src/code-execution-shared.ts	1
 extensions/xai/src/tool-auth-shared.ts	2
 extensions/xai/src/web-search-provider.runtime.ts	2
-extensions/xai/src/web-search-shared.ts	2
+extensions/xai/src/web-search-shared.ts	1
 extensions/xai/src/x-search-config.ts	4
-extensions/xai/src/x-search-shared.ts	2
+extensions/xai/src/x-search-shared.ts	1
 extensions/xai/stream.ts	5
 extensions/xai/tts.ts	1
 extensions/xai/x-search.ts	7
@@ -1619,7 +1618,6 @@ packages/memory-host-sdk/src/host/multimodal.ts	1
 packages/memory-host-sdk/src/host/post-json.ts	1
 packages/memory-host-sdk/src/host/read-file.ts	1
 packages/memory-host-sdk/src/host/read-retry.ts	4
-packages/memory-host-sdk/src/host/secret-input-utils.ts	1
 packages/memory-host-sdk/src/host/session-files.ts	15
 packages/memory-host-sdk/src/host/session-reset-recall.ts	3
 packages/memory-host-sdk/src/host/session-transcript-corpus.ts	1
@@ -1929,7 +1927,6 @@ src/agents/harness/lifecycle-hook-helpers.ts	1
 src/agents/harness/native-hook-relay-client.ts	2
 src/agents/harness/native-hook-relay-codec.ts	2
 src/agents/harness/native-hook-relay-state.ts	1
-src/agents/harness/native-hook-relay.ts	3
 src/agents/harness/selection.ts	6
 src/agents/harness/support.ts	1
 src/agents/harness/tool-result-middleware.ts	1
@@ -2061,7 +2058,7 @@ src/agents/subagents/announce/subagent-announce-delivery-retry.ts	2
 src/agents/subagents/announce/subagent-announce-delivery.runtime.ts	2
 src/agents/subagents/announce/subagent-announce-delivery.ts	1
 src/agents/subagents/announce/subagent-announce-origin.ts	2
-src/agents/subagents/announce/subagent-announce-output.ts	10
+src/agents/subagents/announce/subagent-announce-output.ts	8
 src/agents/subagents/completion/subagent-completion-admission.store.ts	2
 src/agents/subagents/registry/subagent-control-messaging.ts	2
 src/agents/subagents/registry/subagent-control.ts	1
@@ -2473,7 +2470,7 @@ src/cli/program/register.audit.ts	12
 src/cli/program/register.backup.ts	14
 src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	12
-src/cli/program/register.onboard.ts	28
+src/cli/program/register.onboard.ts	27
 src/cli/program/register.setup.ts	2
 src/cli/program/register.status-health-sessions.ts	29
 src/cli/program/route-specs.ts	1
@@ -3096,7 +3093,7 @@ src/gateway/session-lifecycle-state.ts	1
 src/gateway/session-observer-rpc.ts	1
 src/gateway/session-recovery-service.ts	3
 src/gateway/session-sharing-target-input.ts	2
-src/gateway/session-sharing.ts	2
+src/gateway/session-sharing.ts	1
 src/gateway/session-transcript-derived-readers.ts	2
 src/gateway/session-transcript-files.fs.ts	2
 src/gateway/session-transcript-message.ts	4
@@ -3625,7 +3622,7 @@ src/plugins/native-module-require.ts	3
 src/plugins/official-external-plugin-catalog-snapshot-store.ts	4
 src/plugins/official-external-plugin-targets.ts	1
 src/plugins/official-external-provider-endpoints.ts	1
-src/plugins/openai-compatible-embedding-provider.ts	3
+src/plugins/openai-compatible-embedding-provider.ts	2
 src/plugins/plugin-cache-primitives.ts	2
 src/plugins/plugin-command-dispatch-contract.ts	1
 src/plugins/plugin-command-execution.ts	3
@@ -4106,7 +4103,7 @@ ui/src/lib/plugin-activation.ts	3
 ui/src/lib/session-pull-requests.ts	2
 ui/src/lib/sessions/custom-groups.ts	5
 ui/src/lib/sessions/grouping.ts	4
-ui/src/lib/sessions/index.ts	2
+ui/src/lib/sessions/index.ts	1
 ui/src/lib/sessions/navigation.ts	1
 ui/src/lib/sessions/reconcile.ts	10
 ui/src/lib/sessions/session-key.ts	4
@@ -4176,7 +4173,7 @@ ui/src/pages/chat/components/chat-message-markdown.ts	3
 ui/src/pages/chat/components/chat-message-media.ts	13
 ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker-options.ts	2
-ui/src/pages/chat/components/chat-model-picker.ts	8
+ui/src/pages/chat/components/chat-model-picker.ts	7
 ui/src/pages/chat/components/chat-pane-header.ts	2
 ui/src/pages/chat/components/chat-question-card.ts	1
 ui/src/pages/chat/components/chat-selection-popup.ts	1

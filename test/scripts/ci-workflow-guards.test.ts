@@ -7582,8 +7582,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const runStep = nodeTestJob.steps.find(
       (step: WorkflowStep) => step.name === "Run Node test shard",
     );
+    const buildRuntimeStep = nodeTestJob.steps.find(
+      (step: WorkflowStep) => step.name === "Build Node test runtime",
+    );
 
     expect(JSON.stringify(preflightJob.steps)).toContain("timeout_minutes: shard.timeoutMinutes");
+    expect(manifestStep.run).toContain("pretest_build_mode: shard.pretestBuildMode");
     expect(manifestStep.run).toContain(
       'shard.groups?.some((group) => group.shard_name.startsWith("core-tooling"))',
     );
@@ -7596,6 +7600,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON).toBe(
       "${{ needs.preflight.outputs.compatibility_target == 'true' && '[\"--hookTimeout=600000\"]' || '[]' }}",
+    );
+    expect(buildRuntimeStep).toMatchObject({
+      if: "matrix.pretest_build_mode != null",
+      env: {
+        OPENCLAW_BUILD_PRIVATE_QA: "${{ matrix.pretest_build_mode == 'private-qa' && '1' || '0' }}",
+        VITEST: "1",
+      },
+      run: "pnpm build",
+    });
+    expect(nodeTestJob.steps.indexOf(buildRuntimeStep)).toBeLessThan(
+      nodeTestJob.steps.indexOf(runStep),
     );
     const trustedRunnerStep = nodeTestJob.steps.find(
       (step: WorkflowStep) => step.name === "Checkout trusted Node shard runner",

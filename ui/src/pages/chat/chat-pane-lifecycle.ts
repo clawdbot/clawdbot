@@ -21,7 +21,10 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  matchesShortcutCombo,
+} from "../../lib/keyboard-shortcut-catalog.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -326,11 +329,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       this.active &&
       this.presented &&
       !event.defaultPrevented &&
-      !event.altKey &&
-      event.shiftKey &&
-      event.metaKey &&
-      !event.ctrlKey &&
-      resolveAsciiShortcutKey(event) === "b"
+      matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
     ) {
       const state = this.state;
       if (!state) {

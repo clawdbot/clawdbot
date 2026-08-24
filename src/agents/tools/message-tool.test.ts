@@ -3695,12 +3695,26 @@ describe("message tool schema scoping", () => {
   it.each<{
     action: ChannelMessageActionName;
     fields: string[];
+    descriptions?: Record<string, string>;
   }>([
+    {
+      action: "react",
+      fields: ["messageId", "emoji"],
+      descriptions: { emoji: "Unicode emoji; channels may also support custom emoji." },
+    },
     { action: "search", fields: ["query", "limit"] },
     { action: "reactions", fields: ["messageId", "limit"] },
     { action: "sticker-search", fields: ["query", "limit"] },
-    { action: "emoji-list", fields: ["guildId", "limit"] },
-    { action: "emoji-upload", fields: ["guildId", "emojiName", "media", "roleIds"] },
+    {
+      action: "emoji-list",
+      fields: ["guildId", "limit"],
+      descriptions: { limit: "Maximum number of results to return." },
+    },
+    {
+      action: "emoji-upload",
+      fields: ["guildId", "emojiName", "media", "roleIds"],
+      descriptions: { emojiName: "Name for an uploaded custom emoji." },
+    },
     {
       action: "sticker-upload",
       fields: ["guildId", "stickerName", "stickerDesc", "stickerTags", "media"],
@@ -3713,7 +3727,7 @@ describe("message tool schema scoping", () => {
     { action: "setGroupIcon", fields: ["name", "filename", "buffer"] },
     { action: "channel-info", fields: ["channelId", "pageSize", "pageToken"] },
     { action: "channel-list", fields: ["query", "limit"] },
-  ])("keeps fields consumed by scoped $action handlers", ({ action, fields }) => {
+  ])("keeps fields consumed by scoped $action handlers", ({ action, fields, descriptions }) => {
     const plugin = createChannelPlugin({
       id: "test-channel",
       label: "Test Channel",
@@ -3734,6 +3748,11 @@ describe("message tool schema scoping", () => {
 
     for (const field of fields) {
       expect(properties, `${action} should advertise ${field}`).toHaveProperty(field);
+    }
+    for (const [field, description] of Object.entries(descriptions ?? {})) {
+      expect(properties[field], `${action} should describe ${field}`).toMatchObject({
+        description,
+      });
     }
   });
 

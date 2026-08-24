@@ -518,6 +518,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       projectId: requestedProjectId,
       incognito: p.incognito,
       ...(client?.connect ? { requestingOperatorScopes: clientScopes } : {}),
+      ...(client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: client.internal.operatorRoleActor }
+        : {}),
       visibility: p.visibility,
       allowExistingModelSelection,
       parentSessionKey,

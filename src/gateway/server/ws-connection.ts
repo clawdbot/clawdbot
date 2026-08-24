@@ -330,6 +330,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     };
 
     const close = (code = 1000, reason?: string) => {
+      retainClientUntilNodeDrain ||=
+        !closed && client?.connect.role === "node" && nodeLifecycleDispatch.hasActive();
       retireTransport(code, reason);
       if (client && !retainClientUntilNodeDrain) {
         clients.delete(client);
@@ -341,9 +343,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         return { kind: "unavailable" } as const;
       }
       if (socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
-        if (client?.connect.role === "node" && nodeLifecycleDispatch.hasActive()) {
-          retainClientUntilNodeDrain = true;
-        }
         close();
         return { kind: "unavailable" } as const;
       }
@@ -371,6 +370,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         socket.send(encoded);
         return { kind: "sent" } as const;
       } catch {
+        socket.terminate();
+        close();
         return { kind: "unavailable" } as const;
       }
     };

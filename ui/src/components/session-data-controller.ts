@@ -65,7 +65,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   sessionsLoading = false;
   childSessionRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>> = {};
   loadedChildSessionKeys: ReadonlySet<string> = new Set();
-  failedChildSessionKeys: ReadonlySet<string> = new Set();
+  childSessionErrorsByParent: ReadonlyMap<string, string> = new Map();
   loadingChildSessionKeys: ReadonlySet<string> = new Set();
   activeSessionLineageRoot: GatewaySessionRow | null = null;
   activeSessionLineageSelectedRow: GatewaySessionRow | null = null;
@@ -383,7 +383,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
         )
       : {};
     this.loadedChildSessionKeys = new Set();
-    this.failedChildSessionKeys = new Set();
+    this.childSessionErrorsByParent = new Map();
     this.loadingChildSessionKeys = new Set();
     if (options.preserveActiveLineage !== true) {
       this.activeSessionLineageRoot = null;
@@ -560,7 +560,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     if (
       !parentKey ||
       this.loadedChildSessionKeys.has(parentKey) ||
-      this.failedChildSessionKeys.has(parentKey) ||
+      this.childSessionErrorsByParent.has(parentKey) ||
       this.loadingChildSessionKeys.has(parentKey)
     ) {
       return;
@@ -586,13 +586,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       }
       this.childSessionRowsByParent = { ...this.childSessionRowsByParent, [parentKey]: rows };
       this.loadedChildSessionKeys = new Set([...this.loadedChildSessionKeys, parentKey]);
-      if (this.failedChildSessionKeys.has(parentKey)) {
-        const failedKeys = new Set(this.failedChildSessionKeys);
-        failedKeys.delete(parentKey);
-        this.failedChildSessionKeys = failedKeys;
-      }
       this.notify();
-    } catch {
+    } catch (error) {
       if (generation !== this.childSessionGeneration || sessions !== this.context?.sessions) {
         return;
       }
@@ -602,7 +597,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
         ...this.childSessionRowsByParent,
         [parentKey]: this.childSessionRowsByParent[parentKey] ?? [],
       };
-      this.failedChildSessionKeys = new Set([...this.failedChildSessionKeys, parentKey]);
+      this.childSessionErrorsByParent = new Map(this.childSessionErrorsByParent).set(
+        parentKey,
+        formatUiError(error),
+      );
       this.notify();
     } finally {
       if (generation === this.childSessionGeneration && sessions === this.context?.sessions) {
@@ -718,10 +716,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   retryChildSessions(sessionKey: string): void {
-    if (this.failedChildSessionKeys.has(sessionKey)) {
-      const failedKeys = new Set(this.failedChildSessionKeys);
-      failedKeys.delete(sessionKey);
-      this.failedChildSessionKeys = failedKeys;
+    if (this.childSessionErrorsByParent.has(sessionKey)) {
+      const errors = new Map(this.childSessionErrorsByParent);
+      errors.delete(sessionKey);
+      this.childSessionErrorsByParent = errors;
       this.notify();
     }
     void this.loadChildSessions(sessionKey);

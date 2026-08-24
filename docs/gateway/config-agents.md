@@ -1343,8 +1343,9 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 ### Ack reaction
 
 - Defaults to active agent's `identity.emoji`, otherwise `"👀"`. Set `""` to disable.
-- Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
+- Per-channel overrides are supported by Discord, Matrix, Slack, and Telegram: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`. For other channels that support acknowledgment reactions, use `messages.ackReaction` instead.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
+- WhatsApp is the exception to both rules above. It takes the emoji and scope from `messages.ackReaction` and `messages.ackReactionScope` only, and sends no acknowledgment at all when `messages.ackReaction` is unset, so the identity fallback never applies there. Setting `channels.whatsapp.reactionLevel` (or the per-account form) to `"off"` still suppresses every automatic reaction, acknowledgments included. See [WhatsApp acknowledgment reactions](/channels/whatsapp#acknowledgment-reactions).
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`, or `off`/`none` (disables ack reactions entirely).
 - `group-mentions` acks group messages that mention the agent, including in groups with `requireMention: false`. Use `group-all` to ack every group message.
 - `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Signal, Telegram, and WhatsApp.

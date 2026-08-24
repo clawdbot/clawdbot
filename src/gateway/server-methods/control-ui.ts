@@ -105,7 +105,7 @@ function loadControlUiSessionPreview(
   // Hover previews must not reveal more than sessions.list: apply the same
   // incognito/draft sharing predicate so a member cannot preview-by-key a
   // session the sidebar hides from them.
-  const entryFilter = createSessionListEntryFilter({ client });
+  const entryFilter = createSessionListEntryFilter({ client, cfg });
   if (entryFilter && !entryFilter(target.canonicalKey, entry)) {
     return null;
   }

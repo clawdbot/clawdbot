@@ -164,6 +164,27 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout trusted package source preflight
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-harness
+          fetch-depth: 1
+          filter: blob:none
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Validate npm package source metadata
+        env:
+          RELEASE_REF: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          args=(--source-dir "$GITHUB_WORKSPACE")
+          if [[ "$RELEASE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            args+=(--allow-unreleased-changelog)
+          fi
+          node .release-harness/scripts/package-source-preflight.mjs "${args[@]}"
+
       - name: Setup Node environment
         id: setup-node-env
         uses: ./.github/actions/setup-node-env

@@ -1,6 +1,11 @@
 // Error output tests cover program-level error display and exit messaging.
-import { CommanderError } from "commander";
+import { CommanderError, InvalidArgumentError } from "commander";
 import { describe, expect, it } from "vitest";
+import { ExpectedCliError } from "../failure-output.js";
+import {
+  isJsonOutputModeActive,
+  withConsoleLogsRoutedToStderrForJson,
+} from "../json-output-mode.js";
 import {
   getCommanderErrorCommandNames,
   getCommanderErrorCommandPath,
@@ -65,6 +70,128 @@ async function parseLazyGroupError(params: {
 }
 
 describe("formatCliParseErrorOutput", () => {
+  it.each([
+    { label: "JSON spelling", value: "--json", supportsJson: true },
+    { label: "true-valued JSON spelling", value: "--json=true", supportsJson: true },
+    { label: "false-valued JSON spelling", value: "--json=false", supportsJson: true },
+    { label: "command without JSON output", value: "--json", supportsJson: false },
+    {
+      label: "JSON spelling before a positional terminator",
+      value: "--json",
+      supportsJson: true,
+      suffix: ["--", "--json"],
+    },
+    {
+      label: "JSON spelling after a short option alias",
+      value: "--json",
+      supportsJson: true,
+      flag: "-l",
+    },
+  ])("keeps a consumed $label as a human parse error", async (testCase) => {
+    const { value, supportsJson } = testCase;
+    const originalArgv = process.argv;
+    process.argv = [
+      "node",
+      "openclaw",
+      "--profile",
+      "work",
+      "p",
+      "s",
+      testCase.flag ?? "--limit",
+      value,
+      ...(testCase.suffix ?? []),
+    ];
+    let stderr = "";
+    try {
+      const program = new OpenClawCommand()
+        .name("openclaw")
+        .enablePositionalOptions()
+        .option("--profile <name>")
+        .exitOverride();
+      program.configureOutput({
+        writeErr: (output) => {
+          stderr += output;
+        },
+      });
+      const command = program
+        .command("plugins")
+        .alias("p")
+        .command("search")
+        .alias("s")
+        .option("-l, --limit <value>", "Result limit", () => {
+          throw new InvalidArgumentError("--limit must be a positive integer.");
+        });
+      if (supportsJson) {
+        command.option("--json", "Output JSON");
+      }
+
+      await withConsoleLogsRoutedToStderrForJson(
+        process.argv,
+        async () => {
+          const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+
+          expect(error).toBeInstanceOf(CommanderError);
+          expect(error).not.toBeInstanceOf(ExpectedCliError);
+          expect((error as CommanderError).exitCode).toBe(1);
+          expect(stderr).toContain("--limit must be a positive integer.");
+          expect(isJsonOutputModeActive(process.argv)).toBe(false);
+        },
+        { restoreChanges: true },
+      );
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
+  it.each([
+    { label: "before an invalid value", args: ["--json", "--limit", "bad"] },
+    { label: "after an invalid value", args: ["--limit", "bad", "--json"] },
+    { label: "before a consumed JSON value", args: ["--json", "--limit", "--json"] },
+    { label: "after a consumed JSON value", args: ["--limit", "--json", "--json"] },
+    { label: "after a consumed valued JSON token", args: ["--limit", "--json=true", "--json"] },
+  ])("preserves a genuine JSON request $label", async ({ args }) => {
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "plugins", "search", ...args];
+    try {
+      const program = new OpenClawCommand().name("openclaw").exitOverride();
+      program.configureOutput({ writeErr: () => {} });
+      program
+        .command("plugins")
+        .command("search")
+        .option("--json", "Output JSON")
+        .option("--limit <value>", "Result limit", () => {
+          throw new InvalidArgumentError("--limit must be a positive integer.");
+        });
+
+      const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+
+      expect(error).toBeInstanceOf(ExpectedCliError);
+      expect((error as ExpectedCliError).message).toContain("--limit must be a positive integer.");
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
+  it("preserves JSON diagnostics for an unsupported but genuine output flag", async () => {
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "fleet", "logs", "--json"];
+    try {
+      const program = new OpenClawCommand().name("openclaw").exitOverride();
+      program.configureOutput({ writeErr: () => {} });
+      program
+        .command("fleet")
+        .command("logs")
+        .action(() => {});
+
+      const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+
+      expect(error).toBeInstanceOf(ExpectedCliError);
+      expect((error as ExpectedCliError).message).toContain("--json");
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
   it("uses the same structured root diagnostic as the human renderer", () => {
     const error = createCliUnknownCommandError("pairng", {
       argv: ["node", "openclaw", "pairng", "--json"],

@@ -11,7 +11,6 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { t } from "../i18n/index.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
@@ -138,7 +137,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private sessionNavigationState: SidebarSessionNavigationState | undefined;
   private projectedSessionRows: SidebarRecentSession[] | undefined;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
-  private readonly nativeGatewaysChanged = () => this.requestUpdate();
+  private readonly nativeGatewaysChanged = () => this.sidebarMenus.closeSessionMenu();
   private readonly refreshAppearanceSettings = () => this.context?.theme.refresh();
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();

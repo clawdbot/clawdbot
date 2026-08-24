@@ -20,6 +20,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { mergeTelegramAccountConfig, resolveDefaultTelegramAccountId } from "./accounts.js";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
+import { TELEGRAM_MAX_CAPTION_LENGTH, telegramCaptionDeliveryMetadata } from "./caption.js";
 import { splitTelegramHtmlChunks } from "./format.js";
 import {
   canonicalizeTelegramPresentationPayload,
@@ -525,13 +526,21 @@ export function createTelegramOutboundAdapter(
           : normalizeTelegramOutboundTarget(target.to);
       const messageId = result.messageId;
       const accountId = target.accountId ?? undefined;
+      const deliveredPart = result.receipt?.parts.find(
+        (part) => part.platformMessageId === messageId,
+      );
+      const isCaptionDelivery =
+        deliveredPart?.kind === "media" ||
+        (deliveredPart?.kind !== "text" &&
+          result.meta !== undefined &&
+          telegramCaptionDeliveryMetadata.has(result.meta));
       registerTelegramQuestionDelivery({
         accountId,
         chatId,
         messageId,
         payload,
         text,
-        textLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+        textLimit: isCaptionDelivery ? TELEGRAM_MAX_CAPTION_LENGTH : TELEGRAM_TEXT_CHUNK_LIMIT,
         clearButtons: async () => {
           const { editMessageReplyMarkupTelegram } = await loadSendModule();
           await editMessageReplyMarkupTelegram(chatId, messageId, [], {
@@ -546,6 +555,7 @@ export function createTelegramOutboundAdapter(
             cfg,
             accountId,
             verbose: false,
+            ...(isCaptionDelivery ? { editMode: "caption" } : {}),
           });
         },
       });

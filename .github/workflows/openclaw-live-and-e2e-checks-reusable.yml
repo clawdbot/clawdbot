@@ -544,6 +544,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
+      package_artifact_present: ${{ steps.validate.outputs.package_artifact_present }}
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
       workflow_repository: ${{ steps.workflow.outputs.workflow_repository }}
@@ -620,6 +621,9 @@ jobs:
         run: |
           set -euo pipefail
           trusted_reason=""
+          has_non_whitespace() {
+            [[ "$1" =~ [^[:space:]] ]]
+          }
 
           # Resolve here instead of in actions/checkout so short SHAs work too.
           if ! selected_sha="$(git rev-parse --verify "${INPUT_REF}^{commit}")"; then
@@ -643,7 +647,7 @@ jobs:
             exit 1
           fi
 
-          package_tuple_present=0
+          package_tuple_present=false
           for value in \
             "$PACKAGE_ARTIFACT_DIGEST" \
             "$PACKAGE_ARTIFACT_ID" \
@@ -654,20 +658,20 @@ jobs:
             "$PACKAGE_SHA256" \
             "$PACKAGE_SOURCE_SHA" \
             "$PACKAGE_VERSION"; do
-            if [[ -n "${value// }" ]]; then
-              package_tuple_present=1
+            if has_non_whitespace "$value"; then
+              package_tuple_present=true
             fi
           done
-          if [[ "$package_tuple_present" == "1" ]]; then
+          if [[ "$package_tuple_present" == "true" ]]; then
             [[ "$PACKAGE_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ &&
               "$PACKAGE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-              -n "${PACKAGE_ARTIFACT_NAME// }" &&
+              "$PACKAGE_ARTIFACT_NAME" =~ [^[:space:]] &&
               "$PACKAGE_ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ &&
               "$PACKAGE_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ &&
               "$PACKAGE_FILE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$ &&
               "$PACKAGE_SHA256" =~ ^[0-9a-f]{64}$ &&
               "$PACKAGE_SOURCE_SHA" =~ ^[0-9a-f]{40}$ &&
-              -n "${PACKAGE_VERSION// }" ]] || {
+              "$PACKAGE_VERSION" =~ [^[:space:]] ]] || {
               echo "Package artifact selection requires the complete immutable artifact and package identity tuple." >&2
               exit 1
             }
@@ -676,6 +680,7 @@ jobs:
               exit 1
             }
           fi
+          echo "package_artifact_present=$package_tuple_present" >> "$GITHUB_OUTPUT"
 
           if [[ "$PREPUBLISH_PLUGIN_REGISTRY_ENABLED" == "true" ]]; then
             prepublish_plugin_registry_tuple_present=0
@@ -686,14 +691,14 @@ jobs:
               "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT" \
               "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID" \
               "$PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"; do
-              if [[ -n "${value// }" ]]; then
+              if has_non_whitespace "$value"; then
                 prepublish_plugin_registry_tuple_present=1
               fi
             done
             if [[ "$prepublish_plugin_registry_tuple_present" == "1" ]]; then
               [[ "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ &&
                 "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-                -n "${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME// }" &&
+                "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME" =~ [^[:space:]] &&
                 "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ &&
                 "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ &&
                 "$PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
@@ -715,14 +720,14 @@ jobs:
             "$SHARED_IMAGE_ARTIFACT_RUN_ATTEMPT" \
             "$SHARED_IMAGE_ARTIFACT_RUN_ID" \
             "$SHARED_IMAGE_ARCHIVE_SHA256"; do
-            if [[ -n "${value// }" ]]; then
+            if has_non_whitespace "$value"; then
               image_tuple_present=1
             fi
           done
           if [[ "$image_tuple_present" == "1" ]]; then
             [[ "$SHARED_IMAGE_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ &&
               "$SHARED_IMAGE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-              -n "${SHARED_IMAGE_ARTIFACT_NAME// }" &&
+              "$SHARED_IMAGE_ARTIFACT_NAME" =~ [^[:space:]] &&
               "$SHARED_IMAGE_ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ &&
               "$SHARED_IMAGE_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ &&
               "$SHARED_IMAGE_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
@@ -755,7 +760,7 @@ jobs:
                 echo "shared_image_policy=no-push-artifact builds local image artifacts and rejects provided images." >&2
                 exit 1
               }
-              if [[ "$image_tuple_present" == "1" && "$package_tuple_present" != "1" ]]; then
+              if [[ "$image_tuple_present" == "1" && "$package_tuple_present" != "true" ]]; then
                 echo "Reusing a Docker image artifact requires its immutable package identity tuple." >&2
                 exit 1
               fi
@@ -1232,7 +1237,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
-      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_DOCKER_ALL_RELEASE_PROFILE: ${{ inputs.release_test_profile }}
@@ -1619,7 +1624,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_BARE_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.bare_image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
-      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CODEX_NPM_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
@@ -1919,7 +1924,7 @@ jobs:
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.functional_image }}
-      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
+      OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
@@ -2130,8 +2135,8 @@ jobs:
       needs_registry_build: ${{ steps.image_exists.outputs.needs_build }}
       package_sha256: ${{ steps.package.outputs.sha256 }}
       package_version: ${{ steps.package.outputs.version }}
-      package_artifact_name: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || inputs.package_artifact_name }}
-      package_artifact_id: ${{ steps.upload_package.outputs.artifact-id || inputs.package_artifact_id }}
+      package_artifact_name: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_name || '') }}
+      package_artifact_id: ${{ steps.upload_package.outputs.artifact-id || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_id || '') }}
       package_artifact_digest: ${{ steps.upload_package.outputs.artifact-digest || steps.input_package_artifact.outputs.artifact_digest }}
       package_artifact_run_id: ${{ steps.upload_package.outputs.artifact-id && github.run_id || steps.input_package_artifact.outputs.run_id }}
       package_artifact_run_attempt: ${{ steps.upload_package.outputs.artifact-id && github.run_attempt || steps.input_package_artifact.outputs.run_attempt }}
@@ -2169,6 +2174,32 @@ jobs:
           fetch-depth: 1
           path: .release-harness
           persist-credentials: false
+
+      - name: Resolve source package requirement
+        id: package_source
+        env:
+          PACKAGE_ARTIFACT_PRESENT: ${{ needs.validate_selected_ref.outputs.package_artifact_present }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_package_required=false
+          if [[ "$PACKAGE_ARTIFACT_PRESENT" != "true" ]]; then
+            source_package_required=true
+          fi
+          echo "required=$source_package_required" >> "$GITHUB_OUTPUT"
+
+      - name: Validate prepare-only Docker E2E package source metadata
+        if: inputs.prepare_only && steps.package_source.outputs.required == 'true'
+        env:
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--source-dir "$GITHUB_WORKSPACE")
+          if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+            args+=(--allow-unreleased-changelog)
+          fi
+          node .release-harness/scripts/package-source-preflight.mjs "${args[@]}"
 
       - name: Setup trusted release harness
         uses: ./.release-harness/.github/actions/setup-release-harness
@@ -2214,8 +2245,21 @@ jobs:
           fi
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
 
+      - name: Validate Docker E2E package source metadata
+        if: (!inputs.prepare_only) && steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'
+        env:
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--source-dir "$GITHUB_WORKSPACE")
+          if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+            args+=(--allow-unreleased-changelog)
+          fi
+          node .release-harness/scripts/package-source-preflight.mjs "${args[@]}"
+
       - name: Setup Node environment
-        if: (steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == '') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')
+        if: (steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
@@ -2224,7 +2268,7 @@ jobs:
 
       - name: Validate OpenClaw package artifact identity
         id: input_package_artifact
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
+        if: steps.plan.outputs.needs_package == '1' && needs.validate_selected_ref.outputs.package_artifact_present == 'true'
         env:
           ARTIFACT_DIGEST: ${{ inputs.package_artifact_digest }}
           ARTIFACT_ID: ${{ inputs.package_artifact_id }}
@@ -2282,7 +2326,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Download current-run OpenClaw Docker E2E package
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != '' && inputs.package_artifact_run_id == github.run_id
+        if: steps.plan.outputs.needs_package == '1' && needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_run_id == github.run_id
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ inputs.package_artifact_id }}
@@ -2291,7 +2335,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download previous-run OpenClaw Docker E2E package
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != '' && inputs.package_artifact_run_id != github.run_id
+        if: steps.plan.outputs.needs_package == '1' && needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_run_id != github.run_id
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           artifact-ids: ${{ inputs.package_artifact_id }}
@@ -2300,7 +2344,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Pack OpenClaw package for Docker E2E
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == ''
+        if: steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'
         env:
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
         shell: bash
@@ -2322,10 +2366,10 @@ jobs:
         id: package
         if: steps.plan.outputs.needs_package == '1'
         env:
-          EXPECTED_PACKAGE_FILE_NAME: ${{ inputs.package_file_name }}
-          EXPECTED_PACKAGE_SHA256: ${{ inputs.package_sha256 }}
-          EXPECTED_PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
-          EXPECTED_PACKAGE_VERSION: ${{ inputs.package_version }}
+          EXPECTED_PACKAGE_FILE_NAME: ${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_file_name || '' }}
+          EXPECTED_PACKAGE_SHA256: ${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_sha256 || '' }}
+          EXPECTED_PACKAGE_SOURCE_SHA: ${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_source_sha || '' }}
+          EXPECTED_PACKAGE_VERSION: ${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_version || '' }}
           SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           SHARED_IMAGE_POLICY: ${{ inputs.shared_image_policy }}
         shell: bash
@@ -2425,7 +2469,7 @@ jobs:
 
       - name: Upload OpenClaw Docker E2E package
         id: upload_package
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id == ''
+        if: steps.plan.outputs.needs_package == '1' && needs.validate_selected_ref.outputs.package_artifact_present != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: docker-e2e-package-${{ github.run_id }}-${{ github.run_attempt }}
@@ -2701,11 +2745,11 @@ jobs:
           IMAGE_ARTIFACT_NAME: ${{ steps.image_artifact.outputs.artifact_name || inputs.shared_image_artifact_name }}
           IMAGE_ARTIFACT_RUN_ATTEMPT: ${{ steps.upload_image_artifact.outputs.artifact-id && github.run_attempt || inputs.shared_image_artifact_run_attempt }}
           IMAGE_ARTIFACT_RUN_ID: ${{ steps.upload_image_artifact.outputs.artifact-id && github.run_id || inputs.shared_image_artifact_run_id }}
-          PACKAGE_ARTIFACT_DIGEST: ${{ steps.upload_package.outputs.artifact-digest || inputs.package_artifact_digest }}
-          PACKAGE_ARTIFACT_ID: ${{ steps.upload_package.outputs.artifact-id || inputs.package_artifact_id }}
-          PACKAGE_ARTIFACT_NAME: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || inputs.package_artifact_name }}
-          PACKAGE_ARTIFACT_RUN_ATTEMPT: ${{ steps.upload_package.outputs.artifact-id && github.run_attempt || inputs.package_artifact_run_attempt }}
-          PACKAGE_ARTIFACT_RUN_ID: ${{ steps.upload_package.outputs.artifact-id && github.run_id || inputs.package_artifact_run_id }}
+          PACKAGE_ARTIFACT_DIGEST: ${{ steps.upload_package.outputs.artifact-digest || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_digest || '') }}
+          PACKAGE_ARTIFACT_ID: ${{ steps.upload_package.outputs.artifact-id || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_id || '') }}
+          PACKAGE_ARTIFACT_NAME: ${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_name || '') }}
+          PACKAGE_ARTIFACT_RUN_ATTEMPT: ${{ steps.upload_package.outputs.artifact-id && github.run_attempt || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_run_attempt || '') }}
+          PACKAGE_ARTIFACT_RUN_ID: ${{ steps.upload_package.outputs.artifact-id && github.run_id || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_run_id || '') }}
           PACKAGE_FILE_NAME: ${{ steps.package.outputs.file_name }}
           PACKAGE_SHA256: ${{ steps.package.outputs.sha256 }}
           PACKAGE_SOURCE_SHA: ${{ steps.package.outputs.source_sha }}

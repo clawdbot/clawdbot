@@ -154,7 +154,7 @@ export function resolveNewSessionSubmitBlock(
     };
   }
   const deviceRuntimeUnsupportedReason = place.modelControl.devicePlacementUnsupportedReason();
-  if (place.deviceId && deviceRuntimeUnsupportedReason) {
+  if ((place.deviceId || place.autoDevice) && deviceRuntimeUnsupportedReason) {
     return { gate: "device-runtime", reason: deviceRuntimeUnsupportedReason };
   }
   const placementTarget = host.placementTargetForSubmission();

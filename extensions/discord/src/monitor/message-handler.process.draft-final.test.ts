@@ -236,6 +236,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
       allowedMentions: { parse: ["users", "roles"] },
+      onPlatformSendDispatch: expect.any(Function),
     });
   });
 

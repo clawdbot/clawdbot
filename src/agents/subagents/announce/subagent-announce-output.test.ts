@@ -123,6 +123,17 @@ describe("readSubagentOutput", () => {
   });
 
   it.each([
+    { phase: "commentary", expected: undefined },
+    { phase: "final_answer", expected: "Visible subagent answer" },
+  ])("respects the phase of scalar $phase output", async ({ phase, expected }) => {
+    installOutputDeps({
+      messages: [{ role: "assistant", phase, content: "Visible subagent answer" }],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(expected);
+  });
+
+  it.each([
     {
       shape: "OpenAI top-level snake_case function call",
       assistant: {
@@ -468,26 +479,55 @@ describe("buildChildCompletionFindings", () => {
     }
   });
 
-  it("retains a later actionable failure when an earlier child exceeds the remaining budget", () => {
+  it("bounds a single child result's escaped output with a visible marker", () => {
     const findings = buildChildCompletionFindings([
       {
-        childSessionKey: "agent:main:subagent:first",
-        task: "first large result",
+        childSessionKey: "agent:main:subagent:angle-dense",
+        task: "angle-dense result",
         createdAt: 1,
-        completion: { resultText: "<".repeat(100_000) },
+        completion: { resultText: `${"<".repeat(6_000)}-tail` },
         execution: { outcome: { status: "ok" } },
       },
+    ]);
+
+    const block = findings?.match(/<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/)?.[1];
+    expect(block).toBeDefined();
+    expect(block!.length).toBeLessThanOrEqual(512);
+    expect(block!.endsWith("[child result truncated]")).toBe(true);
+  });
+
+  it("sanitizes child results before applying their escaped output budget", () => {
+    const findings = buildChildCompletionFindings([
       {
-        childSessionKey: "agent:main:subagent:second",
-        task: "second large result",
-        createdAt: 2,
-        completion: { resultText: "<".repeat(100_000) },
+        childSessionKey: "agent:main:subagent:control-prefix",
+        task: "control-prefixed result",
+        createdAt: 1,
+        completion: { resultText: `${"\u0000".repeat(700)}useful child result` },
         execution: { outcome: { status: "ok" } },
       },
+    ]);
+
+    expect(findings).toContain("useful child result");
+    expect(findings).not.toContain("[child result truncated]");
+  });
+
+  it("retains a later actionable failure when earlier children exceed the remaining budget", () => {
+    // Bounding each child's escaped output (this fix) shrank a single
+    // oversized child from ~4x the 512-char budget down to ~512, so it now
+    // takes 7 oversized successes (not 2) to pressure the 4096-char
+    // aggregate cap in buildChildCompletionFindings.
+    const findings = buildChildCompletionFindings([
+      ...Array.from({ length: 7 }, (_, index) => ({
+        childSessionKey: `agent:main:subagent:success-${index}`,
+        task: `large result ${index + 1}`,
+        createdAt: index + 1,
+        completion: { resultText: "<".repeat(100_000) },
+        execution: { outcome: { status: "ok" as const } },
+      })),
       {
         childSessionKey: "agent:main:subagent:failure",
         task: "later actionable failure",
-        createdAt: 3,
+        createdAt: 8,
         completion: { resultText: "Permission required." },
         execution: {
           outcome: { status: "error", error: "Writable session authorization required." },
@@ -496,25 +536,28 @@ describe("buildChildCompletionFindings", () => {
     ]);
 
     expect(findings!.length).toBeLessThanOrEqual(4_096);
-    expect(findings).toContain("first large result");
+    expect(findings).toContain("large result 1");
     expect(findings).toContain("later actionable failure");
     expect(findings).toContain("status: error: Writable session authorization required.");
-    expect(findings).toContain("[1 additional child completion result omitted");
+    expect(findings).toContain("additional child completion results omitted");
   });
 
-  it("prioritizes an oversized failed completion over an earlier oversized success", () => {
+  it("prioritizes an oversized failed completion over a competing oversized success", () => {
+    // 6 oversized successes alone just fit the 4096-char aggregate cap; an
+    // oversized failure appended after them must still win its slot,
+    // displacing the lowest-priority (chronologically last) success.
     const findings = buildChildCompletionFindings([
-      {
-        childSessionKey: "agent:main:subagent:success",
-        task: "earlier oversized success",
-        createdAt: 1,
+      ...Array.from({ length: 6 }, (_, index) => ({
+        childSessionKey: `agent:main:subagent:success-${index}`,
+        task: `large result ${index + 1}`,
+        createdAt: index + 1,
         completion: { resultText: "<".repeat(100_000) },
-        execution: { outcome: { status: "ok" } },
-      },
+        execution: { outcome: { status: "ok" as const } },
+      })),
       {
         childSessionKey: "agent:main:subagent:failure",
         task: "later oversized failure",
-        createdAt: 2,
+        createdAt: 100,
         completion: { resultText: "<".repeat(100_000) },
         execution: {
           outcome: { status: "error", error: "Writable session authorization required." },
@@ -525,7 +568,7 @@ describe("buildChildCompletionFindings", () => {
     expect(findings!.length).toBeLessThanOrEqual(4_096);
     expect(findings).toContain("later oversized failure");
     expect(findings).toContain("status: error: Writable session authorization required.");
-    expect(findings).not.toContain("earlier oversized success");
+    expect(findings).not.toContain("large result 6");
     expect(findings).toContain("[1 additional child completion result omitted");
   });
 

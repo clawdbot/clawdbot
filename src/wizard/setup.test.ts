@@ -923,7 +923,10 @@ describe("runSetupWizard", () => {
 
     expect(createConfigIO).toHaveBeenCalledWith({ pluginValidation: "skip" });
     expect(plain).not.toHaveBeenCalled();
-    expect(select).not.toHaveBeenCalled();
+    expect(select).toHaveBeenCalledOnce();
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Help make OpenClaw better?", initialValue: false }),
+    );
     expect(ensureAuthProfileStore).not.toHaveBeenCalled();
     expect(setupChannels).not.toHaveBeenCalled();
     expect(setupSkills).not.toHaveBeenCalled();
@@ -1462,6 +1465,32 @@ describe("runSetupWizard", () => {
     expect(confirm).not.toHaveBeenCalled();
   });
 
+  it("leaves feature-stat telemetry unset during non-interactive wizard setup", async () => {
+    const prompter = buildWizardPrompter();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        nonInteractive: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime({ throwsOnExit: true }),
+      prompter,
+    );
+
+    expect(persistedWizardConfigs().at(-1)?.telemetry).toBeUndefined();
+    expect(prompter.select).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Help make OpenClaw better?" }),
+    );
+  });
+
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
     ensureWorkspaceAndSessions.mockClear();
     replaceConfigFile.mockClear();
@@ -1945,7 +1974,10 @@ describe("runSetupWizard", () => {
         opts: expect.objectContaining({ importSource: "~/.hermes" }),
       }),
     );
-    expect(prompter.select).not.toHaveBeenCalled();
+    expect(prompter.select).toHaveBeenCalledOnce();
+    expect(prompter.select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Help make OpenClaw better?", initialValue: false }),
+    );
   });
 
   it("preserves concurrent edits while migrating pending plugin install records", async () => {
@@ -3525,6 +3557,7 @@ describe("runSetupWizard", () => {
       .mockResolvedValueOnce({ ok: false, status: "auth", error: "key still rejected" });
     const select = vi
       .fn()
+      .mockResolvedValueOnce(false)
       .mockResolvedValueOnce("fix")
       .mockResolvedValueOnce("fix")
       .mockResolvedValueOnce("continue") as unknown as WizardPrompter["select"];
@@ -3566,7 +3599,7 @@ describe("runSetupWizard", () => {
         "second retry auth choice",
       ) as Parameters<ApplyAuthChoice>[0];
       expect(secondRetry.config.models?.providers?.openai?.apiKey).toBe("test-original-key");
-      expect(select).toHaveBeenCalledTimes(3);
+      expect(select).toHaveBeenCalledTimes(4);
       expect(thirdVerification.authProfiles).toEqual([
         stagedOpenAiProfile("test-retry-still-invalid-key"),
       ]);

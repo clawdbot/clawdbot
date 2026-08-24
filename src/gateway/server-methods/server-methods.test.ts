@@ -4912,80 +4912,102 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(payload?.configReload?.hotReloadStatus).toBe("disabled");
   });
 
-  it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {
-    const cached = createSingleChannelHealthSnapshot({
-      channelId: "discord",
-      label: "Discord",
-      running: true,
-      connected: true,
-    });
-    const fresh = {
-      ...cached,
-      ts: cached.ts + 1,
-      channels: {
-        discord: {
-          ...cached.channels.discord,
-          accounts: {
-            ...cached.channels.discord.accounts,
-            work: channelHealthAccount({ accountId: "work", running: true, connected: true }),
-          },
-        },
-      },
-    };
-    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
-      cached,
-      fresh,
-      runtimeSnapshot: {
-        channels: {},
-        channelAccounts: {
-          discord: { work: { accountId: "work", running: true, connected: true } },
-        },
-      },
-    });
+  it.each([
+    {
+      change: "adds a running account",
+      previousAccountIds: ["default"],
+      nextAccountIds: ["default", "work"],
+    },
+    {
+      change: "adds an uninitialized account",
+      previousAccountIds: ["default"],
+      nextAccountIds: ["default", "work"],
+      uninitializedAccountId: "work",
+    },
+    {
+      change: "removes a runtime account",
+      previousAccountIds: ["default", "work"],
+      nextAccountIds: ["default"],
+    },
+    {
+      change: "removes an entire channel plugin",
+      previousAccountIds: ["default"],
+      nextAccountIds: [],
+    },
+    {
+      change: "re-adds an uninitialized channel plugin",
+      previousAccountIds: [],
+      nextAccountIds: ["default"],
+      uninitializedAccountId: "default",
+    },
+  ])(
+    "refreshes cached health after hot reload $change",
+    async ({ previousAccountIds, nextAccountIds, uninitializedAccountId }) => {
+      const current = createSingleChannelHealthSnapshot({
+        channelId: "discord",
+        label: "Discord",
+        running: true,
+        connected: true,
+      });
+      const account = (accountId: string) =>
+        channelHealthAccount({ accountId, running: true, connected: true });
+      const summary = (accountIds: string[]) =>
+        accountIds.length === 0
+          ? createHealthSnapshot({})
+          : {
+              ...current,
+              channels: {
+                discord: {
+                  ...current.channels.discord,
+                  accounts: Object.fromEntries(accountIds.map((id) => [id, account(id)])),
+                },
+              },
+            };
+      const runtime = (accountIds: string[], uninitialized?: string) => ({
+        channels:
+          previousAccountIds.length === 0 && accountIds.length > 0
+            ? { discord: { accountId: accountIds[0] } }
+            : {},
+        channelAccounts:
+          accountIds.length === 0
+            ? {}
+            : {
+                discord: Object.fromEntries(
+                  accountIds.map((id) => [
+                    id,
+                    id === uninitialized ? { accountId: id } : account(id),
+                  ]),
+                ),
+              },
+      });
+      const cached = summary(previousAccountIds);
+      const fresh = summary(nextAccountIds);
+      const refreshHealthSnapshot = vi
+        .fn()
+        .mockResolvedValueOnce(cached)
+        .mockResolvedValueOnce(fresh);
 
-    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
-      probe: false,
-      includeSensitive: false,
-    });
-    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
-  });
+      await requestHealthSnapshot({
+        cached,
+        refreshHealthSnapshot,
+        runtimeSnapshot: runtime(previousAccountIds),
+      });
+      expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
 
-  it("refreshes cached health after hot reload removes a runtime account", async () => {
-    const current = createSingleChannelHealthSnapshot({
-      channelId: "discord",
-      label: "Discord",
-      running: true,
-      connected: true,
-    });
-    const cached = {
-      ...current,
-      channels: {
-        discord: {
-          ...current.channels.discord,
-          accounts: {
-            ...current.channels.discord.accounts,
-            work: channelHealthAccount({ accountId: "work", running: true, connected: true }),
-          },
-        },
-      },
-    };
-    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
-      cached,
-      fresh: current,
-      runtimeSnapshot: {
-        channels: {},
-        channelAccounts: {
-          discord: { default: { accountId: "default", running: true, connected: true } },
-        },
-      },
-    });
+      const { respond } = await requestHealthSnapshot({
+        cached,
+        refreshHealthSnapshot,
+        runtimeSnapshot: runtime(nextAccountIds, uninitializedAccountId),
+      });
 
-    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
-      probe: false,
-      includeSensitive: false,
-    });
-    expect(respond).toHaveBeenCalledWith(true, current, undefined);
-  });
+      expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+      expect(refreshHealthSnapshot).toHaveBeenLastCalledWith({
+        probe: false,
+        includeSensitive: false,
+      });
+      expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+    },
+  );
 });
 
 describe("logs.tail", () => {

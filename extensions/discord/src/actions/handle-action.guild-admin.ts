@@ -87,11 +87,15 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   }
 
   if (action === "emoji-list") {
-    const guildId = readStringParam(actionParams, "guildId", {
-      required: true,
-    });
+    const guildId = readStringParam(actionParams, "guildId");
+    const limit = readPositiveIntegerParam(actionParams, "limit");
     return await handleDiscordAction(
-      { action: "emojiList", accountId: accountId ?? undefined, guildId },
+      {
+        action: "emojiList",
+        accountId: accountId ?? undefined,
+        ...(guildId ? { guildId } : { channelId: resolveChannelId() }),
+        ...(limit ? { limit } : {}),
+      },
       cfg,
       readPolicyOptions,
     );

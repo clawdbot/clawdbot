@@ -1,5 +1,6 @@
 // Discord plugin module implements runtime.messaging.send behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isDiscordThreadChannelType } from "../channel-type.js";
 import {
   createReusableDiscordReplyReference,
   resolveDiscordReplyReference,
@@ -13,7 +14,6 @@ import {
   readStringParam,
 } from "../runtime-api.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
-import { isThreadChannelType } from "../send.permissions.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
@@ -144,7 +144,7 @@ async function appendDiscordThreadRenameResult(
       channelId,
       ctx.withOpts(),
     );
-    if (!isThreadChannelType(channel.type)) {
+    if (!isDiscordThreadChannelType(channel.type)) {
       return {
         ...params.payload,
         warning: "Discord threadName was ignored because the send target is not a thread.",

@@ -112,11 +112,20 @@ describe("Telegram Desktop recorder CLI", () => {
       parseRecorderArgs(["screenshot", "--session", "recorder.json", "--output", "shot.png"]),
     ).toEqual({ command: "screenshot", output: "shot.png", sessionPath: "recorder.json" });
     expect(
-      parseRecorderArgs(["stop", "--session", "recorder.json", "--crop", "telegram-window"]),
+      parseRecorderArgs([
+        "stop",
+        "--session",
+        "recorder.json",
+        "--crop",
+        "telegram-window",
+        "--since",
+        "2026-08-15T12:00:10.000Z",
+      ]),
     ).toEqual({
       command: "stop",
       crop: "telegram-window",
       sessionPath: "recorder.json",
+      since: "2026-08-15T12:00:10.000Z",
     });
     expect(parseRecorderArgs(["status", "--session", "recorder.json"])).toEqual({
       command: "status",
@@ -941,6 +950,7 @@ describe("Telegram Desktop recorder window geometry", () => {
       croppedVideoPath: path.join(root, "cropped.mp4"),
       cwd: root,
       fps: 4,
+      startSeconds: 9,
       run: async ({ args, command }) => {
         calls.push({ args, command });
         return { stderr: "", stdout: command === "crabbox" ? "{}" : "" };
@@ -949,6 +959,7 @@ describe("Telegram Desktop recorder window geometry", () => {
     });
 
     expect(calls.map(({ command }) => command)).toEqual(["ffmpeg", "crabbox"]);
+    expect(calls[0]?.args).toEqual(expect.arrayContaining(["-ss", "9.000"]));
     expect(calls[1]?.args).toEqual(
       expect.arrayContaining([
         "media",
@@ -1008,6 +1019,7 @@ describe("Telegram Desktop recorder window geometry", () => {
         command: "stop",
         crop: "telegram-window",
         sessionPath: recorderSessionArg(root, sessionPath),
+        since: "2026-08-15T12:00:10.000Z",
       },
       operations,
     );
@@ -1015,6 +1027,7 @@ describe("Telegram Desktop recorder window geometry", () => {
       expect.objectContaining({
         crop: { cropWidth: 648, height: 600, width: 648, x: 636, y: 440 },
         fps: 4,
+        startSeconds: 9,
         videoPath: path.join(root, "telegram-desktop-recorder-session.mp4"),
       }),
     );

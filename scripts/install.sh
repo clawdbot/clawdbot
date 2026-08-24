@@ -3418,12 +3418,6 @@ install_openclaw() {
         fi
     fi
 
-    if ! commit_openclaw_bin_backup; then
-        restore_openclaw_bin_backup || true
-        return 1
-    fi
-
-    ui_success "OpenClaw installed"
 }
 
 # Run doctor for migrations (safe, non-interactive)
@@ -3805,8 +3799,14 @@ main() {
         npm_candidate="$(resolve_installed_openclaw_bin || true)"
         if [[ -z "$npm_candidate" ]] || ! "$npm_candidate" --version >/dev/null 2>&1; then
             ui_error "npm replacement failed verification"
+            restore_openclaw_bin_backup || ui_error "Could not restore the previous openclaw command"
             return 1
         fi
+        if ! commit_openclaw_bin_backup; then
+            restore_openclaw_bin_backup || ui_error "Could not restore the previous openclaw command"
+            return 1
+        fi
+        ui_success "OpenClaw installed"
         retire_git_wrapper_after_npm_install || return $?
     fi
 

@@ -2438,6 +2438,26 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
   });
 
+  test.each([
+    { origin: "bundled" as const, expectedActor: { kind: "system" } },
+    { origin: "global" as const, expectedActor: undefined },
+  ])(
+    "limits background system session reads to trusted $origin plugins",
+    async ({ origin, expectedActor }) => {
+      const runtime = await createSubagentRuntime(serverPluginsModule);
+      serverPluginsModule.setFallbackGatewayContext(createTestContext(`background-read-${origin}`));
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        expect(opts.client?.internal?.operatorRoleActor).toEqual(expectedActor);
+        opts.respond(true, { messages: [] });
+      });
+
+      await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: `background-${origin}`, pluginOrigin: origin },
+        () => runtime.getSessionMessages({ sessionKey: "agent:main:background" }),
+      );
+    },
+  );
+
   test("rejects fallback session deletion without minting admin scope", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
