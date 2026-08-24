@@ -100,7 +100,8 @@ export async function sendTelegramText(
     silent: opts?.silent,
   });
   const fallbackText = opts?.plainText ?? text;
-  const acceptProviderMessage = async (message: Message) => {
+  let firstDeliveredMessageId: number | undefined;
+  const acceptProviderMessage = async (message: Message, plainText: string) => {
     if (opts?.thread?.id !== undefined) {
       await reportTelegramProviderDelivery({
         message,
@@ -109,9 +110,13 @@ export async function sendTelegramText(
         successfulSendThread: opts.thread,
       });
     }
-    return message.message_id;
+    const messageId = message.message_id;
+    firstDeliveredMessageId ??= messageId;
+    runtime.log?.(`telegram text delivery ok chat=${chatId} message=${messageId}`);
+    await opts?.onAcceptedMessage?.(messageId, plainText);
+    return message;
   };
-  const pages = planTelegramTextDeliveryPages({
+  const page = planTelegramTextDeliveryPages({
     text,
     maxChars: text.length || 1,
     tableMode: opts?.tableMode,
@@ -120,8 +125,7 @@ export async function sendTelegramText(
     degradationReasons: opts?.richDegradationReasons,
     skipEntityDetection: opts?.linkPreview === false,
     ...(opts?.textMode === "html" ? { textMode: "html" as const } : {}),
-  });
-  const page = pages[0];
+  })[0];
   if (!page || (!page.richMessage && !page.htmlText?.trim() && !fallbackText.trim())) {
     throw new Error("telegram text delivery failed: empty formatted text and empty plain fallback");
   }
@@ -141,10 +145,9 @@ export async function sendTelegramText(
       operation?: string;
     },
   ) => {
-    const requestParams =
-      params.fallback && params.fallback.index > 0 ? withoutReply(baseParams) : baseParams;
+    const requestParams = params.fallback?.index ? withoutReply(baseParams) : baseParams;
     const isFinalFallback = !params.fallback || params.fallback.index === params.fallback.count - 1;
-    return await sendTelegramWithThreadFallback({
+    const message = await sendTelegramWithThreadFallback({
       operation: params.operation ?? "sendMessage",
       runtime,
       requestParams,
@@ -157,8 +160,9 @@ export async function sendTelegramText(
           ...effectiveParams,
         }),
     });
+    return params.fallback ? await acceptProviderMessage(message, messageText) : message;
   };
-  const delivered = await deliverTelegramTextPage({
+  const [accepted] = await deliverTelegramTextPage({
     page,
     context: page.richMessage ? "sendRichMessage" : "sendMessage",
     warn: (message) => runtime.log?.(message),
@@ -186,12 +190,8 @@ export async function sendTelegramText(
         }),
     },
   });
-  let firstDeliveredMessageId: number | undefined;
-  for (const accepted of delivered) {
-    const messageId = await acceptProviderMessage(accepted.result);
-    firstDeliveredMessageId ??= messageId;
-    runtime.log?.(`telegram text delivery ok chat=${chatId} message=${messageId}`);
-    await opts?.onAcceptedMessage?.(messageId, accepted.page.plainText);
+  if (firstDeliveredMessageId === undefined && accepted) {
+    await acceptProviderMessage(accepted.result, accepted.page.plainText);
   }
   return firstDeliveredMessageId!;
 }
