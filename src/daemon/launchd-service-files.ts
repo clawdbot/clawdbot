@@ -28,7 +28,6 @@ const LAUNCH_AGENT_PRIVATE_DIR_MODE = 0o700;
 export const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 export const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
-const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
 export function resolveLaunchAgentPlistPathForLabel(
   env: Record<string, string | undefined>,
   label: string,
@@ -347,7 +346,7 @@ export async function writeLaunchAgentPlist({
   const label = resolveLaunchAgentLabel(env);
   await assertNoSystemLaunchDaemonOwnership(label);
 
-  const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
+  const { logDir, stdoutPath, stderrPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
   await ensureSecureDirectory(logDir);
 
   const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
@@ -373,7 +372,7 @@ export async function writeLaunchAgentPlist({
     programArguments: prepared.programArguments,
     workingDirectory,
     stdoutPath,
-    stderrPath: LAUNCH_AGENT_STDERR_PATH,
+    stderrPath,
     environment: prepared.inlineEnvironment,
   });
   await publishLaunchAgentPlist({ label, plistPath, contents: plist });
@@ -400,7 +399,7 @@ export async function rewriteLaunchAgentPlistForRestart({
     return false;
   }
 
-  const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
+  const { logDir, stdoutPath, stderrPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
   await ensureSecureDirectory(logDir);
 
   const serviceDescription = resolveGatewayServiceDescription({
@@ -426,7 +425,7 @@ export async function rewriteLaunchAgentPlistForRestart({
     programArguments: prepared.programArguments,
     workingDirectory: existing.workingDirectory,
     stdoutPath,
-    stderrPath: LAUNCH_AGENT_STDERR_PATH,
+    stderrPath,
     environment: prepared.inlineEnvironment,
   });
   const previousPlist = await fs.readFile(plistPath, "utf8").catch(() => "");
