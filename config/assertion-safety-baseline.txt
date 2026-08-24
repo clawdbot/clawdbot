@@ -411,7 +411,6 @@ extensions/discord/src/monitor/provider.deploy.ts	4
 extensions/discord/src/monitor/provider.lifecycle.ts	2
 extensions/discord/src/monitor/provider.startup-log.ts	1
 extensions/discord/src/monitor/provider.startup.ts	2
-extensions/discord/src/monitor/provider.ts	1
 extensions/discord/src/monitor/reply-context.ts	1
 extensions/discord/src/monitor/reply-safety.ts	1
 extensions/discord/src/monitor/rest-fetch.ts	3
@@ -592,7 +591,7 @@ extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
 extensions/imessage/src/monitor/conversation-repair.ts	1
 extensions/imessage/src/monitor/inbound-processing.ts	2
-extensions/imessage/src/monitor/monitor-provider.ts	3
+extensions/imessage/src/monitor/monitor-provider.ts	2
 extensions/imessage/src/probe.ts	1
 extensions/imessage/src/remote-host.ts	1
 extensions/imessage/src/send.ts	5
@@ -925,7 +924,7 @@ extensions/ollama/src/provider-models.ts	1
 extensions/ollama/src/setup-pull.ts	1
 extensions/ollama/src/setup.runtime.ts	1
 extensions/ollama/src/stream-compat.ts	1
-extensions/ollama/src/stream.runtime.ts	7
+extensions/ollama/src/stream.runtime.ts	6
 extensions/onepassword/index.ts	2
 extensions/onepassword/src/op-client.ts	2
 extensions/onepassword/src/tool.ts	1
@@ -1297,7 +1296,7 @@ extensions/telegram/src/message-cache.ts	10
 extensions/telegram/src/miniapp/command.ts	1
 extensions/telegram/src/miniapp/init-data.ts	1
 extensions/telegram/src/miniapp/routes.ts	1
-extensions/telegram/src/monitor.ts	3
+extensions/telegram/src/monitor.ts	2
 extensions/telegram/src/network-config.ts	1
 extensions/telegram/src/network-errors.ts	8
 extensions/telegram/src/outbound-adapter.ts	5
@@ -1401,7 +1400,7 @@ extensions/whatsapp/src/approval-handler.runtime.ts	1
 extensions/whatsapp/src/approval-native.ts	1
 extensions/whatsapp/src/approval-reactions.ts	1
 extensions/whatsapp/src/auth-store.ts	3
-extensions/whatsapp/src/auto-reply/monitor.ts	3
+extensions/whatsapp/src/auto-reply/monitor.ts	2
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	4
 extensions/whatsapp/src/auto-reply/monitor/process-message.ts	2
 extensions/whatsapp/src/channel-outbound.ts	1
@@ -2384,7 +2383,7 @@ src/cli/channel-auth.ts	4
 src/cli/channel-options.ts	1
 src/cli/channels-cli.ts	7
 src/cli/claws-cli.gateway-readiness.ts	1
-src/cli/claws-cli.runtime.ts	2
+src/cli/claws-cli.runtime.ts	1
 src/cli/command-config-resolution.ts	2
 src/cli/command-format.ts	1
 src/cli/command-options.ts	1
@@ -2552,7 +2551,7 @@ src/commands/doctor-session-incognito-key-repair.ts	4
 src/commands/doctor-session-snapshots.ts	5
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-migration-run.ts	8
-src/commands/doctor-session-sqlite-readers.ts	11
+src/commands/doctor-session-sqlite-readers.ts	9
 src/commands/doctor-session-sqlite-recover-report.ts	3
 src/commands/doctor-session-sqlite.ts	3
 src/commands/doctor-session-state-providers.ts	3
@@ -4256,6 +4255,7 @@ ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	5
 ui/src/pages/sessions/view.ts	13
 ui/src/pages/skill-workshop/header-controls.ts	1
+ui/src/pages/skill-workshop/proposal-list.ts	1
 ui/src/pages/skill-workshop/route.ts	1
 ui/src/pages/skill-workshop/self-learning.ts	1
 ui/src/pages/skill-workshop/skill-workshop-page.ts	1

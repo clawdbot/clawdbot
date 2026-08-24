@@ -55,29 +55,63 @@ function scriptKindForPath(filePath: string) {
   return filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
 }
 
-function collectSafetyCommentLines(sourceFile: ts.SourceFile, source: string) {
-  const scanner = ts.createScanner(
-    ts.ScriptTarget.Latest,
-    false,
-    sourceFile.languageVariant,
-    source,
-  );
+function collectSafetyCommentLines(_sourceFile: ts.SourceFile, source: string) {
+  // Line-based collection instead of a raw scanner walk: the scanner drops
+  // all trivia after a template literal containing a substitution, so SAFETY
+  // comments below such a template were silently unrecognized. Track quote
+  // and backtick parity per line so SAFETY-looking text inside strings or
+  // template literals does not count.
   const sameLine = new Set<number>();
   const standalone = new Set<number>();
-  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-    if (token !== ts.SyntaxKind.SingleLineCommentTrivia) {
+  let inString: "'" | '"' | null = null;
+  let inTemplate = false;
+  const lines = source.split(/\r?\n/u);
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index] ?? "";
+    let quoteParity: "'" | '"' | null = inString;
+    let templateParity: boolean = inTemplate;
+    let commentStart = -1;
+    for (let column = 0; column < line.length; column++) {
+      const char = line[column];
+      const next = line[column + 1];
+      if (quoteParity !== null) {
+        if (char === "\\") {
+          column += 1;
+        } else if (char === quoteParity) {
+          quoteParity = null;
+        }
+        continue;
+      }
+      if (templateParity) {
+        if (char === "`") {
+          templateParity = false;
+        }
+        continue;
+      }
+      if (char === "`") {
+        templateParity = true;
+        continue;
+      }
+      if (char === "'" || char === '"') {
+        quoteParity = char;
+        continue;
+      }
+      if (char === "/" && next === "/") {
+        commentStart = column;
+        break;
+      }
+    }
+    if (commentStart < 0) {
+      inString = quoteParity;
+      inTemplate = templateParity;
       continue;
     }
-    const comment = source.slice(scanner.getTokenPos(), scanner.getTextPos()).trim();
-    if (!/^\/\/\s*SAFETY:\s*\S/u.test(comment)) {
-      continue;
-    }
-    const position = scanner.getTokenPos();
-    const line = sourceFile.getLineAndCharacterOfPosition(position).line;
-    sameLine.add(line);
-    const lineStart = sourceFile.getPositionOfLineAndCharacter(line, 0);
-    if (source.slice(lineStart, position).trim() === "") {
-      standalone.add(line);
+    const comment = line.slice(commentStart).trim();
+    if (/^\/\/\s*SAFETY:\s*\S/u.test(comment)) {
+      sameLine.add(index);
+      if (line.slice(0, commentStart).trim() === "") {
+        standalone.add(index);
+      }
     }
   }
   return { sameLine, standalone };
