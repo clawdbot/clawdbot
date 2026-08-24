@@ -24,11 +24,12 @@ export function createConfiguredChannelOwnershipPolicy(params: {
   config: OpenClawConfig;
   /**
    * The operator's own config, before auto-enable materializes plugin entries. Explicit selection
-   * must be read from it: auto-enable writes `plugins.entries.<id>.enabled` for the plugins it
-   * turns on, so reading the materialized config would report every auto-enabled plugin as
-   * hand-picked and suppress the replacement rule entirely. `disableImplicitPreferredOverPlugin`
-   * checks its own `originalConfig` for the same reason. Defaults to `config` for callers that
-   * validate a raw config file.
+   * and policy disablement must be read from it: auto-enable writes `plugins.entries.<id>.enabled`
+   * for the plugins it turns on and for a replacement chain's displaced middle claimant, so
+   * reading the materialized config would report every auto-enabled plugin as hand-picked and a
+   * synthesized disable as operator policy. `disableImplicitPreferredOverPlugin` checks its own
+   * `originalConfig` for the same reason. Defaults to `config` for callers that validate a raw
+   * config file.
    */
   sourceConfig?: OpenClawConfig;
   registry: PluginManifestRegistry;
@@ -122,8 +123,14 @@ export function createConfiguredChannelOwnershipPolicy(params: {
     },
     isPluginExplicitlySelected: (pluginId) =>
       isPluginExplicitlySelectedByAlias(sourceConfig, pluginId, canonicalId, params.registry),
+    // Authored policy only, like explicit selection: auto-enable synthesizes `enabled: false` for
+    // the displaced middle of a replacement chain, and reading that back as operator intent kept
+    // the middle claimant's edge from propagating — runtime ownership fell through to the third
+    // claimant while validation of the raw config closed the chain and selected the head.
+    // `isPluginActive` above keeps the effective config: a synthesized disable really does keep
+    // the plugin from loading.
     isPluginPolicyDisabled: (pluginId) =>
-      isPluginPolicyDisabled(params.config, pluginId, canonicalId, params.registry),
+      isPluginPolicyDisabled(sourceConfig, pluginId, canonicalId, params.registry),
     resolveChannelPreferOverIds: (record, channelId) =>
       resolveChannelPreferOverIds({
         record,
