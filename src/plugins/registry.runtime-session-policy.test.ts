@@ -209,9 +209,17 @@ describe("plugin registry runtime session policy", () => {
     }
   });
 
-  it("rejects a retained channel reset runtime after its plugin record is revoked", async () => {
+  it("rejects a revoked channel runtime before the real session store is mutated", async () => {
+    const tempDir = tempDirs.make("openclaw-plugin-revoked-session-reset-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:msteams:direct:user-aad";
     const runtime = createPluginRuntime();
-    const reset = vi.spyOn(runtime.agent.session, "resetSessionEntryLifecycle");
+    await runtime.agent.session.upsertSessionEntry({
+      agentId: "main",
+      entry: { sessionId: "revoked-old", updatedAt: 10 },
+      sessionKey,
+      storePath,
+    });
     const pluginRegistry = createTestRegistry(runtime);
     const teamsRecord = createRecord({ id: "msteams", channelIds: ["msteams"] });
     const teamsApi = pluginRegistry.createApi(teamsRecord, { config: emptyConfig });
@@ -226,19 +234,30 @@ describe("plugin registry runtime session policy", () => {
     await expect(
       retainedSessionRuntime.resetSessionEntryLifecycle({
         channelId: "msteams",
-        sessionKey: "agent:main:msteams:direct:user-aad",
-        storePath: "/tmp/unused-session-store",
+        expectedSessionId: "revoked-old",
+        expectedUpdatedAt: 10,
+        sessionKey,
+        storePath,
         update: () => ({ updatedAt: 0 }),
       }),
     ).rejects.toThrow('Plugin "msteams" channel session runtime is no longer active.');
-    expect(reset).not.toHaveBeenCalled();
+    expect(runtime.agent.session.getSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "revoked-old",
+      updatedAt: 10,
+    });
   });
 
-  it("rejects a replaced channel reset runtime while the replacement remains active", async () => {
+  it("rejects a replaced channel runtime before I/O while the replacement resets the real store", async () => {
+    const tempDir = tempDirs.make("openclaw-plugin-replaced-session-reset-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:msteams:direct:user-aad";
     const runtime = createPluginRuntime();
-    const reset = vi
-      .spyOn(runtime.agent.session, "resetSessionEntryLifecycle")
-      .mockResolvedValue(null);
+    await runtime.agent.session.upsertSessionEntry({
+      agentId: "main",
+      entry: { sessionId: "replacement-old", updatedAt: 10 },
+      sessionKey,
+      storePath,
+    });
     const pluginRegistry = createTestRegistry(runtime);
     const firstRecord = createRecord({ id: "msteams", channelIds: ["msteams"] });
     const firstApi = pluginRegistry.createApi(firstRecord, { config: emptyConfig });
@@ -258,16 +277,94 @@ describe("plugin registry runtime session policy", () => {
     const replacementSessionRuntime = replacementApi.runtime.channel.session;
     const request = {
       channelId: "msteams",
-      sessionKey: "agent:main:msteams:direct:user-aad",
-      storePath: "/tmp/unused-session-store",
+      expectedSessionId: "replacement-old",
+      expectedUpdatedAt: 10,
+      sessionKey,
+      storePath,
       update: () => ({ updatedAt: 0 }),
     };
 
     await expect(retainedSessionRuntime.resetSessionEntryLifecycle(request)).rejects.toThrow(
       'Plugin "msteams" channel session runtime is no longer active.',
     );
-    await expect(replacementSessionRuntime.resetSessionEntryLifecycle(request)).resolves.toBeNull();
-    expect(reset).toHaveBeenCalledTimes(1);
+    expect(runtime.agent.session.getSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "replacement-old",
+      updatedAt: 10,
+    });
+    const replacement = await replacementSessionRuntime.resetSessionEntryLifecycle(request);
+    expect(replacement).toMatchObject({ updatedAt: 0 });
+    expect(replacement?.sessionId).not.toBe("replacement-old");
+    expect(runtime.agent.session.getSessionEntry({ sessionKey, storePath })?.sessionId).toBe(
+      replacement?.sessionId,
+    );
+  });
+
+  it("leaves a fresh ownerless row when release changes the reservation through the full owner path", async () => {
+    const tempDir = tempDirs.make("openclaw-plugin-released-owner-reset-");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:msteams:direct:user-aad";
+    const runtime = createPluginRuntime();
+    await runtime.agent.session.upsertSessionEntry({
+      agentId: "main",
+      entry: {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        sessionId: "released-old",
+        updatedAt: 10,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    const pluginRegistry = createTestRegistry(runtime);
+    const ownerRecord = createRecord({ id: "codex-owner" });
+    const teamsRecord = createRecord({ id: "msteams", channelIds: ["msteams"] });
+    const ownerApi = pluginRegistry.createApi(ownerRecord, { config: emptyConfig });
+    const teamsApi = pluginRegistry.createApi(teamsRecord, { config: emptyConfig });
+    registerTestChannel(teamsApi, "msteams");
+    const harnessReset = vi.fn(async () => {
+      const reserved = runtime.agent.session.getSessionEntry({ sessionKey, storePath });
+      if (!reserved) {
+        throw new Error("expected reserved session entry");
+      }
+      await runtime.agent.session.upsertSessionEntry({
+        agentId: "main",
+        entry: { ...reserved, updatedAt: 11 },
+        sessionKey,
+        storePath,
+      });
+    });
+    ownerApi.registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      reset: harnessReset,
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+    });
+    pluginRegistry.registry.plugins.push(ownerRecord, teamsRecord);
+    markPluginRegistryActive(pluginRegistry.registry);
+    expect(pluginRegistry.registry.channels[0]?.resolveChannelRuntime?.()).toBeDefined();
+
+    await expect(
+      teamsApi.runtime.channel.session.resetSessionEntryLifecycle({
+        channelId: "msteams",
+        expectedSessionId: "released-old",
+        expectedUpdatedAt: 10,
+        sessionKey,
+        storePath,
+        update: () => ({ updatedAt: 0 }),
+      }),
+    ).rejects.toThrow("skipped after physical owner release");
+
+    expect(harnessReset).toHaveBeenCalledOnce();
+    const replacement = runtime.agent.session.getSessionEntry({ sessionKey, storePath });
+    expect(replacement?.sessionId).toBeTruthy();
+    expect(replacement?.sessionId).not.toBe("released-old");
+    expect(replacement?.agentHarnessId).toBeUndefined();
+    expect(replacement?.modelSelectionLocked).toBeUndefined();
+    expect(replacement?.lifecycleRevision).toBeUndefined();
   });
 
   it("guards branch, rewind, and fork gateway mutations for harness-owned sessions", async () => {
