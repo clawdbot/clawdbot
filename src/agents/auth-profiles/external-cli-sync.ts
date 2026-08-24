@@ -17,13 +17,14 @@ import {
   authProfilesLog,
 } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
+import { listExternalCliProfileMetadataIds } from "./external-cli-profile-metadata.js";
 import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
   areOAuthCredentialsEquivalent,
   isSafeToAdoptBootstrapOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
 } from "./oauth-shared.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 
 type ExternalCliResolvedProfile = {
   profileId: string;
@@ -45,10 +46,6 @@ type ExternalCliSyncProvider = {
   readCredentials: (
     options?: Pick<ExternalCliAuthProfileOptions, "allowKeychainPrompt">,
   ) => OAuthCredential | null;
-  // The external CLI keeps rotating this credential after OpenClaw persists it,
-  // so the CLI — not OpenClaw — owns refresh for the profile even once stored.
-  // Only set this for a CLI that refreshes on its own schedule (Claude Code).
-  externalOwnsRefreshWhenPersisted?: boolean;
   // bootstrapOnly providers adopt the external CLI credential only to
   // seed an empty slot; once a local OAuth credential exists for the
   // profile, the local refresh token is treated as canonical and the
@@ -101,7 +98,6 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
       }
       return { ...credential, provider: "claude-cli" };
     },
-    externalOwnsRefreshWhenPersisted: true,
   },
   {
     profileId: MINIMAX_CLI_PROFILE_ID,
@@ -188,36 +184,6 @@ function hasManagedProviderOAuth(
       listExternalCliProviderIds(providerConfig).includes(credential.provider) &&
       hasInlineOAuthTokenMaterial(credential),
   );
-}
-
-/**
- * Profile ids whose OAuth refresh is owned by an external CLI.
- *
- * `runtimeExternalCliProfileIds` only marks profiles this process adopted as a
- * runtime overlay. The Claude CLI credential is persisted into the durable
- * store, so after a gateway restart the profile is still CLI owned but carries
- * no runtime marker. Health reporting needs both sources.
- *
- * Scoped to providers that declare `externalOwnsRefreshWhenPersisted`; every
- * other persisted external CLI profile keeps its expiry visible.
- */
-export function listExternalCliOwnedProfileIds(store: AuthProfileStore): string[] {
-  const owned = new Set<string>();
-  for (const providerConfig of EXTERNAL_CLI_SYNC_PROVIDERS) {
-    if (!providerConfig.externalOwnsRefreshWhenPersisted) {
-      continue;
-    }
-    for (const profileId of listExternalCliProfileIds(providerConfig)) {
-      const existing = store.profiles[profileId];
-      if (
-        existing?.type === "oauth" &&
-        listExternalCliProviderIds(providerConfig).includes(existing.provider)
-      ) {
-        owned.add(profileId);
-      }
-    }
-  }
-  return [...owned].toSorted();
 }
 
 /** Read a CLI credential only for safe bootstrap of an unusable local profile. */
@@ -356,6 +322,74 @@ function listScopedExternalCliProfileIds(params: {
   }
 
   return options?.providerIds ? [providerConfig.profileId] : [];
+}
+
+/**
+ * True when the live external CLI still owns refresh for a persisted profile.
+ *
+ * An idle Claude CLI access token expires long before its refresh token does.
+ * The CLI refreshes on its own schedule, so OpenClaw must not report that
+ * credential as needing an operator re-login. Ownership is asserted only
+ * against the current CLI read, so a logged-out, cleared, or re-logged-in CLI
+ * still surfaces normally:
+ *
+ * - the CLI store must still hold an OAuth credential (a `claude logout`
+ *   removes it, and ownership is refused),
+ * - that credential must still carry refresh material, and
+ * - its token material must match the persisted slot, which is the only proof
+ *   the stored profile IS this CLI login.
+ *
+ * A refresh token revoked server-side while the local file is untouched cannot
+ * be detected without a network call; that matches existing behavior for a CLI
+ * credential inside its validity window.
+ */
+export function isLiveExternalCliRefreshOwner(params: {
+  profileId: string;
+  credential: AuthProfileCredential | undefined;
+  allowKeychainPrompt?: boolean;
+}): boolean {
+  const { credential } = params;
+  if (credential?.type !== "oauth") {
+    return false;
+  }
+  const providerConfig = resolveExternalCliSyncProvider({
+    profileId: params.profileId,
+    credential,
+  });
+  if (!providerConfig || providerConfig.bootstrapOnly) {
+    return false;
+  }
+  const live = providerConfig.readCredentials({
+    allowKeychainPrompt: params.allowKeychainPrompt,
+  });
+  if (live?.type !== "oauth" || !live.refresh?.trim()) {
+    return false;
+  }
+  return (
+    (Boolean(live.refresh?.trim()) && live.refresh === credential.refresh) ||
+    (Boolean(live.access?.trim()) && live.access === credential.access)
+  );
+}
+
+/**
+ * Profile ids whose OAuth refresh the live external CLI still owns.
+ *
+ * Scoped to the canonical built-in CLI slot registry, so a user-owned profile
+ * or another CLI provider keeps its expiry visible.
+ */
+export function listLiveExternalCliOwnedProfileIds(
+  store: AuthProfileStore,
+  options?: { allowKeychainPrompt?: boolean },
+): string[] {
+  return listExternalCliProfileMetadataIds()
+    .filter((profileId) =>
+      isLiveExternalCliRefreshOwner({
+        profileId,
+        credential: store.profiles[profileId],
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+      }),
+    )
+    .toSorted();
 }
 
 function backfillExternalCliIdentity(params: {

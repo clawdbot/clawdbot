@@ -57,6 +57,9 @@ const mocks = vi.hoisted(() => ({
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
   loadProviderUsageSummary: vi.fn(async (): Promise<UsageSummary> => emptyUsageSummary()),
+  readClaudeCliCredentialsCached: vi.fn((): Record<string, unknown> | null => null),
+  readCodexCliCredentialsCached: vi.fn((): Record<string, unknown> | null => null),
+  readMiniMaxCliCredentialsCached: vi.fn((): Record<string, unknown> | null => null),
   listProviderUsagePluginDescriptors: vi.fn(() => [
     { provider: "anthropic", displayName: "Claude" },
     { provider: "deepseek", displayName: "DeepSeek" },
@@ -114,6 +117,14 @@ vi.mock("../../secrets/runtime.js", () => ({
 vi.mock("../../agents/model-provider-auth.js", () => ({
   clearCurrentProviderAuthState: mocks.clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread: mocks.warmCurrentProviderAuthStateOffMainThread,
+}));
+
+// The live CLI credential read decides external CLI refresh ownership; keep it
+// hermetic so tests never consult a real developer or CI credential store.
+vi.mock("../../agents/cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: mocks.readClaudeCliCredentialsCached,
+  readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
+  readMiniMaxCliCredentialsCached: mocks.readMiniMaxCliCredentialsCached,
 }));
 
 vi.mock("../server-model-catalog-auth.js", () => ({
@@ -284,6 +295,9 @@ function resetAuthStatusMocks(): void {
     agentId === "main" ? "/tmp/agent" : `/tmp/agent-${agentId}`,
   );
   mocks.resolveDefaultAgentId.mockReturnValue("main");
+  mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
+  mocks.readCodexCliCredentialsCached.mockReturnValue(null);
+  mocks.readMiniMaxCliCredentialsCached.mockReturnValue(null);
   setPreparedAuthStore({ version: 1, profiles: {} });
   setPreparedMetadataSnapshot({
     index: { plugins: [] },
@@ -704,10 +718,7 @@ describe("models.authStatus", () => {
     expect(provider?.expiry).toBeUndefined();
   });
 
-  it("reports persisted external CLI OAuth as signed in without a runtime marker", async () => {
-    // Regression: the Claude CLI profile is persisted, not a runtime overlay, so
-    // after a gateway restart it carries no runtimeExternalCliProfileIds entry.
-    // An idle-stale CLI access token must still not surface as an operator login.
+  describe("persisted Claude CLI OAuth without a runtime marker", () => {
     const profileId = "anthropic:claude-cli";
     const profile = {
       profileId,
@@ -719,39 +730,94 @@ describe("models.authStatus", () => {
       source: "store",
       label: profileId,
     } satisfies AuthHealthSummary["profiles"][number];
-    setPreparedAuthStore({
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth",
-          provider: "claude-cli",
-          access: "expired-access",
-          refresh: "cli-owned-refresh",
-          expires: 1,
-        } satisfies AuthProfileStore["profiles"][string],
-      },
-    });
-    mocks.buildAuthHealthSummary.mockReturnValue({
-      now: 2,
-      warnAfterMs: 0,
-      profiles: [profile],
-      providers: [
-        {
-          provider: "claude-cli",
-          status: "expired",
-          expiresAt: 1,
-          remainingMs: -1,
-          profiles: [profile],
+
+    function setPersistedClaudeCliStore(): void {
+      // No runtimeExternalCliProfileIds: after a gateway restart the profile is
+      // loaded from the durable store with no runtime provenance attached.
+      setPreparedAuthStore({
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "claude-cli",
+            access: "idle-access",
+            refresh: "cli-owned-refresh",
+            expires: 1,
+          } satisfies AuthProfileStore["profiles"][string],
         },
-      ],
+      });
+      mocks.buildAuthHealthSummary.mockReturnValue({
+        now: 2,
+        warnAfterMs: 0,
+        profiles: [profile],
+        providers: [
+          {
+            provider: "claude-cli",
+            status: "expired",
+            expiresAt: 1,
+            remainingMs: -1,
+            profiles: [profile],
+          },
+        ],
+      });
+    }
+
+    it("reports signed in when the live CLI still holds the same login", async () => {
+      // An idle Claude CLI access token expires long before its refresh token;
+      // the CLI store still holds that same, not-yet-rotated login.
+      mocks.readClaudeCliCredentialsCached.mockReturnValue({
+        type: "oauth",
+        provider: "anthropic",
+        access: "idle-access",
+        refresh: "cli-owned-refresh",
+        expires: 1,
+      });
+      setPersistedClaudeCliStore();
+
+      const provider = await firstAuthStatusProvider();
+
+      expect(provider).toMatchObject({ provider: "claude-cli", status: "ok" });
+      // The per-profile expiry stays diagnostic even when the rollup is healthy.
+      expect(provider?.profiles[0]).toMatchObject({ profileId, status: "expired" });
     });
 
-    const provider = await firstAuthStatusProvider();
+    it("keeps the re-login warning when the CLI is logged out", async () => {
+      mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
+      setPersistedClaudeCliStore();
 
-    expect(provider).toMatchObject({
-      provider: "claude-cli",
-      status: "ok",
-      profiles: [{ profileId, status: "expired" }],
+      const provider = await firstAuthStatusProvider();
+
+      expect(provider).toMatchObject({ provider: "claude-cli", status: "expired" });
+    });
+
+    it("keeps the re-login warning when the CLI holds another account", async () => {
+      mocks.readClaudeCliCredentialsCached.mockReturnValue({
+        type: "oauth",
+        provider: "anthropic",
+        access: "other-account-access",
+        refresh: "other-account-refresh",
+        expires: 1,
+      });
+      setPersistedClaudeCliStore();
+
+      const provider = await firstAuthStatusProvider();
+
+      expect(provider).toMatchObject({ provider: "claude-cli", status: "expired" });
+    });
+
+    it("keeps the re-login warning when the CLI has no refresh material", async () => {
+      mocks.readClaudeCliCredentialsCached.mockReturnValue({
+        type: "oauth",
+        provider: "anthropic",
+        access: "idle-access",
+        refresh: "",
+        expires: 1,
+      });
+      setPersistedClaudeCliStore();
+
+      const provider = await firstAuthStatusProvider();
+
+      expect(provider).toMatchObject({ provider: "claude-cli", status: "expired" });
     });
   });
 

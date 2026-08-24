@@ -25,7 +25,7 @@ import {
   listConfiguredExternalCliProfileMetadataIds,
   normalizeExternalCliProfileMetadata,
 } from "../../agents/auth-profiles/external-cli-profile-metadata.js";
-import { listExternalCliOwnedProfileIds } from "../../agents/auth-profiles/external-cli-sync.js";
+import { listLiveExternalCliOwnedProfileIds } from "../../agents/auth-profiles/external-cli-sync.js";
 import { getRuntimeExternalCliProfileIds } from "../../agents/auth-profiles/runtime-external-profile-references.js";
 import {
   isNonSecretApiKeyMarker,
@@ -676,12 +676,14 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       });
 
       const externalProfileIds = new Set(store.runtimeExternalProfileIds ?? []);
+      // Runtime provenance covers only profiles this process overlaid. An idle
+      // Claude CLI access token expires while its refresh token stays valid, and
+      // that profile carries no runtime marker, so confirm CLI refresh ownership
+      // against the live CLI store before reporting an operator re-login.
       const externalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
-      // Runtime overlay markers miss persisted external CLI profiles; union both
-      // so an idle-stale CLI access token is not reported as an operator login.
       const externalCliOwnedProfileIds = new Set([
         ...externalCliProfileIds,
-        ...listExternalCliOwnedProfileIds(store),
+        ...listLiveExternalCliOwnedProfileIds(store, { allowKeychainPrompt: false }),
       ]);
       const logoutProfileIds = new Set(
         Object.entries(store.profiles)
