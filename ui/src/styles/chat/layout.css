@@ -1750,6 +1750,17 @@ openclaw-chat-video-player {
   fill: var(--accent);
 }
 
+@media (max-width: 400px) {
+  .chat-audio-player__waveform rect:not(:nth-child(3n + 1)) {
+    display: none;
+  }
+
+  .chat-audio-player__waveform rect:nth-child(3n + 1) {
+    width: 1.4px;
+    rx: 0.7px;
+  }
+}
+
 .chat-audio-player__seek--waveform {
   position: absolute;
   inset: 0;
