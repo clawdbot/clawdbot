@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
+import { usefulFinalSourceRunId } from "./prepared-batch.js";
 
 type UnknownSendQueueEntry = Pick<
   QueuedDelivery,
@@ -23,7 +24,7 @@ type UnknownSendQueueEntry = Pick<
   | "threadId"
   | "silent"
   | "session"
->;
+> & { preparedBatch?: QueuedDelivery["preparedBatch"] };
 
 export function buildUnknownSendContext(params: {
   entry: UnknownSendQueueEntry;
@@ -31,6 +32,11 @@ export function buildUnknownSendContext(params: {
   cfg: OpenClawConfig;
 }): ChannelMessageUnknownSendContext {
   const { entry } = params;
+  const payload = params.payloads.length === 1 ? params.payloads[0] : undefined;
+  const sourceRunId =
+    payload && entry.preparedBatch
+      ? usefulFinalSourceRunId(entry.preparedBatch, payload)
+      : undefined;
   return {
     cfg: params.cfg,
     queueId: entry.id,
@@ -39,6 +45,7 @@ export function buildUnknownSendContext(params: {
     ...(entry.accountId !== undefined ? { accountId: entry.accountId } : {}),
     enqueuedAt: entry.enqueuedAt,
     retryCount: entry.retryCount,
+    ...(sourceRunId ? { sourceRunId } : {}),
     ...(entry.platformSendStartedAt !== undefined
       ? { platformSendStartedAt: entry.platformSendStartedAt }
       : {}),

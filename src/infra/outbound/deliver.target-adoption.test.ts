@@ -32,16 +32,22 @@ function installOutbound(outbound: ChannelOutboundAdapter) {
 async function deliverBatch(params: {
   outbound: ChannelOutboundAdapter;
   payloads: Parameters<typeof createUnmodifiedPreparedOutboundBatch>[0];
+  sourceRunId?: string;
   threadId?: string;
   bestEffort?: boolean;
 }) {
   installOutbound(params.outbound);
+  const preparedBatch = createUnmodifiedPreparedOutboundBatch(params.payloads);
+  if (params.sourceRunId) {
+    preparedBatch.runId = params.sourceRunId;
+    preparedBatch.replyKind = "final";
+  }
   return await deliverOutboundPayloadsCore({
     cfg: {},
     channel: "matrix",
     to: "room-parent",
     payloads: [...params.payloads],
-    preparedBatch: createUnmodifiedPreparedOutboundBatch(params.payloads),
+    preparedBatch,
     ...(params.threadId ? { threadId: params.threadId } : {}),
     ...(params.bestEffort ? { bestEffort: true } : {}),
   });
@@ -53,6 +59,20 @@ afterEach(() => {
 });
 
 describe("outbound durable-batch target adoption", () => {
+  it("retains source run correlation from recovered prepared custody", async () => {
+    const sendText = vi.fn(async () => createResult("message-1"));
+
+    await deliverBatch({
+      outbound: { deliveryMode: "direct", sendText },
+      payloads: [{ text: "recovered" }],
+      sourceRunId: "run-from-durable-custody",
+    });
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceRunId: "run-from-durable-custody" }),
+    );
+  });
+
   it("carries the first receipt-created thread through later text, media, pins, and hooks", async () => {
     const sendText = vi.fn(async ({ text, threadId }: { text: string; threadId?: unknown }) =>
       createResult(`text:${text}`, text === "starter" ? "thread-created" : String(threadId)),

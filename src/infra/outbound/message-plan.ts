@@ -16,6 +16,8 @@ export type OutboundMessageSendOverrides = ReplyToOverride & {
   audioAsVoice?: boolean;
   forceDocument?: boolean;
   formatting?: OutboundDeliveryFormattingOptions;
+  /** Exact useful final-answer run retained through durable delivery and recovery. */
+  sourceRunId?: string;
   /** Stable zero-based platform-send index within one durable payload. */
   deliveryPartIndex?: number;
   /** Exact platform-send count for this payload. */
