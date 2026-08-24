@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ChatType } from "../channels/chat-type.js";
 import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,11 +18,15 @@ import { findGitRoot } from "../infra/git-root.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
+import { resolveAgentIdentity } from "./identity.js";
+import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
+const MAX_RUNTIME_AGENT_NAME_CHARS = 128;
 const MAX_RUNTIME_SESSION_URL_CHARS = 512;
 
 type RuntimeInfoInput = {
   agentId?: string;
+  agentName?: string;
   sessionKey?: string;
   sessionId?: string;
   sessionUrl?: string;
@@ -51,7 +56,7 @@ type SystemPromptRuntimeParams = {
 export function buildSystemPromptParams(params: {
   config?: OpenClawConfig;
   agentId?: string;
-  runtime: Omit<RuntimeInfoInput, "agentId" | "sessionUrl">;
+  runtime: Omit<RuntimeInfoInput, "agentId" | "agentName" | "sessionUrl">;
   workspaceDir?: string;
   cwd?: string;
   preparedRepoRoot?: string | null;
@@ -62,6 +67,15 @@ export function buildSystemPromptParams(params: {
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
   const userDate = formatDateStamp(Date.now(), userTimezone);
   const { runId } = parseCronRunScopeSuffix(params.runtime.sessionKey);
+  const agentName =
+    params.config && params.agentId
+      ? truncateUtf16Safe(
+          sanitizeForPromptLiteral(
+            resolveAgentIdentity(params.config, params.agentId)?.name ?? "",
+          ).trim(),
+          MAX_RUNTIME_AGENT_NAME_CHARS,
+        ).trimEnd()
+      : "";
   // Exact isolated-cron URLs expose a volatile run id before prompt rendering can normalize it,
   // defeating byte-identical prompt-prefix reuse across runs of the same job.
   const sessionUrl =
@@ -75,6 +89,7 @@ export function buildSystemPromptParams(params: {
   return {
     runtimeInfo: {
       agentId: params.agentId,
+      agentName: agentName && agentName !== params.agentId ? agentName : undefined,
       ...params.runtime,
       // Published links must be externally usable and bounded before entering model context.
       sessionUrl:
