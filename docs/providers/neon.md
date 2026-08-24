@@ -4,13 +4,13 @@ title: "Neon AI Gateway"
 read_when:
   - You already use Neon and want one credential for LLM access
   - You want per-branch isolation for model requests
-  - You want to reach OpenAI, Google, Meta, Databricks, and Alibaba models without separate provider accounts
+  - You want to reach OpenAI, Anthropic, Google, Meta, Databricks and Alibaba models without separate provider accounts
 ---
 
 [Neon AI Gateway](https://neon.com/docs/ai-gateway/overview) is an OpenAI-compatible inference
-gateway provided by Neon. One Neon credential reaches models from OpenAI, Google, Meta, Databricks,
-and Alibaba, so OpenClaw talks to it over the same `openai-completions` transport used for other
-proxy providers.
+gateway provided by Neon. One Neon credential reaches models from OpenAI, Anthropic, Google, Meta,
+Databricks and Alibaba, so OpenClaw talks to it over the same `openai-completions` transport used
+for other proxy providers.
 
 Each Neon branch has its own gateway host, so requests are scoped to the branch you point at, the
 same isolation your Neon database already has.
@@ -20,8 +20,8 @@ same isolation your Neon database already has.
 | Provider id | `neon` (custom; configure under `models.providers.neon`)                   |
 | Plugin      | none; not a bundled OpenClaw provider plugin                               |
 | Auth        | Neon credential with the `ai_gateway:invoke` scope, sent as a bearer token |
-| API         | `openai-completions`, plus `openai-responses` for two OpenAI models        |
-| Base URL    | `$NEON_AI_GATEWAY_BASE_URL/v1`, or `/openai/v1` for the Responses API      |
+| API         | `openai-completions`, plus `openai-responses` and `anthropic-messages` for specific models |
+| Base URL    | `$NEON_AI_GATEWAY_BASE_URL/v1`, `/openai/v1` for Responses or `/anthropic` for Anthropic Messages |
 
 <Note>
   Neon AI Gateway is a custom OpenAI-compatible provider, not a bundled OpenClaw provider plugin.
@@ -40,7 +40,7 @@ same isolation your Neon database already has.
   <Step title="Create a credential">
     In the [Neon Console](https://console.neon.tech/), select your branch and click **Credentials**
     under **APP BACKEND**. Click **Create credential** and check `ai_gateway:invoke`. The token
-    starts with `nt_live_` and is shown only once.
+    starts with `nt_live_`, and Neon shows it only once.
 
     With the `neon` CLI, `neon env pull --file .env` writes the credential and the branch host for
     the current branch instead.
@@ -126,9 +126,11 @@ same isolation your Neon database already has.
 `baseUrl` is the bare host from `NEON_AI_GATEWAY_BASE_URL` with `/v1` on the end, so replace
 `<your-neon-branch-host>` before loading the config. The `/v1` suffix is required because OpenClaw
 hands the URL to the OpenAI client, which appends `chat/completions`. Neon serves the same endpoint
-at the longer `/ai-gateway/mlflow/v1` path, and both forms behave identically.
+at the longer `/ai-gateway/mlflow/v1` path, and Neon documents that both forms behave identically and
+neither is deprecated, with the longer `/ai-gateway/...` paths guaranteed to keep working
+indefinitely (see [Shorter paths](https://neon.com/docs/ai-gateway/models#shorter-paths)).
 
-Because a Neon branch host is a public HTTPS endpoint, no private-network override is needed.
+Because a Neon branch host is a public HTTPS endpoint, you do not need a private-network override.
 
 ### Cost and output limits
 
@@ -136,7 +138,7 @@ The zero `cost` values are the real rate during the beta: Neon does not bill inf
 omitted `cost` would resolve to the same zeros anyway. Neon says it will charge the model provider's
 published per-token rate with no markup once billing begins, so replace the zeros then. The catalog
 rates for the three models above are $0.25 and $2.00 per million tokens for `gpt-5-mini`, $0.50 and
-$3.00 for `gemini-3-flash`, and $0.15 and $1.20 for `qwen3-next-80b-a3b-instruct`. OpenClaw reads
+$3.00 for `gemini-3-flash` and $0.15 and $1.20 for `qwen3-next-80b-a3b-instruct`. OpenClaw reads
 `cost` in USD per million tokens, so those numbers drop in as written.
 
 None of the model entries set `maxTokens`, which means OpenClaw applies its own default of 8192
@@ -145,15 +147,20 @@ no per-model output ceiling, so there is no upstream number to copy here. Set `m
 you want longer completions. The 20,000 output tokens per minute that Neon documents is a rate limit,
 not a per-request cap.
 
-The `input` array accepts `text`, `image`, `video`, and `audio`. Neon's catalog lists more input
+The `input` array accepts `text`, `image`, `video` and `audio`. Neon's catalog lists more input
 types than that for some models, including PDF for `gpt-5-3-codex` and video and audio for Gemini,
 but only the four values above are valid in an OpenClaw model entry.
 
 ### OpenClaw does not ask Neon for streamed token usage
 
-OpenClaw resolves `supportsUsageInStreaming` to `false` for any provider configured with its own
-`baseUrl`, so it does not send `stream_options` to Neon. That applies to every model above, and no
-`compat` block is needed to get it.
+OpenClaw resolves `supportsUsageInStreaming` to `false` for this Neon route, so it does not send
+`stream_options` to Neon. A Neon branch host is a custom `baseUrl` that OpenClaw does not recognize
+as one of its built-in endpoints, and for an unregistered endpoint like that the derived default is
+`false`. That applies to every model above, and no `compat` block is needed to get it.
+
+This is the default for the Neon route specifically, not a rule about every provider that sets a
+`baseUrl`: endpoints OpenClaw does classify can derive the opposite value, and an explicit
+`compat.supportsUsageInStreaming` on a model always overrides the derived default.
 
 This is a statement about the outgoing request, not about what you will see. OpenClaw still records
 a `usage` object on any chunk that carries one, so a provider that reports usage without being asked
@@ -176,7 +183,7 @@ per model rather than across the whole provider.
 ## Models
 
 Neon uses short model IDs with no vendor prefix, such as `gpt-5-mini`, `gemini-3-flash`,
-`llama-4-maverick`, `gpt-oss-120b`, and `qwen3-next-80b-a3b-instruct`. The `databricks-` prefixed
+`llama-4-maverick`, `gpt-oss-120b` and `qwen3-next-80b-a3b-instruct`. The `databricks-` prefixed
 form is accepted too. To list what a branch can actually reach:
 
 ```bash
@@ -184,7 +191,7 @@ curl "$NEON_AI_GATEWAY_BASE_URL/v1/models" \
   -H "Authorization: Bearer $NEON_AI_GATEWAY_TOKEN"
 ```
 
-Neon returns that list in an OpenRouter-shaped response, but `pricing`, `context_length`, and
+Neon returns that list in an OpenRouter-shaped response, but `pricing`, `context_length` and
 `per_request_limits` are currently always `null`, so take `contextWindow` values from the
 [Neon model catalog](https://neon.com/docs/ai-gateway/models). The same catalog is browsable on
 [models.dev](https://models.dev/providers/neon/).
@@ -241,8 +248,58 @@ Google roll out gradually, so a catalog model may not be enabled for your projec
     }
     ```
 
-    This endpoint takes OpenAI model IDs only. Sending a Gemini, Llama, or Qwen ID returns
+    This endpoint takes OpenAI model IDs only. Sending a Gemini, Llama or Qwen ID returns
     `400 model "<model-id>" is not available on the openai_responses endpoint`.
+
+  </Accordion>
+
+  <Accordion title="Claude models through the Anthropic Messages endpoint">
+    Neon also exposes the [Anthropic Messages API](https://neon.com/docs/ai-gateway/anthropic-messages)
+    under `/anthropic`, where the Anthropic SDK appends `/v1/messages`. This dialect is Claude only, and
+    it supports native Anthropic features such as prompt caching and extended thinking that the
+    OpenAI-compatible `/v1` path cannot express. Reach it with a second provider entry using the
+    `anthropic-messages` API and the `/anthropic` base URL, the same shape as the bundled
+    Anthropic-compatible provider examples:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          "neon-anthropic": {
+            baseUrl: "https://<your-neon-branch-host>/anthropic",
+            apiKey: "${NEON_AI_GATEWAY_TOKEN}",
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "claude-sonnet-4-6",
+                name: "Claude Sonnet 4.6",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200000,
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "neon-anthropic/claude-sonnet-4-6" },
+        },
+      },
+    }
+    ```
+
+    The same `cost`, `maxTokens` and `contextWindow` caveats from the OpenAI entry apply here: the
+    zeros are the beta rate, and you take `contextWindow` from the
+    [Neon model catalog](https://neon.com/docs/ai-gateway/models). Two behaviors matter here:
+
+    - This endpoint takes Claude model IDs only. Sending a non-Anthropic ID returns
+      `400 model "<model-id>" is not available on the anthropic_messages endpoint`, so keep this entry
+      separate from the `/v1` entry, which reaches every model.
+    - On a non-`api.anthropic.com` host, OpenClaw suppresses implicit `anthropic-beta` headers, such as
+      interleaved thinking, so a proxy does not reject them. Set `headers` with an `anthropic-beta` value
+      on the provider if you need a specific beta.
 
   </Accordion>
 
@@ -279,6 +336,20 @@ Google roll out gradually, so a catalog model may not be enabled for your projec
     - Inference is free during the beta. Neon states it will pass through provider per-token rates
       with no markup once billing begins.
   </Accordion>
+
+  <Accordion title="Common errors and troubleshooting">
+    Neon's [troubleshooting guide](https://neon.com/docs/ai-gateway/troubleshooting) covers the errors
+    you are most likely to hit:
+
+    - `403 model requires a verified account` is a per-model gate. It mirrors `enabled: false` for that
+      model in `GET /v1/models`, so a model your project cannot use yet fails here rather than in your
+      OpenClaw config.
+    - `400 model "<model-id>" is not available on the <endpoint> endpoint` means the model ID does not
+      belong to the dialect you called, such as an OpenAI ID sent to `/anthropic` or a Claude ID sent to
+      `/openai/v1`. Use the provider entry that matches the model.
+    - AI Gateway is in beta, paid-plan only and currently limited to AWS US East (Ohio)
+      (`aws-us-east-2`), so a project created elsewhere or on a free plan cannot reach it.
+  </Accordion>
 </AccordionGroup>
 
 <Note>
@@ -289,15 +360,21 @@ For general provider configuration and failover behavior, see [Model Providers](
 
 <CardGroup cols={2}>
   <Card title="Neon AI Gateway docs" href="https://neon.com/docs/ai-gateway/overview" icon="book">
-    Official Neon documentation for the gateway, authentication, and models.
+    Official Neon documentation for the gateway, authentication and models.
   </Card>
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
-    Overview of all providers, model refs, and failover behavior.
+    Overview of all providers, model refs and failover behavior.
   </Card>
   <Card title="Configuration" href="/gateway/configuration" icon="gear">
     Full config reference.
   </Card>
   <Card title="Models" href="/concepts/models" icon="brain">
     How to choose and configure models.
+  </Card>
+  <Card title="Anthropic Messages API" href="https://neon.com/docs/ai-gateway/anthropic-messages" icon="robot">
+    Native Claude dialect with prompt caching and extended thinking.
+  </Card>
+  <Card title="Troubleshooting" href="https://neon.com/docs/ai-gateway/troubleshooting" icon="wrench">
+    Common Neon AI Gateway errors and how to resolve them.
   </Card>
 </CardGroup>
