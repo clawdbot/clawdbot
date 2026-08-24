@@ -1364,7 +1364,7 @@ describe("activateSetupInference", () => {
   it("omits the token cap when harness selection is automatic", () => {
     expect(resolveSetupInferenceProbeStreamParams("auto")).toEqual({});
     expect(resolveSetupInferenceProbeStreamParams("openclaw")).toEqual({
-      streamParams: { maxTokens: 128 },
+      streamParams: { maxTokens: 256 },
     });
   });
 
@@ -1915,6 +1915,7 @@ describe("activateSetupInference", () => {
     };
     const configHarness = createConfigTransformHarness(initialConfig);
     const updateAuthStore = vi.fn();
+    const runEmbeddedAgent = vi.fn(successfulRunner("lmstudio", "qwen-local"));
 
     const result = await activateSetupInference({
       kind: "provider-auto:lmstudio",
@@ -1930,7 +1931,7 @@ describe("activateSetupInference", () => {
           appGuidedDiscovery: true,
         }),
         resolvePluginProviders: () => [provider],
-        runEmbeddedAgent: vi.fn(successfulRunner("lmstudio", "qwen-local")) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         updateAuthProfileStoreWithLock: updateAuthStore as never,
       },
@@ -1948,6 +1949,13 @@ describe("activateSetupInference", () => {
           ]
         : []),
     ]);
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "lmstudio",
+        model: "qwen-local",
+        streamParams: { maxTokens: 256 },
+      }),
+    );
     expect(detect).not.toHaveBeenCalled();
     expect(prepare).toHaveBeenCalledOnce();
     expect(updateAuthStore).not.toHaveBeenCalled();
