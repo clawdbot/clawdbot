@@ -167,6 +167,7 @@ vi.mock("../../sessions/session-key-utils.js", async (importOriginal) => ({
 }));
 
 vi.mock("../reply/reply-run-registry.js", () => ({
+  clearReplyRunForResetBySessionId: vi.fn(),
   replyRunRegistry: {
     isActive(sessionKey: string) {
       replyRegistryReceivers.add(this);
@@ -222,6 +223,7 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
 }));
 
 vi.mock("../../process/command-queue.js", () => ({
+  clearCommandLane: vi.fn(),
   getQueueSize: () => mainQueueSize,
   isGatewayDraining: () => gatewayDraining,
   waitForCommandLaneIdle: async (
@@ -288,9 +290,11 @@ vi.mock("../../infra/heartbeat-wake.js", () => ({
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
+  consumeSelectedSystemEventEntries: () => [],
   enqueueSystemEventRaw: (text: string, options: unknown) => {
     systemEvents.push({ text, options });
   },
+  peekSystemEventEntries: () => [],
 }));
 
 vi.mock("../../infra/continuation-tracer.js", () => ({
@@ -334,7 +338,7 @@ type MockFlow = {
   ownerKey: string;
   chainId?: string;
   controllerId: string;
-  status: "queued" | "running" | "succeeded" | "failed";
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   notifyPolicy: "silent";
   goal: string;
   currentStep?: string;
@@ -348,6 +352,7 @@ type MockFlow = {
 
 const mockFlows = new Map<string, MockFlow>();
 let flowCounter = 0;
+let flowUpdateFailureReason: string | undefined;
 
 function cloneFlow(flow: MockFlow): MockFlow {
   return { ...flow };
@@ -388,6 +393,9 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
   updateFlowRecordByIdExpectedRevision: vi.fn(
     (params: { flowId: string; expectedRevision: number; patch: Partial<MockFlow> }) => {
       const flow = mockFlows.get(params.flowId);
+      if (flowUpdateFailureReason) {
+        return { applied: false, reason: flowUpdateFailureReason };
+      }
       if (!flow || flow.revision !== params.expectedRevision) {
         return { applied: false, reason: flow ? "revision_conflict" : "not_found" };
       }
@@ -451,17 +459,20 @@ import {
   DEFAULT_NO_OP_REARM_THRESHOLD,
   recordNoOpRearmOutcome,
 } from "../reply/no-op-rearm-guard.js";
+import { clearSessionResetRuntimeState } from "../reply/session-reset-cleanup.js";
 import {
   cancelPendingDelegates,
   enqueuePendingDelegate,
   pendingDelegateCount,
 } from "./delegate-store.js";
+import { cancelSessionContinuations } from "./session-reset.js";
 import type { ContinuationRuntimeConfig } from "./types.js";
 import {
-  dispatchPendingContinuationWork,
   bucket1ReapVerdict,
   classifyContinuationWorkReason,
+  clearContinuationWorkDispatch,
   computeBusySkipBackoffMs,
+  dispatchPendingContinuationWork,
   partitionSupersededWork,
   recoverPendingContinuationWork,
   resetContinuationWorkDispatchForTests,
@@ -592,6 +603,7 @@ describe("durable continuation_work dispatch", () => {
     subagentRuns.clear();
     getReplyFromConfigMock.mockClear();
     continuationEnabledForTest = true;
+    flowUpdateFailureReason = undefined;
     capturedReplyTraceparents.length = 0;
     bumpWorkRevisionOnReply = false;
     emitContinuationWorkFireSpanMock.mockReset();
@@ -700,6 +712,85 @@ describe("durable continuation_work dispatch", () => {
     expect(result).toEqual({ applied: false, work });
     expect(work).toEqual(input);
     expect(flow.stateJson).toEqual(stateBeforeConflict);
+  });
+
+  it("fences a claimed work turn when reset lands before final admission", async () => {
+    const sessionKey = "agent:main:reset-before-work-admission";
+    mockSessionStore[sessionKey] = {
+      sessionId: "reset-before-work-admission-session",
+      lifecycleRevision: "reset-before-work-admission-revision",
+    };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "must not run after reset",
+    });
+    const dispatch = dispatchPendingContinuationWork({ sessionKey });
+    for (let i = 0; i < 1_000 && [...mockFlows.values()].at(0)?.status !== "running"; i += 1) {
+      await Promise.resolve();
+    }
+    expect([...mockFlows.values()].at(0)?.status).toBe("running");
+    expect(getReplyFromConfigMock).not.toHaveBeenCalled();
+
+    cancelSessionContinuations(sessionKey);
+    clearContinuationWorkDispatch(sessionKey);
+    const result = await dispatch;
+
+    expect(result).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
+    expect(getReplyFromConfigMock).not.toHaveBeenCalled();
+    expect(turnGrants).toStrictEqual([]);
+    expect([...mockFlows.values()].at(0)?.status).toBe("cancelled");
+    expect(consumePendingWork(sessionKey, { includeRunning: true })).toStrictEqual([]);
+  });
+
+  it("keeps scheduled timers and idle ownership when durable reset cancellation fails", async () => {
+    const sessionKey = "agent:main:reset-persist-failure";
+    mockSessionStore[sessionKey] = {
+      sessionId: "reset-persist-failure-session",
+      lifecycleRevision: "reset-persist-failure-revision",
+    };
+    activeSessions.add(sessionKey);
+    await scheduleContinuationWork({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      request: { delaySeconds: 1, reason: "survive failed reset" },
+      config,
+    });
+    await waitForMockWaiter(replyIdleWaiters, sessionKey);
+    const timersBeforeReset = vi.getTimerCount();
+    flowUpdateFailureReason = "persist_failed";
+
+    expect(() =>
+      clearSessionResetRuntimeState([sessionKey], {
+        agentId: "main",
+        reason: "reset",
+        activeReplySessionId: "reset-persist-failure-session",
+      }),
+    ).toThrow("could not cancel continuation flow");
+
+    expect(replyIdleWaiters.has(sessionKey)).toBe(true);
+    expect(vi.getTimerCount()).toBe(timersBeforeReset);
+    expect([...mockFlows.values()].at(0)?.status).toBe("queued");
+
+    flowUpdateFailureReason = undefined;
+    clearSessionResetRuntimeState([sessionKey], {
+      agentId: "main",
+      reason: "reset",
+      activeReplySessionId: "reset-persist-failure-session",
+    });
+    await flushAsyncWork();
+
+    expect(replyIdleWaiters.has(sessionKey)).toBe(false);
+    expect(vi.getTimerCount()).toBeLessThan(timersBeforeReset);
+    expect([...mockFlows.values()].at(0)?.status).toBe("cancelled");
   });
 
   it("keeps one reply-run registry identity across election, idle retry, and execution", async () => {

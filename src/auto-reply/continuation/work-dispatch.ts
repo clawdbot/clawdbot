@@ -2,12 +2,18 @@
 
 import type { SubagentRunLiveness } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { emitContinuationWorkSpan } from "../../infra/continuation-tracer.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { clampDelayMs, resolveContinuationRuntimeConfig } from "./config.js";
 import { checkContinuationBudget } from "./scheduler.js";
 import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from "./types.js";
+import {
+  abortContinuationWorkDispatchClaims,
+  registerContinuationWorkDispatchClaim,
+  resetContinuationWorkDispatchClaimsForTests,
+} from "./work-dispatch-claims.js";
 import {
   commitFoldedContinuationWork,
   executePendingContinuationWork,
@@ -45,10 +51,6 @@ const SUPERSEDED_GRACE_MULTIPLIER = 2;
 const workTimers = new Map<string, NodeJS.Timeout>();
 const idleRetryFailureTimers = new Map<string, { fireAt: number; handle: NodeJS.Timeout }>();
 const idleRetryControllers = new Map<string, AbortController>();
-
-function formatErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 type DispatchPendingContinuationWorkParams = {
   sessionKey: string;
@@ -105,6 +107,7 @@ export function clearContinuationWorkDispatch(sessionKey: string): void {
     idleRetryControllers.get(key)?.abort();
     idleRetryControllers.delete(key);
   }
+  abortContinuationWorkDispatchClaims(sessionKey);
 }
 
 function armWorkTimer(
@@ -179,6 +182,7 @@ export function resetContinuationWorkDispatchForTests(): void {
   }
   idleRetryFailureTimers.clear();
   clearIdleRetryControllersForTests();
+  resetContinuationWorkDispatchClaimsForTests();
 }
 
 /**
@@ -596,10 +600,17 @@ export async function dispatchPendingContinuationWork(
   }
   for (const work of worksToGrant) {
     clearIdleRetryForWork(work);
-    const directive = await executePendingContinuationWork(
-      work,
-      executionPolicyForWork(work, runtimeConfig),
-    );
+    const activeDispatch = registerContinuationWorkDispatchClaim(work.sessionKey);
+    let directive: ContinuationWorkExecutionDirective;
+    try {
+      directive = await executePendingContinuationWork(
+        work,
+        executionPolicyForWork(work, runtimeConfig),
+        activeDispatch.controller.signal,
+      );
+    } finally {
+      activeDispatch.release();
+    }
     applyExecutionDirective(directive);
     if (directive.kind === "dispatched") {
       dispatched++;

@@ -54,8 +54,8 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import { enqueuePendingDelegate } from "../continuation/delegate-store.js";
-import { enqueuePendingWork } from "../continuation/work-store.js";
+import { consumePendingDelegates, enqueuePendingDelegate } from "../continuation/delegate-store.js";
+import { consumePendingWork, enqueuePendingWork } from "../continuation/work-store.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
@@ -2310,6 +2310,62 @@ describe("initSessionState reset policy", () => {
       });
     }
   });
+
+  it.each([
+    {
+      name: "idle",
+      now: new Date(2026, 0, 18, 5, 30, 0),
+      updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      reset: { mode: "idle" as const, idleMinutes: 30 },
+    },
+    {
+      name: "daily",
+      now: new Date(2026, 0, 18, 5, 0, 0),
+      updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      reset: { mode: "daily" as const, atHour: 4 },
+    },
+  ])("preserves durable continuation claims across implicit $name rollover", async (scenario) => {
+    vi.setSystemTime(scenario.now);
+    resetTaskFlowRegistryForTests();
+    const storePath = await createStorePath(`openclaw-reset-${scenario.name}-continuation-`);
+    const sessionKey = `agent:main:whatsapp:dm:${scenario.name}-continuation`;
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: `${scenario.name}-continuation-session`,
+        updatedAt: scenario.updatedAt,
+      },
+    });
+    const work = enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+    });
+    const delegate = enqueuePendingDelegate(sessionKey, {
+      task: `continue after ${scenario.name} rollover`,
+      delayMs: 0,
+    });
+    if (!work || !delegate) {
+      throw new Error("expected durable continuation rows");
+    }
+
+    try {
+      const result = await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg: { session: { store: storePath, reset: scenario.reset } } as OpenClawConfig,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(consumePendingWork(sessionKey)).toHaveLength(1);
+      expect(consumePendingDelegates(sessionKey)).toHaveLength(1);
+    } finally {
+      resetTaskFlowRegistryForTests();
+    }
+  });
+
   it("drains stale system events when idle rollover creates a new session", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const root = await makeCaseDir("openclaw-reset-idle-system-events-");

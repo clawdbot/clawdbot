@@ -754,6 +754,13 @@ async function initSessionStateAttemptLocked(
     clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
       activeReplySessionId: previousSessionEntry.sessionId,
       agentId,
+      reason:
+        previousSessionEndReason === "new" ||
+        previousSessionEndReason === "reset" ||
+        previousSessionEndReason === "idle" ||
+        previousSessionEndReason === "daily"
+          ? previousSessionEndReason
+          : "reset",
     });
   }
 

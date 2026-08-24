@@ -6,6 +6,7 @@ import {
   resolveContinuationTraceparent,
 } from "../../infra/continuation-tracer.js";
 import { runWithDiagnosticTraceparent } from "../../infra/diagnostic-trace-context.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isRetryableHeartbeatBusySkipReason } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -20,6 +21,7 @@ import {
   markPendingWorkSuperseded,
   markPendingWorkTurnGranted,
   reconcileUndeliverableGrantedWork,
+  revalidatePendingWorkForTurn,
   requeuePendingWork,
 } from "./work-store.js";
 import { deliverPendingTerminalNoticeWithRetry } from "./work-terminal-notice.js";
@@ -33,6 +35,8 @@ const CONTINUATION_TURN_DRAINING_REASON = "draining";
 // Non-retryable: the no-op replay guard tripped. The row is
 // terminal-parked (superseded) so the self-rearm loop stops; never requeued.
 const CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON = "noop-rearm-blocked";
+const CONTINUATION_TURN_RESET_REASON = "session-reset";
+const CONTINUATION_TURN_STALE_CLAIM_REASON = "stale-claim";
 const GATEWAY_RESTARTING_REPLY_TEXT =
   "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 
@@ -65,6 +69,7 @@ type ContinuationWorkExecutionPolicy = Readonly<{
 export type ContinuationWorkExecutionDirective = Readonly<
   | { kind: "dispatched" }
   | { kind: "failed" }
+  | { kind: "cancelled" }
   | { kind: "reaped" }
   | {
       kind: "requeued";
@@ -95,10 +100,6 @@ type ContinuationWorkFoldPolicy = Readonly<{
   deliveryTimeoutMs: number;
   retryDelayMs: number;
 }>;
-
-function formatErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 function isRetryableContinuationSkipReason(reason: string): boolean {
   return (
@@ -255,6 +256,7 @@ async function driveContinuationTurn(
   work: PendingContinuationWork,
   wakeText: string,
   mainCommandLane: string,
+  signal: AbortSignal,
 ): Promise<ContinuationTurnGrantResult> {
   const [
     { getRuntimeConfig },
@@ -312,6 +314,10 @@ async function driveContinuationTurn(
   if (!agentSessionEntry) {
     return { status: "skipped", reason: "missing-session" };
   }
+  const admittedSessionIdentity = {
+    sessionId: agentSessionEntry.sessionId,
+    lifecycleRevision: agentSessionEntry.lifecycleRevision,
+  };
 
   const admission = evaluateNoOpRearmAdmission({
     sessionKey: work.sessionKey,
@@ -323,6 +329,32 @@ async function driveContinuationTurn(
     return { status: "skipped", reason: CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON };
   }
 
+  if (signal.aborted) {
+    return { status: "skipped", reason: CONTINUATION_TURN_RESET_REASON };
+  }
+  const workFence = revalidatePendingWorkForTurn(work);
+  if (!workFence.allowed) {
+    return {
+      status: "skipped",
+      reason:
+        workFence.reason === "cancelled"
+          ? CONTINUATION_TURN_RESET_REASON
+          : CONTINUATION_TURN_STALE_CLAIM_REASON,
+    };
+  }
+  const currentSessionEntry = loadSessionEntry({
+    clone: false,
+    hydrateSkillPromptRefs: false,
+    readConsistency: "latest",
+    sessionKey: work.sessionKey,
+    storePath,
+  });
+  if (
+    currentSessionEntry?.sessionId !== admittedSessionIdentity.sessionId ||
+    currentSessionEntry?.lifecycleRevision !== admittedSessionIdentity.lifecycleRevision
+  ) {
+    return { status: "skipped", reason: CONTINUATION_TURN_RESET_REASON };
+  }
   const reply = await runWithDiagnosticTraceparent(work.traceparent, () =>
     getReplyFromConfig(
       {
@@ -339,6 +371,7 @@ async function driveContinuationTurn(
       },
       {
         continuationTrigger: "work-wake",
+        abortSignal: signal,
         parentRunId: work.parentRunId,
         lane: continuationLane,
         typingPolicy: "system_event",
@@ -480,6 +513,7 @@ export function commitFoldedContinuationWork(
 export async function executePendingContinuationWork(
   work: PendingContinuationWork,
   policy: ContinuationWorkExecutionPolicy,
+  signal: AbortSignal,
 ): Promise<ContinuationWorkExecutionDirective> {
   try {
     const fireDeferredMs = Date.now() - work.electedAt;
@@ -501,6 +535,7 @@ export async function executePendingContinuationWork(
       work,
       formatContinuationWakeText(work),
       policy.mainCommandLane,
+      signal,
     );
     if (result.status === "ran") {
       markPendingWorkTurnGranted(result.work);
@@ -514,6 +549,12 @@ export async function executePendingContinuationWork(
     log.warn(
       `[continuation:work-drive-skipped] flowId=${work.flowId ?? "none"} session=${work.sessionKey} reason=${skippedReason} reasonCategory=${policy.reasonCategory}`,
     );
+    if (skippedReason === CONTINUATION_TURN_RESET_REASON) {
+      log.info(
+        `[continuation:work-drive-cancelled] flowId=${work.flowId ?? "none"} session=${work.sessionKey} reason=${skippedReason}`,
+      );
+      return { kind: "cancelled" };
+    }
     if (skippedReason === CONTINUATION_TURN_NOOP_REARM_BLOCKED_REASON) {
       markPendingWorkSuperseded(
         work,
@@ -576,6 +617,12 @@ export async function executePendingContinuationWork(
     markPendingWorkFailed(work, `Continuation turn was not granted: ${skippedReason}`);
     return { kind: "failed" };
   } catch (err) {
+    if (signal.aborted) {
+      log.info(
+        `[continuation:work-drive-cancelled] flowId=${work.flowId ?? "none"} session=${work.sessionKey} reason=${CONTINUATION_TURN_RESET_REASON}`,
+      );
+      return { kind: "cancelled" };
+    }
     const message = formatErrorMessage(err);
     const retryCount = (work.retryCount ?? 0) + 1;
     if (retryCount <= MAX_TRANSIENT_ERROR_RETRY_COUNT) {

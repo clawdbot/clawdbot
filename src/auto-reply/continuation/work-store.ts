@@ -39,6 +39,33 @@ type PendingWorkDeliveryCommitResult = Readonly<
   | { applied: false; work: PendingContinuationWork }
 >;
 
+export type ContinuationWorkTurnFenceResult =
+  | { allowed: true }
+  | { allowed: false; reason: "cancelled" | "stale" };
+
+/** Re-read a claimed work row at the final synchronous boundary before turn admission. */
+export function revalidatePendingWorkForTurn(
+  work: Pick<PendingContinuationWork, "flowId" | "expectedRevision">,
+): ContinuationWorkTurnFenceResult {
+  if (!work.flowId || work.expectedRevision === undefined) {
+    return { allowed: false, reason: "stale" };
+  }
+  const flow = getTaskFlowById(work.flowId);
+  if (
+    flow &&
+    isContinuationWorkFlow(flow) &&
+    flow.status === "running" &&
+    flow.revision === work.expectedRevision &&
+    flow.cancelRequestedAt == null
+  ) {
+    return { allowed: true };
+  }
+  return {
+    allowed: false,
+    reason: flow?.status === "cancelled" || flow?.cancelRequestedAt != null ? "cancelled" : "stale",
+  };
+}
+
 function finalizeDeliveredWorkFlow(flow: TaskFlowRecord, state: PendingWorkState): void {
   const now = Date.now();
   const foldedActive = state.disposition === "folded-active";

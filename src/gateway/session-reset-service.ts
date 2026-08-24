@@ -336,6 +336,7 @@ async function ensureSessionRuntimeCleanup(params: {
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   sessionId?: string;
+  reason: "new" | "reset" | "delete";
   assertCurrent?: () => void;
 }) {
   // Session lifecycle mutation owns this heavy runtime edge; read-only gateway
@@ -378,6 +379,7 @@ async function ensureSessionRuntimeCleanup(params: {
     clearSessionResetRuntimeState([...queueKeys], {
       activeReplySessionId: params.sessionId,
       agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
+      reason: params.reason,
     });
   } catch (error) {
     if (error instanceof SessionContinuationResetError) {
@@ -808,6 +810,7 @@ export async function cleanupSessionBeforeMutation(params: {
     key: params.key,
     target: params.target,
     sessionId: params.entry?.sessionId,
+    reason: params.reason === "session-reset" ? "reset" : "delete",
     assertCurrent: params.assertCurrent,
   });
   if (cleanupError) {
@@ -1325,6 +1328,7 @@ export async function performGatewaySessionReset(params: {
         key: params.key,
         target,
         sessionId: entry?.sessionId,
+        reason: params.reason,
       });
       if (runtimeCleanupError) {
         return { ok: false, error: runtimeCleanupError };

@@ -95,6 +95,17 @@ const ALLOWLIST = [
       "Lost on process restart; pending continuation work remains in TaskFlow and restart recovery/normal scheduling can re-arm recovery or hedge timers from durable rows.",
   },
   {
+    file: "src/auto-reply/continuation/work-dispatch-claims.ts",
+    symbol: "activeWorkDispatchControllers",
+    owner: "continuation work dispatch claim registry",
+    purpose:
+      "Tracks live AbortControllers for claimed continue_work callbacks so explicit reset can close them before provider admission.",
+    safeVolatileClassification:
+      "The map contains only current-process execution controllers; durable TaskFlow rows remain the restart and recovery authority.",
+    restartContract:
+      "Lost on process restart; running TaskFlow rows remain recoverable only after the stale-running cutoff and reacquire a fresh controller.",
+  },
+  {
     file: "src/auto-reply/reply/reply-run-registry.state.ts",
     symbol: "activeRunsByKey",
     owner: "reply run registry singleton",
