@@ -21,6 +21,7 @@ function createInspectors(
     getQueuedTurns: () => 0,
     getTerminalPersistence: () => 0,
     getTerminalSessions: () => 0,
+    getPluginParticipants: () => [],
     ...overrides,
   };
 }

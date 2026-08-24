@@ -151,6 +151,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerReload: registrars.registerReload,
     registerNodeHostCommand: registrars.registerNodeHostCommand,
     registerSecurityAuditCollector: registrars.registerSecurityAuditCollector,
+    registerGatewaySuspensionParticipant: registrars.registerGatewaySuspensionParticipant,
     registerService: registrars.registerService,
     registerCommand: registrars.registerCommand,
     registerSessionExtension: registrars.registerSessionExtension,

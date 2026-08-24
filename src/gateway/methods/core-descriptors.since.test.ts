@@ -81,6 +81,7 @@ const TRAIN_2026_7_METHODS = [
 ] as const;
 
 const CURRENT_TRAIN_METHODS = [
+  "gateway.suspend.preflight",
   "diagnostics.lanes",
   "device.pair.setupStatus",
   "sessions.patchMany",

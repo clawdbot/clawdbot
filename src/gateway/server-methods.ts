@@ -284,6 +284,7 @@ function authorizeGatewayMethod(
 }
 
 const SUSPEND_CONTROL_METHODS = new Set([
+  "gateway.suspend.preflight",
   "gateway.suspend.prepare",
   "gateway.suspend.status",
   "gateway.suspend.resume",

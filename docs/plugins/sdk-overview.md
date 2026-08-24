@@ -231,30 +231,31 @@ advertised node command.
 
 ### Infrastructure
 
-| Method                                            | What it registers                                                      |
-| ------------------------------------------------- | ---------------------------------------------------------------------- |
-| `api.registerHook(events, handler, opts?)`        | Event hook                                                             |
-| `api.registerHttpRoute(params)`                   | Gateway HTTP endpoint                                                  |
-| `api.registerGatewayMethod(name, handler, opts?)` | Gateway RPC method                                                     |
-| `api.registerGatewayDiscoveryService(service)`    | Local Gateway discovery advertiser                                     |
-| `api.registerCli(registrar, opts?)`               | CLI subcommand                                                         |
-| `api.registerNodeCliFeature(registrar, opts?)`    | Node feature CLI under `openclaw nodes`                                |
-| `api.registerService(service)`                    | Background service                                                     |
-| `api.registerInteractiveHandler(registration)`    | Interactive handler                                                    |
-| `api.registerAgentToolResultMiddleware(...)`      | Runtime tool-result middleware                                         |
-| `api.registerMemoryPromptSupplement(builder)`     | Additive memory-adjacent prompt section                                |
-| `api.registerMemoryPromptPreparation(prepare)`    | Async preparation for a memory-adjacent prompt section                 |
-| `api.registerMemoryCorpusSupplement(adapter)`     | Additive memory search/read corpus                                     |
-| `api.registerHostedMediaResolver(resolver)`       | Resolver for browser-style hosted media URLs                           |
-| `api.registerMcpServerConnectionResolver(...)`    | Per-requester MCP transport (`url`/`headers`) for a static server name |
-| `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
-| `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
-| `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
-| `api.registerAutoEnableProbe(probe)`              | Config probe that can auto-enable this plugin                          |
-| `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
-| `api.registerNodeHostCommand(command)`            | Command handler exposed to paired nodes                                |
-| `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
-| `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
+| Method                                                  | What it registers                                                      |
+| ------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `api.registerHook(events, handler, opts?)`              | Event hook                                                             |
+| `api.registerHttpRoute(params)`                         | Gateway HTTP endpoint                                                  |
+| `api.registerGatewayMethod(name, handler, opts?)`       | Gateway RPC method                                                     |
+| `api.registerGatewayDiscoveryService(service)`          | Local Gateway discovery advertiser                                     |
+| `api.registerCli(registrar, opts?)`                     | CLI subcommand                                                         |
+| `api.registerNodeCliFeature(registrar, opts?)`          | Node feature CLI under `openclaw nodes`                                |
+| `api.registerService(service)`                          | Background service                                                     |
+| `api.registerInteractiveHandler(registration)`          | Interactive handler                                                    |
+| `api.registerAgentToolResultMiddleware(...)`            | Runtime tool-result middleware                                         |
+| `api.registerMemoryPromptSupplement(builder)`           | Additive memory-adjacent prompt section                                |
+| `api.registerMemoryPromptPreparation(prepare)`          | Async preparation for a memory-adjacent prompt section                 |
+| `api.registerMemoryCorpusSupplement(adapter)`           | Additive memory search/read corpus                                     |
+| `api.registerHostedMediaResolver(resolver)`             | Resolver for browser-style hosted media URLs                           |
+| `api.registerMcpServerConnectionResolver(...)`          | Per-requester MCP transport (`url`/`headers`) for a static server name |
+| `api.registerTextTransforms(transforms)`                | Plugin-owned prompt/message compatibility text rewrites                |
+| `api.registerConfigMigration(migrate)`                  | Lightweight config migration run before plugin runtime loads           |
+| `api.registerMigrationProvider(provider)`               | Importer for `openclaw migrate`                                        |
+| `api.registerAutoEnableProbe(probe)`                    | Config probe that can auto-enable this plugin                          |
+| `api.registerReload(registration)`                      | Restart/hot/noop config-prefix policy for reload handling              |
+| `api.registerNodeHostCommand(command)`                  | Command handler exposed to paired nodes                                |
+| `api.registerNodeInvokePolicy(policy)`                  | Allowlist/approval policy for node-invoked commands                    |
+| `api.registerSecurityAuditCollector(collector)`         | Findings collector for `openclaw security audit`                       |
+| `api.registerGatewaySuspensionParticipant(participant)` | Plugin-owned background work joined to the host-suspension fence       |
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 

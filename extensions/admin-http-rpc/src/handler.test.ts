@@ -204,6 +204,7 @@ describe("admin-http-rpc plugin handler", () => {
   );
 
   it.each([
+    ["gateway.suspend.preflight", {}],
     ["gateway.suspend.prepare", { requestId: "host-request-1" }],
     ["gateway.suspend.status", { suspensionId: "suspension-1" }],
     ["gateway.suspend.resume", { suspensionId: "suspension-1" }],

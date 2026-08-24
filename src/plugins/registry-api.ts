@@ -85,6 +85,7 @@ export function createPluginApiFactory(
     registerNodeInvokePolicy,
     registerWidgetPresenter,
     registerSecurityAuditCollector,
+    registerGatewaySuspensionParticipant,
     registerInteractiveHandler,
     registerConversationBindingResolvedHandler,
     registerCommand,
@@ -227,6 +228,8 @@ export function createPluginApiFactory(
               registerWidgetPresenter: (presenter) => registerWidgetPresenter(record, presenter),
               registerSecurityAuditCollector: (collector) =>
                 registerSecurityAuditCollector(record, collector),
+              registerGatewaySuspensionParticipant: (participant) =>
+                registerGatewaySuspensionParticipant(record, participant),
               registerInteractiveHandler: (registration) =>
                 registerInteractiveHandler(record, registration),
               onConversationBindingResolved: (handler) =>

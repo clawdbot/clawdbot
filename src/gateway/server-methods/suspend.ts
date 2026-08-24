@@ -2,10 +2,12 @@
 import {
   ErrorCodes,
   errorShape,
+  validateGatewaySuspendPreflightParams,
   validateGatewaySuspendPrepareParams,
   validateGatewaySuspendResumeParams,
   validateGatewaySuspendStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createGatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import {
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
@@ -27,6 +29,24 @@ function schedulerRecoveryError(retryAfterMs: number) {
 }
 
 export const suspendHandlers: GatewayRequestHandlers = {
+  // Read-only observation. It never closes admission or takes a lease, so a busy
+  // result is advisory and an idle result can go stale before prepare runs.
+  "gateway.suspend.preflight": async ({ respond, params, context }) => {
+    if (!validateGatewaySuspendPreflightParams(params)) {
+      respond(false, undefined, invalidParams("gateway.suspend.preflight"));
+      return;
+    }
+    const snapshot = createGatewayActiveWorkSnapshot(
+      createGatewayServerActiveWorkInspectors(context),
+      { ignoreTerminalSessions: (params.terminalPolicy ?? "preserve") === "terminate" },
+    );
+    respond(true, {
+      status: snapshot.idle ? "idle" : "busy",
+      activeCount: snapshot.counts.totalActive,
+      counts: snapshot.counts,
+      blockers: snapshot.blockers,
+    });
+  },
   "gateway.suspend.prepare": async ({ respond, params, context }) => {
     if (!validateGatewaySuspendPrepareParams(params)) {
       respond(false, undefined, invalidParams("gateway.suspend.prepare"));

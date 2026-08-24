@@ -12,6 +12,10 @@ import {
   sanitizeCommandDescriptorDescription,
 } from "../cli/program/command-descriptor-utils.js";
 import {
+  type GatewaySuspensionParticipant,
+  registerGatewaySuspensionParticipant as registerGatewaySuspensionParticipantEntry,
+} from "../infra/gateway-suspension-participants.js";
+import {
   NODE_EXEC_APPROVALS_COMMANDS,
   isPrivateNodeInvokeCommand,
   NODE_SYSTEM_NOTIFY_COMMAND,
@@ -366,6 +370,28 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     });
   };
 
+  const registerGatewaySuspensionParticipant = (
+    record: PluginRecord,
+    participant: GatewaySuspensionParticipant,
+  ) => {
+    const id = participant.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "gateway suspension participant requires a non-empty id",
+      });
+      return () => {};
+    }
+    // Namespace by plugin so two plugins cannot collide on a shared queue name,
+    // and so an operator can tell which plugin is holding the fence open.
+    return registerGatewaySuspensionParticipantEntry({
+      ...participant,
+      id: `${record.id}:${id}`,
+    });
+  };
+
   const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
     const id = service.id.trim();
     if (!id) {
@@ -506,6 +532,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerNodeHostCommand,
     registerNodeInvokePolicy,
     registerSecurityAuditCollector,
+    registerGatewaySuspensionParticipant,
     registerService,
     registerGatewayDiscoveryService,
     registerCommand,

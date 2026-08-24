@@ -20,6 +20,32 @@ vi.mock("../server-active-work.js", () => ({
   createGatewayServerActiveWorkInspectors: vi.fn(() => ({ getChatRuns: vi.fn(() => 0) })),
 }));
 
+const activeWork = vi.hoisted(() => ({ snapshot: vi.fn() }));
+
+vi.mock("../../infra/gateway-active-work.js", () => ({
+  createGatewayActiveWorkSnapshot: activeWork.snapshot,
+}));
+
+function emptyCounts() {
+  return {
+    queueSize: 0,
+    pendingReplies: 0,
+    embeddedRuns: 0,
+    backgroundExecSessions: 0,
+    cronRuns: 0,
+    activeTasks: 0,
+    rootRequests: 0,
+    sessionAdmissions: 0,
+    sessionMutations: 0,
+    chatRuns: 0,
+    queuedTurns: 0,
+    terminalPersistence: 0,
+    terminalSessions: 0,
+    pluginParticipants: 0,
+    totalActive: 0,
+  };
+}
+
 function invoke(method: keyof typeof suspendHandlers, params: unknown) {
   const respond = vi.fn();
   const pauseScheduling = vi.fn();
@@ -175,5 +201,61 @@ describe("gateway suspend handlers", () => {
         details: { reason: "scheduler-resume-failed" },
       }),
     );
+  });
+
+  it("validates the closed preflight params shape", async () => {
+    const { respond } = await invoke("gateway.suspend.preflight", { suspensionId: "nope" });
+
+    expect(activeWork.snapshot).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: "invalid gateway.suspend.preflight params",
+    });
+  });
+
+  it("reports idle with structured counts and no blockers", async () => {
+    activeWork.snapshot.mockReturnValueOnce({ idle: true, counts: emptyCounts(), blockers: [] });
+
+    const { respond, pauseScheduling } = await invoke("gateway.suspend.preflight", {});
+
+    // Preflight observes only: it must never pause the scheduler or take a lease.
+    expect(pauseScheduling).not.toHaveBeenCalled();
+    expect(coordinator.prepare).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, {
+      status: "idle",
+      activeCount: 0,
+      counts: emptyCounts(),
+      blockers: [],
+    });
+  });
+
+  it("reports busy with the blocker inventory that refuses preparation", async () => {
+    const blockers = [{ kind: "chat-run", count: 2, message: "2 active chat run(s)" }];
+    activeWork.snapshot.mockReturnValueOnce({
+      idle: false,
+      counts: { ...emptyCounts(), chatRuns: 2, totalActive: 2 },
+      blockers,
+    });
+
+    const { respond } = await invoke("gateway.suspend.preflight", {});
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "busy", activeCount: 2, blockers }),
+    );
+  });
+
+  it("applies terminal policy to the observed snapshot", async () => {
+    activeWork.snapshot.mockReturnValue({ idle: true, counts: emptyCounts(), blockers: [] });
+
+    await invoke("gateway.suspend.preflight", { terminalPolicy: "terminate" });
+    expect(activeWork.snapshot).toHaveBeenLastCalledWith(expect.anything(), {
+      ignoreTerminalSessions: true,
+    });
+
+    await invoke("gateway.suspend.preflight", {});
+    expect(activeWork.snapshot).toHaveBeenLastCalledWith(expect.anything(), {
+      ignoreTerminalSessions: false,
+    });
   });
 });

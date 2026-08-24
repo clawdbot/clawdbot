@@ -447,6 +447,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
     { startup: true, controlPlaneWrite: true },
   ],
   ["gateway.suspend.status", "suspend", "operator.read", "2026.7"],
+  // Point-in-time busy inspection. Read-only, so it stays out of control-plane
+  // write rate limiting and remains callable while a lease is held.
+  ["gateway.suspend.preflight", "suspend", "operator.read", "2026.8"],
   // Resume is the safety escape hatch and must not sit behind write-rate limiting.
   ["gateway.suspend.resume", "suspend", "operator.admin", "2026.7"],
   // Spends utility-model tokens on cache misses when the opt-in is enabled, so

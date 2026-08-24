@@ -70,6 +70,9 @@ export function createSafeGatewayRestartPreflight(
     getQueuedTurns: () => 0,
     getTerminalPersistence: () => 0,
     getTerminalSessions: () => 0,
+    // Suspension-only accounting. Restart preflight keeps its restart-specific
+    // inventory so its existing shape and semantics stay unchanged.
+    getPluginParticipants: () => [],
   });
   const counts: SafeGatewayRestartCounts = {
     queueSize: snapshot.counts.queueSize,

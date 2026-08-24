@@ -35,15 +35,53 @@ export const GatewaySuspendBlockerSchema = closedObject({
     Type.Literal("queued-turn"),
     Type.Literal("terminal-persistence"),
     Type.Literal("terminal-session"),
+    Type.Literal("plugin-participant"),
   ]),
   count: CountSchema,
   message: Type.String(),
   task: Type.Optional(GatewaySuspendTaskBlockerSchema),
+  /** Present on plugin-participant blockers to name the owning participant. */
+  participantId: Type.Optional(Type.String()),
 });
+
+const TerminalPolicySchema = Type.Union([Type.Literal("preserve"), Type.Literal("terminate")]);
 
 export const GatewaySuspendPrepareParamsSchema = closedObject({
   requestId: SuspensionTokenSchema,
-  terminalPolicy: Type.Optional(Type.Union([Type.Literal("preserve"), Type.Literal("terminate")])),
+  terminalPolicy: Type.Optional(TerminalPolicySchema),
+});
+
+export const GatewaySuspendPreflightParamsSchema = closedObject({
+  terminalPolicy: Type.Optional(TerminalPolicySchema),
+});
+
+// Mirrors GatewayActiveWorkCounts. Categories can overlap, so controllers should
+// read individual counts for diagnostics and treat totalActive as an aggregate.
+export const GatewaySuspendPreflightCountsSchema = closedObject({
+  queueSize: CountSchema,
+  pendingReplies: CountSchema,
+  embeddedRuns: CountSchema,
+  backgroundExecSessions: CountSchema,
+  cronRuns: CountSchema,
+  activeTasks: CountSchema,
+  rootRequests: CountSchema,
+  sessionAdmissions: CountSchema,
+  sessionMutations: CountSchema,
+  chatRuns: CountSchema,
+  queuedTurns: CountSchema,
+  terminalPersistence: CountSchema,
+  terminalSessions: CountSchema,
+  pluginParticipants: CountSchema,
+  totalActive: CountSchema,
+});
+
+// Point-in-time observation only. gateway.suspend.prepare stays authoritative and
+// may still return busy immediately after preflight reported idle.
+export const GatewaySuspendPreflightResultSchema = closedObject({
+  status: Type.Union([Type.Literal("idle"), Type.Literal("busy")]),
+  activeCount: CountSchema,
+  counts: GatewaySuspendPreflightCountsSchema,
+  blockers: Type.Array(GatewaySuspendBlockerSchema),
 });
 
 export const GatewaySuspendPrepareBusyResultSchema = closedObject({
@@ -99,6 +137,9 @@ export type GatewaySuspendTaskBlocker = Static<typeof GatewaySuspendTaskBlockerS
 export type GatewaySuspendBlocker = Static<typeof GatewaySuspendBlockerSchema>;
 export type GatewaySuspendPrepareParams = Static<typeof GatewaySuspendPrepareParamsSchema>;
 export type GatewaySuspendPrepareResult = Static<typeof GatewaySuspendPrepareResultSchema>;
+export type GatewaySuspendPreflightParams = Static<typeof GatewaySuspendPreflightParamsSchema>;
+export type GatewaySuspendPreflightCounts = Static<typeof GatewaySuspendPreflightCountsSchema>;
+export type GatewaySuspendPreflightResult = Static<typeof GatewaySuspendPreflightResultSchema>;
 export type GatewaySuspendStatusParams = Static<typeof GatewaySuspendStatusParamsSchema>;
 export type GatewaySuspendStatusResult = Static<typeof GatewaySuspendStatusResultSchema>;
 export type GatewaySuspendResumeParams = Static<typeof GatewaySuspendResumeParamsSchema>;

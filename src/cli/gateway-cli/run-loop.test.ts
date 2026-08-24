@@ -80,6 +80,7 @@ const createActiveWorkSnapshot = (
     queuedTurns: 0,
     terminalPersistence: 0,
     terminalSessions: 0,
+    pluginParticipants: 0,
     totalActive: 0,
     ...counts,
   };
