@@ -285,15 +285,6 @@ jobs:
         shell: bash
         run: bash scripts/mantis/telegram-visible-run-agent.sh
 
-      - name: Collect trusted Telegram evidence
-        id: collect
-        env:
-          SESSION_ROOT: ${{ steps.telegram_credential.outputs.session_root }}
-          BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
-          CANDIDATE_SHA: ${{ steps.worktrees.outputs.candidate_revision }}
-        shell: bash
-        run: bash scripts/mantis/telegram-visible-collect-proof.sh
-
       - name: Clean up Mantis sessions
         id: cleanup
         if: ${{ always() }}
@@ -303,6 +294,16 @@ jobs:
           SESSION_ROOT: ${{ steps.telegram_credential.outputs.session_root }}
         shell: bash
         run: bash scripts/mantis/telegram-visible-cleanup-proof.sh
+
+      - name: Collect trusted Telegram evidence
+        id: collect
+        if: ${{ success() && steps.cleanup.outputs.safe_to_release == 'true' }}
+        env:
+          SESSION_ROOT: ${{ steps.telegram_credential.outputs.session_root }}
+          BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ steps.worktrees.outputs.candidate_revision }}
+        shell: bash
+        run: bash scripts/mantis/telegram-visible-collect-proof.sh
 
       - name: Release Telegram QA user lease
         id: release

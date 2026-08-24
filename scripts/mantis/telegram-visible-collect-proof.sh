@@ -2,20 +2,6 @@
 set -euo pipefail
 output_root="$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR"
 
-active_codex_pids() {
-  sudo ps -u codex -o pid=,stat= 2>/dev/null | awk '$2 !~ /^Z/ {print $1}' || true
-}
-sudo pkill -TERM -u codex 2>/dev/null || true
-for _ in {1..10}; do
-  [[ -z "$(active_codex_pids)" ]] && break
-  sleep 1
-done
-sudo pkill -KILL -u codex 2>/dev/null || true
-[[ -z "$(active_codex_pids)" ]] || {
-  echo "Codex processes remained before evidence collection." >&2
-  exit 1
-}
-
 trusted_root="${RUNNER_TEMP}/mantis-trusted-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 test ! -e "$trusted_root"
 install -d -m 0700 "$trusted_root"

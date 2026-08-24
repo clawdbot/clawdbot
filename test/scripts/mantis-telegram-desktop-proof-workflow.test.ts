@@ -7,6 +7,7 @@ const PROMPT = ".github/codex/prompts/mantis-telegram-visible-proof.md";
 
 type Step = {
   name?: string;
+  if?: string;
   run?: string;
   env?: Record<string, string>;
   with?: Record<string, unknown>;
@@ -56,14 +57,27 @@ describe("Mantis Telegram proof workflow", () => {
     }
   });
 
-  it("stops Codex and snapshots its judgment before trusted collection", () => {
+  it("fences every SUT lane before trusted collection", () => {
+    const steps = proofSteps();
+    const cleanupStep = steps.findIndex((step) => step.name === "Clean up Mantis sessions");
+    const collectStep = steps.findIndex(
+      (step) => step.name === "Collect trusted Telegram evidence",
+    );
+    const collectConfig = steps[collectStep];
+    const cleanup = readFileSync("scripts/mantis/telegram-visible-cleanup-proof.sh", "utf8");
     const collect = readFileSync("scripts/mantis/telegram-visible-collect-proof.sh", "utf8");
-    const stop = collect.indexOf("pkill -TERM -u codex");
     const snapshot = collect.indexOf('install -m 0400 "$output_root/agent-evidence.json"');
     const laneSnapshot = collect.indexOf('"$SESSION_ROOT/${lane}.json"');
     const build = collect.indexOf("telegram-visible-proof.mjs collect");
-    expect(stop).toBeGreaterThan(-1);
-    expect(snapshot).toBeGreaterThan(stop);
+
+    expect(cleanupStep).toBeGreaterThan(-1);
+    expect(collectStep).toBeGreaterThan(cleanupStep);
+    expect(collectConfig?.if).toContain("steps.cleanup.outputs.safe_to_release == 'true'");
+    expect(cleanup).toContain("pkill -TERM -u codex");
+    expect(cleanup).toContain("${lane}.active.json");
+    expect(cleanup).toContain("${lane}.starting.json");
+    expect(cleanup).toContain('"/usr/local/bin/mantis-telegram-${lane}" abort');
+    expect(snapshot).toBeGreaterThan(-1);
     expect(laneSnapshot).toBeGreaterThan(snapshot);
     expect(build).toBeGreaterThan(laneSnapshot);
     expect(collect).toContain("${RUNNER_TEMP}/mantis-trusted-evidence-");
