@@ -40,6 +40,7 @@ import {
 import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
+import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-isolated.config.ts";
 import unitFastRootConfig from "./vitest/vitest.unit-fast-root.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
@@ -118,6 +119,35 @@ describe("projects vitest config", () => {
           OPENCLAW_VITEST_INCLUDE_FILE: unrelatedIncludeFile,
         }),
       ).include,
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["ordinary", createUnitFastVitestConfig, "src/plugin-sdk/provider-entry.test.ts"],
+    [
+      "isolated",
+      createUnitFastIsolatedVitestConfig,
+      "src/system-agent/assistant.configured.test.ts",
+    ],
+    ["fake timers", createUnitFastFakeTimersVitestConfig, "src/acp/control-plane/manager.test.ts"],
+  ])("limits %s unit-fast include files to the project's owned tests", (_, createConfig, owned) => {
+    const unrelated = "src/gateway/openresponses-http.test.ts";
+    const mixedIncludeFile = patternFiles.writePatternFile("mixed-unit-fast-include.json", [
+      "src/plugin-sdk/provider-entry.test.ts",
+      "src/system-agent/assistant.configured.test.ts",
+      "src/acp/control-plane/manager.test.ts",
+      unrelated,
+    ]);
+    const unrelatedIncludeFile = patternFiles.writePatternFile("unrelated-unit-fast-include.json", [
+      unrelated,
+    ]);
+
+    expect(
+      requireTestConfig(createConfig({ OPENCLAW_VITEST_INCLUDE_FILE: mixedIncludeFile })).include,
+    ).toEqual([owned]);
+    expect(
+      requireTestConfig(createConfig({ OPENCLAW_VITEST_INCLUDE_FILE: unrelatedIncludeFile }))
+        .include,
     ).toEqual([]);
   });
 
