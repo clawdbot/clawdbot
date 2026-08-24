@@ -3,6 +3,7 @@ import nodePath from "node:path";
 // Gateway config hot-reload watcher.
 // Diffs config/plugin install snapshots and dispatches hot reload or restart plans.
 import chokidar from "chokidar";
+import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { collectChannelSchemaMetadataWithOwnership } from "../config/channel-config-metadata.js";
 import { createConfiguredChannelOwnershipPolicy } from "../config/channel-ownership-policy.js";
 import type { ConfigRuntimeEnvPublication } from "../config/config-env-vars.js";
@@ -239,9 +240,11 @@ function findChannelOwnershipChange(params: {
 }
 
 /**
- * Whether an authored edit touched anything channel ownership reads. Ownership resolves from
- * explicit plugin selection and the per-channel activation candidates, both of which live under
- * `plugins` or `channels` in the source config, so no other source edit can move an owner.
+ * Whether an authored edit touched anything channel ownership SELECTION reads. Selection resolves
+ * from explicit plugin selection and the per-channel activation candidates, both of which live
+ * under `plugins` or `channels` in the source config. Ownership can still move without either
+ * when an `agents.*` edit changes the workspace roots plugin discovery scans; the
+ * `agentWorkspaceRootsMoved` trigger below owns that case.
  *
  * Both ownership-comparison triggers gate on it — the zero-diff guard (`noDiffOwnershipChange`)
  * and the hot-edit escalation gate below it — to keep the comparison off ordinary reload paths:
@@ -260,6 +263,32 @@ function sourceEditTouchesChannelOwnership(
       path.startsWith("plugins.") ||
       path.startsWith("channels."),
   );
+}
+
+/**
+ * Whether the agent workspace roots the config-wide manifest registry discovers from moved.
+ * `resolveConfigWidePluginManifestRegistry` discovers plugin manifests per workspace dir, so an
+ * `agents.*` edit that moves, adds, removes, or reorders a workspace changes which claimants exist
+ * at all — no `plugins.*` or `channels.*` path has to change for ownership to move. Order counts:
+ * registry merge order carries origin precedence for channel schema ownership. The roots resolve
+ * from the runtime config pair because that is the pair the ownership comparison hands the
+ * registry resolver.
+ */
+function agentWorkspaceRootsMoved(
+  previousConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+): boolean {
+  try {
+    const previousDirs = listAgentWorkspaceDirs(previousConfig);
+    const nextDirs = listAgentWorkspaceDirs(nextConfig);
+    return (
+      previousDirs.length !== nextDirs.length ||
+      previousDirs.some((dir, index) => dir !== nextDirs[index])
+    );
+  } catch {
+    // An unresolvable roster proves nothing about the roots; let the ownership comparison decide.
+    return true;
+  }
 }
 
 export function startGatewayConfigReloader(opts: {
@@ -319,6 +348,13 @@ export function startGatewayConfigReloader(opts: {
     persistedHash: string | null;
     changedPaths: readonly string[];
   }) => void;
+  /**
+   * Fires when the watcher observes a persisted config it cannot accept — an
+   * invalid file, or one missing after retries. No snapshot is published on
+   * these paths, so file-derived response caches (config.get) must drop their
+   * entries or CAS writers retry against a hash the file no longer has.
+   */
+  onConfigCandidateRejected?: () => void;
   onNoopConfigCommit: (
     plan: GatewayReloadPlan,
     nextConfig: OpenClawConfig,
@@ -552,6 +588,8 @@ export function startGatewayConfigReloader(opts: {
       return true;
     }
     opts.log.warn("config reload skipped (config file not found)");
+    // Only the settled state invalidates: a mid-write rename gap heals within the retries above.
+    opts.onConfigCandidateRejected?.();
     return true;
   };
 
@@ -561,6 +599,7 @@ export function startGatewayConfigReloader(opts: {
     }
     const issues = formatConfigIssueLines(snapshot.issues, "").join(", ");
     opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+    opts.onConfigCandidateRejected?.();
     return true;
   };
 
@@ -874,6 +913,13 @@ export function startGatewayConfigReloader(opts: {
       plan.reloadPlugins = true;
       plan.disposeMcpRuntimes = true;
     }
+    // A moved workspace root changes plugin discovery itself, so it can move ownership past the
+    // source-path predicate below, and it can also invalidate an already-planned plugin reload:
+    // `reloadAttachedGatewayPlugins` rebuilds the lookup table and metadata snapshot from the
+    // process-stable startup `pluginWorkspaceDir`, so only a gateway restart re-resolves
+    // discovery from the new roots. That is why the moved-roots trigger bypasses the
+    // `!plan.reloadPlugins` guard and why its escalation below restarts instead of reloading.
+    const workspaceRootsMoved = agentWorkspaceRootsMoved(currentConfig, nextConfig);
     if (
       // Under reload-off the transaction commits the baseline without acting on the plan
       // (`commitReloadBaseline({runtimeApplied:false})` below never reads it), so the comparison
@@ -881,10 +927,14 @@ export function startGatewayConfigReloader(opts: {
       // The mode gate below owns the outcome either way; skipping here changes no behavior.
       nextSettings.mode !== "off" &&
       !plan.restartGateway &&
-      !plan.reloadPlugins &&
-      (plan.restartChannels.size > 0 ||
-        (plan.restartChannelAccounts?.size ?? 0) > 0 ||
-        sourceEditTouchesChannelOwnership(currentRuntimeEnvSourceConfig, nextSourceConfig))
+      // Moved roots outrank an already-planned plugin reload (the reload rebuilds from the
+      // startup roots); the remaining arms keep the `!plan.reloadPlugins` guard because the
+      // moves they catch are ones a planned reload already rebuilds and restarts itself.
+      (workspaceRootsMoved ||
+        (!plan.reloadPlugins &&
+          (plan.restartChannels.size > 0 ||
+            (plan.restartChannelAccounts?.size ?? 0) > 0 ||
+            sourceEditTouchesChannelOwnership(currentRuntimeEnvSourceConfig, nextSourceConfig))))
     ) {
       // A `channels.<id>` edit can move the channel's selected owner without touching any
       // `plugins.*` path: ownership reads the per-channel activation candidates from the source
@@ -913,7 +963,17 @@ export function startGatewayConfigReloader(opts: {
           previous: { config: currentConfig, sourceConfig: currentRuntimeEnvSourceConfig },
           next: { config: nextConfig, sourceConfig: nextSourceConfig },
         });
-        if (ownershipChange) {
+        if (ownershipChange && workspaceRootsMoved) {
+          // A plugin reload cannot honor the new roots (startup `pluginWorkspaceDir` above), so
+          // escalating to it would rebuild the registry from the old workspace and report success
+          // while validation keeps describing the new one. Restart re-resolves discovery.
+          const reason = `channel ownership moved with an agent workspace root (${
+            ownershipChange.channelId
+          }: ${ownershipChange.previousOwner ?? "none"} -> ${ownershipChange.nextOwner ?? "none"})`;
+          opts.log.info(`${reason}; restarting gateway`);
+          plan.restartGateway = true;
+          plan.restartReasons.push(reason);
+        } else if (ownershipChange) {
           // No "before channel restart": on the widened trigger the plan may restart no channel
           // at all — the reload result itself restarts owner-changed channels
           // (`pluginReloadResult.restartChannels` in `server-reload-hot.ts`).
@@ -927,11 +987,18 @@ export function startGatewayConfigReloader(opts: {
         }
       } catch (err) {
         // A metadata resolution failure is no proof ownership held still. Escalate to the plugin
-        // reload, whose lifecycle recovery owns metadata failures, rather than restarting the
-        // channel from a registry this transaction could not compare against.
+        // reload, whose lifecycle recovery owns metadata failures — or to the restart when moved
+        // roots make the reload unable to rebuild what this transaction could not compare.
         opts.log.warn(`channel ownership comparison failed: ${String(err)}`);
-        plan.reloadPlugins = true;
-        plan.disposeMcpRuntimes = true;
+        if (workspaceRootsMoved) {
+          plan.restartGateway = true;
+          plan.restartReasons.push(
+            "channel ownership comparison failed with moved agent workspace roots",
+          );
+        } else {
+          plan.reloadPlugins = true;
+          plan.disposeMcpRuntimes = true;
+        }
       }
     }
     if (nextSettings.mode === "off") {

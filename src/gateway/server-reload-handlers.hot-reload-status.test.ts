@@ -1,8 +1,8 @@
 /**
  * Proves `startManagedGatewayConfigReloader` forwards the underlying watcher's
  * live `hotReloadStatus()` accessor and owns cache invalidation at the accepted
- * candidate seam. This keeps request caching coupled to the actual watcher
- * lifecycle instead of individual config writers.
+ * and rejected candidate seams. This keeps request caching coupled to the
+ * actual watcher lifecycle instead of individual config writers.
  */
 import { describe, expect, it, vi } from "vitest";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
@@ -20,6 +20,7 @@ const hoisted = vi.hoisted(() => ({
         changedPaths: readonly string[];
       }) => void)
     | undefined,
+  onConfigCandidateRejected: undefined as (() => void) | undefined,
   notifyPluginMetadataChanged: vi.fn(),
   stop: vi.fn(async () => {}),
 }));
@@ -39,8 +40,10 @@ vi.mock("./config-reload.js", async () => {
           persistedHash: string | null;
           changedPaths: readonly string[];
         }) => void;
+        onConfigCandidateRejected?: () => void;
       }) => {
         hoisted.onConfigCandidateCommitted = options.onConfigCandidateCommitted;
+        hoisted.onConfigCandidateRejected = options.onConfigCandidateRejected;
         return {
           stop: hoisted.stop,
           hotReloadStatus: () => hoisted.hotReloadStatus.current,
@@ -144,6 +147,16 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       { path: "/tmp/openclaw.json", hash: "opaque:persisted-1", ts: expect.any(Number) },
       { dropIfSlow: true },
     );
+
+    // A rejected candidate (invalid file, missing after retries) publishes no snapshot, so no
+    // cache key moves on its own: the managed seam must drop the file-derived config.get cache,
+    // and only that — nothing was accepted, so no config.changed broadcast fires for it.
+    broadcast.mockClear();
+    hoisted.invalidateConfigGetResponseCache.mockClear();
+    expect(hoisted.onConfigCandidateRejected).toBeTypeOf("function");
+    hoisted.onConfigCandidateRejected?.();
+    expect(hoisted.invalidateConfigGetResponseCache).toHaveBeenCalledOnce();
+    expect(broadcast).not.toHaveBeenCalled();
 
     await reloader.stop();
     expect(hoisted.stop).toHaveBeenCalledOnce();

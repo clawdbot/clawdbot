@@ -4,6 +4,7 @@
 // previous registry generation. An ownership-neutral channel edit must keep its cheap plan.
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -49,13 +50,17 @@ vi.mock("../config/config-journal-snapshot.js", async (importOriginal) => {
 // while the real ownership policy and schema-plane selection run against the real configs.
 const manifestMocks = vi.hoisted(() => ({
   registry: { plugins: [], diagnostics: [] } as unknown,
+  // Workspace-move tests install a per-config resolver: production discovery scans manifests per
+  // agent workspace dir, so the registry each comparison side resolves depends on its config.
+  resolve: undefined as undefined | ((params: { config: unknown }) => unknown),
 }));
 
 vi.mock("../config/io.plugin-metadata.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/io.plugin-metadata.js")>();
   return {
     ...actual,
-    resolveConfigWidePluginManifestRegistry: () => manifestMocks.registry,
+    resolveConfigWidePluginManifestRegistry: (params: { config: unknown }) =>
+      manifestMocks.resolve ? manifestMocks.resolve(params) : manifestMocks.registry,
   };
 });
 
@@ -219,6 +224,7 @@ describe("gateway config reload channel ownership escalation", () => {
     configAuditMocks.readLatestSnapshot.mockReset().mockReturnValue(null);
     configAuditMocks.upsertSnapshot.mockReset();
     manifestMocks.registry = makeClaimantRegistry();
+    manifestMocks.resolve = undefined;
   });
 
   afterEach(() => {
@@ -297,7 +303,7 @@ describe("gateway config reload channel ownership escalation", () => {
     const watcher = createWatcherMock();
     vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const onRestart = vi.fn();
+    const onRestart = vi.fn((_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
     const reloader = startGatewayConfigReloader({
       testDebounceMs: 0,
       initialConfig: params.initialConfig,
@@ -666,6 +672,123 @@ describe("gateway config reload channel ownership escalation", () => {
       expect(plan?.reloadPlugins).toBe(true);
       expect(plan?.disposeMcpRuntimes).toBe(true);
       expect(harness.reloadPlugins).toHaveBeenCalledTimes(1);
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  // Codex review P2 round 2: workspace roots feed plugin discovery itself.
+  // `resolveConfigWidePluginManifestRegistry` scans manifests per agent workspace dir, so an
+  // `agents.entries.<id>.workspace` edit changes which claimants exist while touching no
+  // `plugins.*` or `channels.*` path — past the source predicate, with no channel restart in the
+  // plan. A plugin reload cannot honor the move either: `reloadAttachedGatewayPlugins` rebuilds
+  // from the process-stable startup `pluginWorkspaceDir`, so the only lever that re-resolves
+  // discovery from the new root is a gateway restart.
+  function installWorkspaceScopedResolver() {
+    manifestMocks.resolve = ({ config }) => {
+      const [root] = listAgentWorkspaceDirs(config as OpenClawConfig);
+      return {
+        plugins: [
+          makeClaimantRecord({
+            id: root?.endsWith("claw-ws-b") ? REPLACEMENT_PLUGIN_ID : DISPLACED_PLUGIN_ID,
+          }),
+        ],
+        diagnostics: [],
+      };
+    };
+  }
+
+  function makeWorkspaceConfig(workspace: string, plugins?: OpenClawConfig["plugins"]) {
+    return {
+      gateway: { reload: {} },
+      agents: { entries: { main: { workspace } } },
+      channels: { [CHANNEL_ID]: { token: "abc" } },
+      ...(plugins ? { plugins } : {}),
+    } as unknown as OpenClawConfig;
+  }
+
+  it("restarts the gateway when a moved agent workspace root moves channel ownership", async () => {
+    installWorkspaceScopedResolver();
+    const harness = startReloader({
+      initialConfig: makeWorkspaceConfig("/tmp/claw-ws-a"),
+      nextConfig: makeWorkspaceConfig("/tmp/claw-ws-b"),
+      staleRegistryOwnerPluginId: DISPLACED_PLUGIN_ID,
+      reloadedRegistryOwnerPluginId: REPLACEMENT_PLUGIN_ID,
+    });
+    try {
+      harness.watcher.emit("change");
+      await vi.runAllTimersAsync();
+
+      // Not a plugin reload: it would rebuild from the startup workspace root and claim success.
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      expect(harness.reloadPlugins).not.toHaveBeenCalled();
+      expect(harness.onRestart).toHaveBeenCalledTimes(1);
+      const plan = harness.onRestart.mock.calls[0]?.[0];
+      expect(plan?.restartGateway).toBe(true);
+      expect(plan?.restartReasons).toContain(
+        `channel ownership moved with an agent workspace root (${CHANNEL_ID}: ${DISPLACED_PLUGIN_ID} -> ${REPLACEMENT_PLUGIN_ID})`,
+      );
+      expect(harness.log.info).toHaveBeenCalledWith(
+        `channel ownership moved with an agent workspace root (${CHANNEL_ID}: ${DISPLACED_PLUGIN_ID} -> ${REPLACEMENT_PLUGIN_ID}); restarting gateway`,
+      );
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  // The property the moved-roots trigger must not spend: when both roots discover the same
+  // claimants the owners hold still, and the workspace edit keeps its cheap hot plan instead of
+  // bouncing the gateway.
+  it("keeps the hot plan when a moved workspace root does not move ownership", async () => {
+    const harness = startReloader({
+      initialConfig: makeWorkspaceConfig("/tmp/claw-ws-a"),
+      nextConfig: makeWorkspaceConfig("/tmp/claw-ws-b"),
+      staleRegistryOwnerPluginId: REPLACEMENT_PLUGIN_ID,
+      reloadedRegistryOwnerPluginId: REPLACEMENT_PLUGIN_ID,
+    });
+    try {
+      harness.watcher.emit("change");
+      await vi.runAllTimersAsync();
+
+      expect(harness.onRestart).not.toHaveBeenCalled();
+      expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+      const plan = harness.onHotReload.mock.calls[0]?.[0];
+      expect(plan?.restartGateway).toBe(false);
+      expect(plan?.reloadPlugins).toBe(false);
+      expect(harness.reloadPlugins).not.toHaveBeenCalled();
+      expect(harness.log.info).not.toHaveBeenCalledWith(
+        expect.stringContaining("channel ownership moved"),
+      );
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  // A compound edit can already carry `plan.reloadPlugins` (any `plugins.*` path) in the same
+  // write that moves a workspace root. The reload would rebuild from the stale startup root, so
+  // the moved-roots trigger must bypass the reload-planned guard and still restart.
+  it("restarts instead of reloading when a plugins edit lands beside a moved workspace root", async () => {
+    installWorkspaceScopedResolver();
+    const harness = startReloader({
+      initialConfig: makeWorkspaceConfig("/tmp/claw-ws-a"),
+      nextConfig: makeWorkspaceConfig("/tmp/claw-ws-b", {
+        entries: { [REPLACEMENT_PLUGIN_ID]: { enabled: true } },
+      } as OpenClawConfig["plugins"]),
+      staleRegistryOwnerPluginId: DISPLACED_PLUGIN_ID,
+      reloadedRegistryOwnerPluginId: REPLACEMENT_PLUGIN_ID,
+    });
+    try {
+      harness.watcher.emit("change");
+      await vi.runAllTimersAsync();
+
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      expect(harness.reloadPlugins).not.toHaveBeenCalled();
+      expect(harness.onRestart).toHaveBeenCalledTimes(1);
+      const plan = harness.onRestart.mock.calls[0]?.[0];
+      expect(plan?.restartGateway).toBe(true);
+      expect(plan?.restartReasons).toContain(
+        `channel ownership moved with an agent workspace root (${CHANNEL_ID}: ${DISPLACED_PLUGIN_ID} -> ${REPLACEMENT_PLUGIN_ID})`,
+      );
     } finally {
       await harness.reloader.stop();
     }

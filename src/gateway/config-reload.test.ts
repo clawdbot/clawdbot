@@ -884,6 +884,7 @@ function createReloaderHarness(
   const onConfigCandidateCommitted = vi.fn(
     (_info: { path: string; persistedHash: string | null; changedPaths: readonly string[] }) => {},
   );
+  const onConfigCandidateRejected = vi.fn(() => {});
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
   const subscribeToWrites = vi.fn((listener: (event: ConfigWriteNotification) => void) => {
     writeListener = listener;
@@ -932,6 +933,7 @@ function createReloaderHarness(
     onHotReload,
     onRestart,
     onConfigCandidateCommitted,
+    onConfigCandidateRejected,
     ...(options.runTransaction ? { runTransaction: options.runTransaction } : {}),
     log,
     watchPath: "/tmp/openclaw.json",
@@ -947,6 +949,7 @@ function createReloaderHarness(
     onHotReload,
     onRestart,
     onConfigCandidateCommitted,
+    onConfigCandidateRejected,
     log,
     reloader,
     emitWrite(event: ConfigWriteNotification) {
@@ -1712,6 +1715,8 @@ describe("startGatewayConfigReloader", () => {
       persistedHash: "external-prefs-write",
       changedPaths: ["ui"],
     });
+    // Accepted candidates are not rejections; the accepted seam owns their invalidation.
+    expect(harness.onConfigCandidateRejected).not.toHaveBeenCalled();
 
     // A same-content echo must not re-notify: nothing changed.
     harness.onConfigCandidateCommitted.mockClear();
@@ -2888,7 +2893,8 @@ describe("startGatewayConfigReloader", () => {
           hash: "next-1",
         }),
       );
-    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+    const { watcher, onHotReload, onRestart, onConfigCandidateRejected, log, reloader } =
+      createReloaderHarness(readSnapshot);
 
     watcher.emit("unlink");
     await vi.runOnlyPendingTimersAsync();
@@ -2899,6 +2905,8 @@ describe("startGatewayConfigReloader", () => {
     expect(onRestart).not.toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith("config reload retry (1/2): config file not found");
     expect(log.warn).not.toHaveBeenCalledWith("config reload skipped (config file not found)");
+    // A mid-write rename gap that heals within the retry budget is not a rejected candidate.
+    expect(onConfigCandidateRejected).not.toHaveBeenCalled();
 
     await reloader.stop();
   });
@@ -2907,7 +2915,8 @@ describe("startGatewayConfigReloader", () => {
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
       .mockResolvedValue(makeSnapshot({ exists: false, raw: null, hash: "missing" }));
-    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+    const { watcher, onHotReload, onRestart, onConfigCandidateRejected, log, reloader } =
+      createReloaderHarness(readSnapshot);
 
     watcher.emit("unlink");
     await vi.runAllTimersAsync();
@@ -2916,6 +2925,8 @@ describe("startGatewayConfigReloader", () => {
     expect(onHotReload).not.toHaveBeenCalled();
     expect(onRestart).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith("config reload skipped (config file not found)");
+    // Once per settled outcome, not once per retry pass: the exhausted budget is the rejection.
+    expect(onConfigCandidateRejected).toHaveBeenCalledTimes(1);
 
     await reloader.stop();
   });
@@ -3005,9 +3016,10 @@ describe("startGatewayConfigReloader", () => {
       }),
     );
     const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
-    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
-      promoteSnapshot,
-    });
+    const { watcher, onHotReload, onRestart, onConfigCandidateRejected, log, reloader } =
+      createReloaderHarness(readSnapshot, {
+        promoteSnapshot,
+      });
 
     watcher.emit("change");
     await vi.runAllTimersAsync();
@@ -3019,6 +3031,9 @@ describe("startGatewayConfigReloader", () => {
     expect(log.warn).toHaveBeenCalledWith(
       "config reload skipped (invalid config): gateway.mode: Expected string",
     );
+    // The rejected edit moved the file's raw bytes while no snapshot published: file-derived
+    // caches must drop or config.get keeps serving the pre-edit content and CAS base hash.
+    expect(onConfigCandidateRejected).toHaveBeenCalledTimes(1);
 
     await reloader.stop();
   });
