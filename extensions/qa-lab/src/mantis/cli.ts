@@ -30,8 +30,36 @@ async function runDiscordSmoke(opts: MantisDiscordSmokeOptions) {
 }
 
 async function runBeforeAfter(opts: MantisBeforeAfterOptions) {
-  const runtime = await loadMantisCliRuntime();
-  await runtime.runMantisBeforeAfterCommand(opts);
+  const abortController = new AbortController();
+  let interruptedBy: "SIGINT" | "SIGTERM" | undefined;
+  const interrupt = (signal: "SIGINT" | "SIGTERM") => {
+    if (interruptedBy) {
+      return;
+    }
+    interruptedBy = signal;
+    abortController.abort(new Error(`Mantis interrupted by ${signal}`));
+  };
+  const onSigint = () => interrupt("SIGINT");
+  const onSigterm = () => interrupt("SIGTERM");
+
+  // Mantis commands own detached POSIX process groups, so keep signal ownership
+  // until AbortSignal cleanup finishes or Ctrl-C can orphan live QA work.
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
+  try {
+    const runtime = await loadMantisCliRuntime();
+    await runtime.runMantisBeforeAfterCommand({ ...opts, signal: abortController.signal });
+  } catch (error) {
+    if (!interruptedBy) {
+      throw error;
+    }
+  } finally {
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+    if (interruptedBy) {
+      process.exitCode = interruptedBy === "SIGINT" ? 130 : 143;
+    }
+  }
 }
 
 async function runDesktopBrowserSmoke(opts: MantisDesktopBrowserSmokeOptions) {
