@@ -26,6 +26,64 @@ describe("buildGatewaySessionRow", () => {
     expect(row.effectiveReasoningLevel).toBe("stream");
   });
 
+  it("projects the prepared model reasoning default when no override exists", () => {
+    const row = buildGatewaySessionRow({
+      cfg: {
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-opus-4-8" } },
+        },
+      } as OpenClawConfig,
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "session-main",
+        updatedAt: 1,
+      },
+      modelCatalog: [
+        {
+          provider: "anthropic",
+          id: "claude-opus-4-8",
+          name: "Claude Opus 4.8",
+          reasoning: true,
+        },
+      ],
+      now: 1,
+      lightweightListRow: true,
+    });
+
+    expect(row.reasoningLevel).toBeUndefined();
+    expect(row.effectiveReasoningLevel).toBe("on");
+  });
+
+  it("keeps per-model thinking defaults from enabling model reasoning defaults", () => {
+    const row = buildGatewaySessionRow({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-reasoning" },
+            models: { "openai/gpt-reasoning": { params: { thinking: "off" } } },
+          },
+        },
+      } as OpenClawConfig,
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "session-main",
+        updatedAt: 1,
+      },
+      modelCatalog: [
+        { provider: "openai", id: "gpt-reasoning", name: "GPT Reasoning", reasoning: true },
+      ],
+      now: 1,
+      lightweightListRow: true,
+    });
+
+    expect(row.reasoningLevel).toBeUndefined();
+    expect(row.effectiveReasoningLevel).toBe("off");
+  });
+
   it("preserves legacy stored non-off reasoning values in the effective projection", () => {
     const row = buildGatewaySessionRow({
       cfg: {

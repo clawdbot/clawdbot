@@ -303,6 +303,21 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
   return resolveModelThroughAliases(raw, aliasIndex);
 }
 
+/** Whether a model capability may supply reasoning when no explicit reasoning or thinking state owns it. */
+export function shouldUseModelReasoningDefault(params: {
+  reasoningExplicitlySet: boolean;
+  resolvedReasoningLevel: string;
+  thinkingActive: boolean;
+  thinkingExplicitlySet: boolean;
+}): boolean {
+  return (
+    !params.reasoningExplicitlySet &&
+    params.resolvedReasoningLevel === "off" &&
+    !params.thinkingActive &&
+    !params.thinkingExplicitlySet
+  );
+}
+
 /** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */
 export function resolveReasoningDefault(params: {
   provider: string;

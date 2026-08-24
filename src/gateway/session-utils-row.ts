@@ -344,6 +344,7 @@ export function buildGatewaySessionRow(params: {
   // Lightweight projections may use an already-active provider policy, but must
   // not fall through to public artifacts that reload the manifest registry.
   const thinkingModelCatalog = rowModelCatalog ?? (lightweight ? [] : undefined);
+  const reasoningModelCatalog = rowModelCatalog;
   const thinkingProjection = resolveGatewaySessionThinkingProjectionInternal({
     cfg,
     agentId: sessionAgentId,

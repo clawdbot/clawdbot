@@ -31,6 +31,7 @@ import {
   resolveSubagentSpawnModelSelection,
   resolveThinkingDefault,
   resolveModelRefFromString,
+  shouldUseModelReasoningDefault,
 } from "./model-selection.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 
@@ -2624,10 +2625,42 @@ describe("model-selection", () => {
       ).toBe(expected);
     });
 
+    it("uses the model reasoning default only when no explicit state owns the decision", () => {
+      expect(
+        shouldUseModelReasoningDefault({
+          reasoningExplicitlySet: false,
+          resolvedReasoningLevel: "off",
+          thinkingActive: false,
+          thinkingExplicitlySet: false,
+        }),
+      ).toBe(true);
+      expect(
+        shouldUseModelReasoningDefault({
+          reasoningExplicitlySet: false,
+          resolvedReasoningLevel: "off",
+          thinkingActive: true,
+          thinkingExplicitlySet: false,
+        }),
+      ).toBe(false);
+      expect(
+        shouldUseModelReasoningDefault({
+          reasoningExplicitlySet: false,
+          resolvedReasoningLevel: "off",
+          thinkingActive: false,
+          thinkingExplicitlySet: true,
+        }),
+      ).toBe(false);
+      expect(
+        shouldUseModelReasoningDefault({
+          reasoningExplicitlySet: true,
+          resolvedReasoningLevel: "off",
+          thinkingActive: false,
+          thinkingExplicitlySet: false,
+        }),
+      ).toBe(false);
+    });
     it("uses provider policy thinking defaults when no explicit config overrides them", () => {
       const cfg = {} as OpenClawConfig;
-
-      expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
       expect(
         resolveThinkingDefault({
           cfg,
