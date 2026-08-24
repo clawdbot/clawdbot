@@ -1,6 +1,10 @@
 import { readConfigFileSnapshot } from "../config/config.js";
 import { redactConfigSnapshot } from "../config/redact-snapshot.js";
-import { getRuntimeConfigAppliedHash, hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigAppliedHash,
+  getRuntimeConfigSnapshotMetadata,
+  hashRuntimeConfigValue,
+} from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
@@ -13,6 +17,7 @@ let configGetResponseCache:
       revisionProjector: GatewayConfigRevisionProjector;
       appliedConfigHash: string | null;
       pluginRegistryVersion: number;
+      configSnapshotRevision: number | null;
       promise: Promise<ConfigGetResponse>;
     }
   | undefined;
@@ -57,13 +62,25 @@ export async function readConfigGetResponse(params: {
   }
   const appliedConfigHash = getRuntimeConfigAppliedHash();
   const pluginRegistryVersion = getActivePluginRegistryVersion();
+  // An authored edit whose effective diff is empty is committed as a source-only publication: the
+  // watcher's invalidation is gated on changed paths, the applied hash moves only when a candidate
+  // is runtime-applied, and the registry version holds still too. The snapshot revision advances
+  // on every publication (`setRuntimeConfigSourceSnapshotIfCurrent` republishes through
+  // `setRuntimeConfigSnapshot`, rollback included), so a hit must prove it or config.get keeps
+  // serving the pre-edit authored snapshot. Known edge: the revision is a session counter, not
+  // content-addressed — a snapshot clear (`clearSecretsRuntimeSnapshotState` on the
+  // managed-secrets failure paths) zeroes it without invalidating this cache, so a recycled count
+  // can false-hit; keying on the metadata fingerprints would close that and is the follow-up, not
+  // this change.
+  const configSnapshotRevision = getRuntimeConfigSnapshotMetadata()?.revision ?? null;
   // With an active watcher, cache hits never re-read the file. External edits
   // become visible after its successful commit; the write path invalidates early.
   if (
     configGetResponseCache?.getHotReloadStatus === getHotReloadStatus &&
     configGetResponseCache.revisionProjector === params.revisionProjector &&
     configGetResponseCache.appliedConfigHash === appliedConfigHash &&
-    configGetResponseCache.pluginRegistryVersion === pluginRegistryVersion
+    configGetResponseCache.pluginRegistryVersion === pluginRegistryVersion &&
+    configGetResponseCache.configSnapshotRevision === configSnapshotRevision
   ) {
     return await configGetResponseCache.promise;
   }
@@ -82,6 +99,7 @@ export async function readConfigGetResponse(params: {
     appliedConfigHash,
     // Metadata notification precedes registry activation; this version changes at handoff.
     pluginRegistryVersion,
+    configSnapshotRevision,
     promise,
   };
   try {

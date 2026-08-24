@@ -4,6 +4,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 
 const mocks = vi.hoisted(() => ({
   appliedConfigHash: "applied-1" as string | null,
+  configSnapshotRevision: 1,
   pluginRegistryVersion: 1,
   readConfigFileSnapshot: vi.fn<() => Promise<ConfigFileSnapshot>>(),
 }));
@@ -21,6 +22,12 @@ vi.mock("../config/runtime-snapshot.js", async (importOriginal) => {
   return {
     ...actual,
     getRuntimeConfigAppliedHash: () => mocks.appliedConfigHash,
+    getRuntimeConfigSnapshotMetadata: () => ({
+      revision: mocks.configSnapshotRevision,
+      fingerprint: "runtime-fingerprint",
+      sourceFingerprint: null,
+      updatedAtMs: 0,
+    }),
   };
 });
 
@@ -66,6 +73,7 @@ function configSnapshot(sourceConfig: OpenClawConfig): ConfigFileSnapshot {
 beforeEach(() => {
   invalidateConfigGetResponseCache();
   mocks.appliedConfigHash = "applied-1";
+  mocks.configSnapshotRevision = 1;
   mocks.pluginRegistryVersion = 1;
   mocks.readConfigFileSnapshot.mockReset();
   mocks.readConfigFileSnapshot.mockResolvedValue(configSnapshot({ gateway: { port: 19_001 } }));
@@ -132,6 +140,23 @@ describe("config.get response cache", () => {
 
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
     expect(loadUiHints).toHaveBeenCalledTimes(2);
+  });
+
+  // An authored edit whose effective diff is empty is committed as a source-only publication:
+  // `notifyCommitted` (config-reload.ts) skips its invalidation because no path changed, the
+  // applied hash moves only when a candidate is runtime-applied, and the registry version holds
+  // still too. The snapshot revision is the one key that advances
+  // (`setRuntimeConfigSourceSnapshotIfCurrent` republishes through `setRuntimeConfigSnapshot`,
+  // rollback included), so a hit must prove it or config.get keeps serving the pre-edit authored
+  // snapshot.
+  it("rebuilds after a source-only republish that leaves the applied hash unchanged", async () => {
+    const loadUiHints = vi.fn(() => undefined);
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    mocks.configSnapshotRevision = 2;
+    await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("rebuilds immediately after watcher or write-path invalidation", async () => {
