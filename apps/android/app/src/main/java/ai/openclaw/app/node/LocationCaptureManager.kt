@@ -83,7 +83,7 @@ class LocationCaptureManager(
     }
     val now = System.currentTimeMillis()
     val candidates =
-      providers.mapNotNull { provider -> manager.getLastKnownLocation(provider) }
+      providers.mapNotNull { provider -> manager.getLastKnownLocation(provider) }.filter { it.time <= now }
     val freshest = candidates.maxByOrNull { it.time } ?: return null
     // maxAgeMs is a caller contract; stale cached fixes force a live provider request.
     if (maxAgeMs != null && now - freshest.time > maxAgeMs) return null
