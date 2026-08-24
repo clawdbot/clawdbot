@@ -38,7 +38,7 @@ export type WhatsAppIngressAdmission = Omit<WhatsAppDurableInboundPayload, "mess
 
 export type WhatsAppIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
-type WhatsAppIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
+export type WhatsAppIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type WhatsAppIngressFacts = {
   eventId: string;
