@@ -58,7 +58,11 @@ struct MacGatewayProfileKeychainOperations: Sendable {
             query[kSecReturnData as String] = true
             query[kSecMatchLimit as String] = kSecMatchLimitOne
             var result: CFTypeRef?
-            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            let status = MacGatewayProfileStore.performKeychainOperation(
+                allowInteraction: allowInteraction)
+            {
+                SecItemCopyMatching(query as CFDictionary, &result)
+            }
             if status == errSecSuccess, let data = result as? Data {
                 return .data(data)
             }
@@ -75,15 +79,19 @@ struct MacGatewayProfileKeychainOperations: Sendable {
                 service: service,
                 account: account,
                 allowInteraction: allowInteraction)
-            let update = SecItemUpdate(
-                query as CFDictionary,
-                [kSecValueData as String: data] as CFDictionary)
-            if update == errSecSuccess { return update }
-            if update != errSecItemNotFound { return update }
-            var add = query
-            add[kSecValueData as String] = data
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            return SecItemAdd(add as CFDictionary, nil)
+            return MacGatewayProfileStore.performKeychainOperation(
+                allowInteraction: allowInteraction)
+            {
+                let update = SecItemUpdate(
+                    query as CFDictionary,
+                    [kSecValueData as String: data] as CFDictionary)
+                if update == errSecSuccess { return update }
+                if update != errSecItemNotFound { return update }
+                var add = query
+                add[kSecValueData as String] = data
+                add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+                return SecItemAdd(add as CFDictionary, nil)
+            }
         })
 }
 
@@ -93,6 +101,7 @@ actor MacGatewayProfileStore {
     static let shared = MacGatewayProfileStore()
 
     @TaskLocal static var keychainOperations = MacGatewayProfileKeychainOperations.live
+    private static let keychainInteractionLock = NSLock()
 
     static let didChangeNotification = Notification.Name("openclaw.gateway-profiles.did-change")
 
@@ -140,6 +149,26 @@ actor MacGatewayProfileStore {
             true
         default:
             false
+        }
+    }
+
+    fileprivate static func performKeychainOperation(
+        allowInteraction: Bool,
+        operation: () -> OSStatus) -> OSStatus
+    {
+        guard !allowInteraction else { return operation() }
+        // LAContext.interactionNotAllowed covers Data Protection items, but a legacy
+        // login-Keychain ACL can still summon SecurityAgent. The legacy process switch
+        // is the only API that suppresses that UI; keep its scope serialized and minimal.
+        return self.keychainInteractionLock.withLock {
+            var previousInteraction = DarwinBoolean(false)
+            let readStatus = SecKeychainGetUserInteractionAllowed(&previousInteraction)
+            guard readStatus == errSecSuccess else { return readStatus }
+            let disableStatus = SecKeychainSetUserInteractionAllowed(false)
+            guard disableStatus == errSecSuccess else { return disableStatus }
+            let operationStatus = operation()
+            let restoreStatus = SecKeychainSetUserInteractionAllowed(previousInteraction.boolValue)
+            return restoreStatus == errSecSuccess ? operationStatus : restoreStatus
         }
     }
 
