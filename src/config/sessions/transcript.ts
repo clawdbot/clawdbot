@@ -601,6 +601,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         ...(params.runId ? { runId: params.runId } : {}),
         updateMode: params.updateMode ?? "inline",
         touchSessionEntry: true,
+        touchLastInteractionAt: true,
         messages: [
           {
             message: preparedUnkeyedMessage,

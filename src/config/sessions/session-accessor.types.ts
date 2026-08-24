@@ -430,6 +430,7 @@ export type SessionTranscriptTurnPersistOptions = {
    * after that transaction commits.
    */
   touchSessionEntry?: boolean;
+  touchLastInteractionAt?: boolean;
 };
 
 export interface SessionTranscriptTurnPersistResult {
