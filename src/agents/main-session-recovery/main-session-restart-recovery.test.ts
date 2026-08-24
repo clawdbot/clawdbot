@@ -120,6 +120,7 @@ const sendRecoveryNotice = vi.fn<GatewayRecoveryRuntime["sendRecoveryNotice"]>(a
   suppressed: false,
 }));
 const mockRecoveryRuntime = {
+  abortAgent: vi.fn<GatewayRecoveryRuntime["abortAgent"]>(async () => ({ aborted: true })),
   dispatchAgent: async <T>(
     params: Record<string, unknown>,
     timeoutMs?: number,
@@ -3950,6 +3951,7 @@ describe("main-session-restart-recovery", () => {
       sessionKey: "agent:main:main",
       storePath,
       gatewayRuntime: {
+        abortAgent: vi.fn(),
         dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
         waitForAgent: vi.fn(),
         sendRecoveryNotice: vi.fn(),
@@ -4013,6 +4015,7 @@ describe("main-session-restart-recovery", () => {
         sessionKey: "agent:main:main",
         storePath,
         gatewayRuntime: {
+          abortAgent: vi.fn(),
           dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
           waitForAgent: vi.fn(async () => ({
             runId: "recovery-main",
@@ -4045,6 +4048,128 @@ describe("main-session-restart-recovery", () => {
       scheduleSpy.mockRestore();
     }
   });
+
+  it.each([
+    {
+      label: "restores the interrupted claim after confirmed cancellation",
+      aborted: true,
+      expectedAbortedLastRun: true,
+      expectedRunId: undefined,
+      expectedScheduleCount: 1,
+    },
+    {
+      label: "keeps the claim fenced when cancellation is not confirmed",
+      aborted: false,
+      expectedAbortedLastRun: false,
+      expectedRunId: "recovery-main",
+      expectedScheduleCount: 0,
+    },
+  ])(
+    "$label when accepted recovery never starts",
+    async ({ aborted, expectedAbortedLastRun, expectedRunId, expectedScheduleCount }) => {
+      vi.useFakeTimers();
+      const { sessionsDir, storePath } = await makeMainSessionFixture({
+        restartRecoveryDeliveryRunId: "recovery-main",
+        restartRecoveryDeliverySourceRunId: "source-main",
+      });
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "recover after a stalled accepted dispatch" },
+      ]);
+      const scheduleSpy = vi
+        .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
+        .mockImplementation(() => {});
+      const accepted = createDeferred();
+      const abortAgent = vi.fn<GatewayRecoveryRuntime["abortAgent"]>(async () => ({ aborted }));
+      const dispatchAgent = vi.fn<GatewayRecoveryRuntime["dispatchAgent"]>(
+        async (request, _timeoutMs, options) => {
+          const runId = request.idempotencyKey!;
+          await commitMainSessionRecovery({
+            command: {
+              kind: "admit_recovery",
+              lifecycleGeneration: getAgentEventLifecycleGeneration(),
+              now: Date.now(),
+              runId,
+              sessionId: "main-session",
+            },
+            requireWriteSuccess: true,
+            target: { sessionKey: "agent:main:main", storePath },
+          });
+          options?.onAccepted?.({ runId, status: "accepted" });
+          accepted.resolve();
+          return await new Promise<never>((_resolve, reject) => {
+            const signal = options?.signal;
+            if (!signal) {
+              reject(new Error("expected execution-start abort signal"));
+              return;
+            }
+            signal.addEventListener(
+              "abort",
+              () => {
+                // A start callback that loses the deadline race cannot reclaim ownership.
+                options?.onExecutionStarted?.();
+                const abortError =
+                  signal.reason instanceof Error
+                    ? signal.reason
+                    : new Error("execution-start wait aborted");
+                void Promise.resolve(options?.onSignalAbort?.()).then(
+                  () => reject(abortError),
+                  () => reject(abortError),
+                );
+              },
+              { once: true },
+            );
+          });
+        },
+      );
+
+      try {
+        const recovery = retryRestartAbortedMainSessionRecovery({
+          cfg: {},
+          expectedRecoveryRunId: "recovery-main",
+          expectedRecoverySourceRunId: "source-main",
+          expectedSessionId: "main-session",
+          sessionKey: "agent:main:main",
+          storePath,
+          gatewayRuntime: {
+            abortAgent,
+            dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
+            waitForAgent: vi.fn(async () => ({
+              runId: "recovery-main",
+              status: "timeout",
+              timeoutPhase: "queue",
+              providerStarted: false,
+            })) as GatewayRecoveryRuntime["waitForAgent"],
+            sendRecoveryNotice: vi.fn(),
+          },
+        });
+
+        await accepted.promise;
+        await vi.advanceTimersByTimeAsync(10_000);
+        await expect(recovery).resolves.toEqual({ recovered: 0, failed: 1, skipped: 0 });
+        expect(abortAgent).toHaveBeenCalledWith(
+          {
+            agentId: "main",
+            runId: "recovery-main",
+            sessionKey: "agent:main:main",
+          },
+          2_000,
+        );
+        expect(scheduleSpy).toHaveBeenCalledTimes(expectedScheduleCount);
+        expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+          status: "running",
+          abortedLastRun: expectedAbortedLastRun,
+          restartRecoveryDeliverySourceRunId: "source-main",
+        });
+        expect(
+          loadSessionEntry({ sessionKey: "agent:main:main", storePath })
+            ?.restartRecoveryDeliveryRunId,
+        ).toBe(expectedRunId);
+      } finally {
+        scheduleSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("holds lifecycle replacement behind the targeted recovery dispatch", async () => {
     const sessionsDir = await makeSessionsDir();

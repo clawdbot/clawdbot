@@ -28,6 +28,10 @@ export type GatewayApprovalEventPublisher = {
 };
 
 export type GatewayRecoveryRuntime = {
+  abortAgent: (
+    params: { agentId: string; runId: string; sessionKey: string },
+    timeoutMs?: number,
+  ) => Promise<{ aborted?: boolean; runIds?: string[] }>;
   dispatchAgent: <T = unknown>(
     params: AgentRunRequest,
     timeoutMs?: number,

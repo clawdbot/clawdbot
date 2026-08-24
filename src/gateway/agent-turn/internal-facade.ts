@@ -103,6 +103,15 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
             ...(meta ? { meta } : {}),
           };
           resolveAcceptance?.(acceptance);
+          const acceptedRunId =
+            typeof meta?.runId === "string" && meta.runId.trim() ? meta.runId.trim() : undefined;
+          if (
+            meta?.cached === true &&
+            acceptedRunId &&
+            context.chatAbortControllers.get(acceptedRunId)?.executionStarted === true
+          ) {
+            dispatchOptions.onExecutionStarted?.();
+          }
         }
       },
       emitFinal: (frame, meta) => {

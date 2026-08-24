@@ -40,6 +40,7 @@ import {
   type MainSessionRecoveryReservation,
 } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
+import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
@@ -382,6 +383,8 @@ export async function resumeMainSession(params: {
   let dispatchStarted = false;
   let dispatchAccepted = false;
   let executionStarted = false;
+  let preStartAbortAttempted = false;
+  let preStartAbortConfirmed = false;
   const rollbackReservation = async (kind: "abandon_reservation" | "cancel_reservation") => {
     if (!reservation) {
       return undefined;
@@ -557,27 +560,18 @@ export async function resumeMainSession(params: {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
     }
     dispatchStarted = true;
-    let resolveExecutionStarted!: () => void;
-    const executionStartedPromise = new Promise<void>((resolve) => {
-      resolveExecutionStarted = resolve;
+    const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
+      agentId: params.agentId,
+      agentParams,
+      gatewayRuntime: params.gatewayRuntime,
+      recoveryRunId,
+      sessionKey: dispatchSessionKey,
     });
-    const dispatchPromise = params.gatewayRuntime.dispatchAgent<{
-      runId: string;
-      status?: unknown;
-    }>(agentParams, undefined, {
-      expectFinal: true,
-      onAccepted: () => {
-        dispatchAccepted = true;
-      },
-      onExecutionStarted: () => {
-        executionStarted = true;
-        resolveExecutionStarted();
-      },
-    });
-    const dispatchOutcome = await Promise.race([
-      dispatchPromise.then((result) => ({ kind: "terminal" as const, result })),
-      executionStartedPromise.then(() => ({ kind: "started" as const })),
-    ]);
+    ({ dispatchAccepted, executionStarted, preStartAbortAttempted, preStartAbortConfirmed } =
+      dispatchOutcome.observation);
+    if (dispatchOutcome.kind === "failed") {
+      throw dispatchOutcome.error;
+    }
     const dispatchResult =
       dispatchOutcome.kind === "terminal"
         ? dispatchOutcome.result
@@ -636,8 +630,24 @@ export async function resumeMainSession(params: {
     return "resumed";
   } catch (error) {
     const explicitlyRejected = error instanceof GatewayClientRequestError && !dispatchAccepted;
-    if (dispatchAccepted && !executionStarted && params.shouldContinue?.() !== false) {
+    const canRestoreAcceptedFailure = !preStartAbortAttempted || preStartAbortConfirmed;
+    if (
+      dispatchAccepted &&
+      !executionStarted &&
+      canRestoreAcceptedFailure &&
+      params.shouldContinue?.() !== false
+    ) {
       await repairAcceptedRecovery();
+    } else if (
+      dispatchAccepted &&
+      !executionStarted &&
+      preStartAbortAttempted &&
+      !preStartAbortConfirmed &&
+      params.shouldContinue?.() !== false
+    ) {
+      log.warn(
+        `restart recovery execution start timed out without confirmed cancellation: ${params.sessionKey}`,
+      );
     }
     try {
       if (dispatchStarted && !explicitlyRejected && params.shouldContinue?.() !== false) {
