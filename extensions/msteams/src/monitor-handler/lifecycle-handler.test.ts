@@ -160,6 +160,7 @@ describe("handleMSTeamsLifecycleRemove", () => {
         modelSelectionLocked: true,
         agentHarnessId: "codex",
         reasoningLevel: "high",
+        thinkingLevel: "medium",
         verboseLevel: "debug",
         ttsAuto: "off",
         archivedAt: 111,
@@ -254,6 +255,7 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:user-aad"].modelSelectionLocked).toBeUndefined();
     expect(store["msteams:direct:user-aad"].agentHarnessId).toBeUndefined();
     expect(store["msteams:direct:user-aad"].reasoningLevel).toBe("high");
+    expect(store["msteams:direct:user-aad"].thinkingLevel).toBe("medium");
     expect(store["msteams:direct:user-aad"].verboseLevel).toBe("debug");
     expect(store["msteams:direct:user-aad"].ttsAuto).toBe("off");
     expect(store["msteams:direct:user-aad"].archivedAt).toBe(111);

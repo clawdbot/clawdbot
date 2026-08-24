@@ -101,6 +101,7 @@ type MSTeamsResetCandidateEntry = {
   verboseLevel?: unknown;
   traceLevel?: unknown;
   reasoningLevel?: unknown;
+  thinkingLevel?: unknown;
   elevatedLevel?: unknown;
   ttsAuto?: unknown;
   execHost?: unknown;
@@ -220,6 +221,7 @@ function createMSTeamsLifecycleResetEntry<T extends MSTeamsResetCandidateEntry>(
   copyDefinedResetField(next, entry, "verboseLevel");
   copyDefinedResetField(next, entry, "traceLevel");
   copyDefinedResetField(next, entry, "reasoningLevel");
+  copyDefinedResetField(next, entry, "thinkingLevel");
   copyDefinedResetField(next, entry, "elevatedLevel");
   copyDefinedResetField(next, entry, "ttsAuto");
   copyDefinedResetField(next, entry, "execHost");
