@@ -6,6 +6,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
+import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -466,7 +467,7 @@ function renderCatalogSessionRow(
       @keydown=${openMenuFromEvent}
     >
       <a
-        href=${href}
+        href=${withSidebarNavCollapseIntent(href)}
         class="sidebar-recent-session__link"
         aria-current=${active ? "page" : nothing}
         aria-describedby=${stateId ?? nothing}

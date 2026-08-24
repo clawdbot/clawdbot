@@ -6,6 +6,7 @@ import { routeIdFromPath, type RouteId } from "../app-routes.ts";
 import {
   SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
   sessionRefFromPath,
+  withSidebarNavCollapseIntent,
 } from "../app-session-route-paths.ts";
 import {
   isDefaultChatLanding,
@@ -35,6 +36,17 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+describe("withSidebarNavCollapseIntent", () => {
+  it.each([
+    ["/chat/main/research", "/chat/main/research?nav=collapsed"],
+    ["/chat/main?catalog=codex&thread=one", "/chat/main?catalog=codex&thread=one&nav=collapsed"],
+    ["/chat/main?nav=collapsed&catalog=codex", "/chat/main?nav=collapsed&catalog=codex"],
+    ["/chat/main?catalog=codex#details", "/chat/main?catalog=codex&nav=collapsed#details"],
+  ])("marks %s exactly once while preserving its route", (href, expected) => {
+    expect(withSidebarNavCollapseIntent(href)).toBe(expected);
+  });
+});
 
 describe("normalizeLegacyTerminalViewLocation", () => {
   it.each([
