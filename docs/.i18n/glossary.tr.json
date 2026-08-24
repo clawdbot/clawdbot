@@ -86,5 +86,85 @@
   {
     "source": "CI pipeline",
     "target": "CI işlem hattı"
+  },
+  {
+    "source": "Control UI",
+    "target": "Kontrol Arayüzü"
+  },
+  {
+    "source": "Get started",
+    "target": "Başlangıç"
+  },
+  {
+    "source": "First steps",
+    "target": "İlk adımlar"
+  },
+  {
+    "source": "Install",
+    "target": "Kurulum"
+  },
+  {
+    "source": "Install overview",
+    "target": "Kurulum genel bakışı"
+  },
+  {
+    "source": "onboarding",
+    "target": "ilk kurulum"
+  },
+  {
+    "source": "Onboarding",
+    "target": "İlk kurulum"
+  },
+  {
+    "source": "Quick start",
+    "target": "Hızlı başlangıç"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Hızlı başlangıç"
+  },
+  {
+    "source": "Capabilities",
+    "target": "Yetenekler"
+  },
+  {
+    "source": "Platforms",
+    "target": "Platformlar"
+  },
+  {
+    "source": "Channels",
+    "target": "Kanallar"
+  },
+  {
+    "source": "Agents",
+    "target": "Ajanlar"
+  },
+  {
+    "source": "Models",
+    "target": "Modeller"
+  },
+  {
+    "source": "Guides",
+    "target": "Kılavuzlar"
+  },
+  {
+    "source": "Settings",
+    "target": "Ayarlar"
+  },
+  {
+    "source": "Appearance",
+    "target": "Görünüm"
+  },
+  {
+    "source": "Language",
+    "target": "Dil"
+  },
+  {
+    "source": "Note",
+    "target": "Not"
+  },
+  {
+    "source": "Tip",
+    "target": "İpucu"
   }
 ]
