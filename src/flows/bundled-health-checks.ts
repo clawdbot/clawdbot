@@ -17,6 +17,7 @@ import {
 } from "../plugins/public-surface-loader.js";
 import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
 import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
+import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import { getHealthCheck, registerHealthCheck } from "./health-check-registry.js";
 
 type EmbeddingProviderSetupInspectionResult =
@@ -124,22 +125,40 @@ export function registerBundledHealthChecks(params: {
     memoryCoreActive: isMemoryCoreActive(params.cfg),
   });
   if (shouldRegisterCodexManagedHealth(params.cfg)) {
-    loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
-      dirName: "codex",
-      artifactBasename: "api.js",
-    }).registerCodexManagedAppServerDoctorChecks?.({ registerHealthCheck });
+    try {
+      loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+        dirName: "codex",
+        artifactBasename: "api.js",
+      }).registerCodexManagedAppServerDoctorChecks?.({ registerHealthCheck });
+    } catch (error) {
+      if (!(error instanceof MissingPublicSurfaceError)) {
+        throw error;
+      }
+    }
   }
   if (shouldRegisterPolicyHealth(params)) {
-    loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
-      dirName: "policy",
-      artifactBasename: "api.js",
-    }).registerPolicyDoctorChecks?.({ registerHealthCheck });
+    try {
+      loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+        dirName: "policy",
+        artifactBasename: "api.js",
+      }).registerPolicyDoctorChecks?.({ registerHealthCheck });
+    } catch (error) {
+      if (!(error instanceof MissingPublicSurfaceError)) {
+        throw error;
+      }
+    }
   }
   if (shouldRegisterPluginHealth(params.cfg, "cua-computer")) {
-    loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
-      dirName: "cua-computer",
-      artifactBasename: "api.js",
-    }).registerCuaDriverDoctorChecks?.({ registerHealthCheck });
+    try {
+      loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+        dirName: "cua-computer",
+        artifactBasename: "api.js",
+      }).registerCuaDriverDoctorChecks?.({ registerHealthCheck });
+    } catch (error) {
+      if (!(error instanceof MissingPublicSurfaceError)) {
+        throw error;
+      }
+    }
   }
   registerBundledWorkerProviderHealthChecks(params, env);
 }
@@ -157,10 +176,16 @@ function registerBundledWorkerProviderHealthChecks(
     listBundledWorkerProviderOwners(manifestRegistry, providerIds).map((owner) => owner.pluginId),
   );
   for (const pluginId of pluginIds) {
-    loadBundledPluginPublicArtifactModuleFromCandidatesSync<WorkerProviderHealthApi>({
-      dirName: pluginId,
-      artifactCandidates: ["doctor-health-api.js"],
-    })?.registerWorkerProviderDoctorChecks?.({ registerHealthCheck });
+    try {
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync<WorkerProviderHealthApi>({
+        dirName: pluginId,
+        artifactCandidates: ["doctor-health-api.js"],
+      })?.registerWorkerProviderDoctorChecks?.({ registerHealthCheck });
+    } catch (error) {
+      if (!(error instanceof MissingPublicSurfaceError)) {
+        throw error;
+      }
+    }
   }
 }
 

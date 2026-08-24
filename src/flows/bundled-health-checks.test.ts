@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.js";
 import {
@@ -439,5 +440,28 @@ describe("registerBundledHealthChecks", () => {
 
       expect(mocks.registerPolicyDoctorChecks).not.toHaveBeenCalled();
     }
+  });
+
+  it("handles MissingPublicSurfaceError gracefully for externalised plugins", () => {
+    vi.clearAllMocks();
+    mocks.loadBundledPluginPublicArtifactModuleSync.mockImplementationOnce(() => {
+      throw new MissingPublicSurfaceError("Unable to resolve bundled plugin public surface codex/api.js");
+    });
+
+    expect(() =>
+      registerBundledHealthChecks({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.6-sol" },
+              models: {
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+              },
+            },
+          },
+        },
+        cwd: workspaceDir,
+      }),
+    ).not.toThrow();
   });
 });
