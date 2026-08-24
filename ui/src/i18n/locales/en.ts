@@ -968,6 +968,8 @@ export const en: TranslationMap = {
     agentsUnavailable: "No agents are available on this Gateway yet.",
     nodeUnavailable: "The selected device is unavailable. Pick another place.",
     terminalNeedsFolder: "Pick a folder before starting in a terminal.",
+    terminalCapabilityOverridesUnsupported:
+      "Clear session capability overrides before starting in a terminal.",
     what: "What",
     detail: "Detail",
     local: "Local",

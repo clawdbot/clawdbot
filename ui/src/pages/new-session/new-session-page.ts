@@ -614,7 +614,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           terminalAction: this.submission.showStartInTerminal()
             ? {
                 canStart: !this.submission.submitting && this.submission.canSubmit("terminal"),
-                disabledReason: this.submission.terminalStartDisabledReason(),
+                disabledReason: this.submission.submitBlock("terminal")?.reason,
                 onStart: () => void this.submission.startInTerminal(),
               }
             : undefined,

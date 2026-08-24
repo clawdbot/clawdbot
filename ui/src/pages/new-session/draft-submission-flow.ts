@@ -282,10 +282,6 @@ export class DraftSubmissionFlow {
     return this.submitBlock()?.reason;
   }
 
-  terminalStartDisabledReason(): string | undefined {
-    return this.submitBlock("terminal")?.reason;
-  }
-
   incognitoDisabledReason(): string | undefined {
     const access = readSessionMethodAccess(this.read().context?.gateway.snapshot, {
       method: "sessions.create",
@@ -317,6 +313,7 @@ export class DraftSubmissionFlow {
         submissionOutcomeUnknown: this.submissionOutcomeUnknownValue,
         pendingAttachmentReads: this.attachmentDraft.pendingReads,
         hasDraftAttachments: this.attachmentDraft.attachments.length > 0,
+        hasCapabilityOverrides: this.capabilities.toolOverrides !== null,
         submissionSnapshot: () => this.read(),
         requiresModelSetup: () => this.requiresModelSetup(),
         submissionAccess: () => this.submissionAccess(),
