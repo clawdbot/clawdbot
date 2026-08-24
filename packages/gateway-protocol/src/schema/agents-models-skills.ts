@@ -136,6 +136,9 @@ export const AgentsListResultSchema = closedObject({
   defaultId: NonEmptyString,
   ownership: Type.Optional(AgentOwnershipSchema),
   selectionRequired: Type.Optional(Type.Boolean()),
+  // Opaque Gateway authority for chat routing. Clients echo this value instead
+  // of reconstructing it from display defaults that may not own a session.
+  sessionRoutingContract: Type.Optional(NonEmptyString),
   mainKey: NonEmptyString,
   scope: Type.Union([Type.Literal("per-sender"), Type.Literal("global")]),
   agents: Type.Array(AgentSummarySchema),
