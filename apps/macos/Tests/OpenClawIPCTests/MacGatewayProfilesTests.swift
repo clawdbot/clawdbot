@@ -1,8 +1,125 @@
 import Foundation
+import LocalAuthentication
+import Security
 import Testing
 @testable import OpenClaw
 
 struct MacGatewayProfilesTests {
+    @Test func `gateway profile keychain access never opens authentication UI`() throws {
+        let query = MacGatewayProfileStore.baseQuery(
+            account: "registry-v1",
+            allowInteraction: false)
+        let authenticationContext = try #require(
+            query[kSecUseAuthenticationContext as String] as? LAContext)
+
+        #expect(authenticationContext.interactionNotAllowed)
+        #expect(MacGatewayProfileStore.baseQuery(account: "registry-v1")[
+            kSecUseAuthenticationContext as String,
+        ] == nil)
+        #expect(MacGatewayProfileStore.isUnavailableKeychainStatus(errSecNoSuchKeychain))
+        #expect(MacGatewayProfileStore.isUnavailableKeychainStatus(errSecInteractionNotAllowed))
+        #expect(!MacGatewayProfileStore.isUnavailableKeychainStatus(errSecParam))
+    }
+
+    @Test func `authorized mutation reloads profiles hidden by an unavailable keychain`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            let existingURL = try #require(URL(string: "wss://existing.example"))
+            let existing = MacGatewayProfileStore.StoredProfile(
+                profile: MacGatewayProfile(id: "existing", name: "Existing", url: existingURL),
+                credentials: .init(token: "existing-token", password: nil))
+            let fake = try MacGatewayProfileFakeKeychain(registry: .init(profiles: [existing]))
+            let store = MacGatewayProfileStore()
+
+            try await MacGatewayProfileStore.$keychainOperations.withValue(fake.operations) {
+                #expect(try await store.profiles().isEmpty)
+
+                let added = try await store.upsert(
+                    name: "Added",
+                    url: #require(URL(string: "wss://added.example")),
+                    token: "added-token",
+                    password: nil)
+                #expect(fake.loadAllowInteraction == [false, true])
+                #expect(Set(fake.savedRegistry?.profiles.map(\.profile.id) ?? []) ==
+                    Set([added.id, "existing"]))
+
+                try await store.remove(profileID: added.id)
+                #expect(fake.savedRegistry?.profiles.map(\.profile.id) == ["existing"])
+            }
+        }
+    }
+
+    @Test func `authorized remove commits pending migration without dropping hidden profiles`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            let legacyURL = try #require(URL(string: "wss://legacy.example"))
+            let legacyID = try MacGatewayProfileStore.profileID(
+                url: MacGatewayProfileStore.canonicalURL(legacyURL))
+            #expect(OpenClawConfigFile.saveDict(
+                self.remoteRoot(
+                    url: legacyURL.absoluteString,
+                    token: "legacy-token",
+                    password: "legacy-password"),
+                allowGatewayAuthMutation: true))
+            let hidden = try MacGatewayProfileStore.StoredProfile(
+                profile: MacGatewayProfile(
+                    id: "hidden",
+                    name: "Hidden",
+                    url: #require(URL(string: "wss://hidden.example"))),
+                credentials: .init(token: "hidden-token", password: nil))
+            let fake = try MacGatewayProfileFakeKeychain(registry: .init(profiles: [hidden]))
+            let store = MacGatewayProfileStore()
+
+            try await MacGatewayProfileStore.$keychainOperations.withValue(fake.operations) {
+                #expect(try await store.profiles().map(\.id) == [legacyID])
+                try await store.remove(profileID: legacyID)
+                #expect(fake.loadAllowInteraction == [false, true])
+                #expect(fake.savedRegistry?.legacyPrimaryMigrationVersion == 1)
+                #expect(fake.savedRegistry?.profiles.map(\.profile.id) == ["hidden"])
+            }
+        }
+    }
+
+    @Test func `blank same-route upsert preserves migrated credentials and hidden profiles`() async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            let legacyURL = try #require(URL(string: "wss://legacy.example"))
+            #expect(OpenClawConfigFile.saveDict(
+                self.remoteRoot(
+                    url: legacyURL.absoluteString,
+                    token: "legacy-token",
+                    password: "legacy-password"),
+                allowGatewayAuthMutation: true))
+            let hidden = try MacGatewayProfileStore.StoredProfile(
+                profile: MacGatewayProfile(
+                    id: "hidden",
+                    name: "Hidden",
+                    url: #require(URL(string: "wss://hidden.example"))),
+                credentials: .init(token: "hidden-token", password: nil))
+            let fake = try MacGatewayProfileFakeKeychain(registry: .init(profiles: [hidden]))
+            let store = MacGatewayProfileStore()
+
+            try await MacGatewayProfileStore.$keychainOperations.withValue(fake.operations) {
+                #expect(try await store.profiles().count == 1)
+                let saved = try await store.upsert(
+                    name: "",
+                    url: legacyURL,
+                    token: nil,
+                    password: nil)
+                let savedProfiles = fake.savedRegistry?.profiles ?? []
+                #expect(fake.loadAllowInteraction == [false, true])
+                #expect(Set(savedProfiles.map(\.profile.id)) == Set(["hidden", saved.id]))
+                let migrated = try #require(savedProfiles.first { $0.profile.id == saved.id })
+                #expect(migrated.credentials == .init(
+                    token: "legacy-token",
+                    password: "legacy-password"))
+            }
+        }
+    }
+
     @Test func `canonical route identity normalizes authority but preserves path`() throws {
         let implicit = try MacGatewayProfileStore.canonicalURL(
             #require(URL(string: "WSS://Studio.Example/alpha")))
@@ -220,5 +337,38 @@ struct MacGatewayProfilesTests {
         if let token { remote["token"] = token }
         if let password { remote["password"] = password }
         return ["gateway": ["mode": mode, "remote": remote]]
+    }
+}
+
+private final class MacGatewayProfileFakeKeychain: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data: Data
+    private(set) var loadAllowInteraction: [Bool] = []
+    private(set) var savedRegistry: MacGatewayProfileStore.Registry?
+
+    init(registry: MacGatewayProfileStore.Registry) throws {
+        self.data = try JSONEncoder().encode(registry)
+    }
+
+    var operations: MacGatewayProfileKeychainOperations {
+        MacGatewayProfileKeychainOperations(
+            load: { [self] _, _, allowInteraction in
+                self.lock.withLock {
+                    self.loadAllowInteraction.append(allowInteraction)
+                    return allowInteraction
+                        ? .data(self.data)
+                        : .unavailable(errSecInteractionNotAllowed)
+                }
+            },
+            save: { [self] data, _, _, allowInteraction in
+                self.lock.withLock {
+                    guard allowInteraction else { return errSecInteractionNotAllowed }
+                    self.data = data
+                    self.savedRegistry = try? JSONDecoder().decode(
+                        MacGatewayProfileStore.Registry.self,
+                        from: data)
+                    return errSecSuccess
+                }
+            })
     }
 }

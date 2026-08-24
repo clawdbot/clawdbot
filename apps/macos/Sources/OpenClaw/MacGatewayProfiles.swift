@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import LocalAuthentication
 import OpenClawKit
 import Security
 
@@ -32,10 +33,66 @@ enum MacGatewayProfileError: LocalizedError, Equatable {
     }
 }
 
+enum MacGatewayProfileKeychainLoad: Sendable {
+    case data(Data)
+    case missing
+    case unavailable(OSStatus)
+    case failed(OSStatus)
+}
+
+struct MacGatewayProfileKeychainOperations: Sendable {
+    let load: @Sendable (_ service: String, _ account: String, _ allowInteraction: Bool) ->
+        MacGatewayProfileKeychainLoad
+    let save: @Sendable (
+        _ data: Data,
+        _ service: String,
+        _ account: String,
+        _ allowInteraction: Bool) -> OSStatus
+
+    static let live = MacGatewayProfileKeychainOperations(
+        load: { service, account, allowInteraction in
+            var query = MacGatewayProfileStore.baseQuery(
+                service: service,
+                account: account,
+                allowInteraction: allowInteraction)
+            query[kSecReturnData as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+            var result: CFTypeRef?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+            if status == errSecSuccess, let data = result as? Data {
+                return .data(data)
+            }
+            if status == errSecItemNotFound {
+                return .missing
+            }
+            if MacGatewayProfileStore.isUnavailableKeychainStatus(status) {
+                return .unavailable(status)
+            }
+            return .failed(status)
+        },
+        save: { data, service, account, allowInteraction in
+            let query = MacGatewayProfileStore.baseQuery(
+                service: service,
+                account: account,
+                allowInteraction: allowInteraction)
+            let update = SecItemUpdate(
+                query as CFDictionary,
+                [kSecValueData as String: data] as CFDictionary)
+            if update == errSecSuccess { return update }
+            if update != errSecItemNotFound { return update }
+            var add = query
+            add[kSecValueData as String] = data
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            return SecItemAdd(add as CFDictionary, nil)
+        })
+}
+
 /// Persistent gateway identities and credentials for independently routed windows.
 /// Profiles are Keychain-backed so endpoint ownership and its secrets commit together.
 actor MacGatewayProfileStore {
     static let shared = MacGatewayProfileStore()
+
+    @TaskLocal static var keychainOperations = MacGatewayProfileKeychainOperations.live
 
     static let didChangeNotification = Notification.Name("openclaw.gateway-profiles.did-change")
 
@@ -73,11 +130,25 @@ actor MacGatewayProfileStore {
     private static let registryAccount = "registry-v1"
     private static let currentLegacyPrimaryMigrationVersion = 1
 
+    static func isUnavailableKeychainStatus(_ status: OSStatus) -> Bool {
+        switch status {
+        case errSecNotAvailable,
+             errSecAuthFailed,
+             errSecNoSuchKeychain,
+             errSecInteractionNotAllowed,
+             errSecUserCanceled:
+            true
+        default:
+            false
+        }
+    }
+
     /// Registry reads are prompt-bearing: when this binary is missing from the
     /// item's ACL, every SecItemCopyMatching raises a login-keychain dialog, and
     /// catalog refreshes fire per control-channel state change. Cache the one
     /// registry for the process lifetime; saves keep it coherent.
     private var cachedRegistry: Registry?
+    private var cachedRegistryKeychainUnavailable = false
 
     static func migratingLegacyPrimaryConnection(
         root: [String: Any],
@@ -116,7 +187,7 @@ actor MacGatewayProfileStore {
         password: String?) throws -> MacGatewayProfile
     {
         let profile = try Self.makeProfile(name: name, url: url)
-        var registry = try self.loadRegistry()
+        var registry = try self.loadRegistryForMutation()
         let id = profile.id
         let savedCredentials = registry.profiles.first { $0.profile.id == id }?.credentials
         let credentials = Self.resolvedCredentials(
@@ -146,7 +217,7 @@ actor MacGatewayProfileStore {
     }
 
     func remove(profileID: String) throws {
-        var registry = try self.loadRegistry()
+        var registry = try self.loadRegistryForMutation()
         guard registry.profiles.contains(where: { $0.profile.id == profileID }) else {
             throw MacGatewayProfileError.profileNotFound
         }
@@ -171,15 +242,39 @@ actor MacGatewayProfileStore {
             deviceAuthGatewayID: stored.profile.id)
     }
 
-    private func loadRegistry() throws -> Registry {
-        if let cachedRegistry { return cachedRegistry }
-        let registry: Registry = if let data = try Self.load(account: Self.registryAccount) {
-            try Self.decodeRegistry(data)
-        } else {
-            Registry()
+    private func loadRegistry(allowInteraction: Bool = false) throws -> Registry {
+        if let cachedRegistry,
+           !self.cachedRegistryKeychainUnavailable || !allowInteraction
+        {
+            return cachedRegistry
+        }
+        let load = Self.keychainOperations.load(
+            Self.service,
+            Self.registryAccount,
+            allowInteraction)
+        let registry: Registry
+        switch load {
+        case let .data(data):
+            registry = try Self.decodeRegistry(data)
+            self.cachedRegistryKeychainUnavailable = false
+        case .missing:
+            registry = Registry()
+            self.cachedRegistryKeychainUnavailable = false
+        case let .unavailable(status):
+            guard !allowInteraction else { throw MacGatewayProfileError.keychain(status) }
+            registry = Registry()
+            self.cachedRegistryKeychainUnavailable = true
+        case let .failed(status):
+            throw MacGatewayProfileError.keychain(status)
         }
         self.cachedRegistry = registry
         return registry
+    }
+
+    private func loadRegistryForMutation() throws -> Registry {
+        try Self.migratingLegacyPrimaryConnection(
+            root: OpenClawConfigFile.loadDict(),
+            registry: self.loadRegistry(allowInteraction: true))
     }
 
     private func loadRegistryMigratingLegacyPrimary() throws -> Registry {
@@ -193,13 +288,30 @@ actor MacGatewayProfileStore {
             root: OpenClawConfigFile.loadDict(),
             registry: registry)
         guard migrated != registry else { return registry }
-        try self.saveRegistry(migrated)
+        do {
+            try self.saveRegistry(migrated, allowInteraction: false)
+        } catch let error as MacGatewayProfileError {
+            guard case let .keychain(status) = error,
+                  Self.isUnavailableKeychainStatus(status)
+            else { throw error }
+            // Local onboarding does not need saved remote profiles. Keep the
+            // migration receipt in memory so a missing or locked login
+            // keychain cannot prompt repeatedly or block the local route.
+            self.cachedRegistry = migrated
+            self.cachedRegistryKeychainUnavailable = true
+        }
         return migrated
     }
 
-    private func saveRegistry(_ registry: Registry) throws {
-        try Self.save(JSONEncoder().encode(registry), account: Self.registryAccount)
+    private func saveRegistry(_ registry: Registry, allowInteraction: Bool = true) throws {
+        let status = try Self.keychainOperations.save(
+            JSONEncoder().encode(registry),
+            Self.service,
+            Self.registryAccount,
+            allowInteraction)
+        guard status == errSecSuccess else { throw MacGatewayProfileError.keychain(status) }
         self.cachedRegistry = registry
+        self.cachedRegistryKeychainUnavailable = false
     }
 
     private static func decodeRegistry(_ data: Data) throws -> Registry {
@@ -290,40 +402,23 @@ actor MacGatewayProfileStore {
         return value?.isEmpty == false ? value : nil
     }
 
-    private static func load(account: String) throws -> Data? {
-        var query = self.baseQuery(account: account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else {
-            throw MacGatewayProfileError.keychain(status)
-        }
-        return data
-    }
-
-    private static func save(_ data: Data, account: String) throws {
-        let query = self.baseQuery(account: account)
-        let update = SecItemUpdate(
-            query as CFDictionary,
-            [kSecValueData as String: data] as CFDictionary)
-        if update == errSecSuccess { return }
-        guard update == errSecItemNotFound else { throw MacGatewayProfileError.keychain(update) }
-        var add = query
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = SecItemAdd(add as CFDictionary, nil)
-        guard status == errSecSuccess else { throw MacGatewayProfileError.keychain(status) }
-    }
-
-    private static func baseQuery(account: String) -> [String: Any] {
-        [
+    static func baseQuery(
+        service: String = MacGatewayProfileStore.service,
+        account: String,
+        allowInteraction: Bool = true) -> [String: Any]
+    {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: self.service,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecAttrSynchronizable as String: false,
         ]
+        if !allowInteraction {
+            let authenticationContext = LAContext()
+            authenticationContext.interactionNotAllowed = true
+            query[kSecUseAuthenticationContext as String] = authenticationContext
+        }
+        return query
     }
 }
 
