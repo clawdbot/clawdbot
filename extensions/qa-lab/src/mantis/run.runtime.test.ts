@@ -7,6 +7,7 @@ import { QA_EVIDENCE_FILENAME, buildQaSuiteEvidenceSummary } from "../evidence-s
 import { runMantisBeforeAfter } from "./run.runtime.js";
 import {
   failedCommandResult,
+  findSingleMantisGenerationErrorPath,
   requireArgAfter,
   successfulCommandResult,
   timedOutCommandResult,
@@ -733,10 +734,11 @@ describe("mantis before/after runtime", () => {
     if (result.status === "rejected") {
       expect(result.error).toBeInstanceOf(AggregateError);
       const aggregate = result.error as AggregateError;
-      expect(aggregate.message).toContain("Mantis lane failed and worktree cleanup failed");
-      expect(aggregate.message).toContain(
-        path.join(repoRoot, ".artifacts/qa-e2e/mantis/aggregate-failure/error.txt"),
+      const errorPath = await findSingleMantisGenerationErrorPath(
+        path.join(repoRoot, ".artifacts/qa-e2e/mantis/aggregate-failure"),
       );
+      expect(aggregate.message).toContain("Mantis lane failed and worktree cleanup failed");
+      expect(aggregate.message).toContain(errorPath);
       expect(aggregate.cause).toBeInstanceOf(Error);
       expect((aggregate.cause as Error).message).toContain("baseline worktree-add failed to run");
       expect(aggregate.errors).toHaveLength(2);

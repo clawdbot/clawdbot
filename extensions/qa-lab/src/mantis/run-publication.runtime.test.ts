@@ -5,7 +5,11 @@ import path from "node:path";
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runMantisBeforeAfter } from "./run.runtime.js";
-import { successfulCommandResult, writeLegacyLaneSummary } from "./run.test-support.js";
+import {
+  findSingleMantisGenerationErrorPath,
+  successfulCommandResult,
+  writeLegacyLaneSummary,
+} from "./run.test-support.js";
 
 function createSuccessfulMantisRunner() {
   return vi.fn(async (command: string, args: readonly string[], execution) => {
@@ -65,7 +69,9 @@ describe("Mantis generation publication", () => {
     });
 
     await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("caller data");
-    await expect(fs.readFile(path.join(outputDir, "error.txt"), "utf8")).resolves.toBe("");
+    await expect(fs.readFile(path.join(outputDir, "error.txt"), "utf8")).resolves.toBe(
+      "old failure",
+    );
     await expect(readCurrentGeneration(outputDir)).resolves.toBe(result.outputDir);
     await expect(fs.readFile(result.comparisonPath, "utf8")).resolves.toContain('"pass": true');
     await expect(fs.stat(path.join(result.outputDir, "baseline"))).resolves.toMatchObject({
@@ -120,6 +126,10 @@ describe("Mantis generation publication", () => {
     await expect(readCurrentGeneration(outputDir)).resolves.toBe(oldGeneration);
     await expect(fs.readFile(path.join(oldGeneration, "last-good.txt"), "utf8")).resolves.toBe(
       "old generation",
+    );
+    const errorPath = await findSingleMantisGenerationErrorPath(outputDir);
+    await expect(fs.readFile(errorPath, "utf8")).resolves.toContain(
+      "Mantis artifact publication aborted",
     );
   });
 

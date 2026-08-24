@@ -37,7 +37,7 @@ export type MantisRunPublication = {
   generationDir: string;
 };
 
-type MantisOutputRoot = Pick<Awaited<ReturnType<typeof root>>, "stat" | "write" | "writeJson">;
+type MantisOutputRoot = Pick<Awaited<ReturnType<typeof root>>, "stat" | "writeJson">;
 
 export async function publishMantisRunOutput(params: {
   generationDir: string;
@@ -63,10 +63,8 @@ export async function publishMantisRunOutput(params: {
   }
 
   throwIfMantisPublicationAborted(params.signal);
-  // Clearing the fixed failure artifact first cannot invalidate the previous
-  // pointer. The following atomic JSON replacement is the only commit point.
-  await params.outputRoot.write("error.txt", "");
-  throwIfMantisPublicationAborted(params.signal);
+  // The atomic pointer replacement is the only commit point. Earlier failed
+  // generations remain intact until this complete generation is published.
   const currentPath = path.join(params.outputDir, "mantis-current.json");
   await params.outputRoot.writeJson(
     "mantis-current.json",

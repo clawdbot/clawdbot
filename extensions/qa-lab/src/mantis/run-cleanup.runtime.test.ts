@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { removeMantisWorktree } from "./run-cleanup.runtime.js";
+import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
 import { captureMantisDirectoryOwnership, hasSameFileIdentity } from "./run-directory.runtime.js";
 import {
   failedCommandResult,
@@ -165,6 +165,44 @@ describe("Mantis worktree cleanup", () => {
         worktreeDir,
       }),
     ).rejects.toThrow("exceeded its total 5ms deadline");
+  });
+
+  it("keeps one total deadline across legacy discovery and removal", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "legacy-deadline");
+    const legacyWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    await fs.mkdir(legacyWorktreeDir, { recursive: true });
+    let nowMs = 0;
+    let listCalls = 0;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const runner = vi.fn(async (_command: string, args: readonly string[], execution) => {
+      if (args[1] === "list") {
+        listCalls += 1;
+        if (listCalls === 1) {
+          nowMs += 60;
+          return successfulCommandResult(worktreeListOutput(legacyWorktreeDir));
+        }
+        return successfulCommandResult();
+      }
+      if (args[1] === "remove") {
+        nowMs += 60;
+        await fs.rm(execution.cwd, { force: true, recursive: true });
+        return successfulCommandResult();
+      }
+      throw new Error(`unexpected git command: ${args.join(" ")}`);
+    });
+
+    try {
+      await expect(
+        removeLegacyMantisWorktrees({
+          commandTimeouts: { ...commandTimeouts, "worktree-cleanup": 100 },
+          outputDir,
+          repoRoot,
+          runner,
+        }),
+      ).rejects.toThrow("exceeded its total 100ms deadline");
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("keeps high file identities exact", () => {

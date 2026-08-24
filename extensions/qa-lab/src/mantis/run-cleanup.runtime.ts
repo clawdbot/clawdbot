@@ -302,19 +302,19 @@ function createRetainedDirectoryError(params: {
   );
 }
 
-export async function removeMantisWorktree(params: {
+type RemoveMantisWorktreeParams = {
   commandTimeouts: MantisCommandTimeouts;
   lane: "baseline" | "candidate";
   ownership?: MantisDirectoryOwnership;
   repoRoot: string;
   runner: MantisCommandRunner;
   worktreeDir: string;
-}): Promise<void> {
-  const cleanupTimeoutMs = params.commandTimeouts["worktree-cleanup"];
-  const deadline = createMantisCleanupDeadline({
-    lane: params.lane,
-    timeoutMs: cleanupTimeoutMs,
-  });
+};
+
+async function removeMantisWorktreeBeforeDeadline(
+  params: RemoveMantisWorktreeParams,
+  deadline: MantisCleanupDeadline,
+): Promise<void> {
   const createCleanupExecution = (): MantisCommandExecution => ({
     cwd: params.repoRoot,
     env: process.env,
@@ -463,6 +463,14 @@ export async function removeMantisWorktree(params: {
   }
 }
 
+export async function removeMantisWorktree(params: RemoveMantisWorktreeParams): Promise<void> {
+  const deadline = createMantisCleanupDeadline({
+    lane: params.lane,
+    timeoutMs: params.commandTimeouts["worktree-cleanup"],
+  });
+  await removeMantisWorktreeBeforeDeadline(params, deadline);
+}
+
 export async function removeLegacyMantisWorktrees(params: {
   commandTimeouts: MantisCommandTimeouts;
   outputDir: string;
@@ -511,13 +519,16 @@ export async function removeLegacyMantisWorktrees(params: {
           repoRoot: params.repoRoot,
         }),
     );
-    await removeMantisWorktree({
-      commandTimeouts: params.commandTimeouts,
-      lane,
-      ownership,
-      repoRoot: params.repoRoot,
-      runner: params.runner,
-      worktreeDir,
-    });
+    await removeMantisWorktreeBeforeDeadline(
+      {
+        commandTimeouts: params.commandTimeouts,
+        lane,
+        ownership,
+        repoRoot: params.repoRoot,
+        runner: params.runner,
+        worktreeDir,
+      },
+      deadline,
+    );
   }
 }

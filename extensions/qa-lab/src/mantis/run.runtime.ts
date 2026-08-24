@@ -150,12 +150,16 @@ function createMantisFailureArtifactWriteError(params: {
 
 async function throwMantisRunFailure(params: {
   error: unknown;
-  outputDir: string;
+  generationDir: string;
+  generationRelative: string;
   outputRoot: Pick<Awaited<ReturnType<typeof root>>, "write">;
 }): Promise<never> {
-  const errorPath = path.join(params.outputDir, "error.txt");
+  const errorPath = path.join(params.generationDir, "error.txt");
   try {
-    await params.outputRoot.write("error.txt", `${formatMantisFailure(params.error)}\n`);
+    await params.outputRoot.write(
+      path.posix.join(params.generationRelative, "error.txt"),
+      `${formatMantisFailure(params.error)}\n`,
+    );
   } catch (artifactError) {
     throw createMantisFailureArtifactWriteError({
       artifactError,
@@ -522,7 +526,8 @@ export async function runMantisBeforeAfter(
   } catch (error) {
     await throwMantisRunFailure({
       error,
-      outputDir,
+      generationDir,
+      generationRelative,
       outputRoot,
     });
   }
