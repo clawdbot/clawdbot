@@ -41,6 +41,8 @@ export type ChannelOutboundContext = {
   deps?: OutboundSendDeps;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** @internal Exact originating run retained through durable delivery and recovery. */
+  sourceRunId?: string;
   /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
   deliveryQueueId?: string;
   /** @internal Stable platform-send index within one durable payload. */

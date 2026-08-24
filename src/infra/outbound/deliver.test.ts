@@ -782,7 +782,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("sends text through the channel message adapter when present", async () => {
-    const messageSendText = vi.fn(async () => ({
+    const messageSendText = vi.fn(async (_ctx: ChannelMessageSendTextContext) => ({
       messageId: "message-adapter-1",
       receipt: createMessageReceiptFromOutboundResults({
         results: [{ channel: "matrix", messageId: "message-adapter-1" }],
@@ -813,6 +813,67 @@ describe("deliverOutboundPayloads", () => {
     expect(results[0]?.channel).toBe("matrix");
     expect(results[0]?.messageId).toBe("message-adapter-1");
     expect(results[0]?.receipt?.platformMessageIds).toEqual(["message-adapter-1"]);
+  });
+
+  it("passes the exact prepared run correlation to the channel message adapter", async () => {
+    const messageSendText = vi.fn(async (_ctx: ChannelMessageSendTextContext) => ({
+      messageId: "message-adapter-1",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "matrix", messageId: "message-adapter-1" }],
+        kind: "text",
+      }),
+    }));
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: { capabilities: { text: true } },
+      send: { text: messageSendText },
+    });
+
+    await deliverMatrix({
+      runId: "run-exact",
+      replyPayloadSendingHook: {
+        kind: "final",
+        runId: "run-exact",
+        context: { channelId: "matrix" },
+      },
+    });
+
+    expect(messageSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceRunId: "run-exact" }),
+    );
+  });
+
+  it("does not label status or error payloads as useful final results", async () => {
+    const messageSendText = vi.fn(async (_ctx: ChannelMessageSendTextContext) => ({
+      messageId: "message-adapter-1",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "matrix", messageId: "message-adapter-1" }],
+        kind: "text",
+      }),
+    }));
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: { capabilities: { text: true } },
+      send: { text: messageSendText },
+    });
+
+    for (const payload of [
+      { text: "working", isStatusNotice: true },
+      { text: "failed", isError: true },
+    ]) {
+      await deliverMatrix({
+        payloads: [payload],
+        runId: "run-not-useful",
+        replyPayloadSendingHook: {
+          kind: "final",
+          runId: "run-not-useful",
+          context: { channelId: "matrix" },
+        },
+      });
+    }
+
+    expect(messageSendText).toHaveBeenCalledTimes(2);
+    expect(messageSendText.mock.calls.every(([ctx]) => ctx.sourceRunId === undefined)).toBe(true);
   });
 
   it("runs message adapter send lifecycle after durable intent and before platform send", async () => {

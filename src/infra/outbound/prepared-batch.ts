@@ -1,4 +1,5 @@
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type {
   OutboundPayloadDeliveryOutcome,
@@ -38,6 +39,7 @@ export type PreparedOutboundBatch = {
   /** True only when accepted payloads already passed post-policy channel normalization. */
   channelNormalized?: true;
   runId?: string;
+  replyKind?: ReplyDispatchKind;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   entries: PreparedOutboundBatchEntry[];
 };
@@ -77,6 +79,26 @@ export function acceptedPreparedOutboundEntries(
   return batch.entries.filter(
     (entry): entry is PreparedOutboundAcceptedEntry => entry.status === "accepted",
   );
+}
+
+/** Exact source run only when the persisted payload is a useful final answer. */
+export function usefulFinalSourceRunId(
+  batch: Pick<PreparedOutboundBatch, "replyKind" | "runId">,
+  payload: ReplyPayload,
+): string | undefined {
+  if (
+    batch.replyKind !== "final" ||
+    !batch.runId ||
+    payload.isError ||
+    payload.isReasoning ||
+    payload.isCommentary ||
+    payload.isCompactionNotice ||
+    payload.isFallbackNotice ||
+    payload.isStatusNotice
+  ) {
+    return undefined;
+  }
+  return batch.runId;
 }
 
 export function preparedOutboundSuppressionOutcomes(

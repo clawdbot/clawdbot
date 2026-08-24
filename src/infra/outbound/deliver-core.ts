@@ -41,6 +41,7 @@ import type { NormalizedOutboundPayload } from "./payloads.js";
 import {
   acceptedPreparedOutboundEntries,
   preparedOutboundSuppressionOutcomes,
+  usefulFinalSourceRunId,
 } from "./prepared-batch.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 
@@ -336,9 +337,11 @@ export async function deliverOutboundPayloadsCore(
 
       params.onPayload?.(payloadSummary);
       const replyToResolution = resolveCurrentReplyTo(effectivePayload);
+      const sourceRunId = usefulFinalSourceRunId(preparedBatch, effectivePayload);
       const sendOverrides: OutboundMessageSendOverrides = {
         replyToId: replyToResolution.replyToId,
         replyToIdSource: replyToResolution.source,
+        ...(sourceRunId ? { sourceRunId } : {}),
         ...(preparedTarget.threadId != null ? { threadId: preparedTarget.threadId } : {}),
         ...(effectivePayload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
