@@ -209,12 +209,12 @@ function createPrivateSqliteDirectorySync(directoryPath: string): void {
 }
 
 export function resolvePrivateSqliteSnapshotStagingRoot(): string {
-  const configuredRoot = process.env.XDG_CACHE_HOME?.trim();
-  const defaultRoot = process.platform === "darwin" ? "Library/Caches" : ".cache";
+  const appData = process.platform === "win32" ? process.env.LOCALAPPDATA?.trim() : undefined;
+  const defaultRoot = process.platform === "win32" ? "AppData/Local" : ".cache";
+  const platformRoot = process.platform === "darwin" ? "Library/Caches" : defaultRoot;
   const cacheRoot =
-    configuredRoot && path.isAbsolute(configuredRoot)
-      ? configuredRoot
-      : path.join(resolveRequiredOsHomeDir(), defaultRoot);
+    [process.env.XDG_CACHE_HOME?.trim(), appData].find((root) => root && path.isAbsolute(root)) ??
+    path.join(resolveRequiredOsHomeDir(), platformRoot);
   return resolvePreferredOpenClawTmpDir({
     preferredDir: path.join(cacheRoot, "openclaw"),
     tmpdir: () => cacheRoot,

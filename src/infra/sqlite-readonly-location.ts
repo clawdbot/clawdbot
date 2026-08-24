@@ -2,6 +2,7 @@
 import { execFile, spawnSync } from "node:child_process";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
+import { isErrno } from "./errno.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   openNodeSqliteDatabase,
@@ -49,14 +50,19 @@ type SqliteReadOnlyWorkerResult = { ok: true; location: string } | { ok: false; 
 
 class SqliteSourceChangedError extends Error {}
 
-function sqliteSnapshotStagingError(tempDir: string, cause: unknown): Error {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  const errcode = cause instanceof Error && "errcode" in cause ? cause.errcode : undefined;
-  const sqliteCode = typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : "";
-  return new Error(
-    `${message}${sqliteCode}; snapshot staging root ${path.dirname(tempDir)}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`,
-    { cause },
-  );
+function sqliteSnapshotStagingError(tempDir: string, cause: unknown): unknown {
+  const error = isErrno(cause) ? cause : undefined;
+  const errcode = error && "errcode" in error ? error.errcode : undefined;
+  // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
+  if (
+    !["ENOSPC", "EDQUOT"].includes(error?.code ?? "") &&
+    !(typeof errcode === "number" && [13, 778, 1034, 1290].includes(errcode)) &&
+    !`${error?.path ?? ""}${path.sep}`.startsWith(`${tempDir}${path.sep}`)
+  ) {
+    return cause;
+  }
+  const message = `${error?.message}${typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : ""}; snapshot staging root ${path.dirname(tempDir)}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`;
+  return new Error(message, { cause });
 }
 
 function statIfPresent(pathname: string): BigIntStats | undefined {
@@ -392,9 +398,7 @@ function createStableReadOnlyCopyInTempDirectory(
     return adoptPreparedLocation(snapshotPath);
   } catch (error) {
     removeTempDirectory(tempDir);
-    throw error instanceof SqliteSourceChangedError
-      ? error
-      : sqliteSnapshotStagingError(tempDir, error);
+    throw sqliteSnapshotStagingError(tempDir, error);
   }
 }
 
@@ -433,9 +437,7 @@ async function createOnlineReadOnlyBackup(
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
-    const source = openNodeSqliteDatabase(pathname, {
-      readOnly: true,
-    });
+    const source = openNodeSqliteDatabase(pathname, { readOnly: true });
     try {
       source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
       source.prepare("PRAGMA schema_version;").get();
