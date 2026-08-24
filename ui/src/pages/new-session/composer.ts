@@ -224,8 +224,8 @@ export class NewSessionComposerTextareaController {
     if (this.placeholderFrame === null) {
       const step = (timestamp: number) => {
         this.placeholderStartedAt ??= timestamp;
-        const elapsed = Math.max(0, timestamp - this.placeholderStartedAt - 220);
-        const length = Math.min(target.length, Math.floor(elapsed / 36));
+        const elapsed = Math.max(0, timestamp - this.placeholderStartedAt - 180);
+        const length = Math.min(target.length, Math.floor(elapsed / 26));
         if (length !== this.placeholderText.length) {
           this.placeholderText = target.slice(0, length);
           requestUpdate();

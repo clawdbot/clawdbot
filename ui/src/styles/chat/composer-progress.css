@@ -96,7 +96,7 @@
 
 .session-progress-card__summary {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
+  grid-template-columns: 14px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
   width: 100%;
@@ -130,18 +130,23 @@
 
 .session-progress-card__summary-collapsed {
   display: inline-grid;
-  grid-template-columns: minmax(0, auto) auto;
+  grid-template-columns: minmax(0, 1fr);
   justify-content: start;
   gap: 8px;
 }
 
 .session-progress-card__summary-expanded {
   display: none;
+  grid-column: 2 / 4;
   justify-content: space-between;
   gap: 16px;
 }
 
 .session-progress-card--composer[open] .session-progress-card__summary-collapsed {
+  display: none;
+}
+
+.session-progress-card--composer[open] .session-progress-card__summary-count--collapsed {
   display: none;
 }
 
@@ -232,11 +237,13 @@
 
 .session-progress-card--composer .session-progress-card__body {
   position: static;
+  display: flex;
+  flex-direction: column;
   width: 100%;
   min-width: 0;
-  max-height: min(360px, 48dvh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  min-height: 0;
+  max-height: min(300px, 48dvh);
+  overflow: hidden;
   padding: 0 18px 14px;
   border: 0;
   border-radius: 0;
@@ -262,6 +269,15 @@
 .session-progress-card--composer .session-progress-card__step,
 .session-progress-card--composer .session-progress-card__markdown.sidebar-markdown {
   font-size: 13px;
+}
+
+.session-progress-card--composer .session-progress-card__steps {
+  min-height: 0;
+  max-height: min(calc(8.4em + 35px), 36dvh);
+  padding-inline-end: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .session-progress-card--composer .session-progress-card__markdown progress {

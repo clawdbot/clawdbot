@@ -368,7 +368,7 @@ describe("new-session model runtime", () => {
     );
   });
 
-  it("renders an all-cold catalog as disabled intent with a setup action", async () => {
+  it("renders an all-cold catalog as setup actions", async () => {
     const { context, navigate, request } = contextWith([
       {
         id: "gpt-5.6-luna",
@@ -409,7 +409,8 @@ describe("new-session model runtime", () => {
     ).toBe(true);
     expect(options).toHaveLength(2);
     expect(options[0]?.textContent).toContain("Sign-in needed");
-    expect([...options].every((option) => option.disabled)).toBe(true);
+    expect([...options].every((option) => !option.disabled)).toBe(true);
+    expect([...options].every((option) => option.dataset.chatModelSetup === "true")).toBe(true);
     expect(container.textContent).toContain(
       "Authentication failed. Review the provider credential or sign-in, then retry.",
     );

@@ -51,6 +51,22 @@
   scrollbar-width: thin;
 }
 
+.chat-queue__global-state {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--chat-queue-divider);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.chat-queue__global-state[data-chat-queue-global-state="reconnect"] {
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
+}
+
 .chat-queue__scroll[data-scrollable="true"] {
   height: calc(3.55 * var(--chat-queue-row-height));
   overflow-y: auto;
@@ -148,17 +164,13 @@
 }
 
 .chat-queue__item--steered {
-  background: var(--info-subtle);
+  background: transparent;
 }
 
 /* The edited row keeps its slot so the operator can see where the corrected
-   message lands; the outline says the composer owns it right now.
-   Editing is an active state, not a failure, so it uses the informational
-   family: --accent is red in every shipped theme and sits on top of --danger
-   (see the --run token note in base.css), which reads as an error at a glance. */
+   message lands. The input owns focus, so the row itself stays neutral. */
 .chat-queue__item--editing {
-  background: var(--info-subtle);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--info) 34%, transparent);
+  background: color-mix(in srgb, var(--text-strong) 4%, transparent);
 }
 
 /* Drop target reads as an insertion edge rather than a selected row, so the
@@ -264,8 +276,7 @@
   grid-column: 2;
 }
 
-.chat-queue__item--reconnect .chat-queue__badge {
-  background: color-mix(in srgb, var(--warn) 14%, transparent);
+.chat-queue__item--reconnect .chat-queue__state {
   color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
 }
 
@@ -281,20 +292,21 @@
 }
 
 .chat-queue__badge--steered {
-  background: color-mix(in srgb, var(--info) 16%, transparent);
-  color: var(--info);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--muted);
+}
+
+.chat-queue__state {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 
 .chat-queue__item--failed .chat-queue__badge {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
-}
-
-/* Last of the state badges on purpose: editing outranks the send state it
-   pauses, so a reconnecting or failed row still reads as informational blue. */
-.chat-queue__item--editing .chat-queue__badge {
-  background: color-mix(in srgb, var(--info) 16%, transparent);
-  color: var(--info);
 }
 
 .chat-queue__copy {
@@ -327,7 +339,7 @@
   max-height: calc(5 * 1.4em + 10px);
   margin: -1px 0;
   padding: 4px 6px;
-  border: 1px solid color-mix(in srgb, var(--info) 42%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text-strong) 18%, transparent);
   border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--chat-text);
@@ -339,10 +351,6 @@
 }
 
 .chat-queue__edit-input:focus {
-  outline: none;
-}
-
-.chat-queue__item--editing[data-edit-keyboard-focus] .chat-queue__edit-input:focus {
   outline: 2px solid var(--ring);
   outline-offset: 1px;
 }
@@ -406,6 +414,11 @@
 .chat-queue__action:hover:not(:disabled),
 .chat-queue__retry:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.chat-queue__action:disabled {
+  color: color-mix(in srgb, var(--muted) 48%, transparent);
+  cursor: default;
 }
 
 .chat-queue__remove,

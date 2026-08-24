@@ -15,6 +15,75 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("keeps the hold-to-dictate switch interactive without closing the microphone picker", async () => {
+    await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "talk.catalog": {
+            transcription: { ready: true, providers: [] },
+            realtime: { ready: true, providers: [] },
+            speech: { providers: [] },
+            modes: [],
+            transports: [],
+            brains: [],
+          },
+        },
+      });
+      await installTalkBrowserFixtures(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+
+      const voice = page.getByRole("button", { name: "Start voice input" });
+      await voice.hover();
+      await page.getByRole("button", { name: "Microphone input" }).click();
+      const picker = page.locator("wa-dropdown.chat-talk-input-picker");
+      const toggle = page.locator('.chat-talk-input-picker__preference [role="switch"]');
+      await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
+      await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
+
+      await toggle.click();
+
+      await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("false");
+      await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
+      await captureComposerProof(page, "microphone-picker-hold-toggle.png");
+      await page.screenshot({
+        animations: "disabled",
+        path: ".artifacts/control-ui-e2e/voice-controls/microphone-picker-hold-toggle-full.png",
+      });
+    });
+  });
+
+  it("gates unavailable voice capabilities in the microphone picker", async () => {
+    await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "talk.catalog": {
+            transcription: { ready: false, providers: [] },
+            realtime: { ready: false, providers: [] },
+            speech: { providers: [] },
+            modes: [],
+            transports: [],
+            brains: [],
+          },
+        },
+      });
+      await installTalkBrowserFixtures(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+
+      await page.getByRole("button", { name: "Start voice input" }).click();
+      const picker = page.locator("wa-dropdown.chat-talk-input-picker");
+      await expect.poll(() => page.locator('[data-status="unavailable"]').count()).toBe(2);
+      await expect.poll(() => page.getByRole("button", { name: "Talk settings" }).count()).toBe(1);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Transcription setup" }).count())
+        .toBe(1);
+      await captureComposerProof(page, "microphone-picker-capability-gating.png");
+      await page.screenshot({
+        animations: "disabled",
+        path: ".artifacts/control-ui-e2e/voice-controls/microphone-picker-capability-gating-full.png",
+      });
+    });
+  });
+
   it("keeps dictation activity, elapsed time, Stop, and Send visible", async () => {
     await suite.withPage(
       { permissions: ["microphone"], viewport: { width: 390, height: 844 } },
@@ -50,7 +119,16 @@ suite.define(() => {
           microphoneBox.y + microphoneBox.height / 2,
         );
         await page.mouse.down();
+        await page.waitForTimeout(350);
+        await expect
+          .poll(() => microphone.getAttribute("class"))
+          .toContain("chat-send-btn--dictation-arming");
+        await page.screenshot({
+          animations: "allow",
+          path: ".artifacts/control-ui-e2e/voice-controls/dictation-hold-ring.png",
+        });
         await gateway.waitForRequest("talk.session.create");
+        await page.mouse.up();
 
         const composer = page.locator(".agent-chat__input--dictating");
         const activity = composer.locator(
@@ -65,6 +143,10 @@ suite.define(() => {
         await expect.poll(() => stop.isVisible()).toBe(true);
         await expect.poll(() => send.isVisible()).toBe(true);
         await captureComposerProof(page, "dictation-waveform-timer-actions.png");
+        await page.screenshot({
+          animations: "disabled",
+          path: ".artifacts/control-ui-e2e/voice-controls/dictation-latched-after-release.png",
+        });
         const composerBox = await composer.boundingBox();
         expect(composerBox).not.toBeNull();
         if (!composerBox) {

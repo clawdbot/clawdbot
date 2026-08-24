@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { icons } from "../../components/icons.ts";
 import {
   renderChatPaneComposerControls,
   resolveChatModelCatalogState,
@@ -14,6 +15,12 @@ import { renderChatPermissionPicker } from "./components/chat-permission-picker.
 const { showToastMock } = vi.hoisted(() => ({ showToastMock: vi.fn() }));
 
 vi.mock("../../lib/toast.ts", () => ({ showToast: showToastMock }));
+
+function iconMarkup(icon: unknown): string | undefined {
+  const container = document.createElement("div");
+  render(icon as never, container);
+  return container.querySelector("svg")?.innerHTML;
+}
 
 describe("chat model catalog state", () => {
   const cachedCatalog = [
@@ -189,6 +196,21 @@ describe("chat pane composer controls", () => {
     const defaultOption = container.querySelector<HTMLElement>(
       '[data-chat-permission-option="default"]',
     );
+    const permissionIcons = {
+      default: icons.shield,
+      "read-only": icons.shieldEllipsis,
+      guarded: icons.shieldLock,
+      workspace: icons.shieldCog,
+      full: icons.shieldAlert,
+    };
+    for (const [mode, icon] of Object.entries(permissionIcons)) {
+      const renderedIcon = container.querySelector<SVGElement>(
+        `[data-chat-permission-option="${mode}"] .chat-controls__permission-option-icon svg`,
+      );
+      expect(renderedIcon?.innerHTML).toBe(iconMarkup(icon));
+      expect(renderedIcon?.getAttribute("fill")).toBe("none");
+      expect(renderedIcon?.getAttribute("stroke-width")).toBe("2");
+    }
     expect(defaultOption?.textContent).toContain("Follow the agent's configured policy");
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");

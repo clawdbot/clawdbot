@@ -380,6 +380,69 @@ openclaw-chat-page {
   animation: none;
 }
 
+/* General pane notices share the header plane, so their appearance never
+   steals height from the transcript. Keep this lane deliberately compact: it
+   may coexist with header controls on narrow panes. */
+.chat-topbar-notices {
+  position: absolute;
+  z-index: 24;
+  top: 8px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: max-content;
+  max-width: min(34rem, calc(100% - 104px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.chat-topbar-notices:empty {
+  display: none;
+}
+
+.chat-topbar-notices > * {
+  min-width: 0;
+  pointer-events: auto;
+}
+
+.chat-topbar-notices .chat-composer-neighbor-card {
+  display: flex;
+  width: auto;
+  max-width: 100%;
+  min-height: 30px;
+  margin: 0;
+  padding: 4px 8px;
+  gap: 6px;
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-sm);
+}
+
+.chat-topbar-notices .chat-composer-neighbor-card__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-topbar-notices .chat-composer-neighbor-card__copy {
+  display: block;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-topbar-notices .chat-composer-neighbor-card__copy span {
+  display: none;
+}
+
+.chat-topbar-notices .chat-error__dismiss {
+  width: 24px;
+  height: 24px;
+  margin: -1px -3px -1px 0;
+}
+
 .chat-workspace-conflict-notice {
   display: block;
   padding: 0;
@@ -725,25 +788,18 @@ openclaw-chat-page {
 .context-ring {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  width: 24px;
   height: 24px;
-  padding: 0 7px;
+  padding: 0;
   border-radius: var(--radius-full);
   color: currentColor;
-  font-size: 11px;
-  line-height: 1;
   list-style: none;
   user-select: none;
   animation: fade-in 0.2s var(--ease-out);
   transition:
     color 150ms ease-out,
     background 150ms ease-out;
-}
-
-/* Footer labels share one typographic tier; the context percentage is metadata,
-   but it should not shrink below the permission, model, and effort controls. */
-.agent-chat__input .context-ring {
-  font-size: var(--chat-composer-chip-text, 13px);
 }
 
 .agent-chat__input .context-usage {
@@ -764,6 +820,8 @@ openclaw-chat-page {
 }
 
 .context-ring__dial {
+  width: 15px;
+  height: 15px;
   flex-shrink: 0;
   transform: rotate(-90deg);
 }
@@ -781,11 +839,6 @@ openclaw-chat-page {
 .context-ring__fill {
   stroke: currentColor;
   stroke-linecap: round;
-}
-
-.context-ring__pct {
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.01em;
 }
 
 .context-usage__popover,
@@ -1973,6 +2026,7 @@ button.chat-reply-preview--message:disabled {
 .agent-chat__composer-shell {
   --chat-composer-shell-gap: 6px;
 
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: end;
@@ -3283,20 +3337,12 @@ button.chat-pr__diff {
 }
 
 .agent-chat__composer-underlaps {
-  --chat-composer-bottom-underlap: 18px;
-  --chat-composer-underlap-row-height: 44px;
+  --chat-composer-underlap-row-height: 40px;
 
   position: relative;
-  z-index: 0;
   width: 100%;
-  margin: calc(0px - var(--chat-composer-shell-gap) - var(--chat-composer-bottom-underlap)) 0 0;
-  /* Keep the shell gap outside the row's centering box; only the intentional
-     overlap belongs behind the composer. */
-  padding-top: var(--chat-composer-bottom-underlap);
   border: 1px solid color-mix(in srgb, var(--border) 16%, transparent);
-  border-top: 0;
-  border-radius: 0 0 calc(20px * var(--openclaw-corner-radius-scale))
-    calc(20px * var(--openclaw-corner-radius-scale));
+  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   overflow: hidden;
   background: var(--composer-attached-surface, var(--chat-composer-surface));
@@ -3456,7 +3502,9 @@ button.chat-pr__diff {
 .agent-chat__composer-combobox > textarea.agent-chat__composer-textarea--rich {
   position: relative;
   z-index: 1;
-  caret-color: var(--text-strong);
+  /* The friendly token mirror has different metrics from its raw `$skill`
+     source, so it owns the visible caret at the normalized atomic boundary. */
+  caret-color: transparent;
   color: transparent;
   -webkit-text-fill-color: transparent;
 }
@@ -3488,6 +3536,28 @@ button.chat-pr__diff {
 .agent-chat__skill-token-icon svg {
   width: 1em;
   height: 1em;
+}
+
+.agent-chat__composer-caret {
+  display: inline-block;
+  width: 0;
+  height: 1.15em;
+  border-inline-start: 1px solid var(--text-strong);
+  margin-block-end: -0.2em;
+  animation: chat-composer-caret-blink 1s steps(1, end) infinite;
+  pointer-events: none;
+}
+
+@keyframes chat-composer-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__composer-caret {
+    animation: none;
+  }
 }
 
 .agent-chat__composer-combobox
@@ -3599,10 +3669,55 @@ button.chat-pr__diff {
 }
 
 .agent-chat__composer-run-status {
-  display: inline-flex;
-  order: 2;
-  flex: 0 0 auto;
+  display: flex;
   align-items: center;
+  justify-content: center;
+  width: max-content;
+  max-width: 100%;
+  pointer-events: none;
+}
+
+/* Input-affecting notices belong to the composer owner but not its layout.
+   One absolute lane keeps model, placement, voice and lifecycle feedback on
+   the same axis without changing transcript or composer geometry. */
+.agent-chat__composer-overlay {
+  position: absolute;
+  z-index: 24;
+  inset-inline: 0;
+  bottom: calc(100% + var(--chat-composer-shell-gap));
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.agent-chat__composer-overlay:empty {
+  display: none;
+}
+
+.agent-chat__composer-overlay > * {
+  pointer-events: auto;
+}
+
+.agent-chat__composer-overlay
+  > :is(
+    .chat-composer-neighbor-card,
+    .agent-chat__composer-errors,
+    .agent-chat__composer-underlaps
+  ) {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+.agent-chat__composer-overlay > :is(.compaction-indicator, .agent-chat__composer-run-status) {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .chat-topbar-notices {
+    max-width: calc(100% - 84px);
+  }
 }
 
 .agent-chat__composer-controls .chat-composer-model-control {
@@ -3610,7 +3725,14 @@ button.chat-pr__diff {
 }
 
 .agent-chat__composer-run-status .agent-chat__run-status {
-  max-width: min(240px, 30vw);
+  width: max-content;
+  max-width: 100%;
+  overflow: visible;
+}
+
+.agent-chat__composer-run-status .agent-chat__run-status-label {
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .agent-chat__composer-controls .chat-controls {
@@ -4427,7 +4549,10 @@ button.chat-pr__diff {
   gap: 6px;
   height: 24px;
   max-width: 132px;
-  padding: 0 2px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: var(--radius-full);
+  background: var(--chat-composer-surface, var(--popover));
   color: var(--muted);
   font-size: 0.72rem;
   line-height: 1;
@@ -4453,9 +4578,8 @@ button.chat-pr__diff {
   text-overflow: ellipsis;
 }
 
-/* Interrupted is the only visible composer run status: killed runs leave no
-   transcript marker, so silence would read as "finished". Working/Done are
-   covered by the thread spark, content arriving, and Stop reverting. */
+/* Interrupted floats at the composer owner so terminal feedback never becomes
+   transcript content or changes the message viewport geometry. */
 .agent-chat__run-status--interrupted {
   color: var(--warn);
 }
@@ -4739,6 +4863,14 @@ button.chat-pr__diff {
     opacity 120ms ease-out;
 }
 
+/* Pointer capture rerenders the mic while the press is arming. Keep the picker
+   subtree and its layout slot mounted so the microphone never slides sideways;
+   visibility removes the inactive affordance without collapsing its geometry. */
+.chat-talk-control--holding .chat-talk-input-picker {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .chat-talk-control:has(:focus-visible) .chat-talk-input-picker,
 .chat-talk-input-picker[open] {
   width: var(--chat-microphone-picker-width);
@@ -5003,6 +5135,50 @@ button.chat-pr__diff {
   padding-top: 8px;
 }
 
+.chat-talk-input-picker__capabilities {
+  display: grid;
+  gap: 6px;
+  margin-top: 5px;
+  padding: 8px 9px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+}
+
+.chat-talk-input-picker__capability {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.chat-talk-input-picker__capability-copy {
+  display: grid;
+  min-width: 0;
+}
+
+.chat-talk-input-picker__capability-copy strong {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-talk-input-picker__settings {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: var(--cursor-action);
+}
+
+.chat-talk-input-picker__settings:hover {
+  text-decoration: underline;
+}
+
 .chat-talk-input-picker__preference {
   display: flex;
   align-items: center;
@@ -5016,14 +5192,56 @@ button.chat-pr__diff {
   line-height: 1.35;
 }
 
-.chat-talk-input-picker__preference .chat-controls__speed-toggle {
-  flex: 0 0 auto;
-}
-
 .chat-send-btn--hold-enabled {
   touch-action: none;
   -webkit-touch-callout: none;
   user-select: none;
+}
+
+@property --chat-dictation-hold-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+/* The hold threshold is functional feedback, not decoration: the ring fills
+   linearly until dictation latches, then the ordinary Stop state takes over. */
+.chat-send-btn--dictation-arming {
+  position: relative;
+}
+
+.chat-send-btn--dictation-arming::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  padding: 2px;
+  border-radius: inherit;
+  background: conic-gradient(
+    from -90deg,
+    var(--accent) 0deg var(--chat-dictation-hold-angle),
+    transparent var(--chat-dictation-hold-angle) 360deg
+  );
+  -webkit-mask:
+    linear-gradient(white 0 0) content-box,
+    linear-gradient(white 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: chat-dictation-hold-progress calc(var(--duration-slow) * 2) linear forwards;
+  pointer-events: none;
+}
+
+@keyframes chat-dictation-hold-progress {
+  to {
+    --chat-dictation-hold-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-send-btn--dictation-arming::after {
+    --chat-dictation-hold-angle: 360deg;
+    background: color-mix(in srgb, var(--accent) 52%, transparent);
+    animation: none;
+  }
 }
 
 /* Capture button while dictating. Same element as the idle mic — swapping it
@@ -5208,7 +5426,9 @@ button.chat-pr__diff {
     /* Touch targets, not chrome: the composer's own control rules all read this
        token, so raising it here resizes every button on the surface at once. */
     --chat-composer-control-size: 44px;
-    --chat-composer-send-size: 44px;
+    /* Primary and voice actions keep the desktop 32px silhouette; the chip and
+       menu families below retain their independent 44px touch sizing. */
+    --chat-composer-send-size: 32px;
     /* The labelled chips follow, as one family: raising the family tokens keeps
        the session-mode chip the same size as the pickers it sits beside instead
        of leaving a 24px chip stranded against 44px neighbours. */
@@ -5335,6 +5555,9 @@ button.chat-pr__diff {
     max-height: min(440px, var(--auto-size-available-height, calc(100dvh - 116px)));
   }
 
+  /* `interactive-widget=resizes-content` already keeps the composer above the
+     virtual keyboard. Focus alone also covers hardware keyboards and tests, so
+     it must not collapse the normal bottom breathing room. */
   .agent-chat__composer-shell {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
@@ -6053,6 +6276,12 @@ button.chat-pr__diff {
   height: 12px;
 }
 
+/* Tighten only the label-to-chevron seam; leading icons keep the shared chip
+   rhythm. Phone composers already switch the whole trigger to a 3px gap. */
+.agent-chat__input .chat-controls__model-settings .chat-controls__inline-select-chevron {
+  margin-inline-start: -2px;
+}
+
 .chat-controls__inline-select[open]
   > .chat-controls__inline-select-trigger
   .chat-controls__inline-select-chevron {
@@ -6144,7 +6373,7 @@ button.chat-pr__diff {
 }
 
 .chat-controls__permission-picker::part(menu) {
-  width: min(292px, calc(100vw - 24px));
+  width: min(340px, calc(100vw - 24px));
   padding: 8px;
   overflow: hidden;
 }
@@ -6355,13 +6584,13 @@ button.chat-pr__diff {
   font-size: 9px;
 }
 
-/* The trigger's own brand mark is smaller than the 18px menu rows: it is an icon
-   inside a chip, so it takes the chip family's icon box and inherits the same
-   icon-to-label gap the session-mode chip uses. */
+/* The trigger's own brand mark hangs 1px below the chip icon box so its filled
+   glyph reads the same optical size as the context ring's stroked circle next
+   to it; the calc keeps the mobile touch-size raise proportional. */
 .chat-controls__trigger-provider-icon {
-  width: var(--chat-composer-chip-icon, 14px);
-  height: var(--chat-composer-chip-icon, 14px);
-  flex: 0 0 var(--chat-composer-chip-icon, 14px);
+  width: calc(var(--chat-composer-chip-icon, 16px) - 1px);
+  height: calc(var(--chat-composer-chip-icon, 16px) - 1px);
+  flex: 0 0 calc(var(--chat-composer-chip-icon, 16px) - 1px);
 }
 
 /* Chat uses a neutral OpenAI mark in persistent chrome. New-session deliberately
@@ -6385,6 +6614,7 @@ button.chat-pr__diff {
 
 .chat-controls__provider-model-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
 }
 
@@ -6416,6 +6646,9 @@ button.chat-pr__diff {
 .chat-controls__model-option {
   order: var(--chat-model-rank, 0);
   justify-content: flex-start;
+  /* Grid-item min-width:auto would size the provider group's track to the
+     row's full content width (long name + meta), overflowing the 340px menu. */
+  min-width: 0;
 }
 
 /* display: flex above beats the UA [hidden] style; without this, filtered-out
@@ -6499,6 +6732,9 @@ button.chat-pr__diff {
   display: flex;
   align-items: center;
   gap: 0;
+  /* Flex min-width:auto would let a long model name + badges push the row
+     wider than the 340px menu and hand the popover a horizontal scrollbar. */
+  min-width: 0;
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
@@ -6530,6 +6766,7 @@ button.chat-pr__diff {
 .chat-controls__model-option-meta {
   display: inline-flex;
   align-items: center;
+  min-width: 0;
   flex: 0 1 auto;
   color: var(--muted);
   font-size: 10px;
@@ -6588,8 +6825,13 @@ button.chat-pr__diff {
 }
 
 .chat-controls__model-catalog-state--empty {
-  min-height: 72px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  min-height: 112px;
+  padding: 20px 16px;
   border-bottom: 0;
+  text-align: center;
 }
 
 .chat-controls__model-catalog-state-label {
@@ -6785,13 +7027,23 @@ button.chat-pr__diff {
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
-.chat-controls__fast-mode-icon,
-.chat-controls__effort-zap {
+.chat-controls__fast-mode-icon {
   display: inline-flex;
   width: var(--chat-composer-chip-icon, 14px);
   height: var(--chat-composer-chip-icon, 14px);
   color: var(--accent);
   flex: 0 0 var(--chat-composer-chip-icon, 14px);
+}
+
+/* The filled lightning carries more visual mass than the stroked microphone.
+   A 14px box makes their visible ink match while the fast-mode row keeps the
+   full chip icon token. */
+.chat-controls__effort-zap {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+  flex: 0 0 14px;
 }
 
 .chat-controls__fast-mode-icon svg,
@@ -6843,6 +7095,9 @@ button.chat-pr__diff {
 .chat-controls__speed-toggle {
   position: relative;
   display: block;
+  /* Fixed-track switch: without the flex lock the fast-mode row's 1fr copy
+     column squeezes the 36px track down to the thumb. */
+  flex: 0 0 auto;
   width: 36px;
   height: 22px;
   padding: 0;
@@ -7053,10 +7308,6 @@ button.chat-pr__diff {
     width: calc(100% - 8px);
   }
 
-  .agent-chat__composer-shell:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
-    margin-bottom: 0;
-  }
-
   .agent-chat__composer-footer {
     column-gap: 3px;
     min-height: 44px;
@@ -7070,10 +7321,6 @@ button.chat-pr__diff {
 @media (display-mode: standalone) and (max-width: 768px) {
   .agent-chat__composer-shell {
     margin-bottom: calc(14px + max(var(--safe-area-bottom), 34px));
-  }
-
-  .agent-chat__composer-shell:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
-    margin-bottom: 0;
   }
 }
 
@@ -7122,8 +7369,40 @@ button.chat-pr__diff {
 
   .agent-chat__input--chat .agent-chat__composer-actions {
     flex: 0 0 auto;
-    gap: 2px;
+    gap: 8px;
     order: 4;
+  }
+
+  @media (hover: none) {
+    /* Touch has no hover reveal, so the microphone picker stays reachable as a
+       compact split-button segment without occupying the space between Mic and
+       Send. The outer actions retain the same 8px rhythm as desktop. */
+    .agent-chat__input--chat .chat-talk-control {
+      --chat-microphone-picker-width: 18px;
+      position: relative;
+      gap: 0;
+    }
+
+    .agent-chat__input--chat .chat-talk-input-picker {
+      position: absolute;
+      inset-inline-end: -2px;
+      inset-block-end: -2px;
+      z-index: 1;
+      width: var(--chat-microphone-picker-width);
+    }
+
+    .agent-chat__input--chat .chat-talk-input-picker__trigger {
+      width: var(--chat-microphone-picker-width);
+      min-width: var(--chat-microphone-picker-width);
+      height: var(--chat-microphone-picker-width);
+      border: 1px solid var(--chat-composer-surface);
+      background: var(--chat-composer-popover-background);
+    }
+
+    .agent-chat__input--chat .chat-talk-input-picker__trigger svg {
+      width: 10px;
+      height: 10px;
+    }
   }
 
   /* Dictation reduces the footer to Stop + Send. Keep that pair docked to the
@@ -7173,6 +7452,10 @@ button.chat-pr__diff {
     gap: 3px;
     justify-content: center;
     padding-inline: 0;
+  }
+
+  .agent-chat__input .chat-controls__model-settings .chat-controls__inline-select-chevron {
+    margin-inline-start: 0;
   }
 
   .agent-chat__composer-lead .chat-controls__permission-trigger {

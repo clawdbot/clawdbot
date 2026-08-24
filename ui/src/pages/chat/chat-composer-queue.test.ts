@@ -33,9 +33,10 @@ describe("chat composer steering queue", () => {
     );
 
     const badges = container.querySelectorAll(".chat-queue__badge");
-    expect(badges).toHaveLength(2);
+    expect(badges).toHaveLength(1);
     expect(badges[0]?.textContent?.trim()).toBe(t("chat.queue.steer"));
-    expect(badges[1]?.textContent?.trim()).toBe(t("chat.queue.states.waitingForRun"));
+    expect(container.querySelector(".chat-queue__state")).toBeNull();
+    expect(container.querySelector(".chat-queue__global-state")).toBeNull();
     const icon = container.querySelector(".chat-queue__icon");
     expect(icon?.querySelector('path[d="M12 19V5m-7 7 7-7 7 7"]')).not.toBeNull();
     expect(icon?.querySelector("circle")).toBeNull();
@@ -391,7 +392,7 @@ describe("chat composer queue reordering", () => {
     expect(onQueueEditCancel).not.toHaveBeenCalled();
   });
 
-  it("projects an offline queue row as waiting for reconnect", () => {
+  it("projects an offline transition once above the queue", () => {
     const container = renderQueue({
       offline: true,
       queue: [{ id: "a", text: "a", createdAt: 1, sendState: "waiting-idle" }],
@@ -400,9 +401,32 @@ describe("chat composer queue reordering", () => {
 
     const row = container.querySelector(".chat-queue__item");
     expect(row?.classList.contains("chat-queue__item--reconnect")).toBe(true);
-    expect(row?.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
+    expect(row?.querySelector(".chat-queue__state")).toBeNull();
+    expect(container.querySelector(".chat-queue__global-state")?.textContent?.trim()).toBe(
       t("chat.queue.states.waitingForReconnect"),
     );
+    expect(container.querySelectorAll(".chat-queue__global-state")).toHaveLength(1);
+  });
+
+  it("projects applying settings once and preserves the steer affordance", () => {
+    const container = renderQueue({
+      canAbort: true,
+      queue: [
+        { id: "a", text: "a", createdAt: 1, sendState: "waiting-model" },
+        { id: "b", text: "b", createdAt: 2, sendState: "waiting-model" },
+      ],
+      onQueueSteer: vi.fn(),
+      onQueueRemove: vi.fn(),
+    });
+
+    expect(container.querySelectorAll(".chat-queue__global-state")).toHaveLength(1);
+    expect(container.querySelector(".chat-queue__global-state")?.textContent?.trim()).toBe(
+      t("chat.queue.states.applyingSettings"),
+    );
+    expect(container.querySelectorAll(".chat-queue__state")).toHaveLength(0);
+    const steerButtons = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__steer")];
+    expect(steerButtons).toHaveLength(2);
+    expect(steerButtons.every((button) => button.disabled)).toBe(true);
   });
 
   it.each([

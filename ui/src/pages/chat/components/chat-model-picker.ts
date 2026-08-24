@@ -540,24 +540,28 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                 </div>
               `
             : html`
-                <div class="chat-controls__model-search-wrap">
-                  ${icons.search}
-                  <input
-                    class="chat-controls__model-search"
-                    data-chat-model-search="true"
-                    type="search"
-                    role="combobox"
-                    aria-autocomplete="list"
-                    autocomplete="off"
-                    spellcheck="false"
-                    placeholder=${t("chat.modelControls.searchModels")}
-                    aria-label=${t("chat.modelControls.searchModels")}
-                    ?disabled=${params.disabled}
-                    @input=${(event: InputEvent) =>
-                      updateModelSearch(event.currentTarget as HTMLInputElement)}
-                    @keydown=${handleModelSearchKeydown}
-                  />
-                </div>
+                ${params.modelOptions.length > 0
+                  ? html`
+                      <div class="chat-controls__model-search-wrap">
+                        ${icons.search}
+                        <input
+                          class="chat-controls__model-search"
+                          data-chat-model-search="true"
+                          type="search"
+                          role="combobox"
+                          aria-autocomplete="list"
+                          autocomplete="off"
+                          spellcheck="false"
+                          placeholder=${t("chat.modelControls.searchModels")}
+                          aria-label=${t("chat.modelControls.searchModels")}
+                          ?disabled=${params.disabled}
+                          @input=${(event: InputEvent) =>
+                            updateModelSearch(event.currentTarget as HTMLInputElement)}
+                          @keydown=${handleModelSearchKeydown}
+                        />
+                      </div>
+                    `
+                  : nothing}
                 ${renderCatalogState(
                   params.modelCatalogState,
                   params.modelOptions.length > 0,
@@ -601,6 +605,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                     selectedModelValue: params.selectedModelValue,
                                     onHighlight: highlightOption,
                                     onSelect: selectModel,
+                                    onModelSetup: params.onModelSetup,
                                   }),
                               )}
                             </section>

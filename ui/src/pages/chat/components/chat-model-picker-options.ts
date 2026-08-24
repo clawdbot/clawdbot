@@ -68,6 +68,12 @@ function formatModelLabel(option: ChatModelPickerOption): string {
     if (option.label.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) {
       return option.label.slice(prefix.length + 1);
     }
+    // Grouped rows already carry the provider as the section heading, so a
+    // catalog name that repeats it as a trailing "(Provider)" reads twice.
+    const suffix = ` (${prefix.toLowerCase()})`;
+    if (option.label.toLowerCase().endsWith(suffix)) {
+      return option.label.slice(0, option.label.length - suffix.length);
+    }
   }
   return option.label;
 }
@@ -83,6 +89,7 @@ export function renderChatModelPickerOption(params: {
   selectedModelValue: string;
   onHighlight: (row: HTMLButtonElement) => void;
   onSelect: (entry: ChatModelPickerOption, event: MouseEvent) => void;
+  onModelSetup?: () => void;
 }) {
   const selected =
     params.entry.value === params.selectedModelValue ||
@@ -114,10 +121,20 @@ export function renderChatModelPickerOption(params: {
       role="option"
       aria-selected=${selected ? "true" : "false"}
       type="button"
-      ?disabled=${params.disabled || params.entry.disabled}
+      ?disabled=${params.disabled || (params.entry.disabled && !params.onModelSetup)}
+      data-chat-model-setup=${params.entry.disabled && params.onModelSetup ? "true" : nothing}
       @mouseenter=${(event: MouseEvent) =>
         params.onHighlight(event.currentTarget as HTMLButtonElement)}
-      @click=${(event: MouseEvent) => params.onSelect(params.entry, event)}
+      @click=${(event: MouseEvent) => {
+        // A sign-in-gated model must not dead-end: the row routes to Model
+        // Setup instead of silently ignoring the click on a disabled button.
+        if (params.entry.disabled) {
+          event.stopPropagation();
+          params.onModelSetup?.();
+          return;
+        }
+        params.onSelect(params.entry, event);
+      }}
     >
       <span class="chat-controls__model-option-provider">
         ${renderChatModelProviderIcon(params.entry.provider)}

@@ -1,10 +1,36 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
+
+export type ComposerRunStatus =
+  | ChatRunUiStatus
+  | {
+      phase: "in-progress";
+      occurredAt?: number | null;
+    };
+
+export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | undefined) {
+  if (
+    status?.phase !== "interrupted" ||
+    Date.now() - status.occurredAt >= CHAT_RUN_STATUS_TOAST_DURATION_MS
+  ) {
+    return nothing;
+  }
+  const interrupted = t("chat.composer.runInterrupted");
+  return html`
+    <span
+      class="agent-chat__run-status agent-chat__run-status--interrupted"
+      aria-label=${t("chat.composer.runStatus", { status: interrupted })}
+    >
+      ${icons.messageCircleOff}<span class="agent-chat__run-status-label">${interrupted}</span>
+    </span>
+  `;
+}
 
 export function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
   if (!status) {

@@ -45,7 +45,8 @@ import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   type ChatPlacementStartupNoticeProps,
-  renderChatViewNotices,
+  renderChatComposerNotices,
+  renderChatTopbarNotices,
 } from "./chat-view-notices.ts";
 import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
@@ -153,6 +154,9 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     offline?: boolean;
     gatewayClient?: GatewayBrowserClient | null;
     composerHoldToRecord?: boolean;
+    onComposerHoldToRecordChange?: (enabled: boolean) => void;
+    onOpenTalkSettings?: () => void;
+    onOpenDictationSettings?: () => void;
     suggestionComposer?: boolean;
     typingActors?: readonly { id: string; label: string; preview?: string }[];
     onTypingChange?: (typing: boolean, preview?: string) => void;
@@ -412,6 +416,13 @@ export function renderChat(props: ChatProps) {
     disabledReasonTone: props.disabledReasonTone,
     disabledBanner: props.disabledBanner,
     runError: props.runError,
+    anchoredNotices: renderChatComposerNotices({
+      runError: props.runError,
+      workspaceConflict: props.workspaceConflict,
+      onDismissWorkspaceConflict: props.onDismissWorkspaceConflict,
+      placementStartup: props.placementStartup,
+      onRetrySessionPlacementStartup: props.onRetrySessionPlacementStartup,
+    }),
     sending: props.sending,
     canAbort: props.canAbort,
     runStatus: props.runStatus,
@@ -454,6 +465,9 @@ export function renderChat(props: ChatProps) {
     realtimeTalkCameraError: props.realtimeTalkCameraError,
     gatewayClient: props.gatewayClient,
     composerHoldToRecord: props.composerHoldToRecord,
+    onComposerHoldToRecordChange: props.onComposerHoldToRecordChange,
+    onOpenTalkSettings: props.onOpenTalkSettings,
+    onOpenDictationSettings: props.onOpenDictationSettings,
     suggestionComposer: props.suggestionComposer,
     typingActors: props.typingActors,
     onTypingChange: props.onTypingChange,
@@ -612,10 +626,10 @@ export function renderChat(props: ChatProps) {
             <div class="chat-main">
               <div class="chat-main__conversation-column">
                 ${props.header ?? nothing}
-                ${renderChatViewNotices({
+                ${renderChatTopbarNotices({
                   ...props,
-                  error: props.error ?? props.runError?.summary ?? null,
-                  onDismissError: props.error != null ? props.onDismissError : undefined,
+                  error: props.error,
+                  onDismissError: props.onDismissError,
                 })}
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation">

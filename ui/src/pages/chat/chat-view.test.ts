@@ -759,7 +759,7 @@ describe("chat typing status", () => {
     expect(indicator?.textContent).toContain(expectedText);
   });
 
-  it("keeps the run error above typing and the queue attached to the composer", () => {
+  it("anchors the run error and queue to the composer without moving transcript presence", () => {
     const container = renderChatView({
       typingActors: [{ id: "ayaan", label: "Ayaan" }],
       runError: { summary: "Gateway unavailable" },
@@ -779,7 +779,7 @@ describe("chat typing status", () => {
     const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
     const queue = requireElement(container, ".chat-queue", "composer queue");
     expect(error.textContent).toContain("Gateway unavailable");
-    expect(error.compareDocumentPosition(indicator)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(error.closest(".agent-chat__composer-overlay")).not.toBeNull();
     expect(typingRow.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(queue.closest(".agent-chat__composer-shell")).toBe(shell);
     expect(
@@ -930,7 +930,7 @@ describe("inline approval card", () => {
 });
 
 describe("chat run error", () => {
-  it("renders a non-interactive alert in the conversation notices", () => {
+  it("renders a non-interactive alert in the composer overlay", () => {
     const container = renderChatView({
       runError: { summary: "Error: gateway disconnected" },
     });
@@ -940,8 +940,8 @@ describe("chat run error", () => {
     expect(alert.getAttribute("role")).toBe("alert");
     expect(summary.textContent?.trim()).toBe("Error: gateway disconnected");
     expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')).toBeNull();
-    expect(alert.closest(".chat-main__conversation-column")).not.toBeNull();
-    expect(alert.closest(".agent-chat__composer-shell")).toBeNull();
+    expect(alert.closest(".agent-chat__composer-overlay")).not.toBeNull();
+    expect(alert.closest(".agent-chat__composer-shell")).not.toBeNull();
   });
 
   it("keeps dismiss on the error state owned by its callback", () => {
@@ -951,6 +951,7 @@ describe("chat run error", () => {
     container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
 
     expect(onDismissError).toHaveBeenCalledOnce();
+    expect(container.querySelector(".chat-error")?.closest(".chat-topbar-notices")).not.toBeNull();
   });
 });
 
@@ -1011,6 +1012,7 @@ describe("cloud workspace conflict notice", () => {
       ".chat-workspace-conflict-notice",
       "workspace conflict notice",
     );
+    expect(notice.closest(".agent-chat__composer-overlay")).not.toBeNull();
     expect(notice.textContent).toContain("9 cloud workspace conflicts");
     expect(notice.querySelectorAll(".chat-workspace-conflict-paths li")).toHaveLength(5);
     expect(notice.textContent).toContain("+4 more paths");
@@ -1129,7 +1131,7 @@ describe("cloud worker disk-space notice", () => {
       title: "Cloud session disk space is critically low",
       copy: "New writes may fail and stop the agent.",
     },
-  ])("renders persistent $status action guidance above the conversation", (sample) => {
+  ])("renders persistent $status action guidance in the compact topbar overlay", (sample) => {
     const container = renderChatView({
       diskSpace: {
         status: sample.status,
@@ -1145,8 +1147,7 @@ describe("cloud worker disk-space notice", () => {
     expect(notice.textContent).toContain(sample.copy);
     expect(notice.querySelector("svg")).not.toBeNull();
     expect(notice.querySelector("button")).toBeNull();
-    expect(notice.parentElement?.classList.contains("chat-main__conversation-column")).toBe(true);
-    expect(notice.nextElementSibling?.classList.contains("chat-main__conversation")).toBe(true);
+    expect(notice.closest(".chat-topbar-notices")).not.toBeNull();
   });
 
   it.each(["ok" as const, undefined])("clears for %s disk-space projection", (status) => {
@@ -3140,7 +3141,7 @@ describe("chat loading skeleton", () => {
     }
   });
 
-  it("keeps interrupted chrome out of the composer", () => {
+  it("floats interrupted chrome above the composer", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
       const container = renderChatView({
@@ -3156,7 +3157,11 @@ describe("chat loading skeleton", () => {
         },
       });
 
-      expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
+      expect(
+        container
+          .querySelector(".agent-chat__composer-run-status")
+          ?.closest(".agent-chat__composer-overlay"),
+      ).not.toBeNull();
       expect(
         container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
       ).toBe("Interrupted");
@@ -3951,6 +3956,10 @@ describe("chat slash menu accessibility", () => {
 
     textarea.setSelectionRange(8, 8);
     textarea.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    expect(textarea.selectionStart).toBe(4);
+
+    textarea.setSelectionRange(8, 8);
+    textarea.dispatchEvent(new Event("select", { bubbles: true }));
     expect(textarea.selectionStart).toBe(4);
 
     textarea.setSelectionRange("Use $prose_writer".length, "Use $prose_writer".length);
@@ -5815,7 +5824,8 @@ describe("chat model controls", () => {
     ]);
     expect(options[0]?.textContent).toContain("GPT-5.6 Sol");
     expect(options[0]?.textContent).toContain("Default");
-    expect([...options].every((option) => option.disabled)).toBe(true);
+    expect([...options].every((option) => !option.disabled)).toBe(true);
+    expect([...options].every((option) => option.dataset.chatModelSetup === "true")).toBe(true);
     expect([...options].every((option) => option.textContent?.includes("Sign-in needed"))).toBe(
       true,
     );
@@ -6357,6 +6367,19 @@ describe("chat model controls", () => {
     expect(moonshotModels).toContain("Kimi K2.6");
     expect(container.querySelector('[data-chat-model-provider-group="moonshot-ai"]')).toBeNull();
     expect(container.querySelector('[data-chat-model-provider-group="moonshotai"]')).toBeNull();
+  });
+
+  it("removes a provider suffix already represented by the model group", () => {
+    const { state } = createChatHeaderState({
+      model: "kimi-k2.5",
+      modelProvider: "nvidia",
+      models: [{ id: "kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" }],
+    });
+    const container = renderModelControls(state);
+
+    expect(container.querySelector(".chat-controls__model-option-name")?.textContent).toBe(
+      "Kimi K2.5",
+    );
   });
 
   it("keeps active context in picker details without crowding the compact trigger", () => {

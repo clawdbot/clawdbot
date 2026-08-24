@@ -359,6 +359,108 @@ suite.define(() => {
     }
   });
 
+  it("keeps long model names and metadata inside the picker grid", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 844, width: 390 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      models: [
+        {
+          contextWindow: 1_000_000,
+          id: "long-model",
+          name: "Long model",
+          provider: "openai",
+        },
+      ],
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const main = page.getByRole("main");
+      await main.locator('[data-chat-model-select="true"]').click();
+      const menu = main.locator(".chat-controls__model-menu");
+      await expect.poll(() => menu.isVisible()).toBe(true);
+      await menu
+        .locator(".chat-controls__model-option-name")
+        .first()
+        .evaluate((node) => {
+          node.textContent =
+            "A deliberately very long model name that must ellipsize inside the provider grid";
+        });
+      await menu
+        .locator(".chat-controls__model-option-meta")
+        .first()
+        .evaluate((node) => {
+          node.textContent =
+            "deliberately-long-context-metadata-that-must-never-create-horizontal-scroll";
+        });
+
+      const overflow = await menu.evaluate((root) => {
+        const selectors = [
+          ".chat-controls__model-option-copy",
+          ".chat-controls__model-option",
+          ".chat-controls__provider-model-group",
+          ".chat-controls__model-options",
+        ];
+        const containers = selectors.map((selector) => {
+          const element = root.querySelector<HTMLElement>(selector);
+          return {
+            clientWidth: element?.clientWidth ?? -1,
+            overflow: Math.max(0, (element?.scrollWidth ?? 0) - (element?.clientWidth ?? 0)),
+            scrollWidth: element?.scrollWidth ?? -1,
+            selector,
+          };
+        });
+        const rootElement = root as HTMLElement;
+        containers.push({
+          clientWidth: rootElement.clientWidth,
+          overflow: Math.max(0, rootElement.scrollWidth - rootElement.clientWidth),
+          scrollWidth: rootElement.scrollWidth,
+          selector: ".chat-controls__model-menu",
+        });
+        const leafStyles = [
+          ".chat-controls__model-option-name",
+          ".chat-controls__model-option-meta",
+        ].map((selector) => {
+          const element = root.querySelector<HTMLElement>(selector)!;
+          const style = getComputedStyle(element);
+          return { overflowX: style.overflowX, selector, textOverflow: style.textOverflow };
+        });
+        return { containers, leafStyles };
+      });
+      expect(
+        overflow.containers.filter((entry) => entry.overflow > 1),
+        JSON.stringify(overflow),
+      ).toEqual([]);
+      expect(overflow.leafStyles).toEqual([
+        {
+          overflowX: "hidden",
+          selector: ".chat-controls__model-option-name",
+          textOverflow: "ellipsis",
+        },
+        {
+          overflowX: "hidden",
+          selector: ".chat-controls__model-option-meta",
+          textOverflow: "ellipsis",
+        },
+      ]);
+
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await menu.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/model-picker-long-content.png`,
+        });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps a session model override selected after switching away and back", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

@@ -135,6 +135,36 @@ suite.define(() => {
         await composer.press("Enter");
         await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
 
+        const firstTokenStart = "Review this with ".length;
+        await setComposerCaret(composer, "Review this with $autoreview ".length);
+        await composer.press("ArrowLeft");
+        await expect
+          .poll(() =>
+            page.locator(".agent-chat__composer-caret").getAttribute("data-composer-caret-offset"),
+          )
+          .toBe(String(firstTokenStart));
+        if (artifactDir) {
+          await page.locator(".agent-chat__composer-shell").screenshot({
+            path: path.join(artifactDir, "skill-reference-caret-desktop.png"),
+          });
+        }
+
+        await composer.evaluate((element) => {
+          if (!(element instanceof HTMLTextAreaElement)) {
+            throw new Error("Chat composer is not a textarea");
+          }
+          const tokenInterior = "Review this with $auto".length;
+          element.setSelectionRange(tokenInterior, tokenInterior);
+          element.dispatchEvent(new Event("select", { bubbles: true }));
+        });
+        await expect
+          .poll(() =>
+            composer.evaluate((element) =>
+              element instanceof HTMLTextAreaElement ? element.selectionStart : null,
+            ),
+          )
+          .toBe(firstTokenStart);
+
         await composer.fill(`${await composer.inputValue()}and $technical`);
         await expect.poll(() => picker.getByRole("option").count()).toBe(1);
         await composer.press("Tab");
@@ -240,6 +270,20 @@ suite.define(() => {
                   token.clipped <= 1 && !token.overlapsNextWord && token.overflow <= 1,
               ),
           );
+
+        const mobileTokenStart = "A mobile line that wraps before ".length;
+        await setComposerCaret(composer, mobileTokenStart + "$bench_skill_01 ".length);
+        await composer.press("ArrowLeft");
+        await expect
+          .poll(() =>
+            page.locator(".agent-chat__composer-caret").getAttribute("data-composer-caret-offset"),
+          )
+          .toBe(String(mobileTokenStart));
+        if (artifactDir) {
+          await page.locator(".agent-chat__composer-shell").screenshot({
+            path: path.join(artifactDir, "skill-reference-caret-mobile.png"),
+          });
+        }
 
         await composer.fill("שלום עם $bench_skill_01 הבא ואז $autoreview מאוחר יותר");
         await expect.poll(() => composer.getAttribute("dir")).toBe("rtl");

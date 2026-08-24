@@ -5,6 +5,7 @@ import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
+import type { ComposerTalkCapabilityStatus } from "../composer-microphone-picker.ts";
 import {
   realtimeTalkDeviceIssueMessage,
   type RealtimeTalkDeviceIssue,
@@ -50,10 +51,15 @@ type MicrophonePickerProps = {
   voiceActive: boolean;
   issue: RealtimeTalkDeviceIssue | null;
   holdToDictate?: boolean;
+  showRealtimeCapability?: boolean;
+  realtimeStatus: ComposerTalkCapabilityStatus;
+  dictationStatus: ComposerTalkCapabilityStatus;
   onOpen: () => void;
   onClose: () => void;
   onSelect: (deviceId: string) => void;
   onHoldToDictateChange?: (enabled: boolean) => void;
+  onOpenTalkSettings?: () => void;
+  onOpenDictationSettings?: () => void;
 };
 
 /**
@@ -97,6 +103,28 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
   const unavailableIsFault =
     unavailable !== null && unavailable !== "none-found" && unavailable !== "list-unsupported";
   const label = t("chat.composer.microphoneInput");
+  const unavailableCapabilities = [
+    {
+      key: "realtime",
+      label: t("chat.composer.realtimeTalkCapability"),
+      status: props.realtimeStatus,
+      unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
+      settingsLabel: t("chat.composer.openRealtimeTalkSettings"),
+      onOpenSettings: props.onOpenTalkSettings,
+    },
+    {
+      key: "dictation",
+      label: t("chat.composer.dictationCapability"),
+      status: props.dictationStatus,
+      unavailableReason: t("chat.composer.dictationProviderUnavailableShort"),
+      settingsLabel: t("chat.composer.openDictationSettings"),
+      onOpenSettings: props.onOpenDictationSettings,
+    },
+  ].filter(
+    (capability) =>
+      capability.status !== "ready" &&
+      (capability.key !== "realtime" || props.showRealtimeCapability !== false),
+  );
   return html`
     <wa-dropdown
       class="chat-talk-input-picker"
@@ -171,6 +199,47 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
                 </div>`
               : nothing}
           `}
+      ${unavailableCapabilities.length > 0
+        ? html`
+            <div class="chat-talk-input-picker__capabilities">
+              ${unavailableCapabilities.map(
+                (capability) => html`
+                  <div
+                    class="chat-talk-input-picker__capability"
+                    data-chat-talk-capability=${capability.key}
+                    data-status=${capability.status}
+                    role="status"
+                  >
+                    <span class="chat-talk-input-picker__capability-copy">
+                      <strong>${capability.label}</strong>
+                      <span>
+                        ${capability.status === "checking"
+                          ? t("chat.composer.talkCapabilityChecking")
+                          : capability.status === "unknown"
+                            ? t("chat.composer.talkCapabilityUnknown")
+                            : capability.unavailableReason}
+                      </span>
+                    </span>
+                    ${capability.onOpenSettings
+                      ? html`
+                          <button
+                            type="button"
+                            class="chat-talk-input-picker__settings"
+                            @click=${(event: MouseEvent) => {
+                              event.stopPropagation();
+                              capability.onOpenSettings?.();
+                            }}
+                          >
+                            ${capability.settingsLabel}
+                          </button>
+                        `
+                      : nothing}
+                  </div>
+                `,
+              )}
+            </div>
+          `
+        : nothing}
       ${props.onHoldToDictateChange
         ? html`
             <div class="chat-talk-input-picker__preference">
@@ -220,6 +289,7 @@ type ComposerVoiceButtonProps = {
 
 export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
   const active = props.dictation?.active === true;
+  const arming = props.dictation?.arming === true;
   const finalizing = props.dictation?.finalizing === true;
   const holding = props.dictation?.locksComposer === true;
   const label = finalizing
@@ -232,20 +302,15 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return html`
-    <span class="chat-talk-control">
+    <span class="chat-talk-control${holding ? " chat-talk-control--holding" : ""}">
       <openclaw-tooltip .content=${tooltip}>
         <button
           class=${active
             ? `chat-send-btn chat-send-btn--dictating${finalizing ? " chat-send-btn--dictation-finalizing" : ""}`
-            : `chat-send-btn chat-send-btn--voice${props.dictation ? " chat-send-btn--hold-enabled" : ""}`}
+            : `chat-send-btn chat-send-btn--voice${props.dictation ? " chat-send-btn--hold-enabled" : ""}${arming ? " chat-send-btn--dictation-arming" : ""}`}
           type="button"
           @pointerdown=${(event: PointerEvent) => props.onDictationPointerDown?.(event)}
           @click=${(event: MouseEvent) => {
-            if (active) {
-              // Stop keeps the words. Escape remains the explicit discard path.
-              void props.dictation?.finishActive();
-              return;
-            }
             if (props.dictation) {
               props.dictation.handleClick(event);
             } else {
@@ -267,7 +332,7 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
                 `}
         </button>
       </openclaw-tooltip>
-      ${holding ? nothing : props.microphonePicker}
+      ${props.microphonePicker}
     </span>
   `;
 }

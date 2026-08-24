@@ -408,7 +408,6 @@ export function renderContextNotice(
               stroke-dashoffset=${dashOffset.toFixed(2)}
             />
           </svg>
-          ${percentage ? html`<span class="context-ring__pct">${percentage}</span>` : nothing}
         </summary>
         <section class="context-usage__popover" aria-label=${t("chat.composer.contextUsage.title")}>
           ${model

@@ -1,5 +1,5 @@
 // Chat-owned model, reasoning, and fast-mode picker orchestration.
-import { html } from "lit";
+import { html, nothing } from "lit";
 import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -356,6 +356,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const catalogLoadingWithoutSnapshot =
     !managedCatalog.hasSnapshot && ["idle", "loading"].includes(managedCatalog.status);
   const catalogTriggerStatus = resolveCatalogTriggerStatus(managedCatalog, modelOptions.length);
+  // A verified-empty catalog means there is nothing to reason about: the effort
+  // picker would only steer a model that cannot be selected, so it hides with it.
+  const modelsEmpty = managedCatalog.hasSnapshot && modelOptions.length === 0;
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
   const commonDisabled =
@@ -429,23 +432,25 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       })}
-      ${renderChatEffortPicker({
-        disabled: effortDisabled,
-        disabledReason: props.effortMutationDisabledReason,
-        fastMode: {
-          ...fastMode,
-          disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
-        },
-        sessionKey: props.sessionKey,
-        showFastMode,
-        thinkingDisabled,
-        thinking,
-        onFastModeSelect: async (next, targetSessionKey) =>
-          props.onFastModeSelect?.(next, targetSessionKey),
-        onRequestUpdate: props.onRequestUpdate,
-        onThinkingSelect: async (next, targetSessionKey) =>
-          props.onThinkingSelect?.(next, targetSessionKey),
-      })}
+      ${modelsEmpty
+        ? nothing
+        : renderChatEffortPicker({
+            disabled: effortDisabled,
+            disabledReason: props.effortMutationDisabledReason,
+            fastMode: {
+              ...fastMode,
+              disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
+            },
+            sessionKey: props.sessionKey,
+            showFastMode,
+            thinkingDisabled,
+            thinking,
+            onFastModeSelect: async (next, targetSessionKey) =>
+              props.onFastModeSelect?.(next, targetSessionKey),
+            onRequestUpdate: props.onRequestUpdate,
+            onThinkingSelect: async (next, targetSessionKey) =>
+              props.onThinkingSelect?.(next, targetSessionKey),
+          })}
     </div>
   `;
 }

@@ -1720,7 +1720,7 @@ describe("config view", () => {
     resetIn(row("Message width"));
     resetIn(row("Send shortcut"));
     resetIn(row("Open external sessions in"));
-    resetIn(row("Hold microphone button to dictate"));
+    resetIn(row("Hold microphone button to start dictation"));
     resetIn(row("Lobster visits"));
     resetIn(row("Lobster sounds"));
 
@@ -1879,7 +1879,7 @@ describe("config view", () => {
     for (const title of [
       "Message width",
       "Open external sessions in",
-      "Hold microphone button to dictate",
+      "Hold microphone button to start dictation",
     ]) {
       expect(row(title)?.textContent).toContain("Stored in this browser only");
       expect(row(title)?.textContent).not.toContain("Synced across your devices");
@@ -2016,7 +2016,7 @@ describe("config view", () => {
       "System default",
       "Desk Camera",
     ]);
-    expect(container.textContent).toContain("Hold microphone button to dictate");
+    expect(container.textContent).toContain("Hold microphone button to start dictation");
 
     microphoneSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
     cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));

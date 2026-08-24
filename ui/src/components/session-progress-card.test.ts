@@ -154,6 +154,22 @@ describe("renderSessionProgressCard", () => {
     expect(card?.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
   });
 
+  it("keeps the collapsed counter in the summary action column", () => {
+    const container = document.createElement("div");
+    render(renderSessionProgressCard(progressCard, "composer"), container);
+
+    const summary = container.querySelector(".session-progress-card__summary");
+    const count = summary?.querySelector(".session-progress-card__summary-count--collapsed");
+    expect(count?.textContent?.trim()).toBe("2/3");
+    expect(count?.parentElement).toBe(summary);
+    expect(count?.previousElementSibling?.classList).toContain(
+      "session-progress-card__summary-collapsed",
+    );
+    expect(count?.nextElementSibling?.classList).toContain(
+      "session-progress-card__summary-expanded",
+    );
+  });
+
   it("starts completed composer progress collapsed", () => {
     const container = document.createElement("div");
     render(

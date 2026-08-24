@@ -136,7 +136,7 @@ describe("renderChatComposer controls", () => {
   );
 
   it.each([
-    [undefined, "Tap to talk · Hold to dictate"],
+    [undefined, t("chat.composer.voiceGestureHint")],
     [false, t("chat.composer.startVoiceInput")],
   ])(
     "uses the gesture hint only when hold-to-dictate is available",
@@ -551,9 +551,9 @@ describe("renderChatComposer controls", () => {
       item?.querySelector('.chat-queue__icon path[d="M21 5v12a2 2 0 0 1-2 2h-6"]'),
     ).not.toBeNull();
     expect(item?.querySelector(".chat-queue__error")).toBeNull();
-    const badge = item?.querySelector(".chat-queue__badge");
-    expect(badge?.textContent?.trim()).toBe("Waiting for reconnect");
-    expect(badge?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
+    const state = item?.querySelector(".chat-queue__state");
+    expect(state?.textContent?.trim()).toBe("Waiting for reconnect");
+    expect(state?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
   });
 
   it("renders failed sends as retryable and running commands as inert", () => {
@@ -589,7 +589,7 @@ describe("renderChatComposer controls", () => {
         },
       ],
     });
-    expect(view.container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
+    expect(view.container.querySelector(".chat-queue__state")?.textContent?.trim()).toBe(
       "Running command",
     );
     expect(view.container.querySelector(".chat-queue__retry")).toBeNull();

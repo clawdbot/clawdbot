@@ -1,4 +1,3 @@
-import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
@@ -12,14 +11,15 @@ import {
 import { describeRealtimeTalkInputError, openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 
-const HOLD_THRESHOLD_MS = 250;
+const HOLD_ARM_DELAY_MS = 200,
+  HOLD_PROGRESS_MS = 600;
 const FINAL_TRANSCRIPT_QUIET_MS = 1500;
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
 const DICTATION_SAMPLE_RATE_HZ = 8000;
 const MAX_PENDING_AUDIO_SAMPLES = DICTATION_SAMPLE_RATE_HZ * 10;
 
-type DictationPhase = "idle" | "holding" | "connecting" | "recording" | "stopping";
+type DictationPhase = "idle" | "pressing" | "holding" | "connecting" | "recording" | "stopping";
 
 // Transcription relay talk.event payload (src/gateway/talk-transcription-relay.ts):
 // the transcriptionSessionId envelope is the relay's emission shape, shared with the
@@ -53,11 +53,13 @@ type ComposerDictationControllerOptions = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   enabled: boolean;
+  dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
   onCommit: (text: string) => void;
   onError: (message: string) => void;
   onStateChange: () => void;
   onTap: () => void;
+  onDictationUnavailable?: () => void;
 };
 
 function eventPayload(frame: GatewayEventFrame): DictationEvent | null {
@@ -140,11 +142,6 @@ class ComposerDictationSession {
   }
 
   private async startInternal(): Promise<void> {
-    const catalog = await this.client.request<TalkCatalogResult>("talk.catalog", {});
-    if (catalog.transcription?.ready !== true) {
-      throw new Error(t("chat.composer.dictationProviderUnavailable"));
-    }
-
     const inputDeviceId = loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
     const media = await openRealtimeTalkInput(inputDeviceId, {
       signal: this.abortController.signal,
@@ -431,6 +428,10 @@ export class ComposerDictationController {
     return this.phase === "connecting";
   }
 
+  get arming(): boolean {
+    return this.phase === "holding";
+  }
+
   get finalizing(): boolean {
     return this.phase === "stopping";
   }
@@ -488,11 +489,16 @@ export class ComposerDictationController {
     this.pointerTarget?.addEventListener("lostpointercapture", this.handleLostPointerCapture);
     this.suppressClick = true;
     this.suppressedPointerId = event.pointerId;
-    this.setPhase("holding");
+    this.setPhase("pressing");
+    // A normal click gets a quiet grace period. Only a sustained press enters
+    // the visible 600ms ring, so the hold affordance cannot steal tap-to-talk.
     this.holdTimer = globalThis.setTimeout(() => {
-      this.holdTimer = null;
-      void this.start();
-    }, HOLD_THRESHOLD_MS);
+      if (this.phase !== "pressing") {
+        return;
+      }
+      this.setPhase("holding");
+      this.holdTimer = globalThis.setTimeout(() => void this.start(), HOLD_PROGRESS_MS);
+    }, HOLD_ARM_DELAY_MS);
     document.addEventListener("pointermove", this.handleDocumentPointerMove);
     document.addEventListener("pointerup", this.handleDocumentPointerUp);
     document.addEventListener("pointercancel", this.handleDocumentPointerCancel);
@@ -508,6 +514,11 @@ export class ComposerDictationController {
     if (this.suppressClick) {
       this.clearClickSuppression();
       event.preventDefault();
+      return;
+    }
+    if (this.active) {
+      event.preventDefault();
+      void this.finishActive();
       return;
     }
     if (this.phase !== "idle") {
@@ -548,7 +559,7 @@ export class ComposerDictationController {
     if (event.pointerId !== this.pointerId) {
       return;
     }
-    if (this.phase === "holding") {
+    if (this.phase === "pressing" || this.phase === "holding") {
       this.clearGesture();
       this.setPhase("idle");
       this.options.onTap();
@@ -612,6 +623,16 @@ export class ComposerDictationController {
       await this.stop({ commit: false });
       return;
     }
+    if (this.options.dictationAvailable === false) {
+      this.clearGesture();
+      this.setPhase("idle");
+      this.options.onDictationUnavailable?.();
+      this.expireClickSuppression();
+      return;
+    }
+    // Crossing the threshold latches dictation. Pointer ownership ends here,
+    // while Escape/visibility/blur keep guarding the live capture lifecycle.
+    this.clearPointerGesture();
     this.setPhase("connecting");
     this.startElapsedTimer();
     const session = new ComposerDictationSession(client, {
@@ -681,6 +702,11 @@ export class ComposerDictationController {
   }
 
   private clearGesture(): void {
+    this.clearPointerGesture();
+    this.clearLifecycleListeners();
+  }
+
+  private clearPointerGesture(): void {
     if (this.holdTimer !== null) {
       globalThis.clearTimeout(this.holdTimer);
       this.holdTimer = null;
@@ -699,6 +725,9 @@ export class ComposerDictationController {
     document.removeEventListener("pointermove", this.handleDocumentPointerMove);
     document.removeEventListener("pointerup", this.handleDocumentPointerUp);
     document.removeEventListener("pointercancel", this.handleDocumentPointerCancel);
+  }
+
+  private clearLifecycleListeners(): void {
     document.removeEventListener("keydown", this.handleDocumentKeyDown);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     window.removeEventListener("blur", this.handleWindowBlur);

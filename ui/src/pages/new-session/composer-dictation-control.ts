@@ -59,11 +59,13 @@ export class NewSessionDictationControl {
     const ownsDraft = () => this.owner === owner;
     const client = this.options.getClient();
     const connected = this.options.isConnected() && client !== null;
+    this.devicePicker.syncCatalog(client, connected);
     const enabled = this.options.canCommit();
     const dictationOptions = {
       client,
       connected,
       enabled,
+      dictationAvailable: this.devicePicker.dictationStatus === "ready",
       realtimeTalkActive: false,
       onCommit: (transcript: string) => {
         // Route changes replace draft ownership while finalization is asynchronous.
@@ -88,6 +90,7 @@ export class NewSessionDictationControl {
           this.options.requestUpdate();
         }
       },
+      onDictationUnavailable: this.devicePicker.handleOpen,
       onTap: () => {
         if (ownsDraft()) {
           this.options.onError(t("newSession.dictationHoldToSpeak"));
@@ -111,6 +114,9 @@ export class NewSessionDictationControl {
         selectedDeviceId: loadSettings().realtimeTalkInputDeviceId?.trim() ?? "",
         voiceActive: false,
         issue: this.devicePicker.issue,
+        showRealtimeCapability: false,
+        realtimeStatus: this.devicePicker.realtimeStatus,
+        dictationStatus: this.devicePicker.dictationStatus,
         onOpen: this.devicePicker.handleOpen,
         onClose: this.devicePicker.handleClose,
         onSelect: (deviceId: string) => {

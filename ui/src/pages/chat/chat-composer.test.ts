@@ -143,6 +143,22 @@ describe("renderChatComposer controls", () => {
     );
   });
 
+  it("clears a whitespace-only draft on blur so the native placeholder returns", () => {
+    const onDraftChange = vi.fn();
+    const { container } = renderComposer({ draft: "saved", onDraftChange });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) {
+      throw new Error("expected composer textarea");
+    }
+
+    textarea.value = "  \n  ";
+    textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+
+    expect(textarea.value).toBe("");
+    expect(onDraftChange).toHaveBeenLastCalledWith("");
+    expect(textarea.matches(":placeholder-shown")).toBe(true);
+  });
+
   it("keeps an unsaved queued-row edit open when normal composer text is double-clicked", () => {
     const onCancel = vi.fn();
     const { container } = renderComposer({
@@ -307,6 +323,146 @@ describe("renderChatComposer controls", () => {
     await vi.waitFor(() => expect(discoverRealtimeTalkInputsMock).toHaveBeenCalledTimes(2));
     expect(dropdown?.open).toBe(true);
   });
+
+  it("keeps the controlled hold-to-dictate preference in sync after toggling", async () => {
+    discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onComposerHoldToRecordChange = vi.fn((enabled: boolean) => {
+      composerProps.composerHoldToRecord = patchSettings({
+        composerHoldToRecord: enabled,
+      }).composerHoldToRecord;
+      draw();
+    });
+    const composerProps = props({
+      composerHoldToRecord: true,
+      onComposerHoldToRecordChange,
+      onToggleRealtimeTalk: vi.fn(),
+    });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    const dropdown = container.querySelector<
+      HTMLElement & { open: boolean; updateComplete: Promise<unknown> }
+    >("wa-dropdown.chat-talk-input-picker");
+    await dropdown?.updateComplete;
+    button(container, t("chat.composer.microphoneInput")).click();
+    await dropdown?.updateComplete;
+
+    const preference = container.querySelector<HTMLButtonElement>(
+      '.chat-talk-input-picker__preference [role="switch"]',
+    );
+    expect(preference?.getAttribute("aria-checked")).toBe("true");
+    preference?.click();
+    await dropdown?.updateComplete;
+
+    expect(onComposerHoldToRecordChange).toHaveBeenCalledWith(false);
+    expect(loadSettings().composerHoldToRecord).toBe(false);
+    expect(dropdown?.open).toBe(true);
+    expect(
+      container
+        .querySelector<HTMLButtonElement>('.chat-talk-input-picker__preference [role="switch"]')
+        ?.getAttribute("aria-checked"),
+    ).toBe("false");
+  });
+
+  it("gates unavailable voice capabilities before starting and routes to Talk Settings", async () => {
+    discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return {
+          realtime: { ready: false, providers: [] },
+          transcription: { ready: false, providers: [] },
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const gatewayClient = { request } as unknown as GatewayBrowserClient;
+    const onToggleRealtimeTalk = vi.fn();
+    const onOpenTalkSettings = vi.fn();
+    const onOpenDictationSettings = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({
+      gatewayClient,
+      onOpenTalkSettings,
+      onOpenDictationSettings,
+      onToggleRealtimeTalk,
+    });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    await vi.waitFor(() =>
+      expect(
+        container.querySelectorAll('[data-chat-talk-capability][data-status="unavailable"]'),
+      ).toHaveLength(2),
+    );
+    button(container, t("chat.composer.startVoiceInput")).click();
+    const dropdown = container.querySelector<HTMLElement & { open: boolean }>(
+      "wa-dropdown.chat-talk-input-picker",
+    );
+    await vi.waitFor(() => expect(dropdown?.open).toBe(true));
+
+    expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledWith("talk.catalog", {});
+    expect(request).not.toHaveBeenCalledWith("talk.client.create", expect.anything());
+    expect(container.textContent).toContain(t("chat.composer.realtimeTalkProviderUnavailable"));
+    expect(container.textContent).toContain(t("chat.composer.dictationProviderUnavailableShort"));
+
+    const settingsButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(".chat-talk-input-picker__settings"),
+    ];
+    expect(settingsButtons.map((entry) => entry.textContent?.trim())).toEqual([
+      t("chat.composer.openRealtimeTalkSettings"),
+      t("chat.composer.openDictationSettings"),
+    ]);
+    settingsButtons[0]?.click();
+    expect(onOpenTalkSettings).toHaveBeenCalledOnce();
+    expect(onOpenDictationSettings).not.toHaveBeenCalled();
+    settingsButtons[1]?.click();
+    expect(onOpenDictationSettings).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["no providers", false, false, ["realtime", "dictation"]],
+    ["voice only", true, false, ["dictation"]],
+    ["transcription only", false, true, ["realtime"]],
+    ["voice and transcription", true, true, []],
+  ] as const)(
+    "maps the %s catalog to independent visible capability outcomes",
+    async (_name, realtimeReady, transcriptionReady, unavailableCapabilities) => {
+      discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
+      const request = vi.fn(async (method: string) => {
+        if (method === "talk.catalog") {
+          return {
+            realtime: { ready: realtimeReady, providers: [] },
+            transcription: { ready: transcriptionReady, providers: [] },
+          };
+        }
+        throw new Error(`unexpected request: ${method}`);
+      });
+      const container = document.createElement("div");
+      document.body.append(container);
+      const composerProps = props({
+        gatewayClient: { request } as unknown as GatewayBrowserClient,
+        onToggleRealtimeTalk: vi.fn(),
+      });
+      const draw = () => render(renderChatComposer(composerProps), container);
+      composerProps.onRequestUpdate = draw;
+      draw();
+
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+      await vi.waitFor(() =>
+        expect(
+          [...container.querySelectorAll<HTMLElement>("[data-chat-talk-capability]")].map(
+            (entry) => entry.dataset.chatTalkCapability,
+          ),
+        ).toEqual(unavailableCapabilities),
+      );
+    },
+  );
 
   it.each([
     ["none-found", "chat.composer.microphoneNoneFound", false],
@@ -585,7 +741,7 @@ describe("renderChatComposer controls", () => {
     ).not.toBeNull();
   });
 
-  it("keeps the captured dictation button through the hold-start rerender", async () => {
+  it("keeps the dictation button stable through hold progress and latch", async () => {
     vi.useFakeTimers();
     openRealtimeTalkInputMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
     vi.stubGlobal("AudioContext", DictationAudioContext);
@@ -616,6 +772,10 @@ describe("renderChatComposer controls", () => {
     const draw = () => render(renderChatComposer(composerProps), container);
     composerProps.onRequestUpdate = draw;
     draw();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    await vi.waitFor(() =>
+      expect(container.querySelector('[data-chat-talk-capability="dictation"]')).toBeNull(),
+    );
 
     const capturedButton = container.querySelector<HTMLButtonElement>(
       ".chat-talk-control > openclaw-tooltip > button",
@@ -630,17 +790,21 @@ describe("renderChatComposer controls", () => {
 
     capturedButton!.dispatchEvent(dictationPointerDown(9));
     expect(capturedButton!.hasPointerCapture(9)).toBe(true);
-    await vi.advanceTimersByTimeAsync(250);
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(capturedButton?.classList.contains("chat-send-btn--dictation-arming")).toBe(true);
+    const holdingControl = capturedButton?.closest(".chat-talk-control");
+    expect(holdingControl?.classList.contains("chat-talk-control--holding")).toBe(true);
+    expect(holdingControl?.querySelector(".chat-talk-input-picker")).not.toBeNull();
+    expect(capturedButton!.hasPointerCapture(9)).toBe(true);
+    await vi.advanceTimersByTimeAsync(500);
 
     const rerenderedButton = container.querySelector<HTMLButtonElement>(
       ".chat-talk-control > openclaw-tooltip > button",
     );
     expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything());
     expect(rerenderedButton).toBe(capturedButton);
-    expect(rerenderedButton?.hasPointerCapture(9)).toBe(true);
+    expect(rerenderedButton?.classList.contains("chat-send-btn--dictating")).toBe(true);
+    expect(rerenderedButton?.hasPointerCapture(9)).toBe(false);
   });
 });
 
@@ -755,7 +919,7 @@ describe("renderChatComposer status", () => {
 
     expect(view.container.querySelector("openclaw-chat-question-panel")).toBeNull();
   });
-  it("keeps terminal status out of the composer chrome", () => {
+  it("floats a fresh interrupted status above the composer", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     let view = renderComposer({
       runStatus: { phase: "done", runId: "run-0", sessionKey: "main", occurredAt: 900 },
@@ -766,7 +930,10 @@ describe("renderChatComposer status", () => {
       runStatus: { phase: "interrupted", runId: "run-1", sessionKey: "main", occurredAt: 900 },
       composerControls: html`<button type="button">Settings</button>`,
     });
-    expect(view.container.querySelector(".agent-chat__run-status--interrupted")).toBeNull();
+    const interrupted = view.container.querySelector(".agent-chat__run-status--interrupted");
+    expect(interrupted).not.toBeNull();
+    expect(interrupted?.closest(".agent-chat__composer-run-status")).not.toBeNull();
+    expect(interrupted?.querySelector("path")?.getAttribute("d")).toBe("m2 2 20 20");
     expect(
       view.container.querySelector(".agent-chat__run-status-announcement")?.textContent,
     ).toContain("Interrupted");

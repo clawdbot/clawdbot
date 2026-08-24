@@ -114,17 +114,15 @@ function fitQueueEditInput(textarea: HTMLTextAreaElement): void {
   textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
 }
 
-function sendStateLabel(item: ChatQueueItem): string | null {
+function sendStateLabel(item: ChatQueueItem, globalReconnect: boolean): string | null {
   switch (item.sendState) {
     case "waiting-model":
-      // Persisted state name predates reasoning and speed picker gating.
-      return t("chat.queue.states.applyingSettings");
     case "waiting-idle":
-      return t("chat.queue.states.waitingForRun");
+      return null;
     case "executing-command":
       return t("chat.queue.states.runningCommand");
     case "waiting-reconnect":
-      return t("chat.queue.states.waitingForReconnect");
+      return globalReconnect ? null : t("chat.queue.states.waitingForReconnect");
     case "unconfirmed":
       return t("chat.queue.states.needsReview");
     case "failed":
@@ -155,10 +153,26 @@ export function renderChatQueue(props: ChatQueueProps) {
     // edit shrinks the segments but must not retract the handle column.
     offered: visibleQueue.filter(isMovableChatQueueItem).length > 1,
   };
+  // Connection and picker-setting transitions belong to the queue as a whole.
+  // Repeating them on every row makes normal waiting look like item failures
+  // and lets a single global transition crowd out each message's own controls.
+  const globalState = props.offline
+    ? { label: t("chat.queue.states.waitingForReconnect"), tone: "reconnect" }
+    : visibleQueue.some((item) => item.sendState === "waiting-model")
+      ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
+      : null;
   // Keyed rows so a reorder moves the existing DOM node instead of rewriting
   // it in place; that is what keeps focus on the handle the operator is using.
   return html`
     <div class="chat-queue" role="status" aria-live="polite">
+      ${globalState
+        ? html`<div
+            class="chat-queue__global-state"
+            data-chat-queue-global-state=${globalState.tone}
+          >
+            ${globalState.label}
+          </div>`
+        : nothing}
       <div
         class="chat-queue__scroll"
         data-scrollable=${visibleQueue.length > 3 ? "true" : "false"}
@@ -221,14 +235,17 @@ function renderChatQueueItem(
   const hasAuthorAvatar = authorAvatar !== nothing;
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
   const reconnecting = !failed && (props.offline || item.sendState === "waiting-reconnect");
-  const stateLabel = reconnecting
-    ? t("chat.queue.states.waitingForReconnect")
-    : sendStateLabel(item);
+  const stateLabel = sendStateLabel(item, props.offline === true);
   const steered = item.queueMode === "steer" && !failed;
   const busy = item.sendState === "executing-command";
   const editing = props.editingId === item.id;
   const canSteer =
     Boolean(props.canAbort && props.onQueueSteer) && isSteerableQueuedMessage(item) && !editing;
+  const showsSteer =
+    Boolean(props.canAbort && props.onQueueSteer) &&
+    !editing &&
+    !item.localCommandName &&
+    (isSteerableQueuedMessage(item) || item.sendState === "waiting-model");
   const segment = reorder.segments.find((ids) => ids.includes(item.id)) ?? [];
   const moveIndex = segment.indexOf(item.id);
   const move = props.onQueueMove;
@@ -404,7 +421,7 @@ function renderChatQueueItem(
               : nothing}
             ${stateLabel && (!failed || !item.sendError)
               ? html`<span
-                  class="chat-queue__badge"
+                  class=${failed ? "chat-queue__badge" : "chat-queue__state"}
                   title=${ifDefined(reconnecting ? item.sendError : undefined)}
                   >${stateLabel}</span
                 >`
@@ -424,11 +441,12 @@ function renderChatQueueItem(
               </button>
             `
           : nothing}
-        ${canSteer
+        ${showsSteer
           ? html`
               <button
                 class="chat-queue__action chat-queue__steer"
                 type="button"
+                ?disabled=${!canSteer}
                 aria-label=${t("chat.queue.steerQueuedMessage")}
                 @click=${() => props.onQueueSteer?.(item.id)}
               >

@@ -251,6 +251,14 @@ function skillDraftRanges(value: string): SkillDraftRange[] {
   return ranges;
 }
 
+export function hasSkillDraftTokens(value: string): boolean {
+  return skillDraftRanges(value).length > 0;
+}
+
+function notifySkillSelectionChange(target: HTMLTextAreaElement): void {
+  target.dispatchEvent(new Event("select", { bubbles: true }));
+}
+
 export function normalizeSkillTokenSelection(target: HTMLTextAreaElement): boolean {
   const { selectionStart, selectionEnd } = target;
   let nextStart = selectionStart;
@@ -317,6 +325,7 @@ export function handleSkillTokenKeydown(event: KeyboardEvent): boolean {
         Math.max(anchor, nextCaret),
         nextCaret < anchor ? "backward" : "forward",
       );
+      notifySkillSelectionChange(target);
       return true;
     }
     return false;
@@ -349,6 +358,7 @@ export function handleSkillTokenKeydown(event: KeyboardEvent): boolean {
       event.preventDefault();
       const nextCaret = movesLeft ? range.start : range.navigationEnd;
       target.setSelectionRange(nextCaret, nextCaret);
+      notifySkillSelectionChange(target);
       return true;
     }
   }
@@ -358,16 +368,35 @@ export function handleSkillTokenKeydown(event: KeyboardEvent): boolean {
 export function renderSkillDraftOverlay(
   value: string,
   direction: "ltr" | "rtl",
+  caretOffset: number | null,
 ): TemplateResult | typeof nothing {
   const tokens = parseSkillDraftTokens(value);
   if (tokens.length === 0) {
     return nothing;
   }
   const content: Array<string | TemplateResult> = [];
+  const boundedCaret =
+    caretOffset !== null && caretOffset >= 0 && caretOffset <= value.length ? caretOffset : null;
+  let caretRendered = false;
+  const pushText = (start: number, end: number) => {
+    if (boundedCaret === null || caretRendered || boundedCaret < start || boundedCaret > end) {
+      content.push(value.slice(start, end));
+      return;
+    }
+    content.push(
+      value.slice(start, boundedCaret),
+      html`<span
+        class="agent-chat__composer-caret"
+        data-composer-caret-offset=${boundedCaret}
+      ></span>`,
+      value.slice(boundedCaret, end),
+    );
+    caretRendered = true;
+  };
   let cursor = 0;
   for (const token of tokens) {
+    pushText(cursor, token.start);
     content.push(
-      value.slice(cursor, token.start),
       html`<span class="agent-chat__skill-token" data-raw=${token.raw}
         ><span class="agent-chat__skill-token-icon">${icons.pencilSparkles}</span
         >${getSkillDisplayName(token.command)}</span
@@ -375,7 +404,7 @@ export function renderSkillDraftOverlay(
     );
     cursor = token.end;
   }
-  content.push(value.slice(cursor));
+  pushText(cursor, value.length);
   // Template whitespace changes the mirrored draft's line breaks. Keep text
   // segments adjacent to inline tokens so only presented content drives layout.
   // oxfmt-ignore

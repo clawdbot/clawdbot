@@ -197,12 +197,13 @@ export function renderSessionProgressCard(
         </span>
         <span class="session-progress-card__summary-collapsed">
           <span class="session-progress-card__current">${stepLabel}</span>
-          ${counts
-            ? html`<span class="session-progress-card__summary-count"
-                >${currentPosition}/${counts.total}</span
-              >`
-            : nothing}
         </span>
+        ${counts
+          ? html`<span
+              class="session-progress-card__summary-count session-progress-card__summary-count--collapsed"
+              >${currentPosition}/${counts.total}</span
+            >`
+          : nothing}
         <span class="session-progress-card__summary-expanded">
           <span class="session-progress-card__summary-title"
             >${t("sessionProgressCard.composerTitle")}</span

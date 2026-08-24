@@ -57,15 +57,15 @@ function modeLabel(mode: SessionPermissionMode | null | undefined): string {
 function modeIcon(mode: SessionPermissionMode | null): unknown {
   switch (mode) {
     case "read-only":
-      return icons.lock;
+      return icons.shieldEllipsis;
     case "guarded":
-      return icons.shieldCheck;
+      return icons.shieldLock;
     case "workspace":
-      return icons.folder;
+      return icons.shieldCog;
     case "full":
-      return icons.shieldX;
+      return icons.shieldAlert;
     default:
-      return icons.shieldQuestion;
+      return icons.shield;
   }
 }
 
