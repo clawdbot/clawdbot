@@ -1164,7 +1164,7 @@ extensions/slack/src/approval-native-gates.ts	1
 extensions/slack/src/approval-native.ts	2
 extensions/slack/src/blocks-fallback.ts	2
 extensions/slack/src/blocks-input.ts	2
-extensions/slack/src/blocks-render.ts	2
+extensions/slack/src/blocks-render.ts	1
 extensions/slack/src/channel-actions.ts	1
 extensions/slack/src/channel-type.ts	1
 extensions/slack/src/channel.ts	7
