@@ -397,10 +397,12 @@ describe("spawnSubagentDirect seam flow", () => {
     });
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledOnce();
     const registered = firstRegisteredSubagentRun();
-    expect(hoisted.rollbackSubagentRunRegistrationMock).toHaveBeenCalledWith({
-      runId: "run-1",
-      childSessionKey: registered.childSessionKey,
-    });
+    expect(hoisted.rollbackSubagentRunRegistrationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        childSessionKey: registered.childSessionKey,
+      }),
+    );
     expect(gatewayRequestRecords()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

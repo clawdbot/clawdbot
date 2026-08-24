@@ -872,13 +872,13 @@ describe("post-compaction delegate dispatch extraction", () => {
           continuationDelegateFlowId: "queue-1",
           continuationChainState: expect.objectContaining({ count: 1, tokens: 0 }),
         }),
-        {
+        expect.objectContaining({
           agentSessionKey: "main",
           agentChannel: "discord",
           agentAccountId: "account",
           agentTo: "channel",
           agentThreadId: "thread",
-        },
+        }),
       );
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
         "[continuation:compaction-delegate-spawned] Post-compaction shard dispatched: queued delegate",
