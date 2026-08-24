@@ -145,6 +145,45 @@ describe("app-tool-stream run usage", () => {
     expect(host.guardianNotices).toEqual([]);
   });
 
+  it("rejects a sessionless system notice from a foreign run", () => {
+    const host = createHost({ chatRunId: "client-run" });
+
+    expect(
+      handleAgentEvent(
+        host,
+        agentEvent("foreign-run", 1, "notice", {
+          phase: "warning",
+          message: "Foreign system warning",
+        }),
+      ),
+    ).toBe(true);
+    expect(host.guardianNotices).toEqual([]);
+  });
+
+  it("rejects a same-session Guardian notice from a foreign run", () => {
+    const host = createHost({ chatRunId: "client-run" });
+
+    expect(
+      handleAgentEvent(
+        host,
+        agentEvent(
+          "foreign-run",
+          1,
+          "codex_app_server.guardian",
+          {
+            reviewId: "foreign-review",
+            phase: "started",
+            status: "inProgress",
+            command: "foreign command",
+            rationale: "foreign rationale",
+          },
+          "main",
+        ),
+      ),
+    ).toBe(true);
+    expect(host.guardianNotices).toEqual([]);
+  });
+
   it("requires the local run id when an event has no session identity", () => {
     const host = createHost({ chatRunId: "client-run" });
 

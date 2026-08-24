@@ -923,6 +923,9 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
   if (!systemNotice && payload.stream !== "codex_app_server.guardian") {
     return false;
   }
+  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+    return true;
+  }
   const data = payload.data ?? {};
   const phase = toTrimmedString(data.phase);
   const status = toTrimmedString(data.status);
