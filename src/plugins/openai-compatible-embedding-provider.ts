@@ -3,7 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import { readProviderJsonArrayFieldResponse } from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
@@ -41,10 +41,6 @@ type OpenAICompatibleEmbeddingClient = {
   documentInputType?: string;
   localServiceTarget?: ConfiguredProviderLocalServiceTarget;
   acquireLocalService?: AcquireConfiguredProviderLocalService;
-};
-
-type OpenAICompatibleEmbeddingResponse = {
-  data?: unknown;
 };
 
 type ConfiguredEmbeddingProvider = {
@@ -259,7 +255,7 @@ function malformedEmbeddingResponse(): Error {
 }
 
 function readEmbeddingVector(value: unknown): number[] {
-  if (!Array.isArray(value)) {
+  if (!Array.isArray(value) || value.length === 0) {
     throw malformedEmbeddingResponse();
   }
   for (const entry of value) {
@@ -270,24 +266,17 @@ function readEmbeddingVector(value: unknown): number[] {
   return value;
 }
 
-function readEmbeddingVectors(
-  payload: OpenAICompatibleEmbeddingResponse,
-  expectedCount: number,
-): number[][] {
-  if (!Array.isArray(payload.data) || payload.data.length !== expectedCount) {
+function readEmbeddingVectors(data: unknown[], expectedCount: number): number[][] {
+  if (data.length !== expectedCount) {
     throw malformedEmbeddingResponse();
   }
-  return payload.data.map((entry) => {
+  return data.map((entry) => {
     const record = asRecord(entry);
     if (!record) {
       throw malformedEmbeddingResponse();
     }
     return readEmbeddingVector(record.embedding);
   });
-}
-
-async function readJsonResponse(response: Response): Promise<unknown> {
-  return await readProviderJsonResponse(response, "openai-compatible embeddings failed");
 }
 
 async function readEmbeddingErrorBodySnippet(response: Response): Promise<string | undefined> {
@@ -349,7 +338,11 @@ async function postEmbeddingRequest(params: {
         throw await createEmbeddingHttpError(response);
       }
       return readEmbeddingVectors(
-        (await readJsonResponse(response)) as OpenAICompatibleEmbeddingResponse,
+        await readProviderJsonArrayFieldResponse(
+          response,
+          "openai-compatible embeddings failed",
+          "data",
+        ),
         input.length,
       );
     } finally {
