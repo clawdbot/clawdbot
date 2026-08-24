@@ -5,23 +5,24 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { trimToValue } from "../mantis-options.runtime.js";
 import {
-  copyMantisDirContents,
   copyMantisLaneArtifact,
   readMantisLaneResult,
   type LaneResult,
 } from "./run-artifacts.runtime.js";
 import {
-  assertMantisCommandNotAborted,
   createMantisWorktreeDirectory,
-  defaultMantisCommandRunner,
   removeMantisWorktree,
+  type MantisWorktreeOwnership,
+} from "./run-cleanup.runtime.js";
+import {
+  assertMantisCommandNotAborted,
+  defaultMantisCommandRunner,
   resolveMantisCommandTimeouts,
   runMantisCommand,
   type MantisCommandExecution,
   type MantisCommandRunner,
   type MantisCommandTimeoutOverrides,
   type MantisCommandTimeouts,
-  type MantisWorktreeOwnership,
 } from "./run-command.runtime.js";
 
 export type MantisBeforeAfterOptions = {
@@ -332,6 +333,7 @@ async function runLane(params: {
 }) {
   const worktreeDir = path.join(params.worktreeRoot, params.lane);
   const worktreeOutputDir = path.join(".artifacts", "qa-e2e", "mantis", "run", params.lane);
+  const publishedLaneDir = path.join(params.outputDir, params.lane);
   const worktreeAddArgs = ["worktree", "add", "--detach", "--", worktreeDir, params.ref];
   const worktreeAddExecution = {
     cwd: params.repoRoot,
@@ -341,19 +343,22 @@ async function runLane(params: {
     timeoutMs: params.commandTimeouts["worktree-add"],
   } satisfies MantisCommandExecution;
   let worktreeOwnership: MantisWorktreeOwnership | undefined;
-  let laneResult: LaneResult | undefined;
   let workloadFailed = false;
   let workloadError: unknown;
   let cleanupFailed = false;
   let cleanupError: unknown;
 
+  assertMantisCommandNotAborted({
+    command: "git",
+    args: worktreeAddArgs,
+    execution: worktreeAddExecution,
+    lane: params.lane,
+  });
+  // Reset published output before owning a worktree. The completed lane output
+  // can then move out atomically so artifact processing never delays cleanup.
+  await fs.rm(publishedLaneDir, { force: true, recursive: true });
+
   try {
-    assertMantisCommandNotAborted({
-      command: "git",
-      args: worktreeAddArgs,
-      execution: worktreeAddExecution,
-      lane: params.lane,
-    });
     try {
       worktreeOwnership = await createMantisWorktreeDirectory({
         repoRoot: params.repoRoot,
@@ -442,28 +447,7 @@ async function runLane(params: {
       lane: params.lane,
       runner: params.runner,
     });
-    const publishedLaneDir = path.join(params.outputDir, params.lane);
-    await copyMantisDirContents(path.join(worktreeDir, worktreeOutputDir), publishedLaneDir);
-    const result = await readMantisLaneResult({
-      laneOutputDir: path.join(worktreeDir, worktreeOutputDir),
-      publishedLaneDir,
-      scenario: params.scenario,
-    });
-    const copiedScreenshot = await copyMantisLaneArtifact({
-      kind: "screenshot",
-      lane: params.lane,
-      result,
-    });
-    const copiedVideo = await copyMantisLaneArtifact({
-      kind: "video",
-      lane: params.lane,
-      result,
-    });
-    laneResult = {
-      ...result,
-      screenshotPath: copiedScreenshot ?? result.screenshotPath,
-      videoPath: copiedVideo ?? result.videoPath,
-    } satisfies LaneResult;
+    await fs.rename(path.join(worktreeDir, worktreeOutputDir), publishedLaneDir);
   } catch (error) {
     workloadFailed = true;
     workloadError = error;
@@ -498,10 +482,31 @@ async function runLane(params: {
   if (cleanupFailed) {
     throw cleanupError;
   }
-  if (!laneResult) {
-    throw new Error("Mantis lane completed without a result.");
+  if (params.signal?.aborted) {
+    throw new Error(`${params.lane} artifact processing aborted`, {
+      cause: params.signal.reason,
+    });
   }
-  return laneResult;
+  const result = await readMantisLaneResult({
+    laneOutputDir: path.join(worktreeDir, worktreeOutputDir),
+    publishedLaneDir,
+    scenario: params.scenario,
+  });
+  const copiedScreenshot = await copyMantisLaneArtifact({
+    kind: "screenshot",
+    lane: params.lane,
+    result,
+  });
+  const copiedVideo = await copyMantisLaneArtifact({
+    kind: "video",
+    lane: params.lane,
+    result,
+  });
+  return {
+    ...result,
+    screenshotPath: copiedScreenshot ?? result.screenshotPath,
+    videoPath: copiedVideo ?? result.videoPath,
+  } satisfies LaneResult;
 }
 
 export async function runMantisBeforeAfter(

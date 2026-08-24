@@ -21,14 +21,27 @@ export type LaneResult = {
   videoPath?: string;
 };
 
-export async function copyMantisDirContents(sourceDir: string, targetDir: string): Promise<void> {
-  await fs.rm(targetDir, { force: true, recursive: true });
-  await fs.mkdir(targetDir, { recursive: true });
-  await fs.cp(sourceDir, targetDir, { recursive: true });
-}
-
 function isNotFoundError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function remapPublishedArtifactPath(params: {
+  artifactPath: string | undefined;
+  laneOutputDir: string;
+  publishedLaneDir: string;
+}): string | undefined {
+  if (!params.artifactPath || !path.isAbsolute(params.artifactPath)) {
+    return params.artifactPath;
+  }
+  const relativePath = path.relative(params.laneOutputDir, params.artifactPath);
+  if (
+    relativePath === ".." ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    return params.artifactPath;
+  }
+  return path.join(params.publishedLaneDir, relativePath);
 }
 
 async function readNormalizedLaneResult(params: {
@@ -70,10 +83,18 @@ export async function readMantisLaneResult(params: {
     return {
       outputDir: params.publishedLaneDir,
       scenarioDetails: normalized.details,
-      screenshotPath: normalized.screenshotPath,
+      screenshotPath: remapPublishedArtifactPath({
+        artifactPath: normalized.screenshotPath,
+        laneOutputDir: params.laneOutputDir,
+        publishedLaneDir: params.publishedLaneDir,
+      }),
       status: normalized.status,
       summaryPath: normalized.summaryPath,
-      videoPath: normalized.videoPath,
+      videoPath: remapPublishedArtifactPath({
+        artifactPath: normalized.videoPath,
+        laneOutputDir: params.laneOutputDir,
+        publishedLaneDir: params.publishedLaneDir,
+      }),
     };
   }
 
@@ -91,11 +112,19 @@ export async function readMantisLaneResult(params: {
     outputDir: params.publishedLaneDir,
     scenarioDetails:
       typeof scenarioSummary?.details === "string" ? scenarioSummary.details : undefined,
-    screenshotPath:
-      typeof artifactPaths?.screenshot === "string" ? artifactPaths.screenshot : undefined,
+    screenshotPath: remapPublishedArtifactPath({
+      artifactPath:
+        typeof artifactPaths?.screenshot === "string" ? artifactPaths.screenshot : undefined,
+      laneOutputDir: params.laneOutputDir,
+      publishedLaneDir: params.publishedLaneDir,
+    }),
     status: typeof scenarioSummary?.status === "string" ? scenarioSummary.status : "fail",
     summaryPath,
-    videoPath: typeof artifactPaths?.video === "string" ? artifactPaths.video : undefined,
+    videoPath: remapPublishedArtifactPath({
+      artifactPath: typeof artifactPaths?.video === "string" ? artifactPaths.video : undefined,
+      laneOutputDir: params.laneOutputDir,
+      publishedLaneDir: params.publishedLaneDir,
+    }),
   };
 }
 
