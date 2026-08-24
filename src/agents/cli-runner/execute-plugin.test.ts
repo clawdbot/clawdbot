@@ -219,8 +219,99 @@ describe("plugin-owned CLI execution host boundary", () => {
         useResume: false,
         env: { PATH: "/bin:/usr/bin", OPENCLAW_TEST_MARKER: "host-owned" },
         requestToolPermission: expect.any(Function),
+        requestUserInput: expect.any(Function),
       }),
     );
+  });
+
+  it("runs plugin user questions through the shared Gateway question flow", async () => {
+    const { context } = await createExecution({
+      runId: "plugin-user-input",
+      nativeTools: ["AskUserQuestion"],
+    });
+    const onBlockReply = vi.fn(async () => {});
+    context.params.onBlockReply = onBlockReply;
+    const requests = new Map<string, { questions: Array<{ questionId: string }> }>();
+    mockCallGatewayTool.mockImplementation(async (method, _opts, rawParams) => {
+      const params = rawParams as { id: string; questions?: Array<{ questionId: string }> };
+      if (method === "question.request") {
+        requests.set(params.id, { questions: params.questions ?? [] });
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        const request = requests.get(params.id);
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 5);
+        });
+        return {
+          status: "answered",
+          answers: {
+            answers: Object.fromEntries(
+              (request?.questions ?? []).map((question) => [
+                question.questionId,
+                [question.questionId],
+              ]),
+            ),
+          },
+        };
+      }
+      if (method === "question.resolve") {
+        return { status: "cancelled" };
+      }
+      throw new Error(`Unexpected Gateway method: ${method}`);
+    });
+    let result: unknown;
+
+    await runPlugin(context, async function* (execution) {
+      result = await execution.requestUserInput({
+        toolName: "AskUserQuestion",
+        toolCallId: "claude-question",
+        questions: [
+          {
+            id: "one",
+            header: "One",
+            question: "First question?",
+            isOther: true,
+            options: [{ label: "A" }, { label: "B" }],
+          },
+          {
+            id: "two",
+            header: "Two",
+            question: "Second question?",
+            isOther: true,
+            options: [{ label: "A" }, { label: "B" }],
+          },
+          {
+            id: "three",
+            header: "Three",
+            question: "Third question?",
+            isOther: true,
+            options: [{ label: "A" }, { label: "B" }],
+          },
+          {
+            id: "four",
+            header: "Four",
+            question: "Fourth question?",
+            isOther: true,
+            options: [{ label: "A" }, { label: "B" }],
+          },
+        ],
+      });
+      yield SUCCESS_RESULT;
+    });
+
+    expect(result).toEqual({
+      status: "answered",
+      answers: {
+        one: ["one"],
+        two: ["two"],
+        three: ["three"],
+        four: ["four"],
+      },
+    });
+    expect([...requests.keys()]).toEqual(["claude-question:0", "claude-question:1"]);
+    expect([...requests.values()].map((request) => request.questions.length)).toEqual([3, 1]);
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
   });
 
   it("restarts true fresh sessions while preserving legitimate no-resume warm reuse", async () => {
