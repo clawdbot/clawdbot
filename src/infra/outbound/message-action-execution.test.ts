@@ -368,8 +368,6 @@ describe("runMessageAction plugin dispatch", () => {
         await runMessageAction({
           cfg,
           action: "download-file",
-          accountId: "default",
-          requesterAccountId: "default",
           conversationReadOrigin: "direct-operator",
           params: {
             channel: "forumchat",
@@ -412,8 +410,6 @@ describe("runMessageAction plugin dispatch", () => {
       await runMessageAction({
         cfg,
         action: "download-file",
-        accountId: "default",
-        requesterAccountId: "default",
         conversationReadOrigin: "direct-operator",
         params: {
           channel: "forumchat",
