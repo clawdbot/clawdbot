@@ -214,7 +214,7 @@ jobs:
           max-cache-size-mb: 800000
 
       - name: Build Docker E2E image
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2
         with:
           context: .
           file: ./scripts/e2e/Dockerfile
