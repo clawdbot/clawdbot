@@ -1,6 +1,7 @@
 /** Bounded receipt projection across admission, owner-native, and generic decision facts. */
 import type {
   AuditRunInspectResult,
+  DecisionReceiptDisplayV1,
   DecisionReceiptV1,
   ExecutionIdentityContextV1,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -20,6 +21,16 @@ import {
 } from "./message-delivery-receipts.js";
 
 type ExecutionDecisionReadOptions = OpenClawStateDatabaseOptions & { now?: number };
+
+export type InternalAuditRunInspectResult = AuditRunInspectResult & {
+  decisions: DecisionReceiptV1[];
+};
+
+type ProvenancedDecisionReceipt = {
+  receipt: DecisionReceiptV1;
+  provenance: DecisionReceiptDisplayV1["provenance"];
+  selectorId: string;
+};
 
 const MAX_AGGREGATE_MISSING_EVIDENCE = 16;
 const MISSING_EVIDENCE_TRUNCATED = "decision.missing_evidence_truncated";
@@ -131,12 +142,60 @@ function admissionDecision(context: ExecutionIdentityContextV1): DecisionReceipt
   };
 }
 
+function projectDecisionDisplay({
+  receipt,
+  provenance,
+  selectorId,
+}: ProvenancedDecisionReceipt): DecisionReceiptDisplayV1 {
+  if (provenance.state === "unverified") {
+    return {
+      schemaVersion: 1,
+      selectorId,
+      occurredAt: receipt.occurredAt,
+      action: { family: "decision", operation: "record" },
+      decision: { outcome: "unknown", reasonCode: "decision_fact_display_unverified" },
+      enforcement: {
+        coverageState: "unknown",
+        policyCount: 0,
+        grantCount: 0,
+        contextFieldsUsed: [],
+      },
+      provenance,
+      missingEvidence: ["decision.display_provenance"],
+      remediation: [],
+    };
+  }
+  const counts = {
+    policyCount: receipt.enforcement.policyRefs.length,
+    grantCount: receipt.enforcement.grantRefs.length,
+  };
+  return {
+    schemaVersion: 1,
+    selectorId,
+    occurredAt: receipt.occurredAt,
+    action: {
+      family: receipt.action.family,
+      operation: receipt.action.operation,
+      ...(receipt.action.summary ? { summary: receipt.action.summary } : {}),
+    },
+    decision: receipt.decision,
+    enforcement: {
+      coverageState: receipt.enforcement.coverageState,
+      ...counts,
+      contextFieldsUsed: receipt.enforcement.contextFieldsUsed,
+    },
+    provenance,
+    missingEvidence: receipt.missingEvidence,
+    remediation: receipt.remediation,
+  };
+}
+
 export function presentExecutionDecisionReceipts(params: {
   context: ExecutionIdentityContextV1;
   decisionCursor?: string;
   decisionLimit?: number;
   options: ExecutionDecisionReadOptions;
-}): AuditRunInspectResult {
+}): InternalAuditRunInspectResult {
   const cursor = parseDecisionCursor(params.decisionCursor);
   if (cursor === null) {
     throw new ExecutionDecisionCursorError();
@@ -166,14 +225,18 @@ export function presentExecutionDecisionReceipts(params: {
     context: params.context,
     options: { ...params.options, now },
   });
-  const decisions: DecisionReceiptV1[] = [];
+  const decisions: ProvenancedDecisionReceipt[] = [];
   let remainingLimit = limit;
   let nextDecisionCursor: string | undefined;
   const approvalOffset =
     legacyOffset !== undefined && legacyOffset < approvalSummary.count ? legacyOffset : undefined;
 
   if (cursor === undefined && remainingLimit > 0) {
-    decisions.push(admissionDecision(params.context));
+    decisions.push({
+      receipt: admissionDecision(params.context),
+      provenance: { state: "verified", producer: "run-admission" },
+      selectorId: `${params.context.contextId}:admission`,
+    });
     remainingLimit -= 1;
     if (
       remainingLimit === 0 &&
@@ -210,8 +273,14 @@ export function presentExecutionDecisionReceipts(params: {
       }
       throw error;
     }
-    decisions.push(...page.receipts);
-    remainingLimit -= page.receipts.length;
+    decisions.push(
+      ...page.entries.map((entry) => ({
+        receipt: entry.receipt,
+        provenance: { state: "verified" as const, producer: "operator-approval" as const },
+        selectorId: entry.selectorId,
+      })),
+    );
+    remainingLimit -= page.entries.length;
     if (page.nextCursor) {
       nextDecisionCursor = formatDecisionCursor("approval", page.nextCursor);
     } else if (remainingLimit === 0 && messageSummary.count > 0) {
@@ -250,8 +319,14 @@ export function presentExecutionDecisionReceipts(params: {
       }
       throw error;
     }
-    decisions.push(...page.receipts);
-    remainingLimit -= page.receipts.length;
+    decisions.push(
+      ...page.entries.map((entry) => ({
+        receipt: entry.receipt,
+        provenance: { state: "verified" as const, producer: "message-delivery" as const },
+        selectorId: entry.selectorId,
+      })),
+    );
+    remainingLimit -= page.entries.length;
     if (page.nextCursor) {
       nextDecisionCursor = formatDecisionCursor("message", page.nextCursor);
     } else if (remainingLimit === 0 && genericSummary.count > 0) {
@@ -285,28 +360,31 @@ export function presentExecutionDecisionReceipts(params: {
       }
       throw error;
     }
-    decisions.push(...page.receipts);
+    decisions.push(
+      ...page.entries.map((entry) => ({
+        receipt: entry.receipt,
+        provenance: { state: "unverified" as const },
+        selectorId: entry.selectorId,
+      })),
+    );
     if (page.nextCursor) {
       nextDecisionCursor = formatDecisionCursor("generic", page.nextCursor);
     } else {
       nextDecisionCursor = undefined;
     }
   }
-  const ownerCoverage = new Set([
-    approvalSummary.coverageState,
-    messageSummary.coverageState,
-    genericSummary.coverageState,
-  ]);
+  const ownerCoverage = new Set([approvalSummary.coverageState, messageSummary.coverageState]);
+  const hasUnverifiedGenericDecisions = genericSummary.count > 0;
   const boundedEvidence = boundMissingEvidence([
     ...params.context.missingEvidence,
     ...approvalSummary.missingEvidence,
     ...messageSummary.missingEvidence,
-    ...genericSummary.missingEvidence,
+    ...(hasUnverifiedGenericDecisions ? ["decision.display_provenance"] : []),
   ]);
   const coverageState = boundedEvidence.truncated
     ? "unknown"
-    : ownerCoverage.has("unsupported")
-      ? "unsupported"
+    : hasUnverifiedGenericDecisions
+      ? "unknown"
       : ownerCoverage.has("unknown")
         ? "unknown"
         : ownerCoverage.has("enforced")
@@ -322,7 +400,8 @@ export function presentExecutionDecisionReceipts(params: {
       status: "known",
     },
     identity: { state: "present", context: params.context },
-    decisions,
+    decisions: decisions.map(({ receipt }) => receipt),
+    decisionDisplays: decisions.map(projectDecisionDisplay),
     coverage: { state: coverageState, missingEvidence: boundedEvidence.missingEvidence },
     ...(nextDecisionCursor ? { nextDecisionCursor } : {}),
   };

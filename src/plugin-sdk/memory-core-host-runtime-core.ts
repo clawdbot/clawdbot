@@ -34,6 +34,14 @@ export type {
   MemoryPromptSectionBuilder,
 } from "../plugins/memory-state.js";
 export {
+  listMemoryArtifactProvenance,
+  readMemoryArtifactProvenance,
+} from "../memory/memory-artifact-provenance.js";
+export type {
+  MemoryArtifactOriginClass,
+  MemoryArtifactProvenance,
+} from "../memory/memory-artifact-provenance.js";
+export {
   clearMemoryPluginState,
   listMemoryCorpusSupplements,
   registerMemoryCapability,

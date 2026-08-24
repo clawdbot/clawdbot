@@ -1,6 +1,8 @@
 import { formatUiError } from "../../lib/format-error.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
+import { loadChatBranches, retireChatBranchRequests } from "./chat-history.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import {
   consumePaneSessionHandoff,
@@ -46,10 +48,26 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       this.minutePoll.start();
       this.consumeSessionHandoff(this.sessionKey);
       this.syncActiveBindings();
+      const state = this.state;
+      const deferredHydrationActive = this.resumeDeferredSessionHydration();
+      if (
+        state &&
+        !deferredHydrationActive &&
+        (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, state.sessionKey) ||
+          state.chatBranchesConnectionEpoch !== state.connectionEpoch)
+      ) {
+        void loadChatBranches(state);
+      }
+      this.refreshSwarmRoster();
       void this.refreshSessionPullRequests();
       return;
     }
     this.minutePoll.stop();
+    if (this.state) {
+      retireChatBranchRequests(this.state);
+    }
+    this.swarmHydrator?.dispose();
+    this.swarmHydrator = null;
     this.clearHistoryObserver();
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.syncActiveBindings();

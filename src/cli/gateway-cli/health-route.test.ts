@@ -126,6 +126,38 @@ describe("runGatewayHealthJsonRoute", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("preserves structured Gateway health request errors", async () => {
+    const runtime = createRuntime();
+    const error = new Error("health snapshot unavailable");
+    const callGateway = vi.fn(async () => {
+      throw error;
+    });
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_request_error",
+        code: "UNAVAILABLE",
+        message: "health snapshot unavailable",
+      },
+    };
+    const formatGatewayClientRequestErrorJson = vi.fn(() => payload);
+    const formatGatewayTransportErrorJson = vi.fn();
+
+    await runGatewayHealthJsonRoute({ rpc: { json: true, timeout: "10000" } }, runtime as never, {
+      callGateway,
+      readNonObservingHealthConfig: async () => ({}),
+      emitReachableGatewayAuthDiagnostic: vi.fn(async () => false) as never,
+      formatGatewayAuthErrorJson: vi.fn(() => null) as never,
+      formatGatewayClientRequestErrorJson: formatGatewayClientRequestErrorJson as never,
+      formatGatewayTransportErrorJson: formatGatewayTransportErrorJson as never,
+    });
+
+    expect(formatGatewayClientRequestErrorJson).toHaveBeenCalledWith(error);
+    expect(formatGatewayTransportErrorJson).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("preserves structured auth errors when reachability is unknown", async () => {
     const runtime = createRuntime();
     const error = new Error("gateway health requires credentials");

@@ -25,6 +25,11 @@ type CodeModeExecHookMetadata = {
 };
 
 const codeModeControlTools = new WeakSet<object>();
+type CodeModeExecDescriptionTarget = Pick<AnyAgentTool, "description">;
+const codeModeExecDescriptionTargets = new WeakMap<
+  object,
+  { description: string; targets: Set<CodeModeExecDescriptionTarget> }
+>();
 
 /** Mark a tool as owned by code mode control flow. */
 export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
@@ -33,10 +38,39 @@ export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
 }
 
 /** Replicate code-mode identity from an original tool object to a wrapper. */
-export function copyCodeModeControlToolIdentity(original: object, wrapper: object): void {
+export function copyCodeModeControlToolIdentity(
+  original: object,
+  wrapper: CodeModeExecDescriptionTarget,
+): void {
   if (codeModeControlTools.has(original)) {
     codeModeControlTools.add(wrapper);
+    const descriptionState = codeModeExecDescriptionTargets.get(original);
+    if (descriptionState && descriptionState.targets.size > 0) {
+      // Registry refresh recreates wrappers from retained definitions; every
+      // live copy must reflect the current authorized catalog.
+      wrapper.description = descriptionState.description;
+      descriptionState.targets.add(wrapper);
+      codeModeExecDescriptionTargets.set(wrapper, descriptionState);
+    }
   }
+}
+
+/** Keep catalog updates synchronized across every live exec definition and wrapper. */
+export function createCodeModeExecDescriptionUpdater(tool: AnyAgentTool): {
+  update: (description: string) => void;
+  dispose: () => void;
+} {
+  const state = { description: tool.description, targets: new Set([tool]) };
+  codeModeExecDescriptionTargets.set(tool, state);
+  return {
+    update(description) {
+      state.description = description;
+      for (const target of state.targets) {
+        target.description = description;
+      }
+    },
+    dispose: () => state.targets.clear(),
+  };
 }
 
 /** Return whether a tool was marked as code-mode owned. */
@@ -151,9 +185,18 @@ export function reconcileCodeModeExecBeforeHookParams(params: {
 
   const adjustedCode = params.adjustedParams.code;
   const adjustedCommand = params.adjustedParams.command;
-  const adjustedCodeChanged = typeof adjustedCode === "string" && adjustedCode !== hookCode;
+  const adjustedCodeChanged =
+    Object.hasOwn(params.adjustedParams, "code") && adjustedCode !== hookCode;
   const adjustedCommandChanged =
-    typeof adjustedCommand === "string" && adjustedCommand !== hookCode;
+    Object.hasOwn(params.adjustedParams, "command") && adjustedCommand !== hookCode;
+  // Invalidation must dominate a simultaneous valid rewrite; otherwise runtime
+  // ignores the invalid alias and executes the other one.
+  if (adjustedCodeChanged && readNonBlankString(adjustedCode) === undefined) {
+    return { ...params.adjustedParams, command: adjustedCode };
+  }
+  if (adjustedCommandChanged && readNonBlankString(adjustedCommand) === undefined) {
+    return { ...params.adjustedParams, code: adjustedCommand };
+  }
   if (adjustedCodeChanged === adjustedCommandChanged) {
     return params.adjustedParams;
   }

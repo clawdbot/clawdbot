@@ -53,6 +53,75 @@ async function initializeRemoteBackedGitWorkspace(root: string): Promise<string>
   return await fs.realpath(workspace);
 }
 
+test("sessions.create only allocates worktrees for lifecycle-manageable agent owners", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-create-worktree-agent-owner-",
+  });
+  const workspace = await initializeRemoteBackedGitWorkspace(openClawState.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  const { storePath } = await createSessionStoreDir();
+  const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+  const allocatedWorktreeIds = new Set<string>();
+  const createWorktree = vi.spyOn(managedWorktrees, "create");
+  try {
+    for (const owner of [{ agentId: "main" }, { key: "agent:main:dashboard:unconfigured-owner" }]) {
+      const created = await directSessionReq<{
+        key: string;
+        worktree: { id: string };
+      }>("sessions.create", { ...owner, worktree: true }, { client: adminClient });
+      if (created.payload?.worktree.id) {
+        allocatedWorktreeIds.add(created.payload.worktree.id);
+      }
+
+      expect(created).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: 'Unknown agent id "main"' },
+      });
+      if (owner.key) {
+        expect(
+          loadSessionEntry({ agentId: "main", sessionKey: owner.key, storePath }),
+        ).toBeUndefined();
+      }
+      expect(createWorktree).not.toHaveBeenCalled();
+    }
+
+    for (const owner of [{ agentId: "ops" }, {}]) {
+      const created = await directSessionReq<{
+        key: string;
+        worktree: { id: string; path: string };
+      }>("sessions.create", { ...owner, worktree: true }, { client: adminClient });
+      if (created.payload?.worktree.id) {
+        allocatedWorktreeIds.add(created.payload.worktree.id);
+      }
+      expect(created).toMatchObject({
+        ok: true,
+        payload: { key: expect.stringMatching(/^agent:ops:/) },
+      });
+
+      const worktree = created.payload!.worktree;
+      await expect(
+        directSessionReq("sessions.delete", { key: created.payload!.key, agentId: "ops" }),
+      ).resolves.toMatchObject({ ok: true, payload: { deleted: true } });
+      await expect(fs.access(worktree.path)).rejects.toThrow();
+      allocatedWorktreeIds.delete(worktree.id);
+    }
+  } finally {
+    createWorktree.mockRestore();
+    for (const id of allocatedWorktreeIds) {
+      if (getRegistryWorktree(process.env, id)?.removedAt === undefined) {
+        await managedWorktrees.remove({ id, reason: "test-cleanup", allowSnapshotLoss: true });
+      }
+    }
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = undefined;
+    testState.agentsConfig = undefined;
+    await openClawState.cleanup();
+  }
+});
+
 test("sessions.delete snapshots and removes session worktrees", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",

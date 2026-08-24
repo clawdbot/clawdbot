@@ -244,8 +244,8 @@ export async function deliverMattermostReplyWithDraftPreview(
       ]) ?? previewDeliveryResult
     );
   } catch (error: unknown) {
-    // A provider send can complete before preview cleanup fails. Preserve every
-    // completed visible receipt so core cannot mistake that post-send failure for a safe retry.
+    // Preserve confirmed preview and supplemental receipts so core cannot
+    // mistake a later visible-delivery failure for a safe retry.
     const completedVisibleResults: MattermostReplyDeliveryResult[] = [];
     const completedReceiptResults: Array<{ receipt: MessageReceipt } | { messageId: string }> = [];
     for (const result of [

@@ -22,6 +22,7 @@ type SpawnResult = {
   status: number | null;
   stdout?: string;
   signal?: NodeJS.Signals;
+  error?: Error;
 };
 type SpawnMock = ReturnType<typeof vi.fn> & typeof nodeSpawnSync;
 
@@ -198,12 +199,12 @@ describe("maybeRunCliInContainer", () => {
   });
 
   it.each([
-    { signal: "SIGINT" as const, exitCode: 130 },
-    { signal: "SIGTERM" as const, exitCode: 143 },
-  ])("preserves exit code $exitCode when the container child exits from $signal", (testCase) => {
+    { result: { status: 7 }, exitCode: 7, outcome: "status 7" },
+    { result: { status: null, signal: "SIGINT" as const }, exitCode: 130, outcome: "SIGINT" },
+    { result: { status: null, signal: "SIGTERM" as const }, exitCode: 143, outcome: "SIGTERM" },
+  ])("preserves exit code $exitCode when the container child returns $outcome", (testCase) => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, {
-      status: null,
-      signal: testCase.signal,
+      ...testCase.result,
     });
 
     expect(
@@ -216,6 +217,29 @@ describe("maybeRunCliInContainer", () => {
       exitCode: testCase.exitCode,
     });
   });
+
+  it.each(["ENOENT", "EACCES"])(
+    "throws the original %s launch error from the container exec",
+    (code) => {
+      const launchError = Object.assign(new Error(`spawnSync podman ${code}`), { code });
+      const spawnSync = mockSpawn(runningContainer, missingContainer, {
+        status: null,
+        error: launchError,
+      });
+
+      let thrown: unknown;
+      try {
+        maybeRunCliInContainer(["node", "openclaw", "status"], {
+          env: { OPENCLAW_CONTAINER: "demo" } as NodeJS.ProcessEnv,
+          spawnSync,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBe(launchError);
+    },
+  );
 
   it("uses OPENCLAW_CONTAINER when the flag is absent", () => {
     const spawnSync = mockSpawn(runningContainer, missingContainer, successfulExec);

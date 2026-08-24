@@ -673,6 +673,60 @@ describe("external shared-state ownership", () => {
     }
   });
 
+  it("fences a claim made during a canonical current-schema cold open", () => {
+    const env = createEnv();
+    const databasePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const originalPrepare = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "prepare")
+      ?.value as
+      | ((
+          this: import("node:sqlite").DatabaseSync,
+          sql: string,
+        ) => import("node:sqlite").StatementSync)
+      | undefined;
+    if (!originalPrepare) {
+      throw new Error("DatabaseSync.prepare descriptor is unavailable");
+    }
+    let claimInjected = false;
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: import("node:sqlite").DatabaseSync,
+      sql: string,
+    ) {
+      if (!claimInjected && sql.includes("SELECT app_version FROM schema_meta")) {
+        claimInjected = true;
+        const claimant = new DatabaseSync(databasePath);
+        try {
+          claimant
+            .prepare(
+              `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+               VALUES (?, ?, ?)`,
+            )
+            .run(
+              STATE_SUPERVISION_KEY,
+              JSON.stringify({
+                version: 1,
+                mode: "external",
+                managerId: "race-manager",
+                claimedAt: 1,
+              }),
+              1,
+            );
+        } finally {
+          claimant.close();
+        }
+      }
+      return originalPrepare.call(this, sql);
+    });
+
+    try {
+      expect(() => openOpenClawStateDatabase({ env })).toThrow(OpenClawStateOwnershipError);
+    } finally {
+      prepare.mockRestore();
+    }
+    expect(claimInjected).toBe(true);
+  });
+
   it("fences injected and pre-claim handles on their next canonical write", () => {
     const externalEnv = createEnv(true);
     const opened = openOpenClawStateDatabase({ env: externalEnv });

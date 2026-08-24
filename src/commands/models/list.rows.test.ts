@@ -792,7 +792,7 @@ describe("appendConfiguredProviderRows", () => {
     expect(requireOnlyRow(rows).input).toBe("text");
   });
 
-  it("keeps provider normalization for configured provider models", async () => {
+  it("keeps authored input while normalizing configured provider models", async () => {
     mocks.normalizeProviderResolvedModelWithPlugin.mockReturnValueOnce({
       provider: "anthropic",
       id: "claude-sonnet-4-6",
@@ -837,7 +837,10 @@ describe("appendConfiguredProviderRows", () => {
     });
 
     expect(mocks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledOnce();
-    expect(requireOnlyRow(rows).input).toBe("text+image");
+    // models.providers is authoritative for configured capabilities. Runtime
+    // normalization may fill provider details but must not add image input the
+    // operator did not configure.
+    expect(requireOnlyRow(rows).input).toBe("text");
   });
 
   it("threads configured model route facts into auth availability", async () => {

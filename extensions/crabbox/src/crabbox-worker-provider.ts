@@ -77,7 +77,7 @@ type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
 type LeaseCommandContext = { binary: string; id: string; provider: string };
 type LeaseHeartbeatContext = LeaseCommandContext &
-  Pick<CrabboxProfile, "heartbeatIntervalMs" | "idleTimeout">;
+  Pick<CrabboxProfile, "heartbeatIntervalMs" | "heartbeatTimeoutMs" | "idleTimeout">;
 type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
   deadline: number;
   inspect: ParsedInspect;
@@ -433,7 +433,7 @@ export function createCrabboxWorkerProvider(
         binary: context.binary,
         runCommand,
         signal,
-        timeoutMs: Math.min(CRABBOX_LIFECYCLE_TIMEOUT_MS, context.heartbeatIntervalMs),
+        timeoutMs: context.heartbeatTimeoutMs,
       }),
     warn,
   });
@@ -466,6 +466,7 @@ export function createCrabboxWorkerProvider(
     return {
       binary: resolveBinary(parsed.binary),
       heartbeatIntervalMs: parsed.heartbeatIntervalMs,
+      heartbeatTimeoutMs: parsed.heartbeatTimeoutMs,
       id: lease.leaseId,
       idleTimeout: parsed.idleTimeout,
       provider: parsed.provider,
@@ -609,6 +610,9 @@ export function createCrabboxWorkerProvider(
       try {
         enrollment = await beginNodeEnrollment();
       } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error;
+        }
         return await failProvisionAfterCleanup({ ...inspectedParams, id: leaseId }, error);
       }
       const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({ enrollment, leaseId });
@@ -625,11 +629,16 @@ export function createCrabboxWorkerProvider(
       try {
         deviceId = await enrollment.waitForDeviceId();
       } catch (error) {
+        // Gateway shutdown cancels its wait, not the fixed operation-owned provider lease.
+        if (enrollment.signal?.aborted) {
+          throw error;
+        }
         return await failProvisionAfterCleanup({ ...inspectedParams, id: leaseId }, error);
       }
       heartbeats.start({
         binary,
         heartbeatIntervalMs: parsed.heartbeatIntervalMs,
+        heartbeatTimeoutMs: parsed.heartbeatTimeoutMs,
         id: leaseId,
         idleTimeout: parsed.idleTimeout,
         provider: parsed.provider,

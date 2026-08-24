@@ -875,6 +875,15 @@ describe("createModelAuthAvailabilityResolver", () => {
     expect(result).not.toHaveProperty("selectedRoute");
   });
 
+  it("keeps one unconfigured Codex route indeterminate until native account validation", () => {
+    expect(
+      evaluate({
+        resolution: { ...dualRoutes, routes: [subscriptionRoute] },
+        syntheticAuthProviderRefs: ["codex"],
+      }),
+    ).toMatchObject({ availability: undefined, evidence: "synthetic" });
+  });
+
   it("does not let invalid automatic profile evidence block synthetic Codex ownership", () => {
     expect(
       evaluate({

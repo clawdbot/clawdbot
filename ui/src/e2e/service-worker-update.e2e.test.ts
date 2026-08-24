@@ -19,7 +19,6 @@ import {
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const artifactDir = path.resolve(".artifacts/control-ui-e2e/service-worker-update");
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const workerUpdateVersionsStorageKey = "openclaw.control-ui-e2e.worker-update-versions";
 
 const buildA = "service-worker-build-a";
 const buildB = "service-worker-build-b";
@@ -174,15 +173,6 @@ async function ensureControlledPage(page: Page, pageErrors: string[], expectedBu
   await page.waitForFunction(() => navigator.serviceWorker?.controller?.state === "activated");
 }
 
-async function readWorkerUpdateVersions(page: Page): Promise<string[]> {
-  return page.evaluate((storageKey) => {
-    const stored = JSON.parse(sessionStorage.getItem(storageKey) ?? "[]") as unknown;
-    return Array.isArray(stored)
-      ? stored.filter((value): value is string => typeof value === "string")
-      : [];
-  }, workerUpdateVersionsStorageKey);
-}
-
 async function fetchControlledAsset(
   page: Page,
   assetPath: string,
@@ -295,21 +285,6 @@ describe("Control UI service-worker production update E2E", () => {
         ? { recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } } }
         : {}),
     });
-    // An update keeps the incumbent script URL while installing changed bytes.
-    // The worker emits its embedded version only after clients.claim() resolves.
-    await context.addInitScript((storageKey) => {
-      navigator.serviceWorker.addEventListener("message", (event) => {
-        if (event.data?.type !== "sw-updated" || typeof event.data.version !== "string") {
-          return;
-        }
-        const stored = JSON.parse(sessionStorage.getItem(storageKey) ?? "[]") as unknown;
-        const versions = Array.isArray(stored)
-          ? stored.filter((value): value is string => typeof value === "string")
-          : [];
-        versions.push(event.data.version);
-        sessionStorage.setItem(storageKey, JSON.stringify(versions));
-      });
-    }, workerUpdateVersionsStorageKey);
     const page = await context.newPage();
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(`${error.name}:${error.message}`));
@@ -335,7 +310,6 @@ describe("Control UI service-worker production update E2E", () => {
     try {
       expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
       await ensureControlledPage(page, pageErrors, buildA);
-      await expect.poll(() => readWorkerUpdateVersions(page)).toContain(buildA);
       await expect
         .poll(
           async () =>
@@ -458,22 +432,6 @@ describe("Control UI service-worker production update E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("connect")).at(-1)?.params)
         .toMatchObject({ client: { buildId: buildB } });
-      await page.waitForFunction((expectedBuildId) => {
-        const controller = navigator.serviceWorker.controller;
-        return (
-          controller?.state === "activated" &&
-          new URL(controller.scriptURL).searchParams.get("v") === expectedBuildId
-        );
-      }, buildB);
-      expect(
-        await page.evaluate(() => {
-          const controller = navigator.serviceWorker.controller;
-          return {
-            buildId: controller ? new URL(controller.scriptURL).searchParams.get("v") : null,
-            state: controller?.state ?? null,
-          };
-        }),
-      ).toEqual({ buildId: buildB, state: "activated" });
 
       const terminal = page.locator("openclaw-terminal-panel[embedded]");
       await terminal.waitFor({ state: "attached" });

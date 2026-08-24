@@ -37,7 +37,11 @@ export {
   type MemoryReadResult,
 } from "./host/read-file-shared.js";
 export { resolveMemoryBackendConfig } from "./host/backend-config.js";
-export { resolveMemorySearchStaleness } from "./host/types.js";
+export {
+  isAutomaticMemoryEntryEligible,
+  isMemoryOriginEligibleForAutomaticInjection,
+  resolveMemorySearchStaleness,
+} from "./host/types.js";
 export type { ResolvedMemoryBackendConfig } from "./host/backend-config.js";
 export type {
   MemoryEmbeddingProbeResult,

@@ -5,8 +5,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { loadChatHistory, type ChatState } from "./chat-history.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
@@ -104,7 +106,13 @@ function seedChatSnapshot(
 type SessionTestState = ChatState & {
   [key: string]: unknown;
   chatRunStatus?: { phase: string; runId: string | null; sessionKey: string } | null;
-  lastLocalTerminalReconcile?: { sessionStatus: string } | null;
+  knownAgentRunIds: Set<string>;
+  lastLocalTerminalReconcile?: {
+    phase: string;
+    runId: string | null;
+    sessionKey: string;
+    sessionStatus: string;
+  } | null;
   sessionsResult: {
     [key: string]: unknown;
     sessions: Array<Record<string, unknown>>;
@@ -825,6 +833,54 @@ describe("handleChatGatewayEvent", () => {
     ).toMatchObject({
       status: "completed",
       acceptedFinalMessageIdentities: [expect.any(String)],
+    });
+  });
+
+  it("settles an active run when its terminal reply was already accepted", () => {
+    const runId = "run-1";
+    const final = createTextChatMessage("assistant", "Delivered answer");
+    const state = createStateWithRunningSession({
+      sessionKey: "main",
+      chatRunId: runId,
+      chatStream: "Delivered answer",
+      chatStreamStartedAt: 123,
+      chatRunStartup: { state: "activity", runId },
+    }) as SessionTestState & { chatStreamSegments: HistoryToolSegment[] };
+    state.chatStreamSegments = [{ text: "Retained commentary", ts: 122, toolCallId: "call-1" }];
+    state.knownAgentRunIds = new Set([runId]);
+    const scope = { sessionKey: state.sessionKey };
+    const projection = reduceSessionProjection(
+      getChatSessionProjection(state, state.chatMessages, scope),
+      { type: "runTerminal", runId, status: "completed", message: final, scope },
+    );
+    setChatSessionProjection(state, projection);
+    state.chatMessages = [final];
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId,
+        sessionKey: "main",
+        state: "final",
+        message: final,
+      }),
+    ).toBe("final");
+
+    expect(state.chatMessages).toEqual([final]);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamSegments).toEqual([]);
+    expect(state.chatRunStartup).toBeNull();
+    expect(state.knownAgentRunIds.has(runId)).toBe(false);
+    expect(state.sessionsResult.sessions[0]).toMatchObject({
+      status: "done",
+      hasActiveRun: false,
+      activeRunIds: [],
+    });
+    expect(state.lastLocalTerminalReconcile).toMatchObject({
+      runId,
+      sessionKey: "main",
+      phase: "done",
+      sessionStatus: "done",
     });
   });
 
@@ -1804,15 +1860,40 @@ describe("handleChatGatewayEvent", () => {
     {
       name: "keeps stream segments visible when an error ends after a tool event",
       create(): TerminalErrorFixture {
+        const partial = "Visible text before tool.";
         return {
           previous: [createTextChatMessage("user", "Ping", undefined, 1)],
           stream: null,
-          segments: [{ text: "Visible text before tool.", ts: 100 }],
+          segments: [{ text: partial, ts: 100, toolCallId: "call-before-error" }],
           error: "gateway disconnected",
           expected: [
             ["user", "Ping"],
-            ["assistant", "Visible text before tool."],
+            ["assistant", partial],
           ],
+          verify: (state) => {
+            const streamState = state as ChatState & {
+              chatStreamSegments: NonNullable<TerminalErrorFixture["segments"]>;
+            };
+            expect(streamState.chatStreamSegments).toEqual([]);
+            const rendered = buildChatItems({
+              paneId: "terminal-error-stream-owner",
+              sessionKey: state.sessionKey,
+              runId: state.chatRunId,
+              messages: state.chatMessages,
+              toolMessages: [],
+              streamSegments: streamState.chatStreamSegments,
+              stream: state.chatStream,
+              streamStartedAt: state.chatStreamStartedAt,
+              showToolCalls: true,
+            }).flatMap((item) =>
+              item.kind === "group"
+                ? item.messages.map(({ message }) => extractText(message))
+                : item.kind === "stream"
+                  ? [item.text.trim()]
+                  : [],
+            );
+            expect(rendered.filter((text) => text === partial)).toHaveLength(1);
+          },
         };
       },
     },
@@ -2755,6 +2836,30 @@ describe("loadChatHistory filtering", () => {
       { role: "assistant", content: [{ type: "text", text: "shared" }] },
     ]);
     expect(secondState.chatMessages).toEqual(firstState.chatMessages);
+  });
+
+  it("returns the original shared request revision to a later pane consumer", async () => {
+    const startup = createDeferred<HistoryResult>();
+    const request = vi.fn(() => startup.promise);
+    const client = createTestClient(request);
+    const firstState = createHistoryStateForClient(client, {
+      sessionKey: "agent:main:main",
+      sessions: { canonicalListRevision: 7 },
+    });
+    const secondState = createHistoryStateForClient(client, {
+      sessionKey: "agent:main:main",
+      sessions: { canonicalListRevision: 8 },
+    });
+
+    const firstLoad = loadChatHistory(firstState, { startup: true });
+    const secondLoad = loadChatHistory(secondState, { startup: true });
+
+    expect(request).toHaveBeenCalledOnce();
+    startup.resolve(createAssistantHistory("shared revision"));
+    const [firstResult, secondResult] = await Promise.all([firstLoad, secondLoad]);
+
+    expect(firstResult).toMatchObject({ sourceCanonicalListRevision: 7 });
+    expect(secondResult).toMatchObject({ sourceCanonicalListRevision: 7 });
   });
 
   it("keeps startup requests separate for different pane sessions", async () => {

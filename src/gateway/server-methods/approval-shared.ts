@@ -347,6 +347,7 @@ export async function handlePendingApprovalRequest<
     // A turn-source route can approve without an active approval client, so keep
     // the record alive when the originating channel/account can still receive it.
     const hasTurnSourceRoute =
+      !suppressDelivery &&
       !hasApprovalClients &&
       !delivered &&
       hasApprovalTurnSourceRoute({

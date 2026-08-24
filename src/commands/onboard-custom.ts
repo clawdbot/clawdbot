@@ -241,6 +241,7 @@ export async function promptCustomApiConfig(params: {
   config: OpenClawConfig;
   target?: OnboardingAgentTarget;
   secretInputMode?: SecretInputMode;
+  setAsPrimary?: boolean;
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
 
@@ -393,7 +394,12 @@ export async function promptCustomApiConfig(params: {
       // Alias validation must use the post-collision provider id, otherwise a
       // renamed endpoint could incorrectly collide with the requested id.
       const modelRef = modelKey(resolvedProvider.providerId, modelId);
-      return resolveCustomModelAliasError({ raw: value, cfg: config, modelRef });
+      return resolveCustomModelAliasError({
+        raw: value,
+        cfg: config,
+        modelRef,
+        agentId: params.target?.agentId,
+      });
     },
   });
   const imageInputInference = resolveCustomModelImageInputInference(modelId);
@@ -415,6 +421,7 @@ export async function promptCustomApiConfig(params: {
     alias: aliasInput,
     supportsImageInput,
     ...(params.target ? { target: params.target } : {}),
+    ...(params.setAsPrimary === false ? { setAsPrimary: false } : {}),
   });
 
   if (result.providerIdRenamedFrom && result.providerId) {

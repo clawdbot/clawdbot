@@ -3,6 +3,7 @@ import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import {
@@ -1280,9 +1281,7 @@ export function scheduleFollowupDrain(
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
-  // Queue drains outlive their enqueue request across debounce and retries.
-  // Give the detached chain its own root so inherited request admission cannot go stale.
-  void runWithGatewayIndependentRootWorkContinuation(async () => {
+  const drainQueuedFollowups = async (): Promise<void> => {
     let retryDeferred = false;
     let waitingForSteer = false;
     try {
@@ -1545,7 +1544,15 @@ export function scheduleFollowupDrain(
         scheduleFollowupDrain(key, effectiveRunFollowup);
       }
     }
-  }).catch((err: unknown) => {
+  };
+  // Queue drains outlive their enqueue request across debounce and retries.
+  // Give the detached chain its own root so inherited request admission cannot go stale.
+  // Queued turns re-admit on the generation current at drain time: the detached
+  // drain runs outside any ambient prepared-generation scope, so a parked turn
+  // never inherits the predecessor run's replaced generation.
+  void runWithGatewayIndependentRootWorkContinuation(() =>
+    runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
+  ).catch((err: unknown) => {
     queue.draining = false;
     defaultRuntime.error?.(`followup queue drain admission failed for ${key}: ${String(err)}`);
   });

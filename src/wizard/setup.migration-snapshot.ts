@@ -18,7 +18,7 @@ const ONBOARDING_TARGET_LOCK_OPTIONS = {
   staleRecovery: "remove-if-unchanged" as const,
 };
 const activeSetupMigrationTargetLock = new AsyncLocalStorage<string>();
-const MEANINGFUL_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
+const MEANINGFUL_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta", "telemetry"]);
 const MEANINGFUL_WIZARD_CONFIG_IGNORED_KEYS = new Set(["securityAcknowledgedAt"]);
 const MEANINGFUL_WORKSPACE_ENTRIES = [
   "AGENTS.md",
@@ -134,18 +134,21 @@ export async function inspectSetupMigrationFreshness(params: {
   return { fresh: reasons.length === 0, reasons };
 }
 
-/** Preserves the acknowledgement accepted in-memory before the import lock is acquired. */
-export function preserveSetupMigrationSecurityAcknowledgement(
+/** Preserve interactive consent decisions made before the import lock rereads config. */
+export function preserveSetupMigrationOnboardingConsents(
   config: OpenClawConfig,
   inMemoryConfig: OpenClawConfig,
 ): OpenClawConfig {
   const securityAcknowledgedAt = inMemoryConfig.wizard?.securityAcknowledgedAt;
-  if (!securityAcknowledgedAt || config.wizard?.securityAcknowledgedAt) {
+  const preserveSecurity = securityAcknowledgedAt && !config.wizard?.securityAcknowledgedAt;
+  const preserveTelemetry = inMemoryConfig.telemetry?.consentedAt && !config.telemetry?.consentedAt;
+  if (!preserveSecurity && !preserveTelemetry) {
     return config;
   }
   return {
     ...config,
-    wizard: { ...config.wizard, securityAcknowledgedAt },
+    ...(preserveSecurity ? { wizard: { ...config.wizard, securityAcknowledgedAt } } : {}),
+    ...(preserveTelemetry ? { telemetry: inMemoryConfig.telemetry } : {}),
   };
 }
 

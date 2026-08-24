@@ -196,6 +196,7 @@ describe("Control UI build admission over WebSocket", () => {
           },
         },
         connId: "legacy-build-connection",
+        bootId: "control-ui-build-admission-test-boot",
         remoteAddr: "127.0.0.1",
         localAddr: "127.0.0.1",
         requestHost: request.headers.host,

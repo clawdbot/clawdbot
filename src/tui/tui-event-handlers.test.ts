@@ -3754,6 +3754,38 @@ describe("tui-event-handlers: streaming watchdog", () => {
     handlers.dispose?.();
   });
 
+  it.each([
+    { description: "replaces the previous run", previousRunId: "run-before-reconnect" },
+    { description: "appears after an idle disconnect", previousRunId: null },
+  ])("rearms reconnect recovery when authoritative history $description", ({ previousRunId }) => {
+    const { state, setActivityStatus, loadHistory, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    if (previousRunId) {
+      handlers.handleChatEvent({
+        runId: previousRunId,
+        message: { content: "previous reply" },
+      });
+    }
+    handlers.pauseStreamingWatchdog();
+    handlers.reconnectStreamingWatchdog();
+
+    state.activeChatRunId = "run-after-reconnect";
+    handlers.reconnectStreamingWatchdog({
+      state: "active",
+      runId: "run-after-reconnect",
+    });
+
+    vi.advanceTimersByTime(5_001);
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+
+    handlers.dispose?.();
+  });
+
   it("reloads history only once when reconnect recovery and deferred history refresh overlap", () => {
     const { loadHistory, noteLocalRunId, handlers } = createHarness({
       streamingWatchdogMs: 5_000,

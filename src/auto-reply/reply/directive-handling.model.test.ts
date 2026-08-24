@@ -2681,6 +2681,46 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.thinkingLevel).toBe("medium");
   });
 
+  it("rejects thinking levels forbidden by the concrete runtime policy", async () => {
+    setDirectiveTestProviders([
+      {
+        id: "anthropic",
+        resolveThinkingProfile: () => ({
+          levels: [{ id: "minimal" }, { id: "medium" }, { id: "adaptive" }],
+          defaultLevel: "adaptive",
+          preserveWhenCatalogReasoningFalse: true,
+        }),
+      },
+      {
+        id: "claude-cli",
+        resolveThinkingProfile: () => ({
+          levels: [{ id: "off" }],
+          defaultLevel: "off",
+        }),
+      },
+    ]);
+    const sessionEntry = createSessionEntry();
+    const catalogEntry = {
+      provider: "anthropic",
+      id: "claude-mythos-5",
+      name: "Claude Mythos 5",
+      reasoning: false,
+      thinkingPolicyProvider: "claude-cli",
+    };
+
+    const result = await runHandleCommand("/think medium", {
+      provider: "anthropic",
+      model: "claude-mythos-5",
+      allowedModelKeys: new Set(["anthropic/claude-mythos-5"]),
+      allowedModelCatalog: [catalogEntry],
+      thinkingCatalog: [catalogEntry],
+      sessionEntry,
+    });
+
+    expect(result?.text).toContain('Thinking level "medium" is not supported');
+    expect(sessionEntry.thinkingLevel).toBeUndefined();
+  });
+
   it("accepts xhigh when the catalog marks reasoning support", async () => {
     const provider = "openai";
     const model = "gpt-5.5";

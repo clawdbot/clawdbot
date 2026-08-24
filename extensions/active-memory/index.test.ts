@@ -2111,7 +2111,11 @@ describe("active-memory plugin", () => {
             score: 1,
             snippet: "Prefer aisle seats.",
             source: "memory" as const,
-            originClass: "agent",
+            provenance: {
+              originClass: "agent" as const,
+              sessionKind: "interactive" as const,
+              observedAt: 1,
+            },
             triggers: "booking a flight",
           },
         ]),

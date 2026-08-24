@@ -1727,6 +1727,64 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual(["qa-msteams-dm-ok"]);
   });
 
+  it.each([
+    {
+      label: "the exact source route",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: true,
+    },
+    {
+      label: "the same target in another account",
+      accountId: "account-2",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: false,
+    },
+    {
+      label: "the same target in another thread",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-2",
+      expected: false,
+    },
+    {
+      label: "another target",
+      accountId: "account-1",
+      target: "chat456",
+      threadId: "thread-1",
+      expected: false,
+    },
+  ])("records explicit message sends only for $label", async (testCase) => {
+    const { ctx } = createTestContext();
+    Object.assign(ctx.params, {
+      config: {},
+      sourceReplyDeliveryMode: "message_tool_only",
+      messageChannel: "test-channel",
+      currentAccountId: "account-1",
+      currentChannelId: "chat123",
+      currentThreadId: "thread-1",
+    });
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-explicit-${testCase.label}`,
+      args: {
+        action: "send",
+        channel: "test-channel",
+        accountId: testCase.accountId,
+        target: testCase.target,
+        threadId: testCase.threadId,
+        message: "explicit reply",
+      },
+      isError: false,
+      result: { details: { ok: true } },
+    });
+
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(testCase.expected);
+  });
+
   it("records rich-content delivery when visible text is blank", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-rich-content";
@@ -2795,7 +2853,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       sessionKey: "agent:unit-session",
       toolResultFormat: "markdown",
     });
-    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed");
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec blocked");
   });
 
   it("records an actionable failure when unavailable-approval notice delivery rejects", async () => {
@@ -2883,6 +2941,44 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       summary: "Awaiting approval before command can run.",
     });
   });
+
+  it.each([
+    [false, null, "blocked", undefined],
+    [true, 12, "failed", 12],
+    [undefined, Number.POSITIVE_INFINITY, "failed", undefined],
+    [true, -1, "failed", undefined],
+  ] as const)(
+    "projects executionStarted=%s with duration %s",
+    async (executionStarted, durationMs, expectedStatus, expectedDurationMs) => {
+      const { ctx, onAgentEvent } = createTestContext();
+      await executeTool(ctx, {
+        toolName: "exec",
+        toolCallId: "tool-exec-status",
+        args: { command: "exit 7" },
+        isError: true,
+        ...(executionStarted === undefined ? {} : { executionStarted }),
+        result: { content: [], details: { status: "failed", exitCode: 7, durationMs } },
+      });
+
+      const events = onAgentEvent.mock.calls.map((call) => call[0] as CapturedAgentEvent);
+      expect(
+        events
+          .filter((event) => event.stream === "item" && event.data?.phase === "end")
+          .map((event) => event.data?.status),
+      ).toEqual([expectedStatus, expectedStatus]);
+      const commandOutput = requireEvent(
+        events,
+        (event) => event.stream === "command_output",
+        "command output event",
+      ).data;
+      expect([
+        commandOutput?.status,
+        commandOutput?.exitCode,
+        commandOutput?.durationMs,
+        "durationMs" in commandOutput!,
+      ]).toEqual([expectedStatus, 7, expectedDurationMs, expectedDurationMs !== undefined]);
+    },
+  );
 });
 
 describe("handleToolExecutionEnd derived tool events", () => {

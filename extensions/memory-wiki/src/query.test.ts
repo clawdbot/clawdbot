@@ -345,6 +345,169 @@ describe("searchMemoryWiki", () => {
     expect(results.map((result) => result.path)).toEqual(["entities/needle-person.md"]);
   });
 
+  it("filters standalone structural markers from matching, snippets, and ranking", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await Promise.all([
+      fs.writeFile(
+        path.join(rootDir, "entities", "marker-only.md"),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "entity",
+            id: "entity.marker-only",
+            title: "Marker Only",
+          },
+          body: [
+            "<!-- openclaw:wiki:generated:start -->",
+            "<!-- openclaw:wiki:generated:end -->",
+            "<!-- openclaw:human:start -->",
+            "<!-- openclaw:human:end -->",
+            "<!-- openclaw:wiki:raw-source -->",
+            "",
+          ].join("\n"),
+        }),
+        "utf8",
+      ),
+      fs.writeFile(
+        path.join(rootDir, "entities", "evidence.md"),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "entity",
+            id: "entity.evidence",
+            title: "Evidence Page",
+            description: "openclaw release evidence",
+            claims: [
+              {
+                id: "claim.evidence",
+                text: "Neutral release note.",
+                status: "supported",
+                confidence: 0.8,
+                evidence: [{ note: "supporting reference" }],
+              },
+            ],
+          },
+          body: [
+            "<!-- openclaw:human:start -->",
+            "# Evidence Page",
+            "",
+            "Readable release evidence summary.",
+            "<!-- openclaw:human:end -->",
+            "",
+          ].join("\n"),
+        }),
+        "utf8",
+      ),
+      fs.writeFile(
+        path.join(rootDir, "entities", "marker-heavy.md"),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "entity",
+            id: "entity.marker-heavy",
+            title: "Marker Heavy",
+          },
+          body: [
+            "# Marker Heavy",
+            "",
+            "<!-- openclaw:wiki:generated:start -->",
+            "openclaw body reference",
+            "<!-- openclaw:wiki:generated:end -->",
+            "<!-- openclaw:human:start -->",
+            "<!-- openclaw:human:end -->",
+            "<!-- openclaw:wiki:raw-source -->",
+            "",
+          ].join("\n"),
+        }),
+        "utf8",
+      ),
+      fs.writeFile(
+        path.join(rootDir, "entities", "clean.md"),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "entity",
+            id: "entity.clean",
+            title: "Clean",
+          },
+          body: "# Clean\n\nopenclaw openclaw body reference\n",
+        }),
+        "utf8",
+      ),
+    ]);
+
+    const evidenceResults = await searchMemoryWiki({
+      config,
+      query: "openclaw release",
+      maxResults: 10,
+    });
+    expect(evidenceResults.map((result) => result.path)).toEqual(["entities/evidence.md"]);
+    expect(evidenceResults[0]?.snippet).toBe("Readable release evidence summary.");
+
+    const openClawResults = await searchMemoryWiki({
+      config,
+      query: "openclaw",
+      maxResults: 10,
+    });
+    const paths = openClawResults.map((result) => result.path);
+    expect(paths).not.toContain("entities/marker-only.md");
+    expect(
+      openClawResults.find((result) => result.path === "entities/clean.md")?.score,
+    ).toBeGreaterThan(
+      openClawResults.find((result) => result.path === "entities/marker-heavy.md")?.score ?? 0,
+    );
+  });
+
+  it("keeps managed-block content and inline marker prose searchable", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await Promise.all([
+      fs.writeFile(
+        path.join(rootDir, "entities", "managed-content.md"),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "entity",
+            id: "entity.managed-content",
+            title: "Managed Content",
+          },
+          body: [
+            "# Managed Content",
+            "",
+            "<!-- openclaw:wiki:generated:start -->",
+            "Cobalt content remains searchable.",
+            "<!-- openclaw:wiki:generated:end -->",
+            "",
+          ].join("\n"),
+        }),
+        "utf8",
+      ),
+      fs.writeFile(
+        path.join(rootDir, "entities", "inline-marker.md"),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "entity",
+            id: "entity.inline-marker",
+            title: "Inline Marker",
+          },
+          body: [
+            "# Inline Marker",
+            "",
+            "The literal <!-- openclaw:wiki:generated:start --> inline-needle stays searchable.",
+            "",
+          ].join("\n"),
+        }),
+        "utf8",
+      ),
+    ]);
+
+    const managedResults = await searchMemoryWiki({ config, query: "cobalt" });
+    expect(managedResults.map((result) => result.path)).toEqual(["entities/managed-content.md"]);
+    expect(managedResults[0]?.snippet).toBe("Cobalt content remains searchable.");
+
+    const inlineResults = await searchMemoryWiki({ config, query: "inline-needle" });
+    expect(inlineResults.map((result) => result.path)).toEqual(["entities/inline-marker.md"]);
+    expect(inlineResults[0]?.snippet).toContain("<!-- openclaw:wiki:generated:start -->");
+  });
+
   it("matches pages when all query terms appear without an exact phrase", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
@@ -561,6 +724,64 @@ describe("searchMemoryWiki", () => {
     expect(results.map((result) => result.path)).toEqual(["entities/alias.md"]);
     expect(results[0]?.snippet).toBe("# Alias Carrier");
   });
+
+  it.each([
+    {
+      name: "oversized body lines",
+      source: "body",
+      text: `needle ${"x".repeat(20_000)}`,
+      expected: `needle ${"x".repeat(693)}`,
+    },
+    {
+      name: "oversized structured claims",
+      source: "claim",
+      text: `needle ${"x".repeat(20_000)}`,
+      expected: `needle ${"x".repeat(693)}`,
+    },
+    {
+      name: "UTF-16 surrogate pairs at the snippet boundary",
+      source: "body",
+      text: `needle ${"x".repeat(692)}🤖tail`,
+      expected: `needle ${"x".repeat(692)}`,
+    },
+  ])(
+    "bounds $name before search results reach model context",
+    async ({ source, text, expected }) => {
+      const { rootDir, config } = await createQueryVault({ initialize: true });
+      await fs.writeFile(
+        path.join(rootDir, "entities", "bounded-snippet.md"),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "entity",
+            id: "entity.bounded-snippet",
+            title: "Bounded Snippet",
+            ...(source === "claim"
+              ? {
+                  claims: [
+                    {
+                      id: "claim.bounded-snippet",
+                      text,
+                      status: "supported",
+                      confidence: 0.9,
+                      evidence: [],
+                    },
+                  ],
+                }
+              : {}),
+          },
+          body:
+            source === "claim" ? "# Bounded Snippet\n\nUnrelated body.\n" : `# Wiki\n\n${text}\n`,
+        }),
+        "utf8",
+      );
+
+      const results = await searchMemoryWiki({ config, query: "needle" });
+
+      expect(results).toHaveLength(1);
+      expect(results[0]?.snippet).toBe(expected);
+      expect(results[0]?.snippet.length).toBeLessThanOrEqual(700);
+    },
+  );
 
   it("finds wiki pages by structured claim text and surfaces the claim as the snippet", async () => {
     const { rootDir, config } = await createQueryVault({

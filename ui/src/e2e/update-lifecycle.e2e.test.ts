@@ -50,13 +50,12 @@ const HANDOFF_PENDING_SENTINEL = {
 };
 
 async function openUpdateConfirmation(page: Page): Promise<void> {
-  await page
-    .locator('[data-attention-kind="updateAvailable"] .sidebar-attention__open:visible')
-    .click();
-  await page
-    .locator(".custodian__alert-card")
-    .getByRole("button", { name: "Update and restart", exact: true })
-    .click();
+  await page.locator(".sidebar-issues-button").click();
+  const updateIssue = page.locator(
+    'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+  );
+  await updateIssue.locator("summary").click();
+  await updateIssue.locator(".sidebar-update-card__action").click();
 }
 
 suite.define(() => {

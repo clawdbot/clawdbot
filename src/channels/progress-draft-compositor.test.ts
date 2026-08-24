@@ -70,6 +70,29 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenLastCalledWith("🛠️ Next", expect.anything());
   });
 
+  it("keeps plan task progress independent from tool progress", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, commentary: true, toolProgress: false },
+        },
+      },
+      update,
+    });
+
+    expect(
+      await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }], {
+        explanation: "Applying the change.",
+      }),
+    ).toBe(true);
+    expect(update).toHaveBeenLastCalledWith("Applying the change.\n\n▸ Patch", {
+      flush: true,
+      lines: [],
+    });
+  });
+
   it("publishes partial-preview tool lines without enabling progress-only plans", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({

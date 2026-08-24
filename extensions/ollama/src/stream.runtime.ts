@@ -1,6 +1,7 @@
 // Ollama stream runtime implements native transport behavior.
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   parseJsonObjectPreservingUnsafeIntegers,
   parseJsonPreservingUnsafeIntegers,
@@ -26,6 +27,7 @@ import {
   formatToolResultText,
   isImageWithMediaPayload,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+  notifyProviderHttpResponse,
   parseTerminalToolCallArguments,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -51,6 +53,7 @@ import {
 } from "./stream-compat.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
+import type { OllamaLocalService } from "./stream-registration.js";
 
 export {
   createConfiguredOllamaCompatStreamWrapper,
@@ -78,36 +81,6 @@ function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error("Request was aborted");
   }
-}
-
-async function runOllamaResponseHook(params: {
-  hook: (() => void | Promise<void>) | undefined;
-  signal: AbortSignal | undefined;
-}): Promise<void> {
-  const { hook, signal } = params;
-  if (!hook) {
-    return;
-  }
-  throwIfOllamaStreamAborted(signal);
-  if (!signal) {
-    await hook();
-    return;
-  }
-  let onAbort: (() => void) | undefined;
-  try {
-    await Promise.race([
-      Promise.resolve().then(hook),
-      new Promise<never>((_resolve, reject) => {
-        onAbort = () => reject(new Error("Request was aborted"));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }),
-    ]);
-  } finally {
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
-  throwIfOllamaStreamAborted(signal);
 }
 
 function createOllamaStreamCooperativeScheduler(
@@ -993,6 +966,7 @@ function resolveOllamaRequestTimeoutMs(
 function createRawOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
+  localService?: OllamaLocalService,
 ): StreamFn {
   const chatUrl = resolveOllamaChatUrl(baseUrl);
   const ssrfPolicy = buildOllamaBaseUrlSsrFPolicy(chatUrl);
@@ -1061,8 +1035,27 @@ function createRawOllamaStreamFn(
         ) {
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
+        const requestTimeoutMs = resolveOllamaRequestTimeoutMs(
+          model,
+          options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
+        );
 
-        const { response, release, refreshTimeout } = await fetchWithSsrFGuard({
+        // Acquire after request composition and release after guarded cleanup;
+        // reversing either boundary can leak the lease or stop inference mid-stream.
+        const acquisitionDeadline = localService
+          ? buildTimeoutAbortSignal({
+              timeoutMs: requestTimeoutMs,
+              signal: options?.signal,
+              operation: "ollama-stream.local-service",
+            })
+          : undefined;
+        const localServiceLease = await localService
+          ?.acquire(
+            { providerId: localService.providerId, baseUrl, headers },
+            acquisitionDeadline?.signal,
+          )
+          .finally(acquisitionDeadline?.cleanup);
+        const guardedFetch = await fetchWithSsrFGuard({
           url: chatUrl,
           init: {
             method: "POST",
@@ -1071,34 +1064,16 @@ function createRawOllamaStreamFn(
           },
           policy: ssrfPolicy,
           ...(options?.signal ? { signal: options.signal } : {}),
-          timeoutMs: resolveOllamaRequestTimeoutMs(
-            model,
-            options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
-          ),
+          timeoutMs: requestTimeoutMs,
           auditContext: "ollama-stream.chat",
+        }).catch((error: unknown) => {
+          localServiceLease?.release();
+          throw error;
         });
+        const { response, release, refreshTimeout } = guardedFetch;
 
         try {
-          const responseHook = options?.onResponse;
-          try {
-            await runOllamaResponseHook({
-              hook: responseHook
-                ? () =>
-                    responseHook(
-                      {
-                        status: response.status,
-                        headers: Object.fromEntries(response.headers.entries()),
-                      },
-                      model,
-                    )
-                : undefined,
-              signal: options?.signal,
-            });
-          } catch (error) {
-            // A pending body cancel must not stall release or the terminal error.
-            void response.body?.cancel().catch(() => undefined);
-            throw error;
-          }
+          await notifyProviderHttpResponse({ options, response, model });
           if (!response.ok) {
             const errorText = await readResponseTextLimited(
               response,
@@ -1403,7 +1378,11 @@ function createRawOllamaStreamFn(
             message: assistantMessage,
           });
         } finally {
-          await release();
+          try {
+            await release();
+          } finally {
+            localServiceLease?.release();
+          }
         }
       } catch (err) {
         const stopReason = options?.signal?.aborted ? "aborted" : "error";
@@ -1437,14 +1416,20 @@ export function createOllamaStreamFn(
 
 export function createConfiguredOllamaStreamFn(params: {
   model: { baseUrl?: string; headers?: unknown };
+  localService?: OllamaLocalService;
   providerBaseUrl?: string;
 }): StreamFn {
-  return createOllamaStreamFn(
-    resolveOllamaBaseUrlForRun({
-      modelBaseUrl: readStringValue(params.model.baseUrl),
-      providerBaseUrl: params.providerBaseUrl,
-    }),
-    resolveOllamaModelHeaders(params.model),
+  const modelBaseUrl = readStringValue(params.model.baseUrl)?.trim();
+  const baseUrl = resolveOllamaBaseUrlForRun({
+    modelBaseUrl,
+    providerBaseUrl: params.providerBaseUrl,
+  });
+  return createPlainTextToolCallCompatWrapper(
+    createRawOllamaStreamFn(
+      baseUrl,
+      resolveOllamaModelHeaders(params.model),
+      params.providerBaseUrl?.trim() || !modelBaseUrl ? params.localService : undefined,
+    ),
   );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

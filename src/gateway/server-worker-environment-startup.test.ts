@@ -182,6 +182,7 @@ describe("gateway worker environment startup", () => {
       };
       const transport: NodeWorkerSupervisorTransport = {
         listCurrentNodes: async () => [proof],
+        hasCurrentRunner: (candidateNodeId) => candidateNodeId === proof.nodeId,
         isCurrent: () => true,
         invoke: async (request) => {
           expect(request.isDispatchAuthorized()).toBe(true);

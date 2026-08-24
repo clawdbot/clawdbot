@@ -294,10 +294,10 @@ describe("renderChatComposer controls", () => {
         textarea.value = liveDraft;
       }
 
-      pressComposerEnter(container, modifiers);
+      const action = pressComposerEnter(container, modifiers);
 
       expect(onSend).toHaveBeenCalledOnce();
-      expect(onSend).toHaveBeenCalledWith("steer");
+      expect(onSend).toHaveBeenCalledWith("steer", action);
     },
   );
 
@@ -319,9 +319,27 @@ describe("renderChatComposer controls", () => {
         sendShortcut,
       });
 
-      pressComposerEnter(container, { altKey, ctrlKey: true });
+      const action = pressComposerEnter(container, { altKey, ctrlKey: true });
 
-      expect(onSend.mock.calls).toEqual([[]]);
+      expect(onSend.mock.calls).toEqual([[undefined, action]]);
+    },
+  );
+
+  it.each(["keyboard", "pointer"] as const)(
+    "passes the original %s submission event through the composer",
+    (kind) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({ draft: "Repeat this message", onSend });
+      const action =
+        kind === "keyboard"
+          ? pressComposerEnter(container)
+          : new MouseEvent("click", { bubbles: true, cancelable: true });
+
+      if (kind === "pointer") {
+        primaryButton(container).dispatchEvent(action);
+      }
+
+      expect(onSend).toHaveBeenCalledWith(undefined, action);
     },
   );
 

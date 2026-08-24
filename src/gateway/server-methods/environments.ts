@@ -74,18 +74,25 @@ function summarizeNodeEnvironment(
   // runtimes still advertise useful execution surfaces in one stable list.
   const capabilities = uniqueSortedStrings(node.caps, node.commands);
   const platform = node.platform?.trim();
-  const desktop =
-    node.connected === true &&
-    isNodeCommandAllowed({
-      command: NODE_DESKTOP_STREAM_COMMAND,
-      declaredCommands: node.commands,
-      allowlist: resolveNodeCommandAllowlist(config, {
-        platform: node.platform,
-        deviceFamily: node.deviceFamily,
-        commands: node.commands,
-        approvedCommands: node.commands,
-      }),
-    }).ok;
+  const allowlist =
+    node.connected === true
+      ? resolveNodeCommandAllowlist(config, {
+          platform: node.platform,
+          deviceFamily: node.deviceFamily,
+          commands: node.commands,
+          approvedCommands: node.commands,
+        })
+      : undefined;
+  const invocableCommands = allowlist
+    ? uniqueSortedStrings(node.commands)
+        .filter(
+          (command) =>
+            command.length <= 128 &&
+            isNodeCommandAllowed({ command, declaredCommands: node.commands, allowlist }).ok,
+        )
+        .slice(0, 128)
+    : [];
+  const desktop = invocableCommands.includes(NODE_DESKTOP_STREAM_COMMAND);
   return {
     id: `node:${node.nodeId}`,
     type: "node",
@@ -104,6 +111,7 @@ function summarizeNodeEnvironment(
     trust: "persistent",
     ...(desktop ? { desktop: true } : {}),
     ...(capabilities.length > 0 ? { capabilities } : {}),
+    ...(invocableCommands.length > 0 ? { invocableCommands } : {}),
     ...(node.issues?.length ? { issues: [...node.issues] } : {}),
   };
 }
@@ -138,7 +146,9 @@ export function summarizeWorkerEnvironment(
     },
   };
 }
-async function listEnvironments(context: GatewayRequestContext): Promise<EnvironmentSummary[]> {
+export async function listGatewayEnvironments(
+  context: GatewayRequestContext,
+): Promise<EnvironmentSummary[]> {
   const [devices, nodes] = await Promise.all([listDevicePairing(), listNodePairing()]);
   const managedCloudNodeIds = new Set(
     listWorkerEnvironments(context).flatMap((environment) =>
@@ -459,7 +469,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       return rejectInvalid(respond, "environments.list", validateEnvironmentsListParams);
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const environments = await listEnvironments(context);
+      const environments = await listGatewayEnvironments(context);
       const workers = listWorkerEnvironments(context);
       const summarizedAtMs = Date.now();
       environments.push(
@@ -474,7 +484,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       return rejectInvalid(respond, "environments.status", validateEnvironmentsStatusParams);
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const environment = (await listEnvironments(context)).find(
+      const environment = (await listGatewayEnvironments(context)).find(
         (entry) => entry.id === params.environmentId,
       );
       if (environment) {

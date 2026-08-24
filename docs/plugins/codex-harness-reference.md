@@ -172,7 +172,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.147.0`):
+with the official plugin (currently `@openai/codex` `0.148.0`):
 
 ```bash
 codex app-server --listen stdio://
@@ -317,8 +317,8 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin ships Codex app-server `0.147.0` and accepts external versions at or
-above that minimum. Older, malformed, and unversioned handshakes are rejected.
+The plugin ships Codex app-server `0.148.0` and accepts external versions at or
+above `0.147.0`. Older, malformed, and unversioned handshakes are rejected.
 Build metadata does not affect SemVer precedence. The same minimum applies to
 explicit custom executables, remote app-servers, and macOS desktop binaries;
 admission is not readiness proof.
@@ -446,7 +446,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.147.0` app-server.
+This preview path uses the pinned Codex `0.148.0` app-server.
 
 ```json5
 {
@@ -481,6 +481,28 @@ limit. Process exit and cleanup remain tied to the sandbox-owned process.
 This preview path is local-only. A remote WebSocket app-server cannot reach
 the loopback exec-server unless it is running on the same host, so OpenClaw
 rejects that combination.
+
+Paired-device `remote-exec` placement is a separate, placement-owned execution
+path and does not require `appServer.experimental.sandboxExecServer`. The
+Gateway keeps Codex app-server and provider auth local, while the authorized
+paired device runs the managed Codex exec-server over its existing duplex node
+connection. It requires explicit `gateway.nodes.commands.allow` authorization
+for `codex.exec-server.stdio.v1`, the approved pairing surface, and normal node
+invocation approval. The node receives a fresh private home and sanitized
+environments, never Gateway provider, cloud, or GitHub credentials. A lost
+node connection terminates the attempt and process instead of resuming it.
+Each paired-device attempt uses its own Gateway app-server client because
+Codex can register a remote environment but cannot remove one from a running
+app-server. The device exec-server does not consume an OpenClaw worker slot.
+HTTP requests containing authentication, cookies, API keys, or other
+credential-bearing headers are rejected before reaching the device; use a
+Gateway-owned authenticated request or a credential-free endpoint instead.
+Normal Codex turns are supported, but `/btw` side questions are unavailable
+until they can be bound to the active placement.
+The managed placement workspace is not an OS sandbox: approved processes and
+files have the node account's full access. Use a separate least-privilege node
+account when isolation is required.
+See [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device).
 
 ## Auth and environment isolation
 
@@ -746,21 +768,17 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.147.0`. A live `model/list`
-probe against the official `0.147.0` app-server returned these public picker
+The current bundled harness is `@openai/codex` `0.148.0`. A live `model/list`
+probe against the official `0.148.0` app-server returned these public picker
 rows:
 
-| Model id        | Input modalities | Reasoning efforts               |
-| --------------- | ---------------- | ------------------------------- |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh        |
-| `gpt-5.6`       | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.4`       | text, image      | low, medium, high, xhigh        |
-| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh        |
-| `gpt-5.3-codex` | text, image      | low, medium, high, xhigh        |
-| `gpt-5.2`       | text, image      | low, medium, high, xhigh        |
+| Model id        | Input modalities | Reasoning efforts                    |
+| --------------- | ---------------- | ------------------------------------ |
+| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
+| `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
+| `gpt-5.2`       | text, image      | low, medium, high, xhigh             |
 
 Available model IDs, input modalities, and reasoning efforts remain
 account-scoped. Run `/codex models` after starting or upgrading the gateway to
@@ -812,14 +830,67 @@ the fallback catalog:
 }
 ```
 
+## Restricted turns
+
+The Codex harness evaluates the effective tool policy for every turn. It marks
+the turn policy-restricted when any explicit policy would otherwise leave a
+Codex-native capability outside the OpenClaw policy boundary.
+
+Restriction sources include global, provider, agent, group, sender, sandbox,
+subagent, inherited, scheduled/runtime, and per-run tool policies. A finite
+allowlist always restricts the native surface. A deny list restricts it when an
+expanded entry is unknown or absent from the audited safe-deny set; this includes
+wildcards and tool groups containing any unsafe entry. `disableTools` becomes an
+empty per-run allowlist and therefore also restricts the native surface. Default
+tool-profile narrowing is not an explicit restriction and does not activate this
+mode.
+
+The current audited safe-deny names are:
+
+```text
+automations, canvas, dashboard, gateway, heartbeat_respond, image_generate,
+memory_get, memory_search, message, music_generate, show_widget, skill_workshop,
+tts, video_generate, web_fetch, x_search
+```
+
+A policy containing only those denies stays on the normal Codex native surface;
+the harness applies the named OpenClaw denial directly. Any other deny fails
+closed into the restricted surface. For example, `tools.deny: ["nodes"]`
+restricts the native surface because `nodes` is not in the audited set.
+
+Policy-restricted turns have no Codex environment selection or native Code Mode.
+OpenClaw disables inherited and configured MCP servers, attests that they remain
+disabled, disables native hook relays, and applies the effective policy to its
+dynamic tools. A temporary restriction on an existing session uses a transient
+Codex thread and preserves the unrestricted binding for later resume.
+
+Ring zero is not a configurable policy profile. It is the host-scoped system
+agent path used by OpenClaw setup and repair flows. The host must activate the
+system-agent authority and provide the exact single-tool allowlist
+`["openclaw"]`. Ring zero applies the restricted tool surface plus host-authored
+base instructions and zero project-document budget. It also suppresses
+OpenClaw's `AGENTS.md` developer-instruction carrier, so ambient workspace
+instructions cannot enter the setup/repair turn.
+
+Message-only source replies also use the restricted tool surface. Lightweight
+bootstrap turns and tool-disabled internal turns additionally set the project-
+document budget to zero. These modes are separate inputs even when their final
+thread configuration overlaps.
+
 ## Workspace bootstrap files
 
-Codex handles `AGENTS.md` itself through native project-doc discovery.
+Codex normally handles `AGENTS.md` itself through native project-doc discovery.
 OpenClaw does not write synthetic Codex project-doc files or depend on Codex
 fallback filenames for persona files, because Codex fallbacks only apply when
-`AGENTS.md` is missing.
+`AGENTS.md` is missing. Ordinary policy-restricted turns have no native
+filesystem environment, so OpenClaw instead sends the bounded workspace
+`AGENTS.md` snapshot as thread-level developer instructions. Ring-zero,
+lightweight, message-only, and tool-disabled internal turns suppress that
+carrier.
 
-For OpenClaw workspace parity, local tool notes live in the `## Tools` section of `AGENTS.md` and ride Codex's native project-doc discovery. The Codex harness forwards the other bootstrap files as developer instructions:
+For OpenClaw workspace parity, local tool notes live in the `## Tools` section
+of `AGENTS.md` and normally ride Codex's native project-doc discovery. The
+Codex harness forwards the other bootstrap files as developer instructions:
 
 - `SOUL.md`, `IDENTITY.md`, and `USER.md` are forwarded as **turn-scoped**
   collaboration instructions. Native Codex subagents do not inherit them,

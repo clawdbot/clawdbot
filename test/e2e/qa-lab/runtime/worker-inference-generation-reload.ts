@@ -6,7 +6,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import {
+  createQaBusState,
+  createQaChannelTransport,
   QA_EVIDENCE_FILENAME,
+  startQaBusServer,
   startQaGatewayChild,
   startQaMockOpenAiServer,
   type QaEvidenceSummaryJson,
@@ -43,7 +46,7 @@ const GENERATION_B_REPLY = "WORKER-GENERATION-B-OK";
 const GENERATION_C_REPLY = "WORKER-GENERATION-C-OK";
 const OWNERSHIP_STAGES = ["factory", "policy", "wrapper", "execution"] as const;
 
-type Generation = "A" | "B" | "C";
+type Generation = "A" | "B" | "C" | "D";
 type ProducerOptions = { artifactBase: string; repoRoot: string };
 type TraceEvent = {
   event: string;
@@ -81,7 +84,7 @@ async function readTrace(tracePath: string): Promise<TraceEvent[]> {
 
 function classifyAuthorization(value: string | undefined): Generation | "unknown" {
   const credential = value?.replace(/^Bearer\s+/iu, "");
-  for (const generation of ["A", "B", "C"] as const) {
+  for (const generation of ["A", "B", "C", "D"] as const) {
     if (credential === `qa-worker-runtime-${generation}`) {
       return generation;
     }
@@ -210,6 +213,7 @@ function buildGenerationConfig(params: {
       ...config.agents,
       defaults: {
         ...config.agents?.defaults,
+        maxConcurrent: 1,
         model: { primary: MODEL_REF, fallbacks: [] },
         models: {
           ...config.agents?.defaults?.models,
@@ -271,6 +275,49 @@ async function hotPublishGeneration(params: {
     throw new Error(
       `generation ${params.generation} hot publish replaced the Gateway: ${before.pid} -> ${after.pid}`,
     );
+  }
+  return { pidBefore: before.pid!, pidAfter: after.pid! };
+}
+
+async function hotPublishChannelCredential(params: {
+  gateway: WireGateway;
+  generation: Generation;
+}): Promise<{ pidBefore: number; pidAfter: number }> {
+  const before = (await params.gateway.call("system.info", {})) as { pid?: number };
+  const previous = (await params.gateway.call("config.get", {})) as { hash?: string };
+  const config = JSON.parse(await fs.readFile(params.gateway.configPath, "utf8")) as OpenClawConfig;
+  const providerConfig = config.models?.providers?.[PROVIDER_ID];
+  if (!providerConfig) {
+    throw new Error("worker generation provider was missing before credential reload");
+  }
+  const next: OpenClawConfig = {
+    ...config,
+    models: {
+      ...config.models,
+      providers: {
+        ...config.models?.providers,
+        [PROVIDER_ID]: {
+          ...providerConfig,
+          apiKey: `${SOURCE_CREDENTIAL_PREFIX}-${params.generation}`,
+        },
+      },
+    },
+  };
+  await fs.writeFile(params.gateway.configPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  await waitFor(`generation ${params.generation} credential publication`, async () => {
+    const current = (await params.gateway.call("config.get", {})) as {
+      hash?: string;
+      appliedConfigHash?: string;
+      configRevisionHash?: string;
+    };
+    return current.hash !== previous.hash &&
+      current.appliedConfigHash === current.configRevisionHash
+      ? current
+      : undefined;
+  });
+  const after = (await params.gateway.call("system.info", {})) as { pid?: number };
+  if (!Number.isSafeInteger(before.pid) || after.pid !== before.pid) {
+    throw new Error(`credential hot publish replaced the Gateway: ${before.pid} -> ${after.pid}`);
   }
   return { pidBefore: before.pid!, pidAfter: after.pid! };
 }
@@ -398,6 +445,8 @@ async function runProof(options: ProducerOptions) {
     options.repoRoot,
     "test/e2e/qa-lab/runtime/fixtures/worker-inference-generation-provider",
   );
+  const channelState = createQaBusState();
+  const channelBus = await startQaBusServer({ state: channelState });
   const mock = await startQaMockOpenAiServer({ modelRefs: [MODEL_REF] });
   const authProxy = await startAuthInspectingProxy(mock.baseUrl);
   let gateway: WireGateway | undefined;
@@ -413,15 +462,21 @@ async function runProof(options: ProducerOptions) {
     published = await createPublishedWireWorkspace(root);
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
-      useRepoCli: true,
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(options.repoRoot, "dist", "index.js")],
+        cwd: options.repoRoot,
+        usePackagedPlugins: true,
+      },
       providerBaseUrl: `${authProxy.baseUrl}/v1`,
       providerMode: "mock-openai",
       primaryModel: MODEL_REF,
       alternateModel: DEFAULT_MOCK_MODEL_REF,
-      transportBaseUrl: "http://127.0.0.1",
+      transport: createQaChannelTransport(channelState),
+      transportBaseUrl: channelBus.baseUrl,
       controlUiEnabled: false,
-      mutateConfig: (config) =>
-        buildGenerationConfig({
+      mutateConfig: (config) => ({
+        ...buildGenerationConfig({
           config,
           generation: "A",
           pluginDir,
@@ -429,6 +484,17 @@ async function runProof(options: ProducerOptions) {
           barrierPath,
           mockProviderBaseUrl: `${authProxy.baseUrl}/v1`,
         }),
+        channels: {
+          ...config.channels,
+          "qa-channel": {
+            ...config.channels?.["qa-channel"],
+            accounts: {
+              parallel: { enabled: true, baseUrl: channelBus.baseUrl, allowFrom: ["*"] },
+            },
+          },
+        },
+        session: { ...config.session, dmScope: "per-peer" },
+      }),
     });
     await waitFor("generation A provider registration", async () => {
       const registrations = (await readTrace(tracePath)).filter(
@@ -528,16 +594,91 @@ async function runProof(options: ProducerOptions) {
       throw new Error(`worker history reply counts were not exact: ${JSON.stringify(replyCounts)}`);
     }
 
+    const channelTraceCursor = (await readTrace(tracePath)).length;
+    const channelReplies = {
+      blocker: "CHANNEL-GENERATION-C-BLOCKER-OK",
+      admitted: "CHANNEL-GENERATION-C-ADMITTED-OK",
+      current: "CHANNEL-GENERATION-D-CURRENT-OK",
+    };
+    const sendChannelTurn = (conversationId: string, reply: string, accountId = "default") =>
+      channelState.addInboundMessage({
+        accountId,
+        conversation: { id: conversationId, kind: "direct" },
+        senderId: conversationId,
+        text: `Reply exactly: ${reply}`,
+      });
+    const waitForChannelReply = async (conversationId: string, reply: string) =>
+      await waitFor(`${reply} channel delivery`, () =>
+        channelState
+          .getSnapshot()
+          .messages.find(
+            (message) =>
+              message.direction === "outbound" &&
+              message.conversation.id === conversationId &&
+              message.text.includes(reply),
+          ),
+      );
+
+    await fs.writeFile(barrierPath, "armed\n", "utf8");
+    sendChannelTurn("generation-blocker", channelReplies.blocker);
+    await waitFor("generation C channel blocker auth barrier", async () =>
+      (await readTrace(tracePath))
+        .slice(channelTraceCursor)
+        .find(
+          (event) =>
+            event.event === "auth-prepare" && event.generation === "C" && event.waited === true,
+        ),
+    );
+    // Each QA account serializes its own inbound stream, so use a second account
+    // to admit the victim while the first account's turn still holds the main lane.
+    sendChannelTurn("generation-admitted", channelReplies.admitted, "parallel");
+    const activeGateway = gateway;
+    const queuedMainLane = await waitFor(
+      "admitted generation C turn waiting for the global lane",
+      async () => {
+        const diagnostics = (await activeGateway.call("diagnostics.lanes", {})) as {
+          lanes?: Array<{ lane?: string; activeCount?: number; queuedCount?: number }>;
+        };
+        return diagnostics.lanes?.find(
+          (lane) => lane.lane === "main" && lane.activeCount === 1 && (lane.queuedCount ?? 0) >= 1,
+        );
+      },
+    );
+    // A provider-only config reload replaces prepared owners without stopping
+    // the active channel accounts, unlike a whole plugin-generation reload.
+    const hotPublishD = await hotPublishChannelCredential({ gateway, generation: "D" });
+    await fs.writeFile(barrierPath, "released\n", "utf8");
+    await waitForChannelReply("generation-blocker", channelReplies.blocker);
+    await waitForChannelReply("generation-admitted", channelReplies.admitted);
+    sendChannelTurn("generation-current", channelReplies.current);
+    await waitForChannelReply("generation-current", channelReplies.current);
+
+    const channelAuthGenerations = authProxy.authGenerations.slice(3);
+    if (JSON.stringify(channelAuthGenerations) !== JSON.stringify(["C", "C", "D"])) {
+      throw new Error(
+        `admitted channel turn replaced the committed runtime owner: ${JSON.stringify(channelAuthGenerations)}`,
+      );
+    }
+
     verdict = {
       status: "pass",
       providerMode: "mock-openai",
       sessionKey: SESSION_KEY,
       placement: dispatched.placement,
-      hotPublishes: { generationB: hotPublishB, generationC: hotPublishC },
+      hotPublishes: {
+        generationB: hotPublishB,
+        generationC: hotPublishC,
+        generationD: hotPublishD,
+      },
       generationA: { reply: GENERATION_A_REPLY, stages: stagesA },
       generationB: { reply: GENERATION_B_REPLY, stages: stagesB },
       generationC: { reply: GENERATION_C_REPLY, stages: stagesC },
       runtimeCredentialGenerations: authProxy.authGenerations,
+      channelGenerationOwnership: {
+        replies: channelReplies,
+        queuedMainLane,
+        channelAuthGenerations,
+      },
       replyCounts,
       requestFacts,
       tracePath,
@@ -558,6 +699,7 @@ async function runProof(options: ProducerOptions) {
     published ? closeWireServer(published.server) : Promise.resolve(),
     authProxy.stop(),
     mock.stop(),
+    channelBus.stop(),
     fs.rm(root, { recursive: true, force: true }),
   ]);
   const cleanupFailures = cleanup.flatMap((result) =>
@@ -608,7 +750,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
         { filePath: `${SCENARIO_ID}-trace.jsonl`, kind: "trace" },
       ],
       details:
-        "A baseline worker turn established the placement lifecycle; generation B then retained factory, policy, wrapper, and execution ownership while C hot-published, and the next turn used C",
+        "Worker generations A, B, and C preserved provider ownership across plugin reload; two concurrent channel turns retained C while credential generation D committed, and the next channel turn used D",
       durationMs: Math.max(1, Date.now() - startedAt),
       status: "pass",
     });

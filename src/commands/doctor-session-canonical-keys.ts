@@ -14,6 +14,7 @@ import {
   copySessionNodeArtifactsForRepair,
   deleteSessionMembersForRepair,
 } from "../config/sessions/session-accessor.sqlite-node-artifacts.js";
+import { replaceSessionOwnerInTransaction } from "../config/sessions/session-accessor.sqlite-owner.js";
 import { collectSessionStateIdsForEntry } from "../config/sessions/session-accessor.sqlite-references.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
@@ -257,6 +258,11 @@ function applyCanonicalDestinationArtifacts(params: {
   rehomeDeliveries: boolean;
   winner: CanonicalSessionCandidate;
 }): void {
+  replaceSessionOwnerInTransaction(
+    params.database,
+    params.winner.canonicalKey,
+    params.winner.entry.owner,
+  );
   const destinationAliasKeys = listCanonicalDestinationAliasKeys(
     params.destinationStore,
     params.winner,

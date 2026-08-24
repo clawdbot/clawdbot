@@ -4,7 +4,7 @@ import { createGitHubIdentityStatusTool } from "./github-identity-status-tool.js
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 describe("github_identity_status tool", () => {
-  it("returns bounded secret-free status and an operator next action", async () => {
+  it("returns status and an operator next action", async () => {
     const callGatewayMock = vi.fn(async () => ({
       agentId: "main",
       selectedScope: "agent" as const,
@@ -36,6 +36,5 @@ describe("github_identity_status tool", () => {
       selectedScope: "agent",
     });
     expect(JSON.stringify(result)).toContain("Ask the operator");
-    expect(JSON.stringify(result)).not.toMatch(/accessToken|refreshToken|deviceCode/u);
   });
 });

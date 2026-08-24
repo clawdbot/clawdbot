@@ -41,6 +41,7 @@ import {
 } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import "./elapsed-time.ts";
+import "./tooltip.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
@@ -55,10 +56,12 @@ export interface SessionListHost {
   readonly sessionData: Pick<
     SessionDataController,
     | "approvalBadgeSnapshot"
+    | "childSessionErrorsByParent"
     | "loadMoreSessionCatalog"
     | "presenceInstanceId"
     | "presencePayload"
     | "refreshSessionCatalogs"
+    | "retryChildSessions"
     | "sessionCatalogRefreshStatus"
     | "sessionMutationError"
   >;
@@ -75,6 +78,7 @@ export interface SessionListHost {
   >;
   readonly sidebarMenus: Pick<
     SidebarMenusController,
+    | "catalogMenu"
     | "catalogViewMenuPosition"
     | "openCatalogViewMenu"
     | "openSessionGroupMenu"
@@ -98,6 +102,7 @@ export interface SessionListHost {
     sessionKey: string,
     worktreeId: string,
   ): SessionPullRequestIndicatorState;
+  mainSessionRow(): { key: string } | null;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
   startSessionDrag(session: SidebarRecentSession): void;
   finishSessionDrag(): void;
@@ -219,11 +224,13 @@ export function renderRecentSession(params: {
       channelAvatarAuth,
     );
   const trailingDescription = session.isChild
-    ? ""
+    ? running && session.unread
+      ? t("sessionsView.unread")
+      : ""
     : describeSessionTrailingState(session, pullRequestState);
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
-  const stateId = trailingIndicator === nothing ? undefined : sidebarSessionStateId(session.key);
+  const stateId = trailingDescription ? sidebarSessionStateId(session.key) : undefined;
   const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
     handleContextMenuEvent(
       event,
@@ -231,7 +238,9 @@ export function renderRecentSession(params: {
       (trigger, x, y) => host.sidebarMenus.openSessionMenu(session, x, y, trigger),
     );
   const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
-  const menuLabel = `${t("chat.sidebar.openSessionMenu")}: ${label}`;
+  const menuTooltip = t("chat.sidebar.openSessionMenu");
+  const menuLabel = `${menuTooltip}: ${label}`;
+  const menuOpen = host.sidebarMenus.sessionMenu?.session.key === session.key;
   const rowClass = [
     "sidebar-recent-session",
     "session-row-host",
@@ -355,7 +364,9 @@ export function renderRecentSession(params: {
                 ),
               })}
               ${trailingIndicator === nothing
-                ? nothing
+                ? trailingDescription
+                  ? html`<span class="sr-only" id=${stateId}>${trailingDescription}</span>`
+                  : nothing
                 : html`<span class="session-row-aside">
                     <span
                       class="session-row-state"
@@ -426,28 +437,51 @@ export function renderRecentSession(params: {
               >
                 ${icons.pin}
               </button>`}
-          <button
-            class="session-action"
-            data-session-menu="true"
-            type="button"
-            title=${menuLabel}
-            aria-label=${menuLabel}
-            aria-haspopup="menu"
-            aria-expanded=${String(host.sidebarMenus.sessionMenu?.session.key === session.key)}
-            @click=${(event: MouseEvent) => {
-              event.stopPropagation();
-              const trigger = event.currentTarget as HTMLElement;
-              host.toggleSessionMenu(session, trigger);
-            }}
-          >
-            ${icons.moreHorizontal}
-          </button>
+          <openclaw-tooltip .content=${menuTooltip} .describe=${false} .disabled=${menuOpen}>
+            <button
+              class="session-action"
+              data-session-menu="true"
+              type="button"
+              aria-label=${menuLabel}
+              aria-haspopup="menu"
+              aria-expanded=${String(menuOpen)}
+              @click=${(event: MouseEvent) => {
+                event.stopPropagation();
+                const trigger = event.currentTarget as HTMLElement;
+                host.toggleSessionMenu(session, trigger);
+              }}
+            >
+              ${icons.moreHorizontal}
+            </button>
+          </openclaw-tooltip>
         </span>
       </span>
     </div>
   `;
   // Marquee state mutates the row DOM; keying prevents cross-session reuse.
   return keyed(session.key, row);
+}
+
+export function renderChildSessionLoadError(host: SessionListHost, parentKey: string) {
+  const error = host.sessionData.childSessionErrorsByParent.get(parentKey);
+  if (!error) {
+    return nothing;
+  }
+  return html`<div
+    class="sidebar-session-error callout danger"
+    data-child-session-error=${parentKey}
+    role="alert"
+  >
+    <span>${error}</span>
+    <button
+      class="sidebar-session-tree__show-more"
+      type="button"
+      data-retry-child-sessions=${parentKey}
+      @click=${() => host.sessionData.retryChildSessions(parentKey)}
+    >
+      ${t("common.retry")}
+    </button>
+  </div>`;
 }
 
 export function renderSessionTree(params: {
@@ -494,6 +528,7 @@ export function renderSessionTree(params: {
                 ${t("sessionsView.showMoreChildren", { count: String(hiddenChildCount) })}
               </button>`
             : nothing}
+          ${renderChildSessionLoadError(host, session.key)}
           ${session.loadingChildren && session.children.length === 0
             ? html`<span class="sidebar-session-tree__loading">${t("common.loading")}</span>`
             : nothing}

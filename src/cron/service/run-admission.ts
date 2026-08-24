@@ -62,10 +62,38 @@ function dispatchWaiters(state: CronServiceState): void {
   while (admission.active < maxConcurrentRuns) {
     const waiter = admission.waiters.shift();
     if (!waiter) {
-      return;
+      break;
     }
     waiter(acquireCronRunSlot(state));
   }
+  if (admission.active < maxConcurrentRuns && admission.waiters.length === 0) {
+    const listener = admission.capacityListener;
+    admission.capacityListener = null;
+    if (listener) {
+      queueMicrotask(listener);
+    }
+  }
+}
+
+/**
+ * Acquire only the slots currently available to scheduled work. Unlike the
+ * waiter-based path used by direct runs, this never retains a timer batch while
+ * the pool is saturated.
+ */
+export function tryAcquireCronRunSlots(
+  state: CronServiceState,
+  requested: number,
+): Array<() => void> {
+  if (state.stopped || requested <= 0 || state.runAdmission.waiters.length > 0) {
+    return [];
+  }
+  const available = Math.max(0, resolveRunConcurrency() - state.runAdmission.active);
+  return Array.from({ length: Math.min(requested, available) }, () => acquireCronRunSlot(state));
+}
+
+/** Keep the first wake-up until capacity release consumes or cancellation clears it. */
+export function setCronRunCapacityListener(state: CronServiceState, listener: () => void): void {
+  state.runAdmission.capacityListener ??= listener;
 }
 
 async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => void) | null> {
@@ -83,6 +111,7 @@ async function acquireCronRunAdmission(state: CronServiceState): Promise<(() => 
 
 /** Wake queued work on stop so each caller can release its durable reservation. */
 export function cancelCronRunAdmissionWaiters(state: CronServiceState): void {
+  state.runAdmission.capacityListener = null;
   const waiters = state.runAdmission.waiters.splice(0);
   for (const waiter of waiters) {
     waiter(null);
@@ -99,6 +128,7 @@ export function reserveQueuedCronRun(
   const identity = {};
   state.queuedRunReservationsByJobId.set(jobId, {
     identity,
+    lifecycleGeneration: state.lifecycleGeneration,
     markerAtMs: reservationAt,
     runReceipt: opts.runReceipt,
     preserveWhenDisabled: opts?.preserveWhenDisabled === true,
@@ -124,7 +154,11 @@ export function isQueuedCronRunReservationCurrent(
   jobId: string,
   identity: object,
 ): boolean {
-  return state.queuedRunReservationsByJobId.get(jobId)?.identity === identity;
+  const reservation = state.queuedRunReservationsByJobId.get(jobId);
+  return (
+    reservation?.identity === identity &&
+    reservation.lifecycleGeneration === state.lifecycleGeneration
+  );
 }
 
 type QueuedCronRunReservation = {
@@ -467,7 +501,7 @@ export async function activateQueuedCronRun(params: {
     reservation.runReceipt = activatedReceipt!;
     reservation.activationPreviousLastError = { value: previousLastError };
   }
-  if (!state.stopped) {
+  if (!state.stopped && reservation.lifecycleGeneration === state.lifecycleGeneration) {
     return { kind: "activated", job: activatedJob, startedAt, runReceipt: activatedReceipt! };
   }
 
@@ -506,10 +540,7 @@ export async function activateQueuedCronRun(params: {
     releaseLocalCronRunReceiptOwnership(activatedReceipt!);
   }
   releaseQueuedCronRun(state, job.id, reservationIdentity);
-  return {
-    kind: "unavailable",
-    reason: "stopped",
-  };
+  return { kind: "unavailable", reason: "stopped" };
 }
 
 /** Apply one service-level cap to every cron execution source. Queue waiters
@@ -518,8 +549,9 @@ export async function activateQueuedCronRun(params: {
 export async function runWithCronAdmission<T>(
   state: CronServiceState,
   execute: () => Promise<T>,
+  acquiredRelease?: () => void,
 ): Promise<{ kind: "admitted"; value: T } | { kind: "stopped" }> {
-  const release = await acquireCronRunAdmission(state);
+  const release = acquiredRelease ?? (await acquireCronRunAdmission(state));
   if (!release) {
     return { kind: "stopped" };
   }
@@ -535,6 +567,8 @@ export async function executeQueuedCronRun(params: {
   jobId: string;
   reservedAtMs: number;
   reservationIdentity: object;
+  /** A scheduled dispatcher may reserve capacity before durable ownership. */
+  admissionRelease?: () => void;
   runnableOptions?: Omit<Parameters<typeof isRunnableJob>[0], "state" | "job" | "nowMs">;
   isUnavailable?: () => boolean;
   onUnavailable?: () => void;
@@ -550,7 +584,7 @@ export async function executeQueuedCronRun(params: {
 > {
   const { state } = params;
   let activated = false;
-  const admission = await runWithCronAdmission(state, async () => {
+  const executeAdmitted = async () => {
     const started = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       if (params.isUnavailable?.() || state.stopped) {
@@ -564,6 +598,14 @@ export async function executeQueuedCronRun(params: {
         job.state.queuedAtMs !== params.reservedAtMs
       ) {
         const ownership = state.queuedRunReservationsByJobId.get(params.jobId);
+        if (
+          job &&
+          ownership?.identity === params.reservationIdentity &&
+          job.state.queuedAtMs === params.reservedAtMs
+        ) {
+          await params.onNotRunnable(job);
+          return undefined;
+        }
         if (ownership?.identity === params.reservationIdentity) {
           // A concurrent disable/remove wiped the queued marker while this
           // reservation waited on admission. Its receipt is still running and
@@ -647,11 +689,15 @@ export async function executeQueuedCronRun(params: {
     };
     let outcome: TimedCronRunOutcome;
     try {
-      const result = await executeJobCoreWithTimeout(state, executionJob, {
-        runId: taskRunId,
-        activeJobMarker,
-        runReceipt: started.runReceipt,
-      });
+      const execute = async () =>
+        await executeJobCoreWithTimeout(state, executionJob, {
+          runId: taskRunId,
+          activeJobMarker,
+          runReceipt: started.runReceipt,
+        });
+      const result = state.deps.runSchedulerOwned
+        ? await state.deps.runSchedulerOwned(execute)
+        : await execute();
       outcome = { ...base, ...result, endedAt: state.deps.nowMs() };
     } catch (error) {
       const receiptSettlementDisposition =
@@ -677,7 +723,12 @@ export async function executeQueuedCronRun(params: {
       };
     }
     return { outcome, handled: (await params.onCompleted?.(outcome)) === true };
-  }).catch(async (error: unknown) => {
+  };
+  const admission = await runWithCronAdmission(
+    state,
+    executeAdmitted,
+    params.admissionRelease,
+  ).catch(async (error: unknown) => {
     if (activated) {
       await cleanupQueuedCronRunReservations({
         state,

@@ -133,14 +133,19 @@ describe("subagent registry persistence resume", () => {
     });
   });
 
-  it("retries pending child delivery before a recovered requester-turn wake", async () => {
+  it.each([
+    { label: "successful", status: "ok" as const },
+    { label: "timed-out", status: "timeout" as const },
+  ])("retries pending $label child delivery after restart", async ({ label, status }) => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     const stateDir = tempStateDir;
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const runId = `run-pending-${label}-delivery`;
+      const childSessionKey = `agent:main:subagent:pending-${label}-delivery`;
       const run: SubagentRunRecord = {
-        runId: "run-pending-delivery",
+        runId,
         requesterTurnRunId: "run-requester",
-        childSessionKey: "agent:main:subagent:pending-delivery",
+        childSessionKey,
         requesterSessionKey: "agent:main:main",
         requesterDisplayKey: "main",
         task: "deliver before waking requester",
@@ -151,7 +156,7 @@ describe("subagent registry persistence resume", () => {
           status: "terminal",
           startedAt: 110,
           endedAt: 200,
-          outcome: { status: "ok" },
+          outcome: { status },
         },
         expectsCompletionMessage: true,
         completion: { required: true, resultText: "done", capturedAt: 200 },
@@ -160,12 +165,12 @@ describe("subagent registry persistence resume", () => {
           payload: {
             requesterSessionKey: "agent:main:main",
             requesterDisplayKey: "main",
-            childSessionKey: "agent:main:subagent:pending-delivery",
-            childRunId: "run-pending-delivery",
+            childSessionKey,
+            childRunId: runId,
             task: "deliver before waking requester",
             startedAt: 110,
             endedAt: 200,
-            outcome: { status: "ok" },
+            outcome: { status },
             expectsCompletionMessage: true,
           },
         },
@@ -176,8 +181,8 @@ describe("subagent registry persistence resume", () => {
         stateDir,
         agentId: "main",
         sessionKey: run.childSessionKey,
-        sessionId: "sess-pending-delivery",
-        defaultSessionId: "sess-pending-delivery",
+        sessionId: `sess-pending-${label}-delivery`,
+        defaultSessionId: `sess-pending-${label}-delivery`,
       });
 
       mod.initSubagentRegistry();
@@ -188,8 +193,9 @@ describe("subagent registry persistence resume", () => {
         interval: 10,
       });
       expect(announceSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ childRunId: "run-pending-delivery" }),
+        expect.objectContaining({ childRunId: runId, outcome: { status } }),
       );
+      expect(mod.getSubagentRunByRunId(runId)?.execution.outcome).toEqual({ status });
     });
   });
 

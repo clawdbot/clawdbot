@@ -110,24 +110,24 @@ describe("cross-OS release checks workflow", () => {
     const producer = job(release, "prepare_release_package");
     expect(producer.outputs).toMatchObject({
       artifact_digest:
-        "${{ steps.release_package_upload.outputs.artifact-digest || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactDigest }}",
+        "${{ steps.release_package_upload.outputs.artifact-digest || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactDigest }}",
       artifact_id:
-        "${{ steps.release_package_upload.outputs.artifact-id || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId }}",
+        "${{ steps.release_package_upload.outputs.artifact-id || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactId }}",
       artifact_name:
-        "${{ steps.artifact.outputs.name || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactName }}",
+        "${{ steps.artifact.outputs.name || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactName }}",
       artifact_run_attempt:
-        "${{ steps.artifact.outputs.run_attempt || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunAttempt }}",
+        "${{ steps.artifact.outputs.run_attempt || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactRunAttempt }}",
       artifact_run_id:
-        "${{ steps.artifact.outputs.run_id || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunId }}",
+        "${{ steps.artifact.outputs.run_id || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactRunId }}",
       package_file_name:
-        "${{ steps.artifact.outputs.file_name || fromJSON(inputs.candidate_artifact_json || '{}').packageFileName }}",
+        "${{ steps.artifact.outputs.file_name || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageFileName }}",
       package_sha256:
-        "${{ steps.package.outputs.sha256 || fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 }}",
+        "${{ steps.package.outputs.sha256 || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSha256 }}",
       package_version:
-        "${{ steps.package.outputs.package_version || fromJSON(inputs.candidate_artifact_json || '{}').packageVersion }}",
+        "${{ steps.package.outputs.package_version || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageVersion }}",
       prepublish_plugin_registry_json: "${{ steps.registry_identity.outputs.json }}",
       source_sha:
-        "${{ steps.package.outputs.source_sha || fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha }}",
+        "${{ steps.package.outputs.source_sha || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSourceSha }}",
     });
     expect(step(producer, "Checkout trusted workflow ref").with).toMatchObject({
       ref: "${{ github.sha }}",
@@ -228,23 +228,24 @@ describe("cross-OS release checks workflow", () => {
     const resolveTarget = job(workflow, "resolve_target");
     expect(resolveTarget.outputs).toMatchObject({
       cross_os_scheduled: "${{ steps.inputs.outputs.cross_os_scheduled }}",
-      docker_release_scheduled: "${{ steps.inputs.outputs.docker_release_scheduled }}",
+      docker_required: "${{ steps.inputs.outputs.docker_required }}",
+      package_required: "${{ steps.inputs.outputs.package_required }}",
     });
     const capture = step(resolveTarget, "Capture selected inputs");
     expect(capture.run).toContain("cross_os_scheduled=false");
-    expect(capture.run).toContain("docker_release_scheduled=false");
-    expect(capture.run).toContain('"$RELEASE_RERUN_GROUP_INPUT" == "cross-os"');
-    expect(capture.run).toContain('[[ -z "${repo_live_suite_filter// }" ]]');
+    expect(capture.run).toContain("docker_required=false");
+    expect(capture.run).toContain("package_required=false");
+    expect(capture.run).toContain("group_selected cross-os && cross_os_scheduled=true");
+    expect(capture.run).toContain(
+      '"$live_e2e_scheduled" == "true" && -z "$repo_live_suite_filter"',
+    );
 
     const producer = job(workflow, "prepare_release_package");
-    expect(producer.if).toContain("needs.resolve_target.outputs.cross_os_scheduled == 'true'");
-    expect(producer.if).toContain(
-      "needs.resolve_target.outputs.docker_release_scheduled == 'true'",
-    );
+    expect(producer.if).toBe("needs.resolve_target.outputs.package_required == 'true'");
     const resolvePackage = step(producer, "Resolve release package artifact");
     expect(resolvePackage.run).toContain('if [[ "$CROSS_OS_SCHEDULED" == "true" ]]');
     expect(resolvePackage.run).toContain(
-      'if [[ "$DOCKER_RELEASE_SCHEDULED" == "true" && -z "${RELEASE_PACKAGE_SPEC// }" ]]',
+      'if [[ "$DOCKER_REQUIRED" == "true" && "$PACKAGE_MODE" == "source" ]]',
     );
     expect(resolvePackage.run).toContain("registry_args=()");
     expect(resolvePackage.run).toContain("if [[ \"$required_packages\" != '[]' ]]");
@@ -252,7 +253,7 @@ describe("cross-OS release checks workflow", () => {
       "needs.resolve_target.outputs.cross_os_scheduled == 'true'",
     );
     expect(job(workflow, "docker_e2e_release_checks").if).toBe(
-      "needs.resolve_target.outputs.docker_release_scheduled == 'true'",
+      "needs.resolve_target.outputs.docker_required == 'true'",
     );
   });
 

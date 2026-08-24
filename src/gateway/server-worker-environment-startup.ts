@@ -272,6 +272,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     ensureNodeWorkerBundle: async (deviceId) => await ensureNodeWorkerBundle({ deviceId }),
     prepareNodeEnrollment: nodeEnrollment.begin,
     retireNodeEnrollment: nodeEnrollment.retire,
+    stopNodeEnrollmentWaits: nodeEnrollment.stop,
     tunnelManager: workerTunnelManager,
     nodeTunnelManager: nodeWorkerTunnelManager,
     nodeDesktopCarrier: workerNodeDesktopCarrier,

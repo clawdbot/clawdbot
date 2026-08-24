@@ -1,5 +1,6 @@
 // Owns catalog-row menu state, actions, focus anchor, and rendering for AppSidebar.
 import { html, nothing } from "lit";
+import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import "./catalog-session-menu.ts";
@@ -23,6 +24,15 @@ export class SidebarCatalogMenuController {
 
   get isOpen(): boolean {
     return this.state !== null;
+  }
+
+  isOpenFor(key: CatalogSessionKey): boolean {
+    const openKey = this.state?.key;
+    return (
+      openKey?.catalogId === key.catalogId &&
+      openKey.hostId === key.hostId &&
+      openKey.threadId === key.threadId
+    );
   }
 
   open(

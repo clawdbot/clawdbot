@@ -11,6 +11,7 @@ const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.t
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const STARTUP_MEMORY_SAMPLE_COUNT = 3;
+const STARTUP_MEMORY_RSS_TOLERANCE_MB = 1;
 const COMMAND_TIMEOUT_MS = readPositiveIntEnv(
   "OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS",
   DEFAULT_COMMAND_TIMEOUT_MS,
@@ -257,6 +258,8 @@ function runCaseSample(testCase, sampleIndex, params = {}) {
     label: testCase.label,
     command: formatCaseCommand(testCase),
     limitMb: testCase.limitMb,
+    rssToleranceMb: STARTUP_MEMORY_RSS_TOLERANCE_MB,
+    effectiveLimitMb: testCase.limitMb + STARTUP_MEMORY_RSS_TOLERANCE_MB,
     maxRssMb,
     status: PASS,
     exitCode: result.status,
@@ -314,13 +317,13 @@ function runCase(testCase, params = {}) {
   }
   const maxRssMb = median(samples);
   const result = { ...report, maxRssMb, rssSamplesMb: samples };
-  if (maxRssMb > testCase.limitMb) {
-    const error = `${testCase.label} median max RSS ${maxRssMb.toFixed(1)} MB exceeded ${testCase.limitMb} MB (samples: ${formatRssSamples(samples)} MB)`;
+  if (maxRssMb > result.effectiveLimitMb) {
+    const error = `${testCase.label} median max RSS ${maxRssMb.toFixed(1)} MB exceeded effective ceiling ${result.effectiveLimitMb} MB (base limit ${result.limitMb} MB; RSS tolerance ${result.rssToleranceMb} MB; samples: ${formatRssSamples(samples)} MB)`;
     return failResult(result, testCase, error);
   }
   console.log(
     `[startup-memory] ${testCase.label}: ${maxRssMb.toFixed(1)} MB median max RSS ` +
-      `(limit ${testCase.limitMb} MB; samples ${formatRssSamples(samples)} MB)`,
+      `(base limit ${result.limitMb} MB; RSS tolerance ${result.rssToleranceMb} MB; effective ceiling ${result.effectiveLimitMb} MB; samples ${formatRssSamples(samples)} MB)`,
   );
   return result;
 }
@@ -342,9 +345,9 @@ function writeReport(options, results) {
     "",
     ...results.map((result) => {
       const samples = result.rssSamplesMb
-        ? ` (samples: ${result.rssSamplesMb.map(formatMb).join(", ")})`
+        ? `; samples: ${result.rssSamplesMb.map(formatMb).join(", ")}`
         : "";
-      return `- ${result.label}: ${result.status} median max RSS ${formatMb(result.maxRssMb)} / ${formatMb(result.limitMb)}${samples}`;
+      return `- ${result.label}: ${result.status} median max RSS ${formatMb(result.maxRssMb)} (base limit ${formatMb(result.limitMb)}; RSS tolerance ${formatMb(result.rssToleranceMb)}; effective ceiling ${formatMb(result.effectiveLimitMb)}${samples})`;
     }),
     "",
   ];

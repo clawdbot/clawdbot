@@ -1022,6 +1022,7 @@ NODE
       const result = runInstallShell(`
         set -euo pipefail
         source "${SCRIPT_PATH}"
+        env() { /usr/bin/env "$@"; }
         root="$(mktemp -d)"
         repo="$root/repo"
         npm_root="$root/lib/node_modules"
@@ -1065,6 +1066,9 @@ EOF
         install_openclaw
         status=$?
         set -e
+        if (( status == 0 )); then
+          commit_openclaw_bin_backup
+        fi
         cleanup_tmpfiles
         printf 'status=%s version=%s link=%s\n' "$status" "$("$bin/openclaw" --version)" "$([[ -L "$bin/openclaw" ]] && echo yes || echo no)"
       `);
@@ -1077,6 +1081,86 @@ EOF
       }
     },
   );
+
+  it("restores the same-bin git wrapper when final npm verification fails", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      root="$HOME/fixture"
+      repo="$root/repo"
+      npm_root="$root/lib/node_modules"
+      bin="$HOME/.local/bin"
+      launcher="$npm_root/openclaw/openclaw.mjs"
+      calls="$root/candidate-calls"
+      mkdir -p "$repo/dist" "$npm_root/openclaw" "$bin"
+      printf '%s\n' 'process.stdout.write("git-version\\n")' > "$repo/dist/entry.js"
+      cat > "$bin/openclaw" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec ${process.execPath} $repo/dist/entry.js "\\$@"
+EOF
+      chmod +x "$bin/openclaw"
+      cat > "$launcher" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+count=0
+[[ ! -f "$NPM_CANDIDATE_CALLS" ]] || count="$(cat "$NPM_CANDIDATE_CALLS")"
+count=$((count + 1))
+printf '%s\n' "$count" > "$NPM_CANDIDATE_CALLS"
+(( count < 3 )) || exit 9
+printf 'npm-version\n'
+EOF
+      chmod +x "$launcher"
+      fake_npm="$root/npm"
+      cat > "$fake_npm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "\${1:-}" in
+  --version) printf '12.0.0\n' ;;
+  root) printf '%s\n' "$NPM_FAKE_ROOT" ;;
+  prefix) printf '%s\n' "$NPM_FAKE_PREFIX" ;;
+  config) printf 'null\n' ;;
+  *) exit 1 ;;
+esac
+EOF
+      chmod +x "$fake_npm"
+      npm() { "$fake_npm" "$@"; }
+      npm_command_path() { printf '%s\n' "$fake_npm"; }
+      install_openclaw_npm() { return 0; }
+      bootstrap_gum_temp() { :; }
+      print_installer_banner() { :; }
+      print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }
+      detect_openclaw_checkout() { return 1; }
+      show_install_plan() { :; }
+      check_existing_openclaw() { return 0; }
+      configure_install_stage_total() { :; }
+      ui_stage() { :; }
+      load_nvm_for_node_detection() { :; }
+      check_node() { return 0; }
+      activate_supported_node_on_path() { :; }
+      ensure_default_node_active_shell() { return 0; }
+      check_git() { return 0; }
+      fix_npm_permissions() { :; }
+      ui_info() { :; }
+      ui_warn() { :; }
+      ui_error() { :; }
+      ui_success() { :; }
+      INSTALL_METHOD=npm
+      OPENCLAW_VERSION="$root/candidate.tgz"
+      export NPM_CANDIDATE_CALLS="$calls" NPM_FAKE_ROOT="$npm_root" NPM_FAKE_PREFIX="$HOME/.local"
+      set +e
+      (set -e; main)
+      status=$?
+      set -e
+      version="$("$bin/openclaw" --version 2>/dev/null || printf unavailable)"
+      printf 'status=%s version=%s link=%s calls=%s\n' \
+        "$status" "$version" "$([[ -L "$bin/openclaw" ]] && echo yes || echo no)" "$(cat "$calls")"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout, result.stderr).toContain("status=1 version=git-version link=no calls=3");
+  });
 
   it("restores an active shim backup when installation is interrupted", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-shim-signal-"));
@@ -1714,6 +1798,263 @@ EOF
     expect(result.status).toBe(9);
     expect(result.stdout).not.toContain("installed successfully");
     expect(result.stdout).not.toContain("Upgrade complete");
+  });
+
+  it.each([
+    {
+      name: "fresh retained config rejects failed Doctor before success",
+      configured: true,
+      upgrade: false,
+      verify: false,
+      doctorExit: 9,
+      verifyExit: 0,
+      onboard: false,
+      expectedStatus: 9,
+    },
+    {
+      name: "fresh retained config reports success only after Doctor",
+      configured: true,
+      upgrade: false,
+      verify: false,
+      doctorExit: 0,
+      verifyExit: 0,
+      onboard: false,
+      expectedStatus: 0,
+    },
+    {
+      name: "fresh explicit verification rejects failure before success",
+      configured: false,
+      upgrade: false,
+      verify: true,
+      doctorExit: 0,
+      verifyExit: 1,
+      onboard: false,
+      expectedStatus: 1,
+    },
+    {
+      name: "fresh explicit verification reports success only after verification",
+      configured: false,
+      upgrade: false,
+      verify: true,
+      doctorExit: 0,
+      verifyExit: 0,
+      onboard: false,
+      expectedStatus: 0,
+    },
+    {
+      name: "upgrade implicit verification counts four stages before success",
+      configured: true,
+      upgrade: true,
+      verify: false,
+      doctorExit: 0,
+      verifyExit: 0,
+      onboard: false,
+      expectedStatus: 0,
+    },
+    {
+      name: "upgrade rejects failed Doctor before success",
+      configured: true,
+      upgrade: true,
+      verify: false,
+      doctorExit: 9,
+      verifyExit: 0,
+      onboard: false,
+      expectedStatus: 9,
+    },
+    {
+      name: "upgrade rejects failed verification before success",
+      configured: true,
+      upgrade: true,
+      verify: false,
+      doctorExit: 0,
+      verifyExit: 1,
+      onboard: false,
+      expectedStatus: 1,
+    },
+    {
+      name: "plain fresh install reports success before skipping onboarding",
+      configured: false,
+      upgrade: false,
+      verify: false,
+      doctorExit: 0,
+      verifyExit: 0,
+      onboard: false,
+      expectedStatus: 0,
+    },
+    {
+      name: "plain fresh install reports success before optional onboarding handoff",
+      configured: false,
+      upgrade: false,
+      verify: false,
+      doctorExit: 0,
+      verifyExit: 0,
+      onboard: true,
+      expectedStatus: 0,
+    },
+    {
+      name: "fresh verification completes before success and optional onboarding handoff",
+      configured: false,
+      upgrade: false,
+      verify: true,
+      doctorExit: 0,
+      verifyExit: 0,
+      onboard: true,
+      expectedStatus: 0,
+    },
+  ])(
+    "required installer lifecycle: $name",
+    ({ configured, upgrade, verify, doctorExit, verifyExit, onboard, expectedStatus }) => {
+      const result = runInstallShell(
+        `
+          date() { printf '2026-08-20\\n'; }
+          dirname() { printf 'scripts\\n'; }
+          PATH=/__openclaw_installer_test_no_external_commands__
+          source "${SCRIPT_PATH}"
+          cleanup_tmpfiles() { :; }
+
+          INSTALL_METHOD=git
+          GIT_DIR=
+          NO_PROMPT=0
+          NO_ONBOARD="$SCENARIO_NO_ONBOARD"
+          VERIFY_INSTALL="$SCENARIO_VERIFY"
+          OS=linux
+
+          forbidden_command() {
+            printf 'forbidden external command: %s\\n' "$1" >&2
+            return 98
+          }
+          launchctl() { forbidden_command launchctl; }
+          systemctl() { forbidden_command systemctl; }
+          schtasks() { forbidden_command schtasks; }
+          sudo() { forbidden_command sudo; }
+          curl() { forbidden_command curl; }
+          wget() { forbidden_command wget; }
+          brew() { forbidden_command brew; }
+          git() { forbidden_command git; }
+          node() { forbidden_command node; }
+          openclaw() { forbidden_command openclaw; }
+          run_quiet_step() { forbidden_command run_quiet_step; }
+          run_with_safe_stdin() { forbidden_command run_with_safe_stdin; }
+          install_homebrew() { forbidden_command install_homebrew; }
+          install_node() { forbidden_command install_node; }
+          install_git() { forbidden_command install_git; }
+
+          bootstrap_gum_temp() { :; }
+          print_installer_banner() { :; }
+          print_gum_status() { :; }
+          detect_os_or_die() { OS=linux; }
+          detect_openclaw_checkout() { return 1; }
+          show_install_plan() { :; }
+          check_existing_openclaw() { [[ "$SCENARIO_UPGRADE" == 1 ]]; }
+          load_nvm_for_node_detection() { :; }
+          check_node() { return 0; }
+          activate_supported_node_on_path() { :; }
+          ensure_default_node_active_shell() { return 0; }
+          npm() { return 1; }
+          install_openclaw_from_git() { printf 'event:installed\\n'; }
+          resolve_installed_openclaw_bin() { printf '/nonexistent/mock-openclaw\\n'; }
+          warn_duplicate_openclaw_global_installs() { :; }
+          npm_global_bin_dir() { :; }
+          warn_shell_path_missing_dir() { :; }
+          has_openclaw_config() { [[ "$SCENARIO_CONFIGURED" == 1 ]]; }
+          refresh_gateway_service_if_loaded() { printf 'event:service-refresh-mocked\\n'; }
+          has_controlling_tty() { return 1; }
+          is_gateway_daemon_loaded() { return 1; }
+          is_promptable() {
+            printf 'event:onboarding-handoff-probe\\n'
+            return 1
+          }
+          run_doctor() {
+            printf 'event:doctor\\n'
+            return "$SCENARIO_DOCTOR_EXIT"
+          }
+          resolve_openclaw_version() { printf '2026.8.20-test\\n'; }
+          verify_installation() {
+            [[ "$VERIFY_INSTALL" == 1 ]] || return 0
+            ui_stage "Verifying installation"
+            printf 'event:verification\\n'
+            return "$SCENARIO_VERIFY_EXIT"
+          }
+          maybe_open_dashboard() { printf 'event:dashboard-mocked\\n'; }
+          show_footer_links() { printf 'event:footer\\n'; }
+          ui_section() { printf 'event:stage:%s\\n' "$1"; }
+          ui_info() { printf 'event:info:%s\\n' "$*"; }
+          ui_celebrate() { printf 'event:success:%s\\n' "$*"; }
+
+          configure_install_stage_total
+          main
+        `,
+        {
+          OPENCLAW_CONFIG_PATH: "",
+          OPENCLAW_HOME: "",
+          OPENCLAW_STATE_DIR: "",
+          OPENCLAW_INSTALL_METHOD: "",
+          OPENCLAW_VERIFY_INSTALL: "0",
+          OPENCLAW_NO_ONBOARD: "0",
+          OPENCLAW_NO_PROMPT: "0",
+          SCENARIO_CONFIGURED: configured ? "1" : "0",
+          SCENARIO_UPGRADE: upgrade ? "1" : "0",
+          SCENARIO_VERIFY: verify ? "1" : "0",
+          SCENARIO_DOCTOR_EXIT: String(doctorExit),
+          SCENARIO_VERIFY_EXIT: String(verifyExit),
+          SCENARIO_NO_ONBOARD: onboard || configured ? "0" : "1",
+          TERM: "dumb",
+        },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(expectedStatus);
+      expect(result.stderr).not.toContain("forbidden external command");
+
+      const output = result.stdout;
+      const successMatches = output.match(/OpenClaw installed successfully/g) ?? [];
+      const doctorIndex = output.indexOf("event:doctor");
+      const verificationIndex = output.indexOf("event:verification");
+      const successIndex = output.indexOf("event:success:");
+
+      if (expectedStatus !== 0) {
+        expect(successMatches).toHaveLength(0);
+        expect(output).not.toContain("Upgrade complete");
+        return;
+      }
+
+      expect(successMatches).toHaveLength(1);
+      if (configured) {
+        expect(doctorIndex).toBeGreaterThan(-1);
+        expect(doctorIndex).toBeLessThan(successIndex);
+      } else {
+        expect(doctorIndex).toBe(-1);
+      }
+
+      if (verify || upgrade) {
+        expect(verificationIndex).toBeGreaterThan(-1);
+        expect(verificationIndex).toBeLessThan(successIndex);
+        expect(output).toContain("[4/4] Verifying installation");
+        expect(output).not.toContain("[4/3] Verifying installation");
+      } else {
+        expect(verificationIndex).toBe(-1);
+        expect(output).toContain("[3/3] Finalizing setup");
+      }
+
+      if (upgrade) {
+        const upgradeCompletionIndex = output.indexOf("event:info:Upgrade complete");
+        expect(upgradeCompletionIndex).toBeGreaterThan(successIndex);
+      } else {
+        expect(output).not.toContain("Upgrade complete");
+      }
+
+      if (onboard) {
+        const setupIndex = output.indexOf("event:info:Starting setup");
+        const handoffProbeIndex = output.indexOf("event:onboarding-handoff-probe");
+        expect(setupIndex).toBeGreaterThan(successIndex);
+        expect(handoffProbeIndex).toBeGreaterThan(setupIndex);
+      } else if (!configured) {
+        expect(output.indexOf("event:info:Skipping onboard")).toBeGreaterThan(successIndex);
+      }
+    },
+  );
+
+  it("required installer lifecycle: preserves the interactive exec onboarding handoff", () => {
+    expect(script).toMatch(/exec <\/dev\/tty\s+exec "\$claw" onboard/);
   });
 
   it("keeps the npm owner runnable when a npm-to-git candidate fails", () => {

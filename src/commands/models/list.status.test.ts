@@ -990,6 +990,107 @@ describe("modelsStatusCommand auth overview", () => {
     );
   });
 
+  async function withConfig<T>(cfg: unknown, run: () => Promise<T>): Promise<T> {
+    const original = mocks.loadConfig.getMockImplementation();
+    mocks.loadConfig.mockReturnValue(cfg);
+    try {
+      return await run();
+    } finally {
+      if (original) {
+        mocks.loadConfig.mockImplementation(original);
+      }
+    }
+  }
+
+  it("resolves a selected agent's bare alias from that agent's model scope", async () => {
+    const localRuntime = createRuntime();
+    await withConfig(
+      {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-default", fallbacks: [] } },
+          entries: {
+            jeremiah: {
+              model: { primary: "jeremiah-choice" },
+              models: { "anthropic/claude-sonnet-4-6": { alias: "jeremiah-choice" } },
+            },
+          },
+        },
+      },
+      async () => {
+        await withAgentScopeOverrides({ primary: "jeremiah-choice" }, async () => {
+          await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime as never);
+          const payload = parseFirstJsonLog(localRuntime);
+          expect(payload.defaultModel).toBe("jeremiah-choice");
+          // Resolving the bare alias against global defaults reported
+          // openai/jeremiah-choice while the runtime selected Anthropic, so status,
+          // --check and --probe all inspected the wrong provider route.
+          expect(payload.resolvedDefault).toBe("anthropic/claude-sonnet-4-6");
+          expect(payload.aliases).toMatchObject({
+            "jeremiah-choice": "anthropic/claude-sonnet-4-6",
+          });
+        });
+      },
+    );
+  });
+
+  it("prefers a per-agent alias row over the same alias in defaults", async () => {
+    const localRuntime = createRuntime();
+    await withConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-default", fallbacks: [] },
+            models: { "openai/gpt-shared": { alias: "shared" } },
+          },
+          entries: {
+            jeremiah: {
+              model: { primary: "shared" },
+              models: { "anthropic/claude-sonnet-4-6": { alias: "shared" } },
+            },
+          },
+        },
+      },
+      async () => {
+        await withAgentScopeOverrides({ primary: "shared" }, async () => {
+          await modelsStatusCommand({ json: true, agent: "jeremiah" }, localRuntime as never);
+          const payload = parseFirstJsonLog(localRuntime);
+          // Per-agent rows are applied after defaults, so the agent's row owns
+          // the alias and the displayed target must follow the same precedence.
+          expect(payload.resolvedDefault).toBe("anthropic/claude-sonnet-4-6");
+          expect(payload.aliases).toMatchObject({ shared: "anthropic/claude-sonnet-4-6" });
+        });
+      },
+    );
+  });
+
+  it("keeps unscoped status on global defaults when no agent is selected", async () => {
+    const localRuntime = createRuntime();
+    await withConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "shared", fallbacks: [] },
+            models: { "openai/gpt-shared": { alias: "shared" } },
+          },
+          entries: {
+            jeremiah: {
+              model: { primary: "shared" },
+              models: { "anthropic/claude-sonnet-4-6": { alias: "shared" } },
+            },
+          },
+        },
+      },
+      async () => {
+        await modelsStatusCommand({ json: true }, localRuntime as never);
+        const payload = parseFirstJsonLog(localRuntime);
+        // No --agent still reports unscoped defaults; another agent's rows must
+        // not leak into the global view.
+        expect(payload.resolvedDefault).toBe("openai/gpt-shared");
+        expect(payload.aliases).toMatchObject({ shared: "openai/gpt-shared" });
+      },
+    );
+  });
+
   it("uses system-agent storage without changing unscoped model output", async () => {
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();
     mocks.loadConfig.mockReturnValue({

@@ -157,6 +157,8 @@ export type CronServiceDeps = {
     sessionKey?: string;
     agentId?: string;
   }) => DeliveryContext | undefined;
+  /** Runs timer and startup work inside the owning Gateway's detached scope. */
+  runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {
     source?: HeartbeatWakeRequest["source"];
@@ -274,10 +276,13 @@ type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
 type CronRunAdmission = {
   active: number;
   waiters: Array<(release: (() => void) | null) => void>;
+  /** One bounded wake-up for scheduled work left without a free slot. */
+  capacityListener: (() => void) | null;
 };
 
 type QueuedCronRunReservation = {
   identity: object;
+  lifecycleGeneration: number;
   markerAtMs: number;
   runReceipt: CronRunReceiptHandle;
   preserveWhenDisabled: boolean;
@@ -293,7 +298,11 @@ export type CronServiceState = {
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
   timer: NodeJS.Timeout | null;
   running: boolean;
+  /** Number of timer batches currently executing admitted scheduled work. */
+  activeTimerTicks: number;
   stopped: boolean;
+  /** Rotates synchronously on stop so an immediate restart cannot revive old work. */
+  lifecycleGeneration: number;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
   activeManualRunJobIds: Set<string>;
@@ -329,12 +338,14 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,
     running: false,
+    activeTimerTicks: 0,
     stopped: false,
+    lifecycleGeneration: 0,
     schedulingPaused: false,
     schedulerStarted: false,
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
-    runAdmission: { active: 0, waiters: [] },
+    runAdmission: { active: 0, waiters: [], capacityListener: null },
     queuedRunReservationsByJobId: new Map<string, QueuedCronRunReservation>(),
     op: Promise.resolve(),
     warnedDisabled: false,
@@ -372,6 +383,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 /** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
+  triggersEnabled: boolean;
   /** @deprecated Alias for `sqlitePath`. */
   storePath: string;
   /** Storage backend identifier. */

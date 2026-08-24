@@ -31,7 +31,9 @@ import {
 } from "../sessions/agent-harness-session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-auth-utils.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
+import { isResolvedIncognitoSession } from "./session-sharing.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
 export {
@@ -307,4 +309,22 @@ export function resolveGatewayRequestContext(params: {
     : params.defaultMessageChannel;
 
   return { agentId, sessionKey, messageChannel };
+}
+
+export function authorizeOpenAiCompatibleHttpSession(params: {
+  agentId: string;
+  sessionKey: string;
+  senderIsOwner: boolean;
+}): { allowed: true } | { allowed: false; missingScope: typeof ADMIN_SCOPE } {
+  if (
+    params.senderIsOwner ||
+    !isResolvedIncognitoSession({
+      cfg: getRuntimeConfig(),
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+    })
+  ) {
+    return { allowed: true };
+  }
+  return { allowed: false, missingScope: ADMIN_SCOPE };
 }

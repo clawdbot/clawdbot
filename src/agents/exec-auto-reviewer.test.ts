@@ -331,6 +331,18 @@ describe("createModelExecAutoReviewer", () => {
     expect(capturedPrompt).not.toContain("sessionKey");
   });
 
+  it("defers an oversized serialized request before model preparation", async () => {
+    const { reviewer, prepare, complete } = createReviewerHarness();
+
+    await expect(reviewer({ ...input, command: "x".repeat(20_000) })).resolves.toEqual({
+      decision: "ask",
+      risk: "unknown",
+      rationale: "exec reviewer deferred because the request exceeds review input limits",
+    });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
   it("defers to human approval when command text tries to instruct the reviewer", async () => {
     // Command content is adversarial input to the reviewer. Prompt-injection
     // attempts force human review even if the model returns a low-risk allow.

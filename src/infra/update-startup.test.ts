@@ -24,6 +24,7 @@ import type { UpdateCheckResult } from "./update-check.js";
 import { parseDevUpdateTargetEnv } from "./update-dev-target.js";
 
 const {
+  checkTelemetryUpdateMock,
   detectRespawnSupervisorMock,
   getRuntimeConfigMock,
   refreshRemoteModelCatalogMock,
@@ -32,6 +33,7 @@ const {
   startManagedServiceUpdateHandoffMock,
   versionMock,
 } = vi.hoisted(() => ({
+  checkTelemetryUpdateMock: vi.fn<typeof import("./telemetry.js").checkTelemetryUpdate>(),
   detectRespawnSupervisorMock: vi.fn(),
   getRuntimeConfigMock: vi.fn(() => ({})),
   refreshRemoteModelCatalogMock: vi.fn<
@@ -93,6 +95,10 @@ vi.mock("./supervisor-markers.js", async () => {
     detectRespawnSupervisor: detectRespawnSupervisorMock,
   };
 });
+
+vi.mock("./telemetry.js", () => ({
+  checkTelemetryUpdate: checkTelemetryUpdateMock,
+}));
 
 vi.mock("./update-check.js", async () => {
   const parse = (value: string) => value.split(".").map((part) => Number.parseInt(part, 10));
@@ -282,6 +288,7 @@ describe("update-startup", () => {
     }
     vi.mocked(resolveOpenClawPackageRoot).mockClear();
     vi.mocked(checkUpdateStatus).mockClear();
+    checkTelemetryUpdateMock.mockReset().mockResolvedValue(null);
     vi.mocked(resolveNpmChannelTag).mockClear();
     vi.mocked(runCommandWithTimeout).mockReset();
     vi.mocked(runCommandWithTimeout).mockResolvedValue({
@@ -394,6 +401,7 @@ describe("update-startup", () => {
       tag,
       version,
     });
+    checkTelemetryUpdateMock.mockResolvedValue({ version });
   }
 
   function mockDevGitStatus(params?: {
@@ -607,12 +615,39 @@ describe("update-startup", () => {
   ])("logs latest update hint for $name", async ({ channel }) => {
     const { log, parsed } = await runUpdateCheckAndReadState(channel);
 
+    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(
+      { update: { channel } },
+      { surface: "gateway" },
+    );
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith(
       `update available (latest): v2.0.0 (current v1.0.0). Run: ${formatCliCommand("openclaw update")}`,
     );
     expect(parsed?.lastNotifiedVersion).toBe("2.0.0");
     expect(parsed?.lastAvailableVersion).toBe("2.0.0");
     expect(parsed?.lastNotifiedTag).toBe("latest");
+  });
+
+  it("appends a bounded, terminal-safe remote note to the automatic update notice", async () => {
+    mockPackageInstallStatus();
+    checkTelemetryUpdateMock.mockResolvedValue({
+      version: "2.0.0",
+      note: `\u001b[2KImportant\nnotice ${"x".repeat(600)}`,
+    });
+    const log = { info: vi.fn() };
+
+    await runGatewayUpdateCheck({
+      cfg: {},
+      log,
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    const message = log.info.mock.calls[0]?.[0];
+    expect(message).toContain("Note: Important\\nnotice ");
+    expect(message).not.toContain("\u001b");
+    expect(message?.split("Note: ")[1]).toHaveLength(500);
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
   });
 
   it("falls back when the update-check clock is outside Date range", async () => {
@@ -762,10 +797,11 @@ describe("update-startup", () => {
       await runExtendedStableUpdateCheck({ onUpdateAvailableChange });
 
       expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
-      expect(resolveNpmChannelTag).toHaveBeenCalledWith({
-        channel: "extended-stable",
-        timeoutMs: 2500,
-      });
+      expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(
+        { update: { channel: "extended-stable" } },
+        { surface: "gateway" },
+      );
+      expect(resolveNpmChannelTag).not.toHaveBeenCalled();
       expect(onUpdateAvailableChange).toHaveBeenCalledWith({
         currentVersion: "1.0.0",
         latestVersion: "2.0.0",
@@ -787,10 +823,8 @@ describe("update-startup", () => {
     await runExtendedStableUpdateCheck();
 
     expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
-    expect(resolveNpmChannelTag).toHaveBeenCalledWith({
-      channel: "extended-stable",
-      timeoutMs: 2500,
-    });
+    expect(checkTelemetryUpdateMock).toHaveBeenCalledOnce();
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
     expect(getUpdateAvailable()).toEqual({
       currentVersion: "1.0.0",
       latestVersion: "2.0.0",
@@ -814,15 +848,9 @@ describe("update-startup", () => {
 
   it("emits update change callback when update state clears", async () => {
     mockPackageInstallStatus();
-    vi.mocked(resolveNpmChannelTag)
-      .mockResolvedValueOnce({
-        tag: "latest",
-        version: "2.0.0",
-      })
-      .mockResolvedValueOnce({
-        tag: "latest",
-        version: "1.0.0",
-      });
+    checkTelemetryUpdateMock
+      .mockResolvedValueOnce({ version: "2.0.0" })
+      .mockResolvedValueOnce({ version: "1.0.0" });
 
     const onUpdateAvailableChange = vi.fn();
     await runStableUpdateCheck({ onUpdateAvailableChange });
@@ -849,11 +877,12 @@ describe("update-startup", () => {
     });
 
     expect(log.info).not.toHaveBeenCalled();
+    expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
     expect(readPersistedUpdateCheckState()).toBeNull();
     await expectPathMissing(path.join(tempDir, "update-check.json"));
   });
 
-  it("uses the extended-stable selector for an installed final extended-stable package", async () => {
+  it("uses the telemetry endpoint for an installed final extended-stable package", async () => {
     versionMock.value = "2026.6.33";
     mockPackageUpdateStatus("extended-stable", "2026.7.33");
     const onUpdateAvailableChange = vi.fn();
@@ -866,10 +895,8 @@ describe("update-startup", () => {
       onUpdateAvailableChange,
     });
 
-    expect(resolveNpmChannelTag).toHaveBeenCalledWith({
-      channel: "extended-stable",
-      timeoutMs: 2500,
-    });
+    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith({}, { surface: "gateway" });
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
     expect(onUpdateAvailableChange).toHaveBeenCalledWith({
       currentVersion: "2026.6.33",
       latestVersion: "2026.7.33",
@@ -890,7 +917,7 @@ describe("update-startup", () => {
       runAutoUpdate,
     });
 
-    expect(checkUpdateStatus).toHaveBeenCalledOnce();
+    expect(checkUpdateStatus).not.toHaveBeenCalled();
     expect(resolveNpmChannelTag).not.toHaveBeenCalled();
     expect(runAutoUpdate).not.toHaveBeenCalled();
     expect(readPersistedUpdateCheckState()).toBeNull();
@@ -916,11 +943,8 @@ describe("update-startup", () => {
       runAutoUpdate,
     });
 
-    expect(resolveNpmChannelTag).toHaveBeenCalledTimes(2);
-    expect(resolveNpmChannelTag).toHaveBeenNthCalledWith(1, {
-      channel: "extended-stable",
-      timeoutMs: 2500,
-    });
+    expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledTimes(1);
     expect(log.info).toHaveBeenCalledWith(
       `update available (extended-stable): v2.0.0 (current v1.0.0). Run: ${formatCliCommand("openclaw update")}`,
@@ -981,10 +1005,7 @@ describe("update-startup", () => {
     await seedExtendedStableAvailability({ onUpdateAvailableChange });
     seedStableAutoRolloutState();
     onUpdateAvailableChange.mockClear();
-    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-      tag: "extended-stable",
-      version,
-    });
+    checkTelemetryUpdateMock.mockResolvedValue({ version });
     vi.setSystemTime(new Date("2026-01-18T11:00:00Z"));
     const log = { info: vi.fn() };
 
@@ -1003,37 +1024,30 @@ describe("update-startup", () => {
     expectStableAutoRolloutStatePreserved();
   });
 
-  it.each(["selector_missing", "selector_query_failed", "exact_package_mismatch"] as const)(
-    "clears stale extended-stable availability when exact resolution fails with %s",
-    async (failure) => {
-      const onUpdateAvailableChange = vi.fn();
-      await seedExtendedStableAvailability({ onUpdateAvailableChange });
-      seedStableAutoRolloutState();
-      onUpdateAvailableChange.mockClear();
-      vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-        tag: "extended-stable",
-        version: null,
-        reason: failure,
-      });
-      vi.setSystemTime(new Date("2026-01-18T11:00:00Z"));
-      const log = { info: vi.fn() };
+  it("clears stale extended-stable availability when the telemetry request fails", async () => {
+    const onUpdateAvailableChange = vi.fn();
+    await seedExtendedStableAvailability({ onUpdateAvailableChange });
+    seedStableAutoRolloutState();
+    onUpdateAvailableChange.mockClear();
+    checkTelemetryUpdateMock.mockResolvedValue(null);
+    vi.setSystemTime(new Date("2026-01-18T11:00:00Z"));
+    const log = { info: vi.fn() };
 
-      await runExtendedStableUpdateCheck({ log, onUpdateAvailableChange });
+    await runExtendedStableUpdateCheck({ log, onUpdateAvailableChange });
 
-      expect(log.info).not.toHaveBeenCalled();
-      expect(onUpdateAvailableChange).toHaveBeenCalledOnce();
-      expect(onUpdateAvailableChange).toHaveBeenCalledWith(null);
-      expect(getUpdateAvailable()).toBeNull();
-      expect(readPersistedUpdateCheckState()?.lastAvailableVersion).toBeUndefined();
-      expect(readPersistedUpdateCheckState()?.lastAvailableTag).toBe("extended-stable");
-      expectStableAutoRolloutStatePreserved();
-      expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
+    expect(onUpdateAvailableChange).toHaveBeenCalledOnce();
+    expect(onUpdateAvailableChange).toHaveBeenCalledWith(null);
+    expect(getUpdateAvailable()).toBeNull();
+    expect(readPersistedUpdateCheckState()?.lastAvailableVersion).toBeUndefined();
+    expect(readPersistedUpdateCheckState()?.lastAvailableTag).toBe("extended-stable");
+    expectStableAutoRolloutStatePreserved();
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
 
-      await runExtendedStableUpdateCheck({ log, onUpdateAvailableChange });
-      expect(resolveNpmChannelTag).toHaveBeenCalledTimes(2);
-    },
-  );
+    await runExtendedStableUpdateCheck({ log, onUpdateAvailableChange });
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+  });
 
   it("preserves cross-channel persisted availability when extended-stable resolution fails", async () => {
     writePersistedUpdateCheckState({
@@ -1042,11 +1056,7 @@ describe("update-startup", () => {
       lastAvailableTag: "latest",
     });
     mockPackageInstallStatus();
-    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-      tag: "extended-stable",
-      version: null,
-      reason: "selector_query_failed",
-    });
+    checkTelemetryUpdateMock.mockResolvedValue(null);
     const onUpdateAvailableChange = vi.fn();
 
     await runExtendedStableUpdateCheck({ onUpdateAvailableChange });
@@ -1101,10 +1111,8 @@ describe("update-startup", () => {
       allowInTests: true,
     });
 
-    expect(resolveNpmChannelTag).toHaveBeenCalledWith({
-      channel: "extended-stable",
-      timeoutMs: 2500,
-    });
+    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith({}, { surface: "gateway" });
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
   });
 
   it("keeps a configless Git install on dev after schedule population", async () => {
@@ -1865,7 +1873,7 @@ describe("update-startup", () => {
     });
   });
 
-  it("runs auto-update when checkOnStart is false but auto-update is enabled", async () => {
+  it("disables all automatic update traffic when checkOnStart is false", async () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     const runAutoUpdate = createAutoUpdateSuccessMock();
 
@@ -1874,10 +1882,15 @@ describe("update-startup", () => {
       runAutoUpdate,
     });
 
-    expect(runAutoUpdate).toHaveBeenCalledTimes(1);
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+    expect(checkUpdateStatus).not.toHaveBeenCalled();
+    expect(getUpdateAvailable()).toBeNull();
+    expect(getUpdateSchedule()).toMatchObject({ channel: "beta", autoEnabled: false });
   });
 
-  it("honors OPENCLAW_NO_AUTO_UPDATE for configured auto-updates", async () => {
+  it("disables update notices, telemetry, and auto-update with OPENCLAW_NO_AUTO_UPDATE", async () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     process.env.OPENCLAW_NO_AUTO_UPDATE = "1";
     const log = { info: vi.fn() };
@@ -1892,16 +1905,10 @@ describe("update-startup", () => {
     });
 
     expect(runAutoUpdate).not.toHaveBeenCalled();
-    const disabledLogCall = log.info.mock.calls.find(
-      ([message]) => message === "auto-update disabled by OPENCLAW_NO_AUTO_UPDATE",
-    );
-    expect(disabledLogCall).toEqual([
-      "auto-update disabled by OPENCLAW_NO_AUTO_UPDATE",
-      {
-        version: "2.0.0-beta.1",
-        tag: "beta",
-      },
-    ]);
+    expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+    expect(checkUpdateStatus).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
   });
 
   it("delegates configured auto-updates to an external supervisor", async () => {
@@ -2149,14 +2156,15 @@ describe("update-startup", () => {
 
     try {
       await vi.advanceTimersByTimeAsync(0);
-      expect(resolveNpmChannelTag).toHaveBeenCalledTimes(1);
+      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
-      expect(resolveNpmChannelTag).toHaveBeenCalledTimes(2);
+      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
 
       stop();
       await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
-      expect(resolveNpmChannelTag).toHaveBeenCalledTimes(2);
+      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
+      expect(resolveNpmChannelTag).not.toHaveBeenCalled();
     } finally {
       stop();
       process.env.NODE_ENV = previousNodeEnv;

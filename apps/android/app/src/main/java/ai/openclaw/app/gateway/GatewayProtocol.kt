@@ -326,6 +326,13 @@ data class SessionGitHubPublicationFailed(
 sealed interface SessionGitHubPublicationResult
 
 @Serializable
+data class TalkSessionCancelOutputResult(
+  val ok: Boolean,
+  val status: String? = null,
+  val turnId: String? = null,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,

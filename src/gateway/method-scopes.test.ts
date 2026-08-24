@@ -459,6 +459,17 @@ describe("method scope resolution", () => {
       "operator.write",
     ],
     [
+      "Gateway abandonment",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+        abandonSource: true,
+      },
+      "operator.write",
+    ],
+    [
       "device move",
       "sessions.move",
       {

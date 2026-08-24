@@ -99,7 +99,6 @@ function createLazyStandingIntentTool(
   reportUnavailable: (reason: string) => void,
 ): AnyAgentTool | null {
   if (ctx.senderIsOwner !== true) {
-    reportUnavailable("owner authorization is unavailable for this turn");
     return null;
   }
   const cfg = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
@@ -201,6 +200,16 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
         throw new Error("memory-core runtime search authorization is unavailable");
       }
       return await runtime.authorizeSearchHits(params);
+    },
+    async classifyWorkspaceMemoryPaths(params) {
+      const [{ classifyWorkspaceMemoryPaths }, dreamingState] = await Promise.all([
+        import("./src/workspace-path-classifier.js"),
+        import("./src/dreaming-state.js"),
+      ]);
+      if (host.openKeyedStore) {
+        dreamingState.configureMemoryCoreDreamingState(host.openKeyedStore);
+      }
+      return await classifyWorkspaceMemoryPaths(params);
     },
     resolveMemoryBackendConfig(params) {
       return resolveMemoryBackendConfig(params);

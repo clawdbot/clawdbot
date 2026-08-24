@@ -249,6 +249,26 @@ describe("plugin tool descriptor cache keys", () => {
     expect(firstKey).not.toBe(secondKey);
   });
 
+  it("varies descriptor keys by delivery availability", () => {
+    const base = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["delivery_tool"],
+      ctx: { workspaceDir: "/tmp/workspace" },
+    };
+
+    const withoutDelivery = buildPluginToolDescriptorCacheKey(base);
+    const withDelivery = buildPluginToolDescriptorCacheKey({
+      ...base,
+      ctx: {
+        ...base.ctx,
+        delivery: { send: vi.fn() },
+      },
+    });
+
+    expect(withDelivery).not.toBe(withoutDelivery);
+  });
+
   it("varies descriptor keys by trusted owner state", () => {
     const base = {
       pluginId: "demo",

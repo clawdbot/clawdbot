@@ -14,6 +14,7 @@ import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import {
   finalizeTerminalToolCallArguments,
+  notifyProviderHttpResponse,
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
 import type {
@@ -32,7 +33,11 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import {
+  createToolArgumentPreviewSchedule,
+  parseStreamingJson,
+  type ToolArgumentPreviewSchedule,
+} from "../utils/json-parse.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -141,24 +146,28 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         throw new Error(`No API key for provider: ${model.provider}`);
       }
 
+      const boundedFetcher = createBoundedMistralFetcher(
+        MISTRAL_STREAM_BODY_MAX_BYTES,
+        getAiTransportHost().buildModelFetch(model) ?? fetch,
+      );
+      let mistralResponse: Response | undefined;
+      let reportedResponse: Response | undefined;
+      const httpClient = new HTTPClient({ fetcher: boundedFetcher });
+      httpClient.addHook("response", async (response) => {
+        mistralResponse = response;
+        if (!response.ok) {
+          await notifyProviderHttpResponse({ options, response, model });
+          reportedResponse = response;
+        }
+      });
       // Intentionally per-request: avoids shared SDK mutable state across concurrent consumers.
       const mistral = new Mistral({
         apiKey,
         serverURL: model.baseUrl,
         // Bound the streamed Mistral response body at 16 MiB so a hostile or
-        // malfunctioning endpoint cannot exhaust memory. The fetcher is
-        // injected via the SDK's `HTTPClient` (see
-        // `@mistralai/mistralai/lib/sdks.ts` `ClientSDK` constructor: when
-        // `httpClient` is passed, `ClientSDK.#httpClient` is set from it and
-        // every `chat.stream` / `complete` call routes through
-        // `HTTPClient.request` → `this.fetcher(req)`).
-        // Mistral accepts HTTPClient.fetcher, so compose guarded egress with the byte cap.
-        httpClient: new HTTPClient({
-          fetcher: createBoundedMistralFetcher(
-            MISTRAL_STREAM_BODY_MAX_BYTES,
-            getAiTransportHost().buildModelFetch(model) ?? fetch,
-          ),
-        }),
+        // malfunctioning endpoint cannot exhaust memory. The HTTPClient is the
+        // SDK's public fetch and response-hook boundary for every chat.stream attempt.
+        httpClient,
       });
 
       const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();
@@ -181,6 +190,14 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         headers,
         signal: options?.signal,
       });
+      if (mistralResponse && mistralResponse !== reportedResponse) {
+        await notifyProviderHttpResponse({
+          options,
+          response: mistralResponse,
+          model,
+          cancelStream: (reason) => mistralStream.cancel(reason),
+        });
+      }
       stream.push({ type: "start", partial: output });
       await consumeChatStream(model, output, stream, mistralStream);
 
@@ -395,6 +412,11 @@ async function consumeChatStream(
   // Persist every identity fact across chunks. The SDK defaults omitted indexes
   // to zero, so only a unique compatible candidate may receive later arguments.
   const toolBlockIdentities = new Map<number, ToolBlockIdentity>();
+  // Preview schedules are per active tool call; WeakMap keys die with the block.
+  const toolArgumentPreviewSchedules = new WeakMap<
+    ToolCall & { partialArgs?: string },
+    ToolArgumentPreviewSchedule
+  >();
   const normalizeMissingToolCallId = createMistralToolCallIdNormalizer();
   // Some Mistral-compatible endpoints omit tool-call ids. Their streamed index
   // is only response-local, so namespace the fallback before strict-9 hashing.
@@ -701,6 +723,7 @@ async function consumeChatStream(
           partialArgs: "",
         };
         output.content.push(block);
+        toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
         toolBlockIdentities.set(contentIndex, {
           explicitIds: new Set(providedCallId ? [providedCallId] : []),
           functionNames: new Set(functionName ? [functionName] : []),
@@ -740,7 +763,11 @@ async function consumeChatStream(
           ? toolCall.function.arguments
           : JSON.stringify(toolCall.function.arguments || {});
       block.partialArgs = (block.partialArgs || "") + argsDelta;
-      block.arguments = parseStreamingJson(block.partialArgs);
+      // Preview refresh is scheduled geometrically; the terminal strict parse
+      // below re-reads the full buffer authoritatively either way.
+      if (toolArgumentPreviewSchedules.get(block)?.(block.partialArgs.length)) {
+        block.arguments = parseStreamingJson(block.partialArgs);
+      }
       stream.push({
         type: "toolcall_delta",
         contentIndex,

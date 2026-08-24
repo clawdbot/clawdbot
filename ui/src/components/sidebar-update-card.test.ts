@@ -9,6 +9,7 @@ import "./sidebar-update-card.ts";
 type SidebarUpdateCardElement = HTMLElement & {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
+  compact: boolean;
   heldUpdateCampaignId: string | null;
   updateBusy: boolean;
   canUpdate: boolean;
@@ -138,7 +139,7 @@ describe("SidebarUpdateCard", () => {
     expect(onUpdate).toHaveBeenCalledOnce();
   });
 
-  it("narrates the whole update after the Gateway drops its metadata", async () => {
+  it("renders an available update and narrates it after the Gateway drops its metadata", async () => {
     const element = await mount(
       { currentVersion: "1.0.0", latestVersion: "1.0.0", channel: "dev", commitsBehind: 246 },
       {
@@ -152,7 +153,9 @@ describe("SidebarUpdateCard", () => {
         },
       },
     );
-    expect(element.querySelector(".sidebar-update-card")).toBeNull();
+    expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
+      "246 commits behind",
+    );
 
     element.updateBusy = true;
     await element.updateComplete;
@@ -164,6 +167,23 @@ describe("SidebarUpdateCard", () => {
     element.updateSchedule = null;
     await element.updateComplete;
     expect(element.textContent).toContain("Updating Gateway…");
+  });
+
+  it("keeps an available update actionable inside the compact Inbox row", async () => {
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    element.compact = true;
+    await element.updateComplete;
+
+    expect(element.querySelector(".sidebar-issues-panel__entity")?.textContent).toBe(
+      "Update available",
+    );
+    expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
+      "Update Gateway",
+    );
   });
 
   it("renders a quiet live countdown and stops ticking on disconnect", async () => {

@@ -5,6 +5,8 @@ type CrabboxProvisionTimeoutProfile = {
 
 export const CRABBOX_WARMUP_TIMEOUT_MS = 240_000;
 export const CRABBOX_LIFECYCLE_TIMEOUT_MS = 60_000;
+// AWS coordinator heartbeat latency reached 107.6 seconds in production measurements.
+export const CRABBOX_HEARTBEAT_TIMEOUT_MS = 150_000;
 
 // `providers --json` is a static compiled report: no network, no credentials,
 // measured well under a second. The picker awaits it, so cap it far below the

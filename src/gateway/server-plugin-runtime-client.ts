@@ -28,6 +28,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
   pluginRuntimeOwnerId?: string;
   pluginSubagentRequester?: PluginSubagentRequesterContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  pluginSubagentToolsAllow?: string[];
   delegatedToolPolicyHandoffId?: string;
   sessionCreation?: TrustedSessionCreation;
   scopes?: string[];
@@ -69,6 +70,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
         : {}),
       ...(params?.runtimePluginToolGrant
         ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
+        : {}),
+      ...(params?.pluginSubagentToolsAllow
+        ? { pluginSubagentToolsAllow: [...params.pluginSubagentToolsAllow] }
         : {}),
       ...(params?.delegatedToolPolicyHandoffId
         ? { delegatedToolPolicyHandoffId: params.delegatedToolPolicyHandoffId }

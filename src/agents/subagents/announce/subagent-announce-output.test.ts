@@ -578,13 +578,13 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain("ANNOUNCE_SKIP");
   });
 
-  it("uses frozen child completion text when normalized completion is absent", () => {
+  it("uses the canonical captured child completion text", () => {
     const findings = buildChildCompletionFindings([
       {
         childSessionKey: "agent:main:subagent:child",
         task: "child task",
         createdAt: 1,
-        frozenResultText: "final child output",
+        completion: { resultText: "final child output" },
         execution: { outcome: { status: "ok" } },
       },
     ]);
@@ -624,6 +624,72 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain("findings captured before the wake");
     expect(findings).not.toContain("NO_REPLY");
   });
+
+  it.each([
+    {
+      name: "visible",
+      terminalReply: { disposition: "visible", text: "authoritative final output" } as const,
+      resultText: "older captured output",
+      expected: "authoritative final output",
+    },
+    {
+      name: "silent",
+      terminalReply: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+      expected: undefined,
+    },
+    {
+      name: "empty",
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+      expected: undefined,
+    },
+  ])(
+    "keeps producer-owned $name terminal evidence authoritative over older fallback",
+    ({ terminalReply, resultText, expected }) => {
+      const findings = buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:child",
+          task: "child task",
+          createdAt: 1,
+          completion: {
+            required: true,
+            resultText,
+            fallbackResultText: "older captured fallback",
+            terminalReply,
+          },
+          execution: { outcome: { status: "ok" } },
+        },
+      ]);
+
+      if (expected === undefined) {
+        expect(findings).toBeUndefined();
+      } else {
+        expect(findings).toContain(expected);
+        expect(findings).not.toContain("older captured output");
+      }
+    },
+  );
+
+  it.each(["silent", "empty"] as const)(
+    "treats %s terminal evidence without retained text as an intentional non-result",
+    (disposition) => {
+      const findings = buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:child",
+          task: "child task",
+          createdAt: 1,
+          completion: {
+            resultText: disposition === "silent" ? "NO_REPLY" : null,
+            terminalReply: { disposition },
+          },
+          execution: { outcome: { status: "ok" } },
+        },
+      ]);
+
+      expect(findings).toBeUndefined();
+    },
+  );
 
   it.each(["ANNOUNCE_SKIP", "REPLY_SKIP", "HEARTBEAT_OK"])(
     "does not override an intentional %s completion with fallback output",
@@ -791,6 +857,92 @@ describe("applySubagentWaitOutcome", () => {
     expect(applied.outcome).toEqual({
       status: "error",
       error: "subagent run terminated",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it.each(["restart", "aborted"] as const)(
+    "keeps %s stop reasons as cancellation even when liveness is blocked",
+    (stopReason) => {
+      // classifySubagentTerminalOutcome must win over the generic classifier
+      // here: blocked liveness alone would read as a failure, but an explicit
+      // restart/aborted stop reason owns the outcome (openclaw#125407).
+      const applied = applySubagentWaitOutcome({
+        wait: {
+          status: "ok",
+          startedAt: 100,
+          endedAt: 150,
+          stopReason,
+          livenessState: "blocked",
+          error: "Context overflow: prompt too large for the model.",
+        },
+        outcome: undefined,
+      });
+
+      expect(applied.outcome).toEqual({
+        status: "error",
+        error: "subagent run terminated",
+        startedAt: 100,
+        endedAt: 150,
+        elapsedMs: 50,
+      });
+    },
+  );
+
+  it("keeps the failure cause on pending-error timeout wait snapshots", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+        pendingError: true,
+        error: "model returned an unrecoverable tool-call sequence",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      error: "model returned an unrecoverable tool-call sequence",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it("leaves genuine budget timeouts without a cause", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it("ignores wait error text when the run did not end in a pending error", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+        error: "waited too long",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
       startedAt: 100,
       endedAt: 150,
       elapsedMs: 50,

@@ -34,6 +34,7 @@ import {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
+  isDeliveredMessagingToolSendToCurrentSource,
 } from "./embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
@@ -246,6 +247,7 @@ export async function handleToolExecutionEnd(
       : {}),
   });
   ctx.state.lastToolError = terminal.lastToolError;
+  const terminalErrorStatus = terminal.executionStarted ? "failed" : "blocked";
   const toolErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)
     : undefined;
@@ -299,6 +301,9 @@ export async function handleToolExecutionEnd(
     didDeliverMessagingResult && isMessagingSend
       ? [...argumentMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
       : [];
+  const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
+  const confirmedMessageTarget =
+    messageTarget && extractMessagingToolSendResult(messageTarget, extractionResult);
   const deliveredMessageToolSourceReply =
     didDeliverMessagingResult &&
     isDeliveredMessageToolOnlySourceReplyResult({
@@ -307,6 +312,18 @@ export async function handleToolExecutionEnd(
       args: startArgs,
       result,
       isError: isToolError,
+      allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+        send: confirmedMessageTarget,
+        config: ctx.params.config,
+        currentProvider: ctx.params.messageChannel,
+        currentAccountId: ctx.params.currentAccountId,
+        currentChannelId: ctx.params.currentChannelId,
+        currentMessagingTarget: ctx.params.currentMessagingTarget,
+        currentThreadId:
+          ctx.params.currentThreadId ?? parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+        sessionKey: ctx.params.sessionKey,
+        deliveredPayload: extractionResult,
+      }),
       deliveryConfirmed: didDeliverMessagingResult,
     });
   const deliveredCurrentSourceReply =
@@ -330,11 +347,9 @@ export async function handleToolExecutionEnd(
     ctx.log.debug(`Committed messaging text: tool=${toolName} len=${messageText.length}`);
     ctx.trimMessagingToolSent();
   }
-  if (didDeliverMessagingResult && messageTarget) {
-    const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
-    const confirmedTarget = extractMessagingToolSendResult(messageTarget, extractionResult);
+  if (didDeliverMessagingResult && confirmedMessageTarget) {
     ctx.state.messagingToolSentTargets.push({
-      ...confirmedTarget,
+      ...confirmedMessageTarget,
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
       ...(hasRichContent ? { hasRichContent: true as const } : {}),
@@ -433,7 +448,7 @@ export async function handleToolExecutionEnd(
     phase: "end",
     kind: "tool",
     title: buildToolItemTitle(toolName, meta),
-    status: isToolError ? "failed" : "completed",
+    status: isToolError ? terminalErrorStatus : "completed",
     name: toolName,
     meta,
     commandBearing: callSummary.commandBearing,
@@ -528,7 +543,7 @@ export async function handleToolExecutionEnd(
       const output = extractLiveExecOutput(eventResult);
       const rawOutput = extractExecOutput(sanitizedResult);
       const commandStatus =
-        execDetails?.status === "failed" || isToolError ? "failed" : "completed";
+        execDetails?.status === "failed" || isToolError ? terminalErrorStatus : "completed";
       emitTrackedItemEvent(ctx, {
         itemId: commandItemId,
         phase: "end",
@@ -554,7 +569,11 @@ export async function handleToolExecutionEnd(
         ...(output ? { output } : {}),
         status: commandStatus,
         ...(execDetails && "exitCode" in execDetails ? { exitCode: execDetails.exitCode } : {}),
-        ...(execDetails && "durationMs" in execDetails
+        ...(execDetails &&
+        "durationMs" in execDetails &&
+        typeof execDetails.durationMs === "number" &&
+        Number.isFinite(execDetails.durationMs) &&
+        execDetails.durationMs >= 0
           ? { durationMs: execDetails.durationMs }
           : {}),
         ...(execDetails && "cwd" in execDetails && typeof execDetails.cwd === "string"
@@ -691,4 +710,5 @@ export async function handleToolExecutionEnd(
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }
+  return { executionStarted: terminal.executionStarted };
 }

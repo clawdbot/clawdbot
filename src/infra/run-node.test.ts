@@ -33,6 +33,14 @@ const ROOT_SRC = "src/index.ts";
 const ROOT_TSCONFIG = "tsconfig.json";
 const ROOT_PACKAGE = "package.json";
 const ROOT_TSDOWN = "tsdown.config.ts";
+const RUNTIME_POSTBUILD_IMPLEMENTATION_PATHS = [
+  "scripts/check-built-plugin-control-plane-modules.mts",
+  "scripts/copy-bundled-plugin-metadata.mts",
+  "scripts/copy-hook-metadata.ts",
+  "scripts/runtime-postbuild.mts",
+  "scripts/stage-bundled-plugin-runtime.mts",
+  "scripts/write-official-channel-catalog.mts",
+] as const;
 const DEPLOYMENT_MANIFEST = "deployment.json";
 const GENERATED_PLUGIN_ASSET_BUNDLE = "extensions/demo/src/host/assets/view.bundle.js";
 const GENERATED_PLUGIN_ASSET_BUNDLE_HASH = "extensions/demo/src/host/assets/.bundle.hash";
@@ -74,6 +82,8 @@ const DIFFS_PACKAGE = "extensions/diffs/package.json";
 const DIFFS_VIEWER_RUNTIME_SOURCE = "extensions/diffs/assets/viewer-runtime.js";
 const DIST_DIFFS_VIEWER_RUNTIME = "dist/extensions/diffs/assets/viewer-runtime.js";
 const DIST_RUNTIME_DIFFS_VIEWER_RUNTIME = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
+const BUNDLED_HOOK_METADATA = "src/hooks/bundled/demo/HOOK.md";
+const DIST_BUNDLED_HOOK_METADATA = "dist/bundled/demo/HOOK.md";
 const DIST_EXTENSION_MANIFEST = bundledDistPluginFile("demo", "openclaw.plugin.json");
 const DIST_EXTENSION_PACKAGE = bundledDistPluginFile("demo", "package.json");
 
@@ -2053,6 +2063,29 @@ describe("run-node script", () => {
     }
   });
 
+  it("reports missing bundled hook metadata when runtime stamps match HEAD", async ({ tmp }) => {
+    await setupStampedProject(tmp, {
+      files: {
+        [BUNDLED_HOOK_METADATA]: "# Demo hook\n",
+        [DIST_BUNDLED_HOOK_METADATA]: "# Demo hook\n",
+        [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+      },
+    });
+
+    expect(resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp))).toEqual({
+      shouldSync: false,
+      reason: "clean",
+    });
+    await fs.rm(resolvePath(tmp, DIST_BUNDLED_HOOK_METADATA));
+
+    const requirement = resolveRuntimePostBuildRequirement(createBuildRequirementDeps(tmp));
+
+    expect(requirement).toEqual({
+      shouldSync: true,
+      reason: "missing_runtime_postbuild_output",
+    });
+  });
+
   it("does not require ambiguous stable runtime aliases that postbuild cannot create", async ({
     tmp,
   }) => {
@@ -2117,6 +2150,49 @@ describe("run-node script", () => {
     expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
       shouldSync: true,
       reason: "dirty_runtime_postbuild_inputs",
+    });
+  });
+
+  it.each(RUNTIME_POSTBUILD_IMPLEMENTATION_PATHS)(
+    "reports dirty runtime postbuild implementation %s",
+    async (implementationPath) => {
+      await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        await setupStampedProject(tmp, {
+          files: {
+            [implementationPath]: "export {};\n",
+            [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+          },
+          trackConfig: true,
+        });
+
+        const requirement = resolveRuntimePostBuildRequirement(
+          createBuildRequirementDeps(tmp, { gitStatus: ` M ${implementationPath}\n` }),
+        );
+
+        expect(requirement).toEqual({
+          shouldSync: true,
+          reason: "dirty_runtime_postbuild_inputs",
+        });
+      });
+    },
+  );
+
+  it("reports a newer hook metadata copier without git status", async ({ tmp }) => {
+    const implementationPath = "scripts/copy-hook-metadata.ts";
+    await setupStampedProject(tmp, {
+      files: {
+        [implementationPath]: "export {};\n",
+        [RUNTIME_POSTBUILD_STAMP]: "{}\n",
+      },
+      newPaths: [implementationPath],
+      trackConfig: true,
+    });
+    const deps = createBuildRequirementDeps(tmp);
+    deps.spawnSync = () => ({ status: 1, stdout: "" });
+
+    expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
+      shouldSync: true,
+      reason: "runtime_postbuild_input_mtime_newer",
     });
   });
 

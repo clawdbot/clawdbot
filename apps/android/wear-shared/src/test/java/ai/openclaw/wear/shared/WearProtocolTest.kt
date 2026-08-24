@@ -143,7 +143,9 @@ class WearProtocolTest {
     assertEquals("agent-controls", WearProxyCapability.AgentControls.wireValue)
     assertEquals("gateway-controls", WearProxyCapability.GatewayControls.wireValue)
     assertEquals("model-controls", WearProxyCapability.ModelControls.wireValue)
+    assertEquals("model-catalog-search", WearProxyCapability.ModelCatalogSearch.wireValue)
     assertEquals("session-selection-lookup", WearProxyCapability.SessionSelectionLookup.wireValue)
+    assertEquals("session-search-pagination", WearProxyCapability.SessionSearchPagination.wireValue)
     assertEquals("agent-pulse", WearProxyCapability.AgentPulse.wireValue)
     assertEquals(
       "attempt-scoped-realtime-audio",

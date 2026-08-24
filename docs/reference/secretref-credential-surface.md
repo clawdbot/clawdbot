@@ -59,6 +59,7 @@ The lists below are generated from the source target registry and checked agains
 - `channels.nextcloud-talk.accounts.*.botSecret`
 - `channels.nextcloud-talk.apiPassword`
 - `channels.nextcloud-talk.botSecret`
+- `channels.nostr.privateKey`
 - `channels.qqbot.accounts.*.clientSecret`
 - `channels.qqbot.clientSecret`
 - `channels.slack.accounts.*.appToken`

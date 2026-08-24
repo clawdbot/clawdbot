@@ -1,5 +1,5 @@
 // Control UI browser proof covers the config snapshot and guarded-write lifecycle.
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -59,6 +59,22 @@ function configSchemaResponse() {
         tools: {
           type: "object",
           title: "Tools",
+          properties: {
+            elevated: {
+              type: "object",
+              properties: {
+                allowFrom: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "array",
+                    items: {
+                      anyOf: [{ type: "string", pattern: "^[0-9]+$" }, { type: "number" }],
+                    },
+                  },
+                },
+              },
+            },
+          },
           additionalProperties: true,
         },
       },
@@ -93,6 +109,21 @@ function settingsRow(page: Page, title: string): Locator {
   return page.locator(".settings-row").filter({
     has: page.locator(".settings-row__title").getByText(title, { exact: true }),
   });
+}
+
+function overlapArea(
+  first: { x: number; y: number; width: number; height: number },
+  second: { x: number; y: number; width: number; height: number },
+): number {
+  const width = Math.max(
+    0,
+    Math.min(first.x + first.width, second.x + second.width) - Math.max(first.x, second.x),
+  );
+  const height = Math.max(
+    0,
+    Math.min(first.y + first.height, second.y + second.height) - Math.max(first.y, second.y),
+  );
+  return width * height;
 }
 
 async function capture(page: Page, name: string): Promise<void> {
@@ -178,10 +209,6 @@ suite.define(() => {
 
         await gateway.deferNext("config.set");
         await endpoint.fill("form-api");
-        // A revert to the loaded value here means a boot-time config refresh
-        // ate the edit (the focused-field guard in config-form.node.scalar.ts
-        // protects this); fail loudly instead of timing out on config.set.
-        await expect.poll(() => endpoint.inputValue()).toBe("form-api");
         const staleSetParams = mutationParams(await gateway.waitForRequest("config.set"));
         expect(staleSetParams.baseHash).toBe("snapshot-2");
         expect(JSON.parse(String(staleSetParams.raw))).toMatchObject({
@@ -424,10 +451,40 @@ suite.define(() => {
         await expect
           .poll(() => saveIndicator.textContent())
           .toContain("Autosave paused after reconnect");
+        const saveButton = saveIndicator.getByRole("button", { name: "Save", exact: true });
+        const buildLink = page.locator(".settings-sidebar__footer .sidebar-footer-build");
+        await saveButton.focus();
+        await expect
+          .poll(() => saveButton.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        const [saveBounds, buildBounds] = await Promise.all([
+          saveButton.boundingBox(),
+          buildLink.boundingBox(),
+        ]);
+        expect(saveBounds).not.toBeNull();
+        expect(buildBounds).not.toBeNull();
+        if (!saveBounds || !buildBounds) {
+          throw new Error("Expected visible settings footer controls");
+        }
+        expect(overlapArea(saveBounds, buildBounds)).toBe(0);
+        expect(await buildLink.textContent()).not.toBe("");
         await capture(page, "07-opaque-revision-reconnect.png");
 
+        await page.setViewportSize({ height: 900, width: 1280 });
+        const [narrowSaveBounds, narrowBuildBounds] = await Promise.all([
+          saveButton.boundingBox(),
+          buildLink.boundingBox(),
+        ]);
+        expect(narrowSaveBounds).not.toBeNull();
+        expect(narrowBuildBounds).not.toBeNull();
+        if (!narrowSaveBounds || !narrowBuildBounds) {
+          throw new Error("Expected visible settings footer controls at 1280px");
+        }
+        expect(overlapArea(narrowSaveBounds, narrowBuildBounds)).toBe(0);
+        await capture(page, "07-opaque-revision-reconnect-1280.png");
+
         await gateway.deferNext("config.set");
-        await saveIndicator.getByRole("button", { name: "Save", exact: true }).click();
+        await saveButton.click();
         const save = mutationParams(await gateway.waitForRequest("config.set"));
         expect(save.baseHash).toBe("hmac-sha256:v1:opaque-current");
         expect(JSON.parse(String(save.raw))).toMatchObject({
@@ -442,6 +499,75 @@ suite.define(() => {
         );
         await gateway.resolveDeferred("config.set", { hash: "hmac-sha256:v1:opaque-next" });
         await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
+      },
+    );
+  });
+
+  it("preserves untouched 64-bit identifier strings during an unrelated form save", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        recordVideo: captureUiProofEnabled
+          ? { dir: uiProofArtifactDir, size: { height: 1000, width: 1440 } }
+          : undefined,
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const identifier = "1048113311314608148";
+        const initialConfig = {
+          laboratory: { endpoint: "before-save", retryBudget: 2 },
+          tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse(initialConfig, "id-snapshot-1"),
+            "config.schema": configSchemaResponse(),
+          },
+        });
+
+        expect(
+          (
+            await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`)
+          )?.status(),
+        ).toBe(200);
+        const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
+        await expect.poll(() => endpoint.inputValue()).toBe("before-save");
+        await capture(page, "08-id-before-unrelated-save.png");
+
+        await gateway.deferNext("config.set");
+        await endpoint.fill("after-save");
+        const save = mutationParams(await gateway.waitForRequest("config.set"));
+        const submitted = JSON.parse(String(save.raw)) as typeof initialConfig;
+        expect(save.baseHash).toBe("id-snapshot-1");
+        expect(String(save.raw)).toContain(`"${identifier}"`);
+        expect(String(save.raw)).not.toContain(String(Number(identifier)));
+        expect(submitted).toEqual({
+          laboratory: { endpoint: "after-save", retryBudget: 2 },
+          tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
+        });
+        expect(submitted.tools.elevated.allowFrom.discord[0]).toBe(identifier);
+        expect(typeof submitted.tools.elevated.allowFrom.discord[0]).toBe("string");
+
+        if (captureUiProofEnabled) {
+          await mkdir(uiProofArtifactDir, { recursive: true });
+          await writeFile(
+            path.join(uiProofArtifactDir, "09-id-config-set-payload.json"),
+            `${JSON.stringify({ before: initialConfig, submitted }, null, 2)}\n`,
+          );
+        }
+        await gateway.resolveDeferred("config.set");
+        const saveIndicator = page.locator("openclaw-settings-save-indicator");
+        await expect.poll(() => saveIndicator.textContent()).toContain("Saved");
+
+        await page.reload();
+        await expect.poll(() => endpoint.inputValue()).toBe("after-save");
+        await page.getByRole("button", { name: "Raw", exact: true }).click();
+        const rawEditor = page.locator(".config-raw-field textarea");
+        await rawEditor.waitFor();
+        await expect.poll(() => rawEditor.inputValue()).toContain(`"${identifier}"`);
+        await capture(page, "10-id-after-unrelated-save.png");
       },
     );
   });

@@ -1648,6 +1648,7 @@ export interface WorkerInferenceTurns {
 }
 
 export interface WorkerSessionPlacementMoves {
+  abandon_source: number | null;
   created_at_ms: number;
   last_error: string | null;
   operation_id: string;
