@@ -111,12 +111,13 @@ async function publishReleasedOwnerReplacement(params: {
 }
 
 export async function resetSessionEntryLifecycleImpl(
-  params: InternalResetSessionEntryLifecycleParams,
+  params: ResetSessionEntryLifecycleParams,
   resolveNextSessionFile: (
     sessionId: string,
     options?: { agentId?: string; sessionsDir?: string },
   ) => string,
 ): Promise<SessionEntry | null> {
+  const internalParams = params as InternalResetSessionEntryLifecycleParams;
   const storePath =
     params.storePath ??
     resolveStorePath(undefined, {
@@ -211,7 +212,7 @@ export async function resetSessionEntryLifecycleImpl(
             "sessionFile" in originalEntry && typeof originalEntry.sessionFile === "string"
               ? originalEntry.sessionFile
               : undefined;
-          params.assertActiveOwner?.();
+          internalParams.assertActiveOwner?.();
           await params.releasePhysicalOwner({
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             entry: structuredClone(originalEntry),
@@ -223,11 +224,15 @@ export async function resetSessionEntryLifecycleImpl(
           });
           physicalOwnerReleased = true;
         }
-        const result = await resetAccessorSessionEntryLifecycle({
+        const accessorParams: Parameters<typeof resetAccessorSessionEntryLifecycle>[0] & {
+          beforeEntryMutation?: () => void;
+        } = {
           ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
           storePath,
           target: { canonicalKey: params.sessionKey, storeKeys: [params.sessionKey] },
-          ...(params.assertActiveOwner ? { beforeEntryMutation: params.assertActiveOwner } : {}),
+          ...(internalParams.assertActiveOwner
+            ? { beforeEntryMutation: internalParams.assertActiveOwner }
+            : {}),
           buildNextEntry: async ({ currentEntry }) => {
             if (
               !currentEntry ||
@@ -258,7 +263,8 @@ export async function resetSessionEntryLifecycleImpl(
               updatedAt: patch.updatedAt ?? Date.now(),
             };
           },
-        });
+        };
+        const result = await resetAccessorSessionEntryLifecycle(accessorParams);
         resultEntry = result.nextEntry;
       } catch (err) {
         if (err instanceof SessionLifecycleResetSkipped) {

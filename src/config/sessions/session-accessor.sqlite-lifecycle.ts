@@ -176,6 +176,9 @@ export async function cleanupSessionLifecycleArtifactsCore(
 export async function resetSessionEntryLifecycle(
   params: ResetSessionEntryLifecycleParams,
 ): Promise<ResetSessionEntryLifecycleResult> {
+  const internalParams = params as ResetSessionEntryLifecycleParams & {
+    beforeEntryMutation?: () => void;
+  };
   const agentId = params.agentId ?? parseAgentSessionKey(params.target.canonicalKey)?.agentId;
   const resolved = resolveSqliteStoreScope(params.storePath, { agentId });
   // Retained reset history is the store's growth event; give the throttled
@@ -199,7 +202,7 @@ export async function resetSessionEntryLifecycle(
         ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
       };
       runOpenClawAgentWriteTransaction((transactionDb) => {
-        params.beforeEntryMutation?.();
+        internalParams.beforeEntryMutation?.();
         assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
         if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundaryReason) {
           const event = buildSessionResetBoundaryEvent({
