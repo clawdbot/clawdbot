@@ -67,6 +67,13 @@ export function collectPluginIdsForConfiguredChannel(
   const preferredIds = new Set<string>();
   for (const claim of claims) {
     for (const canonicalPreferredOverId of claim.preferOver) {
+      // A claimant naming one of its own aliases resolves to itself. A manifest that names itself
+      // declares nothing — `shouldSkipPreferredPluginAutoEnable` and the `channel-config-metadata.ts`
+      // fixpoint both skip the self comparison — so reading it as a contest here narrowed the
+      // candidates to that claimant alone and dropped the registry-first fallback.
+      if (canonicalPreferredOverId === claim.plugin.id) {
+        continue;
+      }
       if (claimIds.has(canonicalPreferredOverId)) {
         // Keep both sides as candidates. The preferOver filter later disables
         // the lower-priority plugin unless the preferred plugin is explicitly
