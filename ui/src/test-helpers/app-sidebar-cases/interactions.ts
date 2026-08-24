@@ -115,27 +115,53 @@ describe("AppSidebar multi-select", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("cmd-click toggles rows into the selection and plain click clears it", async () => {
+  it.each([
+    { modifier: "Command", event: { metaKey: true } },
+    { modifier: "Control", event: { ctrlKey: true } },
+  ])("lets $modifier-click open session links through the browser", async ({ event }) => {
     const { sidebar } = await mountMultiSelect();
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+    const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true, ...event });
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    rowLink(sidebar, "agent:main:a").dispatchEvent(clickEvent);
     await sidebar.updateComplete;
+
+    expect(clickEvent.defaultPrevented).toBe(false);
+    expect(selectedRowKeys(sidebar)).toEqual([]);
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it("option-click toggles selection and plain click clears it while navigating", async () => {
+    const { sidebar } = await mountMultiSelect();
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+
+    const optionClick = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      altKey: true,
+    });
+    rowLink(sidebar, "agent:main:a").dispatchEvent(optionClick);
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
+    await sidebar.updateComplete;
+    expect(optionClick.defaultPrevented).toBe(true);
     expect(selectedRowKeys(sidebar)).toEqual(["agent:main:a", "agent:main:b"]);
 
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
     await sidebar.updateComplete;
     expect(selectedRowKeys(sidebar)).toEqual(["agent:main:a"]);
 
     click(rowLink(sidebar, "agent:main:c"));
     await sidebar.updateComplete;
     expect(selectedRowKeys(sidebar)).toEqual([]);
+    expect(onNavigate).toHaveBeenCalledOnce();
   });
 
   it("shift-click extends the selection from the anchor across the visible order", async () => {
     const { sidebar } = await mountMultiSelect();
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
     click(rowLink(sidebar, "agent:main:c"), { shiftKey: true });
     await sidebar.updateComplete;
 
@@ -145,8 +171,8 @@ describe("AppSidebar multi-select", () => {
   it("archives every selected session from the batch menu", async () => {
     const { sidebar, harness } = await mountMultiSelect();
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
     await sidebar.updateComplete;
     openContextMenu(sidebar, "agent:main:a");
     await sidebar.updateComplete;
@@ -181,8 +207,8 @@ describe("AppSidebar multi-select", () => {
   it("marks every selected session unread through patchMany", async () => {
     const { sidebar, harness } = await mountMultiSelect(["sessions.patchMany"]);
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
     await sidebar.updateComplete;
     openContextMenu(sidebar, "agent:main:a");
     await sidebar.updateComplete;
@@ -203,8 +229,8 @@ describe("AppSidebar multi-select", () => {
   it("archives serially when an older Gateway does not advertise patchMany", async () => {
     const { sidebar, harness, request } = await mountMultiSelect(["sessions.patch"]);
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
     await sidebar.updateComplete;
     openContextMenu(sidebar, "agent:main:a");
     await sidebar.updateComplete;
@@ -248,8 +274,8 @@ describe("AppSidebar multi-select", () => {
     });
     const { sidebar, harness, request } = await mountMultiSelect(null, rejection);
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
     await sidebar.updateComplete;
     openContextMenu(sidebar, "agent:main:a");
     await sidebar.updateComplete;
@@ -271,8 +297,8 @@ describe("AppSidebar multi-select", () => {
     try {
       const { sidebar, harness } = await mountMultiSelect();
 
-      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+      click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+      click(rowLink(sidebar, "agent:main:b"), { altKey: true });
       await sidebar.updateComplete;
       openContextMenu(sidebar, "agent:main:b");
       await sidebar.updateComplete;
@@ -307,8 +333,8 @@ describe("AppSidebar multi-select", () => {
   it("retargets the menu to an unselected row and drops the selection", async () => {
     const { sidebar } = await mountMultiSelect();
 
-    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
     await sidebar.updateComplete;
     openContextMenu(sidebar, "agent:main:c");
     await sidebar.updateComplete;

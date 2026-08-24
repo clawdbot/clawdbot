@@ -1,5 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import * as pluginRuntime from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { setTestEnvValue } from "../test-utils/env.js";
@@ -17,6 +20,12 @@ const TELEMETRY_URL = "https://telemetry.openclaw.ai/api/latest-version";
 const TELEMETRY_STATE_KEY = "telemetry.updateCheck";
 const mockHttp = useMockHttp();
 
+function installPluginRegistry(...plugins: Parameters<typeof createPluginRecord>[0][]): void {
+  const registry = createEmptyPluginRegistry();
+  registry.plugins.push(...plugins.map((plugin) => createPluginRecord(plugin)));
+  pluginRuntime.setActivePluginRegistry(registry);
+}
+
 function createFeatureConfig(enabled = true): OpenClawConfig {
   return {
     telemetry: { enabled },
@@ -32,6 +41,7 @@ function createFeatureConfig(enabled = true): OpenClawConfig {
     channels: {
       telegram: { enabled: true, botToken: "private-telegram-token" },
       discord: { enabled: true, token: "private-discord-token" },
+      "acme-internal-crm": { enabled: true },
       slack: { enabled: false, botToken: "private-slack-token" },
       defaults: { groupPolicy: "allowlist" },
       modelByChannel: { telegram: { "private-account-id": "openai/private-model" } },
@@ -48,6 +58,10 @@ function createFeatureConfig(enabled = true): OpenClawConfig {
           apiKey: "private-anthropic-api-key",
           models: [],
         },
+        "acme-llm": {
+          baseUrl: "https://private-llm.example.invalid/v1",
+          models: [],
+        },
       },
     },
     plugins: {
@@ -55,6 +69,8 @@ function createFeatureConfig(enabled = true): OpenClawConfig {
         telegram: { enabled: true },
         discord: { enabled: true },
         memory: { enabled: true },
+        "acme-internal-crm": { enabled: true },
+        "acme-internal-workflows": { enabled: true },
         disabled: { enabled: false },
       },
     },
@@ -76,6 +92,16 @@ describe("anonymous telemetry", () => {
         OPENCLAW_TELEMETRY_ENDPOINT: undefined,
       },
     });
+    installPluginRegistry(
+      { id: "telegram", origin: "bundled", channelIds: ["telegram"] },
+      { id: "discord", origin: "bundled", channelIds: ["discord"] },
+      { id: "memory", origin: "bundled" },
+      { id: "acme-internal-crm", channelIds: ["acme-internal-crm"] },
+      { id: "acme-internal-workflows" },
+      { id: "disabled", origin: "bundled", enabled: false, status: "disabled" },
+      { id: "load-error", origin: "bundled", status: "error" },
+      { id: "deferred", origin: "bundled", imported: false },
+    );
   });
 
   afterEach(async () => {
@@ -96,7 +122,8 @@ describe("anonymous telemetry", () => {
       features: {
         channels: ["discord", "telegram"],
         providerFamilies: ["anthropic", "openai"],
-        pluginsEnabled: 3,
+        plugins: ["discord", "memory", "telegram"],
+        pluginsEnabled: 5,
         sessionsLast24h: expect.any(Number),
       },
     });
@@ -104,20 +131,27 @@ describe("anonymous telemetry", () => {
       /"(?:id|accountId|userId|machineId|installId|token|apiKey|secret|password|prompt|message|host|hostname|baseUrl|path|email|models)"\s*:/iu,
     );
     expect(serialized).not.toContain("private-");
+    expect(serialized).not.toContain("acme-internal-crm");
+    expect(serialized).not.toContain("acme-internal-workflows");
+    expect(serialized).not.toContain("acme-llm");
     expect(serialized).not.toContain("example.invalid");
     expect(serialized).not.toContain("@");
     expect(serialized).not.toContain(testState.stateDir);
     expect(payload.features.sessionsLast24h).toBeGreaterThanOrEqual(0);
   });
 
-  it("counts auto-enabled channel plugins and provider families configured through agent models", () => {
+  it("counts loaded default plugins instead of unloaded config entries and accepts official provider families", () => {
+    installPluginRegistry(
+      { id: "whatsapp", origin: "bundled", channelIds: ["whatsapp"] },
+      { id: "diagnostics-otel", origin: "bundled" },
+    );
     const payload = buildTelemetryPayload(
       {
         agents: {
           defaults: {
             model: {
               primary: "anthropic/private-model",
-              fallbacks: ["openai/private-fallback"],
+              fallbacks: ["openai/private-fallback", "cohere/private-official-model"],
             },
           },
           entries: {
@@ -125,17 +159,55 @@ describe("anonymous telemetry", () => {
           },
         },
         channels: { whatsapp: { allowFrom: ["+15555550123"] } },
+        plugins: { entries: { "never-loaded": { enabled: true } } },
       },
       { surface: "gateway" },
     );
 
     expect(payload.features).toMatchObject({
       channels: ["whatsapp"],
-      providerFamilies: ["anthropic", "google", "openai"],
-      pluginsEnabled: 1,
+      providerFamilies: ["anthropic", "cohere", "google", "openai"],
+      plugins: ["diagnostics-otel", "whatsapp"],
+      pluginsEnabled: 2,
     });
     expect(JSON.stringify(payload)).not.toContain("private-");
     expect(JSON.stringify(payload)).not.toContain("+15555550123");
+  });
+
+  it("classifies configured channels by their loaded plugin owner", () => {
+    installPluginRegistry(
+      { id: "public-channel-owner", origin: "bundled", channelIds: ["public-alias"] },
+      { id: "acme-internal-crm", channelIds: ["telegram"] },
+    );
+
+    const payload = buildTelemetryPayload(
+      { channels: { "public-alias": { enabled: true }, telegram: { enabled: true } } },
+      { surface: "gateway" },
+    );
+
+    expect(payload.features.channels).toEqual(["public-alias"]);
+    expect(payload.features.plugins).toEqual(["public-channel-owner"]);
+    expect(payload.features.pluginsEnabled).toBe(2);
+    expect(JSON.stringify(payload)).not.toContain("acme-internal-crm");
+  });
+
+  it("uses manifest-owned plugin activation when a CLI has no active runtime registry", () => {
+    const activeRegistry = vi.spyOn(pluginRuntime, "getActivePluginRegistry").mockReturnValue(null);
+    try {
+      const payload = buildTelemetryPayload(
+        {
+          channels: { telegram: { enabled: true } },
+          plugins: { allow: ["telegram"] },
+        },
+        { surface: "cli" },
+      );
+
+      expect(payload.features.channels).toEqual(["telegram"]);
+      expect(payload.features.plugins).toContain("telegram");
+      expect(payload.features.pluginsEnabled).toBe(payload.features.plugins.length);
+    } finally {
+      activeRegistry.mockRestore();
+    }
   });
 
   it("counts only session creation events from the previous 24 hours", async () => {

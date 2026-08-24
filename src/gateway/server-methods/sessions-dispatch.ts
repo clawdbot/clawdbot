@@ -334,6 +334,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       dispatchTarget = destination.value;
     }
     if (
+      !autoDevice &&
       dispatchTarget &&
       !(await validateDispatchExecutionMode({
         context,
@@ -422,13 +423,15 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
           return;
         }
         dispatchTarget = destination.value;
+      }
+      if (autoDevice) {
         const eligibility = await resolveDevicePlacementEligibility({
           environmentService: context.workerEnvironmentService,
-          deviceId: dispatchTarget.deviceId!,
+          deviceId: candidates[attempt]!,
           runtimeId: sessionRuntime,
           requirement: devicePlacement,
           config: cfg,
-          currentNode: context.nodeRegistry.get(dispatchTarget.deviceId!),
+          currentNode: context.nodeRegistry.get(candidates[attempt]!),
         });
         if (!eligibility.ok) {
           lastEligibilityError = eligibility.error;

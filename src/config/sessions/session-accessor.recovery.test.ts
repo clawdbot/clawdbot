@@ -135,13 +135,17 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
     });
   });
 
-  it("does not archive or copy when the recovery revision changed", async () => {
+  it.each([
+    { name: "recovery", revision: 3 },
+    { name: "lifecycle", revision: 4, lifecycleRevision: "different-generation" },
+  ])("does not archive or copy when the $name revision changed", async (expected) => {
     const fixture = await createFixture();
     const result = await recoverSessionEntryFromRestartTombstone({
       agentId: "main",
       expected: {
         cycleId: "cycle-1",
-        revision: 3,
+        revision: expected.revision,
+        ...(expected.lifecycleRevision ? { lifecycleRevision: expected.lifecycleRevision } : {}),
         sessionId: fixture.sourceSessionId,
         pluginOwnerId: "codex",
       },

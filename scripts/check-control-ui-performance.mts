@@ -33,7 +33,11 @@ const controlUiPerformanceBudgets = {
   // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
   startupCssGzipBytes: 45 * KIB,
   largestJsGzipBytes: 215 * KIB,
-  largestCssGzipBytes: 45 * KIB,
+  // Startup CSS stays at 45 KiB; the boot-group consolidation (2026-08,
+  // control-ui-boot chunking) merges boot-path component CSS into one file
+  // that lands just above it, trading ~1 KiB of ceiling for ~95 fewer boot
+  // requests on HTTP/1.1 gateways.
+  largestCssGzipBytes: 47 * KIB,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

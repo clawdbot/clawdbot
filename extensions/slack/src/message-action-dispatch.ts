@@ -16,6 +16,7 @@ import {
 import { resolveDefaultSlackAccountId } from "./accounts.js";
 import { SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import { buildSlackPresentationBlocks, canRenderSlackPresentation } from "./blocks-render.js";
+import { normalizeSlackOutboundText } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
 import {
@@ -224,11 +225,15 @@ export async function handleSlackMessageAction(params: {
       ? renderSlackMessagePresentationFallbackText({ text: content, presentation })
       : resolveSlackPresentationText(content, presentation);
     if (
-      renderedPresentation.usesPresentationTextFallback &&
-      countSlackTextUtf8Bytes(accessibleContent) > SLACK_EDIT_TEXT_MAX_BYTES
+      !blocks &&
+      countSlackTextUtf8Bytes(normalizeSlackOutboundText(accessibleContent)) >
+        SLACK_EDIT_TEXT_MAX_BYTES
     ) {
+      const editSubject = renderedPresentation.usesPresentationTextFallback
+        ? "Slack presentation fallback"
+        : "Slack edit";
       throw new Error(
-        `Slack presentation fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
+        `${editSubject} exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
       );
     }
     if (!accessibleContent && !blocks) {

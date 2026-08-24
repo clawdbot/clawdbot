@@ -276,6 +276,33 @@ describe("registerOnboardCommand", () => {
     },
   );
 
+  it.each([
+    {
+      rejection: "modern onboarding without risk acknowledgement",
+      args: ["--modern", "--non-interactive"],
+      message: "Non-interactive setup requires explicit risk acknowledgement.",
+    },
+    {
+      rejection: "modern onboarding with unsupported setup flags",
+      args: ["--modern", "--classic"],
+      message: "--modern cannot be combined with: --classic.",
+    },
+  ])("emits one options JSON object for $rejection", async ({ args, message }) => {
+    await runCli(["onboard", "--json", ...args]);
+
+    expect(runtime.log).toHaveBeenCalledOnce();
+    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    expect(payload).toEqual({
+      ok: false,
+      phase: "options",
+      message: expect.stringContaining(message),
+    });
+    expect(runtime.error).toHaveBeenCalledWith(payload.message);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runSystemAgentWithInference).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
     expect(setupWizardOptions().mistralApiKey).toBe("sk-mistral-test"); // pragma: allowlist secret

@@ -241,17 +241,9 @@ only for behavior that really belongs to the backend.
 | `manualCompaction`                 | Atomic command, transport, and positive-acknowledgement contract            |
 | `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
-| `liveSessionRequirement`           | Require an init capability before trusting long-lived session output        |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
 a backend hook can express the behavior.
-
-`liveSessionRequirement` declares one exact capability that the CLI must
-advertise in its initialization record before OpenClaw trusts streamed output.
-It also supplies the first known compatible version, version-probe arguments,
-and update command used by setup and Doctor. Runtime support remains
-capability-based, so a compatible backport or wrapper is not rejected only
-because of its version string.
 
 `prepareExecution(ctx)` receives `ctx.contextTokenBudget`, the effective token
 limit selected for the run. Backends that own native compaction can map that
@@ -260,6 +252,16 @@ effective `ctx.thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`,
 `xhigh`, `adaptive`, or `max`. Use that field when the selected level must be
 applied through launch environment or staged configuration; the same field is
 available to `resolveExecutionArgs(ctx)` for native CLI flags.
+
+`prepareExecution(ctx)` may also return an optional `execute` transport when a
+backend owns a vendor-supported SDK for the installed CLI. The transport
+receives the exact prepared command, arguments, environment, prompt, session,
+and tool availability; it yields the backend's existing structured stream
+records. Native tool actions must use the provided, run-bound
+`requestToolPermission` callback rather than creating independent approval
+authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
+grant ownership. Explicit credential forwarding, paired-node execution, and
+manual compaction continue through the existing host-managed process path.
 
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
@@ -306,16 +308,6 @@ Declare how the backend enforces that contract:
 Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
 OpenClaw before this contract is built. Native tools are disabled, and a
 backend without a complete declared enforcement path fails before execution.
-
-Plugins built against `v2026.7.2-beta.1` through `v2026.7.2-beta.3` may still
-read the deprecated `ctx.toolAvailability.mcp` transport-name projection and
-may omit `toolAvailabilityEnforcement` when a selectable backend implements
-`resolveExecutionArgs`. OpenClaw recognizes that shipped beta path from the
-plugin package's required `openclaw.build.openclawVersion` metadata and
-preserves it through the `2026.8.x` line. New and updated plugins should use canonical
-`ctx.toolAvailability.openClaw` names and declare
-`toolAvailabilityEnforcement: "execution-args"` explicitly; the beta
-compatibility path is scheduled for removal after that window.
 
 ### `parseJsonlEvent`: provider-specific JSONL streams
 

@@ -46,6 +46,7 @@ import {
 } from "./session-binding.js";
 import {
   applyCodexSessionPermissionPolicy,
+  resolveCodexEffectiveSessionPermissionPolicy,
   resolveCodexSessionPermissionCwd,
 } from "./session-permission-policy.js";
 import {
@@ -427,6 +428,16 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
     appServer = resolvedAppServer.appServer;
   }
+  const sessionPermissionPolicy = resolveCodexEffectiveSessionPermissionPolicy({
+    appServer,
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
+  });
+  if (sessionPermissionPolicy) {
+    params.permissionMode = sessionPermissionPolicy.mode;
+    params.sessionRoot = sessionPermissionPolicy.root;
+    (params.execOverrides ??= {}).mode = sessionPermissionPolicy.execMode;
+  }
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
@@ -482,6 +493,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     effectiveWorkspace,
     effectiveCwd,
     appServer,
+    sessionPermissionPolicy,
     nativeHookRelayEvents,
     runAbortController,
     terminalState,

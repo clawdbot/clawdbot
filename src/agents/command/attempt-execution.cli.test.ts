@@ -354,9 +354,9 @@ vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
 }));
 
-vi.mock("../cli-runner/claude-live-registry.js", () => ({
-  getClaudeGeneration: vi.fn(() => undefined),
-  hasClaudeSession: hasClaudeSessionMock,
+vi.mock("../cli-runner/cli-live-session-registry.js", () => ({
+  getCliLiveSessionGeneration: vi.fn(() => undefined),
+  hasCliLiveSession: hasClaudeSessionMock,
 }));
 
 vi.mock("../model-selection.js", () => ({

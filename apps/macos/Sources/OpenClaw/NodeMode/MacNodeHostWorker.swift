@@ -383,7 +383,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         timer.resume()
 
         let configuration = Subprocess.Configuration(
-            .path(.init(executable)),
+            executable: .path(.init(executable)),
             arguments: Arguments(Array(command.dropFirst())),
             environment: ManagedProcess.environment(from: environment),
             workingDirectory: launch.currentDirectoryURL.map { .init($0.path) })

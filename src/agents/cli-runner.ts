@@ -28,7 +28,7 @@ import {
   markAuthProfileSuccess,
 } from "./auth-profiles.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
-import { acceptsClaudeLive } from "./cli-runner/claude-live-session-policy.js";
+import { acceptsCliLiveSession } from "./cli-runner/cli-live-session-registry.js";
 import {
   resolveCliSessionId,
   runCliRecovery,
@@ -568,7 +568,7 @@ export async function runPreparedCliAgent(
               effectiveCliSessionId,
               params.provider,
               context.cwd ?? context.workspaceDir,
-              { skipTranscriptProbe: acceptsClaudeLive(context) },
+              { skipTranscriptProbe: acceptsCliLiveSession(context) },
             );
         const interruptionError = terminalInterruption
           ? formatCliTerminalInterruption(terminalInterruption)

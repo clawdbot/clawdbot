@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node environment
         id: setup-node-env
@@ -75,7 +75,7 @@ jobs:
       - name: Save Node toolchain cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && runner.os != 'Windows' && runner.environment != 'github-hosted' && steps.setup-node-env.outputs.node-toolchain-populated == 'true' && steps.setup-node-env.outputs.node-toolchain-cache-matched-key != steps.setup-node-env.outputs.node-toolchain-cache-key }}
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.setup-node-env.outputs.node-toolchain-cache-path }}
           key: ${{ steps.setup-node-env.outputs.node-toolchain-cache-key }}
@@ -83,7 +83,7 @@ jobs:
       - name: Save exact dependency cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.dependency-cache-key != '' && steps.setup-node-env.outputs.dependency-cache-hit != 'true' }}
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             node_modules
@@ -106,7 +106,7 @@ jobs:
       - name: Save pnpm store cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.pnpm-store-cache-key != '' && steps.setup-node-env.outputs.pnpm-store-cache-hit != 'true' }}
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}
           key: ${{ steps.setup-node-env.outputs.pnpm-store-cache-key }}
@@ -114,7 +114,7 @@ jobs:
       - name: Save Vitest transform cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.vitest-cache-key != '' }}
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /var/tmp/openclaw-vitest-fs-cache
           key: ${{ steps.setup-node-env.outputs.vitest-cache-key }}
@@ -122,7 +122,7 @@ jobs:
       - name: Save Node compile cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.node-compile-cache-key != '' }}
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /var/tmp/openclaw-node-compile-cache
           key: ${{ steps.setup-node-env.outputs.node-compile-cache-key }}
@@ -130,7 +130,7 @@ jobs:
       - name: Save build-all cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.build-all-cache-key != '' }}
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .artifacts/build-all-cache
           key: ${{ steps.setup-node-env.outputs.build-all-cache-key }}
@@ -138,7 +138,7 @@ jobs:
       - name: Save dist build cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' }}
         continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             dist/

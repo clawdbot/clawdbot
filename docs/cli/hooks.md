@@ -125,6 +125,7 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .   # filter by action
 ## Notes
 
 - `hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
+- Failed hook reports use the standard [CLI JSON failure envelope](/cli#json-failures); missing hook info also includes the requested `hook` name.
 - `hooks list`, `info`, and `check` pass `--agent` to a running Gateway and preserve it when falling back to local read-only discovery against an older or unavailable Gateway.
 
 ## Related

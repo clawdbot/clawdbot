@@ -17,6 +17,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -79,6 +80,7 @@ import {
   toolChoiceConstraintPrompt,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type OpenAiHttpOptions = {
@@ -1007,13 +1009,27 @@ export async function handleOpenAiHttpRequest(
     }
     throw err;
   }
+  const creationAuth = authorizeGatewaySessionCreation({
+    cfg: getRuntimeConfig(),
+    ...(senderIsOwner && !handled.requestAuth.authenticatedUserProfile
+      ? { actor: { kind: "system" as const } }
+      : { profileId: handled.requestAuth.authenticatedUserProfile?.profileId }),
+    agentId,
+  });
+  if (creationAuth) {
+    sendJson(res, 403, {
+      error: { message: creationAuth.message, type: "forbidden" },
+    });
+    return true;
+  }
   const sessionAuth = authorizeOpenAiCompatibleHttpSession({
     agentId,
     sessionKey,
+    requestAuth: handled.requestAuth,
     senderIsOwner,
   });
   if (!sessionAuth.allowed) {
-    sendMissingScopeForbidden(res, sessionAuth.missingScope);
+    sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });
     return true;
   }
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({

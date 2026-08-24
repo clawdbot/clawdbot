@@ -1057,6 +1057,131 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
   });
 
+  it("resolves a GitHub-backed role before registering the connection or sending hello", async () => {
+    await withOpenClawTestState({ label: "gateway-github-role-before-hello" }, async () => {
+      const canonical = ensureProfileForEmail("canonical@example.test");
+      const syncCompletion = createDeferred<{ profileId: string; updatedAt: number }>();
+      const sync = vi.fn(async () => await syncCompletion.promise);
+      createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
+      loadConfigMock.mockImplementationOnce(() => ({
+        gateway: {
+          auth: {
+            mode: "none",
+            identityScopes: { "ada@github": ["operator.read", "operator.admin"] },
+          },
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "view" as const },
+                agents: "*" as const,
+                scopes: ["operator.read" as const],
+              },
+            },
+          },
+          controlUi: { allowedOrigins: ["http://127.0.0.1:19001"] },
+        },
+      }));
+      resolveConnectAuthStateMock.mockResolvedValueOnce({
+        authResult: {
+          ok: true,
+          method: "tailscale",
+          user: "ada@github",
+          tailscaleIdentity: { login: "ada@github", name: "Ada Lovelace" },
+        },
+        authOk: true,
+        authMethod: "tailscale",
+        sharedAuthOk: true,
+      });
+      const harness = attachGatewayHarness({
+        connId: "conn-github-role-before-hello",
+        connectNonce: "nonce-github-role-before-hello",
+      });
+
+      harness.sendConnect("connect-github-role-before-hello", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: { id: "test", version: "dev", platform: "test", mode: "test" },
+        role: "operator",
+        caps: [],
+      });
+
+      await waitForFast(() => expect(sync).toHaveBeenCalledOnce());
+      expect(harness.client).toBeNull();
+      expect(harness.socketSend).not.toHaveBeenCalled();
+      syncCompletion.resolve({ profileId: canonical.id, updatedAt: canonical.updatedAt });
+
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({
+          connect: { scopes: ["operator.read"] },
+          authenticatedUserProfile: { profileId: canonical.id },
+        });
+        expect(harness.socketSend).toHaveBeenCalled();
+      });
+      expect(sync.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.socketSend.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    });
+  });
+
+  it("withholds every operator scope when configured-role identity verification fails", async () => {
+    await withOpenClawTestState({ label: "gateway-github-role-verification-failure" }, async () => {
+      createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(
+        vi.fn(async () => {
+          throw new Error("GitHub unavailable");
+        }),
+      );
+      loadConfigMock.mockImplementationOnce(() => ({
+        gateway: {
+          auth: {
+            mode: "none",
+            identityScopes: { "ada@github": ["operator.admin"] },
+          },
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "view" as const },
+                agents: "*" as const,
+                scopes: ["operator.read" as const],
+              },
+            },
+          },
+          controlUi: { allowedOrigins: ["http://127.0.0.1:19001"] },
+        },
+      }));
+      resolveConnectAuthStateMock.mockResolvedValueOnce({
+        authResult: {
+          ok: true,
+          method: "tailscale",
+          user: "ada@github",
+          tailscaleIdentity: { login: "ada@github", name: "Ada Lovelace" },
+        },
+        authOk: true,
+        authMethod: "tailscale",
+        sharedAuthOk: true,
+      });
+      const harness = attachGatewayHarness({
+        connId: "conn-github-role-verification-failure",
+        connectNonce: "nonce-github-role-verification-failure",
+      });
+
+      harness.sendConnect("connect-github-role-verification-failure", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: { id: "test", version: "dev", platform: "test", mode: "test" },
+        role: "operator",
+        caps: [],
+      });
+
+      await waitForFast(() => {
+        expect(harness.client).toMatchObject({ connect: { scopes: [] } });
+        expect(harness.socketSend).toHaveBeenCalled();
+      });
+      expect(harness.client).not.toHaveProperty("authenticatedUserProfile");
+    });
+  });
+
   it("keeps a mutable GitHub alias unattributed when immutable sync fails", async () => {
     await withOpenClawTestState({ label: "gateway-github-profile-failure" }, async () => {
       syncGitHubIdentity({
