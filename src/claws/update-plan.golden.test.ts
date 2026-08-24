@@ -216,7 +216,6 @@ describe("claws update-plan goldens", () => {
         ref: "obsolete",
         version: "2.0.0",
         integrity: `sha256:${"b".repeat(64)}`,
-        installId: "obsolete",
       },
       { env: current.env },
     );
