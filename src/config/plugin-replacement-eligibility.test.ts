@@ -289,6 +289,83 @@ describe("isPluginExplicitlySelectedByAlias", () => {
     ).toBe(true);
   });
 
+  // Codex review P1 on #123209: a material entry is not an activation cause on its own. Startup
+  // refuses a workspace plugin that neither the allowlist nor an entry `enabled: true` trusts
+  // ("workspace-disabled-by-default"), so counting its `config` block as hand-picked set aside the
+  // replacement's edge and kept the schema of a claimant the runtime never loads.
+  it("does not treat a config-only entry as selection for an untrusted workspace plugin", () => {
+    const config = {
+      plugins: { entries: { "clickclack-plus": { config: { token: "x" } } } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(config, "clickclack-plus", canonicalId, registry),
+    ).toBe(false);
+  });
+
+  // The same finding's second shape: `resolveManifestOwnerBasePolicyBlock` returns
+  // "not-in-allowlist" for any non-bundled plugin a non-empty `plugins.allow` omits, so no entry
+  // under it can be an activation cause.
+  it("does not treat a material entry as selection under a restrictive allowlist", () => {
+    const globalRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "clickclack-plus", origin: "global", channels: ["clickclack"] }],
+    } as unknown as PluginManifestRegistry;
+    const config = {
+      plugins: {
+        allow: ["something-else"],
+        entries: { "clickclack-plus": { config: { token: "x" } } },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "clickclack-plus",
+        createManifestPluginAliasResolver(globalRegistry),
+        globalRegistry,
+      ),
+    ).toBe(false);
+  });
+
+  // Over-gating is as much a defect as under-gating: this predicate must stay exactly as wide as
+  // activation. With no allowlist and an origin that loads by default, a material entry is still
+  // the operator's own choice and must outrank a replacement's edge.
+  it.each([
+    {
+      label: "a default-loading origin with no allowlist",
+      registry: {
+        diagnostics: [],
+        plugins: [{ id: "clickclack-plus", origin: "global", channels: ["clickclack"] }],
+      },
+      config: { plugins: { entries: { "clickclack-plus": { config: { token: "x" } } } } },
+    },
+    {
+      label: "a workspace plugin the allowlist trusts",
+      registry: {
+        diagnostics: [],
+        plugins: [{ id: "clickclack-plus", origin: "workspace", channels: ["clickclack"] }],
+      },
+      config: {
+        plugins: {
+          allow: ["clickclack-plus"],
+          entries: { "clickclack-plus": { config: { token: "x" } } },
+        },
+      },
+    },
+  ])("still sees a material entry as selection for $label", ({ registry: fixture, config }) => {
+    const typedRegistry = fixture as unknown as PluginManifestRegistry;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config as unknown as OpenClawConfig,
+        "clickclack-plus",
+        createManifestPluginAliasResolver(typedRegistry),
+        typedRegistry,
+      ),
+    ).toBe(true);
+  });
+
   // Codex review P2 on #123209: `plugins.slots.memory` and `plugins.slots.contextEngine` are
   // explicit-selection causes in the activation contract, and activation checks entry disablement
   // before its slot branches. Missing them here let `disableImplicitPreferredOverPlugin` write

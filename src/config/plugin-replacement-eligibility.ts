@@ -212,6 +212,44 @@ export function isPluginExplicitlySelectedByAlias(
   ) {
     return true;
   }
+  // A material entry is not an activation cause by itself. The causes are an entry `enabled: true`,
+  // the two capability slots, the allowlist, and a bundled channel enable
+  // (`PLUGIN_ACTIVATION_REASON_BY_CAUSE`), so config, hooks, or an apiKey under
+  // `plugins.entries.<id>` only shapes a plugin activation reaches by some other route. Two policy
+  // blocks refuse such a plugin outright, and counting it hand-picked here set aside the
+  // replacement's edge and kept the schema of a claimant the runtime never loads.
+  //
+  // Both gates need `manifestRegistry` to see origin, and a caller without one keeps the wide
+  // reading, as the arms above do.
+  if (manifestRegistry) {
+    const allowedIds = Array.isArray(allow)
+      ? allow.filter((id): id is string => typeof id === "string")
+      : [];
+    const allowlisted = allowedIds.some((id) => canonicalId(id) === target);
+    const hasOrigin = (origin: string): boolean =>
+      manifestRegistry.plugins.some(
+        (plugin) => plugin.origin === origin && canonicalId(plugin.id) === target,
+      );
+    // `resolveManifestOwnerBasePolicyBlock` returns "not-in-allowlist" for any plugin a non-empty
+    // `plugins.allow` omits. Only a bundled channel owner bypasses it on explicit config, which is
+    // why this arm is gated on non-bundled origin exactly like the allowlist cause above.
+    if (!hasOrigin("bundled") && allowedIds.length > 0 && !allowlisted) {
+      return false;
+    }
+    // A workspace plugin is disabled by default; startup returns "workspace-disabled-by-default"
+    // unless the allowlist or an entry `enabled: true` trusts it. Same pair the memory-slot arm
+    // above already requires.
+    if (
+      hasOrigin("workspace") &&
+      !allowlisted &&
+      !Object.entries(cfg.plugins?.entries ?? {}).some(
+        ([writtenId, entry]) =>
+          canonicalId(writtenId) === target && isRecord(entry) && entry.enabled === true,
+      )
+    ) {
+      return false;
+    }
+  }
   return Object.entries(cfg.plugins?.entries ?? {}).some(
     ([writtenId, entry]) =>
       canonicalId(writtenId) === target && hasMaterialPluginEntryConfig(entry),
