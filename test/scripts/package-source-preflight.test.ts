@@ -52,7 +52,7 @@ type WorkflowStep = {
 };
 
 type Workflow = {
-  jobs: Record<string, { steps: WorkflowStep[] }>;
+  jobs: Record<string, { steps: WorkflowStep[]; with?: Record<string, unknown> }>;
 };
 
 function readWorkflow(file: string): Workflow {
@@ -79,6 +79,57 @@ function runSourceRequirement(step: WorkflowStep, env: Record<string, string>) {
     });
     expect(result.status, result.stderr).toBe(0);
     return readFileSync(outputPath, "utf8").trim();
+  } finally {
+    rmSync(tempDir, { force: true, recursive: true });
+  }
+}
+
+function runReleaseInputCapture(params: {
+  candidateArtifactJson?: string;
+  releasePackageSpec?: string;
+}) {
+  const workflow = readWorkflow(".github/workflows/openclaw-release-checks.yml");
+  const step = workflowStep(workflow, "resolve_target", "Capture selected inputs");
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-release-inputs-"));
+  const outputPath = path.join(tempDir, "output");
+  const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
+  try {
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...stepEnv,
+        CANDIDATE_ARTIFACT_JSON_INPUT: params.candidateArtifactJson ?? "",
+        GITHUB_OUTPUT: outputPath,
+        RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: "false",
+        RELEASE_CROSS_OS_SUITE_FILTER_INPUT: "",
+        RELEASE_FAIL_FAST_INPUT: "false",
+        RELEASE_FILTER_VALIDATOR: path.resolve("scripts/github/validate-release-suite-filters.sh"),
+        RELEASE_LIVE_SUITE_FILTER_INPUT: "",
+        RELEASE_MODE_INPUT: "both",
+        RELEASE_PACKAGE_SPEC_INPUT: params.releasePackageSpec ?? "",
+        RELEASE_PROFILE_INPUT: "beta",
+        RELEASE_PROVIDER_INPUT: "openai",
+        RELEASE_QA_DISCORD_LIVE_CI_ENABLED: "false",
+        RELEASE_QA_SLACK_LIVE_CI_ENABLED: "false",
+        RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED: "false",
+        RELEASE_REF_INPUT: "main",
+        RELEASE_RERUN_GROUP_INPUT: "package",
+        RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
+        RELEASE_RUN_RELEASE_SOAK_INPUT: "false",
+        RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: "false",
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    return Object.fromEntries(
+      readFileSync(outputPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }),
+    );
   } finally {
     rmSync(tempDir, { force: true, recursive: true });
   }
@@ -210,14 +261,9 @@ describe("package source preflight", () => {
     ).toBe("2026.8.1");
   });
 
-  it("normalizes release-check source selection and guards the source resolver", () => {
+  it("normalizes release-check package mode and guards the source resolver", () => {
     const workflow = readWorkflow(".github/workflows/openclaw-release-checks.yml");
     const steps = workflow.jobs.prepare_release_package!.steps;
-    const sourceRequirement = workflowStep(
-      workflow,
-      "prepare_release_package",
-      "Resolve source package requirement",
-    );
     const preflightIndex = steps.findIndex(
       (step) => step.name === "Validate release package source metadata",
     );
@@ -228,31 +274,63 @@ describe("package source preflight", () => {
     const preflight = steps[preflightIndex]!;
     const packageStep = steps[packageIndex]!;
     const setup = workflowStep(workflow, "prepare_release_package", "Setup Node environment");
+    const upload = workflowStep(
+      workflow,
+      "prepare_release_package",
+      "Upload release package artifact",
+    );
+    const artifactIdentity = workflowStep(
+      workflow,
+      "prepare_release_package",
+      "Validate shared release candidate identity",
+    );
 
     expect(preflightIndex).toBeGreaterThan(-1);
     expect(preflightIndex).toBeLessThan(setupIndex);
     expect(preflightIndex).toBeLessThan(packageIndex);
+    expect(runReleaseInputCapture({ releasePackageSpec: " \t " })).toMatchObject({
+      candidate_artifact_json: "",
+      package_mode: "source",
+      release_package_spec: "",
+    });
+    expect(runReleaseInputCapture({ releasePackageSpec: "openclaw@beta" })).toMatchObject({
+      candidate_artifact_json: "",
+      package_mode: "published",
+      release_package_spec: "openclaw@beta",
+    });
+    expect(runReleaseInputCapture({ candidateArtifactJson: " \t " })).toMatchObject({
+      candidate_artifact_json: "",
+      package_mode: "source",
+      release_package_spec: "",
+    });
     expect(
-      runSourceRequirement(sourceRequirement, {
-        CANDIDATE_ARTIFACT_JSON: "",
-        RELEASE_PACKAGE_SPEC: " \t ",
-      }),
-    ).toBe("required=true");
-    expect(
-      runSourceRequirement(sourceRequirement, {
-        CANDIDATE_ARTIFACT_JSON: "",
-        RELEASE_PACKAGE_SPEC: "openclaw@beta",
-      }),
-    ).toBe("required=false");
-    expect(preflight.if).toBe("steps.package_source.outputs.required == 'true'");
+      runReleaseInputCapture({ candidateArtifactJson: '{"packageArtifactId":"1"}' }),
+    ).toMatchObject({
+      candidate_artifact_json: '{"packageArtifactId":"1"}',
+      package_mode: "artifact",
+      release_package_spec: "",
+    });
+    expect(preflight.if).toBe("needs.resolve_target.outputs.package_mode == 'source'");
     expect(preflight.env?.PACKAGE_REF).toBe("${{ needs.resolve_target.outputs.revision }}");
     expect(preflight.run).toContain("node scripts/package-source-preflight.mjs");
-    expect(packageStep.env?.SOURCE_PACKAGE_REQUIRED).toBe(
-      "${{ steps.package_source.outputs.required }}",
-    );
-    expect(setup.if).toContain("steps.package_source.outputs.required == 'true'");
-    expect(packageStep.if).toContain("steps.package_source.outputs.required == 'true'");
-    expect(packageStep.run).toContain('if [[ "$SOURCE_PACKAGE_REQUIRED" != "true" ]]');
+    expect(packageStep.env?.PACKAGE_MODE).toBe("${{ needs.resolve_target.outputs.package_mode }}");
+    expect(setup.if).toBe("needs.resolve_target.outputs.package_mode != 'artifact'");
+    expect(packageStep.if).toBe("needs.resolve_target.outputs.package_mode != 'artifact'");
+    expect(packageStep.run).toContain('if [[ "$PACKAGE_MODE" == "published" ]]');
+    expect(upload.if).toBe("needs.resolve_target.outputs.package_mode != 'artifact'");
+    expect(artifactIdentity.if).toBe("needs.resolve_target.outputs.package_mode == 'artifact'");
+    expect(workflow.jobs.docker_e2e_release_checks?.with).toMatchObject({
+      enable_prepublish_plugin_registry:
+        "${{ needs.resolve_target.outputs.package_mode != 'published' }}",
+    });
+    expect(workflow.jobs.package_acceptance_release_checks?.with).toMatchObject({
+      candidate_artifact_json: "${{ needs.resolve_target.outputs.candidate_artifact_json }}",
+      source:
+        "${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}",
+    });
+    const workflowSource = readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8");
+    expect(workflowSource.match(/\$\{\{ inputs\.candidate_artifact_json \}\}/gu)).toHaveLength(1);
+    expect(workflowSource.match(/\$\{\{ inputs\.release_package_spec \}\}/gu)).toHaveLength(1);
   });
 
   it("guards the default live/E2E candidate producer before setup and packing", () => {
@@ -268,6 +346,11 @@ describe("package source preflight", () => {
       "prepare_docker_e2e_image",
       "Validate Docker E2E package source metadata",
     );
+    const harnessSetup = workflowStep(
+      workflow,
+      "prepare_docker_e2e_image",
+      "Setup trusted release harness",
+    );
     const setup = workflowStep(workflow, "prepare_docker_e2e_image", "Setup Node environment");
     const pack = workflowStep(
       workflow,
@@ -277,24 +360,26 @@ describe("package source preflight", () => {
 
     expect(
       runSourceRequirement(sourceRequirement, {
-        NEEDS_PACKAGE: "1",
         PACKAGE_ARTIFACT_NAME: " ",
         PACKAGE_ARTIFACT_RUN_ID: "\t",
       }),
     ).toBe("required=true");
     expect(
       runSourceRequirement(sourceRequirement, {
-        NEEDS_PACKAGE: "1",
         PACKAGE_ARTIFACT_NAME: "release-package-1",
         PACKAGE_ARTIFACT_RUN_ID: "123",
       }),
     ).toBe("required=false");
+    expect(steps.indexOf(preflight)).toBeLessThan(steps.indexOf(harnessSetup));
+    expect(harnessSetup.uses).toBe("./.release-harness/.github/actions/setup-release-harness");
     expect(steps.indexOf(preflight)).toBeLessThan(steps.indexOf(setup));
     expect(steps.indexOf(preflight)).toBeLessThan(steps.indexOf(pack));
     expect(preflight.run).toContain("node .release-harness/scripts/package-source-preflight.mjs");
     expect(preflight.if).toBe("steps.package_source.outputs.required == 'true'");
     expect(setup.if).toContain("steps.package_source.outputs.required == 'true'");
-    expect(pack.if).toBe("steps.package_source.outputs.required == 'true'");
+    expect(pack.if).toBe(
+      "steps.plan.outputs.needs_package == '1' && steps.package_source.outputs.required == 'true'",
+    );
   });
 
   it("guards install-smoke candidate packaging before its dependency install", () => {
