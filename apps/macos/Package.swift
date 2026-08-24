@@ -16,7 +16,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", exact: "3.0.1"),
-        .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.3.0"),
+        .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.3.1"),
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.4.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.12.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
