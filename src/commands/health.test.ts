@@ -1,7 +1,9 @@
 // Health command tests cover gateway health probes, JSON output, and status formatting.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { ExitError } from "../runtime.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
@@ -25,6 +27,10 @@ const runtime = {
   error: vi.fn(),
   exit: vi.fn(),
 };
+
+afterEach(() => {
+  resetSecretRedactionRegistryForTest();
+});
 
 const defaultSessions: HealthSummary["sessions"] = {
   path: "/tmp/sessions.json",
@@ -908,6 +914,18 @@ describe("formatConfigReloadHealthLine", () => {
 });
 
 describe("formatHealthCheckFailure", () => {
+  it.each([false, true])("redacts registered secrets from rich=%s output", (rich) => {
+    const registeredSecret = "qa-health-check-secret";
+    registerSecretValueForRedaction(registeredSecret);
+
+    const output = formatHealthCheckFailure(new Error(`gateway failed with ${registeredSecret}`), {
+      rich,
+    });
+
+    expect(output).toContain("gateway failed with");
+    expect(output).not.toContain(registeredSecret);
+  });
+
   it("keeps non-rich output stable", () => {
     const err = new Error("gateway closed (1006 abnormal closure): no close reason");
     expect(formatHealthCheckFailure(err, { rich: false })).toBe(

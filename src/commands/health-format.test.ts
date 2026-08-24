@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { HealthSummary } from "../gateway/health/types.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { formatGatewayClosedDiagnostic, formatHealthChannelLines } from "./health-format.js";
+
+afterEach(resetSecretRedactionRegistryForTest);
 
 describe("formatGatewayClosedDiagnostic", () => {
   it("formats a coded gateway transport close", () => {
@@ -14,6 +18,26 @@ describe("formatGatewayClosedDiagnostic", () => {
     expect(formatGatewayClosedDiagnostic(error)).toBe(
       "Gateway connect failed: gateway closed (1006): no close reason",
     );
+  });
+
+  it("redacts a registered secret from the close reason", () => {
+    const registeredSecret = "qa-gateway-close-secret";
+    registerSecretValueForRedaction(registeredSecret);
+    const error = Object.assign(
+      new Error(`gateway closed (1006): remote reason ${registeredSecret}\nignored detail`),
+      {
+        name: "GatewayTransportError",
+        kind: "closed",
+        code: 1006,
+        connectionDetails: {},
+      },
+    );
+
+    const output = formatGatewayClosedDiagnostic(error);
+
+    expect(output).toContain("gateway closed (1006): remote reason");
+    expect(output).not.toContain(registeredSecret);
+    expect(output).not.toContain("ignored detail");
   });
 
   it("does not equate an uncoded connect-time close with a websocket close", () => {

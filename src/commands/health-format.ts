@@ -6,12 +6,14 @@ import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import { isGatewayTransportError } from "../gateway/call.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
+import { redactSensitiveText } from "../logging/redact.js";
 
 export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
   if (!isGatewayTransportError(err) || err.kind !== "closed" || err.code === undefined) {
     return undefined;
   }
-  return `Gateway connect failed: ${sanitizeTerminalText(err.message.split("\n", 1)[0] ?? "")}`;
+  const message = redactSensitiveText(err.message.split("\n", 1)[0] ?? "");
+  return `Gateway connect failed: ${sanitizeTerminalText(message)}`;
 }
 
 const formatKv = (line: string, rich: boolean) => {
@@ -35,8 +37,8 @@ const formatKv = (line: string, rich: boolean) => {
 /** Formats thrown health errors with rich detail lines when terminal color is enabled. */
 export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } = {}): string {
   const rich = opts.rich ?? isRich();
-  const raw = String(err);
-  const message = err instanceof Error ? err.message : raw;
+  const raw = redactSensitiveText(String(err));
+  const message = err instanceof Error ? redactSensitiveText(err.message) : raw;
 
   if (!rich) {
     return `Health check failed: ${raw}`;
