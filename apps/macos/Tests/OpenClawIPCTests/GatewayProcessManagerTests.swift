@@ -75,7 +75,10 @@ struct GatewayProcessManagerTests {
         try Data(config.utf8)
             .write(to: URL(fileURLWithPath: configPath))
         defer { try? FileManager.default.removeItem(atPath: configPath) }
-        return try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath], body)
+        return try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PORT": nil,
+        ], body)
     }
 
     private func withLaunchAgentEnvironment<T>(

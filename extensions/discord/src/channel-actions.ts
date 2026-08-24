@@ -9,6 +9,7 @@ import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/co
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { Type } from "typebox";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { readDiscordComponentSpec } from "./components.js";
@@ -172,6 +173,20 @@ function describeDiscordMessageTool({
   return {
     actions: Array.from(actions),
     capabilities: ["presentation"],
+    ...(actions.has("react")
+      ? {
+          schema: {
+            properties: {
+              emoji: Type.Optional(
+                Type.String({
+                  description: `Unicode emoji or custom name:id (also <:name:id> / <a:name:id>).${actions.has("emoji-list") ? ' Use action:"emoji-list" for server emojis.' : ""}`,
+                }),
+              ),
+            },
+            actions: ["react", "reactions"],
+          },
+        }
+      : {}),
   };
 }
 

@@ -283,6 +283,11 @@ describe("ModelsListResultSchema", () => {
         { id: "xhigh", label: "Extra high" },
       ],
       thinkingDefault: "xhigh",
+      contextWindows: [
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+        { id: "1m", label: "1M", contextWindow: 1_000_000 },
+      ],
+      contextWindowDefault: "1m",
       input: ["text", "image", "audio", "video", "document"],
     };
 

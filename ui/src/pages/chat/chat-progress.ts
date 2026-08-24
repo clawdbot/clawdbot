@@ -1,18 +1,21 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
-import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 
 type WorkingProgress = {
   key: string;
+  runId: string | null;
   startedAt: number;
 };
 
-type WorkingProgressCache = WorkingProgress & {
-  runId: string | null;
-};
+type WorkingProgressCache = WorkingProgress;
 
 const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
+
+export function isContextCompactionActivity(message: unknown): boolean {
+  return asRecord(asRecord(message)?.["__openclaw"])?.runtimeActivityKind === "context_compaction";
+}
 
 export function projectContextCompactionActivity(message: unknown): unknown {
   const record = asRecord(message);
@@ -20,10 +23,17 @@ export function projectContextCompactionActivity(message: unknown): unknown {
     return message;
   }
   const metadata = asRecord(record["__openclaw"]);
+  const details = asRecord(record.details);
+  const { idempotencyKey: _activityId, ...activity } = record;
   return {
-    ...record,
+    ...activity,
     role: "assistant",
     content: [{ type: "text", text: t("chat.composer.contextCompacted") }],
+    ...(typeof metadata?.runId === "string"
+      ? { runId: metadata.runId }
+      : typeof details?.runId === "string"
+        ? { runId: details.runId }
+        : {}),
     __openclaw: {
       ...metadata,
       runtimeActivityKind: "context_compaction",
@@ -33,6 +43,46 @@ export function projectContextCompactionActivity(message: unknown): unknown {
 
 const workingProgressBySession = new Map<string, WorkingProgressCache>();
 let anonymousWorkingProgressId = 0;
+
+export function buildGuardianNoticeItem(
+  notice: ChatGuardianNotice,
+): Extract<ChatItem, { kind: "notice" }> {
+  const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
+  if (notice.kind === "approved") {
+    return {
+      kind: "notice",
+      key: notice.key,
+      icon: "shieldCheck",
+      label: t("chat.systemNotice.guardian.approvedSummary", { action }),
+      text: "",
+      timestamp: notice.timestamp,
+    };
+  }
+  if (notice.kind === "warning") {
+    return {
+      kind: "notice",
+      key: notice.key,
+      icon: "shieldCheck",
+      label: t("chat.systemNotice.guardian.warningLabel"),
+      text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
+      timestamp: notice.timestamp,
+      tone: "danger",
+    };
+  }
+  return {
+    kind: "notice",
+    key: notice.key,
+    icon: "shieldCheck",
+    label: t("chat.systemNotice.guardian.deniedLabel"),
+    text: t("chat.systemNotice.guardian.deniedSummary", {
+      action,
+      risk: notice.riskLevel ?? t("chat.systemNotice.guardian.unknownRisk"),
+      rationale: notice.rationale ?? t("chat.systemNotice.guardian.noRationale"),
+    }),
+    timestamp: notice.timestamp,
+    tone: "danger",
+  };
+}
 
 export function buildCompactionDividerItem(
   marker: Record<string, unknown>,
@@ -104,18 +154,26 @@ export function resolveWorkingProgress(
   runId: string | null,
   streamStartedAt: number | null,
   queue: ChatQueueItem[],
-  streamSegments: Array<{ ts: number }>,
+  streamSegments: Array<{ ts: number; runId?: string }>,
   toolMessages: unknown[],
 ): WorkingProgress {
-  const queuedRunId =
-    queue.find((item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item))
-      ?.sendRunId ?? queue.find(shouldRenderQueuedSendInThread)?.sendRunId;
-  const toolRunId = toolMessages
-    .map((message) => (message as Record<string, unknown> | null)?.runId)
-    .find(
+  const queuedProgress =
+    queue.find((item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item)) ??
+    queue.find(shouldRenderQueuedSendInThread);
+  const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
+  const segmentRunId = streamSegments
+    .map((segment) => segment.runId)
+    .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  const explicitRunId = queuedRunId ?? runId ?? toolRunId;
+  const toolRunId = toolMessages
+    .map((message) => (message as Record<string, unknown> | null)?.runId)
+    .findLast(
+      (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
+    );
+  // Stream and tool facts describe work already observed in this row. Queue
+  // identity is only a pre-run fallback and must not claim an active tail.
+  const explicitRunId = runId ?? segmentRunId ?? toolRunId ?? queuedRunId;
   const cached = workingProgressBySession.get(sessionKey);
   const compatibleCached =
     cached && (!explicitRunId || !cached.runId || cached.runId === explicitRunId) ? cached : null;
@@ -146,7 +204,7 @@ export function resolveWorkingProgress(
     runId: explicitRunId ?? compatibleCached?.runId ?? null,
     startedAt,
   });
-  return { key, startedAt };
+  return { key, runId: explicitRunId ?? compatibleCached?.runId ?? null, startedAt };
 }
 
 export function clearWorkingProgress(sessionKey: string): void {

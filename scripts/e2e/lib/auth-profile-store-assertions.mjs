@@ -1,5 +1,84 @@
 // Shared auth profile store assertions for install/onboard E2E proof.
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "../../lib/record-shared.mjs";
+
+export function readSharedAuthProfileStoreText(stateDir) {
+  const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    return "";
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const schema = db
+      .prepare("SELECT type FROM sqlite_schema WHERE name = ? LIMIT 1")
+      .get("auth_profile_stores");
+    if (!schema) {
+      return "";
+    }
+    if (schema.type !== "table") {
+      throw new Error(`auth_profile_stores is ${String(schema.type)}, not a table`);
+    }
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?")
+      .get("shared");
+    return typeof row?.store_json === "string" ? row.store_json : "";
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`could not read the shared auth profile store: ${detail}`, {
+      cause: error,
+    });
+  } finally {
+    db?.close();
+  }
+}
+
+export function assertNoLegacyPrimaryAuthRows(stateDir) {
+  const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    return;
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const legacyRows = [
+      {
+        table: "auth_profile_store",
+        query: "SELECT 1 AS present FROM auth_profile_store WHERE store_key = ? LIMIT 1",
+      },
+      {
+        table: "auth_profile_state",
+        query: "SELECT 1 AS present FROM auth_profile_state WHERE state_key = ? LIMIT 1",
+      },
+    ];
+    for (const entry of legacyRows) {
+      const schema = db
+        .prepare("SELECT type FROM sqlite_schema WHERE name = ? LIMIT 1")
+        .get(entry.table);
+      if (!schema) {
+        continue;
+      }
+      if (schema.type !== "table") {
+        throw new Error(`${entry.table} is ${String(schema.type)}, not a table`);
+      }
+      if (db.prepare(entry.query).get("primary")) {
+        throw new Error(`onboard preserved a retired primary row in ${entry.table}`);
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("onboard preserved a retired")) {
+      throw error;
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`could not validate the main-agent auth database: ${detail}`, {
+      cause: error,
+    });
+  } finally {
+    db?.close();
+  }
+}
 
 function hasExpectedOpenAiEnvRef(profile) {
   if (!isRecord(profile)) {

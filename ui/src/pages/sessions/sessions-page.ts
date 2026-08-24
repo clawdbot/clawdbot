@@ -1369,15 +1369,15 @@ class SessionsPage extends OpenClawLightDomElement {
     );
     void fetchSessionMenuWork({
       client: scope.client,
-      pullRequestsAvailable:
+      loadPullRequests:
         isGatewayMethodAdvertised(
           scope.context.gateway.snapshot,
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        ) === true,
-      sessionKey: row.key,
-      agentId: this.sessionAgentId(row.key, scope.context),
-      loadPullRequests: () => store.load(this, pullRequestKey),
+        ) === true
+          ? () => store.load(this, pullRequestKey)
+          : undefined,
       worktreeId: row.worktree.id,
+      execNode: row.execNode,
     }).then((work) => {
       if (version === this.sessionMenuWorkVersion) {
         this.sessionMenuWork = { loading: false, ...work };

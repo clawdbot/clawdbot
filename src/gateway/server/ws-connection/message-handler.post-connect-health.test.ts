@@ -326,6 +326,7 @@ function attachGatewayHarness(options: {
   });
   attachGatewayWsMessageHandler({
     socket,
+    bootId: "post-connect-health-test-boot",
     upgradeReq: {
       headers: {
         host: requestHost,
@@ -472,7 +473,7 @@ describe("WebSocket request trace context", () => {
   });
 });
 
-function connectTrustedProxyUser(connId: string) {
+function connectTrustedProxyUser(connId: string, clientOverrides: Record<string, unknown> = {}) {
   loadConfigMock.mockImplementationOnce(() => ({
     gateway: {
       auth: {
@@ -521,6 +522,7 @@ function connectTrustedProxyUser(connId: string) {
       version: "dev",
       platform: "test",
       mode: "ui",
+      ...clientOverrides,
     },
     role: "operator",
     caps: [],
@@ -1179,6 +1181,17 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             "cf-access-jwt-assertion": assertion,
           }),
         }),
+      );
+    });
+  });
+
+  it("carries the client-reported time zone into the presence entry", async () => {
+    connectTrustedProxyUser("conn-time-zone", { timeZone: "Europe/Vienna" });
+
+    await waitForFast(() => {
+      expect(upsertPresenceMock).toHaveBeenCalledWith(
+        "conn-time-zone",
+        expect.objectContaining({ timeZone: "Europe/Vienna" }),
       );
     });
   });

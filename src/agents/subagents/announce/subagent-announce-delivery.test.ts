@@ -2063,6 +2063,36 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: false,
     },
     {
+      name: "only pre-tool commentary",
+      payloads: [{ text: "Waiting for the delegated task.", isCommentary: true }],
+      delivered: false,
+    },
+    {
+      name: "only a compaction notice",
+      payloads: [{ text: "Compacting the session.", isCompactionNotice: true }],
+      delivered: false,
+    },
+    {
+      name: "only a provider-fallback notice",
+      payloads: [{ text: "Switching providers.", isFallbackNotice: true }],
+      delivered: false,
+    },
+    {
+      name: "only a transient status notice",
+      payloads: [{ text: "Still working.", isStatusNotice: true }],
+      delivered: false,
+    },
+    {
+      name: "only supplemental TTS audio",
+      payloads: [
+        {
+          mediaUrl: "file:///tmp/answer.mp3",
+          ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
+        },
+      ],
+      delivered: false,
+    },
+    {
       name: "a failed-tool warning and a successful visible reply",
       payloads: [
         { text: "Yield failed before completion.", isError: true },
@@ -2074,6 +2104,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       name: "hidden reasoning and a successful visible reply",
       payloads: [
         { text: "Waiting for the delegated task.", isReasoning: true },
+        { text: "The delegated task completed." },
+      ],
+      delivered: true,
+    },
+    {
+      name: "a status notice and a successful visible reply",
+      payloads: [
+        { text: "Still working.", isStatusNotice: true },
         { text: "The delegated task completed." },
       ],
       delivered: true,

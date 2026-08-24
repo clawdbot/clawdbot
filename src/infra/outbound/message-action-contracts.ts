@@ -51,6 +51,7 @@ export type MessageActionInput = {
   requesterSenderE164?: string | null;
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  workspaceDir?: string;
   /** @internal Host-owned route plan computed before broadcast SecretRef resolution. */
   broadcastAccountPlan?: MessageBroadcastAccountPlan;
   /**

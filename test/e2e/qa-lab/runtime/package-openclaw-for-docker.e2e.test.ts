@@ -241,6 +241,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/package-openclaw-for-docker.mts",
       "scripts/package-changelog.mjs",
       "scripts/package-docs-map.mjs",
+      "scripts/package-source-dependencies.mjs",
       "scripts/docs-list.js",
       "scripts/npm-runner.mts",
       "scripts/pnpm-runner.mts",

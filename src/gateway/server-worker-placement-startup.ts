@@ -623,8 +623,7 @@ export function createGatewayWorkerPlacementRuntime(
       return await stopBeforeReady();
     }
     const startupReconcile = (async () => {
-      await dispatchService.reconcile();
-      await sessionRetirement.reconcile();
+      await dispatchService.reconcile("startup");
       await reconcilePublications();
     })();
     placementReconcile.current = startupReconcile;
@@ -647,6 +646,11 @@ export function createGatewayWorkerPlacementRuntime(
       if (hooks.isClosePreludeStarted()) {
         return await stopBeforeReady();
       }
+      void trackOperation(
+        placementReconcile,
+        sessionRetirement.reconcile(),
+        "Worker placement reconcile sweep failed",
+      );
       void sweepDiskSpace();
       placementReconcileInterval = setInterval(
         sweepActivePlacements,

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -398,12 +399,6 @@ function resolvePathThroughExistingAncestor(
     missingSegments.unshift(pathOps.basename(candidate));
     candidate = parent;
   }
-}
-
-function decodeMountInfoPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
 }
 
 function escapeControlCharsForTerminal(value: string): string {

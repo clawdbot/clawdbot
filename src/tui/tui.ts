@@ -1,15 +1,7 @@
 // Runs the interactive TUI loop and coordinates backend, input, and rendering.
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  CombinedAutocompleteProvider,
-  Container,
-  Loader,
-  matchesKey,
-  ProcessTerminal,
-  Text,
-  TUI,
-} from "@earendil-works/pi-tui";
+import { Container, Loader, matchesKey, ProcessTerminal, Text, TUI } from "@earendil-works/pi-tui";
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -50,7 +42,7 @@ import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, tuiTheme as theme } from "./theme/theme.js";
 import { createTuiAuthChildOwner } from "./tui-auth-child.js";
-import { sanitizeAutocompleteProvider } from "./tui-autocomplete.js";
+import { createTuiAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
@@ -940,6 +932,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
 
   const resolveDynamicSlashCommandsKey = () => state.currentAgentId;
 
+  let autocompleteFdPath: string | undefined;
   const applyAutocompleteProvider = () => {
     const dynamicKey = resolveDynamicSlashCommandsKey();
     const slashCommands = getSlashCommands({
@@ -954,11 +947,18 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     editor.shouldSubmitAutocomplete = (text) =>
       shouldSubmitExactArgumentCompletion(text, slashCommands);
     editor.setAutocompleteProvider(
-      sanitizeAutocompleteProvider(
-        new CombinedAutocompleteProvider(slashCommands, resolveUsableCwd()),
-      ),
+      createTuiAutocompleteProvider(slashCommands, resolveUsableCwd(), autocompleteFdPath),
     );
   };
+
+  void import("../agents/utils/tools-manager.js")
+    .then(({ ensureTool }) => ensureTool("fd", true))
+    .then((fdPath) => {
+      if (fdPath) {
+        autocompleteFdPath = fdPath;
+        applyAutocompleteProvider();
+      }
+    });
 
   const clearDynamicSlashCommandsRefreshTimer = () => {
     if (!dynamicSlashCommandsRefreshTimer) {
@@ -1446,7 +1446,11 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     const activeRunAtStart = state.activeChatRunId;
     const result = await loadHistorySnapshot();
     if (result.loaded) {
-      if (reconcileReconnect && activeRunAtStart && activeRunAtStart === state.activeChatRunId) {
+      // History can adopt a newer run before returning; terminal outcomes
+      // still belong only to the unchanged run captured before the request.
+      const recoveredRunId =
+        result.runOutcome.state === "active" ? result.runOutcome.runId : activeRunAtStart;
+      if (reconcileReconnect && recoveredRunId && recoveredRunId === state.activeChatRunId) {
         reconcileReconnectRun(result.runOutcome);
       }
       restoreConnectionNotices();

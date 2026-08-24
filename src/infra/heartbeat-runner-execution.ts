@@ -79,7 +79,7 @@ import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   inferHeartbeatWakeSourceFromReason,
   isConfiguredHeartbeatAgent,
-  isTargetedImmediateUnscheduledWake,
+  isTargetedUnscheduledWake,
 } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
@@ -169,7 +169,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     left.jobId.localeCompare(right.jobId),
   );
   const allowsUnscheduledTarget =
-    isTargetedImmediateUnscheduledWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
+    isTargetedUnscheduledWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
   if (!areHeartbeatsEnabled()) {
     return { kind: "skipped", reason: "disabled" } as const;
   }

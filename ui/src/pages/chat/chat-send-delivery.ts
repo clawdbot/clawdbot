@@ -10,7 +10,6 @@ import { readChatResetTargetAccess } from "./chat-commands.ts";
 import { loadChatBranches, loadChatHistory } from "./chat-history.ts";
 import {
   flushStoredChatOutbox,
-  retryableGatewayDelayMs,
   scheduleStoredChatOutboxDrain as scheduleOutboxDrain,
   scheduleStoredChatOutboxRetry,
   UNCONFIRMED_CHAT_SEND_ERROR,
@@ -19,6 +18,7 @@ import {
   type QueuedChatSendResult,
   type QueuedChatStorageMode,
 } from "./chat-outbox-drain.ts";
+import { retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
 import {
   excludeComposerAttachments,
   readQueuedMessageById,

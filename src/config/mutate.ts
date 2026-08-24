@@ -225,10 +225,10 @@ async function withConfigMutationLock<T>(
         async () => await withFileLock(configPath, CONFIG_MUTATION_LOCK_OPTIONS, fn),
       ),
     )
-    .catch((error: unknown) => {
+    .catch(async (error: unknown) => {
       // Only relabel a permission failure on the config directory itself. The caller's mutation
       // runs inside this scope, so an unrelated EACCES from its own work must not be misdiagnosed.
-      if (!isPermissionErrorInDirectory(error, configDir)) {
+      if (!(await isPermissionErrorInDirectory(error, configDir))) {
         throw error;
       }
       throw new Error(
@@ -238,7 +238,7 @@ async function withConfigMutationLock<T>(
     });
 }
 
-function isPermissionErrorInDirectory(error: unknown, directory: string): boolean {
+async function isPermissionErrorInDirectory(error: unknown, directory: string): Promise<boolean> {
   if (
     !isErrno(error) ||
     (error.code !== "EACCES" && error.code !== "EPERM" && error.code !== "EROFS")
@@ -246,7 +246,18 @@ function isPermissionErrorInDirectory(error: unknown, directory: string): boolea
     return false;
   }
   const failedPath = error.path;
-  return typeof failedPath === "string" && path.dirname(path.resolve(failedPath)) === directory;
+  if (typeof failedPath !== "string") {
+    return false;
+  }
+  const failedDir = path.dirname(path.resolve(failedPath));
+  if (failedDir === directory) {
+    return true;
+  }
+  // Node reports the canonical path, so a config directory reached through a symlink (a macOS
+  // /var -> /private/var home, for one) never matches the raw string. Resolve only on mismatch to
+  // keep the successful write path free of an extra syscall.
+  const canonicalDirectory = await fs.realpath(directory).catch(() => undefined);
+  return canonicalDirectory !== undefined && failedDir === canonicalDirectory;
 }
 
 function markActiveConfigMutationPath(configPath: string): void {

@@ -3954,6 +3954,47 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
   });
 });
 
+test("sessions.create model change clears a selection the new model does not support", async () => {
+  const { storePath } = await createSessionStoreDir();
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    {
+      id: "gpt-test-a",
+      name: "A",
+      provider: "openai",
+      contextWindows: [
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+        { id: "1m", label: "1M", contextWindow: 1_000_000 },
+      ],
+      contextWindowDefault: "1m",
+    },
+    { id: "gpt-test-b", name: "B", provider: "openai" },
+  ];
+  const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+  const existingKey = "agent:main:dashboard:selected-window";
+  await writeSessionStore({
+    entries: {
+      [existingKey]: sessionStoreEntry("sess-selected-window", {
+        providerOverride: "openai",
+        modelOverride: "gpt-test-a",
+        contextWindow: "200k",
+      }),
+    },
+  });
+
+  // Create-with-key adoption omits contextWindow, so the model change must take
+  // the clearing branch for the now-unsupported selection instead of rejecting.
+  const changed = await directSessionReq<{
+    entry?: { modelOverride?: string; contextWindow?: string };
+  }>("sessions.create", { key: existingKey, model: "openai/gpt-test-b" }, { client: adminClient });
+  expect(changed.ok, JSON.stringify(changed.error)).toBe(true);
+  expect(changed.payload?.entry?.modelOverride).toBe("gpt-test-b");
+  expect(changed.payload?.entry?.contextWindow).toBeUndefined();
+  const stored = loadSessionEntry({ sessionKey: existingKey, storePath });
+  expect(stored?.modelOverride).toBe("gpt-test-b");
+  expect(stored?.contextWindow).toBeUndefined();
+});
+
 test("sessions.create stamps trusted operator provenance and records created", async () => {
   const { storePath } = await createSessionStoreDir();
   const profileId = "profile-session-creator";

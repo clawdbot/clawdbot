@@ -330,7 +330,7 @@ QQBot-only: `/bot-ping`, `/bot-version`, `/bot-help`, `/bot-upgrade`, `/bot-logs
 User-invocable skills are exposed as slash commands:
 
 - `/skill <name> [input]` always works as the generic entrypoint.
-- Skills may register as direct commands (e.g. `/prose` for OpenProse).
+- Skills may register as direct commands using their declared skill name.
 - Native skill-command registration is controlled by `commands.nativeSkills` and
   `channels.<provider>.commands.nativeSkills`.
 - Names are sanitized to `a-z0-9_` (max 32 chars); collisions get numeric suffixes.
@@ -340,8 +340,7 @@ User-invocable skills are exposed as slash commands:
     By default, skill commands route to the model as a normal request.
 
     Skills can declare `command-dispatch: tool` to route directly to a tool
-    (deterministic, no model involvement). Example: `/prose` (OpenProse plugin)
-    — see [OpenProse](/prose).
+    (deterministic, no model involvement).
 
   </Accordion>
   <Accordion title="Native command arguments">

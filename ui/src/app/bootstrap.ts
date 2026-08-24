@@ -42,6 +42,7 @@ import type {
   ApplicationTheme,
   ApplicationThemeServerSelection,
 } from "./context.ts";
+import { applyControlUiAccent } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
@@ -84,6 +85,7 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
   syncCustomThemeStyleTag(settings.customTheme);
+  applyControlUiAccent(settings.accent);
   const background = getComputedStyle(root).getPropertyValue("--bg").trim();
   if (background) {
     for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {

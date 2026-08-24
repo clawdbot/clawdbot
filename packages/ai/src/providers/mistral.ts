@@ -33,7 +33,11 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import {
+  createToolArgumentPreviewSchedule,
+  parseStreamingJson,
+  type ToolArgumentPreviewSchedule,
+} from "../utils/json-parse.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -408,6 +412,11 @@ async function consumeChatStream(
   // Persist every identity fact across chunks. The SDK defaults omitted indexes
   // to zero, so only a unique compatible candidate may receive later arguments.
   const toolBlockIdentities = new Map<number, ToolBlockIdentity>();
+  // Preview schedules are per active tool call; WeakMap keys die with the block.
+  const toolArgumentPreviewSchedules = new WeakMap<
+    ToolCall & { partialArgs?: string },
+    ToolArgumentPreviewSchedule
+  >();
   const normalizeMissingToolCallId = createMistralToolCallIdNormalizer();
   // Some Mistral-compatible endpoints omit tool-call ids. Their streamed index
   // is only response-local, so namespace the fallback before strict-9 hashing.
@@ -714,6 +723,7 @@ async function consumeChatStream(
           partialArgs: "",
         };
         output.content.push(block);
+        toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
         toolBlockIdentities.set(contentIndex, {
           explicitIds: new Set(providedCallId ? [providedCallId] : []),
           functionNames: new Set(functionName ? [functionName] : []),
@@ -753,7 +763,11 @@ async function consumeChatStream(
           ? toolCall.function.arguments
           : JSON.stringify(toolCall.function.arguments || {});
       block.partialArgs = (block.partialArgs || "") + argsDelta;
-      block.arguments = parseStreamingJson(block.partialArgs);
+      // Preview refresh is scheduled geometrically; the terminal strict parse
+      // below re-reads the full buffer authoritatively either way.
+      if (toolArgumentPreviewSchedules.get(block)?.(block.partialArgs.length)) {
+        block.arguments = parseStreamingJson(block.partialArgs);
+      }
       stream.push({
         type: "toolcall_delta",
         contentIndex,

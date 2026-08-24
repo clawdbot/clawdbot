@@ -480,7 +480,7 @@ export function printCronList(
     formatCell("Model", CRON_MODEL_PAD),
   ].join(" ");
 
-  runtime.log(rich ? theme.heading(header) : header);
+  const lines = [rich ? theme.heading(header) : header];
   const now = Date.now();
 
   for (const job of jobs) {
@@ -555,8 +555,10 @@ export function printCronList(
         : colorize(rich, theme.muted, modelLabel),
     ].join(" ");
 
-    runtime.log(line.trimEnd());
+    lines.push(line.trimEnd());
   }
+
+  runtime.log(lines.join("\n"));
 }
 
 export function printCronShow(

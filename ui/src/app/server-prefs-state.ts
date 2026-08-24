@@ -2,6 +2,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import {
+  normalizeAccentColor,
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
@@ -46,6 +47,13 @@ export const SYNCED_PREFS = {
     write: (value) => ({ themeMode: value ?? UI_APPEARANCE_DEFAULTS.themeMode }),
     clearable: true,
     reset: () => ({ themeMode: UI_APPEARANCE_DEFAULTS.themeMode }),
+  }),
+  accent: prefSpec<string>({
+    extract: normalizeAccentColor,
+    local: (settings) => normalizeAccentColor(settings.accent),
+    write: (value) => ({ accent: value }),
+    clearable: true,
+    reset: () => ({ accent: undefined }),
   }),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
@@ -95,6 +103,7 @@ export type SyncedPrefKey = keyof typeof SYNCED_PREFS;
 export type ResettableServerUiPrefKey =
   | "theme"
   | "themeMode"
+  | "accent"
   | "locale"
   | "chatSendShortcut"
   | "chatFollowUpMode";

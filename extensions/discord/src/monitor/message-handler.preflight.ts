@@ -278,8 +278,10 @@ export async function preflightDiscordMessage(
   const messageText = resolveDiscordMessageText(message, {
     includeForwarded: true,
   });
+  // Only bot/webhook traffic can be rejected before canonical routing; ordinary
+  // messages should reach the single authoritative binding lookup below.
   const injectedBoundThreadBinding =
-    !isDirectMessage && !isGroupDm
+    !isDirectMessage && !isGroupDm && (webhookId || author.bot)
       ? resolveInjectedBoundThreadLookupRecord({
           threadBindings: params.threadBindings,
           threadId: messageChannelId,

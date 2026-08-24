@@ -230,6 +230,13 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activityPage = page.locator("openclaw-activity-page");
         await expect.poll(() => activityPage.count()).toBe(1);
+        const titleLeft = await activityPage
+          .locator(".page-title")
+          .evaluate((element) => element.getBoundingClientRect().left);
+        const tabsLeft = await activityPage
+          .locator(".activity-mode-tabs")
+          .evaluate((element) => element.getBoundingClientRect().left);
+        expect(Math.abs(titleLeft - tabsLeft)).toBeLessThanOrEqual(8);
         await activityPage.locator(".activity-feed__people-trigger").click();
         await expect
           .poll(() =>

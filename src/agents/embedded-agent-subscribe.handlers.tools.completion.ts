@@ -34,6 +34,7 @@ import {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
   extractMessagingToolSourceReplyPayload,
+  isDeliveredMessagingToolSendToCurrentSource,
 } from "./embedded-agent-messaging-extraction.js";
 import {
   isMessagingTool,
@@ -299,6 +300,9 @@ export async function handleToolExecutionEnd(
     didDeliverMessagingResult && isMessagingSend
       ? [...argumentMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
       : [];
+  const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
+  const confirmedMessageTarget =
+    messageTarget && extractMessagingToolSendResult(messageTarget, extractionResult);
   const deliveredMessageToolSourceReply =
     didDeliverMessagingResult &&
     isDeliveredMessageToolOnlySourceReplyResult({
@@ -307,6 +311,18 @@ export async function handleToolExecutionEnd(
       args: startArgs,
       result,
       isError: isToolError,
+      allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+        send: confirmedMessageTarget,
+        config: ctx.params.config,
+        currentProvider: ctx.params.messageChannel,
+        currentAccountId: ctx.params.currentAccountId,
+        currentChannelId: ctx.params.currentChannelId,
+        currentMessagingTarget: ctx.params.currentMessagingTarget,
+        currentThreadId:
+          ctx.params.currentThreadId ?? parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+        sessionKey: ctx.params.sessionKey,
+        deliveredPayload: extractionResult,
+      }),
       deliveryConfirmed: didDeliverMessagingResult,
     });
   const deliveredCurrentSourceReply =
@@ -330,11 +346,9 @@ export async function handleToolExecutionEnd(
     ctx.log.debug(`Committed messaging text: tool=${toolName} len=${messageText.length}`);
     ctx.trimMessagingToolSent();
   }
-  if (didDeliverMessagingResult && messageTarget) {
-    const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
-    const confirmedTarget = extractMessagingToolSendResult(messageTarget, extractionResult);
+  if (didDeliverMessagingResult && confirmedMessageTarget) {
     ctx.state.messagingToolSentTargets.push({
-      ...confirmedTarget,
+      ...confirmedMessageTarget,
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
       ...(hasRichContent ? { hasRichContent: true as const } : {}),
@@ -691,4 +705,5 @@ export async function handleToolExecutionEnd(
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }
+  return { executionStarted: terminal.executionStarted };
 }

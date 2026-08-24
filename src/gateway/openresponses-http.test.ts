@@ -22,6 +22,7 @@ import {
   getAgentEventLifecycleGeneration,
   onAgentEvent,
 } from "../infra/agent-events.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -335,6 +336,28 @@ async function expectInvalidRequest(
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
+  it("binds the Gateway lifecycle resolver to response runs", async () => {
+    let resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
+      const admittedRunContext = {};
+      const onAdmittedRunContext = (
+        opts as { onAdmittedRunContext?: (context: object) => void | Promise<void> }
+      ).onAdmittedRunContext;
+      expect(onAdmittedRunContext).toBeTypeOf("function");
+      await onAdmittedRunContext?.(admittedRunContext);
+      resolveGatewayContext = getGatewayContextResolver(admittedRunContext);
+      return { payloads: [{ text: "hello" }] } as never;
+    });
+
+    const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    const context = resolveGatewayContext?.();
+    expect(context?.resolveGatewayContext).toBe(resolveGatewayContext);
+  });
+
   it("returns a typed selection error unless an ownerless fleet request selects an agent", async () => {
     try {
       testState.agentsConfig = {
@@ -368,12 +391,17 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
-  it.each([false, true])(
-    "accepts the official OpenAI SDK plain-text response format (stream: %s)",
-    async (stream) => {
+  it.each([
+    { stream: false, text: "SDK plain-text response", expected: "SDK plain-text response" },
+    { stream: true, text: "SDK plain-text response", expected: "SDK plain-text response" },
+    { stream: false, text: "", expected: "No response from OpenClaw." },
+    { stream: true, text: "", expected: "No response from OpenClaw." },
+  ])(
+    "returns visible official SDK response text (stream: $stream, text: $text)",
+    async ({ stream, text, expected }) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text: "SDK plain-text response" }],
+        payloads: [{ text }],
       } as never);
 
       const client = new OpenAI({
@@ -398,17 +426,51 @@ describe("OpenResponses HTTP API (e2e)", () => {
             textDeltas.push(event.delta);
           }
         }
-        expect(textDeltas.join("")).toBe("SDK plain-text response");
+        expect(textDeltas.join("")).toBe(expected);
         expect(eventTypes).toContain("response.completed");
       } else {
         const response = await client.responses.create({ ...request, stream: false });
         expect(response.status).toBe("completed");
-        expect(response.output_text).toBe("SDK plain-text response");
+        expect(response.output_text).toBe(expected);
       }
 
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("preserves buffered leading text in official SDK streaming snapshots", async () => {
+    const expected = "<tag>ok</tag>";
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming response run ID");
+      }
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: expected, delta: "tag>ok</tag>" },
+      });
+      return { payloads: [{ text: expected }] };
+    }) as never);
+
+    const client = new OpenAI({
+      apiKey: "test",
+      baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+      defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+      maxRetries: 0,
+    });
+    const stream = client.responses.stream({
+      model: "openclaw",
+      input: "Preserve the complete assistant snapshot.",
+    });
+    const deltas: string[] = [];
+    stream.on("response.output_text.delta", (event) => deltas.push(event.delta));
+
+    const response = await stream.finalResponse();
+    expect(deltas.join("")).toBe(expected);
+    expect(response.output_text).toBe(expected);
+  });
 
   it.each([
     { name: "rewritten", replacementText: "final answer" },
@@ -2769,6 +2831,24 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     const events = parseSseEvents(text);
+    const commentaryDeltas = events.filter((event) => event.event === "response.output_text.delta");
+    expect(
+      commentaryDeltas.map((event) => (parseSseData(event) as { delta?: string }).delta),
+    ).toEqual(["Let me check that."]);
+    expect(
+      collectSseEventTypes(events).filter((event) =>
+        [
+          "response.output_text.delta",
+          "response.output_text.done",
+          "response.output_item.done",
+        ].includes(event),
+      ),
+    ).toEqual([
+      "response.output_text.delta",
+      "response.output_text.done",
+      "response.output_item.done",
+      "response.output_item.done",
+    ]);
     const outputTextDone = findSseEvent(events, "response.output_text.done");
     expect((parseSseData(outputTextDone) as { text?: string }).text).toBe("Let me check that.");
 
@@ -2931,6 +3011,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       "activate_graph",
       "get_status",
     ]);
+    expect(response?.output?.slice(1)).toEqual(doneFunctionCalls.map(({ item }) => item));
     expect(events.map((event) => event.data)).toContain("[DONE]");
   });
 

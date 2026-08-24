@@ -440,7 +440,7 @@ export function resolveSessionMutationAuthorization(params: {
     storeCache: GatewaySessionStoreCache;
     targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
   } => ({ storeCache: new Map(), targetDiscoveryCache: new Map() });
-  const lookupCaches = createLookupCaches();
+  let lookupCaches: ReturnType<typeof createLookupCaches> | undefined;
   const resolveAuthorizedTarget = (
     targetRef: SessionMutationTarget,
   ): { target: SessionSharingTarget | null } | { error: ErrorShape } => {
@@ -450,7 +450,7 @@ export function resolveSessionMutationAuthorization(params: {
           cfg: getCfg(),
           sessionKey: targetRef.sessionKey,
           agentId: targetRef.agentId,
-          ...lookupCaches,
+          ...(lookupCaches ??= createLookupCaches()),
         }),
       };
     } catch (error) {

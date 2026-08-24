@@ -203,6 +203,7 @@ describe("worker turn launcher failure recovery", () => {
         throw new Error("unexpected inherited worker environment creation");
       }),
       reconcileOnce,
+      reconcileEnvironment: vi.fn(),
     };
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
     const dispatch = createWorkerPlacementDispatchService({

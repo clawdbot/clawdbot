@@ -338,7 +338,7 @@ function scheduleRunStatusClear(host: RunLifecycleHost, status: ChatRunUiStatus)
     host.chatRunStatusClearTimer = null;
     // Terminal status temporarily masks stale active rows from session polling.
     // Reconcile again as the mask expires so the composer cannot revert to Stop.
-    if (!reconcileStaleChatRunAfterSessionStatePublication(host)) {
+    if (!reconcileChatRunAfterSessionStatePublication(host)) {
       host.requestUpdate?.();
     }
   }, CHAT_RUN_STATUS_TOAST_DURATION_MS);
@@ -561,7 +561,11 @@ export function reconcileChatRunFromCurrentSessionRow(
   return reconcileChatRunFromSessionRow(host, row, options);
 }
 
-export function reconcileStaleChatRunAfterSessionStatePublication(host: RunLifecycleHost): boolean {
+export function reconcileChatRunAfterSessionStatePublication(host: RunLifecycleHost): boolean {
+  const row = currentSessionRow(host);
+  if (host.chatRunId && row?.lastRunId === host.chatRunId) {
+    return reconcileChatRunFromSessionRow(host, row, { publishRunStatus: false });
+  }
   // Both session subscriptions and direct event reconciliation can republish
   // canonical rows after the local terminal projection; guard both paths.
   const canReconcile =

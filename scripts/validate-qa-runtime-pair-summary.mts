@@ -62,6 +62,25 @@ const FROZEN_RUNTIME_PAIR_MANIFESTS = new Map([
   ["311047822ecdde24e824d839ab105ef08f17be00:core", FROZEN_CORE_RUNTIME_PAIR_MANIFEST],
   ["c37af96b18776fecc9e24268f27fc89b563481bf:core", FROZEN_CORE_RUNTIME_PAIR_MANIFEST],
 ]);
+const FROZEN_RUNTIME_PAIR_COMPATIBILITY_PROFILES = new Map([
+  [
+    "ee5ead24b1b46a3560f28f8d57e0afcd911acacb:core",
+    {
+      allowMissingRunStatus: true,
+      scenarioIds: FROZEN_CORE_RUNTIME_PAIR_MANIFEST.scenarioIds.filter(
+        (scenarioId) =>
+          scenarioId !== "codex-plugin-pinned-new" && scenarioId !== "codex-plugin-pinned-old",
+      ),
+    },
+  ],
+]);
+
+type RuntimePairValidationOptions = {
+  candidateSuiteOutcome?: string;
+  lane?: string;
+  requireExplicitGap?: boolean;
+  targetSha?: string;
+};
 
 function isPassableCell(cell: unknown) {
   if (!isRecord(cell) || typeof cell.transportErrorClass === "string") {
@@ -168,14 +187,50 @@ function requireCanonicalRuntimePair(runtimePair: unknown) {
   );
 }
 
+function isCanonicalIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+function isTrustedMissingStatusRun(
+  run: Record<string, unknown>,
+  options: RuntimePairValidationOptions,
+) {
+  const profile = FROZEN_RUNTIME_PAIR_COMPATIBILITY_PROFILES.get(
+    `${options.targetSha}:${options.lane}`,
+  );
+  if (
+    Object.hasOwn(run, "status") ||
+    options.candidateSuiteOutcome !== "success" ||
+    profile?.allowMissingRunStatus !== true ||
+    !isCanonicalIsoTimestamp(run.startedAt) ||
+    !isCanonicalIsoTimestamp(run.finishedAt) ||
+    Date.parse(run.finishedAt) < Date.parse(run.startedAt)
+  ) {
+    return false;
+  }
+  const scenarioIds = run.scenarioIds;
+  return (
+    Array.isArray(scenarioIds) &&
+    scenarioIds.length === profile.scenarioIds.length &&
+    profile.scenarioIds.every((scenarioId, index) => scenarioIds[index] === scenarioId)
+  );
+}
+
 export function validateQaRuntimePairSummary(
   summary: unknown,
-  options: { requireExplicitGap?: boolean; targetSha?: string; lane?: string } = {},
+  options: RuntimePairValidationOptions = {},
 ) {
   if (!isRecord(summary) || !isRecord(summary.run) || !Array.isArray(summary.scenarios)) {
     throw new Error("runtime-pair summary is missing run or scenario evidence");
   }
-  if (summary.run.status !== "completed") {
+  // Frozen compatibility profiles may admit a specifically attested legacy
+  // producer shape. The trusted workflow outcome and exact manifest prevent a
+  // partial or failed producer from masquerading as terminal evidence.
+  if (summary.run.status !== "completed" && !isTrustedMissingStatusRun(summary.run, options)) {
     throw new Error("runtime-pair summary is not completed");
   }
   if (!requireCanonicalRuntimePair(summary.run.runtimePair)) {
@@ -253,7 +308,7 @@ export function validateQaRuntimePairReport(
   summary: unknown,
   reportSummary: unknown,
   reportMarkdown: string,
-  options: { requireExplicitGap?: boolean; targetSha?: string; lane?: string } = {},
+  options: RuntimePairValidationOptions = {},
 ) {
   const counts = validateQaRuntimePairSummary(summary, options);
   if (
@@ -355,6 +410,7 @@ export function parseArgs(argv: string[]) {
   let reportSummaryPath;
   let reportMarkdownPath;
   let requireExplicitGap = false;
+  let candidateSuiteOutcome;
   let targetSha;
   let lane;
   for (let index = 0; index < argv.length; index += 1) {
@@ -378,6 +434,12 @@ export function parseArgs(argv: string[]) {
       index += 1;
     } else if (arg === "--require-explicit-gap") {
       requireExplicitGap = true;
+    } else if (arg === "--candidate-suite-outcome") {
+      candidateSuiteOutcome = argv[index + 1];
+      if (!candidateSuiteOutcome || candidateSuiteOutcome.startsWith("-")) {
+        throw new Error("--candidate-suite-outcome requires a value");
+      }
+      index += 1;
     } else if (arg === "--target-sha" || arg === "--lane") {
       const value = argv[index + 1];
       if (!value || value.startsWith("-")) {
@@ -391,7 +453,7 @@ export function parseArgs(argv: string[]) {
       index += 1;
     } else if (arg === "--help" || arg === "-h") {
       process.stdout.write(
-        "Usage: node --import tsx scripts/validate-qa-runtime-pair-summary.mts --summary <qa-suite-summary.json> [--require-explicit-gap] [--report-summary <json> --report-markdown <md>]\n",
+        "Usage: node --import tsx scripts/validate-qa-runtime-pair-summary.mts --summary <qa-suite-summary.json> [--candidate-suite-outcome <outcome>] [--require-explicit-gap] [--report-summary <json> --report-markdown <md>]\n",
       );
       return undefined;
     } else {
@@ -411,6 +473,7 @@ export function parseArgs(argv: string[]) {
     summaryPath,
     reportSummaryPath,
     reportMarkdownPath,
+    candidateSuiteOutcome,
     requireExplicitGap,
     targetSha,
     lane,

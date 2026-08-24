@@ -53,6 +53,7 @@ import {
   mainSessionRecoveryLog,
   MAX_RECOVERY_RETRIES,
   normalizeStringSet,
+  resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 
 function pendingFinalRecoveryAction(
@@ -112,6 +113,7 @@ async function completePendingFinalRecoveryWithNotice(
         abortedLastRun: false,
         endedAt,
         lifecycleRunId: undefined,
+        lastRunId: resolveRestartRecoveryTerminalClientRunId(current),
         pendingFinalDelivery: undefined,
         ...(pending?.context &&
         pending.intentId &&

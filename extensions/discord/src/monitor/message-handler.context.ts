@@ -1,6 +1,7 @@
 // Discord plugin module implements message handler.context behavior.
 import {
   buildChannelInboundEventContext,
+  createCommandTurnContext,
   formatInboundEnvelope,
   formatInboundMediaUnavailableText,
   resolveEnvelopeFormatOptions,
@@ -10,6 +11,7 @@ import {
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import {
   buildHistoryContextFromEntries,
   buildInboundHistoryFromEntries,
@@ -106,6 +108,7 @@ export async function buildDiscordMessageProcessContext(params: {
     boundSessionKey,
     route,
     commandAuthorized,
+    hasControlCommand,
     resolveChannelIngress,
   } = ctx;
 
@@ -184,6 +187,12 @@ export async function buildDiscordMessageProcessContext(params: {
         })
       : body;
   const bodyWithMediaNotice = appendMediaUnavailableNotice(text) ?? text;
+  // Agent-facing body prefers the framed transcript and falls back to typed
+  // text; machine transcriptions are always labeled untrusted for the model.
+  const agentFacingBody =
+    preflightAudioTranscript !== undefined
+      ? formatAudioTranscriptForAgent(preflightAudioTranscript)
+      : (baseText ?? text);
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -439,11 +448,13 @@ export async function buildDiscordMessageProcessContext(params: {
     message: {
       inboundEventKind: ctx.inboundEventKind,
       body: combinedBody,
-      rawBody: preflightAudioTranscript ?? baseText,
+      // RawBody/CommandBody keep only the typed text so machine-generated
+      // transcripts never enter command classification (telegram/whatsapp parity).
+      rawBody: baseText,
       // BodyForAgent wins over Body for the model's text, so the notice has to
-      // ride the agent-facing source too — keeping transcript precedence.
-      bodyForAgent: appendMediaUnavailableNotice(preflightAudioTranscript ?? baseText ?? text),
-      commandBody: preflightAudioTranscript ?? baseText,
+      // ride the agent-facing source too.
+      bodyForAgent: appendMediaUnavailableNotice(agentFacingBody),
+      commandBody: baseText,
       inboundHistory,
     },
     sessionTranscript: {
@@ -461,12 +472,10 @@ export async function buildDiscordMessageProcessContext(params: {
         authorized: commandAuthorized,
       },
     },
-    commandTurn: {
-      kind: "text-slash" as const,
-      source: "text" as const,
+    commandTurn: createCommandTurnContext(hasControlCommand ? "text" : "message", {
       authorized: commandAuthorized,
-      body: preflightAudioTranscript ?? baseText,
-    },
+      body: baseText,
+    }),
     media: await toInboundMediaFactsWithMetadata(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     }),

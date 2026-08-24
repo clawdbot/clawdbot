@@ -70,6 +70,7 @@ export async function runEmbeddedFallbackCandidate(params: {
   sessionRuntimeOverride?: string;
   candidateThinkLevel?: ThinkLevel;
   candidateFastMode: Pick<RunEmbeddedAgentParams, "fastMode" | "fastModeAutoOnSeconds">;
+  runLane: RunEmbeddedAgentParams["lane"];
   runId: string;
   getLifecycleGeneration: () => string;
   onLifecycleGeneration: (generation: string) => void;
@@ -231,6 +232,8 @@ export async function runEmbeddedFallbackCandidate(params: {
         groupSpace: normalizeOptionalString(turn.sessionCtx.GroupSpace),
         ...senderContext,
         ...runBaseParams,
+        contextWindow: turn.getActiveSessionEntry()?.contextWindow,
+        lane: params.runLane,
         provider: embeddedRunProvider,
         agentHarnessId: embeddedRunHarnessOverride,
         agentHarnessRuntimeOverride: embeddedRunHarnessOverride,

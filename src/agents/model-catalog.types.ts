@@ -10,6 +10,12 @@ import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome
 /** Input modalities a catalog entry can advertise. */
 export type ModelInputType = "text" | "image" | "audio" | "video" | "document";
 
+type ModelContextWindowOption = {
+  id: string;
+  label: string;
+  contextWindow: number;
+};
+
 /** Normalized model metadata exposed by the agent model catalog. */
 export type ModelCatalogEntry = {
   id: string;
@@ -22,6 +28,8 @@ export type ModelCatalogEntry = {
   /** Private transport provenance for route matching; never project directly to clients. */
   baseUrl?: string;
   contextWindow?: number;
+  contextWindows?: ModelContextWindowOption[];
+  contextWindowDefault?: string;
   contextTokens?: number;
   reasoning?: boolean;
   /** Config-authored reasoning override; internal provenance, never project to clients. */

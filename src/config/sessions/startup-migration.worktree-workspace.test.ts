@@ -32,6 +32,7 @@ it("backfills a nested requested workspace once instead of using the agent defau
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
   const sessionKey = "agent:main:dashboard:legacy-worktree";
+  const ordinarySessionKey = "agent:main:dashboard:ordinary";
   const cfg: OpenClawConfig = {
     agents: { list: [{ id: "main", default: true, workspace: agentWorkspace }] },
     session: { store: storePath },
@@ -58,6 +59,16 @@ it("backfills a nested requested workspace once instead of using the agent defau
       worktree: { id: "legacy", branch: "openclaw/legacy", repoRoot },
     },
   );
+  await replaceSessionEntry(
+    { agentId: "main", env, sessionKey: ordinarySessionKey, storePath },
+    { sessionId: "ordinary-session", updatedAt: 20 },
+  );
+  const ordinaryBefore = loadSessionEntry({
+    agentId: "main",
+    env,
+    sessionKey: ordinarySessionKey,
+    storePath,
+  });
 
   const runMigration = async () =>
     await migrateManagedWorktreeCanonicalWorkspaces({
@@ -74,4 +85,7 @@ it("backfills a nested requested workspace once instead of using the agent defau
 
   await runMigration();
   expect(loadSessionEntry({ agentId: "main", env, sessionKey, storePath })).toEqual(first);
+  expect(
+    loadSessionEntry({ agentId: "main", env, sessionKey: ordinarySessionKey, storePath }),
+  ).toEqual(ordinaryBefore);
 });

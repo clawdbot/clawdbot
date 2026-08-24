@@ -29,11 +29,24 @@ export type MemorySearchResult = {
   triggers?: string;
   /** Semicolon-separated stable repository identities lifted from inline annotations. */
   projectKey?: string;
-  /** Future provenance column supplied by the promoted-memory workstream. */
+  /** @deprecated Use provenance.originClass. This field is not authoritative for automatic injection. */
   originClass?: string;
   citation?: string;
   provenance?: MemoryEntryProvenance;
 };
+
+/** Automatic prompt injection is reserved for content with authoritative trusted provenance. */
+export function isMemoryOriginEligibleForAutomaticInjection(
+  originClass: unknown,
+): originClass is "owner" | "agent" {
+  return originClass === "owner" || originClass === "agent";
+}
+
+export function isAutomaticMemoryEntryEligible(
+  entry: Pick<MemorySearchResult, "provenance">,
+): boolean {
+  return isMemoryOriginEligibleForAutomaticInjection(entry.provenance?.originClass);
+}
 
 /** Cached/probed embedding availability status. */
 export type MemoryEmbeddingProbeResult = {

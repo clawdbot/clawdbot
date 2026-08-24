@@ -254,4 +254,27 @@ describe("optional custom element requests", () => {
     await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
     expect(element.loadModule).toHaveBeenCalledTimes(2);
   });
+
+  it("reports a preload failure when an active surface opts into recovery", async () => {
+    const error = new Error("chunk unavailable");
+    const { requests } = createRequestHarness();
+    const element = {
+      tagName: uniqueTag(),
+      label: "active panel",
+      loadModule: vi.fn(async () => {
+        throw error;
+      }),
+    };
+
+    requests.preload(element, { reportError: true });
+
+    await waitForFast(() =>
+      expect(requests.visibleState).toMatchObject({
+        element,
+        error,
+        stale: false,
+        status: "error",
+      }),
+    );
+  });
 });

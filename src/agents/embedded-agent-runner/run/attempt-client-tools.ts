@@ -5,8 +5,10 @@ import {
   toClientToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
+import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { normalizeToolPolicyName } from "../../tool-policy.js";
 import {
   collectReplaySafeToolNames,
   collectSideEffectToolOwners,
@@ -68,6 +70,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
     isPluginTool: (tool) =>
       Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
   });
+  const coreReadAuthorized = params.uncompactedEffectiveTools.some(
+    (tool) =>
+      normalizeToolPolicyName(tool.name ?? "") === "read" &&
+      !getPluginToolMeta(tool) &&
+      !getChannelAgentToolMeta(tool),
+  );
   const isReplaySafeTool = (tool: { name?: string }) =>
     isAgentToolReplaySafe(tool, params.replaySafetyOptions);
   const replaySafeTools = new Set(params.uncompactedEffectiveTools.filter(isReplaySafeTool));
@@ -176,6 +184,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
     allCustomTools,
     builtinToolNames,
     coreBuiltinToolNames,
+    coreReadAuthorized,
     clientToolCallSlots,
     clientToolDefs,
     clientToolLoopDetection,
