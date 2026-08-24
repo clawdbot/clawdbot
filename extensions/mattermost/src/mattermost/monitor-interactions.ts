@@ -163,7 +163,6 @@ export function registerMattermostInteractions(params: {
     source: "mattermost-interactions",
     accountId: account.accountId,
     log: (message: string) => runtime.log?.(message),
-    replaceExisting: true,
     throwOnFailure: true,
   });
 }
