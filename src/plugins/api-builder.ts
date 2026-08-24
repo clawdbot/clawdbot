@@ -1,6 +1,7 @@
 // Builds plugin API objects from config, registries, and runtime helpers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./api-facades.js";
+import type { PluginSessionToolModeRegistration } from "./host-hooks.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
 
@@ -86,7 +87,9 @@ type BuildPluginApiParams = {
       | "registerMemoryPromptPreparation"
       | "registerMemoryCorpusSupplement"
       | "on"
-    >
+    > & {
+      registerSessionToolMode?: (mode: PluginSessionToolModeRegistration) => void;
+    }
   >;
 };
 
@@ -154,6 +157,7 @@ const noopEnqueueNextTurnInjection: OpenClawPluginApi["enqueueNextTurnInjection"
 const noopRegisterTrustedToolPolicy: OpenClawPluginApi["registerTrustedToolPolicy"] = () => {};
 const noopRegisterToolMetadata: OpenClawPluginApi["registerToolMetadata"] = () => {};
 const noopRegisterControlUiDescriptor: OpenClawPluginApi["registerControlUiDescriptor"] = () => {};
+const noopRegisterSessionToolMode = (_mode: PluginSessionToolModeRegistration) => {};
 const noopRegisterBoardWidgetContentKind: OpenClawPluginApi["registerBoardWidgetContentKind"] =
   () => {};
 const noopRegisterRuntimeLifecycle: OpenClawPluginApi["registerRuntimeLifecycle"] = () => {};
@@ -272,6 +276,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerToolMetadata: handlers.registerToolMetadata ?? noopRegisterToolMetadata,
     registerControlUiDescriptor:
       handlers.registerControlUiDescriptor ?? noopRegisterControlUiDescriptor,
+    registerSessionToolMode: handlers.registerSessionToolMode ?? noopRegisterSessionToolMode,
     registerBoardWidgetContentKind:
       handlers.registerBoardWidgetContentKind ?? noopRegisterBoardWidgetContentKind,
     registerRuntimeLifecycle: handlers.registerRuntimeLifecycle ?? noopRegisterRuntimeLifecycle,

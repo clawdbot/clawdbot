@@ -1,5 +1,8 @@
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  PluginSessionToolMode,
+  SessionCatalogPullRequestSummary,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -173,6 +176,10 @@ export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
 export const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
 export const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 export const headerPlatformByClient = new WeakMap<GatewayBrowserClient, Promise<string | null>>();
+export const sessionToolModesByClient = new WeakMap<
+  GatewayBrowserClient,
+  Promise<PluginSessionToolMode[]>
+>();
 
 export function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
   const record = catalogRawRecord(raw);

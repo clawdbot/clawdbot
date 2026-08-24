@@ -39,6 +39,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "browser",
   "canvas",
   "cua-computer",
+  "developer-mode",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",

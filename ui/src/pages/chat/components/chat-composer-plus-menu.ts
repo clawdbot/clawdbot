@@ -23,6 +23,11 @@ import {
   renderChatAttachmentMenuTrigger,
   type ChatAttachmentControlsProps,
 } from "./chat-attachments.ts";
+import {
+  handleChatComposerToolModeSelection,
+  renderChatComposerToolModeMenu,
+  type ChatComposerToolModeMenuProps,
+} from "./chat-composer-tool-mode-menu.ts";
 
 export type ChatComposerPlusMenuView = "root" | "skills" | "connectors" | `tools:${string}`;
 
@@ -39,6 +44,7 @@ type MenuRoute = "mcp" | "plugins" | "skills";
 
 export type ChatComposerPlusMenuProps = {
   attachments: ChatAttachmentControlsProps;
+  toolModeMenu?: ChatComposerToolModeMenuProps;
   showCapabilities: boolean;
   basePath: string;
   disabled: boolean;
@@ -138,13 +144,16 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
     props.toolOverrides?.webSearch,
   );
   const attachments = renderChatAttachmentMenuOptions(icons.paperclip);
+  const toolMode = props.toolModeMenu
+    ? html`${menuDivider()} ${renderChatComposerToolModeMenu(props.toolModeMenu)}`
+    : nothing;
   if (!props.showCapabilities) {
-    return attachments;
+    return html`${attachments} ${toolMode}`;
   }
   // Core gates managed and Codex-native search. Config sniffing misses env/native providers;
   // without a provider, this session override is a harmless no-op.
   return html`
-    ${attachments} ${menuDivider()}
+    ${attachments} ${toolMode} ${menuDivider()}
     <wa-dropdown-item class="agent-chat__capability-menu-item" value="open-skills">
       <span slot="icon" aria-hidden="true">${icons.book}</span>
       <span>${t("chat.composer.menu.skills")}</span>
@@ -401,6 +410,9 @@ function handleMenuSelection(
 ) {
   const value = event.detail.item.value ?? "";
   if (handleChatAttachmentMenuSelection(event)) {
+    return;
+  }
+  if (handleChatComposerToolModeSelection(value, props.toolModeMenu)) {
     return;
   }
   const menu = event.currentTarget as HTMLElement;

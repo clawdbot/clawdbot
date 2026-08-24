@@ -1,3 +1,4 @@
+import { createSessionToolModeRegistrar } from "./registry-registrar-session-tool-mode.js";
 import { createCapabilityRegistrars } from "./registry-registrars-capabilities.js";
 import { createHostRegistrars } from "./registry-registrars-host.js";
 import { createMemoryRegistrars } from "./registry-registrars-memory.js";
@@ -16,6 +17,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
     ...createProviderRegistrars(state),
     ...createOperationRegistrars(state),
     ...createHostRegistrars(state),
+    ...createSessionToolModeRegistrar(state),
     ...createMemoryRegistrars(state),
     registerModelCatalogProvider: state.registerModelCatalogProvider,
   };

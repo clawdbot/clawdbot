@@ -15,6 +15,14 @@ import { projectConversationToolNames } from "./conversation-tool-policy-pipelin
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 describe("resolveConversationCapabilityProfile", () => {
+  it("applies a prepared session Tool profile over configured profile defaults", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: { tools: { profile: "full" } },
+      toolProfileOverride: "minimal",
+    });
+
+    expect(profile.policy.profile).toBe("minimal");
+  });
   it("intersects base and provider profile contributions from plugin manifests", () => {
     const profile = resolveConversationCapabilityProfile({
       config: {

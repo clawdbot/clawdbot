@@ -21,6 +21,11 @@ export const SessionToolOverridesSchema = closedObject({
   webSearch: Type.Optional(Type.Boolean()),
 });
 
+export const SessionToolModeSelectionSchema = closedObject({
+  pluginId: NonEmptyString,
+  modeId: NonEmptyString,
+});
+
 /** Projected actor that caused a session node to be created. */
 export const SessionCreatedActorSchema = closedObject({
   type: Type.Union([Type.Literal("human"), Type.Literal("agent"), Type.Literal("system")]),
@@ -152,6 +157,8 @@ export const SessionRowSchema = Type.Object(
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
     toolOverrides: Type.Optional(SessionToolOverridesSchema),
+    toolMode: Type.Optional(SessionToolModeSelectionSchema),
+    activeToolMode: Type.Optional(SessionToolModeSelectionSchema),
   },
   { additionalProperties: true },
 );
@@ -160,5 +167,6 @@ export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
 export type SessionPermissionMode = Static<typeof SessionPermissionModeSchema>;
 export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
+export type SessionToolModeSelection = Static<typeof SessionToolModeSelectionSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
 export type SessionRunStatus = NonNullable<SessionRow["status"]>;

@@ -1332,6 +1332,7 @@
                   "plugins/teams-meetings",
                   "plugins/zoom-meetings",
                   "plugins/workboard",
+                  "plugins/developer-mode",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
               "plugins/geolocation",

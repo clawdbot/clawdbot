@@ -114,7 +114,7 @@ export function patchChatSessionSettings(
   sessionKey: string,
   patch: Pick<
     SessionPatch,
-    "model" | "contextWindow" | "thinkingLevel" | "fastMode" | "toolOverrides"
+    "model" | "contextWindow" | "thinkingLevel" | "fastMode" | "toolMode" | "toolOverrides"
   >,
   options: {
     agentId?: string;

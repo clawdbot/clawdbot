@@ -41,6 +41,7 @@ import type {
   PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
   PluginSessionActionRegistration,
+  PluginSessionToolModeRegistration,
   PluginSessionAttachmentParams,
   PluginSessionAttachmentResult,
   PluginSessionSchedulerJobHandle,
@@ -138,6 +139,8 @@ type OpenClawPluginSessionControlsApi = {
   registerSessionAction: (action: PluginSessionActionRegistration) => void;
   /** Register a generic Control UI contribution descriptor. */
   registerControlUiDescriptor: (descriptor: PluginControlUiDescriptor) => void;
+  /** Register one plugin-owned per-session Tool mode preset. */
+  registerToolMode: (mode: PluginSessionToolModeRegistration) => void;
 };
 
 type OpenClawPluginSessionApi = {

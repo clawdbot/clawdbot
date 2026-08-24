@@ -27,6 +27,7 @@ type AgentToolSurfacePlanParams = {
   toolsAllow?: readonly string[];
   forceCodeModeControls?: boolean;
   forceDirectTools?: boolean;
+  codeModeOverride?: "direct" | "code";
 };
 
 export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) {
@@ -60,7 +61,9 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     // Restart recovery continues one provider turn. Keep its original control
     // schema even when the reloaded config disables Code Mode for new turns.
     (params.forceCodeModeControls === true ||
-      isCodeModeEngagedForModel(codeModeConfig, params.model));
+      params.codeModeOverride === "code" ||
+      (params.codeModeOverride !== "direct" &&
+        isCodeModeEngagedForModel(codeModeConfig, params.model)));
   const toolSearchControlsEnabled =
     toolsAvailable &&
     params.forceDirectTools !== true &&

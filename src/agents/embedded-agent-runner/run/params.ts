@@ -231,6 +231,7 @@ export type RunEmbeddedAgentParams = {
    */
   config?: OpenClawConfig;
   toolOverrides?: SessionToolOverrides;
+  toolMode?: SessionEntry["toolMode"];
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */

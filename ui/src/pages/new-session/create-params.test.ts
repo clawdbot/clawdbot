@@ -32,6 +32,18 @@ describe("create-as-draft availability", () => {
 });
 
 describe("buildDraftSessionCreateParams", () => {
+  it("carries a selected Tool mode into session creation", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "hello",
+        worktree: false,
+        toolMode: { pluginId: "developer-mode", modeId: "code" },
+      }),
+    ).toMatchObject({
+      toolMode: { pluginId: "developer-mode", modeId: "code" },
+    });
+  });
   it("keeps plain chats minimal", () => {
     expect(
       buildDraftSessionCreateParams({

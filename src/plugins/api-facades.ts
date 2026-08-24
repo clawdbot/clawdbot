@@ -1,3 +1,4 @@
+import type { PluginSessionToolModeRegistration } from "./host-hooks.js";
 // Builds plugin API facades exposed to bundled and external plugins.
 import type { OpenClawPluginApi } from "./types.js";
 
@@ -6,7 +7,11 @@ type PluginApiFacadeFields = Pick<
   "agent" | "lifecycle" | "runContext" | "session"
 >;
 /** Plugin API shape without nested facade namespaces attached. */
-export type OpenClawPluginApiWithoutFacades = Omit<OpenClawPluginApi, keyof PluginApiFacadeFields>;
+type SessionToolModeFacadeSource = {
+  registerSessionToolMode?: (mode: PluginSessionToolModeRegistration) => void;
+};
+export type OpenClawPluginApiWithoutFacades = Omit<OpenClawPluginApi, keyof PluginApiFacadeFields> &
+  SessionToolModeFacadeSource;
 type PluginApiFacadeSource = Pick<
   OpenClawPluginApi,
   | "clearRunContext"
@@ -23,12 +28,17 @@ type PluginApiFacadeSource = Pick<
   | "sendSessionAttachment"
   | "setRunContext"
   | "unscheduleSessionTurnsByTag"
->;
+> &
+  SessionToolModeFacadeSource;
 
 /** Attaches nested facade namespaces to the flat plugin API implementation. */
 export function attachPluginApiFacades<T extends object>(
   api: T & PluginApiFacadeSource & Partial<PluginApiFacadeFields>,
 ): T & PluginApiFacadeFields {
+  const registerToolMode = api.registerSessionToolMode ?? api.session?.controls.registerToolMode;
+  if (!registerToolMode) {
+    throw new Error("plugin API is missing the session Tool mode registrar");
+  }
   api.session = {
     state: {
       registerSessionExtension: (...args) => api.registerSessionExtension(...args),
@@ -43,6 +53,7 @@ export function attachPluginApiFacades<T extends object>(
     controls: {
       registerSessionAction: (...args) => api.registerSessionAction(...args),
       registerControlUiDescriptor: (...args) => api.registerControlUiDescriptor(...args),
+      registerToolMode: (...args) => registerToolMode(...args),
     },
   };
   api.agent = {

@@ -326,11 +326,13 @@ describe("embedded-agent runner run lifecycle", () => {
       transcriptLeafId: "assistant-1",
       messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
       inFlightPrompt: "keep going",
+      toolMode: { pluginId: "developer-mode", modeId: "code" },
     });
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toEqual({
       transcriptLeafId: "assistant-1",
       messages: [{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 }],
       inFlightPrompt: "keep going",
+      toolMode: { pluginId: "developer-mode", modeId: "code" },
     });
 
     clearActiveEmbeddedRun("session-snapshot", handle);

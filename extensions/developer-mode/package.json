@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/developer-mode",
+  "version": "2026.8.1",
+  "private": true,
+  "description": "OpenClaw per-session developer Tool modes",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.8.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

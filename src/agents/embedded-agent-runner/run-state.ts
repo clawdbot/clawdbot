@@ -14,6 +14,7 @@ import {
   type ReplyBackendQueueMessageResult,
   type ReplyBackendMessageInjection,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
@@ -73,6 +74,7 @@ export type ActiveEmbeddedRunSnapshot = {
   transcriptLeafId: string | null;
   messages?: unknown[];
   inFlightPrompt?: string;
+  toolMode?: SessionEntry["toolMode"];
 };
 
 export type EmbeddedRunWaiter = {

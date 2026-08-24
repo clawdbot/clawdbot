@@ -33,6 +33,7 @@ import {
   updateSkillMenu,
   type SkillMenuHost,
 } from "../chat/components/chat-composer-skill-menu.ts";
+import type { ChatComposerToolModeMenuProps } from "../chat/components/chat-composer-tool-mode-menu.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
@@ -44,6 +45,7 @@ type NewSessionComposerOptions = {
   getAttachments: () => ChatAttachment[];
   message: string;
   modelControl?: TemplateResult | typeof nothing;
+  toolModeMenu?: ChatComposerToolModeMenuProps;
   pendingAttachmentReads: number;
   readSignal: AbortSignal;
   requiresModifier: boolean;
@@ -345,7 +347,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
         </div>
         <div class="agent-chat__composer-footer">
           <div class="agent-chat__composer-controls">
-            ${renderChatAttachmentMenu(attachmentProps)}
+            ${renderChatAttachmentMenu(attachmentProps, options.toolModeMenu)}
             ${options.modelControl && options.modelControl !== nothing
               ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
               : nothing}
@@ -384,6 +386,7 @@ export function renderNewSessionDraftComposer(options: {
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
   modelControl: NewSessionModelControl;
+  toolModeMenu?: ChatComposerToolModeMenuProps;
   textareaController: NewSessionComposerTextareaController;
   requiresModifier: boolean;
   requestUpdate: () => void;
@@ -411,6 +414,7 @@ export function renderNewSessionDraftComposer(options: {
     message: options.message,
     visibility: options.visibility,
     draftAvailable: options.draftAvailable,
+    toolModeMenu: options.toolModeMenu,
     modelControl: options.isCatalogTarget
       ? nothing
       : options.modelControl.render({

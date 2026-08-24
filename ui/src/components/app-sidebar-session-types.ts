@@ -1,3 +1,4 @@
+import type { SessionToolModeSelection } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
@@ -229,6 +230,7 @@ export type SidebarSessionPatch = {
   label?: string | null;
   icon?: string | null;
   category?: string | null;
+  toolMode?: SessionToolModeSelection;
 };
 
 export const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;

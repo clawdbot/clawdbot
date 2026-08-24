@@ -33,6 +33,23 @@ export const PluginControlUiDescriptorSchema = closedObject({
   requiredScopes: Type.Optional(Type.Array(NonEmptyString)),
 });
 
+export const PluginSessionToolModeSchema = closedObject({
+  pluginId: NonEmptyString,
+  pluginName: Type.Optional(NonEmptyString),
+  id: NonEmptyString,
+  label: NonEmptyString,
+  description: Type.Optional(Type.String()),
+  controlLabel: NonEmptyString,
+  default: Type.Optional(Type.Boolean()),
+  toolProfile: Type.Union([
+    Type.Literal("minimal"),
+    Type.Literal("coding"),
+    Type.Literal("messaging"),
+    Type.Literal("full"),
+  ]),
+  codeMode: Type.Union([Type.Literal("direct"), Type.Literal("code")]),
+});
+
 /** Empty request payload for listing plugin UI descriptors. */
 export const PluginsUiDescriptorsParamsSchema = closedObject({});
 
@@ -40,6 +57,7 @@ export const PluginsUiDescriptorsParamsSchema = closedObject({});
 export const PluginsUiDescriptorsResultSchema = closedObject({
   ok: Type.Literal(true),
   descriptors: Type.Array(PluginControlUiDescriptorSchema),
+  toolModes: Type.Array(PluginSessionToolModeSchema),
 });
 
 /** Request payload for invoking one plugin-owned session action. */
@@ -244,6 +262,7 @@ export type PluginsSetEnabledResult = Static<typeof PluginsSetEnabledResultSchem
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type PluginControlUiDescriptor = Static<typeof PluginControlUiDescriptorSchema>;
+export type PluginSessionToolMode = Static<typeof PluginSessionToolModeSchema>;
 export type PluginsUiDescriptorsParams = Static<typeof PluginsUiDescriptorsParamsSchema>;
 export type PluginsUiDescriptorsResult = Static<typeof PluginsUiDescriptorsResultSchema>;
 export type PluginsSessionActionParams = Static<typeof PluginsSessionActionParamsSchema>;

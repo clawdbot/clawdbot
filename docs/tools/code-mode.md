@@ -34,6 +34,11 @@ Both are JavaScript execution surfaces, not shell-command surfaces. Treat them
 as independent, differently-implemented features that happen to expose
 identically-named `exec`/`wait` tools.
 
+For an operator-facing per-session choice between direct tools and this
+QuickJS-WASI surface, enable the bundled
+[Developer Mode plugin](/plugins/developer-mode) and choose **Code** from
+**Tool mode** in the composer **+** menu.
+
 In OpenClaw code mode, `command` is a JavaScript or TypeScript alias for
 `code`, not a shell command. For shell or file operations, call the appropriate
 async tool global from guest JavaScript. Recognizable shell

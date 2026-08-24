@@ -147,6 +147,8 @@ export type GatewaySessionRow = {
   thinkingDefault?: string;
   fastMode?: FastMode;
   toolOverrides?: SessionEntry["toolOverrides"];
+  toolMode?: SessionEntry["toolMode"];
+  activeToolMode?: SessionEntry["toolMode"];
   effectiveFastMode?: FastMode;
   effectiveFastModeSource?: FastModeSource;
   fastAutoOnSeconds?: number;

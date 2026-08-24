@@ -81,7 +81,25 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       }
       return descriptor;
     });
-    const result = { ok: true, descriptors };
+    const toolModes = (registry?.sessionToolModes ?? []).map((entry) => {
+      const mode: Record<string, unknown> = {
+        pluginId: entry.pluginId,
+        pluginName: entry.pluginName,
+        id: entry.mode.id,
+        label: entry.mode.label,
+        controlLabel: entry.mode.controlLabel,
+        toolProfile: entry.mode.toolProfile,
+        codeMode: entry.mode.codeMode,
+      };
+      if (entry.mode.description !== undefined) {
+        mode.description = entry.mode.description;
+      }
+      if (entry.mode.default !== undefined) {
+        mode.default = entry.mode.default;
+      }
+      return mode;
+    });
+    const result = { ok: true, descriptors, toolModes };
     if (!validatePluginsUiDescriptorsResult(result)) {
       log.warn("invalid plugins.uiDescriptors result", {
         errors: validatePluginsUiDescriptorsResult.errors,

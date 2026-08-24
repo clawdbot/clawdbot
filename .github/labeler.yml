@@ -84,6 +84,12 @@
           - "extensions/workboard/**"
           - "docs/plugins/workboard.md"
           - "docs/plugins/reference/workboard.md"
+
+"plugin: developer-mode":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/developer-mode/**"
+          - "docs/plugins/developer-mode.md"
 "plugin: beam":
   - changed-files:
       - any-glob-to-any-file:

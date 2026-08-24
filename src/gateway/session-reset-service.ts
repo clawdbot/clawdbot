@@ -26,6 +26,7 @@ import {
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
@@ -67,6 +68,7 @@ import { getSessionBindingService } from "../infra/outbound/session-binding-serv
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { sessionToolModeSelectionError } from "../plugins/session-tool-modes.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import {
   isIncognitoSessionKey,
@@ -948,6 +950,7 @@ export async function performGatewaySessionReset(params: {
   spawnedCwd?: string;
   sessionRoot?: string;
   permissionMode?: SessionEntry["permissionMode"];
+  toolMode?: SessionEntry["toolMode"];
   /** Prepares session-owned resources while the target lifecycle fence is held. */
   prepareLifecycle?: PrepareGatewaySessionLifecycle;
   onLifecycleCleanupError?: (error: unknown) => void;
@@ -1612,6 +1615,7 @@ export async function performGatewaySessionReset(params: {
             permissionMode: params.clearSpawnedCwd
               ? undefined
               : (params.permissionMode ?? currentEntry?.permissionMode),
+            toolMode: params.toolMode ?? currentEntry?.toolMode,
             worktree: params.clearSpawnedCwd
               ? undefined
               : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
@@ -1651,6 +1655,23 @@ export async function performGatewaySessionReset(params: {
             totalTokensFresh: true,
             totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
           };
+          if (nextEntry.toolMode) {
+            const selectedModel = resolveSessionModelRef(cfg, nextEntry, target.agentId);
+            const runtimeId = resolveEffectiveAgentRuntime({
+              cfg,
+              provider: selectedModel.provider,
+              modelId: selectedModel.model,
+              agentId: target.agentId,
+              sessionKey: target.canonicalKey,
+              sessionEntry: nextEntry,
+            });
+            if (
+              sessionToolModeSelectionError({ selection: nextEntry.toolMode, runtimeId }) !==
+              undefined
+            ) {
+              delete nextEntry.toolMode;
+            }
+          }
           // Drop CLI provider bindings so the next turn after reset starts a fresh
           // CLI conversation on the provider side. Preserved only for spawned
           // subagents (canonical `:subagent:` keys), where Tak Hoffman's fa56682b3ced

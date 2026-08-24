@@ -431,7 +431,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.headerWorktreePaths.clear();
       this.headerBranches.clear();
       this.headerPlatform = null;
+      this.sessionToolModes = null;
       void this.loadHeaderPlatform(startupClient, startupGeneration);
+      void this.loadSessionToolModes(startupClient, startupGeneration);
       if (catalogRouteKey) {
         void this.loadCatalogSession(catalogRouteKey, false);
         state.requestUpdate?.();

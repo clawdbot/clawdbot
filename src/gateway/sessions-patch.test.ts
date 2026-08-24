@@ -750,6 +750,78 @@ describe("gateway sessions patch", () => {
     expect(cleared.toolOverrides).toBeUndefined();
   });
 
+  test("sets and clears a registered session Tool mode", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.sessionToolModes.push({
+      pluginId: "developer-mode",
+      mode: {
+        id: "code",
+        label: "Code",
+        controlLabel: "Tool mode",
+        toolProfile: "coding",
+        codeMode: "code",
+      },
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const store = mainStoreEntry({ agentRuntimeOverride: "openclaw" });
+
+    const set = expectPatchOk(
+      await runPatch({
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          toolMode: { pluginId: "developer-mode", modeId: "code" },
+        },
+      }),
+    );
+    expect(set.toolMode).toEqual({ pluginId: "developer-mode", modeId: "code" });
+
+    const cleared = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, toolMode: null } }),
+    );
+    expect(cleared.toolMode).toBeUndefined();
+
+    expectPatchError(
+      await runPatch({
+        store: mainStoreEntry({
+          providerOverride: "openai",
+          modelOverride: "gpt-5.6-luna",
+          agentRuntimeOverride: "codex",
+        }),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          toolMode: { pluginId: "developer-mode", modeId: "code" },
+        },
+      }),
+      "session Tool mode requires the openclaw runtime (resolved codex)",
+    );
+
+    const switched = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.6-sol" },
+              models: {
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+                "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        store: mainStoreEntry({
+          providerOverride: "openai",
+          modelOverride: "gpt-5.6-sol",
+          toolMode: { pluginId: "developer-mode", modeId: "code" },
+        }),
+        patch: { key: MAIN_SESSION_KEY, model: "openai/gpt-5.6-luna" },
+        loadGatewayModelCatalog: loadCatalog("openai/gpt-5.6-sol", "openai/gpt-5.6-luna"),
+      }),
+    );
+    expect(switched.toolMode).toBeUndefined();
+  });
+
   test("persists verboseLevel=full", async () => {
     const entry = expectPatchOk(
       await runPatch({

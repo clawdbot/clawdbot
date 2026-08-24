@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionToolModeSelection } from "../../../../packages/gateway-protocol/src/index.js";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -41,6 +42,7 @@ export function buildDraftSessionCreateParams(draft: {
   workspace?: string;
   catalogId?: string;
   category?: string;
+  toolMode?: SessionToolModeSelection;
 }): Record<string, unknown> {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
@@ -60,6 +62,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
     ...(catalogId ? { catalogId } : {}),
     ...(category ? { category } : {}),
+    ...(draft.toolMode ? { toolMode: draft.toolMode } : {}),
     ...(!catalogId && model ? { model } : {}),
     ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),

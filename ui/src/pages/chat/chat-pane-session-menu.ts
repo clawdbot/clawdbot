@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
+  PluginsUiDescriptorsResult,
   SessionsFilesRevealResult,
   SystemInfoResult,
   WorktreesBranchesResult,
@@ -19,7 +20,7 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
-import { headerPlatformByClient } from "./chat-pane-shared.ts";
+import { headerPlatformByClient, sessionToolModesByClient } from "./chat-pane-shared.ts";
 import { patchChatSessionLabel } from "./chat-state-route.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
@@ -51,6 +52,24 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       }
     } catch {
       // Optional label refinement. Generic file-manager copy remains correct.
+    }
+  }
+
+  protected async loadSessionToolModes(
+    client: GatewayBrowserClient,
+    generation: number,
+  ): Promise<void> {
+    let request = sessionToolModesByClient.get(client);
+    if (!request) {
+      request = client
+        .request<PluginsUiDescriptorsResult>("plugins.uiDescriptors", {})
+        .then((result) => result.toolModes)
+        .catch(() => []);
+      sessionToolModesByClient.set(client, request);
+    }
+    const modes = await request;
+    if (this.connectedClient === client && this.connectionGeneration === generation) {
+      this.sessionToolModes = modes;
     }
   }
 

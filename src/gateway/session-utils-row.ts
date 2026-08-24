@@ -9,6 +9,7 @@ import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { getActiveEmbeddedRunSnapshot } from "../agents/embedded-agent-runner/runs.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
@@ -627,6 +628,10 @@ export function buildGatewaySessionRow(params: {
     thinkingDefault: thinkingProjection.thinkingDefault,
     fastMode: entry?.fastMode,
     toolOverrides: entry?.toolOverrides,
+    toolMode: entry?.toolMode,
+    activeToolMode: entry?.sessionId
+      ? getActiveEmbeddedRunSnapshot(entry.sessionId)?.toolMode
+      : undefined,
     effectiveFastMode: fastModeState.mode,
     effectiveFastModeSource: fastModeState.source,
     fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,

@@ -2058,6 +2058,7 @@ describe("host-hook fixture plugin contract", () => {
     expect(
       validatePluginsUiDescriptorsResult({
         ok: true,
+        toolModes: [],
         descriptors: [
           {
             id: "approval-panel",
@@ -2071,6 +2072,7 @@ describe("host-hook fixture plugin contract", () => {
     expect(
       validatePluginsUiDescriptorsResult({
         ok: true,
+        toolModes: [],
         descriptors: [
           {
             id: "approval-panel",
@@ -2099,13 +2101,26 @@ describe("host-hook fixture plugin contract", () => {
           surface: "session",
           label: "Approval panel",
         });
+        api.session.controls.registerToolMode({
+          id: "standard",
+          label: "Standard",
+          controlLabel: "Tool mode",
+          default: true,
+          toolProfile: "coding",
+          codeMode: "direct",
+        });
       },
     });
     const descriptorEntry = registry.registry.controlUiDescriptors[0];
     if (!descriptorEntry) {
       throw new Error("expected control UI descriptor registration");
     }
+    const toolModeEntry = registry.registry.sessionToolModes[0];
+    if (!toolModeEntry) {
+      throw new Error("expected session Tool mode registration");
+    }
     Object.assign(descriptorEntry.descriptor, { leakedRegistryField: true });
+    Object.assign(toolModeEntry.mode, { leakedRegistryField: true });
     setActivePluginRegistry(registry.registry);
 
     const calls: Array<[boolean, unknown, unknown]> = [];
@@ -2135,6 +2150,45 @@ describe("host-hook fixture plugin contract", () => {
           label: "Approval panel",
         },
       ],
+      toolModes: [
+        {
+          pluginId: "host-hook-fixture",
+          pluginName: "Host Hook Fixture",
+          id: "standard",
+          label: "Standard",
+          controlLabel: "Tool mode",
+          default: true,
+          toolProfile: "coding",
+          codeMode: "direct",
+        },
+      ],
+    });
+  });
+
+  it("rejects a second global Tool mode default", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    for (const pluginId of ["first-mode-plugin", "second-mode-plugin"]) {
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({ id: pluginId, name: pluginId }),
+        register(api) {
+          api.session.controls.registerToolMode({
+            id: "standard",
+            label: "Standard",
+            controlLabel: "Tool mode",
+            default: true,
+            toolProfile: "coding",
+            codeMode: "direct",
+          });
+        },
+      });
+    }
+
+    expect(registry.registry.sessionToolModes).toHaveLength(1);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toContainEqual({
+      pluginId: "second-mode-plugin",
+      message: "session Tool modes may register only one global default",
     });
   });
 

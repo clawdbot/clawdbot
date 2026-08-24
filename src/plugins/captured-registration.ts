@@ -17,6 +17,7 @@ import type {
   PluginControlUiDescriptor,
   PluginRuntimeLifecycleRegistration,
   PluginSessionActionRegistration,
+  PluginSessionToolModeRegistration,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginToolMetadataRegistration,
@@ -87,6 +88,7 @@ export type CapturedPluginRegistration = {
   agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[];
   sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[];
   sessionActions: PluginSessionActionRegistration[];
+  sessionToolModes: PluginSessionToolModeRegistration[];
   tools: AnyAgentTool[];
   modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
   sessionCatalogs: SessionCatalogProvider[];
@@ -127,6 +129,7 @@ export function createCapturedPluginRegistration(params?: {
   const agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[] = [];
   const sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[] = [];
   const sessionActions: PluginSessionActionRegistration[] = [];
+  const sessionToolModes: PluginSessionToolModeRegistration[] = [];
   let capturedSessionTurnCount = 0;
   const tools: AnyAgentTool[] = [];
   const modelCatalogProviders: UnifiedModelCatalogProviderPlugin[] = [];
@@ -170,6 +173,7 @@ export function createCapturedPluginRegistration(params?: {
     agentEventSubscriptions,
     sessionSchedulerJobs,
     sessionActions,
+    sessionToolModes,
     tools,
     modelCatalogProviders,
     sessionCatalogs,
@@ -341,6 +345,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerSessionAction(action: PluginSessionActionRegistration) {
           sessionActions.push(action);
+        },
+        registerSessionToolMode(mode: PluginSessionToolModeRegistration) {
+          sessionToolModes.push(mode);
         },
         sendSessionAttachment: async () => ({ ok: false, error: "captured registration" }),
         scheduleSessionTurn: async (schedule) => {

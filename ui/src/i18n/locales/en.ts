@@ -5991,6 +5991,14 @@ export const en: TranslationMap = {
         offlineBlocked: "Connect to the gateway to change session capabilities.",
         adminBlocked: "Admin access is required to manage connectors.",
         savingBlocked: "Wait for the current session capability change to finish.",
+        toolMode: {
+          unavailable: "Tool mode unavailable",
+          unavailableDetail:
+            "The selected plugin mode is unavailable. Configured defaults are active.",
+          usingDefaults: "Using defaults",
+          active: "Active",
+          next: "Next",
+        },
       },
       overrides: {
         count: "{count} session overrides",

@@ -9,6 +9,7 @@ import {
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
+import { resolveSessionToolMode } from "../../../plugins/session-tool-modes.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { createOpenClawCodingTools } from "../../agent-tools.js";
@@ -95,6 +96,12 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolsEnabled,
     toolsAllow: toolsAllowWithForcedRuntimeTools,
   });
+  const selectedToolMode = resolveSessionToolMode({
+    selection: attempt.toolMode,
+    runtimeId: "openclaw",
+  });
+  const toolMode =
+    selectedToolMode?.status === "available" ? selectedToolMode.registration?.mode : undefined;
   const {
     codeModeControlsEnabled: codeModeControlsEnabledForRun,
     toolSearchConfig,
@@ -113,6 +120,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolsAllow: attempt.toolsAllow,
     forceCodeModeControls: attempt.forceCodeModeTools,
     forceDirectTools: attempt.forceCodeModeReconciliationTools,
+    codeModeOverride: toolMode?.codeMode,
   });
   if (isCodeModeDiagnosticEnabled()) {
     logCodeModeDiagnostic(log, "activation", {
@@ -192,6 +200,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     senderUsername: attempt.senderUsername,
     senderE164: attempt.senderE164,
     senderIsOwner: attempt.senderIsOwner,
+    toolProfileOverride: toolMode?.toolProfile,
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
     modelApi: attempt.model.api,

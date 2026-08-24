@@ -4,7 +4,11 @@ import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../session-agent-status.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
-import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
+import {
+  SessionPermissionModeSchema,
+  SessionToolModeSelectionSchema,
+  SessionToolOverridesSchema,
+} from "./sessions-row.js";
 
 export const SESSIONS_PATCH_MANY_MAX_TARGETS = 100;
 
@@ -32,6 +36,7 @@ const SessionsPatchMutationProperties = {
   thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
   toolOverrides: Type.Optional(Type.Union([SessionToolOverridesSchema, Type.Null()])),
+  toolMode: Type.Optional(Type.Union([SessionToolModeSelectionSchema, Type.Null()])),
   verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   traceLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

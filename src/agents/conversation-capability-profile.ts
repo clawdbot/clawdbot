@@ -34,6 +34,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
   type ToolPolicyLike,
+  type ToolProfileId,
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
@@ -87,6 +88,7 @@ export type ConversationCapabilityProfileParams = {
   senderUsername?: string | null;
   senderE164?: string | null;
   senderIsOwner?: boolean;
+  toolProfileOverride?: ToolProfileId;
   modelProvider?: string;
   modelId?: string;
   modelApi?: string;
@@ -213,13 +215,16 @@ export function resolveConversationCapabilityProfile(
   params: ConversationCapabilityProfileParams,
 ): ResolvedConversationCapabilityProfile {
   const messageProvider = params.messageProvider;
-  const effective = resolveEffectiveToolPolicy({
+  const configuredEffective = resolveEffectiveToolPolicy({
     config: params.config,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+  const effective = params.toolProfileOverride
+    ? { ...configuredEffective, profile: params.toolProfileOverride }
+    : configuredEffective;
   const trustedGroup = resolveTrustedGroupId({
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,

@@ -388,6 +388,7 @@ plugins.
 | `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                                                     |
 | `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true` or `suppressReply: true`; Discord native commands support `descriptionLocalizations` |
 | `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, settings, or tab surfaces                                                                      |
+| `api.session.controls.registerToolMode(...)`                                         | One plugin-owned per-session OpenClaw Tool mode preset with profile and Code Mode effects                                                                  |
 | `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                                          |
 | `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                                              |
 | `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                             |
@@ -459,6 +460,25 @@ api.session.controls.registerControlUiDescriptor({
 });
 ```
 
+Register per-session Tool modes when a plugin owns a small operator-facing
+preset rather than a new global config surface:
+
+```typescript
+api.session.controls.registerToolMode({
+  id: "code",
+  label: "Code",
+  description: "Combine several actions efficiently",
+  controlLabel: "Tool mode",
+  toolProfile: "coding",
+  codeMode: "code",
+});
+```
+
+Modes from one plugin must share `controlLabel`; at most one may declare
+`default: true`. `toolProfile` accepts the built-in profile ids,
+and `codeMode` is either `"direct"` or `"code"`. Tool modes apply only to the
+embedded OpenClaw runtime; other runtimes leave the control visible but disabled.
+
 Use the grouped namespaces for new plugin code:
 
 - `api.session.state.registerSessionExtension(...)`
@@ -469,6 +489,7 @@ Use the grouped namespaces for new plugin code:
 - `api.session.workflow.unscheduleSessionTurnsByTag(...)`
 - `api.session.controls.registerSessionAction(...)`
 - `api.session.controls.registerControlUiDescriptor(...)`
+- `api.session.controls.registerToolMode(...)`
 - `api.agent.events.registerAgentEventSubscription(...)`
 - `api.agent.events.emitAgentEvent(...)`
 - `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`

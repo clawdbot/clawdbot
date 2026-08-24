@@ -21,6 +21,7 @@ import type {
   PluginControlUiDescriptor,
   PluginRuntimeLifecycleRegistration,
   PluginSessionActionRegistration,
+  PluginSessionToolModeRegistration,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginToolMetadataRegistration,
@@ -418,6 +419,14 @@ type PluginControlUiDescriptorRegistryRegistration = {
   rootDir?: string;
 };
 
+export type PluginSessionToolModeRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  mode: PluginSessionToolModeRegistration;
+  source: string;
+  rootDir?: string;
+};
+
 type PluginRuntimeLifecycleRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -586,6 +595,7 @@ export type PluginRegistry = {
   trustedToolPolicies: PluginTrustedToolPolicyRegistryRegistration[];
   toolMetadata: PluginToolMetadataRegistryRegistration[];
   controlUiDescriptors: PluginControlUiDescriptorRegistryRegistration[];
+  sessionToolModes: PluginSessionToolModeRegistryRegistration[];
   runtimeLifecycles: PluginRuntimeLifecycleRegistryRegistration[];
   agentEventSubscriptions: PluginAgentEventSubscriptionRegistryRegistration[];
   sessionSchedulerJobs: PluginSessionSchedulerJobRegistryRegistration[];

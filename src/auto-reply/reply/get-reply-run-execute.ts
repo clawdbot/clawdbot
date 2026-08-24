@@ -431,6 +431,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       config: cfg,
       toolOverrides: preparedSessionState.sessionEntry?.toolOverrides,
+      toolMode: preparedSessionState.sessionEntry?.toolMode,
       skillsSnapshot,
       provider,
       model,

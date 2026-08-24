@@ -1,4 +1,7 @@
-import type { SessionPermissionMode } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionPermissionMode,
+  SessionToolModeSelection,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { FastMode, SessionsPatchResult } from "../../api/types.ts";
 
 export type SessionToolOverrides = {
@@ -20,6 +23,7 @@ export type SessionPatch = {
   verboseLevel?: string | null;
   reasoningLevel?: string | null;
   permissionMode?: SessionPermissionMode | null;
+  toolMode?: SessionToolModeSelection | null;
   toolOverrides?: SessionToolOverrides | null;
   archived?: boolean;
   pinned?: boolean;

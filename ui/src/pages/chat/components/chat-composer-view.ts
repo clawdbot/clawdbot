@@ -342,6 +342,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             <div class="agent-chat__composer-input-row">
               ${renderChatComposerPlusMenu({
                 attachments: props,
+                toolModeMenu: props.capabilityMenu?.toolModeMenu,
                 showCapabilities: props.capabilityMenu !== undefined,
                 basePath: props.capabilityMenu?.basePath ?? "",
                 disabled: !canCompose || props.suggestionComposer === true,

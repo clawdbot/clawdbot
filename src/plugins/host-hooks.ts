@@ -116,6 +116,17 @@ export type PluginControlUiDescriptor = {
   order?: number;
 };
 
+/** One plugin-owned preset for a session's OpenClaw tool surface. */
+export type PluginSessionToolModeRegistration = {
+  id: string;
+  label: string;
+  description?: string;
+  controlLabel: string;
+  default?: boolean;
+  toolProfile: "minimal" | "coding" | "messaging" | "full";
+  codeMode: "direct" | "code";
+};
+
 export type PluginSessionActionContext = {
   pluginId: string;
   actionId: string;

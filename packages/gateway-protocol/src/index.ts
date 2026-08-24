@@ -19,12 +19,14 @@ export {
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionToolOverridesSchema,
+  SessionToolModeSelectionSchema,
   type SessionCreatedActor,
   type SessionOwner,
   type SessionPermissionMode,
   type SessionRow,
   type SessionRunStatus,
   type SessionToolOverrides,
+  type SessionToolModeSelection,
 } from "./schema/sessions-row.js";
 export * from "./schema/session-classification.js";
 export * from "./schema/sessions-suggestions.js";

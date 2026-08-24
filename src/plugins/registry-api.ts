@@ -96,6 +96,7 @@ export function createPluginApiFactory(
     registerTrustedToolPolicy,
     registerToolMetadata,
     registerControlUiDescriptor,
+    registerSessionToolMode,
     registerBoardWidgetContentKind,
     registerRuntimeLifecycle,
     registerAgentEventSubscription,
@@ -268,6 +269,7 @@ export function createPluginApiFactory(
               registerToolMetadata: (metadata) => registerToolMetadata(record, metadata),
               registerControlUiDescriptor: (descriptor) =>
                 registerControlUiDescriptor(record, descriptor),
+              registerSessionToolMode: (mode) => registerSessionToolMode(record, mode),
               registerBoardWidgetContentKind: (definition) =>
                 registerBoardWidgetContentKind(record, definition),
               registerRuntimeLifecycle: (lifecycle) => registerRuntimeLifecycle(record, lifecycle),

@@ -87,6 +87,19 @@ describe("resolveAgentToolSurfacePlan", () => {
   });
 
   it.each([
+    { override: "direct" as const, expected: false },
+    { override: "code" as const, expected: true },
+  ])("lets a session Tool mode force $override exposure", ({ override, expected }) => {
+    const plan = resolveAgentToolSurfacePlan({
+      ...basePlanParams,
+      config: { tools: { codeMode: override === "direct" } },
+      codeModeOverride: override,
+    });
+
+    expect(plan.codeModeControlsEnabled).toBe(expected);
+  });
+
+  it.each([
     {
       name: "Code Mode",
       config: { tools: { codeMode: true, toolSearch: true } },

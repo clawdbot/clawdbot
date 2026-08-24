@@ -1,4 +1,7 @@
-import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  ProjectsAddResult,
+  SessionToolModeSelection,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
@@ -55,6 +58,7 @@ export class DraftSubmissionFlow {
   private submittingValue = false;
   private blockedSubmitGate: string | null = null;
   private submissionOutcomeUnknownValue: SubmissionOutcomeReason | null = null;
+  toolMode: SessionToolModeSelection | undefined;
   private readonly startedSession = new StartedSessionNavigation();
   error: string | null = null;
   private submitRequestToken = 0;
@@ -230,6 +234,7 @@ export class DraftSubmissionFlow {
       workspace: this.place.workspacePath(),
       catalogId: snapshot.data?.catalogId,
       category: this.gateway.resolvedGroupCategory(),
+      toolMode: this.toolMode,
     });
   }
 

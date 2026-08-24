@@ -16,6 +16,11 @@ import {
   releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
 import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
+import {
+  handleChatComposerToolModeSelection,
+  renderChatComposerToolModeMenu,
+  type ChatComposerToolModeMenuProps,
+} from "./chat-composer-tool-mode-menu.ts";
 
 const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,video/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
@@ -536,15 +541,27 @@ export function renderChatAttachmentMenuOptions(fileIcon = icons.folder) {
   `;
 }
 
-export function renderChatAttachmentMenu(props: ChatAttachmentControlsProps) {
+export function renderChatAttachmentMenu(
+  props: ChatAttachmentControlsProps,
+  toolModeMenu?: ChatComposerToolModeMenuProps,
+) {
   return html`
     <wa-dropdown
-      class="agent-chat__attach-menu"
+      class=${`agent-chat__attach-menu${toolModeMenu ? " agent-chat__capability-menu" : ""}`}
       placement="top-start"
       aria-label=${t("chat.composer.addAttachment")}
-      @wa-select=${handleChatAttachmentMenuSelection}
+      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+        if (handleChatAttachmentMenuSelection(event)) {
+          return;
+        }
+        handleChatComposerToolModeSelection(event.detail.item.value ?? "", toolModeMenu);
+      }}
     >
       ${renderChatAttachmentMenuTrigger(props.disabled)} ${renderChatAttachmentMenuOptions()}
+      ${toolModeMenu
+        ? html`<div class="agent-chat__capability-menu-divider" role="separator"></div>
+            ${renderChatComposerToolModeMenu(toolModeMenu)}`
+        : nothing}
     </wa-dropdown>
   `;
 }

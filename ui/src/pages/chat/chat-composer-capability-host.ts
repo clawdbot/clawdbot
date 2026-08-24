@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
+import type { PluginSessionToolMode } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   ConfigSnapshot,
@@ -30,6 +31,7 @@ import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
+  type SessionPatch,
 } from "../../lib/sessions/index.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -291,17 +293,17 @@ export class ChatComposerCapabilityHost {
       });
   }
 
-  private async patch(
+  private async patchSession(
     context: ApplicationContext,
     state: ChatPageHost,
-    next: SessionToolOverrides | null,
+    patch: Pick<SessionPatch, "toolMode" | "toolOverrides">,
   ): Promise<{ ok: true } | { ok: false; error: string }> {
     if (!state.connected || !state.client) {
       return { ok: false, error: t("chat.composer.menu.offlineBlocked") };
     }
     const access = readSessionMethodAccess(context.gateway.snapshot, {
       method: "sessions.patch",
-      params: { key: state.sessionKey, toolOverrides: next },
+      params: { key: state.sessionKey, ...patch },
     });
     if (!access.allowed) {
       return { ok: false, error: access.reason };
@@ -324,14 +326,9 @@ export class ChatComposerCapabilityHost {
     }
     this.notify();
     try {
-      const result = await patchChatSessionSettings(
-        state,
-        sessionKey,
-        { toolOverrides: next },
-        {
-          ...scopedAgentParamsForSession(state, sessionKey),
-        },
-      );
+      const result = await patchChatSessionSettings(state, sessionKey, patch, {
+        ...scopedAgentParamsForSession(state, sessionKey),
+      });
       if (!result) {
         throw new Error(t("chat.composer.menu.offlineBlocked"));
       }
@@ -474,7 +471,7 @@ export class ChatComposerCapabilityHost {
             note: `composer connectors: add MCP server ${name}`,
           }),
         loadSessionOverrides: () => this.loadCurrentSessionOverrides(state, sessionKey, agentId),
-        patchSession: (next) => this.patch(context, state, next),
+        patchSession: (next) => this.patchSession(context, state, { toolOverrides: next }),
       });
     } finally {
       this.addBusy = false;
@@ -567,6 +564,7 @@ export class ChatComposerCapabilityHost {
     state: ChatPageHost,
     session: GatewaySessionRow | undefined,
     agentId: string,
+    toolModes: readonly PluginSessionToolMode[] | null = null,
   ): CapabilityMenuProps {
     if (this.client !== state.client || this.connectionEpoch !== state.connectionEpoch) {
       this.client = state.client;
@@ -602,6 +600,10 @@ export class ChatComposerCapabilityHost {
       method: "sessions.patch",
       params: { key: state.sessionKey, toolOverrides: null },
     });
+    const toolModePatchAccess = readSessionMethodAccess(context.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key: state.sessionKey, toolMode: null },
+    });
     const mutationBlockedReason = !gatewayAvailable
       ? t("chat.composer.menu.offlineBlocked")
       : !capabilitiesReady
@@ -623,8 +625,31 @@ export class ChatComposerCapabilityHost {
       : !access.canAdmin
         ? t("chat.composer.menu.adminBlocked")
         : null;
+    const toolModeBlockedReason = !gatewayAvailable
+      ? t("chat.composer.menu.offlineBlocked")
+      : !session
+        ? t("common.loading")
+        : !toolModePatchAccess.allowed
+          ? toolModePatchAccess.reason
+          : this.patchTokens.has(state.sessionKey)
+            ? t("chat.composer.menu.savingBlocked")
+            : null;
+    const toolModeMenu =
+      toolModes !== null && session && (toolModes.length > 0 || session.toolMode)
+        ? {
+            modes: toolModes,
+            selected: session.toolMode ?? null,
+            active: session.activeToolMode ?? null,
+            runtimeId: session.agentRuntime?.id ?? "openclaw",
+            disabled: toolModeBlockedReason !== null,
+            disabledReason: toolModeBlockedReason,
+            onSelect: (selection: NonNullable<SessionPatch["toolMode"]>) =>
+              void this.patchSession(context, state, { toolMode: selection }),
+          }
+        : undefined;
     return {
       basePath: state.basePath,
+      toolModeMenu,
       skills:
         this.skills.get(agentId)?.map((skill) =>
           Object.assign({}, skill, {
@@ -647,7 +672,8 @@ export class ChatComposerCapabilityHost {
       adminBlockedReason,
       addServerDialog: this.renderAddServerDialog(context, state, session),
       onLoadSkills: () => this.loadSkills(context, state, agentId),
-      onPatchToolOverrides: (next) => void this.patch(context, state, next),
+      onPatchToolOverrides: (next) =>
+        void this.patchSession(context, state, { toolOverrides: next }),
       onNavigate: (routeId, options) => context.navigate(routeId, options),
       onAddServer: () => {
         if (!access.canAdmin || !gatewayAvailable) {

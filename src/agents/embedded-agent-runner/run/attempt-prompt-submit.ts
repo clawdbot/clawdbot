@@ -7,6 +7,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import { readPersistedMediaFacts } from "../../../media/media-facts.js";
+import { resolveSessionToolMode } from "../../../plugins/session-tool-modes.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -69,7 +70,7 @@ type SteeringLease = {
 type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
 
 export async function submitEmbeddedAttemptPrompt(input: {
-  attempt: Pick<EmbeddedRunAttemptParams, "sessionId" | "userTurnTranscriptRecorder">;
+  attempt: Pick<EmbeddedRunAttemptParams, "sessionId" | "toolMode" | "userTurnTranscriptRecorder">;
   activeSession: PromptSubmissionSession;
   appendContext?: string;
   contextTokenBudget: number;
@@ -138,10 +139,15 @@ export async function submitEmbeddedAttemptPrompt(input: {
     messages: activeSession.messages,
     imagesCount: input.images.length,
   });
+  const resolvedToolMode = resolveSessionToolMode({
+    selection: attempt.toolMode,
+    runtimeId: "openclaw",
+  });
   updateActiveEmbeddedRunSnapshot(attempt.sessionId, {
     transcriptLeafId: input.transcriptLeafId,
     messages: snapshotRecentMessages(normalizedReplayMessages),
     inFlightPrompt: input.transcriptPrompt,
+    toolMode: resolvedToolMode?.status === "available" ? resolvedToolMode.selection : undefined,
   });
 
   let captureCurrentPromptForModel = false;
