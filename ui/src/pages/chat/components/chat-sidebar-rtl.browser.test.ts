@@ -1,0 +1,104 @@
+import { describe, expect, it } from "vitest";
+import "../../../styles.css";
+import "../../../styles/chat.css";
+import type { SidebarContent } from "./chat-sidebar.ts";
+import "./chat-sidebar.ts";
+
+const browserMode = "__vitest_browser__" in globalThis;
+
+type DetailPanel = HTMLElement & {
+  content: SidebarContent;
+  updateComplete: Promise<unknown>;
+};
+
+// Same host contract as chat-sidebar-scroll.browser.test.ts: the panel only
+// bounds itself through `.side-panel__panel`.
+function mountDetailPanel(content: SidebarContent): {
+  panel: DetailPanel;
+  release: () => void;
+} {
+  const container = document.createElement("div");
+  container.className = "side-panel__panel";
+  container.style.cssText = "display:flex;width:480px;height:320px;";
+
+  const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+  panel.className = "chat-sidebar";
+  panel.content = content;
+  container.append(panel);
+  document.body.append(container);
+
+  return { panel, release: () => container.remove() };
+}
+
+const HEBREW_DOCUMENT = [
+  "## כותרת המסמך",
+  "",
+  "> ציטוט בעברית",
+  "",
+  "- פריט ראשון",
+  "- פריט שני",
+].join("\n");
+
+const ENGLISH_DOCUMENT = ["## Document heading", "", "> An English quote", "", "- First item"].join(
+  "\n",
+);
+
+describe.runIf(browserMode)("chat sidebar markdown direction", () => {
+  it("mirrors the rendered document for a right-to-left language", async () => {
+    const { panel, release } = mountDetailPanel({ kind: "markdown", content: HEBREW_DOCUMENT });
+
+    try {
+      await panel.updateComplete;
+      const reader = panel.querySelector<HTMLElement>(".sidebar-markdown-reader");
+      expect(reader?.getAttribute("dir")).toBe("rtl");
+
+      // The quote bar and the list indent are the two physical offsets a
+      // right-to-left document gets wrong when styles use left/right directly.
+      const quote = getComputedStyle(reader!.querySelector("blockquote")!);
+      expect(quote.borderRightWidth).toBe("3px");
+      expect(quote.borderLeftWidth).toBe("0px");
+
+      const list = getComputedStyle(reader!.querySelector("ul")!);
+      expect(Number.parseFloat(list.paddingRight)).toBeGreaterThan(0);
+      expect(Number.parseFloat(list.paddingLeft)).toBe(0);
+    } finally {
+      release();
+    }
+  });
+
+  it("leaves a left-to-right document untouched", async () => {
+    const { panel, release } = mountDetailPanel({ kind: "markdown", content: ENGLISH_DOCUMENT });
+
+    try {
+      await panel.updateComplete;
+      const reader = panel.querySelector<HTMLElement>(".sidebar-markdown-reader");
+      expect(reader?.getAttribute("dir")).toBe("ltr");
+
+      const quote = getComputedStyle(reader!.querySelector("blockquote")!);
+      expect(quote.borderLeftWidth).toBe("3px");
+      expect(quote.borderRightWidth).toBe("0px");
+
+      const list = getComputedStyle(reader!.querySelector("ul")!);
+      expect(Number.parseFloat(list.paddingLeft)).toBeGreaterThan(0);
+      expect(Number.parseFloat(list.paddingRight)).toBe(0);
+    } finally {
+      release();
+    }
+  });
+
+  it("gives each line of a code block its own direction", async () => {
+    const { panel, release } = mountDetailPanel({
+      kind: "markdown",
+      content: ["```", "שורה בעברית", "an english line", "```"].join("\n"),
+    });
+
+    try {
+      await panel.updateComplete;
+      const pre = panel.querySelector<HTMLElement>(".sidebar-markdown-reader pre");
+      expect(pre).not.toBeNull();
+      expect(getComputedStyle(pre!).unicodeBidi).toBe("plaintext");
+    } finally {
+      release();
+    }
+  });
+});
