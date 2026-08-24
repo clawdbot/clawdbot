@@ -10,6 +10,8 @@ import {
 } from "./subagent-spawn-execution-identity.js";
 import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 
+type AcceptedRunCleanupOwnership = Awaited<ReturnType<typeof terminateAcceptedCollectorRun>>;
+
 export async function launchAcpChildThroughGateway(params: {
   attachments?: unknown[];
   childIdem: string;
@@ -17,6 +19,7 @@ export async function launchAcpChildThroughGateway(params: {
   initializedSession: AcpSpawnInitializedRuntime;
   label?: string;
   lineage: Parameters<typeof buildSubagentExecutionSessionSpawnContext>[0];
+  onAcceptedRunTermination: (ownership: AcceptedRunCleanupOwnership) => void;
   parentExecutionIdentityToken?: ExecutionIdentityAdmissionToken;
   runTimeoutSeconds: number;
   sessionKey: string;
@@ -51,12 +54,13 @@ export async function launchAcpChildThroughGateway(params: {
     ),
   );
   if (params.signal?.aborted) {
-    await terminateAcceptedCollectorRun({
+    const ownership = await terminateAcceptedCollectorRun({
       childSessionKey: params.sessionKey,
       gatewayRunId: readGatewayRunId(response) ?? params.childIdem,
       expectedSessionId: params.initializedSession.sessionId,
       expectedLifecycleRevision: params.initializedSession.sessionEntry?.lifecycleRevision,
     });
+    params.onAcceptedRunTermination(ownership);
     params.signal.throwIfAborted();
   }
   recordSessionParticipantBestEffort({

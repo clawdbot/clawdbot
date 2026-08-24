@@ -3698,6 +3698,45 @@ describe("spawnAcpDirect", () => {
     );
   });
 
+  it("preserves a successor lifecycle when guarded cancellation cleanup loses ownership", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
+      const args = argsUnknown as { method?: string };
+      if (args.method === "agent") {
+        return { runId: "accepted-before-successor" };
+      }
+      if (args.method === "chat.abort") {
+        return { ok: true, aborted: true, runIds: ["successor-run"] };
+      }
+      if (args.method === "sessions.delete") {
+        throw Object.assign(new Error("session changed"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          details: { reason: "session-changed" },
+        });
+      }
+      return { ok: true };
+    });
+
+    const result = await spawnAcpDirect(createSpawnRequest(), {
+      ...createRequesterContext(),
+      signal: controller.signal,
+    });
+
+    expect(expectFailedSpawn(result, "error").errorCode).toBe("dispatch_failed");
+    expect(gatewayRequest("sessions.delete")).toMatchObject({
+      params: {
+        expectedSessionId: "sess-123",
+        expectedLifecycleRevision: "lifecycle-123",
+      },
+    });
+    expect(hoisted.cleanupFailedAcpSpawnMock).not.toHaveBeenCalled();
+    expect(hoisted.closeSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingUnbindMock).not.toHaveBeenCalled();
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
   it("preserves the ACP failure code when run registration fails", async () => {
     hoisted.registerSubagentRunMock.mockImplementationOnce(() => {
       throw new Error("registry unavailable");

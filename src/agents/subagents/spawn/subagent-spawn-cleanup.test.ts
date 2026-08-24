@@ -85,7 +85,7 @@ describe("subagent spawn cleanup identity", () => {
         expectedLifecycleRevision: "session-revision",
         callGateway,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("changed");
 
     expect(callGateway).toHaveBeenCalledTimes(2);
   });

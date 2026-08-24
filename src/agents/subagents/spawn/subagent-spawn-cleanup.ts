@@ -109,6 +109,8 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   };
 }
 
+export type AcceptedRunCleanupOwnership = "owned" | "changed";
+
 export async function terminateAcceptedCollectorRun(params: {
   childSessionKey: string;
   gatewayRunId: string;
@@ -116,9 +118,10 @@ export async function terminateAcceptedCollectorRun(params: {
   expectedLifecycleRevision?: string;
   callGateway?: GatewayCall;
   timeoutMs?: number;
-}): Promise<void> {
+}): Promise<AcceptedRunCleanupOwnership> {
   const call = params.callGateway ?? callSubagentGateway;
   const timeoutMs = params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS;
+  let ownership: AcceptedRunCleanupOwnership = "owned";
   await retrySubagentCleanup(async () => {
     try {
       const response = await call({
@@ -140,6 +143,8 @@ export async function terminateAcceptedCollectorRun(params: {
       timeoutMs,
     });
     // A changed lifecycle proves the accepted run no longer owns this session.
+    ownership = cleanup === "changed" ? "changed" : ownership;
     return cleanup !== "failed";
   });
+  return ownership;
 }
