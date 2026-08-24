@@ -56,6 +56,14 @@ describe("getSlashCommands", () => {
     ]);
   });
 
+  it.each(["think", "fast"])("offers /%s default to clear the session override", (name) => {
+    const command = getSlashCommands().find((candidate) => candidate.name === name);
+
+    expect(command?.getArgumentCompletions?.("default")).toEqual([
+      { value: "default", label: "default" },
+    ]);
+  });
+
   it.each([{}, { local: true }])("exposes usage cost in completion and help", (options) => {
     const commands = getSlashCommands(options);
     const usage = commands.find((command) => command.name === "usage");
@@ -132,6 +140,7 @@ describe("getSlashCommands", () => {
     expect(completions).toEqual([
       { value: "off", label: "off" },
       { value: "adaptive", label: "adaptive" },
+      { value: "default", label: "default" },
     ]);
   });
 
@@ -202,11 +211,19 @@ describe("helpText", () => {
     },
   );
 
+  it("documents default reset values for model, thinking, and fast mode", () => {
+    const output = helpText();
+
+    expect(output).toContain("/model <provider/model|default>");
+    expect(output).toMatch(/\/think <[^>]+\|default>/u);
+    expect(output).toContain("/fast <status|auto|on|off|default>");
+  });
+
   it("includes slash command help for aliases", () => {
     const output = helpText();
     expect(output).toContain("/elevated <on|off|ask|full>");
     expect(output).toContain("/elev <on|off|ask|full>");
-    expect(output).toContain("/fast <status|auto|on|off>");
+    expect(output).toContain("/fast <status|auto|on|off|default>");
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
     expect(output).toContain("/openclaw [request]");

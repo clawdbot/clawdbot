@@ -1815,6 +1815,67 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
   });
 
+  it.each([
+    { name: "another agent's fixed-store session", agentId: "main" },
+    { name: "an ownerless default-agent alias", agentId: undefined },
+  ])("ignores a reset for $name colliding with the selected session", ({ agentId }) => {
+    const pendingSubmit = acceptedSubmit("run-pending");
+    const { state, loadHistory, setActivityStatus, handleSessionsChangedEvent } =
+      createHandlersHarness({
+        state: {
+          agentDefaultId: "main",
+          currentAgentId: "work",
+          currentSessionKey: "agent:work:support",
+          currentSessionId: "session-work",
+          activeChatRunId: "run-work",
+          activityStatus: "streaming",
+          pendingSubmit,
+          sessionInfo: { updatedAt: 100 },
+        },
+      });
+
+    handleSessionsChangedEvent({
+      sessionKey: "support",
+      ...(agentId ? { agentId } : {}),
+      reason: "reset",
+      sessionId: "session-main-new",
+      updatedAt: 200,
+      activeRunIds: [],
+    });
+
+    expect(state.activeChatRunId).toBe("run-work");
+    expect(state.pendingSubmit).toBe(pendingSubmit);
+    expect(state.currentSessionId).toBe("session-work");
+    expect(state.sessionInfo.updatedAt).toBe(100);
+    expect(state.activityStatus).toBe("streaming");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
+  it("accepts a reset for the selected non-default agent's owned session alias", () => {
+    const { state, loadHistory, handleSessionsChangedEvent } = createHandlersHarness({
+      state: {
+        agentDefaultId: "main",
+        currentAgentId: "work",
+        currentSessionKey: "agent:work:support",
+        currentSessionId: "session-work-old",
+        activeChatRunId: "run-work",
+        activityStatus: "streaming",
+      },
+    });
+
+    handleSessionsChangedEvent({
+      sessionKey: "support",
+      agentId: "work",
+      reason: "reset",
+      sessionId: "session-work-new",
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.currentSessionId).toBe("session-work-new");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores selected-global sessions.changed reset events from other agents", () => {
     const { state, loadHistory, setActivityStatus, handleSessionsChangedEvent } =
       createHandlersHarness({

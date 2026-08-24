@@ -84,6 +84,55 @@ function installPageLifecycle() {
 }
 
 describe("event-driven session list refresh", () => {
+  it("does not admit an active message for a session absent from the canonical roster", async () => {
+    const visibleKey = "agent:main:visible";
+    const unrelatedKey = "agent:main:unrelated";
+    const request = vi.fn(async (method: string): Promise<SessionsListResult> => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      const visible = {
+        key: visibleKey,
+        kind: "direct" as const,
+        updatedAt: 1,
+        owner: { actor: { type: "human" as const, id: "profile-self" } },
+      };
+      return sessionsResult(1, [visible]);
+    });
+    const { sessions, emitEvent } = createHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
+
+      const event = {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: unrelatedKey,
+          key: unrelatedKey,
+          kind: "direct",
+          updatedAt: 2,
+          archived: false,
+          hasActiveRun: true,
+          status: "running",
+          owner: { actor: { type: "human", id: "profile-other" } },
+          participants: [],
+          participantCount: 0,
+        },
+      } as const satisfies GatewayEventFrame;
+      emitEvent(event);
+      // Chat consumes the same event after the capability-level subscriber.
+      sessions.reconcileChanged(event.payload);
+
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
+    } finally {
+      sessions.dispose();
+    }
+  });
+
   it("refreshes exact managed queries by agent and retains appended dashboard windows", async () => {
     vi.useFakeTimers();
     const dashboardRows = Array.from({ length: 4 }, (_, index) => ({

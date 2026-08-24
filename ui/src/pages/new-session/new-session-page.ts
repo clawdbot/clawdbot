@@ -290,6 +290,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     }
     this.place.restorePreferenceSelections();
     activateDraft(this.submission, openKey);
+    this.submission.resumeInterruptedSubmission();
   }
 
   private invalidateGatewayDiscovery(
@@ -594,7 +595,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           agent: this.place.selectedAgent(),
           agentId: this.place.agentId,
           attachmentDraft: this.submission.attachmentDraft,
-          canSubmit: this.submission.canSubmit(),
+          canSubmit: !this.submission.submitting && this.submission.canSubmit(),
           submitDisabledReason: this.submission.submitDisabledReason(),
           blockedSubmitNotice: this.submission.blockedSubmitNotice(),
           context: this.context,
@@ -610,7 +611,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           messageLocked: Boolean(this.submission.pendingPlacement.sessionKey),
           terminalAction: this.submission.showStartInTerminal()
             ? {
-                canStart: this.submission.canSubmit("terminal"),
+                canStart: !this.submission.submitting && this.submission.canSubmit("terminal"),
                 disabledReason: this.submission.terminalStartDisabledReason(),
                 onStart: () => void this.submission.startInTerminal(),
               }

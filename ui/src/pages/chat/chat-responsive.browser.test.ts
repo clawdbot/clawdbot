@@ -1724,6 +1724,86 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("paints open message context above its virtual row", async () => {
+    const page = await openBrowserPage(900, 500);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread chat-thread--direct" style="width: 720px; height: 400px;">
+            <div class="chat-thread-inner chat-thread-inner--virtual" style="width: 720px;">
+              <div class="chat-virtual-sizer" style="height: 400px;">
+                <div
+                  class="chat-virtual-row"
+                  data-previous-row
+                  style="height: 100px; transform: translateY(0px);"
+                >
+                  <div class="chat-group tool">
+                    <div class="chat-group-messages">Previous transcript row</div>
+                  </div>
+                </div>
+                <div
+                  class="chat-virtual-row"
+                  data-context-row
+                  style="transform: translateY(100px); contain-intrinsic-block-size: auto 28px;"
+                >
+                  <div class="chat-group assistant chat-group--with-footer">
+                    <div class="chat-group-messages"></div>
+                    <div class="chat-group-footer">
+                      <div class="chat-group-footer__meta">
+                        <span class="chat-sender-name">Assistant</span>
+                        <details class="msg-meta" open>
+                          <summary class="msg-meta__summary">
+                            <time class="chat-group-timestamp">just now</time>
+                          </summary>
+                          <span class="msg-meta__details">
+                            <span class="msg-meta__time">Aug 24, 2026, 1:15 PM UTC</span>
+                            <span class="msg-meta__tokens">↑19.6k</span>
+                            <span class="msg-meta__tokens">↓126</span>
+                            <span class="msg-meta__cache">R2.4k</span>
+                            <span class="msg-meta__model">gpt-5.5</span>
+                          </span>
+                        </details>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+      await waitForLayoutSettled(page, "[data-context-row], .msg-meta__details");
+
+      const layout = await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>("[data-context-row]")!;
+        const popover = row.querySelector<HTMLElement>(".msg-meta__details")!;
+        const rowRect = row.getBoundingClientRect();
+        const popoverRect = popover.getBoundingClientRect();
+        const sample = {
+          x: popoverRect.left + Math.min(10, popoverRect.width / 2),
+          y: Math.min(rowRect.top - 1, popoverRect.bottom - 1),
+        };
+        const target = document.elementFromPoint(sample.x, sample.y);
+        return {
+          paintedAboveRow:
+            sample.y >= popoverRect.top &&
+            sample.y < rowRect.top &&
+            target !== null &&
+            popover.contains(target),
+          popoverBottom: popoverRect.bottom,
+          popoverTop: popoverRect.top,
+          rowTop: rowRect.top,
+        };
+      });
+
+      expect(layout.popoverTop).toBeLessThan(layout.rowTop);
+      expect(layout.popoverBottom).toBeGreaterThan(layout.rowTop - 1);
+      expect(layout.paintedAboveRow).toBe(true);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps attributed user avatar fallbacks beside the message after identity resolution", async () => {
     const page = await openBrowserPage(860, 900);
     try {

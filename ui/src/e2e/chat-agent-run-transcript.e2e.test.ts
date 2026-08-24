@@ -25,6 +25,76 @@ function transcriptMessage(
 }
 
 suite.define(() => {
+  it("keeps restart-recovered live tool batches in one transcript row", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1200 } });
+    const page = await context.newPage();
+    const runId = "run-restart-recovery";
+    const toolResult = (id: string, seq: number, name: string) => ({
+      ...transcriptMessage(
+        "toolResult",
+        [{ type: "text", text: `${name} completed` }],
+        runId,
+        id,
+        seq,
+      ),
+      toolCallId: id,
+      toolName: name,
+    });
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          ...transcriptMessage(
+            "user",
+            "[System] Continue the interrupted turn.",
+            `${runId}:user`,
+            "restart-recovery",
+            1,
+          ),
+          provenance: {
+            kind: "internal_system",
+            sourceSessionKey: "main",
+            sourceTool: "main_session_restart_recovery",
+          },
+        },
+        toolResult("process-1", 2, "process"),
+        toolResult("process-2", 3, "process"),
+        transcriptMessage("assistant", "Checking the next batch.", runId, "gap-1", 4),
+        toolResult("exec-1", 5, "exec"),
+        toolResult("exec-2", 6, "exec"),
+        transcriptMessage("assistant", "Checking the final batch.", runId, "gap-2", 7),
+        toolResult("process-3", 8, "process"),
+        toolResult("process-4", 9, "process"),
+      ],
+      inFlightRun: { runId, text: "" },
+      sessionInfo: {
+        activeRunIds: [runId],
+        hasActiveRun: true,
+        key: "main",
+      },
+    });
+
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const summaries = page.locator(".chat-activity-group__summary");
+    await expect.poll(() => summaries.count()).toBe(3);
+    const rowKeys = await summaries.evaluateAll((elements) =>
+      elements.map(
+        (element) => element.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
+      ),
+    );
+
+    expect(rowKeys[0]).toMatch(/^agent-run:/u);
+    expect(rowKeys).toEqual([rowKeys[0], rowKeys[0], rowKeys[0]]);
+    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    if (artifactDir) {
+      await fs.mkdir(artifactDir, { recursive: true });
+      await page.locator(".chat-thread-inner").screenshot({
+        path: path.join(artifactDir, "restart-recovery-run-frame.png"),
+      });
+    }
+
+    await context.close();
+  });
+
   it("renders each run as one linear response with actions only on its terminal text", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1200 } });
     const page = await context.newPage();

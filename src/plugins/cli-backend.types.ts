@@ -172,6 +172,33 @@ export type CliBackendToolPermissionResult =
   | { behavior: "allow"; updatedInput: Record<string, unknown> }
   | { behavior: "deny"; message: string };
 
+export type CliBackendUserInputOption = {
+  label: string;
+  description?: string;
+};
+
+export type CliBackendUserInputQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  multiSelect?: boolean;
+  isOther?: boolean;
+  options?: readonly CliBackendUserInputOption[] | null;
+};
+
+/** Structured operator input requested by a plugin-owned native runtime. */
+export type CliBackendUserInputRequest = {
+  toolName: string;
+  questions: readonly CliBackendUserInputQuestion[];
+  intro?: string;
+  toolCallId?: string;
+  abortSignal?: AbortSignal;
+};
+
+export type CliBackendUserInputResult =
+  | { status: "answered"; answers: Record<string, string[]> }
+  | { status: "cancelled"; message: string };
+
 /** Lifecycle reasons accepted by a plugin-owned reusable execution process. */
 export type CliBackendLiveSessionCloseReason =
   | "idle"
@@ -219,6 +246,8 @@ export type CliBackendExecuteContext = {
   requestToolPermission: (
     request: CliBackendToolPermissionRequest,
   ) => Promise<CliBackendToolPermissionResult>;
+  /** Closure-bound structured-input capability; retained copies fail after the run closes. */
+  requestUserInput: (request: CliBackendUserInputRequest) => Promise<CliBackendUserInputResult>;
 };
 
 /** Plugin-owned runtime yielding the backend's existing structured stream records. */
