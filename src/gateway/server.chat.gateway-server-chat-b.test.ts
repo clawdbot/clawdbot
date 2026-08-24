@@ -511,6 +511,8 @@ function captureChatResponse(responses: CapturedChatResponse[]): RespondFn {
 }
 
 async function sendControlUiChat(params: {
+  agentId?: string;
+  sessionKey?: string;
   authenticatedUserId?: string;
   authenticatedUserProfile?: {
     profileId: string;
@@ -525,6 +527,8 @@ async function sendControlUiChat(params: {
   onAdmissionOwned?: () => Promise<boolean>;
 }): Promise<void> {
   const requestParams = makeChatSendParams({
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     message: params.message,
     idempotencyKey: params.idempotencyKey,
     ...(params.expectedSessionRoutingContract
@@ -4053,6 +4057,53 @@ describe("gateway server chat", () => {
       expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
       expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
     } finally {
+      resetDirectChatSession();
+    }
+  });
+
+  test("chat.send accepts the released Apple routing projection for a canonical explicit target", async () => {
+    openDirectChatSession();
+    const config: OpenClawConfig = {
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+    };
+    try {
+      await writeGatewayConfig(config);
+      testState.agentsConfig = config.agents;
+      await writeStoredMainSession(makeDoneSessionEntry());
+      const context = createDirectChatContext({ getRuntimeConfig: () => config });
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
+
+      await sendControlUiChat({
+        context,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        expectedSessionRoutingContract: "per-sender|main|main",
+        idempotencyKey: "released-apple-routing-projection",
+        message: "send through the selected explicit agent",
+        respond: captureChatResult(responses),
+      });
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({
+            runId: "released-apple-routing-projection",
+            status: "started",
+          }),
+        },
+      ]);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    } finally {
+      testState.agentsConfig = undefined;
+      if (process.env.OPENCLAW_CONFIG_PATH) {
+        await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
+      }
       resetDirectChatSession();
     }
   });

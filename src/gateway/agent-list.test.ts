@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { listGatewayAgentsBasic } from "./agent-list.js";
+import {
+  listGatewayAgentsBasic,
+  matchesLegacyGatewaySessionRoutingContract,
+} from "./agent-list.js";
 
 describe("listGatewayAgentsBasic", () => {
   it("projects sole, retained-legacy, and explicit fleet ownership honestly", async () => {
@@ -16,6 +19,7 @@ describe("listGatewayAgentsBasic", () => {
         defaultId: "ops",
         ownership: "sole",
         selectionRequired: false,
+        sessionRoutingContract: "per-sender|main|ops",
       });
 
       const legacy = retainLegacyDefaultAgentId(
@@ -26,6 +30,7 @@ describe("listGatewayAgentsBasic", () => {
         defaultId: "retired",
         ownership: "legacy",
         selectionRequired: false,
+        sessionRoutingContract: "per-sender|main|retired",
       });
 
       expect(
@@ -36,8 +41,82 @@ describe("listGatewayAgentsBasic", () => {
         defaultId: "ops",
         ownership: "explicit",
         selectionRequired: true,
+        sessionRoutingContract: "per-sender|main|unowned",
       });
     });
+  });
+
+  it("accepts only the released projection for canonical explicit agent targets", () => {
+    const cfg: OpenClawConfig = {
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+    };
+
+    for (const agentId of ["main", "research"]) {
+      expect(
+        matchesLegacyGatewaySessionRoutingContract({
+          cfg,
+          expectedContract: "per-sender|main|main",
+          agentId,
+          sessionKey: `agent:${agentId}:main`,
+        }),
+      ).toBe(true);
+    }
+    expect(
+      matchesLegacyGatewaySessionRoutingContract({
+        cfg,
+        expectedContract: "per-sender|main|research",
+        agentId: "research",
+        sessionKey: "agent:research:main",
+      }),
+    ).toBe(false);
+    expect(
+      matchesLegacyGatewaySessionRoutingContract({
+        cfg,
+        expectedContract: "per-sender|main|main",
+        agentId: "main",
+        sessionKey: "main",
+      }),
+    ).toBe(false);
+    expect(
+      matchesLegacyGatewaySessionRoutingContract({
+        cfg: { ...cfg, session: { scope: "global", mainKey: "main" } },
+        expectedContract: "global|main|main",
+        agentId: "main",
+        sessionKey: "global",
+      }),
+    ).toBe(false);
+    expect(
+      matchesLegacyGatewaySessionRoutingContract({
+        cfg: { ...cfg, session: { scope: "per-sender", mainKey: "next" } },
+        expectedContract: "per-sender|main|main",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe(false);
+    expect(
+      matchesLegacyGatewaySessionRoutingContract({
+        cfg: { agents: { entries: { main: { default: true } } } },
+        expectedContract: "per-sender|main|main",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe(false);
+    expect(
+      matchesLegacyGatewaySessionRoutingContract({
+        cfg,
+        expectedContract: "per-sender|main|main",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe(false);
+    expect(
+      matchesLegacyGatewaySessionRoutingContract({
+        cfg: { agents: { ownership: "explicit", entries: { main: {} } } },
+        expectedContract: "per-sender|main|main",
+        agentId: "research",
+        sessionKey: "agent:research:main",
+      }),
+    ).toBe(false);
   });
 
   it("retains disk system agents without treating regular disk dirs as roster members", async () => {

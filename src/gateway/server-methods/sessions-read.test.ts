@@ -98,6 +98,14 @@ test("agents.list includes system rows only when negotiated", async () => {
   expect(await listAgentIdsViaRpc(true)).toEqual(["main", "openclaw"]);
 });
 
+test("agents.list publishes the authoritative session routing contract", async () => {
+  await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });
+
+  await expect(listAgentsViaRpc()).resolves.toMatchObject({
+    sessionRoutingContract: "per-sender|main|unowned",
+  });
+});
+
 test("agents.list reads published model facts without starting provider discovery", async () => {
   const loadGatewayModelCatalog = vi.fn(async () => []);
   const readPreparedGatewayModelCatalog = vi.fn(async () => []);

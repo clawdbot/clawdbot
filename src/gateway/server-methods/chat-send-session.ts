@@ -11,6 +11,7 @@ import { measureDiagnosticsTimelineSpanSync } from "../../infra/diagnostics-time
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
+import { matchesLegacyGatewaySessionRoutingContract } from "../agent-list.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import {
   loadSessionEntry,
@@ -82,7 +83,14 @@ function loadChatSendSessionContext(params: {
     p.expectedLeafEntryId === null ? null : normalizeOptionalChatText(p.expectedLeafEntryId);
   const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
     expectedSessionRoutingContract !== undefined &&
-    expectedSessionRoutingContract.toLowerCase() !== resolveSessionRoutingContract(candidateConfig);
+    expectedSessionRoutingContract.toLowerCase() !==
+      resolveSessionRoutingContract(candidateConfig) &&
+    !matchesLegacyGatewaySessionRoutingContract({
+      cfg: candidateConfig,
+      expectedContract: expectedSessionRoutingContract,
+      agentId: requestedAgentId,
+      sessionKey: rawSessionKey,
+    });
   return {
     ok: true as const,
     value: {
