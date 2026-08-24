@@ -227,7 +227,7 @@ describe("question gateway methods", () => {
         profile: ReturnType<typeof ensureProfileForEmail>,
         connId: string,
       ) => {
-        const socket = { bufferedAmount: 0, close: vi.fn(), send: vi.fn() };
+        const socket = { bufferedAmount: 0, close: vi.fn(), readyState: 1, send: vi.fn() };
         const client: GatewayWsClient = {
           socket: socket as unknown as GatewayWsClient["socket"],
           connect: {

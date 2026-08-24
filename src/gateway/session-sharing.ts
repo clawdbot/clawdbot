@@ -75,6 +75,12 @@ const AGENT_RUN_START_METHODS = new Set([
   "wake",
 ]);
 
+// Documented contract (docs/gateway/protocol.md): these methods authorize by session
+// visibility inside their handler, not by mutation participation. The pipeline still
+// applies incognito checks and the operator role cap: a view/suggest-capped caller
+// must not reassign ownership of a foreign session it can merely see.
+const VISIBILITY_AUTHORIZED_METHODS = new Set(["sessions.assignOwner"]);
+
 export class SessionMutationAuthorizationChangedError extends Error {
   readonly error: ErrorShape;
 
@@ -479,7 +485,11 @@ export function resolveSessionMutationAuthorization(params: {
         sessionKey: targetRef.sessionKey,
         target,
       }) ??
-      (target
+      (target &&
+      !(
+        VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
+        (operatorSessionCap(params.client, getCfg()) ?? "write") === "write"
+      )
         ? authorizeSessionSharingTarget({ cfg: getCfg(), client: params.client, target })
         : null);
     if (error) {

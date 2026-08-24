@@ -411,6 +411,21 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   if (profileError) {
     return { error: profileError };
   }
+  // Startup gating precedes session authorization: session stores are not loaded yet,
+  // so an authorization read here would deny with a misleading non-retryable error.
+  if (params.context.unavailableGatewayMethods?.has(params.method)) {
+    return {
+      error: errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${params.method} unavailable during gateway startup`,
+        {
+          retryable: true,
+          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
+        },
+      ),
+    };
+  }
   const sessionMutation = resolveSessionMutationAuthorization({
     client: params.client ?? null,
     method: params.method,
@@ -430,19 +445,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         retryable: true,
         details: { code: "PAIRING_CHANGED" },
       }),
-    };
-  }
-  if (params.context.unavailableGatewayMethods?.has(params.method)) {
-    return {
-      error: errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `${params.method} unavailable during gateway startup`,
-        {
-          retryable: true,
-          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
-        },
-      ),
     };
   }
   return {

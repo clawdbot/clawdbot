@@ -1,11 +1,33 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { verifyBoardViewTicket } from "./board-view-ticket.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { resolveSessionGroupMutationTargetsByName } from "./session-group-mutation-targets.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
+
+export function resolveSessionGroupMutationTargetsByName(
+  cfg: OpenClawConfig,
+): Map<string, SessionMutationTarget[]> {
+  const targetsByName = new Map<string, SessionMutationTarget[]>();
+  for (const storeTarget of resolveAllAgentSessionStoreTargetsSync(cfg)) {
+    for (const { sessionKey, entry } of listSessionEntriesCore({
+      agentId: storeTarget.agentId,
+      storePath: storeTarget.storePath,
+    })) {
+      const groupName = normalizeOptionalString(entry.category);
+      if (!groupName) {
+        continue;
+      }
+      const targets = targetsByName.get(groupName) ?? [];
+      targets.push({ sessionKey, agentId: storeTarget.agentId });
+      targetsByName.set(groupName, targets);
+    }
+  }
+  return targetsByName;
+}
 
 export type SessionMutationTarget = {
   sessionKey: string;
