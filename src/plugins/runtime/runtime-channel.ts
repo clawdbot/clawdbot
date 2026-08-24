@@ -88,7 +88,7 @@ export function createRuntimeChannel(options?: {
   ) => {
     const { channelId: _channelId, ...request } = params;
     return await import("../../plugin-sdk/session-store-lifecycle-runtime.js").then((runtime) =>
-      runtime.resetSessionEntryLifecycle(request),
+      runtime.resetPluginRuntimeSessionEntryLifecycle(request),
     );
   };
   const dispatchInbound: typeof dispatchRoutedChannelTurn = (params) =>

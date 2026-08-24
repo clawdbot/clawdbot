@@ -1,3 +1,4 @@
+// Runtime agent helpers resolve agent-scoped directories and config for plugin execution.
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
@@ -32,7 +33,7 @@ import {
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
-import { resetSessionEntryLifecycle } from "../../plugin-sdk/session-store-lifecycle-runtime.js";
+import { resetPluginRuntimeSessionEntryLifecycle } from "../../plugin-sdk/session-store-lifecycle-runtime.js";
 import {
   beginSessionWorkAdmission,
   isSessionWorkAdmissionActive,
@@ -641,7 +642,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     getSessionEntry,
     listSessionEntries,
     patchSessionEntry,
-    resetSessionEntryLifecycle,
+    resetSessionEntryLifecycle: resetPluginRuntimeSessionEntryLifecycle,
     upsertSessionEntry,
     runWithWorkAdmission: runWithSessionWorkAdmission,
     updateSessionStoreEntry,

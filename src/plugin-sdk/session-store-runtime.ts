@@ -174,6 +174,7 @@ function preserveGenerationPrivateFields(
       }
     : clearGenerationPrivateFieldsForRotatedSessionPatch(persistedEntry, publicPatch);
 }
+
 function resolveLegacySessionStoreTarget(storePath: string): {
   agentId?: string;
   storePath: string;

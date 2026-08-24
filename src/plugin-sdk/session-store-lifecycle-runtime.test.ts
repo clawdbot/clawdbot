@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import { resetSessionEntryLifecycle } from "./session-store-lifecycle-runtime.js";
+import { resetPluginRuntimeSessionEntryLifecycle } from "./session-store-lifecycle-runtime.js";
 import { getSessionEntry, upsertSessionEntry, type SessionEntry } from "./session-store-runtime.js";
 
 describe("session-store lifecycle runtime", () => {
@@ -35,7 +35,7 @@ describe("session-store lifecycle runtime", () => {
       updatedAt: 10,
     });
 
-    const result = await resetSessionEntryLifecycle({
+    const result = await resetPluginRuntimeSessionEntryLifecycle({
       expectedSessionId: "old-session",
       expectedUpdatedAt: 10,
       sessionKey,
@@ -78,7 +78,7 @@ describe("session-store lifecycle runtime", () => {
     releaseAdmission = admission.release;
 
     try {
-      const result = await resetSessionEntryLifecycle({
+      const result = await resetPluginRuntimeSessionEntryLifecycle({
         expectedSessionId: "active-old-session",
         expectedUpdatedAt: 10,
         sessionKey,
@@ -98,7 +98,7 @@ describe("session-store lifecycle runtime", () => {
     await seedSessionEntry(sessionKey, lockedEntry());
 
     await expect(
-      resetSessionEntryLifecycle({
+      resetPluginRuntimeSessionEntryLifecycle({
         expectedSessionId: "locked-old-session",
         expectedUpdatedAt: 10,
         sessionKey,
@@ -117,7 +117,7 @@ describe("session-store lifecycle runtime", () => {
     await seedSessionEntry(sessionKey, lockedEntry());
 
     await expect(
-      resetSessionEntryLifecycle({
+      resetPluginRuntimeSessionEntryLifecycle({
         expectedSessionId: "locked-old-session",
         expectedUpdatedAt: 10,
         releasePhysicalOwner: () => {
@@ -139,7 +139,7 @@ describe("session-store lifecycle runtime", () => {
     const releaseCalls: Array<{ sessionId: string; lifecycleRevision?: string }> = [];
     await seedSessionEntry(sessionKey, lockedEntry());
 
-    const result = await resetSessionEntryLifecycle({
+    const result = await resetPluginRuntimeSessionEntryLifecycle({
       expectedSessionId: "locked-old-session",
       expectedUpdatedAt: 10,
       releasePhysicalOwner: (context) => {
@@ -166,7 +166,7 @@ describe("session-store lifecycle runtime", () => {
     await seedSessionEntry(sessionKey, lockedEntry());
 
     await expect(
-      resetSessionEntryLifecycle({
+      resetPluginRuntimeSessionEntryLifecycle({
         expectedSessionId: "locked-old-session",
         expectedUpdatedAt: 10,
         releasePhysicalOwner: async () => {
@@ -194,7 +194,7 @@ describe("session-store lifecycle runtime", () => {
     await seedSessionEntry(sessionKey, lockedEntry());
 
     await expect(
-      resetSessionEntryLifecycle({
+      resetPluginRuntimeSessionEntryLifecycle({
         expectedSessionId: "locked-old-session",
         expectedUpdatedAt: 10,
         releasePhysicalOwner: () => {},

@@ -307,7 +307,7 @@ export async function resetSessionEntryLifecycleImpl(
 }
 
 /** Internal runtime entry point; plugin callers receive an owner-scoped wrapper. */
-export async function resetSessionEntryLifecycle(
+export async function resetPluginRuntimeSessionEntryLifecycle(
   params: ResetSessionEntryLifecycleParams,
 ): Promise<SessionEntry | null> {
   return await resetSessionEntryLifecycleImpl(params, (sessionId, options) =>
