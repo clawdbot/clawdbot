@@ -1,22 +1,19 @@
 // Diffs Language Pack plugin module implements plugin tests.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
-import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { OpenClawPluginApi } from "../api.js";
+import type { OpenClawPluginApi, OpenClawPluginHttpRouteHandler } from "../api.js";
 import { registerDiffsLanguagePackPlugin } from "./plugin.js";
 
 const execFileAsync = promisify(execFile);
 
 const VIEWER_RUNTIME_PATH = "/plugins/diffs-language-pack/assets/viewer-runtime.js";
 const UNKNOWN_ASSET_PATH = "/plugins/diffs-language-pack/assets/does-not-exist.js";
-
-type HttpRouteHandler = (req: IncomingMessage, res: ServerResponse) => boolean | Promise<boolean>;
 
 type ServedResponse = {
   status: number;
@@ -43,17 +40,19 @@ async function ensureViewerRuntimeForTests(): Promise<void> {
   }
   // viewer-runtime.js is ignored generated output; build the fixture before
   // serving assets in a clean checkout.
-  await execFileAsync(process.execPath, ["scripts/build-diffs-viewer-runtime.mjs", "full"], {
-    cwd: repoRoot,
-  });
+  await execFileAsync(
+    process.execPath,
+    ["--import", "tsx", "scripts/build-diffs-viewer-runtime.mts", "full"],
+    { cwd: repoRoot },
+  );
 }
 
 beforeAll(async () => {
   await ensureViewerRuntimeForTests();
 }, 120_000);
 
-function captureHandler(): HttpRouteHandler {
-  let registeredHttpRouteHandler: HttpRouteHandler | undefined;
+function captureHandler(): OpenClawPluginHttpRouteHandler {
+  let registeredHttpRouteHandler: OpenClawPluginHttpRouteHandler | undefined;
   const api = createTestPluginApi({
     id: "diffs-language-pack",
     name: "Diffs Language Pack",
@@ -61,7 +60,7 @@ function captureHandler(): HttpRouteHandler {
     source: "test",
     config: {},
     registerHttpRoute(params: Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]) {
-      registeredHttpRouteHandler = params.handler as HttpRouteHandler;
+      registeredHttpRouteHandler = params.handler;
     },
   });
   registerDiffsLanguagePackPlugin(api as unknown as OpenClawPluginApi);
@@ -73,33 +72,22 @@ function captureHandler(): HttpRouteHandler {
 
 async function withLanguagePackServer(run: (base: string) => Promise<void>): Promise<void> {
   const handler = captureHandler();
-  const server: Server = createServer((req, res) => {
-    void (async () => {
-      const handled = await handler(req, res);
+  await withServer((req, res) => {
+    void Promise.resolve(handler(req, res)).then((handled) => {
       if (!handled) {
         res.statusCode = 404;
         res.end();
       }
-    })();
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected TCP server address");
-  }
-  try {
-    await run(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
     });
-  }
+  }, run);
 }
 
-async function fetchServed(base: string, path: string, method = "GET"): Promise<ServedResponse> {
-  const response = await fetch(`${base}${path}`, { method });
+async function fetchServed(
+  base: string,
+  requestPath: string,
+  method = "GET",
+): Promise<ServedResponse> {
+  const response = await fetch(`${base}${requestPath}`, { method });
   const body = await response.arrayBuffer();
   return {
     status: response.status,
