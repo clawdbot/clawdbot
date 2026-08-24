@@ -29,6 +29,7 @@ import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-age
 import {
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
+  SESSION_NODE_ENTRY_VALID_TRIGGER_NAMES,
 } from "./openclaw-agent-db-session-migrations.js";
 import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
 import {
@@ -85,6 +86,26 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     {
       tableName: MEMORY_INDEX_SOURCES_TABLE,
       triggers: MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
+    },
+    {
+      // Retired in the same revision that removed them from the canonical
+      // schema: old databases may still carry them, and they must not be
+      // treated as a drift violation while migrations drop them.
+      tableName: "session_nodes",
+      triggers: [
+        {
+          name: "session_nodes_entry_valid_after_insert",
+          sql: "CREATE TRIGGER IF NOT EXISTS main.session_nodes_entry_valid_after_insert\nAFTER INSERT ON session_nodes\nBEGIN\n  UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;\nEND;",
+        },
+        {
+          name: "session_nodes_entry_valid_after_entry_update",
+          sql: "CREATE TRIGGER IF NOT EXISTS main.session_nodes_entry_valid_after_entry_update\nAFTER UPDATE OF entry_json ON session_nodes\nBEGIN\n  UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;\nEND;",
+        },
+        {
+          name: "session_nodes_entry_valid_after_identity_update",
+          sql: "CREATE TRIGGER IF NOT EXISTS main.session_nodes_entry_valid_after_identity_update\nAFTER UPDATE OF current_session_id, updated_at ON session_nodes\nBEGIN\n  UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;\nEND;",
+        },
+      ],
     },
   ],
 } satisfies SqliteSchemaCompatibility;

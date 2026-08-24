@@ -112,6 +112,13 @@ function migratedConversation(
   };
 }
 
+/** The retired session_nodes entry-validity write-triggers (see ensureSessionEntryValidityProjection). */
+export const SESSION_NODE_ENTRY_VALID_TRIGGER_NAMES = [
+  "session_nodes_entry_valid_after_insert",
+  "session_nodes_entry_valid_after_entry_update",
+  "session_nodes_entry_valid_after_identity_update",
+] as const;
+
 /** Backfills canonical external addresses once when conversation routing becomes active. */
 export function backfillSessionConversations(db: DatabaseSync): void {
   if (
@@ -326,23 +333,18 @@ export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
       "ALTER TABLE session_nodes ADD COLUMN entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1))",
     );
   }
-  db.exec(`
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
-    AFTER INSERT ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_entry_update
-    AFTER UPDATE OF entry_json ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_identity_update
-    AFTER UPDATE OF current_session_id, updated_at ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-  `);
+  // The write-triggers are retired in this revision: they mark every insert and
+  // update as pending (entry_valid = 0) and rely on each writer settling the row
+  // immediately after, but any read that lands inside that window — or a
+  // best-effort writer such as prompt-error entries that never settles — sees an
+  // invalid row and the whole turn fails with
+  // SessionCanonicalKeyMigrationRequiredError. Writers already settle explicitly
+  // (upsertSessionNode sets entry_valid = 1 right after the write), so the
+  // triggers only widen the failure window. Drop them and settle any rows they
+  // left pending instead.
+  for (const trigger of SESSION_NODE_ENTRY_VALID_TRIGGER_NAMES) {
+    db.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
+  }
   const selectPending = db.prepare(
     "SELECT current_session_id, entry_json, session_key, updated_at FROM session_nodes WHERE entry_valid = 0 ORDER BY session_key LIMIT 256",
   );
