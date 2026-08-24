@@ -27,6 +27,7 @@ import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { SessionContinuationResetError } from "../auto-reply/continuation/session-reset.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -373,10 +374,17 @@ async function ensureSessionRuntimeCleanup(params: {
   const processScopeKeys = new Set(queueKeys);
   processScopeKeys.add(params.key);
   clearFinishedSessionsForScopes(processScopeKeys);
-  clearSessionResetRuntimeState([...queueKeys], {
-    activeReplySessionId: params.sessionId,
-    agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
-  });
+  try {
+    clearSessionResetRuntimeState([...queueKeys], {
+      activeReplySessionId: params.sessionId,
+      agentId: resolveLifecycleAgentId(params.cfg, params.target.agentId),
+    });
+  } catch (error) {
+    if (error instanceof SessionContinuationResetError) {
+      return errorShape(ErrorCodes.UNAVAILABLE, error.message);
+    }
+    throw error;
+  }
   await stopSubagentsForRequester({
     cfg: params.cfg,
     requesterSessionKey: params.target.canonicalKey,

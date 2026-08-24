@@ -46,12 +46,16 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { listTaskFlowRecords } from "../../tasks/task-flow-registry.js";
+import { resetTaskFlowRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { enqueuePendingDelegate } from "../continuation/delegate-store.js";
+import { enqueuePendingWork } from "../continuation/work-store.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
@@ -2831,6 +2835,53 @@ describe("initSessionState browser tab cleanup", () => {
       "closeTrackedBrowserTabsForSessions",
     );
     expect(cleanupParams.sessionKeys).toEqual([existingSessionId, sessionKey]);
+  });
+
+  it("cancels durable continuation work and delegates on inline reset", async () => {
+    const storePath = await createStorePath("openclaw-inline-reset-continuation-");
+    const sessionKey = "agent:main:telegram:dm:inline-reset-continuation";
+    const existingSessionId = "inline-reset-continuation-session";
+    resetTaskFlowRegistryForTests();
+    try {
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: Date.now(),
+        },
+      });
+      const work = enqueuePendingWork({
+        sessionKey,
+        hop: 1,
+        delayMs: 60_000,
+        electedAt: Date.now(),
+        dueAt: Date.now() + 60_000,
+        maxChainLength: 8,
+      });
+      const delegate = enqueuePendingDelegate(sessionKey, {
+        task: "delegate after inline reset",
+        delayMs: 60_000,
+      });
+      if (!work || !delegate) {
+        throw new Error("expected durable continuation rows");
+      }
+
+      const result = await initSessionState({
+        ctx: {
+          Body: "/new",
+          RawBody: "/new",
+          CommandBody: "/new",
+          SessionKey: sessionKey,
+        },
+        cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      const flows = new Map(listTaskFlowRecords().map((flow) => [flow.flowId, flow]));
+      expect(flows.get(work.flowId!)?.status).toBe("cancelled");
+      expect(flows.get(delegate.flowId!)?.status).toBe("cancelled");
+    } finally {
+      resetTaskFlowRegistryForTests();
+    }
   });
 
   it("does not close browser tabs for a fresh session without previous state", async () => {

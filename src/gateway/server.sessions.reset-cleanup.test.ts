@@ -8,6 +8,8 @@ import {
 } from "../acp/runtime/session-meta.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
+import { enqueuePendingDelegate } from "../auto-reply/continuation/delegate-store.js";
+import { enqueuePendingWork } from "../auto-reply/continuation/work-store.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import {
@@ -20,6 +22,9 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { runExclusiveSessionLifecycle } from "../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { listTaskFlowRecords } from "../tasks/task-flow-registry.js";
+import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.test-support.js";
+import { resetTaskFlowRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
@@ -62,6 +67,7 @@ type ResetAcpState = {
 type ConfigFilePatch = Parameters<(typeof import("../config/config.js"))["writeConfigFile"]>[0];
 
 afterEach(() => {
+  resetTaskFlowRegistryForTests();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -152,6 +158,22 @@ async function expectResetWithConfigSkipsBrowserCleanup(config: ConfigFilePatch)
 
 test("sessions.reset aborts active runs and clears queues", async () => {
   const { storePath } = await seedWaitingActiveMainSession();
+  resetTaskFlowRegistryForTests();
+  const work = enqueuePendingWork({
+    sessionKey: "agent:main:main",
+    hop: 1,
+    delayMs: 60_000,
+    electedAt: Date.now(),
+    dueAt: Date.now() + 60_000,
+    maxChainLength: 8,
+  });
+  const delegate = enqueuePendingDelegate("agent:main:main", {
+    task: "delegate after gateway reset",
+    delayMs: 60_000,
+  });
+  if (!work || !delegate) {
+    throw new Error("expected durable continuation rows");
+  }
   enqueueSystemEvent("stale event via alias", { sessionKey: "main" });
   enqueueSystemEvent("stale event via canonical key", { sessionKey: "agent:main:main" });
   enqueueSystemEvent("stale event via session id", { sessionKey: "sess-main" });
@@ -166,6 +188,9 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   expect(reset.payload?.entry.sessionId).toBe("sess-main");
   expect(reset.payload?.entry.lifecycleRevision).toEqual(expect.any(String));
   expect(reset.payload?.entry).not.toHaveProperty("sessionDiffBaselineCapture");
+  const flows = new Map(listTaskFlowRecords().map((flow) => [flow.flowId, flow]));
+  expect(flows.get(work.flowId!)?.status).toBe("cancelled");
+  expect(flows.get(delegate.flowId!)?.status).toBe("cancelled");
   expect(
     loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }) as
       | InternalSessionEntry
@@ -222,6 +247,43 @@ test("sessions.reset aborts active runs and clears queues", async () => {
     targetSessionKey: "agent:main:main",
     reason: "session-reset",
   });
+});
+
+test("sessions.reset reports durable continuation cancellation failures", async () => {
+  const { storePath } = await seedWaitingActiveMainSession();
+  resetTaskFlowRegistryForTests();
+  const work = enqueuePendingWork({
+    sessionKey: "agent:main:main",
+    hop: 1,
+    delayMs: 60_000,
+    electedAt: Date.now(),
+    dueAt: Date.now() + 60_000,
+    maxChainLength: 8,
+  });
+  if (!work) {
+    throw new Error("expected durable continuation work");
+  }
+  configureTaskFlowRegistryRuntime({
+    store: {
+      loadSnapshot: () => ({ flows: new Map() }),
+      saveSnapshot: () => {},
+      upsertFlow: () => {
+        throw new Error("SQLITE_FULL: database or disk is full");
+      },
+    },
+  });
+
+  const reset = await resetMainSession();
+
+  expect(reset.ok).toBe(false);
+  expect(reset.error).toMatchObject({
+    code: "UNAVAILABLE",
+    message: expect.stringContaining("could not cancel continuation flow"),
+  });
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.sessionId).toBe(
+    "sess-main",
+  );
+  expect(listTaskFlowRecords().find((flow) => flow.flowId === work.flowId)?.status).toBe("queued");
 });
 
 test("sessions.reset watches reply-backed MCP retirement after an active-run timeout", async () => {

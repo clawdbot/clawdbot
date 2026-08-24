@@ -93,6 +93,20 @@ function clearIdleRetryControllersForTests(): void {
   idleRetryControllers.clear();
 }
 
+/** Cancel timers and idle waiters that can re-drive one session's durable work. */
+export function clearContinuationWorkDispatch(sessionKey: string): void {
+  clearWorkTimer(sessionKey);
+  clearIdleRetryFailureTimer(sessionKey);
+  for (const trigger of [
+    { kind: "reply-run-ended" as const },
+    { kind: "command-lane-idle" as const, lane: MAIN_COMMAND_LANE },
+  ]) {
+    const key = idleRetryTriggerKey(sessionKey, trigger);
+    idleRetryControllers.get(key)?.abort();
+    idleRetryControllers.delete(key);
+  }
+}
+
 function armWorkTimer(
   sessionKey: string,
   fireAt: number,

@@ -5,11 +5,16 @@ import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
 } from "../../infra/system-events.js";
+import { clearDelegateDispatchHedge } from "../continuation/delegate-dispatch-hedge.js";
+import { cancelSessionContinuations } from "../continuation/session-reset.js";
+import { clearTrackedContinuationTimers } from "../continuation/state.js";
+import { clearContinuationWorkDispatch } from "../continuation/work-dispatch.js";
 import { clearSessionQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
 import { clearReplyRunForResetBySessionId } from "./reply-run-registry.js";
 
 /** Runtime cleanup result for reset-related queues and system events. */
 type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {
+  continuationFlowsCancelled: number;
   systemEventsCleared: number;
 };
 
@@ -20,9 +25,14 @@ export function clearSessionResetRuntimeState(
 ): ClearSessionResetRuntimeStateResult {
   clearEmbeddedSessionPromptStates(keys);
   const cleared = clearSessionQueues(keys);
+  let continuationFlowsCancelled = 0;
   let systemEventsCleared = 0;
 
   for (const key of cleared.keys) {
+    clearContinuationWorkDispatch(key);
+    clearDelegateDispatchHedge(key);
+    clearTrackedContinuationTimers(key);
+    continuationFlowsCancelled += cancelSessionContinuations(key);
     // Global session rows may share one transient queue across agents. An
     // agent-scoped reset must not discard another agent's pending work.
     const removed = consumeSelectedSystemEventEntries(
@@ -38,6 +48,7 @@ export function clearSessionResetRuntimeState(
 
   return {
     ...cleared,
+    continuationFlowsCancelled,
     systemEventsCleared,
   };
 }
