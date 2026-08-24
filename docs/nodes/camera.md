@@ -9,7 +9,7 @@ title: "Camera capture"
 
 OpenClaw supports camera capture for agent workflows on paired **iOS**, **Android**, **macOS**, and **Linux** nodes: capture a photo (`jpg`) or a short video clip (`mp4`, with optional audio) via Gateway `node.invoke`.
 
-When a capture request includes `deviceId`, the selected camera must match that ID exactly. An unknown ID fails instead of capturing from a different camera.
+When a capture request includes `deviceId`, the selected camera must match that ID exactly. An unknown ID fails instead of capturing from a different camera; run `camera.list` to refresh device IDs, which change when cameras are reconnected.
 
 The macOS app can also physically pan, tilt, and zoom supported USB UVC cameras. PTZ moves the camera hardware; it does not rotate, crop, or otherwise transform a captured image.
 

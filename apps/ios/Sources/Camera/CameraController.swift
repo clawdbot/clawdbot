@@ -208,7 +208,9 @@ actor CameraController {
             },
             unavailableError: CameraError.cameraUnavailable,
             deviceNotFoundError: {
-                CameraError.invalidParams("INVALID_REQUEST: camera device not found: \($0)")
+                CameraError.invalidParams(
+                    "INVALID_REQUEST: camera device not found: \($0); " +
+                        "run camera.list for current device IDs")
             })
     }
 

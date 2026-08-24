@@ -49,7 +49,7 @@ enum CameraPTZError: LocalizedError, Equatable {
         case let .invalidRequest(message):
             "INVALID_REQUEST: \(message)"
         case let .deviceNotFound(deviceId):
-            "CAMERA_DEVICE_NOT_FOUND: \(deviceId)"
+            "CAMERA_DEVICE_NOT_FOUND: \(deviceId); run camera.list for current device IDs"
         case let .unsupported(message):
             "CAMERA_PTZ_UNSUPPORTED: \(message)"
         case let .axisUnsupported(axis):
