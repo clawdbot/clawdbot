@@ -1,4 +1,6 @@
 // Xai plugin module implements responses tool shared behavior.
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
+import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
 import { truncateSanitizedExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import {
   isRecord,
@@ -70,6 +72,30 @@ export function buildXaiResponsesToolBody(params: {
     ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
     ...(params.maxTurns ? { max_turns: params.maxTurns } : {}),
   };
+}
+
+export async function requestXaiResponsesTool<T>(
+  params: Parameters<typeof buildXaiResponsesToolBody>[0] & {
+    apiKey: string;
+    endpoint: string;
+    timeoutSeconds: number;
+    errorLabel: string;
+    signal?: AbortSignal;
+  },
+  parseResponse: (data: XaiWebSearchResponse) => T,
+): Promise<T> {
+  return await postTrustedWebToolsJson(
+    {
+      url: params.endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      apiKey: params.apiKey,
+      ...(params.signal ? { signal: params.signal } : {}),
+      body: buildXaiResponsesToolBody(params),
+      errorLabel: "xAI",
+    },
+    async (response) =>
+      parseResponse(await readProviderJsonObjectResponse(response, params.errorLabel)),
+  );
 }
 
 export function extractXaiWebSearchContent(
