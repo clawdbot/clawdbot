@@ -3402,7 +3402,7 @@ openclaw-sidebar-attention {
 
 openclaw-tooltip.sidebar-hover-tooltip {
   --openclaw-tooltip-max-width: min(340px, calc(100vw - 24px));
-  --openclaw-tooltip-open-animation: openclaw-tooltip-hover-card-in 100ms var(--ease-out);
+  --openclaw-tooltip-open-animation: openclaw-tooltip-hover-card-in 140ms var(--ease-out);
   --openclaw-tooltip-popup-show-duration: 0ms;
   --openclaw-tooltip-popup-hide-duration: 0ms;
 }

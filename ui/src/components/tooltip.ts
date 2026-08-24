@@ -290,7 +290,7 @@ class Tooltip extends OpenClawLitElement {
       overflow-wrap: anywhere;
     }
 
-    wa-tooltip[open]::part(body) {
+    wa-tooltip[open]::part(base__popup) {
       animation: var(--openclaw-tooltip-open-animation, none);
     }
 
@@ -300,7 +300,7 @@ class Tooltip extends OpenClawLitElement {
         --hide-duration: 0ms;
       }
 
-      wa-tooltip[open]::part(body) {
+      wa-tooltip[open]::part(base__popup) {
         animation: none;
       }
     }

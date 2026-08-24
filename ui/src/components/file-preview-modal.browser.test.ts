@@ -226,4 +226,30 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
 
     expect(dialog.getBoundingClientRect().width).toBeCloseTo(expectedWidth, 0);
   });
+  it("slides workboard drawers in from the owned edge", async () => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(1280, 844);
+    const modal = document.createElement("openclaw-modal-dialog");
+    modal.label = "Preview";
+    modal.style.setProperty("--openclaw-modal-width", "min(460px, 100vw)");
+    modal.classList.add("drawer");
+    modal.append(document.createElement("div"));
+    document.body.append(modal);
+    await modal.updateComplete;
+    const webAwesomeDialog = modal.shadowRoot?.querySelector<WaDialog>("wa-dialog");
+    await webAwesomeDialog?.updateComplete;
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    const dialog = webAwesomeDialog?.shadowRoot?.querySelector("dialog");
+    expect(dialog).toBeInstanceOf(HTMLDialogElement);
+
+    const animation = dialog!.getAnimations()[0];
+    expect(animation).toBeDefined();
+    expect(animation?.effect).toBeInstanceOf(KeyframeEffect);
+    const keyframes = (animation?.effect as KeyframeEffect | null)?.getKeyframes();
+    expect(keyframes?.[0]?.transform).toBe("translateX(100%)");
+    expect(keyframes?.at(-1)?.transform).toBe("translateX(0px)");
+    expect(animation?.effect?.getTiming().duration).toBe(200);
+  });
 });

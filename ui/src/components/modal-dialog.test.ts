@@ -142,6 +142,19 @@ describe("openclaw-modal-dialog", () => {
     }
   });
 
+  it("assigns overlay motion by interaction type", () => {
+    const styles = OpenClawModalDialog.styles.cssText;
+
+    expect(styles).toMatch(
+      /:host\(\.palette\)\s+wa-dialog\s*\{[^}]*--show-duration:\s*0ms;[^}]*--hide-duration:\s*0ms;/u,
+    );
+    expect(styles).toMatch(
+      /:host\(\.drawer\)\s+wa-dialog\s*\{[^}]*--show-duration:\s*0ms;[^}]*--hide-duration:\s*0ms;/u,
+    );
+    expect(styles).toMatch(
+      /:host\(\.drawer\)\s+wa-dialog\[open\]::part\(dialog\)\s*\{[^}]*animation:\s*openclaw-drawer-in 200ms cubic-bezier\(0\.32, 0\.72, 0, 1\);/u,
+    );
+  });
   it("emits modal-cancel on Escape", async () => {
     const { modal, dialog } = await renderModal();
     const onCancel = vi.fn();
