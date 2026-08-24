@@ -290,6 +290,13 @@ class Tooltip extends OpenClawLitElement {
       overflow-wrap: anywhere;
     }
 
+    /* Plain tips are descriptive chrome, so their popup cannot consume an
+       action meant for the UI underneath. Rich slotted content opts back in. */
+    wa-tooltip::part(base__popup),
+    .tooltip-content {
+      pointer-events: none;
+    }
+
     wa-tooltip[open]::part(body) {
       animation: var(--openclaw-tooltip-open-animation, none);
     }

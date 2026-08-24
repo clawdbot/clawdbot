@@ -3,6 +3,7 @@ import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { renderDockDestinations } from "../../../components/dock-destination-controls.ts";
+import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import { renderPanelTabStrip } from "../../../components/panel-tab-strip.ts";
@@ -29,6 +30,7 @@ import type {
   SidebarPanelDefinition,
   SidebarPanelTemplates,
   SidebarRegionCallbacks,
+  SidebarSurfaceActivity,
 } from "./chat-sidebar-region-types.ts";
 
 function panelType(
@@ -60,7 +62,20 @@ function panelsOf(layout: SidebarLayout): SidebarPanel[] {
   return layout.columns[0]?.panels ?? [];
 }
 
+function surfaceActivityAction(event: Event): HTMLElement | undefined {
+  return event
+    .composedPath()
+    .find(
+      (target): target is HTMLElement =>
+        target instanceof HTMLElement &&
+        (target.classList.contains("agent-chat__surface-activity-open") ||
+          target.classList.contains("agent-chat__surface-activity-stop")),
+    );
+}
+
 class ChatSidebarRegion extends OpenClawLightDomElement {
+  private surfaceComposerVisible = true;
+
   @property({ attribute: false }) layout: SidebarLayout = { columns: [] };
   @property({ attribute: false }) panelDefinitions = sidebarPanelDefinitions();
   @property({ attribute: false }) panelTemplates: SidebarPanelTemplates = {};
@@ -72,6 +87,9 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) callbacks: SidebarRegionCallbacks | null = null;
   @property({ type: Boolean }) narrow = false;
   @property({ type: Number }) availableWidth = 0;
+  @property({ attribute: false }) surfaceComposer: TemplateResult | typeof nothing = nothing;
+  @property({ attribute: false }) surfaceActivity: SidebarSurfaceActivity | null = null;
+  @property({ attribute: false }) surfaceSlot: "browser" | "desktop" | "terminal" | null = null;
 
   deliverPanelEvent(slot: SidebarSlotId, event: Event): boolean {
     const panel = this.parentElement?.querySelector<HTMLElement>(
@@ -206,6 +224,31 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     });
   }
 
+  private renderComposerToggle() {
+    if (this.layout.expanded !== true || !this.surfaceSlot || this.surfaceComposer === nothing) {
+      return nothing;
+    }
+    const label = t(
+      this.surfaceComposerVisible ? "chat.sidePanel.hideComposer" : "chat.sidePanel.showComposer",
+    );
+    return html`<span class="side-panel__action-group side-panel__action-group--composer">
+      <openclaw-tooltip .content=${label}>
+        <button
+          class="rail-header__action side-panel__composer-toggle"
+          type="button"
+          aria-label=${label}
+          aria-pressed=${String(this.surfaceComposerVisible)}
+          @click=${() => {
+            this.surfaceComposerVisible = !this.surfaceComposerVisible;
+            this.requestUpdate();
+          }}
+        >
+          ${icons.messageSquare}
+        </button>
+      </openclaw-tooltip>
+    </span>`;
+  }
+
   private renderHeaderActions(panelActions: TemplateResult | typeof nothing | null) {
     const expandLabel = t(
       this.layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expand",
@@ -216,7 +259,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
             ${panelActions}
           </span>`
         : nothing}
-      ${this.renderDockControls()}
+      ${this.renderComposerToggle()} ${this.renderDockControls()}
       <span class="side-panel__action-group side-panel__action-group--layout">
         <openclaw-tooltip .content=${expandLabel}>
           <button
@@ -340,6 +383,89 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     });
   }
 
+  private renderSurfaceComposer() {
+    if (
+      this.layout.expanded !== true ||
+      !this.surfaceComposerVisible ||
+      !this.surfaceSlot ||
+      this.surfaceComposer === nothing
+    ) {
+      return nothing;
+    }
+    return html`<div
+      class="side-panel__composer-overlay"
+      data-surface-overlay=${this.surfaceSlot}
+      @pointerdown=${(event: PointerEvent) => {
+        if (event.button === 0 && surfaceActivityAction(event)) {
+          event.preventDefault();
+        }
+      }}
+      @click=${this.handleSurfaceComposerClick}
+    >
+      ${this.surfaceComposer}
+    </div>`;
+  }
+
+  private readonly handleSurfaceComposerClick = (event: Event) => {
+    const action = surfaceActivityAction(event);
+    if (!action) {
+      return;
+    }
+    event.stopPropagation();
+    if (action.classList.contains("agent-chat__surface-activity-open")) {
+      this.callbacks?.setExpanded(false);
+      return;
+    }
+    this.surfaceActivity?.onStop?.();
+  };
+
+  private renderSurfaceActivity() {
+    const activity = this.surfaceActivity;
+    if (!activity) {
+      return nothing;
+    }
+    return html`
+      <span class="agent-chat__surface-activity" role="status" aria-live="off">
+        <span class="agent-chat__surface-activity-pulse" aria-hidden="true"></span>
+        <strong class="agent-chat__surface-activity-label">${activity.label}</strong>
+        <span class="agent-chat__surface-activity-meta">
+          ${activity.detail ? html`<span>${activity.detail}</span>` : nothing}
+          ${activity.startedAt != null
+            ? html`
+                ${activity.detail ? html`<span aria-hidden="true">·</span>` : nothing}
+                <openclaw-elapsed-time .startMs=${activity.startedAt}></openclaw-elapsed-time>
+              `
+            : nothing}
+        </span>
+        <span class="agent-chat__surface-activity-mobile"
+          >${activity.detail ?? activity.label}</span
+        >
+        <span class="agent-chat__surface-activity-actions">
+          <button
+            class="btn btn--xs agent-chat__surface-activity-open"
+            type="button"
+            aria-label=${t("chat.composer.openChat")}
+          >
+            ${icons.messageSquare}<span>${t("chat.composer.openChat")}</span>
+          </button>
+          ${activity.onStop
+            ? html`
+                <openclaw-tooltip .content=${t("chat.runControls.stop")}>
+                  <button
+                    class="btn btn--xs danger agent-chat__surface-activity-stop"
+                    type="button"
+                    aria-label=${t("chat.runControls.stopGenerating")}
+                  >
+                    ${icons.stop}
+                  </button>
+                </openclaw-tooltip>
+              `
+            : nothing}
+        </span>
+      </span>
+    `;
+  }
+
   private renderPanel() {
     if (this.layout.open !== true) {
       return nothing;
@@ -365,7 +491,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
               <strong class="side-panel__empty-header-title">${t("chat.sidePanel.label")}</strong>
               ${this.renderHeaderActions(null)}
             </header>`}
-        ${this.renderBody(column)}
+        ${this.renderBody(column)} ${this.renderSurfaceComposer()}
       </section>`;
   }
 
@@ -375,6 +501,14 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       const previousWidth = root.querySelector<HTMLElement>(".side-panel")?.style.width;
       renderTemplate(this.renderPanel(), root);
       const panel = root.querySelector<HTMLElement>(".side-panel");
+      // The composer rerenders independently. Portal the region-owned actions
+      // after its header commits so their callbacks survive focus changes.
+      const activitySlot = panel?.querySelector<HTMLElement>(
+        ".agent-chat__surface-overlay-activity",
+      );
+      if (activitySlot) {
+        renderTemplate(this.renderSurfaceActivity(), activitySlot);
+      }
       // The manual panel render is the commit boundary for its transcript.
       // Width changes additionally invalidate every transcript row measurement.
       panel?.dispatchEvent(

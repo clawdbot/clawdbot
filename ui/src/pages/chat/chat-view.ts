@@ -291,7 +291,11 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onPublishPullRequest?: () => void;
   };
 
-export function renderChat(props: ChatProps) {
+type ChatRenderOptions = {
+  placeComposer?: (composer: TemplateResult | typeof nothing) => boolean | void;
+};
+
+export function renderChat(props: ChatProps, options: ChatRenderOptions = {}) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const canCompose = props.canSend;
   const showModelSetupSplash =
@@ -386,6 +390,7 @@ export function renderChat(props: ChatProps) {
       backgroundTasks: props.backgroundTasks,
       onFocusComposer: () =>
         chatSection
+          ?.closest("openclaw-chat-pane")
           ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
           ?.focus({ preventScroll: true }),
     },
@@ -475,6 +480,8 @@ export function renderChat(props: ChatProps) {
     onRemoveAttachment: props.onRemoveAttachment,
     onOpenImage: openImmediateImage,
   });
+  const presentedComposer = showModelSetupSplash ? nothing : chatColumnFooter;
+  const renderInlineComposer = options.placeComposer?.(presentedComposer) !== false;
   const scrollToBottomButton =
     props.showNewMessages && props.onScrollToBottom
       ? html`
@@ -601,7 +608,7 @@ export function renderChat(props: ChatProps) {
                     sessions: props.swarmSessions ?? [],
                     sessionKey: props.sessionKey,
                   })}
-                  ${showModelSetupSplash ? nothing : chatColumnFooter}
+                  ${renderInlineComposer ? presentedComposer : nothing}
                 </div>
               </div>
             </div>

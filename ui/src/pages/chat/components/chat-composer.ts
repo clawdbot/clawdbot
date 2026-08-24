@@ -46,6 +46,7 @@ import {
   releaseMicrophoneDeviceWatch,
   suppressStaleSubmittedDraftReplay,
 } from "./chat-composer-state.ts";
+import { resolveComposerInProgressLabel } from "./chat-composer-status.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
@@ -118,15 +119,13 @@ export function renderChatComposer(props: ChatComposerProps) {
   );
   const composerControls = props.composerControls ?? nothing;
   const assistantName = props.assistantName || "OpenClaw";
-  const inProgressLabel = props.waitingApproval
-    ? t("chat.waitingForApproval")
-    : submittedProgress?.sendState === "waiting-model"
-      ? t("chat.composer.preparingModel")
-      : props.stream !== null
-        ? t("chat.composer.responding", { name: assistantName })
-        : props.sending || submittedProgress
-          ? t("chat.composer.sendingMessage")
-          : t("chat.composer.working", { name: assistantName });
+  const inProgressLabel = resolveComposerInProgressLabel({
+    assistantName,
+    waitingApproval: props.waitingApproval,
+    preparingModel: submittedProgress?.sendState === "waiting-model",
+    responding: props.stream !== null,
+    sending: Boolean(props.sending || submittedProgress),
+  });
   // Persistent sr-only live region: run phases are otherwise conveyed only
   // visually (thread spark, content arriving, interrupted toast).
   const runStatusAnnouncement =

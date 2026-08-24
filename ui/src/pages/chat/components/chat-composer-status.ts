@@ -15,6 +15,28 @@ export type ComposerRunStatus =
       occurredAt?: number | null;
     };
 
+export function resolveComposerInProgressLabel(params: {
+  assistantName: string;
+  waitingApproval?: boolean;
+  preparingModel: boolean;
+  responding: boolean;
+  sending: boolean;
+}): string {
+  if (params.waitingApproval) {
+    return t("chat.waitingForApproval");
+  }
+  if (params.preparingModel) {
+    return t("chat.composer.preparingModel");
+  }
+  if (params.responding) {
+    return t("chat.composer.responding", { name: params.assistantName });
+  }
+  if (params.sending) {
+    return t("chat.composer.sendingMessage");
+  }
+  return t("chat.composer.working", { name: params.assistantName });
+}
+
 // Working and Done need no composer chrome: the thread's working spark,
 // content arriving, and Stop reverting to Send already show them (screen
 // readers get the composer's persistent sr-only run-status region).

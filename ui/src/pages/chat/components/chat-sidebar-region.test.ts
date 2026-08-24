@@ -320,6 +320,23 @@ describe("chat sidebar region", () => {
     expect(region.callbacks?.setExpanded).toHaveBeenLastCalledWith(false);
   });
 
+  it("mounts the active session composer only over an expanded operator surface", async () => {
+    const region = await createRegion(
+      setSidebarExpanded(openSlot({ columns: [] }, "terminal"), true),
+    );
+    region.surfaceSlot = "terminal";
+    region.surfaceComposer = html`<div class="agent-chat__composer-shell">Composer</div>`;
+    await region.updateComplete;
+
+    const overlay = root(region).querySelector<HTMLElement>(".side-panel__composer-overlay");
+    expect(overlay?.dataset.surfaceOverlay).toBe("terminal");
+    expect(overlay?.textContent?.trim()).toBe("Composer");
+
+    region.layout = setSidebarExpanded(region.layout, false);
+    await region.updateComplete;
+    expect(root(region).querySelector(".side-panel__composer-overlay")).toBeNull();
+  });
+
   it("offers expand and minimize controls in the no-tabs selector", async () => {
     const region = await createRegion({ columns: [], open: true });
     expect(root(region).querySelector<HTMLElement>(".side-panel")?.style.width).toBe("480px");

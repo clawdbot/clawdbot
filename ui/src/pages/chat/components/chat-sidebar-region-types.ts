@@ -27,3 +27,10 @@ export type SidebarRegionCallbacks = {
   setExpanded: (expanded: boolean) => void;
   setOpen: (open: boolean) => void;
 };
+
+export type SidebarSurfaceActivity = {
+  label: string;
+  detail?: string;
+  startedAt?: number | null;
+  onStop?: () => void;
+};

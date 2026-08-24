@@ -1,10 +1,13 @@
-import { html, nothing } from "lit";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { html, nothing, type TemplateResult } from "lit";
 import type {
   ProgressCard,
   SessionObserverDigest,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { t } from "../../i18n/index.ts";
+import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -18,18 +21,68 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
 import { renderBackgroundTasksRail } from "./components/chat-background-tasks-render.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
+import {
+  hasTerminalRunStatus,
+  isCurrentSessionSubmittedProgress,
+} from "./components/chat-composer-state.ts";
+import { resolveComposerInProgressLabel } from "./components/chat-composer-status.ts";
 import { detailSlotOpen, renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
 import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
+import type { SidebarSurfaceActivity } from "./components/chat-sidebar-region-types.ts";
+import { isRunningToolCard, resolveToolRowText } from "./components/chat-tool-cards.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
+
+function resolveSurfaceToolActivity(chat: ChatProps) {
+  for (let index = chat.toolMessages.length - 1; index >= 0; index -= 1) {
+    const message = chat.toolMessages[index];
+    const runningCard = extractToolCardsCached(message, `surface-activity-${index}`).findLast(
+      (card) => isRunningToolCard(card, true),
+    );
+    if (!runningCard) {
+      continue;
+    }
+    const timestamp = asNullableRecord(message)?.timestamp;
+    return {
+      label: resolveToolRowText(runningCard, true),
+      startedAt: typeof timestamp === "number" ? timestamp : chat.streamStartedAt,
+    };
+  }
+  return null;
+}
+
+function resolveSurfaceActivity(chat: ChatProps): SidebarSurfaceActivity | null {
+  const submittedProgress = chat.queue.find((item) =>
+    isCurrentSessionSubmittedProgress(item, chat.sessionKey, chat.runStatus),
+  );
+  const canStop = Boolean(chat.canAbort && chat.onAbort && !hasTerminalRunStatus(chat.runStatus));
+  if (!canStop && !submittedProgress) {
+    return null;
+  }
+  const assistantName = chat.assistantName || "OpenClaw";
+  const detail = resolveComposerInProgressLabel({
+    assistantName,
+    waitingApproval: chat.waitingApproval,
+    preparingModel: submittedProgress?.sendState === "waiting-model",
+    responding: chat.stream !== null,
+    sending: Boolean(chat.sending || submittedProgress),
+  });
+  const tool = canStop ? resolveSurfaceToolActivity(chat) : null;
+  return {
+    label: tool?.label ?? detail,
+    ...(tool ? { detail: chat.waitingApproval ? detail : t("common.working") } : {}),
+    startedAt: tool?.startedAt ?? chat.streamStartedAt,
+    onStop: canStop ? chat.onAbort : undefined,
+  };
+}
 
 type ChatPaneLayoutRenderParams = {
   state: ChatPageHost;
@@ -81,10 +134,25 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       workspaceGit,
       sidebarLayout,
     );
-    const chat = renderChat({
-      ...chatProps,
-      header: board.face === "dashboard" ? nothing : header,
-    });
+    const surfaceSlot = (["terminal", "browser", "desktop"] as const).find((slot) =>
+      isSidebarSlotVisible(sidebarLayout, slot),
+    );
+    const surfaceOverlayActive =
+      this.active && this.presented && sidebarLayout.expanded === true && surfaceSlot !== undefined;
+    const surfaceActivity = surfaceOverlayActive ? resolveSurfaceActivity(chatProps) : null;
+    let surfaceComposer: TemplateResult | typeof nothing = nothing;
+    const chat = renderChat(
+      {
+        ...chatProps,
+        header: board.face === "dashboard" ? nothing : header,
+      },
+      {
+        placeComposer: (composer) => {
+          surfaceComposer = surfaceOverlayActive ? composer : nothing;
+          return !surfaceOverlayActive;
+        },
+      },
+    );
     // Keep this root stable across board face changes so the guarded board runtime
     // remains connected while Chat is active.
     const primary = html`<div class="chat-pane-primary-column">
@@ -162,6 +230,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       panelTemplates,
       primary,
       requestUpdate: state.requestUpdate!,
+      surfaceComposer,
+      surfaceActivity,
+      surfaceSlot,
     });
     return html`${content}${renderChatImageLightbox(
       state.imageLightbox,

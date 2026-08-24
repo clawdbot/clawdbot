@@ -5,5 +5,6 @@
 @import "./chat/tool-cards.css";
 @import "./chat/question-card.css";
 @import "./chat/sidebar.css";
+@import "./chat/surface-composer.css";
 @import "./chat/split-view.css";
 @import "./chat/board.css";
