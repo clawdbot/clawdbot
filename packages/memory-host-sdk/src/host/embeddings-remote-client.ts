@@ -27,7 +27,7 @@ function normalizeEmbeddingDestinationKey(baseUrl: string): string | undefined {
     const hostname = parsed.hostname.toLowerCase();
     const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
     const pathname = parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/$/, "");
-    return `${parsed.protocol}//${hostname}:${port}${pathname}`;
+    return `${parsed.protocol}//${hostname}:${port}${pathname}${parsed.search}`;
   } catch {
     return undefined;
   }

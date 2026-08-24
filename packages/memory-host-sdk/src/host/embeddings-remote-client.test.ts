@@ -95,6 +95,29 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
     ).rejects.toThrow(/memory\.search\.remote\.apiKey|Authorization header/);
   });
 
+  it("treats query-distinct URLs as different credential destinations", async () => {
+    await expect(
+      resolveRemoteEmbeddingBearerClient({
+        provider: "openai",
+        defaultBaseUrl: "https://provider.example.test/v1?tenant=provider",
+        options: {
+          config: {
+            models: {
+              providers: {
+                openai: {
+                  ...configuredProvider,
+                  baseUrl: "https://provider.example.test/v1?tenant=provider",
+                },
+              },
+            },
+          } as never,
+          model: "text-embedding-3-small",
+          remote: { baseUrl: "https://provider.example.test/v1?tenant=remote" },
+        },
+      }),
+    ).rejects.toThrow(/memory\.search\.remote\.apiKey|Authorization header/);
+  });
+
   it("adds OpenClaw attribution to native OpenAI embedding requests", async () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const client = await resolveRemoteEmbeddingBearerClient({
