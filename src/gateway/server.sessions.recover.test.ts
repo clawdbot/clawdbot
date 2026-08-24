@@ -4,6 +4,7 @@ import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/sessi
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
@@ -149,6 +150,70 @@ test("sessions.recover rejects a healthy session", async () => {
   expect(recovered).toMatchObject({
     ok: false,
     error: { code: "INVALID_REQUEST", message: expect.stringContaining("tombstoned") },
+  });
+});
+
+test("sessions.recover cannot create a successor on an agent excluded by the caller's role", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const profile = ensureProfileForEmail("restricted-session-recovery@example.com");
+  setUserProfileRole(profile.id, "guest");
+  const key = "agent:main:dashboard:role-denied-recovery";
+  await writeSessionStore({
+    entries: {
+      [key]: sessionStoreEntry("role-denied-recovery-session", {
+        status: "failed",
+        abortedLastRun: true,
+        createdActor: { type: "human", id: profile.id },
+        mainRestartRecovery: {
+          cycleId: "cycle-role-denied-recovery",
+          revision: 1,
+          chargedAttempts: 3,
+          tombstone: { reason: "automatic recovery exhausted" },
+        },
+      }),
+    },
+  });
+  const cfg = {
+    ...getRuntimeConfig(),
+    gateway: {
+      ...getRuntimeConfig().gateway,
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            sessions: { others: "view" as const },
+            agents: ["guest-only"],
+            scopes: ["operator.read" as const, "operator.write" as const],
+          },
+        },
+      },
+    },
+  };
+  const client = {
+    connect: { role: "operator", scopes: ["operator.write"] },
+    authenticatedUserProfile: {
+      profileId: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    },
+  } as never;
+
+  const recovered = await directSessionReq(
+    "sessions.recover",
+    { agentId: "main", key },
+    { client, context: { getRuntimeConfig: () => cfg } },
+  );
+
+  expect(recovered).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN", message: expect.stringContaining('agent "main"') },
+  });
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+    mainRestartRecovery: {
+      revision: 1,
+      tombstone: { reason: "automatic recovery exhausted" },
+    },
   });
 });
 

@@ -33,6 +33,7 @@ import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
@@ -3667,6 +3668,87 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(firstAgentCommandOptions()?.senderIsOwner).toBe(senderIsOwner);
       }
     }
+  });
+
+  it("blocks a view-capped operator from mutating another operator's session", async () => {
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
+      async () => {
+        const port = await getGatewayTestPort();
+        let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+        const previousGatewayAuth = testState.gatewayAuth;
+        const trustedProxyAuth = {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+          },
+        };
+        testState.gatewayAuth = trustedProxyAuth;
+        try {
+          await writeGatewayConfig({
+            gateway: {
+              auth: trustedProxyAuth,
+              trustedProxies: ["127.0.0.1"],
+              roles: {
+                default: "guest",
+                definitions: {
+                  guest: {
+                    agents: "*",
+                    scopes: ["operator.write"],
+                    sessions: { others: "view" },
+                  },
+                },
+              },
+            },
+          });
+          resetConfigRuntimeState();
+          server = await startGatewayServer(port, {
+            host: "127.0.0.1",
+            auth: trustedProxyAuth,
+            controlUiEnabled: false,
+            openAiChatCompletionsEnabled: true,
+          });
+
+          const owner = ensureProfileForEmail("session-owner@example.test");
+          const sessionKey = "agent:main:foreign-openai-http";
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            {
+              sessionId: "foreign-openai-http",
+              updatedAt: 1,
+              visibility: "shared",
+              createdActor: { type: "human", id: owner.id },
+            },
+          );
+
+          agentCommandMock.mockClear();
+          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+          const response = await postChatCompletions(
+            port,
+            { model: "openclaw", messages: [{ role: "user", content: "mutate foreign session" }] },
+            {
+              "x-forwarded-for": "198.51.100.42",
+              "x-forwarded-proto": "https",
+              "x-forwarded-user": "guest@example.test",
+              "x-openclaw-session-key": sessionKey,
+            },
+          );
+
+          expect(response.status).toBe(403);
+          expect(await response.json()).toMatchObject({
+            error: { type: "forbidden", message: expect.stringContaining("session is shared") },
+          });
+          expect(agentCommandMock).not.toHaveBeenCalled();
+        } finally {
+          await server?.close({ reason: "openai operator role session sharing test done" });
+          testState.gatewayAuth = previousGatewayAuth;
+          await writeGatewayConfig({});
+          resetConfigRuntimeState();
+        }
+      },
+    );
   });
 
   it("preserves verified trusted-proxy owner identity for both response modes", async () => {

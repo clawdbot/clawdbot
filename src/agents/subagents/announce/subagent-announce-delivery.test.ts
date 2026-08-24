@@ -2,7 +2,9 @@
 // runs report progress or completion back to the requester session.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../../config/sessions.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
+import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import {
   OutboundDeliveryError,
@@ -42,6 +44,7 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.test-support.js";
+import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
@@ -108,6 +111,40 @@ function createPayloadGatewayMock(...payloads: Record<string, unknown>[]) {
 
 function createInProcessGatewayMock(response: Record<string, unknown> = {}) {
   return vi.fn(async () => response) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
+}
+
+function createRoleRestrictedInProcessGatewayMock(response: Record<string, unknown>) {
+  const cfg = {
+    gateway: {
+      roles: {
+        default: "restricted",
+        definitions: {
+          restricted: {
+            agents: [],
+            scopes: ["operator.write"],
+            sessions: { others: "none" },
+          },
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+  const dispatchGatewayMethodInProcess = vi.fn(
+    async (
+      _method: string,
+      _agentParams: Record<string, unknown>,
+      options?: Parameters<typeof runtimeDispatchGatewayMethodInProcess>[2],
+    ) => {
+      const actor = options?.operatorRoleActor;
+      const authorizationError = actor
+        ? authorizeGatewaySessionCreation({ cfg, agentId: "main", actor })
+        : authorizeGatewaySessionCreation({ cfg, agentId: "main", profileId: undefined });
+      if (authorizationError) {
+        throw new Error(`${authorizationError.code}: ${authorizationError.message}`);
+      }
+      return response;
+    },
+  ) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
+  return { cfg, dispatchGatewayMethodInProcess };
 }
 
 function createSendMessageMock() {
@@ -1880,9 +1917,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
-  it("uses in-process agent dispatch for dormant completion requesters", async () => {
+  it("delivers dormant child completion under restrictive gateway roles", async () => {
     const callGateway = createGatewayMock();
-    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+    const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
       result: {
         payloads: [{ text: "requester voice completion" }],
       },
@@ -1894,7 +1931,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         sessionId: "requester-session-local",
         isActive: false,
       }),
-      getRuntimeConfig: () => ({}) as never,
+      getRuntimeConfig: () => cfg,
     });
 
     const ownerContext = { owner: "gateway-a" } as never;
@@ -1935,6 +1972,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(dispatchOptions).toMatchObject({
       expectFinal: true,
       forceSyntheticClient: true,
+      operatorRoleActor: { kind: "system" },
       delegatedToolPolicyHandoff: {
         sourceSessionKey: "agent:main:subagent:child",
         sourceSessionId: "child-session-local",
@@ -1945,6 +1983,42 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       timeoutMs: 120_000,
       resolveGatewayContext,
     });
+  });
+
+  it("wakes settled descendant runs under restrictive gateway roles", async () => {
+    const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
+      runId: "descendant-wake-run",
+    });
+    const replaceSubagentRunAfterSteer = vi.fn(async () => true);
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      loadSessionEntry: () => ({ sessionId: "nested-session", updatedAt: 1 }),
+    });
+
+    const woke = await runDescendantWake({
+      runId: "nested-parent-run",
+      childSessionKey: "agent:main:subagent:nested-parent",
+      taskLabel: "collect descendant findings",
+      findings: "The descendant completed successfully.",
+      announceId: "descendant-completion",
+      isChildSessionEffectsAllowed: () => true,
+      hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
+        typeof entry === "object" && entry !== null,
+      deps: {
+        callGateway: createGatewayMock(),
+        dispatchGatewayMethodInProcess,
+        getRuntimeConfig: () => cfg,
+        replaceSubagentRunAfterSteer,
+      },
+    });
+
+    expect(woke).toBe(true);
+    expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousRunId: "nested-parent-run",
+        nextRunId: "descendant-wake-run",
+      }),
+    );
   });
 
   it("does not dispatch child-derived completion after source lifecycle ownership changes", async () => {

@@ -83,6 +83,9 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
     must never get a second row. */
 export type GatewayAgentRunTaskOwner = "plugin_subagent" | "native_subagent";
 
+/** Host-minted role authority; never accepted from Gateway wire params. */
+export type GatewayOperatorRoleActor = { kind: "system" } | { kind: "operator"; profileId: string };
+
 /** Caller identity captured by a built-in agent tool before trusted in-process dispatch. */
 export type TrustedAgentToolCaller = Readonly<{
   agentId: string;
@@ -125,6 +128,8 @@ export type GatewayClient = {
     isLocalClient?: true;
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
+    /** Host-owned role authority retained separately from an autonomous run principal. */
+    operatorRoleActor?: GatewayOperatorRoleActor;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */
     senderAttribution?: { id: string; name?: string };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */
@@ -333,6 +338,7 @@ type GatewayTransportContext = {
     record?: ExecApprovalRecord<TPayload>;
   }) => ReadonlySet<string>;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
+  disconnectClientsForUserProfile?: (profileId: string) => void;
   invalidateClientsForDevice?: (
     deviceId: string,
     opts?: { role?: string; reason?: string },

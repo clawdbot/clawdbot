@@ -6,6 +6,7 @@ import type { AgentsListResult } from "../../../packages/gateway-protocol/src/in
 import { resolveSessionStorePathCore as resolveStorePath } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { recordAgentProvenance } from "../../state/agent-provenance.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -13,6 +14,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { testState } from "../test-helpers.js";
 import {
   getGatewayConfigModule,
@@ -21,7 +23,7 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
 import { agentsHandlers } from "./agents.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 setupGatewaySessionsHandlerTestHarness();
 
@@ -196,6 +198,87 @@ test("unknown-agent session reads return missing results without provisioning an
 
   expectAgentStoreAbsent(UNKNOWN_AGENT_ID);
   expect(await listAgentIdsViaRpc()).toEqual(["main"]);
+});
+
+test("a hidden-foreign role cannot discover sessions through search, batch previews, or exact resolve", async () => {
+  const ownerId = ensureProfileForEmail("role-viewer@example.com").id;
+  const foreignKey = "agent:main:foreign-role-read";
+  const ownKey = "agent:main:own-role-read";
+  const storePath = resolveStorePath(undefined, { agentId: "main" });
+  for (const [sessionKey, actorId] of [
+    [foreignKey, "foreign-owner@example.com"],
+    [ownKey, ownerId],
+  ] as const) {
+    const sessionId = `session-${sessionKey.split(":").at(-1)}`;
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId,
+        updatedAt: 42,
+        createdActor: { type: "human", id: actorId },
+        visibility: "shared",
+      },
+    );
+    await seedLinearSessionTranscript({
+      agentId: "main",
+      contents: ["hidden role search needle"],
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+  }
+  const cfg: OpenClawConfig = {
+    agents: { list: [{ id: "main", default: true }] },
+    gateway: {
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            sessions: { others: "none" },
+            agents: "*",
+            scopes: ["operator.read", "operator.write"],
+          },
+        },
+      },
+    },
+  };
+  const client: GatewayClient = {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+      role: "operator",
+      scopes: ["operator.read", "operator.write"],
+    },
+    authenticatedUserProfile: {
+      profileId: ownerId,
+      displayName: null,
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+  };
+  const options = { client, context: { getRuntimeConfig: () => cfg } };
+
+  const searched = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
+    "sessions.search",
+    { query: "hidden role search needle" },
+    options,
+  );
+  expect(searched.payload?.results.map((result) => result.sessionKey)).toEqual([ownKey]);
+
+  const previews = await directSessionReq<{
+    previews: Array<{ key: string; status: string }>;
+  }>("sessions.preview", { keys: [foreignKey, ownKey] }, options);
+  expect(previews.payload?.previews).toMatchObject([
+    { key: foreignKey, status: "missing" },
+    { key: ownKey, status: "ok" },
+  ]);
+
+  const resolved = await directSessionReq("sessions.resolve", { key: foreignKey }, options);
+  expect(resolved).toMatchObject({
+    ok: false,
+    error: { message: `No session found: ${foreignKey}` },
+  });
 });
 
 test("bare ownerless reads fail closed without blocking scoped preview siblings", async () => {

@@ -11,7 +11,9 @@ import {
   listSessionSuggestions,
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
 } from "../../config/sessions/session-suggestion-store.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionSharingTarget } from "../session-sharing.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
@@ -156,6 +158,83 @@ describe("session suggestion handlers", () => {
         role: "viewer",
         suggestions: [{ author: { id: "alice" }, text: "  Try the focused fix\n" }],
       });
+    });
+  });
+
+  it("enforces view, suggest, and hidden role ceilings while honoring explicit membership", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const ownerProfile = ensureProfileForEmail("suggestion-owner@example.test");
+      const guestProfile = ensureProfileForEmail("suggestion-guest@example.test");
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-main",
+          updatedAt: 1,
+          createdActor: { type: "human", id: ownerProfile.id },
+          visibility: "suggest",
+        },
+      );
+      const guest = client(guestProfile.id, "Guest");
+      const roleConfig = (others: "none" | "view" | "suggest"): OpenClawConfig => ({
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others },
+                agents: "*",
+                scopes: ["operator.read", "operator.write"],
+              },
+            },
+          },
+        },
+      });
+
+      const denied = await call(
+        "session.suggestions.add",
+        { sessionKey, text: "view-only suggestion" },
+        guest,
+        context(vi.fn(), roleConfig("view")),
+      );
+      expect(denied.responses[0]?.[2]).toMatchObject({
+        code: "FORBIDDEN",
+        message: expect.stringContaining("viewing sessions only"),
+      });
+
+      const hidden = await call(
+        "session.suggestions.list",
+        { sessionKey },
+        guest,
+        context(vi.fn(), roleConfig("none")),
+      );
+      expect(hidden.responses[0]?.[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: `unknown session: ${sessionKey}`,
+      });
+
+      const suggested = await call(
+        "session.suggestions.add",
+        { sessionKey, text: "permitted suggestion" },
+        guest,
+        context(vi.fn(), roleConfig("suggest")),
+      );
+      expect(suggested.responses[0]?.[0]).toBe(true);
+
+      addSessionMember(
+        { agentId: "main", sessionKey },
+        {
+          identityId: guestProfile.id,
+          addedBy: ownerProfile.id,
+          expectedSessionId: "session-main",
+        },
+      );
+      const invited = await call(
+        "session.suggestions.add",
+        { sessionKey, text: "explicitly invited member" },
+        guest,
+        context(vi.fn(), roleConfig("view")),
+      );
+      expect(invited.responses[0]?.[0]).toBe(true);
     });
   });
 

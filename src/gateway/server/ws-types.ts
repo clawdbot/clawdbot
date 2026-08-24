@@ -4,6 +4,7 @@ import type { ConnectParams } from "../../../packages/gateway-protocol/src/schem
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
+import type { GatewayOperatorRoleActor } from "../server-methods/shared-types.js";
 import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
 
 export const GATEWAY_WS_CONNECTION_KIND_PROPERTY = "__openclawConnectionKind";
@@ -50,6 +51,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     isLocalClient?: true;
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
+    /** Server-attested role-policy actor; never accepted from WebSocket wire params. */
+    operatorRoleActor?: GatewayOperatorRoleActor;
   };
   canvasHostUrl?: string;
   canvasCapability?: string;

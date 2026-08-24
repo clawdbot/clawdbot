@@ -221,6 +221,25 @@ describe("resolveTrustedHttpOperatorScopes", () => {
 
     expect(scopes).toStrictEqual([]);
   });
+
+  it("caps trusted-proxy headers and defaults to the verified profile's role", () => {
+    const requestAuth = {
+      trustDeclaredOperatorScopes: true,
+      operatorRolePolicy: {
+        sessions: { others: "view" as const },
+        agents: ["guest"],
+        scopes: ["operator.read" as const],
+      },
+    };
+
+    expect(
+      resolveTrustedHttpOperatorScopes(
+        createReq({ "x-openclaw-scopes": "operator.admin, operator.read, operator.write" }),
+        requestAuth,
+      ),
+    ).toEqual(["operator.read"]);
+    expect(resolveTrustedHttpOperatorScopes(createReq(), requestAuth)).toEqual(["operator.read"]);
+  });
 });
 
 describe("resolveHttpSenderIsOwner", () => {

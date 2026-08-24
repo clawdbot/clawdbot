@@ -56,10 +56,17 @@ function resolvePluginRoutePathContextForRequest(
 function createPluginRouteRuntimeClient(
   scopes: readonly string[],
   clientIp: string | undefined,
+  requestAuth?: AuthorizedGatewayHttpRequest,
 ): GatewayRequestOptions["client"] {
+  const authenticatedUserProfile = requestAuth?.authenticatedUserProfile;
+  const sharedSecretOwner =
+    !authenticatedUserProfile &&
+    (requestAuth?.authMethod === "token" || requestAuth?.authMethod === "password");
   return {
     connId: `plugin-http:${clientIp ?? "unknown"}`,
     ...(clientIp ? { clientIp } : {}),
+    ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    ...(sharedSecretOwner ? { internal: { operatorRoleActor: { kind: "system" as const } } } : {}),
     connect: {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -133,6 +140,7 @@ function createPluginRouteRuntimeScope(params: {
   const runtimeClient = createPluginRouteRuntimeClient(
     runtimeScopes,
     params.gatewayRequestClientIp,
+    params.route.auth === "gateway" ? params.gatewayRequestAuth : undefined,
   );
   return {
     pluginRegistry: params.registry,

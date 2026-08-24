@@ -20,6 +20,7 @@ import {
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
   type StoredSessionSuggestion,
 } from "../../config/sessions.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
@@ -176,15 +177,28 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const target = requireSuggestionTarget({ context, ...params, respond });
+    const cfg = context.getRuntimeConfig();
+    const target = requireSuggestionTarget({ client, context, ...params, respond });
     const author = gatewayClientSessionCreator(client);
     if (!target) {
       return;
     }
-    if (
-      requireVisibleSuggestionRole({ client, sessionKey: params.sessionKey, target, respond }) ===
-      null
-    ) {
+    const role = requireVisibleSuggestionRole({
+      client,
+      cfg,
+      sessionKey: params.sessionKey,
+      target,
+      respond,
+    });
+    if (role === null) {
+      return;
+    }
+    if (role === "viewer" && operatorSessionCap(client, cfg) === "view") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "your operator role permits viewing sessions only"),
+      );
       return;
     }
     const lifecycleError = resolveSessionWorkStartError(target.canonicalKey, target.entry);
@@ -255,12 +269,14 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const target = requireSuggestionTarget({ context, ...params, respond });
+    const cfg = context.getRuntimeConfig();
+    const target = requireSuggestionTarget({ client, context, ...params, respond });
     if (!target) {
       return;
     }
     const role = requireVisibleSuggestionRole({
       client,
+      cfg,
       sessionKey: params.sessionKey,
       target,
       respond,
@@ -301,12 +317,14 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const target = requireSuggestionTarget({ context, ...params, respond });
+    const cfg = context.getRuntimeConfig();
+    const target = requireSuggestionTarget({ client, context, ...params, respond });
     if (!target) {
       return;
     }
     const role = requireVisibleSuggestionRole({
       client,
+      cfg,
       sessionKey: params.sessionKey,
       target,
       respond,
@@ -506,7 +524,8 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
       return;
     }
-    const target = requireSuggestionTarget({ context, ...params, respond });
+    const cfg = context.getRuntimeConfig();
+    const target = requireSuggestionTarget({ client, context, ...params, respond });
     const actor = gatewayClientSessionCreator(client);
     if (!target) {
       return;
@@ -528,8 +547,12 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       respond(true, { ok: true, broadcast: false });
       return;
     }
-    const role = resolveSessionSharingRole({ client, target });
+    const role = resolveSessionSharingRole({ client, cfg, target });
     const visibility = resolveSessionVisibility(target.entry);
+    if (role === "viewer" && operatorSessionCap(client, cfg) === "view") {
+      respond(true, { ok: true, broadcast: false });
+      return;
+    }
     if (visibility === "draft" && !canManageSessionSharing(role)) {
       respond(true, { ok: true, broadcast: false });
       return;
@@ -572,8 +595,12 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
         if (!current || current.entry.sessionId !== target.entry.sessionId) {
           return false;
         }
-        const currentRole = resolveSessionSharingRole({ client, target: current });
+        const currentCfg = context.getRuntimeConfig();
+        const currentRole = resolveSessionSharingRole({ client, cfg: currentCfg, target: current });
         const currentVisibility = resolveSessionVisibility(current.entry);
+        if (currentRole === "viewer" && operatorSessionCap(client, currentCfg) === "view") {
+          return false;
+        }
         if (currentVisibility === "draft" && !canManageSessionSharing(currentRole)) {
           return false;
         }
