@@ -3,7 +3,6 @@
  *
  * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
  */
-import { promises as fs } from "node:fs";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
@@ -46,7 +45,6 @@ import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
   cleanupFailedSpawnBeforeAgentStart,
   cleanupProvisionalSession,
-  terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
 import { activateCollectorSubagentRun } from "./subagent-spawn-collector.js";
 import {
@@ -69,6 +67,7 @@ import { callNativeSubagentGateway, readGatewayRunId } from "./subagent-spawn-ga
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
+import { cleanupAcceptedSubagentSpawnFailure } from "./subagent-spawn-rollback.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import {
   bindThreadForSubagentSpawn,
@@ -487,46 +486,6 @@ export async function spawnSubagentDirect(
         // the run's row, and registration is what delivers it. A register failure
         // means no owner ever recorded the run, so abort the run the gateway
         // already accepted instead of leaving it executing unrecorded.
-        const admissionCancelled = isSpawnSubagentAdmissionCancelledError(error);
-        const cleanupFailures: unknown[] = [];
-        if (
-          phase === "register" &&
-          acceptedChildRunId &&
-          (taskRowOwnership === "required" || admissionCancelled)
-        ) {
-          try {
-            const terminated = await terminateAcceptedCollectorRun({
-              childSessionKey,
-              gatewayRunId: acceptedChildRunId,
-              ...provisionalSessionIdentity,
-              retry: false,
-            });
-            if (!terminated) {
-              throw new Error(
-                `Accepted child termination was not confirmed: ${acceptedChildRunId}`,
-              );
-            }
-          } catch (terminationError) {
-            cleanupFailures.push(terminationError);
-          }
-        }
-        try {
-          const contextRolledBack = await rollbackPreparedContextEngine(
-            state?.contextEnginePreparation,
-          );
-          if (!contextRolledBack) {
-            throw new Error("Prepared context rollback was not confirmed");
-          }
-        } catch (contextError) {
-          cleanupFailures.push(contextError);
-        }
-        if (attachmentAbsDir) {
-          try {
-            await fs.rm(attachmentAbsDir, { recursive: true, force: true });
-          } catch {
-            // Best-effort cleanup only.
-          }
-        }
         let emitLifecycleHooks = threadBindingReady;
         if (phase === "dispatch" && threadBindingReady) {
           let endedHookEmitted = false;
@@ -556,19 +515,19 @@ export async function spawnSubagentDirect(
           }
           emitLifecycleHooks = !endedHookEmitted;
         }
-        try {
-          await cleanupCreatedSession(emitLifecycleHooks);
-        } catch (sessionError) {
-          cleanupFailures.push(sessionError);
-        }
-        if (cleanupFailures.length > 0) {
-          const aggregate = new AggregateError(
-            cleanupFailures,
-            `Subagent spawn cleanup incomplete: ${acceptedChildRunId ?? childIdem}`,
-          );
-          aggregate.cause = cleanupFailures[0];
-          throw aggregate;
-        }
+        await cleanupAcceptedSubagentSpawnFailure({
+          phase,
+          error,
+          runId: childIdem,
+          childSessionKey,
+          acceptedChildRunId,
+          taskRowOwnership,
+          contextEnginePreparation: state?.contextEnginePreparation,
+          attachmentAbsDir,
+          ...provisionalSessionIdentity,
+          emitLifecycleHooks,
+          cleanupCreatedSession,
+        });
       },
     };
     const pipelineResult = await runSpawnPipeline({

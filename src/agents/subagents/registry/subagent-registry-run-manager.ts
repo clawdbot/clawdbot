@@ -46,6 +46,7 @@ class SubagentRunManager extends SubagentLaunchManager {
     | { status: "rejected" } => {
     const runId = params.runId.trim();
     const gatewayRunId = params.gatewayRunId.trim();
+    const reason = params.reason.trim() || "Accepted subagent rollback pending.";
     const entry = this.options.runs.get(runId);
     if (!entry || entry.childSessionKey !== params.childSessionKey || !gatewayRunId) {
       return { status: "rejected" };
@@ -57,7 +58,7 @@ class SubagentRunManager extends SubagentLaunchManager {
     entry.acceptedSpawnRollback = existing ?? {
       gatewayRunId,
       requestedAt: Date.now(),
-      reason: params.reason,
+      reason,
       expectedSessionId: params.expectedSessionId?.trim() || undefined,
       expectedLifecycleRevision: params.expectedLifecycleRevision?.trim() || undefined,
     };

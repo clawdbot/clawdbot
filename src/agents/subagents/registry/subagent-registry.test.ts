@@ -5780,14 +5780,17 @@ describe("subagent registry seam flow", () => {
         runId,
         childSessionKey,
         gatewayRunId: "gateway-rollback-retry",
-        reason: "source acceptance stale",
+        reason: " ",
       }),
     ).toMatchObject({
       status: "pending-persistence",
       error: expect.objectContaining({ message: "rollback owner disk full" }),
     });
     expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
-      acceptedSpawnRollback: { gatewayRunId: "gateway-rollback-retry" },
+      acceptedSpawnRollback: {
+        gatewayRunId: "gateway-rollback-retry",
+        reason: "Accepted subagent rollback pending.",
+      },
       suppressCompletionDelivery: true,
       execution: { suppressSessionEffects: true },
     });

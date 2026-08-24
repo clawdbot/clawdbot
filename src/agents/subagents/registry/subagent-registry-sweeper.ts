@@ -1,5 +1,3 @@
-import type { callGateway } from "../../../gateway/call.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
@@ -8,15 +6,9 @@ import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { createSubagentSweepSessionCleanup } from "../../subagent-registry-sweeper-session.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
-import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { reconcileOrphanedRun, safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
-import type {
-  SubagentLifecycleController,
-  SubagentLifecycleOptions,
-} from "./subagent-registry-lifecycle.js";
 import { createInterruptedRecoveryCoordinator } from "./subagent-registry-restart-recovery-coordinator.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
-import type { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import {
   discardSuspendedPendingFinalDelivery,
   isSuspendedPendingFinalDelivery,
@@ -31,11 +23,8 @@ import {
   reconcileProvisionalSubagentKill,
   selectNextAcceptedSteerCandidate,
 } from "./subagent-registry-sweep-kill.js";
-import type {
-  ContextEngineSubagentEndedParams,
-  SubagentCompletionRequest,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
+import type { SubagentRegistrySweeperParams } from "./subagent-registry-sweeper.types.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 import {
   loadSubagentSessionEntry,
@@ -52,54 +41,7 @@ const restartRecoveryLoader = createLazyImportLoader(
 );
 const killRuntimeLoader = createLazyImportLoader(() => import("./subagent-control.runtime.js"));
 
-type SubagentRunManager = ReturnType<typeof createSubagentRunManager>;
-type CollectorRuns = (requester: string, group: string) => Iterable<[string, SubagentRunRecord]>;
-
-export function createSubagentRegistrySweeper(params: {
-  runs: Map<string, SubagentRunRecord>;
-  resumedRuns: Set<string>;
-  persist: (...runIds: string[]) => void;
-  persistOrThrow: (...runIds: string[]) => void;
-  clearPendingLifecycleError: (runId: string) => void;
-  clearPendingLifecycleTimeout: (runId: string) => void;
-  sweepPendingLifecycle: (now: number) => void;
-  completeSubagentRunWithRecovery: (
-    completion: SubagentCompletionRequest,
-    source: string,
-  ) => Promise<void>;
-  clearSubagentRunSteerRestart: SubagentRunManager["clearSubagentRunSteerRestart"];
-  recordAcceptedSubagentSpawnRollback: SubagentRunManager["recordAcceptedSubagentSpawnRollback"];
-  rollbackSubagentRunRegistration: SubagentRunManager["rollbackSubagentRunRegistration"];
-  settleFailedQueuedSubagentLaunch: SubagentRunManager["settleFailedQueuedSubagentLaunch"];
-  getGatewayRecoveryRuntime: () => GatewayRecoveryRuntime | undefined;
-  abandonSubagentRestartRecoveryLaunch: SubagentRunManager["abandonSubagentRestartRecoveryLaunch"];
-  clearAcceptedSubagentRestartRecovery: SubagentRunManager["clearAcceptedSubagentRestartRecovery"];
-  resumeSettledSubagentRestartRecovery: SubagentRunManager["resumeSettledSubagentRestartRecovery"];
-  replaceSubagentRunAfterSteer: SubagentRunManager["replaceSubagentRunAfterSteer"];
-  markSubagentRestartRecoveryLaunchAttempted: SubagentRunManager["markSubagentRestartRecoveryLaunchAttempted"];
-  markSubagentRestartRecoveryLaunchAccepted: SubagentRunManager["markSubagentRestartRecoveryLaunchAccepted"];
-  markSubagentRestartRecoveryLaunchConsumed: SubagentRunManager["markSubagentRestartRecoveryLaunchConsumed"];
-  reserveSubagentRestartRecoveryLaunch: SubagentRunManager["reserveSubagentRestartRecoveryLaunch"];
-  resetSubagentRestartRecoveryLaunchAttempt: SubagentRunManager["resetSubagentRestartRecoveryLaunchAttempt"];
-  finalizeInterruptedSubagentRun: ReturnType<
-    typeof createSubagentRegistryCompletionRuntime
-  >["finalizeInterruptedSubagentRun"];
-  resumeRequesterSettleWake: SubagentLifecycleController["resumeRequesterSettleWake"];
-  startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
-  completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
-  discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
-  shouldEmitEndedHookForRun: SubagentLifecycleOptions["shouldEmitEndedHookForRun"];
-  emitSubagentEndedHookForRun: SubagentLifecycleOptions["emitSubagentEndedHookForRun"];
-  shouldDeferArchive: (entry: SubagentRunRecord) => boolean;
-  callGateway: typeof callGateway;
-  cleanupCollectorLaunchResources: (entry: SubagentRunRecord) => Promise<boolean>;
-  runContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
-  notifyContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
-  retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
-  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
-  getRunsForCollectorGroup: CollectorRuns;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
-}) {
+export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperParams) {
   const { runs, resumedRuns } = params;
   const { deleteSession, freezeSessionIdentity } = createSubagentSweepSessionCleanup(
     params.callGateway,
