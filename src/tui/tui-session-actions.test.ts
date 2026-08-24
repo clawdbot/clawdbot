@@ -240,6 +240,49 @@ describe("tui session actions", () => {
     expect(updateFooter).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["success", "failure"])(
+    "does not publish a superseded picker roster %s",
+    async (outcome) => {
+      const pendingRoster = createDeferred<Awaited<ReturnType<TuiBackend["listAgents"]>>>();
+      const cachedAgents = [{ id: "research", name: "Research" }];
+      const state = createBaseState({
+        agentDefaultId: "research",
+        agents: cachedAgents,
+        currentAgentId: "research",
+        currentSessionKey: "agent:research:incident",
+      });
+      const addSystem = vi.fn();
+      const agentNames = new Map([["research", "Research"]]);
+      const { refreshAgents } = createTestSessionActions({
+        client: makeTuiBackend({ listAgents: vi.fn(() => pendingRoster.promise) }),
+        chatLog: makeChatLog({ addSystem }),
+        state,
+        agentNames,
+      });
+      let ownsRefresh = true;
+
+      const refresh = refreshAgents(() => ownsRefresh);
+      ownsRefresh = false;
+      if (outcome === "success") {
+        pendingRoster.resolve({
+          defaultId: "ops",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [{ id: "ops", name: "Operations" }],
+        });
+      } else {
+        pendingRoster.reject(new Error("obsolete roster request failed"));
+      }
+      await refresh;
+
+      expect(state.currentAgentId).toBe("research");
+      expect(state.currentSessionKey).toBe("agent:research:incident");
+      expect(state.agents).toBe(cachedAgents);
+      expect([...agentNames]).toEqual([["research", "Research"]]);
+      expect(addSystem).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       scope: "per-sender" as const,

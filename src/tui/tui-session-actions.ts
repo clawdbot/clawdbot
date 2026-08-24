@@ -186,11 +186,11 @@ export function createSessionActions(context: SessionActionContext) {
     updateFooter();
   };
 
-  const refreshAgents = () =>
+  const refreshAgents = (ownsRefresh: () => boolean = () => true) =>
     refreshTuiAgentList({
       load: () => client.listAgents(),
-      apply: applyAgentsResult,
-      reportError: (message) => chatLog.addSystem(`agents list failed: ${message}`),
+      apply: (result) => ownsRefresh() && applyAgentsResult(result),
+      reportError: (error) => ownsRefresh() && chatLog.addSystem(`agents list failed: ${error}`),
     });
 
   const updateAgentFromSessionKey = (key: string) => {
