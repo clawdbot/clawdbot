@@ -25,7 +25,7 @@ struct ManagedProcessTests {
         let termFile = directory.appendingPathComponent("term")
         let stdinPipe = Pipe()
         let configuration = Subprocess.Configuration(
-            .path(.init("/bin/sh")),
+            executable: .path(.init("/bin/sh")),
             arguments: Arguments([
                 "-c",
                 #"trap 'touch "$2"; exit 0' TERM; while IFS= read -r _; do :; done; touch "$1"; while :; do sleep 1; done"#,
@@ -108,7 +108,7 @@ struct ManagedProcessTests {
         environment: [String: String] = [:]) async throws -> ManagedProcess
     {
         let configuration = Subprocess.Configuration(
-            .path(.init(executable)),
+            executable: .path(.init(executable)),
             arguments: Arguments(arguments),
             environment: ManagedProcess.environment(from: environment))
         let process = ManagedProcess.launch(

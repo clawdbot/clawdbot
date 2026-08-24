@@ -254,6 +254,19 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       expect(
         await mobile.page.locator(".content > openclaw-device-scope-upgrade-banner").count(),
       ).toBe(0);
+      // Burn in the one-time dialog open: its first render fetches glyph
+      // subsets whose arrival reflows fractional text metrics document-wide,
+      // which would otherwise register as sub-pixel drift the open never
+      // caused. The stability assertion below compares settled layouts.
+      await status.click();
+      await mobile.page.locator("openclaw-modal-dialog.scope-upgrade-details-dialog").waitFor();
+      await mobile.page.getByRole("button", { name: "Close limited access details" }).click();
+      await mobile.page
+        .locator("openclaw-modal-dialog.scope-upgrade-details-dialog")
+        .waitFor({ state: "detached" });
+      await status.waitFor();
+      await mobile.page.evaluate(() => document.fonts.ready);
+
       const titleTopBefore = (await title.boundingBox())?.y;
       await captureProof(mobile.page, "mobile-automations-shell-status.png");
 
@@ -309,6 +322,14 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       const status = desktop.page.locator(".scope-upgrade-shell-status");
       await title.waitFor();
       await status.waitFor();
+      // Same burn-in as the mobile section: the first popover render fetches
+      // glyph subsets whose arrival reflows fractional text metrics.
+      await status.click();
+      await desktop.page.locator(".scope-upgrade-details-popover").waitFor();
+      await desktop.page.getByRole("button", { name: "Close limited access details" }).click();
+      await status.waitFor();
+      await desktop.page.evaluate(() => document.fonts.ready);
+
       const titleTopBefore = (await title.boundingBox())?.y;
       await captureProof(desktop.page, "desktop-automations-shell-status.png");
 

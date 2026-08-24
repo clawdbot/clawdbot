@@ -1825,6 +1825,31 @@ describe("cli json stdout contract", () => {
       args: ["skills", "--json", "--agent", ""],
       message: "--agent must not be blank",
     },
+    {
+      name: "curator mutation",
+      args: ["skills", "curator", "pin", "missing-skill", "--json"],
+      message: "Curated skill not found: missing-skill",
+    },
+    {
+      name: "curator mutation with parent JSON",
+      args: ["skills", "curator", "--json", "pin", "missing-skill"],
+      message: "Curated skill not found: missing-skill",
+    },
+    {
+      name: "workshop workspace validation with parent JSON",
+      args: ["skills", "--json", "workshop", "list", "--agent", ""],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "workshop mutation",
+      args: ["skills", "workshop", "reject", "missing-proposal", "--json"],
+      message: "Skill proposal not found: missing-proposal",
+    },
+    {
+      name: "workshop inspection",
+      args: ["skills", "workshop", "inspect", "missing-proposal", "--json"],
+      message: "Skill proposal not found: missing-proposal",
+    },
   ])("returns one canonical JSON document when skills $name fails", async (testCase) => {
     await withTempHome(
       async (tempHome) => {

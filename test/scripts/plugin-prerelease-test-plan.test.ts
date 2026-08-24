@@ -13,7 +13,7 @@ import {
 } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
+const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -758,7 +758,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     );
     expect(inspectorRun.env).toEqual({
       OPENCLAW_PLUGIN_INSPECTOR_ROOT: ".artifacts/plugin-inspector",
-      OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.10",
+      OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.21",
     });
     expect(inspectorRun.run).toContain("extensions/");
     expect(inspectorRun.run).toContain(

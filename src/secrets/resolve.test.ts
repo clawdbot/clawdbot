@@ -437,36 +437,37 @@ describe("secret ref resolver", () => {
     const scriptPath = await writeForkingNoOutputScript(root);
     const pidPath = path.join(root, "forked.pid");
     let childPid: number | undefined;
-    const nativeSetTimeout = globalThis.setTimeout;
-    const noOutputTimeouts: Array<() => void> = [];
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback, delay, ...args) => {
-        if (delay === 1_000) {
-          noOutputTimeouts.push(() => callback(...args));
-          return nativeSetTimeout(() => undefined, 60_000);
-        }
-        return nativeSetTimeout(callback, delay, ...args);
-      });
+    let resultPromise: Promise<string> | undefined;
 
     try {
-      const resultPromise = resolveExecSecret(scriptPath, {
+      resultPromise = resolveExecSecret(scriptPath, {
         env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
-        // Preserve production-like startup headroom; the test fires the
-        // re-armed timer only after the readiness byte arrives.
         noOutputTimeoutMs: 1_000,
         timeoutMs: 10_000,
       });
-      await vi.waitFor(() => {
-        expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+      const resultErrorPromise = resultPromise.catch((error: unknown) => error);
+      await vi.waitFor(async () => {
+        childPid = await readPidFile(pidPath);
+        expect(childPid).toBeGreaterThan(0);
       });
-      childPid = await readPidFile(pidPath);
-      noOutputTimeouts.at(-1)?.();
-      await expect(resultPromise).rejects.toThrow('Exec provider "execmain" produced no output');
+      if (childPid === undefined) {
+        throw new Error("forked exec provider pid was not recorded");
+      }
+      const error = await resultErrorPromise;
+      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+      if (!isProviderScopedSecretResolutionError(error)) {
+        throw new Error("expected a provider-scoped no-output error");
+      }
+      expect(error).toMatchObject({
+        code: "SECRET_PROVIDER_UNAVAILABLE",
+        source: "exec",
+        provider: "execmain",
+        message: 'Exec provider "execmain" produced no output for 1000ms.',
+      });
       expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
     } finally {
-      setTimeoutSpy.mockRestore();
       killPidIfAlive(childPid);
+      await resultPromise?.catch(() => {});
     }
   });
 
