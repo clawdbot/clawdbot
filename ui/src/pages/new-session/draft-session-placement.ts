@@ -1,6 +1,5 @@
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { restoreChatApiAttachments } from "../chat/attachment-api.ts";
-import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
 
 export type PendingPlacementPlace = {
@@ -14,7 +13,7 @@ export type PendingPlacementPlace = {
 
 export function resolveDraftSessionPlacement(
   pending: Pick<PendingSessionPlacementRecoveryState, "sessionKey" | "target">,
-  place: Pick<DraftPlaceState, "autoDevice" | "cloudProfileId" | "deviceId" | "machineClass">,
+  place: { autoDevice: boolean; cloudProfileId: string; deviceId: string; machineClass: string },
 ) {
   const target = pending.sessionKey
     ? pending.target
