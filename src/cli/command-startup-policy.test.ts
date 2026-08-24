@@ -36,6 +36,7 @@ describe("command-startup-policy", () => {
       ["uninstall"],
       ["agent", "exec"],
       ["status"],
+      ["triage"],
       ["agents", "bindings"],
       ["approvals", "pending"],
       ["skills"],
