@@ -203,12 +203,19 @@ describe("new-session model runtime", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     const container = renderControl(control, context);
-    expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
-      "Loading models",
+    const loadingModelTrigger = container.querySelector<HTMLElement>(
+      '[data-chat-model-select="true"]',
     );
-    expect(
-      container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled"),
-    ).toBe("true");
+    const loadingSkeleton = loadingModelTrigger?.querySelector(
+      ".skeleton.chat-controls__model-trigger-skeleton",
+    );
+    expect(loadingModelTrigger).not.toBeNull();
+    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
+    expect(loadingModelTrigger?.getAttribute("aria-disabled")).toBe("true");
+    expect(loadingSkeleton).not.toBeNull();
+    expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     pending.resolve({ models: [] });
   });
@@ -228,12 +235,20 @@ describe("new-session model runtime", () => {
     });
 
     let container = renderControl(control, context, "main", null);
-    const loadingModelTrigger = container.querySelector('[data-chat-model-select="true"]');
-    expect(loadingModelTrigger?.textContent).toContain("Loading models");
-    expect(loadingModelTrigger?.textContent).not.toContain("Default model");
-    expect(container.querySelector('[data-chat-thinking-select="true"]')?.textContent).toContain(
-      "Medium",
+    const loadingModelTrigger = container.querySelector<HTMLElement>(
+      '[data-chat-model-select="true"]',
     );
+    const loadingSkeleton = loadingModelTrigger?.querySelector(
+      ".skeleton.chat-controls__model-trigger-skeleton",
+    );
+    expect(loadingModelTrigger).not.toBeNull();
+    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
+    expect(loadingSkeleton).not.toBeNull();
+    expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
+    expect(loadingModelTrigger?.textContent).not.toContain("Default model");
+    expect(container.querySelector('[data-chat-thinking-select="true"]')).toBeNull();
     expect(control.selected).toBe("");
     expect(control.thinkingLevel).toBe("");
 
