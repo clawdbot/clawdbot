@@ -1843,7 +1843,7 @@ describe("handleTelegramAction", () => {
     },
   );
 
-  it("stores created forum topic names in the account-scoped cache", async () => {
+  it("stores created forum topic thread names in the account-scoped cache", async () => {
     createForumTopicTelegram.mockResolvedValueOnce({
       topicId: 99,
       name: "Topic",
@@ -1855,7 +1855,7 @@ describe("handleTelegramAction", () => {
     } as OpenClawConfig;
 
     await handleTelegramAction(
-      { action: "createForumTopic", accountId: "work", chatId: "alias-chat", name: "Topic" },
+      { action: "createForumTopic", accountId: "work", chatId: "alias-chat", threadName: "Topic" },
       cfg,
     );
 
@@ -1864,7 +1864,7 @@ describe("handleTelegramAction", () => {
     await expect(getTopicName("alias-chat", 99, scope)).resolves.toBeUndefined();
   });
 
-  it("stores edited forum topic names in the account-scoped cache", async () => {
+  it("stores edited forum topic thread names in the account-scoped cache", async () => {
     editForumTopicTelegram.mockResolvedValueOnce({
       ok: true,
       chatId: "-100123",
@@ -1882,12 +1882,68 @@ describe("handleTelegramAction", () => {
         accountId: "work",
         chatId: "alias-chat",
         messageThreadId: 42,
-        name: "New",
+        threadName: "New",
       },
       cfg,
     );
 
     await expect(getTopicName("-100123", 42, topicCacheScopeFor(cfg, "work"))).resolves.toBe("New");
+  });
+
+  it("prefers name over threadName for forum topic actions", async () => {
+    const cfg = telegramConfig({
+      actions: { createForumTopic: true, editForumTopic: true },
+    });
+
+    await handleTelegramAction(
+      { action: "createForumTopic", chatId: "123", name: "Primary", threadName: "Alias" },
+      cfg,
+    );
+    await handleTelegramAction(
+      {
+        action: "editForumTopic",
+        chatId: "123",
+        messageThreadId: 42,
+        name: "Primary",
+        threadName: "Alias",
+      },
+      cfg,
+    );
+
+    expect(mockCall(createForumTopicTelegram, 0, "topic create")[1]).toBe("Primary");
+    expect(mockCall(editForumTopicTelegram, 0, "topic edit")[2]).toMatchObject({
+      name: "Primary",
+    });
+  });
+
+  it("preserves structured validation when a created topic has no name", async () => {
+    const cfg = telegramConfig({ actions: { createForumTopic: true } });
+
+    await expect(
+      handleTelegramAction({ action: "createForumTopic", chatId: "123" }, cfg),
+    ).rejects.toMatchObject({
+      name: "ToolInputError",
+      status: 400,
+      message: "name required",
+    });
+  });
+
+  it("preserves icon-only forum topic edits", async () => {
+    const cfg = telegramConfig({ actions: { editForumTopic: true } });
+    await handleTelegramAction(
+      {
+        action: "editForumTopic",
+        chatId: "123",
+        messageThreadId: 42,
+        iconCustomEmojiId: "emoji-1",
+      },
+      cfg,
+    );
+
+    expect(mockCall(editForumTopicTelegram, 0, "icon-only topic edit")[2]).toMatchObject({
+      name: undefined,
+      iconCustomEmojiId: "emoji-1",
+    });
   });
 
   it.each([
