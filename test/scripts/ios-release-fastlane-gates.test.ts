@@ -127,11 +127,13 @@ function swiftFunctionBody(source: string, name: string): string {
 }
 
 describe("iOS Fastlane release upload gates", () => {
-  it("pins the CI Ruby and Fastlane toolchain", () => {
+  it("pins the CI Ruby and Fastlane toolchain on the Fastlane-owning screenshot shards", () => {
     const workflow = readFileSync(ciWorkflowPath, "utf8");
     const iosJobStart = workflow.indexOf("\n  ios-build:\n");
-    const iosJobEnd = workflow.indexOf("\n  android:\n", iosJobStart);
+    const iosJobEnd = workflow.indexOf("\n  ios-screenshot-shard:\n", iosJobStart);
     const iosJob = workflow.slice(iosJobStart, iosJobEnd);
+    const shardJobEnd = workflow.indexOf("\n  ios-screenshot-evidence:\n", iosJobEnd);
+    const shardJob = workflow.slice(iosJobEnd, shardJobEnd);
     const gemfile = readFileSync(gemfilePath, "utf8");
     const lockfile = readFileSync(gemfileLockPath, "utf8");
 
@@ -144,16 +146,22 @@ describe("iOS Fastlane release upload gates", () => {
     expect(lockfile).toContain("CHECKSUMS");
     expect(lockfile).toContain("RUBY VERSION\n   ruby 3.4.10");
     expect(lockfile).toContain("BUNDLED WITH\n   2.6.9");
-    expect(iosJob).toContain('BUNDLE_DEPLOYMENT: "true"');
-    expect(iosJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
-    expect(iosJob).toContain("ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b");
-    expect(iosJob).toContain('ruby-version: "3.4.10"');
-    expect(iosJob).toContain('bundler: "2.6.9"');
-    expect(iosJob).toContain("bundler-cache: false");
-    expect(iosJob).toContain("working-directory: apps/ios");
-    expect(iosJob).toContain("bundle _2.6.9_ install --jobs 4 --retry 3");
-    expect(iosJob).toContain("bundle _2.6.9_ check");
-    expect(iosJob).toContain("bundle _2.6.9_ exec fastlane --version");
+    expect(iosJob).not.toContain("BUNDLE_DEPLOYMENT");
+    expect(iosJob).not.toContain("BUNDLE_GEMFILE");
+    expect(iosJob).not.toContain("ruby/setup-ruby@");
+    expect(iosJob).not.toContain("Install locked Fastlane bundle");
+    expect(shardJob).toContain('BUNDLE_DEPLOYMENT: "true"');
+    expect(shardJob).toContain("BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile");
+    expect(shardJob).toContain("ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b");
+    expect(shardJob).toContain('ruby-version: "3.4.10"');
+    expect(shardJob).toContain('bundler: "2.6.9"');
+    expect(shardJob).toContain("bundler-cache: false");
+    expect(shardJob).toContain("working-directory: apps/ios");
+    expect(shardJob).toContain("bundle _2.6.9_ install --jobs 4 --retry 3");
+    expect(shardJob).toContain("bundle _2.6.9_ check");
+    expect(shardJob).toContain("bundle _2.6.9_ exec fastlane --version");
+    expect(workflow.match(/ruby\/setup-ruby@/gu)).toHaveLength(1);
+    expect(workflow.match(/name: Install locked Fastlane bundle/gu)).toHaveLength(1);
   });
 
   it("documents every iOS Fastlane command through the pinned bundle", () => {
@@ -578,9 +586,10 @@ describe("iOS Fastlane release upload gates", () => {
     expect(shardJob).toContain("id: package_screenshot_evidence");
     expect(shardJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
     expect(shardJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
-    expect(shardJob).toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
+    expect(shardJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
     expect(shardJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
     expect(shardJob).toContain("IOS_SCREENSHOT_XCODE_VERSION");
+    expect(shardJob).not.toContain('test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"');
     expect(shardJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
     expect(shardJob).not.toContain("SnapshotDerivedData");
     expect(shardJob.match(/contents: read/g)).toHaveLength(1);
