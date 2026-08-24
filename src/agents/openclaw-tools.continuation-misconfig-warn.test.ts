@@ -83,7 +83,7 @@ describe("createOpenClawTools — silent partial-registration guard", () => {
   });
 
   it("warns when continuation.enabled=true but neither continueWorkOpts nor requestCompactionOpts are supplied", () => {
-    createOpenClawTools({
+    const tools = createOpenClawTools({
       agentSessionKey: "main",
       disablePluginTools: true,
       disableMessageTool: true,
@@ -98,6 +98,10 @@ describe("createOpenClawTools — silent partial-registration guard", () => {
     expect(message).toContain("continuation.enabled=true");
     expect(message).toContain("only continue_delegate will register");
     expect(meta).toMatchObject({ agentSessionKey: "main" });
+    const names = tools.map((tool) => tool.name);
+    expect(names).toContain("continue_delegate");
+    expect(names).not.toContain("continue_work");
+    expect(names).not.toContain("request_compaction");
   });
 
   it("does NOT warn when continuation is fully configured", () => {
@@ -197,5 +201,73 @@ describe("createOpenClawTools — silent partial-registration guard", () => {
     expect(names).toContain("continue_work");
     expect(names).toContain("continue_delegate");
     expect(names).toContain("request_compaction");
+  });
+
+  it("builds a complete non-runnable continuation catalog for skill-command dispatch", async () => {
+    const tools = createOpenClawTools({
+      agentSessionKey: "main",
+      disablePluginTools: true,
+      disableMessageTool: true,
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: { continuation: { enabled: true } } },
+      } as never,
+      beforeToolCallHookContext: {
+        skillCommand: {
+          commandName: "inventory-command",
+          skillName: "Inventory Command",
+          skillSource: "workspace",
+        },
+      },
+    });
+
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    expect([...byName.keys()]).toEqual(
+      expect.arrayContaining(["continue_work", "continue_delegate", "request_compaction"]),
+    );
+    expect(warnSpy).not.toHaveBeenCalled();
+    await expect(
+      byName.get("continue_work")?.execute("call-1", { reason: "verify inventory guard" }),
+    ).rejects.toThrow(/not available in this catalog\/inventory context/);
+    await expect(
+      byName.get("request_compaction")?.execute("call-2", {
+        reason: "verify inventory guard",
+      }),
+    ).resolves.toMatchObject({
+      content: [
+        expect.objectContaining({
+          text: expect.stringContaining("inventory-only paths"),
+        }),
+      ],
+    });
+  });
+
+  it("preserves live continuation callbacks when a runner supplies skill-command context", async () => {
+    const requestContinuation = vi.fn();
+    const tools = createOpenClawTools({
+      agentSessionKey: "main",
+      disablePluginTools: true,
+      disableMessageTool: true,
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: { continuation: { enabled: true } } },
+      } as never,
+      beforeToolCallHookContext: {
+        skillCommand: {
+          commandName: "live-command",
+          skillName: "Live Command",
+          skillSource: "workspace",
+        },
+      },
+      continueWorkOpts: { requestContinuation },
+      requestCompactionOpts: buildRequestCompactionOpts(),
+    });
+
+    const continueWork = tools.find((tool) => tool.name === "continue_work");
+    await continueWork?.execute("call-1", { reason: "continue live work" });
+    expect(requestContinuation).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "continue live work" }),
+    );
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 });

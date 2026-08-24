@@ -39,6 +39,7 @@ import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createAskUserTool } from "./tools/ask-user-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
+import { buildInventoryContinuationToolOpts } from "./tools/continuation-inventory-opts.js";
 import {
   createConversationsListTool,
   createConversationsSendTool,
@@ -118,6 +119,11 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
   const spawnWorkspaceDir = resolveWorkspaceRoot(options?.spawnWorkspaceDir ?? workspaceDir);
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
   const widgetPresentation = resolveWidgetPresentationForRun(options);
+  const inventoryContinuationOpts = options?.beforeToolCallHookContext?.skillCommand
+    ? buildInventoryContinuationToolOpts(
+        resolvedConfig?.agents?.defaults?.continuation?.enabled === true,
+      )
+    : {};
   // Scheduled turns keep delivery routing live, but Gateway authorization remains bound to the
   // authenticated creator account captured in the immutable scheduled authority envelope.
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
@@ -592,8 +598,9 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       sandboxWritable: options?.sandboxWritable,
       drainsContinuationDelegateQueue: options?.drainsContinuationDelegateQueue,
       disableContinuationTools: options?.disableContinuationTools,
-      continueWorkOpts: options?.continueWorkOpts,
-      requestCompactionOpts: options?.requestCompactionOpts,
+      continueWorkOpts: options?.continueWorkOpts ?? inventoryContinuationOpts.continueWorkOpts,
+      requestCompactionOpts:
+        options?.requestCompactionOpts ?? inventoryContinuationOpts.requestCompactionOpts,
     }),
   ];
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
