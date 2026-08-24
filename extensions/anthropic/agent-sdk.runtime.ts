@@ -580,11 +580,9 @@ export const executeClaudeAgentSdk: CliBackendExecute = async function* (context
   let sawTerminalResult = false;
   const abort = () => controller.abort();
   context.abortSignal?.addEventListener("abort", abort, { once: true });
-  if (context.abortSignal?.aborted) {
-    abort();
-  }
 
   try {
+    context.abortSignal?.throwIfAborted();
     const options = resolveClaudeAgentSdkOptions(context, controller, () => activeTurn);
     for await (const message of query({ prompt: context.prompt, options })) {
       if (message.type === "result") {

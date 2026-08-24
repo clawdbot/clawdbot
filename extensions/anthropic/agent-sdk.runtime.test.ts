@@ -246,6 +246,15 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(queryMock.mock.calls[0]?.[0]?.prompt).toBe("Remember the launch code.");
   });
 
+  it("never starts the SDK after its admitted run was already aborted", async () => {
+    const controller = new AbortController();
+    const reason = new Error("OpenClaw cancelled the run before SDK startup.");
+    controller.abort(reason);
+
+    await expect(collect(createContext({ abortSignal: controller.signal }))).rejects.toBe(reason);
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
   it("preserves native session identity across fresh and resumed turns", async () => {
     useSdkMessages();
 
