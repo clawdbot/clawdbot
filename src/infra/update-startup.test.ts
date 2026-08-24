@@ -79,13 +79,8 @@ vi.mock("./openclaw-root.js", async () => {
   };
 });
 
-vi.mock("./restart.js", () => ({
-  resolveGatewayRestartDeferralTimeoutMs: (timeoutMs: unknown) => {
-    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
-      return 300_000;
-    }
-    return timeoutMs <= 0 ? undefined : Math.floor(timeoutMs);
-  },
+vi.mock("./restart.js", async () => ({
+  ...(await vi.importActual<typeof import("./restart.js")>("./restart.js")),
   scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
 }));
 
@@ -2143,6 +2138,7 @@ describe("update-startup", () => {
       expect.objectContaining({
         root: "/opt/openclaw",
         timeoutMs: 45 * 60 * 1000,
+        restartDrainTimeoutMs: 300_000,
         channel: "beta",
         tag: "2.0.0-beta.1",
         restartDelayMs: 2000,

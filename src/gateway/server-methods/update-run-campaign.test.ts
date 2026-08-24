@@ -88,8 +88,8 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   };
 });
 
-vi.mock("../../infra/restart.js", () => ({
-  resolveGatewayRestartDeferralTimeoutMs: () => 300_000,
+vi.mock("../../infra/restart.js", async () => ({
+  ...(await vi.importActual<typeof import("../../infra/restart.js")>("../../infra/restart.js")),
   scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
 }));
 

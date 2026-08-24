@@ -513,6 +513,33 @@ describe("infra runtime", () => {
       }
     });
 
+    it("replaces stale managed successor ownership when its replacement coalesces", async () => {
+      const replacementOwner = { ...managedSuccessorOwner, handoffId: "replacement-handoff" };
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "update.auto",
+          successorOwner: managedSuccessorOwner,
+        });
+        const replacement = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "update.auto",
+          successorOwner: replacementOwner,
+        });
+
+        expect(replacement.coalesced).toBe(true);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+          reason: "update.auto",
+          successorOwner: replacementOwner,
+        });
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
     it("runs restart preparation only when the scheduled restart emits", async () => {
       const beforeEmit = vi.fn(async () => {});
       const emitSpy = vi.spyOn(process, "emit");

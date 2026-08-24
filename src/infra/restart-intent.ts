@@ -40,10 +40,6 @@ export type GatewayRestartIntent = {
   };
 };
 
-function normalizeRestartIntentPid(pid: number | undefined): number | null {
-  return asPositiveSafeInteger(pid) ?? null;
-}
-
 export function normalizeRestartIntentReason(reason: string | undefined): string | undefined {
   const normalized = reason?.trim();
   return normalized ? truncateUtf16Safe(normalized, 200) : undefined;
@@ -55,7 +51,7 @@ export function writeGatewayRestartIntentSync(opts: {
   intent?: GatewayRestartIntent;
   reason?: string;
 }): boolean {
-  const targetPid = normalizeRestartIntentPid(opts.targetPid);
+  const targetPid = asPositiveSafeInteger(opts.targetPid) ?? null;
   if (targetPid === null) {
     return false;
   }

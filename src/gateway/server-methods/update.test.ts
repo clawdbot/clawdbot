@@ -89,9 +89,7 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
 }));
 
-vi.mock("../../config/commands.flags.js", () => ({
-  isRestartEnabled: isRestartEnabledMock,
-}));
+vi.mock("../../config/commands.flags.js", () => ({ isRestartEnabled: isRestartEnabledMock }));
 
 vi.mock("../../config/sessions.js", () => ({
   extractDeliveryInfo: (sessionKey: string | undefined) => {
@@ -125,19 +123,12 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   };
 });
 
-vi.mock("../../infra/restart.js", () => ({
-  resolveGatewayRestartDeferralTimeoutMs: (timeoutMs: unknown) => {
-    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
-      return 300_000;
-    }
-    return timeoutMs <= 0 ? undefined : Math.floor(timeoutMs);
-  },
+vi.mock("../../infra/restart.js", async () => ({
+  ...(await vi.importActual<typeof import("../../infra/restart.js")>("../../infra/restart.js")),
   scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
 }));
 
-vi.mock("../../infra/package-json.js", () => ({
-  readPackageVersion: readPackageVersionMock,
-}));
+vi.mock("../../infra/package-json.js", () => ({ readPackageVersion: readPackageVersionMock }));
 
 vi.mock("../../version.js", () => ({
   get VERSION() {
@@ -688,6 +679,7 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         supervisor: "systemd",
+        restartDrainTimeoutMs: 300_000,
         restartDelayMs: 2000,
       }),
     );
@@ -705,6 +697,23 @@ describe("update.run restart scheduling", () => {
       }),
     );
   });
+
+  it.each(["launchd", "systemd"] as const)(
+    "normalizes overflow-sized %s handoff and restart delays together",
+    async (supervisor) => {
+      detectRespawnSupervisorMock.mockReturnValueOnce(supervisor);
+      mockGlobalInstallSurface();
+
+      await invokeUpdateRun({ restartDelayMs: 2_147_153_648 });
+
+      expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+        expect.objectContaining({ supervisor, restartDelayMs: 60_000 }),
+      );
+      expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
+        expect.objectContaining({ delayMs: 60_000 }),
+      );
+    },
+  );
 
   it("starts managed package handoff when the gateway cwd is unavailable", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
@@ -922,27 +931,29 @@ describe("update.run restart scheduling", () => {
     expect(payload?.handoff?.status).toBe("started");
   });
 
-  it("does not hand off systemd-supervised git/dev updates from generic systemd markers alone", async () => {
+  it("hands marker-only systemd git/dev updates to the helper for exact ownership verification", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("systemd");
     mockGitInstallSurface("/tmp/openclaw-git");
 
     const payload = await withProcessEnv(
       {
         OPENCLAW_SYSTEMD_UNIT: undefined,
-        INVOCATION_ID: "8a77e69a8f604bf0b7984879b9f17a7c",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
       },
       () => captureUpdateRunPayload(),
     );
 
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
-    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-    expect(payload?.ok).toBe(false);
-    expect(payload?.restart).toBeNull();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({ root: "/tmp/openclaw-git", supervisor: "systemd" }),
+    );
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledOnce();
+    expect(payload?.ok).toBe(true);
     expect(payload?.result?.status).toBe("skipped");
-    expect(payload?.result?.reason).toBe("managed-service-handoff-unavailable");
+    expect(payload?.result?.reason).toBe("managed-service-handoff-started");
     expect(payload?.result?.mode).toBe("git");
-    expect(payload?.handoff?.status).toBe("unavailable");
+    expect(payload?.handoff?.status).toBe("started");
   });
 
   it("returns a safe command when package updates cannot be handed off", async () => {

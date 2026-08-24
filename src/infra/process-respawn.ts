@@ -35,39 +35,6 @@ function rewritePnpmVersionedOpenClawEntryPath(entryPath: string): string {
   );
 }
 
-function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
-  child: ChildProcess;
-  pid?: number;
-} {
-  const [entryArg, ...entryArgs] = process.argv.slice(1);
-  const args = [
-    ...process.execArgv,
-    ...(entryArg ? [rewritePnpmVersionedOpenClawEntryPath(entryArg)] : []),
-    ...entryArgs,
-  ];
-  const child = spawn(process.execPath, args, {
-    env: opts.env ? { ...process.env, ...opts.env } : process.env,
-    detached: true,
-    stdio: "inherit",
-  });
-  // Detached spawn failures can arrive asynchronously after spawn() returns.
-  // Keep this listener before unref() so the parent does not crash during handoff.
-  child.on("error", () => {});
-  child.unref();
-  return { child, pid: child.pid ?? undefined };
-}
-
-function scheduleLaunchdRestartAfterExit(): GatewayRespawnResult {
-  const handoff = scheduleDetachedLaunchdRestartHandoff({
-    mode: "start-after-exit",
-    waitForPid: process.pid,
-  });
-  if (!handoff.ok) {
-    return { mode: "failed", detail: handoff.error };
-  }
-  return { mode: "supervised", handoffSpawned: handoff.value };
-}
-
 /**
  * Attempt to restart this process with a fresh PID.
  * - supervised environments (launchd/systemd/schtasks): caller should exit and let supervisor restart
@@ -84,7 +51,13 @@ export function restartGatewayProcessWithFreshPid(
   const supervisor = detectGatewayRespawnSupervisor(process.env);
   if (supervisor) {
     if (supervisor === "launchd") {
-      return scheduleLaunchdRestartAfterExit();
+      const handoff = scheduleDetachedLaunchdRestartHandoff({
+        mode: "start-after-exit",
+        waitForPid: process.pid,
+      });
+      return handoff.ok
+        ? { mode: "supervised", handoffSpawned: handoff.value }
+        : { mode: "failed", detail: handoff.error };
     }
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
@@ -97,25 +70,14 @@ export function restartGatewayProcessWithFreshPid(
     }
     return { mode: "supervised" };
   }
-  if (process.platform === "win32") {
-    // Detached respawn is unsafe on Windows without an identified Scheduled Task:
-    // the child becomes orphaned if the original process exits.
-    return {
-      mode: "disabled",
-      detail: "win32: detached respawn unsupported without Scheduled Task markers",
-    };
-  }
-  if (isContainerEnvironment()) {
-    return {
-      mode: "disabled",
-      detail: "container: use in-process restart to keep PID 1 alive",
-    };
-  }
-
-  return {
-    mode: "disabled",
-    detail: "unmanaged: use in-process restart to keep custom supervisor PID tracking stable",
-  };
+  // Unmanaged Windows or containers cannot safely surrender their tracked process.
+  const detail =
+    process.platform === "win32"
+      ? "win32: detached respawn unsupported without Scheduled Task markers"
+      : isContainerEnvironment()
+        ? "container: use in-process restart to keep PID 1 alive"
+        : "unmanaged: use in-process restart to keep custom supervisor PID tracking stable";
+  return { mode: "disabled", detail };
 }
 
 /**
@@ -132,12 +94,22 @@ export function respawnGatewayProcessForUpdate(
     return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
   }
   try {
-    const { child, pid } = spawnDetachedGatewayProcess(opts);
-    return { mode: "spawned", pid, child };
+    const [entryArg, ...entryArgs] = process.argv.slice(1);
+    const args = [
+      ...process.execArgv,
+      ...(entryArg ? [rewritePnpmVersionedOpenClawEntryPath(entryArg)] : []),
+      ...entryArgs,
+    ];
+    const child = spawn(process.execPath, args, {
+      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      detached: true,
+      stdio: "inherit",
+    });
+    // Register before unref: late detached-spawn failures must not crash the parent.
+    child.on("error", () => {});
+    child.unref();
+    return { mode: "spawned", pid: child.pid ?? undefined, child };
   } catch (err) {
-    return {
-      mode: "failed",
-      detail: formatErrorMessage(err),
-    };
+    return { mode: "failed", detail: formatErrorMessage(err) };
   }
 }

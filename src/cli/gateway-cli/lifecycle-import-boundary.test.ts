@@ -28,11 +28,6 @@ describe("gateway lifecycle hub import boundaries", () => {
     expect(hub).not.toContain(
       'from "../../agents/main-session-recovery/main-session-restart-recovery.js"',
     );
-
-    // Service-manager graphs remain lazy until a managed update owns successor parking.
-    expect(hub).toContain('from "../../infra/managed-update-successor.js"');
-    expect(hub).not.toContain('from "../../daemon/systemd-lifecycle.js"');
-    expect(hub).not.toContain('from "../../daemon/launchd-stop.js"');
   });
 
   it("still primes the hub eagerly so signal handlers survive dist chunk rotation", () => {
