@@ -75,6 +75,52 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
   });
 
+  it("closes an established legacy SSE transport after a terminal reconnect response", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (method !== "GET") {
+        return new Response(null, { status: 202 });
+      }
+      if (!streamController) {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              streamController = controller;
+              controller.enqueue(
+                encoder.encode("retry: 1\n\nevent: endpoint\ndata: /messages\n\n"),
+              );
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      return new Response(null, { status: 503, statusText: "Unavailable" });
+    });
+    const transport = new OpenClawSSEClientTransport(new URL("http://mcp.invalid/sse"), {
+      fetch: fetchMock,
+      eventSourceInit: { fetch: fetchMock },
+    });
+    const onclose = vi.fn();
+    // MCP transports expose callback properties rather than EventTarget listeners.
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener
+    transport.onclose = onclose;
+
+    try {
+      await transport.start();
+      streamController?.close();
+
+      await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
+      await expect(transport.send({ jsonrpc: "2.0", id: 1, method: "tools/list" })).rejects.toThrow(
+        "closed",
+      );
+      expect(fetchMock.mock.calls.filter((call) => call[1]?.method === "POST")).toHaveLength(0);
+    } finally {
+      await transport.close();
+    }
+  });
+
   it("closes after Streamable notification retry exhaustion", async () => {
     let getCount = 0;
     const fetchMock = initializedFetch({
@@ -105,6 +151,30 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     await client.connect(transport);
     await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
     expect(fetchMock.mock.calls.filter((call) => call[1]?.method === "GET")).toHaveLength(3);
+  });
+
+  it("closes a stateful Streamable session when its initial notification GET expired", async () => {
+    const fetchMock = initializedFetch({
+      onGet: () => new Response("Session not found", { status: 404, statusText: "Not Found" }),
+    });
+    const transport = new OpenClawStreamableHTTPClientTransport(new URL("http://mcp.invalid/mcp"), {
+      fetch: fetchMock,
+    });
+    const client = new Client({ name: "test", version: "1" });
+    const onclose = vi.fn();
+    // MCP clients expose callback properties rather than EventTarget listeners.
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener
+    client.onclose = onclose;
+
+    try {
+      await client.connect(transport);
+
+      await vi.waitFor(() => expect(onclose).toHaveBeenCalledOnce());
+      expect(transport.sessionId).toBe("session-1");
+      expect(fetchMock.mock.calls.filter((call) => call[1]?.method === "GET")).toHaveLength(1);
+    } finally {
+      await disposeMcpClient({ client, transport, transportType: "streamable-http" });
+    }
   });
 
   it("sends stateful DELETE after failed initialization closed the SDK transport", async () => {

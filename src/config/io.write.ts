@@ -362,6 +362,7 @@ export async function writeConfigFileFromContext(
   const validated = validateConfigObjectRawWithPlugins(validationCandidate, {
     env: deps.env,
     pluginValidation: options.skipPluginValidation ? "skip" : "full",
+    semanticValidation: "strict",
     preservedLegacyRootKeys: options.preservedLegacyRootKeys,
   });
   if (!validated.ok) {

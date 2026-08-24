@@ -22,6 +22,7 @@ import type {
 type ActiveRun = {
   run: ManagedRun;
   scopeKey?: string;
+  waitForExtinction: () => Promise<void>;
 };
 
 type StartingRun = {
@@ -94,7 +95,9 @@ function resolveElapsedTimeoutReason(params: {
     : null;
 }
 
-export function createProcessSupervisor(): ProcessSupervisor {
+export function createProcessSupervisor(): ProcessSupervisor & {
+  waitForScope: (scopeKey: string) => Promise<void>;
+} {
   const registry = createRunRegistry();
   const active = new Map<string, ActiveRun>();
   const startingRuns = new Map<string, StartingRun>();
@@ -136,6 +139,28 @@ export function createProcessSupervisor(): ProcessSupervisor {
       if (starting.scopeKey === scopeKey) {
         cancel(runId, reason);
       }
+    }
+  };
+
+  const waitForScope = async (scopeKey: string): Promise<void> => {
+    let firstFailure: PromiseRejectedResult | undefined;
+    while (true) {
+      const starts = Array.from(startingScopes.get(scopeKey)?.runs ?? []);
+      const owned = Array.from(active.values())
+        .filter((current) => current.scopeKey === scopeKey)
+        .map((current) => current.waitForExtinction());
+      if (starts.length === 0 && owned.length === 0) {
+        if (firstFailure) {
+          throw firstFailure.reason;
+        }
+        return;
+      }
+      // Startup can become active while the snapshot settles; recheck both maps
+      // so shutdown cannot outrun an admitted command or retained descendants.
+      const results = await Promise.allSettled([...owned, ...starts]);
+      firstFailure ??= results.find(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
     }
   };
 
@@ -194,7 +219,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
     }
 
     let forcedReason: TerminationReason | null = startingRun.terminationReason ?? null;
-    let settled = false;
+    let resultSettled = false;
+    let ownershipExtinct = false;
     let stdout = "";
     let stderr = "";
     let stdoutListener = input.onStdout;
@@ -212,7 +238,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
     let noOutputTimeoutDeadlineMs: number | null = null;
 
     const setForcedReason = (reason: TerminationReason) => {
-      if (forcedReason) {
+      if (forcedReason || resultSettled) {
         return;
       }
       forcedReason = reason;
@@ -236,7 +262,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
     ): NodeJS.Timeout => {
       const intervalMs = resolveTimerTimeoutMs(remainingMs, 1);
       return setTimeout(() => {
-        if (settled) {
+        if (resultSettled) {
           return;
         }
         const nextRemainingMs = Math.min(remainingMs - intervalMs, deadlineMs - performance.now());
@@ -255,7 +281,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
 
     const touchOutput = () => {
       registry.touchOutput(runId);
-      if (!noOutputTimeoutMs || settled) {
+      if (!noOutputTimeoutMs || resultSettled) {
         return;
       }
       noOutputTimeoutDeadlineMs = performance.now() + noOutputTimeoutMs;
@@ -288,22 +314,29 @@ export function createProcessSupervisor(): ProcessSupervisor {
                 env: input.env,
               });
             })()
-          : await createChildAdapter({
-              argv: input.argv,
-              cwd: input.cwd,
-              env: input.env,
-              windowsVerbatimArguments: input.windowsVerbatimArguments,
-              input: input.input,
-              stdinMode: input.stdinMode,
-              secretInput: input.secretInput,
-            });
+          : input.mode === "anchored-shell"
+            ? await createChildAdapter({
+                anchoredShellCommand: input.command,
+                cwd: input.cwd,
+                env: input.env,
+              })
+            : await createChildAdapter({
+                argv: input.argv,
+                cwd: input.cwd,
+                env: input.env,
+                exactEnv: input.exactEnv,
+                windowsVerbatimArguments: input.windowsVerbatimArguments,
+                input: input.input,
+                stdinMode: input.stdinMode,
+                secretInput: input.secretInput,
+              });
 
       registry.updateState(runId, forcedReason ? "exiting" : "running", {
         pid: adapter.pid,
         ...(forcedReason ? { terminationReason: forcedReason } : {}),
       });
 
-      const clearTimers = () => {
+      const clearResultTimers = () => {
         if (timeoutTimer) {
           clearTimeout(timeoutTimer);
           timeoutTimer = null;
@@ -312,17 +345,50 @@ export function createProcessSupervisor(): ProcessSupervisor {
           clearTimeout(noOutputTimer);
           noOutputTimer = null;
         }
+      };
+
+      const releaseOwnership = () => {
+        if (ownershipExtinct) {
+          return;
+        }
+        ownershipExtinct = true;
         if (forceKillTimer) {
           clearTimeout(forceKillTimer);
           forceKillTimer = null;
         }
+        active.delete(runId);
+        // Control-channel extinction can precede independently drained output;
+        // keep decoder subscriptions alive until the root result also settles.
+        if (resultSettled) {
+          adapter.dispose();
+        }
+      };
+
+      const settleResult = () => {
+        resultSettled = true;
+        clearResultTimers();
+        if (ownershipExtinct) {
+          adapter.dispose();
+        } else if (!adapter.waitForExtinction) {
+          releaseOwnership();
+        }
       };
 
       cancelAdapter = (reason: TerminationReason) => {
-        if (settled || cancelRequested) {
+        if (ownershipExtinct || (cancelRequested && !(resultSettled && forceKillTimer))) {
           return;
         }
         cancelRequested = true;
+        if (resultSettled) {
+          if (forceKillTimer) {
+            clearTimeout(forceKillTimer);
+            forceKillTimer = null;
+          }
+          // Root completion closes its terminal record, not ownership of
+          // descendants still retained by the authoritative group or Job.
+          adapter.kill("SIGKILL");
+          return;
+        }
         // Windows has no catchable SIGTERM equivalent: the adapter implements it
         // with asynchronous taskkill, so waiting the cleanup grace only delays an
         // already-expired deadline before the same forced tree termination.
@@ -335,7 +401,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
         }
         adapter.kill("SIGTERM");
         forceKillTimer = setTimeout(() => {
-          if (!settled) {
+          if (!ownershipExtinct) {
             adapter.kill("SIGKILL");
           }
         }, GRACEFUL_CANCEL_TIMEOUT_MS);
@@ -359,20 +425,27 @@ export function createProcessSupervisor(): ProcessSupervisor {
         );
       }
 
+      const onRawOutput = (listener?: (chunk: Buffer) => void) =>
+        listener &&
+        ((chunk: Buffer) => {
+          listener(chunk);
+          touchOutput();
+        });
+      const rawInput = input.mode === "child" ? input : undefined;
       adapter.onStdout((chunk) => {
         if (captureOutput) {
           stdout = appendCapturedOutput(stdout, chunk, "stdout", maxCapturedOutputChars);
         }
         stdoutListener?.(chunk);
         touchOutput();
-      });
+      }, onRawOutput(rawInput?.onStdoutRaw));
       adapter.onStderr((chunk) => {
         if (captureOutput) {
           stderr = appendCapturedOutput(stderr, chunk, "stderr", maxCapturedOutputChars);
         }
         stderrListener?.(chunk);
         touchOutput();
-      });
+      }, onRawOutput(rawInput?.onStderrRaw));
 
       const waitPromise = (async (): Promise<RunExit> => {
         const result = await adapter.wait();
@@ -382,10 +455,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
           noOutputTimeoutDeadlineMs,
         });
         const terminalReason = forcedReason ?? deadlineReason;
-        settled = true;
-        clearTimers();
-        adapter.dispose();
-        active.delete(runId);
+        settleResult();
 
         const reason: TerminationReason =
           terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
@@ -407,11 +477,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
         });
         return exit;
       })().catch((err: unknown) => {
-        if (!settled) {
-          settled = true;
-          clearTimers();
-          active.delete(runId);
-          adapter.dispose();
+        if (!resultSettled) {
+          settleResult();
           registry.finalize(runId, {
             reason: "spawn-error",
             exitCode: null,
@@ -421,12 +488,20 @@ export function createProcessSupervisor(): ProcessSupervisor {
         throw err;
       });
 
+      const extinctionPromise = adapter.waitForExtinction
+        ? adapter.waitForExtinction().finally(releaseOwnership)
+        : waitPromise.then(() => undefined);
+      // Ownership failures remain observable through the explicit join, but a
+      // caller waiting only for the root result must not create an unhandled rejection.
+      void extinctionPromise.catch(() => undefined);
+
       const managedRun: ManagedRun = {
         runId,
         pid: adapter.pid,
         startedAtMs,
         stdin: adapter.stdin,
         wait: async () => await waitPromise,
+        ...(adapter.waitForExtinction && { waitForExtinction: () => extinctionPromise }),
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);
         },
@@ -439,6 +514,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
       active.set(runId, {
         run: managedRun,
         scopeKey,
+        waitForExtinction: async () => await extinctionPromise,
       });
       if (forcedReason) {
         managedRun.cancel(forcedReason);
@@ -509,6 +585,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
     spawn,
     cancel,
     cancelScope,
+    waitForScope,
     getRecord: (runId: string) => registry.get(runId),
   };
 }

@@ -4,12 +4,16 @@ import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 
+type SetupChannels = typeof import("./onboard-channels.js").setupChannels;
+
 const mocks = vi.hoisted(() => ({
   state: { snapshot: undefined as unknown },
   commitConfig: vi.fn(),
   ensureWorkspaceAndSessions: vi.fn(),
   setupPluginConfig: vi.fn(),
   setupSkills: vi.fn(),
+  setupChannels: vi.fn<SetupChannels>(async (config) => config),
+  select: vi.fn(),
   text: vi.fn(),
 }));
 
@@ -67,7 +71,7 @@ vi.mock("./configure.shared.js", () => ({
   confirm: vi.fn(),
   intro: vi.fn(),
   outro: vi.fn(),
-  select: vi.fn(),
+  select: mocks.select,
   text: mocks.text,
 }));
 
@@ -84,6 +88,8 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./onboard-skills.js", () => ({ setupSkills: mocks.setupSkills }));
+
+vi.mock("./onboard-channels.js", () => ({ setupChannels: mocks.setupChannels }));
 
 import { runConfigureWizard } from "./configure.wizard.js";
 
@@ -117,6 +123,7 @@ describe("runConfigureWizard default-agent ownership", () => {
       issues: [],
     };
     mocks.text.mockResolvedValue("/tmp/new-ops-workspace");
+    mocks.select.mockResolvedValue("configure");
     mocks.setupPluginConfig.mockImplementation(
       async ({ config }: { config: OpenClawConfig }) => config,
     );
@@ -359,5 +366,24 @@ describe("runConfigureWizard default-agent ownership", () => {
     expect(mocks.setupPluginConfig).not.toHaveBeenCalled();
     expect(mocks.setupSkills).not.toHaveBeenCalled();
     expect(mocks.commitConfig).not.toHaveBeenCalled();
+  });
+
+  it("runs channel post-write hooks after the converged config write", async () => {
+    const hook = vi.fn(async () => {});
+    mocks.setupChannels.mockImplementationOnce(async (config, _runtime, _prompter, options) => {
+      options?.onPostWriteHook?.({
+        channel: "matrix",
+        accountId: "ops",
+        run: hook,
+      });
+      return config;
+    });
+
+    await runConfigureWizard({ command: "configure", sections: ["channels"] }, runtime);
+
+    expect(hook).toHaveBeenCalledOnce();
+    expect(mocks.commitConfig.mock.invocationCallOrder[0]!).toBeLessThan(
+      hook.mock.invocationCallOrder[0]!,
+    );
   });
 });

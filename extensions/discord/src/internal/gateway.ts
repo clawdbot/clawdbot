@@ -15,6 +15,8 @@ import {
   type GatewaySendPayload,
   type GatewayVoiceStateUpdateData,
 } from "discord-api-types/v10";
+import { asSafeIntegerInRange, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as ws from "ws";
 import { Plugin, type Client } from "./client.js";
 import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-close-codes.js";
@@ -118,8 +120,12 @@ export class GatewayPlugin extends Plugin {
     return null;
   }
 
-  listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] {
+  listVoiceChannelStates(guildId: string, channelId: string): APIVoiceState[] | null {
     return this.voiceStateCache.listVoiceChannelStates(guildId, channelId);
+  }
+
+  async fetchGuildEmojis<T>(guildId: string, fetcher: () => Promise<T>): Promise<T> {
+    return this.client ? await this.client.fetchGuildEmojis(guildId, fetcher) : await fetcher();
   }
 
   takeVoiceStateTransition(state: APIVoiceState): DiscordGatewayVoiceStateTransition | null {
@@ -261,7 +267,10 @@ export class GatewayPlugin extends Plugin {
     switch (payload.op) {
       case GatewayOpcodes.Hello: {
         this.startHeartbeat(
-          (payload.d as { heartbeat_interval?: number }).heartbeat_interval ?? 45_000,
+          asSafeIntegerInRange(asOptionalRecord(payload.d)?.heartbeat_interval, {
+            min: 1,
+            max: MAX_TIMER_TIMEOUT_MS,
+          }) ?? 45_000,
         );
         const resumeState = resume ? this.getResumeState() : null;
         if (resumeState) {

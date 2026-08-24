@@ -47,7 +47,7 @@ type ExistingHostPathResult =
   | { kind: "invalid" };
 
 function normalizeExplicitWorkdirInput(workdir: string | undefined): NormalizedWorkdirInput {
-  if (workdir === undefined) {
+  if (workdir === undefined || workdir === "") {
     return { kind: "omitted" };
   }
   const value = normalizeOptionalString(workdir);

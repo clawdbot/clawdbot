@@ -116,7 +116,7 @@ describe("worktrees gateway methods", () => {
     expect(service.remove).toHaveBeenCalledWith({
       id: record.id,
       reason: "manual-delete",
-      force: true,
+      allowSnapshotLoss: true,
     });
   });
 

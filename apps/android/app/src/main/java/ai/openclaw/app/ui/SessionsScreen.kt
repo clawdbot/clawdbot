@@ -949,7 +949,8 @@ internal fun sessionListSubtitle(
       (digest.health == "done" || digest.health == "failed") &&
       (session.lastReadAt ?: 0L) < digest.updatedAt
   val observer = digest?.headline?.takeIf { (running && digestMatchesActiveRun) || (!running && finalDigestUnread) }
-  return declaredAttention ?: failedAttention ?: agentStatus?.note ?: observer ?: fallback
+  val queued = nativeString("Waiting for a concurrency slot").takeIf { runStatus == "queued" }
+  return declaredAttention ?: failedAttention ?: agentStatus?.note ?: queued ?: observer ?: fallback
 }
 
 internal data class SessionSection(

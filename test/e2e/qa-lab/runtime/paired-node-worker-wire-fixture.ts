@@ -295,7 +295,7 @@ export async function createPairedNodeWorkerHost(
   await fs.mkdir(nodeEnv.HOME, { recursive: true });
   const workspace = new NodeWorkerWorkspaceRuntime({ root: nodeHostRoot, env: nodeEnv });
   const bundleInstaller = new NodeWorkerBundleInstaller({ root: nodeHostRoot, env: nodeEnv });
-  let capacityAvailable = true;
+  let capacity = { total: options.capacity ?? 2, available: 0 };
   let client: GatewayClient | undefined;
   let closing = false;
   const invokeTasks = new Set<Promise<void>>();
@@ -311,7 +311,7 @@ export async function createPairedNodeWorkerHost(
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
     workerHost: {
       enabled: true as const,
-      capacity: capacityAvailable ? ("available" as const) : ("full" as const),
+      capacity,
       ...(options.bundlePrewarm ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION } : {}),
       ...(options.bundleRetention ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION } : {}),
       ...(options.bundleStatus ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION } : {}),
@@ -323,8 +323,8 @@ export async function createPairedNodeWorkerHost(
     workspace,
     capacity: options.capacity,
     capacityWaitMs: options.capacityWaitMs,
-    onAvailabilityChanged: (available) => {
-      capacityAvailable = available;
+    onCapacityChanged: (nextCapacity) => {
+      capacity = nextCapacity;
     },
   });
 
@@ -506,7 +506,7 @@ export async function startPairedNodeWorkerGateway(params: {
       logging: params.executionIdentity
         ? {
             ...config.logging,
-            audit: { ...config.logging?.audit, executionIdentity: true },
+            audit: { ...config.logging?.audit, enabled: true, executionIdentity: true },
           }
         : config.logging,
       nodeHost: {

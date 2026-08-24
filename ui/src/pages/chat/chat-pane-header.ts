@@ -1,27 +1,38 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
+import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
+import {
+  openScopeUpgradeDetails,
+  renderScopeUpgradeTrigger,
+  scopeUpgradeStatusUsesSessionHeader,
+} from "../../app/device-scope-upgrade.ts";
+import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import {
+  formatUpdateCampaignLabel,
+  formatUpdateTargetLabel,
+} from "../../app/update-overlay-helpers.ts";
+import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  personActivityRouting,
+  type PersonActivityRouting,
+} from "../../components/person-activity-link.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { listAssignableSessionOwners } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
-import {
-  hasSessionPresenceViewers,
-  projectPresencePayload,
-} from "../../components/viewer-facepile.ts";
-import { workspaceIconRouteUrl } from "../../components/workspace-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { hasSessionPresenceViewers, projectPresencePayload } from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { isActiveTask } from "../../lib/tasks/data.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
 import { displayedChatSessionBranches } from "./chat-history.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
@@ -35,6 +46,7 @@ import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
   HeaderMenuQuickAction,
+  HeaderMenuStatusAction,
 } from "./components/chat-header-session-menu.ts";
 import {
   canRevealSessionWorkspace,
@@ -46,9 +58,14 @@ import { renderChatSessionSharing } from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import type { SidebarLayout } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
+  private personActivityRouting(): PersonActivityRouting {
+    return personActivityRouting(this.context);
+  }
+
   private resolveWorkspaceIcon(sessionKey: string | undefined) {
     if (!sessionKey) {
       return null;
@@ -60,10 +77,82 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       password: gateway.connection.password,
     });
     return {
-      routeUrl: workspaceIconRouteUrl(this.context.basePath, sessionKey),
+      routeUrl: buildControlUiResourcePath(
+        "workspaceIcon",
+        this.context.resourceBasePath,
+        sessionKey,
+      ),
       authTokens,
       authReady: Boolean(gateway.snapshot.hello || authTokens.length),
     };
+  }
+
+  private compactHeaderStatusActions(): HeaderMenuStatusAction[] {
+    if (!this.narrow) {
+      return [];
+    }
+    const actions: HeaderMenuStatusAction[] = [];
+    if (scopeUpgradeStatusUsesSessionHeader(this.context.gateway.snapshot)) {
+      actions.push({
+        id: "access",
+        label: t("connection.scopeUpgrade.status"),
+        icon: icons.shieldQuestion,
+        tone: "warn",
+        onActivate: openScopeUpgradeDetails,
+      });
+    }
+
+    const overlay = this.context.overlays.snapshot;
+    if (overlay.controlUiRefreshRequired) {
+      actions.push({
+        id: "refresh",
+        label: `${t("chat.sidebar.serverUpdatedTitle")} · ${t(
+          "chat.sidebar.serverUpdatedRefresh",
+        )}`,
+        icon: icons.refresh,
+        tone: "info",
+        onActivate: () => globalThis.location.reload(),
+      });
+      return actions;
+    }
+
+    const campaignLabel = formatUpdateCampaignLabel(overlay.updateSchedule);
+    const targetLabel = formatUpdateTargetLabel(overlay.updateSchedule, overlay.updateAvailable);
+    const updateBusy = overlay.updateRunning || overlay.updateReconciliationPending;
+    const update = overlay.updateAvailable;
+    const target = overlay.updateSchedule?.target;
+    const updateAvailable = Boolean(
+      update &&
+      !overlay.updateSchedule?.campaign &&
+      !overlay.updateStatusBanner &&
+      (update.latestVersion !== update.currentVersion ||
+        (target?.kind === "git" && target.commitsBehind > 0)),
+    );
+    const updateLabel = overlay.updateStatusBanner?.text
+      ? overlay.updateStatusBanner.text
+      : campaignLabel
+        ? targetLabel
+          ? t("updates.sidebar.campaignTarget", { status: campaignLabel, target: targetLabel })
+          : campaignLabel
+        : updateBusy
+          ? t("updates.sidebar.updating")
+          : updateAvailable
+            ? t("updates.page.available", { target: targetLabel ?? update?.latestVersion ?? "" })
+            : null;
+    if (updateLabel) {
+      actions.push({
+        id: "update",
+        label: updateLabel,
+        icon: overlay.updateStatusBanner
+          ? icons.alertTriangle
+          : updateBusy
+            ? icons.refresh
+            : icons.download,
+        tone: overlay.updateStatusBanner?.tone ?? (updateBusy ? "info" : "warn"),
+        onActivate: () => this.context.navigate("updates"),
+      });
+    }
+    return actions;
   }
 
   protected renderPaneHeader(
@@ -73,6 +162,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     catalog: boolean,
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
+    sidebarLayout?: SidebarLayout,
   ) {
     const board = this.resolveBoardView();
     const canChangeBoardDock = board.hasBoard && board.provider.canMutate;
@@ -192,15 +282,18 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const desktopEnvironmentId = resolveChatPaneDesktopTarget(row);
     const desktopPanelAvailable =
       desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
+    const accessStatusAction =
+      this.active &&
+      !this.narrow &&
+      scopeUpgradeStatusUsesSessionHeader(this.context.gateway.snapshot)
+        ? renderScopeUpgradeTrigger(
+            "btn btn--ghost btn--icon chat-icon-btn scope-upgrade-status-trigger",
+          )
+        : nothing;
     const openDesktopPanel = sessionWorkspace.onToggleDesktop ?? (() => undefined);
     const discussion = this.resolveSessionDiscussionAction();
-    const sidePanelOpen = this.state?.sidebarLayout.open === true;
-    const toggleSidePanel = () => {
-      const state = this.state;
-      if (state) {
-        this.setChatSidePanelOpen(!sidePanelOpen);
-      }
-    };
+    const sidePanelOpen = (sidebarLayout ?? this.state?.sidebarLayout)?.open === true;
+    const toggleSidePanel = () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout);
     const sidePanelAction = html`<openclaw-tooltip
       .content=${t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label")}
     >
@@ -279,7 +372,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         ),
         icon: icons.listChecks,
         active: !backgroundTasks.collapsed,
-        badge: backgroundTasks.tasks?.filter(isActiveTask).length ?? 0,
+        badge: backgroundTasks.activeCount,
         onActivate: backgroundTasks.onToggleCollapsed,
       });
     }
@@ -337,14 +430,15 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const selfId = sharingSnapshot.selfUser?.id;
     const instanceId = sharingSnapshot.client?.instanceId;
     const result = this.state?.sessionsResult;
-    const showOwnerChip = (result?.creators?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
+    const showOwnerChip = (result?.owners?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
+    const personActivity = this.personActivityRouting();
     const renderedOwnerId = showOwnerChip ? row?.owner?.actor.id : undefined;
     const presence = projectPresencePayload(this.presencePayload, selfId, instanceId);
     const ownerViewing = presence.users.some(
       (user) => user.id === renderedOwnerId && user.watchedSessions.includes(key),
     );
     const ownerOptions = listAssignableSessionOwners({
-      facet: result?.creators,
+      facet: result?.owners,
       agents: this.context.agents.state.agentsList?.agents,
       self: sharingSnapshot.selfUser ?? null,
     });
@@ -362,6 +456,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       session: row,
       showOwnerChip,
       ownerViewing,
+      personActivity,
       catalog,
       editing: this.headerEditing && this.headerRenameSessionKey === row?.key,
       renameValue: this.headerRenameValue,
@@ -376,7 +471,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       canReveal,
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
-      panelActions: html`${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
+      panelActions: html`${accessStatusAction}${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
       discussionAction: nothing,
       diffAction: nothing,
       backgroundTasksAction: nothing,
@@ -393,6 +488,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .sessionKey=${key}
               .excludeUserId=${renderedOwnerId}
               .maxVisible=${4}
+              .personActivity=${personActivity}
               variant="session"
             ></openclaw-viewer-facepile>`
           : nothing,
@@ -401,7 +497,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         face: board.face,
         dock: board.dock,
         canChangeDock: canChangeBoardDock,
+        fullscreenControl: board.hasBoard ? this.boardFullscreen.renderButton() : undefined,
         onSelectMode: (mode) => {
+          if (mode === "chat") {
+            void this.boardFullscreen.exit();
+          }
           if (!canChangeBoardDock) {
             const face = mode === "chat" ? "chat" : "dashboard";
             this.syncChatSidebarForDock(face === "dashboard" ? board.dock : "hidden");
@@ -457,7 +557,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .sessionLabel=${normalizeOptionalString(row.label) ??
               normalizeOptionalString(this.paneTitle) ??
               row.key}
-              .worktreePath=${row.execNode ? null : workspace.root}
+              .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}
               .archived=${row.archived === true}
               .onboarding=${this.onboarding}
               .preferencesBrowserOnly=${this.context.runtimeConfig?.state.connected &&
@@ -466,6 +566,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .settings=${this.state.settings}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
+              .statusActions=${this.compactHeaderStatusActions()}
               .ownerOptions=${ownerOptions}
               .selfOwner=${selfOwner}
               .currentOwnerId=${row.owner?.actor.id ?? null}
@@ -477,6 +578,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .onOpen=${() => {
                 void this.loadHeaderMenuData(row, agentWorkspace, workspaceGit);
               }}
+              .onOpenCommandPalette=${() =>
+                window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT))}
               .onSettingsChange=${this.state.applySettings}
               .onAction=${(action: HeaderMenuAction) => this.handleHeaderSessionAction(action, row)}
             ></openclaw-chat-header-session-menu>`

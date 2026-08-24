@@ -21,7 +21,6 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -53,7 +52,6 @@ import {
   subscribeChatPaneSnapshotInvalidation,
   subscribeChatPaneStartup,
 } from "./chat-pane-startup-subscriptions.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
 import { applySelectedChatAgent } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { createPageState } from "./chat-state-page.ts";
@@ -64,7 +62,11 @@ import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts"
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
-import { admitInitialUserMessageHandoff } from "./history-merge.ts";
+import {
+  admitInitialUserMessageHandoff,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import {
   applyChatCacheSnapshot,
@@ -111,10 +113,24 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       ) {
         return;
       }
-      // The memory miss is the ordering fence: any network replacement or live
-      // append that landed while IndexedDB was pending remains authoritative.
-      cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }, snapshot);
-      applyChatCacheSnapshot(state, snapshot);
+      // The memory miss fences network replacement; the pane projection merges
+      // live and pending rows that arrived while IndexedDB was pending.
+      const projection = reduceChatSessionProjection(
+        state,
+        { type: "snapshotLoaded", messages: snapshot.messages },
+        {
+          scope: readChatSessionProjectionScope(state, {
+            sessionKey,
+            sessionId: snapshot.sessionId,
+            ...(Object.hasOwn(snapshot, "displayedLeafEntryId")
+              ? { activeLeafEntryId: snapshot.displayedLeafEntryId }
+              : {}),
+          }),
+        },
+      );
+      const mergedSnapshot = { ...snapshot, messages: [...projection.messages] };
+      cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }, mergedSnapshot);
+      applyChatCacheSnapshot(state, mergedSnapshot);
       state.requestUpdate?.();
     });
   }
@@ -265,7 +281,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       state.handleChatDraftChange(draft);
       state.requestUpdate?.();
     });
-    this.sendPendingSkillWorkshopRevision(this.sessionKey);
   }
 
   protected readonly handlePaneFocus = () => {
@@ -281,38 +296,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     // A null mount binds only when its first annotation ownership begins.
     this.stagedAttachmentGatewayOwner ??= this.context.gateway.snapshot.client;
     focusBrowserAnnotationComposerAfterUpdate(this);
-  }
-
-  protected sendPendingSkillWorkshopRevision(expectedSessionKey: string) {
-    const state = this.state;
-    if (
-      !this.active ||
-      !this.presented ||
-      !state ||
-      !state.connected ||
-      state.sessionKey !== expectedSessionKey
-    ) {
-      return;
-    }
-    const revision = this.context.skillWorkshopRevision.consume(
-      expectedSessionKey,
-      this.context.gateway.snapshot.hello,
-    );
-    if (!revision) {
-      return;
-    }
-    void state
-      .handleSendChat(revision.instructions, {
-        restoreDraft: true,
-        skillWorkshopRevision: {
-          proposalId: revision.proposalId,
-          agentId: revision.proposalAgentId,
-        },
-      })
-      .catch((error: unknown) => {
-        setChatError(state, formatUiError(error));
-        state.requestUpdate?.();
-      });
   }
 
   protected readonly handleDocumentKeydown = (event: KeyboardEvent) => {
@@ -415,7 +398,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   };
 
   override connectedCallback() {
-    this.boardProviderLifecycleConnected = this.presented;
+    this.boardProviderLifecycleConnected = true;
     this.resumeStagedAttachments();
     super.connectedCallback();
     if (!this.presented) {
@@ -597,7 +580,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
           if (event.event === "session.message") {
             this.clearTypingActorForSessionMessage(event.payload);
           }
-          handlePageGatewayEvent(state, event);
+          handlePageGatewayEvent(state, event, () => this.presented);
         }
       }),
     );
@@ -709,7 +692,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.paneResizeObserver = null;
     this.connectionGeneration += 1;
     this.retireHeaderSessionMutations();
-    this.deferredSessionHydrationRequestVersion += 1;
+    this.retireDeferredSessionHydration();
     this.sessionDiscussionPanels.clear();
     this.taskSuggestionsRequestVersion += 1;
     this.setTaskSuggestions([]);

@@ -5,6 +5,7 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import type { PreparedAgentCommandRuntimeContext } from "../../agents/command/prepare.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -13,6 +14,7 @@ import { isTimeoutError } from "../../agents/failover-error.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { normalizeAgentRunTimeoutPhase } from "../../agents/run-timeout-attribution.js";
+import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
@@ -124,7 +126,9 @@ export function dispatchAgentRunFromGateway(params: {
   io: AgentTurnIo;
   context: AgentTurnContext;
   taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  canonicalSkillWorkspaceDir?: string;
   restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
+  commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
   onSettled?: (outcome: {
     terminalOutcome: AgentRunTerminalOutcome;
     onRecovered?: () => void;
@@ -185,15 +189,18 @@ export function dispatchAgentRunFromGateway(params: {
     readAgentRunDispatchExecutionIdentity(params),
   );
   const runAgent = () =>
-    agentCommandFromGatewayIngress(
-      cronCreatorAuthorityCapability
-        ? { ...ingressOptsWithSpawnFacts, cronCreatorAuthorityCapability }
-        : ingressOptsWithSpawnFacts,
-      defaultRuntime,
-      params.context.deps,
-      {
-        restoreAdmittedRecovery: params.restoreAdmittedRecovery,
-      },
+    runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
+      agentCommandFromGatewayIngress(
+        cronCreatorAuthorityCapability
+          ? { ...ingressOptsWithSpawnFacts, cronCreatorAuthorityCapability }
+          : ingressOptsWithSpawnFacts,
+        defaultRuntime,
+        params.context.deps,
+        {
+          restoreAdmittedRecovery: params.restoreAdmittedRecovery,
+        },
+        params.commandRuntimeContext,
+      ),
     );
   const agentRun = cronCreatorAuthorityCapability
     ? runWithCronCreatorAuthorityCapability(

@@ -41,19 +41,20 @@ function isRecoverableMissingManagerPersistentSessionError(error: AcpRuntimeErro
   return false;
 }
 
-/** Prepares a one-time fresh-handle retry for recoverable pre-output runtime failures. */
+/** Prepares a one-time fresh-handle retry only before authoritative prompt submission. */
 export async function prepareFreshManagerRuntimeHandleRetry(params: {
   attempt: number;
   cfg: OpenClawConfig;
   sessionKey: string;
   error: AcpRuntimeError;
+  promptStarted: boolean;
   sawTurnOutput: boolean;
   runtime?: AcpRuntime;
   meta?: SessionAcpMeta;
   runtimeHandles: ManagerRuntimeHandleCache;
   writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<boolean> {
-  if (params.attempt > 0 || params.sawTurnOutput) {
+  if (params.attempt > 0 || params.promptStarted || params.sawTurnOutput) {
     return false;
   }
   if (isRecoverableManagerAcpxExitError(params.error.message)) {

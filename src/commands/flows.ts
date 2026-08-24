@@ -7,10 +7,10 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { parseCliEnumFilter } from "../cli/enum-filter.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { writeRuntimeJson } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
 import {
@@ -211,8 +211,13 @@ export async function flowsShowCommand(
 ) {
   const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {
-    runtime.error(formatFlowLookupMiss(opts.lookup));
-    runtime.exit(1);
+    const message = formatFlowLookupMiss(opts.lookup);
+    if (opts.json) {
+      writeRuntimeJson(runtime, formatCliJsonFailure(message));
+    } else {
+      runtime.error(message);
+    }
+    runtime.exit(1, opts.json ? { resetStream: process.stderr } : undefined);
     return;
   }
   const tasks = listTasksForFlowId(flow.flowId);

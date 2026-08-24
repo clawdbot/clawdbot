@@ -82,12 +82,11 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         if (event.item_id && event.item_id !== this.assistantAudioItem?.itemId) {
           this.assistantAudioItem = {
             itemId: event.item_id,
-            bytes: 0,
+            bytes: audio.byteLength,
             startTimestamp: this.latestMediaTimestamp,
           };
-        }
-        // Playback clocks can lead provider output, but truncate cannot exceed item audio.
-        if (this.assistantAudioItem) {
+        } else if (this.assistantAudioItem) {
+          // Playback clocks can lead provider output, but truncate cannot exceed item audio.
           this.assistantAudioItem.bytes += audio.byteLength;
         }
         this.responseActive = true;

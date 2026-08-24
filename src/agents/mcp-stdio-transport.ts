@@ -11,7 +11,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
-import { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
+import { signalProcessTree } from "../process/kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
 
 type OpenClawStdioServerParameters = {
@@ -96,11 +96,10 @@ export class OpenClawStdioClientTransport implements Transport {
       });
       child.on("spawn", () => resolve());
       child.on("close", () => {
-        const exitedUnexpectedly = this.process === child && this.closingProcess !== child;
         if (this.process === child) {
           this.process = undefined;
         }
-        if (exitedUnexpectedly && child.pid && this.ownedProcessGroupId === child.pid) {
+        if (child.pid && this.ownedProcessGroupId === child.pid) {
           // The leader still owns this PGID at close notification time. Kill any
           // descendants now so a retained numeric PGID can never outlive ownership.
           signalProcessTree(child.pid, "SIGKILL", { detached: true });
@@ -154,9 +153,6 @@ export class OpenClawStdioClientTransport implements Transport {
     this.process = undefined;
     this.closingProcess = processToClose;
     if (processToClose) {
-      this.closingProcess = processToClose;
-    }
-    if (processToClose) {
       const closePromise = new Promise<void>((resolve) => {
         processToClose.once("close", () => resolve());
       });
@@ -167,10 +163,9 @@ export class OpenClawStdioClientTransport implements Transport {
       }
       await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
       if (processToClose.exitCode === null && processToClose.pid) {
-        killProcessTree(processToClose.pid, { detached: true });
+        signalProcessTree(processToClose.pid, "SIGTERM", { detached: true });
         await Promise.race([closePromise, delay(CLOSE_TIMEOUT_MS)]);
         if (processToClose.exitCode === null && processToClose.pid) {
-          // SIGKILL synchronously: killProcessTree's setTimeout is .unref()'d and races shutdown (#86412).
           signalProcessTree(processToClose.pid, "SIGKILL", { detached: true });
           await Promise.race([closePromise, delay(SIGKILL_REAP_TIMEOUT_MS)]);
         }

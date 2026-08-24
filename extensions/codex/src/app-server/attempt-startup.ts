@@ -11,6 +11,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
@@ -18,6 +19,7 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
+import { verifyStartupArtifact } from "./attempt-runtime-artifact.js";
 import {
   CodexAppServerStartupError,
   isCodexAppServerStartupError,
@@ -72,6 +74,7 @@ import type { CodexAppServerBindingStore } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrent,
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
+  createIsolatedCodexAppServerClient,
   isCodexAppServerStartSelectionChangedError,
   releaseLeasedSharedCodexAppServerClient,
   retireSharedCodexAppServerClientIfCurrent,
@@ -130,6 +133,7 @@ type StartCodexAttemptThreadResult = {
 export async function startCodexAttemptThread(params: {
   attemptClientFactory: CodexAppServerClientFactory;
   bindingStore: CodexAppServerBindingStore;
+  runtime?: PluginRuntime;
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;
   computerUseConfig: ResolvedCodexComputerUseConfig;
@@ -147,6 +151,7 @@ export async function startCodexAttemptThread(params: {
   shellEnvironment?: Readonly<Record<string, string>>;
   disableLoginShell?: boolean;
   buildAttemptParams: () => EmbeddedRunAttemptParams;
+  runtimeModelId?: string;
   sessionAgentId: string;
   effectiveWorkspace: string;
   effectiveCwd: string;
@@ -154,6 +159,7 @@ export async function startCodexAttemptThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
+  agentWorkspaceDeveloperInstructions?: string;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
@@ -168,6 +174,7 @@ export async function startCodexAttemptThread(params: {
   startupTimeoutMs: number;
   signal: AbortSignal;
   onStartupTimeout: () => void | Promise<void>;
+  onExecutionDisconnect?: (error: Error) => void;
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
 }): Promise<StartCodexAttemptThreadResult> {
   let pluginAppServer = params.appServer;
@@ -271,7 +278,11 @@ export async function startCodexAttemptThread(params: {
                 return;
               }
               startupClientLeaseReleased = true;
-              releaseLeasedSharedCodexAppServerClient(activeStartupClient);
+              if (params.attemptClientFactory === createIsolatedCodexAppServerClient) {
+                activeStartupClient.close();
+              } else {
+                releaseLeasedSharedCodexAppServerClient(activeStartupClient);
+              }
             };
             releaseSharedClientLease = startupClientLease;
             attemptedClient = activeStartupClient;
@@ -282,39 +293,11 @@ export async function startCodexAttemptThread(params: {
             if (startupAbandonController.signal.aborted) {
               throw new CodexAppServerStartupError("aborted");
             }
-            let runtimeArtifact: AgentHarnessRuntimeArtifactBinding | undefined;
-            if (params.runtimeArtifactRequest) {
-              const {
-                readCodexAppServerClientRuntimeArtifact,
-                validateCodexAppServerRuntimeArtifact,
-              } = await import("./runtime-artifact.js");
-              runtimeArtifact = readCodexAppServerClientRuntimeArtifact(activeStartupClient);
-              const expected = params.runtimeArtifactRequest.expected;
-              const matchesExpected =
-                !expected ||
-                Boolean(
-                  runtimeArtifact &&
-                  runtimeArtifact.id === expected.id &&
-                  runtimeArtifact.fingerprint === expected.fingerprint,
-                );
-              if (
-                !runtimeArtifact ||
-                !matchesExpected ||
-                !(await validateCodexAppServerRuntimeArtifact(
-                  runtimeArtifact,
-                  startupAbandonController.signal,
-                ))
-              ) {
-                // Never let an unattested physical generation reach Computer Use,
-                // plugin discovery, or a native thread request.
-                retireSharedCodexAppServerClientIfCurrent(activeStartupClient);
-                throw new Error(
-                  expected
-                    ? "Codex app-server runtime artifact does not match verified inference"
-                    : "Codex app-server runtime artifact is unavailable or stale",
-                );
-              }
-            }
+            const runtimeArtifact = await verifyStartupArtifact({
+              client: activeStartupClient,
+              request: params.runtimeArtifactRequest,
+              signal: startupAbandonController.signal,
+            });
             ensureCodexAppServerClientRuntime(activeStartupClient, {
               agentDir: params.agentDir,
               authProfileId: startupRuntimeAuthProfileId,
@@ -387,7 +370,10 @@ export async function startCodexAttemptThread(params: {
             const releaseStartupSandboxEnvironment = async () => {
               if (startupSandboxEnvironmentAcquired) {
                 startupSandboxEnvironmentAcquired = false;
-                await releaseCodexSandboxExecServerEnvironment(params.sandbox);
+                await releaseCodexSandboxExecServerEnvironment(
+                  params.sandbox,
+                  startupSandboxEnvironment,
+                );
               }
             };
             releaseStartupResourcesOnTimeout = releaseStartupSandboxEnvironment;
@@ -401,9 +387,11 @@ export async function startCodexAttemptThread(params: {
                 ? await ensureCodexSandboxExecServerEnvironment({
                     client: activeStartupClient,
                     sandbox: params.sandbox ?? null,
+                    runtime: params.runtime,
                     appServerStartOptions: params.appServer.start,
                     timeoutMs: params.appServer.requestTimeoutMs,
-                    signal: startupAbandonController.signal,
+                    signal: AbortSignal.any([params.signal, startupAbandonController.signal]),
+                    onExecutionDisconnect: params.onExecutionDisconnect,
                   })
                 : undefined;
               startupSandboxEnvironmentAcquired = Boolean(startupSandboxEnvironment);
@@ -467,13 +455,16 @@ export async function startCodexAttemptThread(params: {
                 reserveResumeThread,
                 bindingStore: params.bindingStore,
                 params: params.buildAttemptParams(),
+                runtimeModelId: params.runtimeModelId,
                 agentId: params.sessionAgentId,
+                agentDir: params.agentDir,
                 cwd: startupExecutionCwd,
                 dynamicTools: params.dynamicTools,
                 persistentWebSearchAllowed: params.persistentWebSearchAllowed,
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
+                agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
                 config: threadConfig,
                 shellEnvironment: params.shellEnvironment,
                 disableLoginShell: params.disableLoginShell,

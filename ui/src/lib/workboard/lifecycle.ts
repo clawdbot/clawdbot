@@ -62,6 +62,14 @@ export function getWorkboardLifecycle(
   if (!session) {
     return { session: null, state: "missing" };
   }
+  if (session.status === "queued") {
+    return {
+      session,
+      state: "queued",
+      targetStatus: "todo",
+      sourceUpdatedAt: sessionUpdatedAtValue(session),
+    };
+  }
   if (staleSessionState(session)) {
     return {
       session,

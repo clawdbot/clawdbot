@@ -1,5 +1,6 @@
 import { computeBackoff } from "../../packages/retry/src/index.js";
 // Persists queued session deliveries for retry and recovery.
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/source-reply-delivery-mode.types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -74,6 +75,8 @@ export type QueuedSessionDeliveryPayload =
       inputProvenance?: InputProvenance;
       sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
       expectedMediaUrls?: string[];
+      expectedMediaAttachments?: Record<string, ReplyMediaAttachment>;
+      preparedMediaBlocks?: Record<string, Array<Record<string, unknown>>>;
       suppressTextDelivery?: true;
       idempotencyKey?: string;
       owner?: SessionDeliveryOwnerReference;
@@ -236,6 +239,30 @@ export async function advanceSessionDeliveryAgentRun(
       ...(updates?.suppressTextDelivery === true ? { suppressTextDelivery: true as const } : {}),
     };
   });
+}
+
+/** Preserve one prepared artifact before transcript persistence or retry transitions. */
+export async function mergeSessionDeliveryPreparedMediaBlocks(
+  id: string,
+  mediaUrl: string,
+  blocks: Array<Record<string, unknown>>,
+  stateDir?: string,
+): Promise<Array<Record<string, unknown>>> {
+  let retained = blocks;
+  updateDeliveryQueueEntry(SESSION_DELIVERY_QUEUE_NAME, id, stateDir, (entry) => {
+    // SAFETY: this queue namespace stores only QueuedSessionDelivery payloads.
+    const queued = entry as QueuedSessionDelivery;
+    if (queued.kind !== "agentTurn") {
+      return queued;
+    }
+    retained = queued.preparedMediaBlocks?.[mediaUrl] ?? blocks;
+    return {
+      ...queued,
+      // The first durable artifact identity wins if the same attempt is replayed.
+      preparedMediaBlocks: { ...queued.preparedMediaBlocks, [mediaUrl]: retained },
+    };
+  });
+  return retained;
 }
 
 /** Mark an agent turn before it can commit transcript or channel side effects. */

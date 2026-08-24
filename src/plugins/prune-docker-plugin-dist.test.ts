@@ -7,7 +7,8 @@ import {
   parseDockerPluginKeepList,
   pruneDockerPluginDist,
 } from "../../scripts/prune-docker-plugin-dist.mjs";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 

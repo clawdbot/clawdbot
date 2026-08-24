@@ -6,31 +6,31 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   realtimeVoiceAudioDurationMs,
   RealtimeVoiceSessionLifecycle,
+  toOpenAICompatibleRealtimeAudioFormat,
   type RealtimeVoiceSessionConnection,
 } from "./realtime-voice.js";
 
 describe("realtimeVoiceAudioDurationMs", () => {
   it.each([
-    {
-      name: "G.711 μ-law 8 kHz mono",
-      format: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
-      byteLength: 8_000,
-      durationMs: 1_000,
-    },
-    {
-      name: "PCM16 24 kHz mono",
-      format: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-      byteLength: 48_000,
-      durationMs: 1_000,
-    },
-    {
-      name: "one G.711 μ-law sample without rounding",
-      format: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
-      byteLength: 1,
-      durationMs: 0.125,
-    },
-  ])("calculates $name", ({ format, byteLength, durationMs }) => {
+    ["G.711 μ-law 8 kHz mono", REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ, 8_000, 1_000],
+    ["PCM16 24 kHz mono", REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, 48_000, 1_000],
+    [
+      "one G.711 μ-law sample without rounding",
+      REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+      1,
+      0.125,
+    ],
+  ] as const)("calculates %s", (_name, format, byteLength, durationMs) => {
     expect(realtimeVoiceAudioDurationMs(format, byteLength)).toBe(durationMs);
+  });
+});
+
+describe("toOpenAICompatibleRealtimeAudioFormat", () => {
+  it.each([
+    ["G.711 μ-law", REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ, { type: "audio/pcmu" }],
+    ["PCM16", REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ, { type: "audio/pcm", rate: 24000 }],
+  ] as const)("maps %s", (_name, format, expected) => {
+    expect(toOpenAICompatibleRealtimeAudioFormat(format)).toEqual(expected);
   });
 });
 

@@ -167,6 +167,9 @@ function shapeTargetError(
     ...(error instanceof GatewayTransportError ? { reason: error.reason } : {}),
     message: error.message,
   });
+  if (failure.kind === "identity-proxy") {
+    return new Error(`${failure.userMessage}\n${failure.remediation}`);
+  }
   if (failure.kind === "unreachable") {
     const effectiveGatewayUrl =
       gatewayUrl ??

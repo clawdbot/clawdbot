@@ -108,8 +108,12 @@ function retainLastGoodOnTimeout(
       .filter((provider) => provider.error === undefined)
       .map((provider) => [provider.provider, provider]),
   );
+  const retainedLastGood = summary.providers.some(
+    (provider) => provider.error === "Timeout" && lastGoodByProvider.has(provider.provider),
+  );
   return {
     ...summary,
+    updatedAt: retainedLastGood ? lastGood.updatedAt : summary.updatedAt,
     providers: summary.providers.map((provider) =>
       provider.error === "Timeout"
         ? (lastGoodByProvider.get(provider.provider) ?? provider)

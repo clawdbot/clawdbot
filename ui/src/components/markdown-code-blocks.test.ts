@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleMarkdownCodeBlockCopy } from "./markdown-code-blocks.ts";
+import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
@@ -21,7 +21,7 @@ function renderCodeCopyButton(): HTMLButtonElement {
   if (!button) {
     throw new Error("Expected Markdown code-copy button");
   }
-  button.addEventListener("click", handleMarkdownCodeBlockCopy);
+  button.addEventListener("click", handleMarkdownCodeBlockClick);
   return button;
 }
 
@@ -153,7 +153,7 @@ describe("Markdown code-block clipboard feedback", () => {
     });
     const first = renderCodeCopyButton();
     const second = first.cloneNode(true) as HTMLButtonElement;
-    second.addEventListener("click", handleMarkdownCodeBlockCopy);
+    second.addEventListener("click", handleMarkdownCodeBlockClick);
     document.body.append(second);
 
     first.click();

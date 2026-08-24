@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { setFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import { makeFakePty } from "./terminal/session-manager.test-helpers.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -40,39 +40,45 @@ describe("resolveGatewayScopedTools terminal ownership", () => {
       (runId, sessionKey) =>
         tasks.find((task) => task.runId === runId && task.childSessionKey === sessionKey),
     );
-    const clearContext = setFallbackGatewayContext({
+    const context = {
       terminalSessions: manager,
       isTerminalEnabled: () => true,
       resolveTerminalLaunchPolicy: () => ({
         ok: true,
         plan: { agentId: "main", cwd: "/tmp", shell: "/bin/sh", args: [] },
       }),
-    } as unknown as GatewayRequestContext);
+    } as unknown as GatewayRequestContext;
 
     try {
-      const result = resolveGatewayScopedTools({
-        cfg: { tools: { allow: ["terminal"] } } as OpenClawConfig,
-        sessionKey: childSessionKey,
-        runId: "shared-run",
-        senderIsOwner: true,
-        surface: "loopback",
-      });
+      const result = withPluginRuntimeGatewayRequestScope(
+        { context, isWebchatConnect: () => false },
+        () =>
+          resolveGatewayScopedTools({
+            cfg: { tools: { allow: ["terminal"] } } as OpenClawConfig,
+            sessionKey: childSessionKey,
+            sessionId: "loopback-session-id",
+            runId: "shared-run",
+            senderIsOwner: true,
+            surface: "loopback",
+          }),
+      );
       const terminal = result.tools.find((tool) => tool.name === "terminal");
       if (!terminal?.execute) {
         throw new Error("expected loopback terminal tool");
       }
 
-      await terminal.execute("terminal-open", { action: "open" });
+      await withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
+        terminal.execute!("terminal-open", { action: "open" }),
+      );
 
       expect(taskStatusMocks.findTaskByRunIdForChildSessionForStatus).toHaveBeenCalledWith(
         "shared-run",
         childSessionKey,
       );
-      expect(manager.closeAgentSessions("task-2")).toBe(1);
-      expect(manager.closeAgentSessions("task-1")).toBe(0);
+      expect(manager.closeTaskSessions("task-2")).toBe(1);
+      expect(manager.closeTaskSessions("task-1")).toBe(0);
       expect(backend.killed).toBe(true);
     } finally {
-      clearContext();
       manager.disposeAll();
       taskStatusMocks.findTaskByRunIdForChildSessionForStatus.mockReset();
       taskStatusMocks.findTaskByRunIdForStatus.mockReset();

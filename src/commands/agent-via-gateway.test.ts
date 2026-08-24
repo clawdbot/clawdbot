@@ -361,6 +361,15 @@ describe("agentCliCommand", () => {
     expect(zeroTimeoutGatewayRequestMs).toBe(2_147_000_000);
   });
 
+  it("rejects a blank agent before selecting a local or Gateway target", async () => {
+    await expect(agentCliCommand({ message: "hi", agent: "" }, runtime)).rejects.toThrow(
+      "--agent must not be blank",
+    );
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(agentCommand).not.toHaveBeenCalled();
+  });
+
   it("clamps oversized gateway timeout seconds at the command boundary", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
@@ -2136,18 +2145,23 @@ describe("agentCliCommand", () => {
 
   it("surfaces duplicate in-flight gateway runs without pretending a reply arrived", async () => {
     await withTempStore(async () => {
+      const signals = createSignalProcess();
       callGateway.mockResolvedValue({
         runId: "idem-1",
         status: "in_flight",
         sessionKey: "agent:main:main",
       });
 
-      await agentCliCommand({ message: "hi", to: "+1555", runId: "idem-1" }, runtime);
+      await agentCliCommand({ message: "hi", to: "+1555", runId: "idem-1" }, runtime, {
+        process: signals.processLike,
+      });
 
       expect(runtime.error).toHaveBeenCalledWith(
         "Agent run idem-1 is already in flight; not starting a duplicate run.",
       );
       expect(runtime.log).not.toHaveBeenCalledWith("No reply from agent.");
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(signals.processLike.exitCode).toBe(1);
     });
   });
 

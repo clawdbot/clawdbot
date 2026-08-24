@@ -1,24 +1,22 @@
 import { describe, expect, it } from "vitest";
-import {
-  parseManifest,
-  serializeManifest,
-  updateManifestHeightMode,
-} from "./sqlite-board-codec.js";
+import { parseManifest } from "./sqlite-board-codec.js";
 
 describe("board widget manifest codec", () => {
-  it("round-trips presentation and height mode", () => {
-    const serialized = serializeManifest(undefined, "none", undefined, {
-      presentation: "full-bleed",
-      heightMode: "auto",
-    });
-    expect(parseManifest(serialized)).toMatchObject({
-      presentation: "full-bleed",
-      heightMode: "auto",
-    });
-    expect(parseManifest(updateManifestHeightMode(serialized, "fixed"))).toMatchObject({
-      presentation: "full-bleed",
-      heightMode: "fixed",
-    });
+  it("preserves registered content ownership independently of frame instance metadata", () => {
+    expect(
+      parseManifest(
+        JSON.stringify({ contentOwner: "registered", registeredContentKind: "diagram" }),
+      ),
+    ).toMatchObject({ contentOwner: "registered", registeredContentKind: "diagram" });
+  });
+
+  it.each([
+    { contentOwner: "unknown" },
+    { contentOwner: "registered" },
+    { contentOwner: "registered", registeredContentKind: "Invalid Kind" },
+    { contentOwner: "plugin", registeredContentKind: "diagram" },
+  ])("rejects invalid explicit widget ownership %j", (manifest) => {
+    expect(() => parseManifest(JSON.stringify(manifest))).toThrow(/content ownership/i);
   });
 
   it("ignores invalid persisted frame preferences", () => {
@@ -27,20 +25,7 @@ describe("board widget manifest codec", () => {
     ).toEqual({});
   });
 
-  it("round-trips explicit and generated name identity metadata", () => {
-    const serialized = serializeManifest(undefined, "none", undefined, undefined, {
-      kind: "generated",
-      source: "show_widget",
-      key: "a".repeat(64),
-    });
-    expect(parseManifest(serialized)).toMatchObject({
-      nameIdentity: { kind: "generated", source: "show_widget", key: "a".repeat(64) },
-    });
-    expect(
-      parseManifest(
-        serializeManifest(undefined, "none", undefined, undefined, { kind: "explicit" }),
-      ),
-    ).toMatchObject({ nameIdentity: { kind: "explicit" } });
+  it("flags invalid persisted generated name identity metadata", () => {
     expect(
       parseManifest(
         JSON.stringify({

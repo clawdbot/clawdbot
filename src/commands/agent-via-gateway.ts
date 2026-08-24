@@ -1170,10 +1170,10 @@ async function agentViaGatewayCommand(
   if (!response) {
     throw new Error("gateway agent call did not return a response");
   }
+  markAgentRunExitCode(response.status, signalBridge);
 
   if (opts.json) {
     writeRuntimeJson(runtime, buildGatewayJsonResponse(response));
-    markAgentRunExitCode(response.status, signalBridge);
     return response;
   }
 
@@ -1189,7 +1189,6 @@ async function agentViaGatewayCommand(
     if (response?.status !== "ok") {
       runtime.log(response?.summary ? response.summary : "No reply from agent.");
     }
-    markAgentRunExitCode(response.status, signalBridge);
     return response;
   }
 
@@ -1199,8 +1198,6 @@ async function agentViaGatewayCommand(
       runtime.log(out);
     }
   }
-
-  markAgentRunExitCode(response.status, signalBridge);
 
   return response;
 }
@@ -1238,6 +1235,9 @@ export async function agentCliCommand(
   runtime: RuntimeEnv,
   deps?: AgentCliDeps,
 ) {
+  if (opts.agent !== undefined && !opts.agent.trim()) {
+    throw new Error("--agent must not be blank");
+  }
   protectJsonStdout(opts);
   const messageOpts = await resolveAgentMessageOpts(opts);
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler

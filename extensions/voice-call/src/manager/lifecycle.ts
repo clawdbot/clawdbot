@@ -41,12 +41,11 @@ export function finalizeCall(params: {
   const { ctx, call, endReason } = params;
   const previousState = call.state;
 
-  call.endedAt = params.endedAt ?? Date.now();
-  call.endReason = endReason;
-  transitionState(call, endReason);
-  persistCallRecord(ctx.storePath, call);
-
-  if (!TerminalStates.has(previousState) && TerminalStates.has(call.state)) {
+  if (!TerminalStates.has(previousState)) {
+    call.endedAt = params.endedAt ?? Date.now();
+    call.endReason = endReason;
+    transitionState(call, endReason);
+    persistCallRecord(ctx.storePath, call);
     log.info(
       `[voice-call] Call finalized callId=${call.callId} providerCallId=${call.providerCallId ?? "unknown"} endReason=${endReason}`,
     );

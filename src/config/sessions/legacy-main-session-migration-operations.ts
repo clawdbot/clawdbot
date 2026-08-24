@@ -23,6 +23,7 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
+import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "./types.js";
 
@@ -108,6 +109,18 @@ export function warningForDivergence(
   return `session: ${kind} for ${canonicalKey}; preserved claims ${claimsText}. Run openclaw doctor --fix to quarantine the losing claims.`;
 }
 
+function writeMigratedSessionClaim(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  entry: SessionEntry,
+): void {
+  writeSessionEntry(database, sessionKey, entry, {
+    allowStoredAliases: true,
+    previousEntry: null,
+  });
+  replaceSessionOwnerInTransaction(database, sessionKey, entry.owner);
+}
+
 function migrateClaimsInPlace(params: {
   aliases: readonly SessionClaim[];
   canonical?: SessionClaim;
@@ -135,10 +148,7 @@ function migrateClaimsInPlace(params: {
         return;
       }
       if (!currentCanonical) {
-        writeSessionEntry(database, params.canonicalKey, params.winner.entry, {
-          allowStoredAliases: true,
-          previousEntry: null,
-        });
+        writeMigratedSessionClaim(database, params.canonicalKey, params.winner.entry);
       }
       deleteLegacySessionEntryRows(
         database,
@@ -225,10 +235,7 @@ function quarantineClaim(params: {
           break;
         }
       }
-      writeSessionEntry(database, quarantineKey, params.claim.entry, {
-        allowStoredAliases: true,
-        previousEntry: null,
-      });
+      writeMigratedSessionClaim(database, quarantineKey, params.claim.entry);
       deleteLegacySessionEntryRows(database, [params.claim.key], quarantineKey, {
         rehomeMembers: true,
       });

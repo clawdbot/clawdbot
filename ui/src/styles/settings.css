@@ -87,6 +87,15 @@
   max-width: 1120px;
 }
 
+/* Section rhythm for embedded surfaces (tab panels, split layouts) that host
+   settings sections without .settings-page's centered column. Sections crammed
+   into a plain wrapper collapse to zero separation. */
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
 .settings-page__intro {
   margin: 0;
   font-size: var(--control-ui-text-sm);
@@ -128,6 +137,12 @@
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);
+}
+
+/* Control-height header actions overhang the one-line heading; keep the
+   description's negative pull from squeezing it against the button row. */
+.settings-section__header:has(.settings-section__actions) + .settings-section__desc {
+  margin-top: 0;
 }
 
 .settings-section__actions {
@@ -595,6 +610,26 @@ textarea.settings-input {
   gap: var(--space-3);
 }
 
+.updates-attempt-details {
+  width: 100%;
+}
+
+.updates-attempt-details summary {
+  cursor: var(--cursor-action);
+  font-weight: 600;
+}
+
+.updates-attempt-details pre {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .updates-commit-list {
   width: 100%;
   overflow: hidden;
@@ -691,6 +726,13 @@ textarea.settings-input {
   height: 20px;
   border-radius: var(--radius-full);
   flex: none;
+}
+
+.github-device-code {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+  font-weight: 700;
+  letter-spacing: 0.08em;
 }
 
 /* ── Mobile ── */

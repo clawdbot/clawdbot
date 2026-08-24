@@ -79,7 +79,7 @@ suite.define(() => {
       await model.click();
       await model.click();
       const retry = await gateway.waitForRequest("models.list", { after: beforeRetry });
-      expect(retry.params).toEqual({ agentId: "main", view: "configured" });
+      expect(retry.params).toEqual({ agentId: "main", view: "configured", refresh: true });
       await expect.poll(() => textarea.isEnabled()).toBe(true);
       await expect.poll(() => composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       await expect
@@ -312,6 +312,14 @@ suite.define(() => {
           (await effort.locator(".chat-controls__inline-select-label").textContent())?.trim(),
         )
         .toBe("High");
+      for (const trigger of [model, effort]) {
+        const title = await trigger.getAttribute("title");
+        expect(title).toBeTruthy();
+        await trigger.hover();
+        expect(await trigger.getAttribute("title")).toBe("");
+        await page.mouse.move(0, 0);
+        await expect.poll(() => trigger.getAttribute("title")).toBe(title);
+      }
       await expect.poll(() => contextUsage.locator(".context-ring__detail").count()).toBe(0);
       await expect
         .poll(() => contextUsage.getAttribute("aria-label"))
@@ -647,6 +655,22 @@ suite.define(() => {
       ) {
         throw new Error("expected mobile composer controls to have layout boxes");
       }
+      await expect
+        .poll(() =>
+          model.evaluate((node) => {
+            const style = getComputedStyle(node);
+            return [style.paddingInlineStart, style.paddingInlineEnd];
+          }),
+        )
+        .toEqual(["10px", "10px"]);
+      await expect
+        .poll(() =>
+          effort.evaluate((node) => {
+            const style = getComputedStyle(node);
+            return [style.paddingInlineStart, style.paddingInlineEnd];
+          }),
+        )
+        .toEqual(["9px", "11px"]);
       for (const control of [mobileModelBox, mobileContextBox]) {
         expect(
           Math.abs(control.y + control.height / 2 - (mobileModelBox.y + mobileModelBox.height / 2)),

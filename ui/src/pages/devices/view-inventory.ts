@@ -65,6 +65,8 @@ export function renderDeviceInventory(props: DevicesProps) {
       ? html`
           <button
             class="btn btn--sm danger"
+            title=${props.canManagePairing ? "" : t("devices.readOnly.pairingRequired")}
+            ?disabled=${!props.canManagePairing}
             @click=${() => props.onInventoryCleanup(stale.map(toRemovalRequest))}
           >
             ${icons.trash} ${t("devices.inventory.cleanupStale", { count: String(stale.length) })}
@@ -199,7 +201,7 @@ function entryWarnStatuses(
       </span>`,
     );
   }
-  if (isApprovedNode && !entry.connected && isWindowsPlatform(entry.platform)) {
+  if (isApprovedNode && entry.node?.connected === false && isWindowsPlatform(entry.platform)) {
     statuses.push(
       html`<span title=${t("devices.inventory.manualWakeTitle")}>
         ${renderSettingsStatus({ kind: "warn", label: t("devices.inventory.manualWake") })}
@@ -234,6 +236,14 @@ function entryMetaLine(entry: DeviceInventoryEntry): string {
   }
   if (entry.node?.workerBundle?.status === "installed") {
     parts.push(t("devices.inventory.workerVersion", { version: entry.node.workerBundle.version }));
+  }
+  if (entry.node?.workerSlots) {
+    parts.push(
+      t("devices.inventory.workerSlots", {
+        available: String(entry.node.workerSlots.available),
+        total: String(entry.node.workerSlots.total),
+      }),
+    );
   }
   if (entry.connected && entry.presence?.lastInputSeconds != null) {
     parts.push(formatInputRecency(entry.presence.lastInputSeconds));
@@ -304,9 +314,10 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
     entry.node?.approvalState === "pending-reapproval"
       ? entry.node.pendingRequestId
       : undefined;
-  const connectionStatus = entry.connected
-    ? nothing
-    : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
+  const connectionStatus =
+    (entry.node?.connected ?? entry.connected)
+      ? nothing
+      : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
   return html`
     <div class="settings-row device-entry">
       ${renderDeviceTile(deviceIcon(entry))}
@@ -319,10 +330,18 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
         ${connectionStatus} ${entryWarnStatuses(entry, props.gatewayVersion)}
         ${pendingRequestId
           ? html`
-              <button class="btn btn--sm" @click=${() => props.onNodeApprove(pendingRequestId)}>
+              <button
+                class="btn btn--sm"
+                ?disabled=${!props.canManagePairing}
+                @click=${() => props.onNodeApprove(pendingRequestId)}
+              >
                 ${t("devices.inventory.approve")}
               </button>
-              <button class="btn btn--sm" @click=${() => props.onNodeReject(pendingRequestId)}>
+              <button
+                class="btn btn--sm"
+                ?disabled=${!props.canManagePairing}
+                @click=${() => props.onNodeReject(pendingRequestId)}
+              >
                 ${t("devices.inventory.reject")}
               </button>
             `
@@ -331,6 +350,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
           class="btn btn--sm danger"
           aria-label=${t("devices.inventory.removeName", { name: entry.name })}
           title=${t("devices.inventory.remove")}
+          ?disabled=${!props.canManagePairing}
           @click=${() => props.onInventoryRemove(toRemovalRequest(entry))}
         >
           ${icons.x}
@@ -408,6 +428,7 @@ function renderTokenRow(
       <span class="device-entry__token-actions">
         <button
           class="btn btn--sm"
+          ?disabled=${!props.canManagePairing}
           @click=${() => props.onDeviceRotate(device, tokenSummary.role, tokenSummary.scopes)}
         >
           ${t("devices.inventory.rotate")}
@@ -417,6 +438,7 @@ function renderTokenRow(
           : html`
               <button
                 class="btn btn--sm danger"
+                ?disabled=${!props.canManagePairing}
                 @click=${() => props.onDeviceRevoke(device.id, tokenSummary.role)}
               >
                 ${t("devices.inventory.revoke")}

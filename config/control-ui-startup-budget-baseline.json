@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 340994,
-  "reason": "Ask OpenClaw companion: shell chrome toggle, palette action, scope-aware gating",
-  "updatedAt": "2026-08-17"
+  "startupJsGzipBytes": 345049,
+  "reason": "streamed-markdown highlighting changes (#127749, #127754) consumed the ratchet",
+  "updatedAt": "2026-08-22"
 }

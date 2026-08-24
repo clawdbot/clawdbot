@@ -19,6 +19,7 @@ import {
   validateAgentsListParams,
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { AgentsDeleteResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createAgent } from "../../agents/agent-create.js";
 import {
   findOverlappingWorkspaceAgentIds,
@@ -330,15 +331,8 @@ function respondAgentNotFound(respond: RespondFn, agentId: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
 }
 
-type AgentDeleteRemovedPath = {
-  path: string;
-  method: "trash" | "missing";
-};
-
-type AgentDeleteFailedPath = {
-  path: string;
-  reason: string;
-};
+type AgentDeleteRemovedPath = NonNullable<AgentsDeleteResult["removed"]>[number];
+type AgentDeleteFailedPath = NonNullable<AgentsDeleteResult["failed"]>[number];
 
 type AgentDeletePathOutcome =
   | { removed: AgentDeleteRemovedPath }

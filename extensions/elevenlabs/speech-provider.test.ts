@@ -35,6 +35,16 @@ function parseRequestBody(init: RequestInit | undefined): Record<string, unknown
   return body as Record<string, unknown>;
 }
 
+const OUTPUT_FORMAT_CASES = [
+  { outputFormat: "pcm_44100", fileExtension: ".pcm", voiceCompatible: false },
+  { outputFormat: "OPUS_48000_64", fileExtension: ".opus", voiceCompatible: true },
+  { outputFormat: "mp3_44100_128", fileExtension: ".mp3", voiceCompatible: false },
+  { outputFormat: "ulaw_8000", fileExtension: ".ulaw", voiceCompatible: false },
+  { outputFormat: "alaw_8000", fileExtension: ".alaw", voiceCompatible: false },
+  { outputFormat: "wav_44100", fileExtension: ".wav", voiceCompatible: false },
+  { outputFormat: "future_123", fileExtension: ".bin", voiceCompatible: false },
+] as const;
+
 describe("elevenlabs speech provider", () => {
   const originalFetch = globalThis.fetch;
 
@@ -309,6 +319,79 @@ describe("elevenlabs speech provider", () => {
       timeoutMs: 1_000,
     });
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(OUTPUT_FORMAT_CASES)(
+    "returns truthful $outputFormat metadata for a voice-note override",
+    async ({ outputFormat, fileExtension, voiceCompatible }) => {
+      const fetchMock = vi.fn(async (url: string) => {
+        expect(new URL(url).searchParams.get("output_format")).toBe(outputFormat);
+        return new Response(new Uint8Array([1, 2, 3]), {
+          headers: { "content-type": "audio/mpeg" },
+        });
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const result = await buildElevenLabsSpeechProvider().synthesize({
+        text: "hello",
+        target: "voice-note",
+        cfg: {} as never,
+        providerConfig: { apiKey: "xi-test" },
+        providerOverrides: { outputFormat },
+        timeoutMs: 1_000,
+      });
+
+      expect(result).toEqual({
+        audioBuffer: Buffer.from([1, 2, 3]),
+        outputFormat,
+        fileExtension,
+        voiceCompatible,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("returns truthful stream metadata for an output override and releases the stream once", async () => {
+    const cancel = vi.fn();
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(new URL(url).searchParams.get("output_format")).toBe("pcm_44100");
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1, 2, 3]));
+          },
+          cancel,
+        }),
+        { headers: { "content-type": "audio/mpeg" } },
+      );
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await buildElevenLabsSpeechProvider().streamSynthesize?.({
+      text: "hello",
+      target: "voice-note",
+      cfg: {} as never,
+      providerConfig: { apiKey: "xi-test" },
+      providerOverrides: { outputFormat: "pcm_44100" },
+      timeoutMs: 1_000,
+    });
+    if (!result) {
+      throw new Error("streamSynthesize is unavailable");
+    }
+
+    expect(result).toMatchObject({
+      outputFormat: "pcm_44100",
+      fileExtension: ".pcm",
+      voiceCompatible: false,
+    });
+    if (!result.release) {
+      throw new Error("stream release is unavailable");
+    }
+    expect(cancel).not.toHaveBeenCalled();
+    await result.release();
+    await result.release();
+    expect(cancel).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

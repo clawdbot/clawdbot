@@ -1,7 +1,7 @@
 /**
  * Tests provider selection runtime helper behavior.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   resolveConfiguredCapabilityProvider,
   resolveProviderRawConfig,
@@ -70,6 +70,47 @@ describe("plugin-sdk provider-selection-runtime", () => {
     }
     expect(resolution.provider).toBe(providers[1]);
     expect(resolution.providerConfig).toEqual({ providerId: "second" });
+  });
+
+  it("skips unavailable auto candidates before config normalization", () => {
+    const resolveProviderConfig = vi.fn(({ provider }: { provider: TestProvider }) => ({
+      providerId: provider.id,
+    }));
+    const resolution = resolveConfiguredCapabilityProvider({
+      cfg: {},
+      cfgForResolve: {},
+      getConfiguredProvider: (providerId) => providers.find((entry) => entry.id === providerId),
+      listProviders: () => providers,
+      isProviderAvailable: ({ provider }) => provider.id !== "first",
+      resolveProviderConfig,
+      isProviderConfigured: () => true,
+    });
+
+    expect(resolution.ok).toBe(true);
+    expect(resolveProviderConfig).toHaveBeenCalledOnce();
+    expect(resolveProviderConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: providers[1] }),
+    );
+  });
+
+  it("retains the first unavailable provider when no auto candidate is available", () => {
+    const resolveProviderConfig = vi.fn();
+    const resolution = resolveConfiguredCapabilityProvider({
+      cfg: {},
+      cfgForResolve: {},
+      getConfiguredProvider: (providerId) => providers.find((entry) => entry.id === providerId),
+      listProviders: () => providers,
+      isProviderAvailable: () => false,
+      resolveProviderConfig,
+      isProviderConfigured: () => true,
+    });
+
+    expect(resolution).toEqual({
+      ok: false,
+      code: "provider-unavailable",
+      provider: providers[0],
+    });
+    expect(resolveProviderConfig).not.toHaveBeenCalled();
   });
 
   it("merges canonical and selected provider config", () => {

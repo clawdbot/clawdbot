@@ -21,6 +21,7 @@ describe("GATEWAY_EVENTS", () => {
   it("advertises node topology updates", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
     expect(GATEWAY_EVENTS).toContain("device.pair.setup.completed");
+    expect(GATEWAY_EVENTS).toContain("device.pair.changed");
     expect(GATEWAY_EVENTS).toContain("node.runnerInventory.changed");
   });
 
@@ -72,7 +73,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-59)).toEqual([
+    expect(listGatewayMethods().slice(-64)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -132,6 +133,11 @@ describe("listGatewayMethods", () => {
       "progressCard.put",
       "tools.github.status",
       "tools.github.configure",
+      "tools.github.authorize.start",
+      "tools.github.authorize.poll",
+      "tools.github.authorize.cancel",
+      "sessions.github.publish",
+      "diagnostics.lanes",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -197,6 +203,23 @@ describe("listGatewayMethods", () => {
     expect(descriptor?.controlPlaneWrite).toBeUndefined();
   });
 
+  it("classifies cron mutations as control-plane writes", () => {
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+
+    for (const method of ["cron.add", "cron.update", "cron.remove", "cron.run"]) {
+      expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
+        name: method,
+        scope: "operator.admin",
+        controlPlaneWrite: true,
+      });
+    }
+    for (const method of ["cron.get", "cron.list", "cron.status", "cron.runs"]) {
+      expect(
+        descriptors.find((descriptor) => descriptor.name === method)?.controlPlaneWrite,
+      ).toBeUndefined();
+    }
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("node.runnerInventory.update");
@@ -237,7 +260,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-66)).toEqual([
+    expect(coreMethods.slice(-71)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -304,6 +327,11 @@ describe("listGatewayMethods", () => {
       "progressCard.put",
       "tools.github.status",
       "tools.github.configure",
+      "tools.github.authorize.start",
+      "tools.github.authorize.poll",
+      "tools.github.authorize.cancel",
+      "sessions.github.publish",
+      "diagnostics.lanes",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
@@ -374,6 +402,28 @@ describe("listGatewayMethods", () => {
       expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
         name: method,
         scope: "operator.admin",
+        startup: "unavailable-until-sidecars",
+        controlPlaneWrite: true,
+      });
+    }
+  });
+
+  it("advertises placement mutations with target-aware scopes", () => {
+    const advertisedMethods = listGatewayMethods();
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+    const scopes = new Map([
+      ["sessions.dispatch", "dynamic"],
+      ["sessions.move", "dynamic"],
+      ["sessions.reclaim", "operator.write"],
+    ]);
+
+    for (const [method, scope] of scopes) {
+      expect(advertisedMethods).toContain(method);
+      expect(coreGatewayHandlers[method]).toEqual(expect.any(Function));
+      expect(STARTUP_UNAVAILABLE_GATEWAY_METHODS).toContain(method);
+      expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
+        name: method,
+        scope,
         startup: "unavailable-until-sidecars",
         controlPlaneWrite: true,
       });

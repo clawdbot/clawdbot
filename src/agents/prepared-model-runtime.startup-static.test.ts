@@ -165,6 +165,7 @@ vi.mock("./agent-scope.js", () => ({
   resolveDefaultAgentId: () => "default",
   tryResolveSoleAgentId: () => "default",
   resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveAgentModelFallbacksOverride: () => undefined,
   resolveRunModelFallbacksOverride: () => undefined,
   resolveSessionAgentIds: ({ agentId }: { agentId?: string }) => ({
     defaultAgentId: "default",
@@ -210,6 +211,7 @@ vi.mock("../logging/subsystem.js", () => ({
 
 const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
   await import("./prepared-model-runtime.js");
+const { getAvailablePreparedModelCatalogSnapshot } = await import("./prepared-model-catalog.js");
 const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog } =
   await import("./prepared-model-runtime.scoped-catalog.js");
 const { resetPreparedModelRuntimeSnapshotsForTest } =
@@ -395,22 +397,18 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.discoverModels).toHaveBeenLastCalledWith(
       mocks.authStorage,
       expect.objectContaining({
+        config,
         includePluginCatalogs: true,
         modelsJsonContents: null,
         pluginCatalogs: [],
-        pluginMetadataSnapshot: expect.objectContaining({
-          ...mocks.metadataSnapshot,
-          index: expect.objectContaining({
-            ...mocks.metadataSnapshot.index,
-            workspaceDir: "/tmp/prepared-static-workspace",
-          }),
-          workspaceDir: "/tmp/prepared-static-workspace",
-        }),
+        pluginMetadataSnapshot: mocks.metadataSnapshot,
         workspaceDir: "/tmp/prepared-static-workspace",
       }),
     );
     expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(mocks.loadStaticCatalog).not.toHaveBeenCalled();
+    // The prepared plugin context and model-id normalization probe the same
+    // published metadata generation without starting catalog discovery.
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(2);
     expect(configuredRuntimeModelCount).toBe(1);
     expect(generatedCatalogReadCount).toBe(0);
@@ -421,6 +419,14 @@ describe("prepared model runtime Gateway catalog mode", () => {
       inheritedAuthDir: "/tmp/prepared-static-agent",
       workspaceDir: "/tmp/prepared-static-workspace",
     });
+    expect(
+      getAvailablePreparedModelCatalogSnapshot({
+        agentId: "default",
+        config,
+        agentDir: "/tmp/prepared-static-agent",
+        workspaceDir: "/tmp/prepared-static-workspace",
+      }),
+    ).toBe(snapshot?.modelCatalog);
     expect(snapshot?.configuredRuntimeModels).toHaveLength(1);
     expect(snapshot?.pluginRegistry).toBeDefined();
     expect(snapshot?.messageToolCatalog).toBeUndefined();
@@ -437,6 +443,15 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
     expect(snapshot?.readFullModelCatalog?.()).toEqual({ entries: [], routeVariants: [] });
+    expect(
+      getAvailablePreparedModelCatalogSnapshot({
+        agentId: "default",
+        config,
+        agentDir: "/tmp/prepared-static-agent",
+        workspaceDir: "/tmp/prepared-static-workspace",
+      }),
+    ).toEqual({ entries: [], routeVariants: [] });
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
 
     await snapshot?.loadFullModelCatalog?.({ refresh: true });
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);

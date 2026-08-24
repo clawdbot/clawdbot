@@ -493,18 +493,29 @@ suite.define(() => {
             nameFontSize: nameStyle?.fontSize ?? "",
             paddingBottom: linkStyle?.paddingBottom ?? "",
             paddingTop: linkStyle?.paddingTop ?? "",
+            singleLine: row.classList.contains("sidebar-recent-session--single-line"),
           };
         }),
       );
       expect(threadRowMetrics).toHaveLength(4);
-      expect(new Set(threadRowMetrics.map((metric) => metric.height)).size).toBe(1);
-      expect(threadRowMetrics[0]?.height).toBeGreaterThan(30);
+      // Gateway threads and native catalog children must stay density-identical.
+      // Catalog children never carry preview text, so every subtitle-less row —
+      // whichever source it came from — collapses to the same one-line height
+      // instead of reserving a phantom second line.
+      for (const metric of threadRowMetrics) {
+        expect(metric.singleLine).toBe(true);
+      }
+      const singleLineHeights = new Set(threadRowMetrics.map((metric) => metric.height));
+      expect(singleLineHeights.size).toBe(1);
+      const [collapsedHeight] = [...singleLineHeights];
+      // Collapsed rows sit on the 30px min-height floor; renderer sub-pixels vary.
+      expect(collapsedHeight).toBeCloseTo(30, 1);
       for (const metric of threadRowMetrics) {
         expect(metric).toMatchObject({
           minHeight: "30px",
           nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
+          paddingBottom: "4px",
+          paddingTop: "4px",
         });
       }
       const projectLabelTone = await openclawProject

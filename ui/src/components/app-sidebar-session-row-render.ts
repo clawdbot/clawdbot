@@ -4,13 +4,14 @@ import { keyed } from "lit/directives/keyed.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
-import type { ApplicationNavigationOptions } from "../app/context.ts";
-import type { AuthenticatedUser } from "../app/user-profile.ts";
+import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
+import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
+import { projectPresencePayload } from "../lib/presence-users.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
@@ -39,18 +40,15 @@ import {
   resolveSidebarSessionSubtitle,
 } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
-import { projectPresencePayload } from "./viewer-facepile.ts";
 import "./elapsed-time.ts";
+import "./tooltip.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
 export interface SessionListHost {
-  readonly sessionDataContext:
-    | {
-        gateway: { snapshot: { selfUser?: AuthenticatedUser | null } };
-      }
-    | undefined;
+  readonly sessionDataContext: Pick<ApplicationContext, "gateway"> | undefined;
   readonly sidebarLiveActivity: boolean;
+  readonly sessionsShowPreview: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
   readonly selectedSessionKeys: ReadonlySet<string>;
@@ -58,10 +56,12 @@ export interface SessionListHost {
   readonly sessionData: Pick<
     SessionDataController,
     | "approvalBadgeSnapshot"
+    | "childSessionErrorsByParent"
     | "loadMoreSessionCatalog"
     | "presenceInstanceId"
     | "presencePayload"
     | "refreshSessionCatalogs"
+    | "retryChildSessions"
     | "sessionCatalogRefreshStatus"
     | "sessionMutationError"
   >;
@@ -78,6 +78,7 @@ export interface SessionListHost {
   >;
   readonly sidebarMenus: Pick<
     SidebarMenusController,
+    | "catalogMenu"
     | "catalogViewMenuPosition"
     | "openCatalogViewMenu"
     | "openSessionGroupMenu"
@@ -89,7 +90,7 @@ export interface SessionListHost {
     | "toggleSessionSortMenu"
   >;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
-  readonly sessionCreatorFilterActive: boolean;
+  readonly sessionOwnerFilterActive: boolean;
   readonly sessionOwnershipVisible: boolean;
   readonly onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   readonly onNavigate?: (
@@ -101,6 +102,7 @@ export interface SessionListHost {
     sessionKey: string,
     worktreeId: string,
   ): SessionPullRequestIndicatorState;
+  mainSessionRow(): { key: string } | null;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
   startSessionDrag(session: SidebarRecentSession): void;
   finishSessionDrag(): void;
@@ -168,6 +170,7 @@ export function renderRecentSession(params: {
     hasDisplay: display !== undefined,
     displaySubtitle: display?.subtitle,
     sidebarLiveActivity: host.sidebarLiveActivity,
+    showPreview: host.sessionsShowPreview,
     narrationLine: host.sidebarNarrationLines.get(session.key),
     observerDigest: host.sidebarObserverDigests.get(session.key) ?? null,
   });
@@ -193,6 +196,22 @@ export function renderRecentSession(params: {
         host.sessionData.presenceInstanceId,
       ).users.some((user) => user.id === ownerId && user.watchedSessions.includes(session.key))
     : undefined;
+  const gateway = host.sessionDataContext?.gateway;
+  const channelAvatarAuth = {
+    authTokens: gateway
+      ? resolveControlUiAuthCandidates({
+          hello: gateway.snapshot.hello,
+          settings: { token: gateway.connection.token },
+          password: gateway.connection.password,
+        })
+      : [],
+    authReady: Boolean(
+      gateway &&
+      (gateway.snapshot.hello ||
+        gateway.connection.token.trim() ||
+        gateway.connection.password.trim()),
+    ),
+  };
   const { running, leadingIndicator, trailingIndicator, renderedOwnerId } =
     renderSessionLeadingState(
       session,
@@ -202,13 +221,16 @@ export function renderRecentSession(params: {
       ownerViewing,
       session.participants,
       session.participantCount,
+      channelAvatarAuth,
     );
   const trailingDescription = session.isChild
-    ? ""
+    ? running && session.unread
+      ? t("sessionsView.unread")
+      : ""
     : describeSessionTrailingState(session, pullRequestState);
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
-  const stateId = trailingIndicator === nothing ? undefined : sidebarSessionStateId(session.key);
+  const stateId = trailingDescription ? sidebarSessionStateId(session.key) : undefined;
   const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
     handleContextMenuEvent(
       event,
@@ -216,11 +238,14 @@ export function renderRecentSession(params: {
       (trigger, x, y) => host.sidebarMenus.openSessionMenu(session, x, y, trigger),
     );
   const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
-  const menuLabel = `${t("chat.sidebar.openSessionMenu")}: ${label}`;
+  const menuTooltip = t("chat.sidebar.openSessionMenu");
+  const menuLabel = `${menuTooltip}: ${label}`;
+  const menuOpen = host.sidebarMenus.sessionMenu?.session.key === session.key;
   const rowClass = [
     "sidebar-recent-session",
     "session-row-host",
     session.isChild ? "sidebar-recent-session--child" : "",
+    !subtitle ? "sidebar-recent-session--single-line" : "",
     session.archived ? "sidebar-session--archived" : "",
     session.visuallyActive ? "sidebar-recent-session--active" : "",
     host.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
@@ -339,7 +364,9 @@ export function renderRecentSession(params: {
                 ),
               })}
               ${trailingIndicator === nothing
-                ? nothing
+                ? trailingDescription
+                  ? html`<span class="sr-only" id=${stateId}>${trailingDescription}</span>`
+                  : nothing
                 : html`<span class="session-row-aside">
                     <span
                       class="session-row-state"
@@ -410,28 +437,51 @@ export function renderRecentSession(params: {
               >
                 ${icons.pin}
               </button>`}
-          <button
-            class="session-action"
-            data-session-menu="true"
-            type="button"
-            title=${menuLabel}
-            aria-label=${menuLabel}
-            aria-haspopup="menu"
-            aria-expanded=${String(host.sidebarMenus.sessionMenu?.session.key === session.key)}
-            @click=${(event: MouseEvent) => {
-              event.stopPropagation();
-              const trigger = event.currentTarget as HTMLElement;
-              host.toggleSessionMenu(session, trigger);
-            }}
-          >
-            ${icons.moreHorizontal}
-          </button>
+          <openclaw-tooltip .content=${menuTooltip} .describe=${false} .disabled=${menuOpen}>
+            <button
+              class="session-action"
+              data-session-menu="true"
+              type="button"
+              aria-label=${menuLabel}
+              aria-haspopup="menu"
+              aria-expanded=${String(menuOpen)}
+              @click=${(event: MouseEvent) => {
+                event.stopPropagation();
+                const trigger = event.currentTarget as HTMLElement;
+                host.toggleSessionMenu(session, trigger);
+              }}
+            >
+              ${icons.moreHorizontal}
+            </button>
+          </openclaw-tooltip>
         </span>
       </span>
     </div>
   `;
   // Marquee state mutates the row DOM; keying prevents cross-session reuse.
   return keyed(session.key, row);
+}
+
+export function renderChildSessionLoadError(host: SessionListHost, parentKey: string) {
+  const error = host.sessionData.childSessionErrorsByParent.get(parentKey);
+  if (!error) {
+    return nothing;
+  }
+  return html`<div
+    class="sidebar-session-error callout danger"
+    data-child-session-error=${parentKey}
+    role="alert"
+  >
+    <span>${error}</span>
+    <button
+      class="sidebar-session-tree__show-more"
+      type="button"
+      data-retry-child-sessions=${parentKey}
+      @click=${() => host.sessionData.retryChildSessions(parentKey)}
+    >
+      ${t("common.retry")}
+    </button>
+  </div>`;
 }
 
 export function renderSessionTree(params: {
@@ -478,6 +528,7 @@ export function renderSessionTree(params: {
                 ${t("sessionsView.showMoreChildren", { count: String(hiddenChildCount) })}
               </button>`
             : nothing}
+          ${renderChildSessionLoadError(host, session.key)}
           ${session.loadingChildren && session.children.length === 0
             ? html`<span class="sidebar-session-tree__loading">${t("common.loading")}</span>`
             : nothing}

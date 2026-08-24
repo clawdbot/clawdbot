@@ -35,7 +35,6 @@ export async function startGatewayDiscovery(params: {
   port: number;
   gatewayTls?: { enabled: boolean; fingerprintSha256?: string };
   gatewayDirectReachable?: boolean;
-  canvasPort?: number;
   wideAreaDiscoveryEnabled: boolean;
   wideAreaDiscoveryDomain?: string | null;
   tailscaleMode: "off" | "serve" | "funnel";
@@ -79,7 +78,6 @@ export async function startGatewayDiscovery(params: {
           gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
           gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
           gatewayDirectReachable: params.gatewayDirectReachable === true,
-          canvasPort: params.canvasPort,
           sshPort,
           tailnetDns,
           cliPath,

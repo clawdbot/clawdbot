@@ -2,6 +2,7 @@ import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-h
 // Memory Core tests cover tools plugin behavior.
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-host-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MEMORY_GET_TOOL_CONTRACT, MEMORY_SEARCH_TOOL_CONTRACT } from "./memory-tool-contract.js";
 import {
   getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
@@ -18,11 +19,7 @@ import {
 } from "./memory-tool-manager.test-mocks.js";
 import { applyProjectRanking } from "./memory/project-ranking.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
-import {
-  buildMemorySearchUnavailableResult,
-  MemoryGetSchema,
-  MemorySearchSchema,
-} from "./tools.shared.js";
+import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
 import {
   asOpenClawConfig,
   createMemorySearchToolOrThrow,
@@ -58,19 +55,14 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 
 describe("memory tool schemas", () => {
   it("uses flat corpus enums for provider tool compatibility", () => {
-    const searchCorpus = MemorySearchSchema.properties.corpus as {
-      anyOf?: unknown;
-      enum?: unknown;
-    };
-    const getCorpus = MemoryGetSchema.properties.corpus as {
-      anyOf?: unknown;
-      enum?: unknown;
-    };
-
-    expect(searchCorpus.anyOf).toBeUndefined();
-    expect(searchCorpus.enum).toEqual(["memory", "wiki", "all", "sessions"]);
-    expect(getCorpus.anyOf).toBeUndefined();
-    expect(getCorpus.enum).toEqual(["memory", "wiki", "all"]);
+    expect(MEMORY_SEARCH_TOOL_CONTRACT.parameters.properties.corpus).toEqual({
+      type: "string",
+      enum: ["memory", "wiki", "all", "sessions"],
+    });
+    expect(MEMORY_GET_TOOL_CONTRACT.parameters.properties.corpus).toEqual({
+      type: "string",
+      enum: ["memory", "wiki", "all"],
+    });
   });
 });
 
@@ -776,8 +768,10 @@ describe("memory_search corpus labels", () => {
 
   it("keeps ordinary memory_search on explicitly configured sources when recall indexing is enabled", async () => {
     let seenSources: readonly string[] | undefined;
+    let seenMaxResults: number | undefined;
     setMemorySearchImpl(async (opts) => {
       seenSources = opts?.sources;
+      seenMaxResults = opts?.maxResults;
       return [];
     });
     const tool = createMemorySearchToolOrThrow({
@@ -795,9 +789,10 @@ describe("memory_search corpus labels", () => {
       agentSessionKey: "agent:main:main",
     });
 
-    await tool.execute("ordinary-search", { query: "favorite food" });
+    await tool.execute("ordinary-search", { query: "favorite food", maxResults: 3 });
 
     expect(seenSources).toEqual(["memory"]);
+    expect(seenMaxResults).toBe(3);
   });
 
   it("applies active-project ranking through the production memory_search tool", async () => {
@@ -1061,6 +1056,7 @@ describe("memory_search corpus labels", () => {
   });
 
   it("widens ranked candidates to fill the visible session result window", async () => {
+    const searchedLimits: Array<number | undefined> = [];
     const ranked = [
       {
         path: "sessions/missing-high-rank-a.jsonl",
@@ -1096,6 +1092,7 @@ describe("memory_search corpus labels", () => {
       },
     ];
     setMemorySearchImpl(async (opts) => {
+      searchedLimits.push(opts?.maxResults);
       return ranked.slice(0, opts?.maxResults);
     });
     setMemorySourceCounts([{ source: "sessions", files: 3, chunks: 4 }]);
@@ -1140,11 +1137,41 @@ describe("memory_search corpus labels", () => {
     ]);
     expect(details.results).toHaveLength(2);
     expect(details.results.every((entry) => entry.path.startsWith("sessions/"))).toBe(true);
+    expect(searchedLimits).toEqual([4]);
     expect(details.debug).toMatchObject({
       hits: 2,
       candidateHits: 4,
       withheldHits: 2,
       searchWindow: 4,
+    });
+
+    searchedLimits.length = 0;
+    const boundedResult = await tool.execute("indexed-candidate-bound", {
+      query: "session result",
+      maxResults: 5,
+    });
+    expect(searchedLimits).toEqual([4]);
+    expect(boundedResult.details).toMatchObject({
+      results: expect.arrayContaining([
+        expect.objectContaining({ snippet: "First visible session result" }),
+        expect.objectContaining({ snippet: "Second visible session result" }),
+      ]),
+      debug: { hits: 2, candidateHits: 4, withheldHits: 2, searchWindow: 4 },
+    });
+
+    searchedLimits.length = 0;
+    setMemorySourceCounts([]);
+    const bootstrapResult = await tool.execute("bootstrap-candidate-window", {
+      query: "session result",
+      maxResults: 2,
+    });
+    expect(searchedLimits).toEqual([200]);
+    expect(bootstrapResult.details).toMatchObject({
+      results: expect.arrayContaining([
+        expect.objectContaining({ snippet: "First visible session result" }),
+        expect.objectContaining({ snippet: "Second visible session result" }),
+      ]),
+      debug: { hits: 2, candidateHits: 4, withheldHits: 2, searchWindow: 200 },
     });
   });
 

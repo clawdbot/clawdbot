@@ -171,6 +171,7 @@ describe("agent harness host capability", () => {
     host.close();
     expect(getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(authority);
     expect(() => host.capabilities.bindToolSurface([tool])).toThrow("no longer active");
+    expect(() => host.capabilities.createToolSurface?.({} as never)).toThrow("no longer active");
     expect(() => host.capabilities.assertActive()).toThrow("no longer active");
     await expect(bound.execute("call-1", {})).rejects.toThrow("no longer active");
     expect(execute).not.toHaveBeenCalled();
@@ -239,6 +240,37 @@ describe("agent harness host capability", () => {
     });
     host.close();
     expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
+  });
+
+  it("delegates trajectory events and rejects a flush that outlives the capability", async () => {
+    const flushStarted = createDeferred();
+    const flushResult = createDeferred();
+    const recordEvent = vi.fn();
+    const flush = vi.fn(async () => {
+      flushStarted.resolve();
+      await flushResult.promise;
+    });
+    const { attempt } = await admittedAttempt("run-trajectory", {
+      trajectoryRecorder: {
+        recordEvent,
+        flush,
+      },
+    });
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const trajectory = host.capabilities.trajectory;
+    if (!trajectory) {
+      throw new Error("expected trajectory capability");
+    }
+
+    trajectory.recordEvent("plugin.event", { ok: true });
+    expect(recordEvent).toHaveBeenCalledWith("plugin.event", { ok: true });
+    const pending = trajectory.flush();
+    await flushStarted.promise;
+    host.close();
+    flushResult.resolve();
+
+    await expect(pending).rejects.toThrow("no longer active");
+    expect(() => trajectory.recordEvent("late.event")).toThrow("no longer active");
   });
 
   it("preserves ambient GitHub service tokens for a native local identity", async () => {
@@ -342,38 +374,51 @@ describe("agent harness host capability", () => {
     expect(mockRunBefore).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    {
-      name: "lexical host closure",
-      revoke: async ({ host }: { host: ReturnType<typeof createAgentHarnessHostCapabilities> }) => {
-        host.close();
+  it.each(
+    [
+      {
+        name: "lexical host closure",
+        revoke: async ({
+          host,
+        }: {
+          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
+          attempt: HostAttempt;
+        }) => {
+          host.close();
+        },
       },
-    },
-    {
-      name: "exact authority release",
-      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
-        expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+      {
+        name: "exact authority release",
+        revoke: async ({
+          attempt,
+        }: {
+          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
+          attempt: HostAttempt;
+        }) => {
+          expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+        },
       },
-    },
-    {
-      name: "outer admission abort",
-      revoke: async ({ admission }: { admission: PreparedAgentRunAdmission }) => {
-        admission.close();
+      {
+        name: "replacement owner",
+        revoke: async ({
+          attempt,
+        }: {
+          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
+          attempt: HostAttempt;
+        }) => {
+          await admittedAttempt(attempt.runId);
+        },
       },
-    },
-    {
-      name: "replacement owner",
-      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
-        await admittedAttempt(attempt.runId);
-      },
-    },
-  ])("rejects an allowed policy result after $name during the hook", async ({ revoke }) => {
-    const { attempt, admission } = await admittedAttempt("run-policy-race");
+    ].flatMap((entry) =>
+      (["resolve", "reject"] as const).map((settlement) => Object.assign({ settlement }, entry)),
+    ),
+  )("rejects a deferred policy $settlement after $name", async ({ revoke, settlement }) => {
+    const { attempt } = await admittedAttempt("run-policy-race");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    const hookStarted = createDeferred();
+    const hookStarted = createDeferred<(() => boolean | void) | undefined>();
     const hookResult = createDeferred<{ blocked: false; params: { command: string } }>();
     mockRunBefore.mockImplementationOnce(async () => {
-      hookStarted.resolve();
+      hookStarted.resolve(getGatewayToolCallerIdentity()?.receiptAuthority);
       return await hookResult.promise;
     });
 
@@ -381,11 +426,19 @@ describe("agent harness host capability", () => {
       toolName: "exec",
       params: { command: "true" },
     });
-    await hookStarted.promise;
-    await revoke({ admission, attempt, host });
-    hookResult.resolve({ blocked: false, params: { command: "true" } });
+    const receiptAuthority = await hookStarted.promise;
+    expect(receiptAuthority).toEqual(expect.any(Function));
+    await revoke({ attempt, host });
+    expect(receiptAuthority?.()).toBe(false);
+    if (settlement === "resolve") {
+      hookResult.resolve({ blocked: false, params: { command: "true" } });
+    } else {
+      hookResult.reject(new Error("deferred policy rejected"));
+    }
 
-    await expect(pending).rejects.toThrow("no longer active");
+    await expect(pending).rejects.toThrow(
+      settlement === "resolve" ? "no longer active" : "deferred policy rejected",
+    );
   });
 
   it("keeps a private native policy lease after foreground close but fences replacement", async () => {

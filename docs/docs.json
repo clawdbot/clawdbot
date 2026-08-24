@@ -89,6 +89,10 @@
       "destination": "/gateway/external-apps"
     },
     {
+      "source": "/reference/wizard",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
       "source": "/reference/maturity-scorecard",
       "destination": "/maturity/scorecard"
     },
@@ -1088,6 +1092,7 @@
                 "pages": [
                   "install/backups",
                   "install/updating",
+                  "install/update-troubleshooting",
                   {
                     "group": "Migrating",
                     "pages": [
@@ -1357,6 +1362,7 @@
                 "group": "Skills",
                 "pages": [
                   "tools/skills",
+                  "tools/custodian-skills",
                   "tools/skill-workshop",
                   "tools/self-learning",
                   "tools/creating-skills",
@@ -1671,6 +1677,7 @@
                       "gateway/heartbeat",
                       "gateway/doctor",
                       "gateway/audit",
+                      "gateway/telemetry",
                       "logging",
                       "gateway/opentelemetry",
                       "gateway/prometheus",
@@ -1739,7 +1746,8 @@
                   "gateway/remote",
                   "gateway/remote-gateway-readme",
                   "gateway/stable-https-url",
-                  "gateway/tailscale"
+                  "gateway/tailscale",
+                  "gateway/cloudflare-access"
                 ]
               },
               {
@@ -1977,7 +1985,6 @@
                 "group": "Technical reference",
                 "pages": [
                   "agent-runtime-architecture",
-                  "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
                   "reference/openclaw-ai",

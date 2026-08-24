@@ -2,7 +2,10 @@ import type { TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
-import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
+import type {
+  NativeNotificationsPermission,
+  NativeNotificationTestOutcome,
+} from "../../app/native-notifications.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
@@ -101,6 +104,9 @@ export type ConfigProps = {
   themeModeOverridden: boolean;
   themeModeProvenance: ServerUiPrefProvenance;
   themeModeResetValue: ThemeMode;
+  accent: string | undefined;
+  accentOverridden: boolean;
+  accentProvenance: ServerUiPrefProvenance;
   systemLocale: Locale;
   localeOverride?: Locale;
   localeOverridden: boolean;
@@ -112,6 +118,8 @@ export type ConfigProps = {
   resetTheme: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   resetThemeMode: () => void;
+  setAccent: (accent: string) => void;
+  resetAccent: () => void;
   hasCustomTheme: boolean;
   customThemeLabel: string | null;
   customThemeSourceUrl: string | null;
@@ -187,7 +195,10 @@ export type ConfigProps = {
   includeVirtualSections?: boolean;
   /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
   settingsLayout?: "tabs" | "accordion";
-  nativeNotifications?: { permission: NativeNotificationsPermission | "unknown" };
+  nativeNotifications?: {
+    permission: NativeNotificationsPermission | "unknown";
+    test: NativeNotificationTestOutcome | null;
+  };
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
   webPush?: WebPushUiState;

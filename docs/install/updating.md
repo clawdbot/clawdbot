@@ -60,9 +60,11 @@ OpenClaw cannot safely distinguish an old automatic pin from a user pin; run
 `openclaw plugins update @openclaw/name` once on the extended-stable channel
 to opt that plugin back into exact-core tracking.
 
-`--channel dev` gives a persistent moving GitHub `main` checkout. For a one-off
-package update, `--tag main` maps to the `github:openclaw/openclaw#main` package
-spec and installs it directly through the target package manager (npm/pnpm/bun).
+`--channel dev` gives a persistent moving GitHub `main` checkout. Package
+installs reject the `--tag main` shorthand because the workspace checkout is
+not a self-contained package artifact. Use `openclaw update --channel dev` to
+switch to the supported checkout and build flow. Other explicit package specs
+keep their package-manager behavior.
 
 For managed plugins, a missing beta release is a warning, not a failure: the
 core update can still succeed while a plugin falls back to its recorded
@@ -71,6 +73,8 @@ default/latest release.
 See [Release channels](/install/development-channels) for channel semantics.
 
 ## Switch between npm and git installs
+
+Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
 
 Use channels to change the install type. The updater keeps your state, config,
 credentials, and workspace in `~/.openclaw`; it only changes which OpenClaw
@@ -280,6 +284,10 @@ Off by default. Enable it in `~/.openclaw/openclaw.json`:
 
 You can also choose the update channel and enable automatic updates from
 **Settings → Updates** (`/settings/updates`) in the Control UI.
+Recorded failures on that page include typed **Check status** and **Retry
+update** actions when the connected Gateway supports them. See [Update
+troubleshooting](/install/update-troubleshooting) for reason codes, guided
+recovery, CLI fallbacks, and diagnostics to collect.
 For a `dev` git install, opening this page refreshes the tracked upstream and
 shows whether the checkout is current, ahead, diverged, unavailable, or a
 specific number of commits behind. It also shows exact and relative build,
@@ -314,9 +322,13 @@ Every failed apply ends the campaign so the UI does not remain on
 in the restart sentinel and surface after the Gateway returns; direct
 unsupervised failures remain in the running Gateway's logs.
 
-`OPENCLAW_NO_AUTO_UPDATE=1` and external-supervisor mode disable automatic
-applies entirely. Startup update hints can still run unless
-`update.checkOnStart` is also disabled.
+`update.checkOnStart: false` disables all automatic update checks, feature
+statistics, and update notices, even when `update.auto.enabled` is `true`.
+`OPENCLAW_NO_AUTO_UPDATE=1` also disables automatic checks and applies.
+External-supervisor mode disables automatic applies; startup update hints can
+still run unless `update.checkOnStart` is also disabled. See
+[Usage telemetry and update checks](/gateway/telemetry) for the information
+sent by the daily check and optional anonymous feature statistics.
 
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this

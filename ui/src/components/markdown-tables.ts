@@ -151,6 +151,20 @@ function showTableDialog(table: HTMLTableElement, trigger: HTMLElement): void {
   const expandedTable = table.cloneNode(true);
   dialog.append(close, expandedTable);
   close.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("click", (event) => {
+    if (event.target !== dialog) {
+      return;
+    }
+    const bounds = dialog.getBoundingClientRect();
+    const outside =
+      event.clientX < bounds.left ||
+      event.clientX > bounds.right ||
+      event.clientY < bounds.top ||
+      event.clientY > bounds.bottom;
+    if (outside) {
+      dialog.close();
+    }
+  });
   dialog.addEventListener("close", () => {
     dialog.remove();
     if (trigger.isConnected) {
@@ -185,9 +199,13 @@ export function handleMarkdownTableInteraction(event: Event): void {
   if (copy) {
     void copyToClipboard(tableText(table)).then((copied) => {
       copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
+      if (copied) {
+        render(icons.check, copy);
+      }
       clearTimeout(tableCopyResetTimers.get(copy));
       const resetTimer = setTimeout(
         () => {
+          render(icons.copy, copy);
           copy.setAttribute("aria-label", t("common.copyTable"));
           tableCopyResetTimers.delete(copy);
         },

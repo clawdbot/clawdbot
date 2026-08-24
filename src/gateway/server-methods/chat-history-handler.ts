@@ -247,7 +247,7 @@ async function handleChatHistoryRequest({
   const selectedAgent = validateChatSelectedAgent({
     cfg,
     requestedSessionKey: sessionKey,
-    agentId: requestedAgentId,
+    explicitAgentId: agentIdOverride,
   });
   if (!selectedAgent.ok) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
@@ -502,7 +502,12 @@ async function handleChatHistoryRequest({
     defaultAgentId: compatibilityOwnerAgentId,
   });
   sessionInfo.hasActiveRun = activeRunState.active;
-  sessionInfo.activeRunIds = activeRunState.runIds;
+  if (activeRunState.runIds !== undefined) {
+    sessionInfo.activeRunIds = activeRunState.runIds;
+  }
+  if (activeRunState.active) {
+    sessionInfo.status = activeRunState.status ?? "running";
+  }
   // Clients merge this row into the same store sessions.list fills, so it must
   // carry the placement facts that projection adds; without them the merge
   // erases a live worker placement and its move intent.

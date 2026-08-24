@@ -236,6 +236,29 @@ describe("resolveExecDefaults", () => {
     });
   });
 
+  it("keeps an explicit full session at full/off despite host approval floors", () => {
+    vi.mocked(execApprovals.loadExecApprovals).mockReturnValue({
+      version: 1,
+      defaults: {
+        security: "full",
+        ask: "always",
+      },
+      agents: {},
+    });
+
+    expect(
+      resolveExecDefaults({
+        cfg: withDefaultAgent({}),
+        sessionEntry: { permissionMode: "full" } as SessionEntry,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      mode: "full",
+      security: "full",
+      ask: "off",
+    });
+  });
+
   it("keeps agent mode overrides ahead of the global mode", () => {
     expect(
       resolveExecDefaults({

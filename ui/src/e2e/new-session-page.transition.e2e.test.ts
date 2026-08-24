@@ -133,6 +133,9 @@ suite.define(() => {
 
       await expect.poll(() => start.getAttribute("aria-busy")).toBe("true");
       const spinner = start.locator("svg");
+      expect(await spinner.evaluate((element) => getComputedStyle(element).animationDuration)).toBe(
+        "2.25s",
+      );
       const initialSpinnerTransform = await spinner.evaluate(
         (element) => getComputedStyle(element).transform,
       );

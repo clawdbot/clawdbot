@@ -29,7 +29,7 @@ export type ArtifactDownloadResolver = (params: {
 
 export type ImageRenderOptions = {
   localMediaPreviewRoots?: readonly string[];
-  basePath?: string;
+  resourceBasePath?: string;
   authToken?: string | null;
   onRequestUpdate?: () => void;
   onRequestOpenImage?: () => number;

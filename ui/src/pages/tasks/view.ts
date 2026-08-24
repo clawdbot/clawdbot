@@ -29,6 +29,7 @@ type TasksProps = {
   canCancel: boolean;
   loading: boolean;
   error: string | null;
+  copyResultError: string | null;
   tasks: TaskSummary[];
   cancellingTaskIds: ReadonlySet<string>;
   sessionRow: (sessionKey: string) => GatewaySessionRow | undefined;
@@ -255,7 +256,10 @@ export function renderTasks(props: TasksProps) {
       ${!props.connected
         ? html`<div class="callout warn">${t("tasksPage.disconnected")}</div>`
         : nothing}
-      ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+      ${props.error ? html`<div class="callout danger" role="alert">${props.error}</div>` : nothing}
+      ${props.copyResultError
+        ? html`<div class="callout danger" role="alert">${props.copyResultError}</div>`
+        : nothing}
       ${renderSummaryStrip(props.tasks)}
       ${props.loading && props.tasks.length === 0
         ? html`<div class="card muted">${t("tasksPage.loading")}</div>`

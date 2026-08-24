@@ -3,6 +3,7 @@
  * prepared direct compaction attempt.
  */
 import os from "node:os";
+import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
@@ -100,6 +101,10 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     effectiveCwd,
     effectiveSkillAgentId,
   } = prepared;
+  const sessionPermissionPolicy =
+    params.sessionEntry?.permissionMode && params.sessionEntry.sessionRoot
+      ? { mode: params.sessionEntry.permissionMode, root: params.sessionEntry.sessionRoot }
+      : undefined;
   let restoreSkillEnv: (() => void) | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof createBundleMcpToolRuntime>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
@@ -142,16 +147,21 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       workspaceOnly: loadSkillsWorkspaceOnly,
     } = resolveSandboxSkillRuntimeInputs({
       sandbox,
-      effectiveWorkspace,
+      skillsAnchorWorkspace: params.bootstrapWorkspaceDir ?? effectiveWorkspace,
       skillsSnapshot: params.skillsSnapshot,
     });
-    const { shouldLoadSkillEntries, skillEntries, loadSkillEntries } =
+    const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
       resolveEmbeddedRunSkillEntries({
         workspaceDir: effectiveSkillsWorkspace,
         config: params.config,
         agentId: effectiveSkillAgentId,
         eligibility: skillsEligibility,
         skillsSnapshot: skillsSnapshotForRun,
+        // Sandbox fallbacks stay inside their sandbox skill workspace;
+        // host execution skills are not mounted there.
+        ...(sandbox?.enabled === true
+          ? {}
+          : { executionSkillsDir: path.join(effectiveWorkspace, "skills") }),
         workspaceOnly: loadSkillsWorkspaceOnly,
       });
     restoreSkillEnv = skillsSnapshotForRun
@@ -185,6 +195,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       workspaceDir: effectiveSkillsPromptWorkspace,
       agentId: effectiveSkillAgentId,
       eligibility: skillsEligibility,
+      preserveEntryOrder,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -308,6 +319,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             elevated: params.bashElevated,
           },
           sandbox,
+          sessionPermissionPolicy,
           messageProvider: resolvedMessageProvider,
           clientCaps: params.clientCaps,
           chatType: params.chatType,
@@ -499,6 +511,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       config: params.config,
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,
+      permissionMode: sessionPermissionPolicy?.mode,
       sandboxAvailable: sandbox?.enabled === true,
       execOverrides: params.execOverrides,
     });

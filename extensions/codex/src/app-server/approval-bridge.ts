@@ -31,6 +31,7 @@ import {
   truncateCodexApprovalDisplayText as truncate,
   type AppServerApprovalOutcome,
   type CodexApprovalKind,
+  type ExecApprovalDecision,
   waitForPluginApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
@@ -188,6 +189,11 @@ export async function handleCodexAppServerApprovalRequest(params: {
       severity: context.severity,
       toolName: context.toolName,
       toolCallId: context.approvalId,
+      allowedDecisions: nativeApprovalAllowedDecisions({
+        method: params.method,
+        requestParams,
+        requiresOneShot: mutableFileApprovalRequiresOneShot,
+      }),
     });
 
     const approvalId = requestResult?.id;
@@ -809,16 +815,38 @@ function commandApprovalDecision(
   if (outcome === "denied" || outcome === "unavailable") {
     return "decline";
   }
-  if (outcome === "approved-session") {
-    if (hasAvailableDecision(requestParams, "acceptForSession")) {
-      return "acceptForSession";
-    }
-    const amendmentDecision = findAvailableCommandAmendmentDecision(requestParams);
-    if (amendmentDecision) {
-      return amendmentDecision;
-    }
+  const capabilities = commandApprovalCapabilities(requestParams);
+  if (outcome === "approved-session" && capabilities.sessionDecision !== undefined) {
+    return capabilities.sessionDecision;
   }
-  return hasAvailableDecision(requestParams, "accept") ? "accept" : "decline";
+  return capabilities.once ? "accept" : "decline";
+}
+
+function nativeApprovalAllowedDecisions(params: {
+  method: string;
+  requestParams: JsonObject | undefined;
+  requiresOneShot: boolean;
+}): ExecApprovalDecision[] | undefined {
+  if (params.method === "item/fileChange/requestApproval") {
+    return ["allow-once", "allow-always", "deny"];
+  }
+  if (params.method !== "item/commandExecution/requestApproval") {
+    return undefined;
+  }
+  const available = params.requestParams?.availableDecisions;
+  if (!Array.isArray(available)) {
+    return undefined;
+  }
+  const capabilities = commandApprovalCapabilities(params.requestParams);
+  const decisions: ExecApprovalDecision[] = [];
+  if (capabilities.once) {
+    decisions.push("allow-once");
+  }
+  if (!params.requiresOneShot && capabilities.sessionDecision !== undefined) {
+    decisions.push("allow-always");
+  }
+  decisions.push("deny");
+  return decisions;
 }
 
 function fileChangeApprovalDecision(outcome: AppServerApprovalOutcome): JsonValue {
@@ -1167,9 +1195,20 @@ function isPrivateNetworkHostPattern(value: string): boolean {
   return /^172\.(1[6-9]|2\d|3[0-1])\./.test(wildcardStripped);
 }
 
-function hasAvailableDecision(requestParams: JsonObject | undefined, decision: string): boolean {
+function commandApprovalCapabilities(requestParams: JsonObject | undefined): {
+  once: boolean;
+  sessionDecision?: JsonValue;
+} {
   const available = requestParams?.availableDecisions;
-  return !Array.isArray(available) || available.includes(decision);
+  if (!Array.isArray(available)) {
+    return { once: true, sessionDecision: "acceptForSession" };
+  }
+  return {
+    once: available.includes("accept"),
+    ...(available.includes("acceptForSession")
+      ? { sessionDecision: "acceptForSession" }
+      : { sessionDecision: findAvailableCommandAmendmentDecision(requestParams) }),
+  };
 }
 
 function findAvailableCommandAmendmentDecision(

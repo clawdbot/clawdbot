@@ -565,13 +565,13 @@ describe("CodexAppServerTurnRouter", () => {
     expect(staleHandler).not.toHaveBeenCalled();
   });
 
-  it("routes no-turn requests immediately after activation", async () => {
+  it("routes no-turn requests and preserves exact cancellation before release", async () => {
     const harness = createHarness();
     const handleRequest = (request: CodexAppServerServerRequest): JsonValue => {
       if (request.method === "execCommandApproval" || request.method === "applyPatchApproval") {
         return { decision: "approved" };
       }
-      return { action: "accept", content: { answer: "yes" } };
+      return { action: "cancel", content: null, _meta: null };
     };
     const handler = vi.fn(handleRequest);
     const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
@@ -593,7 +593,7 @@ describe("CodexAppServerTurnRouter", () => {
 
     expect(await waitForResponse(harness, "elicitation-1")).toEqual({
       id: "elicitation-1",
-      result: { action: "accept", content: { answer: "yes" } },
+      result: { action: "cancel", content: null, _meta: null },
     });
     expect(handler).toHaveBeenCalledOnce();
     route.release();

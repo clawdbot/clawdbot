@@ -157,60 +157,7 @@ describe("plugin metadata snapshot", () => {
     expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
   });
 
-  it("reuses workspace-independent lifecycle metadata for a new workspace", () => {
-    const config = {};
-    const sourceWorkspace = "/workspace/source";
-    const targetWorkspace = "/workspace/target";
-    const index = makeIndex();
-    index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    index.workspaceDir = sourceWorkspace;
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
-    const source = loadPluginMetadataSnapshot({
-      config,
-      env: {},
-      index,
-      workspaceDir: sourceWorkspace,
-    });
-    setCurrentPluginMetadataSnapshot(source, {
-      config,
-      env: {},
-      workspaceDir: sourceWorkspace,
-    });
-    loadPluginRegistrySnapshotWithMetadata.mockClear();
-    loadPluginManifestRegistryForInstalledIndex.mockClear();
-
-    const resolved = resolvePluginMetadataSnapshot({
-      config,
-      env: {},
-      workspaceDir: targetWorkspace,
-      workspacePluginRootPresent: false,
-    });
-
-    expect(resolved).not.toBe(source);
-    expect(resolved.workspaceDir).toBe(targetWorkspace);
-    expect(resolved.index.workspaceDir).toBe(targetWorkspace);
-    expect(resolved.plugins).toBe(source.plugins);
-    expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
-
-    resolvePluginMetadataSnapshot({
-      config,
-      env: {},
-      workspaceDir: targetWorkspace,
-      workspacePluginRootPresent: true,
-    });
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
-  });
-
-  it("loads a fresh graph when no caller asserted workspace plugin-root absence", () => {
-    // Startup config validation never resolves workspace plugin-root presence, so it must keep
-    // loading. Projecting the published graph instead would serve whatever inventory happened to
-    // be current, and startup convergence rewrites that inventory between the two reads that
-    // form the migration checkpoint identity — the gateway then refuses to report ready.
+  it("cold-loads the requested workspace instead of reusing a different lifecycle graph", () => {
     const config = {};
     const sourceWorkspace = "/workspace/source";
     const targetWorkspace = "/workspace/target";

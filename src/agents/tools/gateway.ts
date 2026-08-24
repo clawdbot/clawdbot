@@ -503,11 +503,13 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   const resolvedMessageActionContext = terminalSourceReply
     ? {
         ...messageActionContext,
+        turnCapability: params.turnCapability,
         sourceReplyFinal: true as const,
         sourceReplyToolCallId: sourceReplyToolCallId!,
       }
     : {
         ...messageActionContext,
+        turnCapability: params.turnCapability,
         ...(params.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
         ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
       };

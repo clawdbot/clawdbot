@@ -9,13 +9,6 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("aligns Markdown markers and text while containing expanded disclosures", async () => {
-    const longJson = JSON.stringify(
-      Object.fromEntries(
-        Array.from({ length: 40 }, (_, index) => [`field-${index + 1}`, index + 1]),
-      ),
-      null,
-      2,
-    );
     await suite.withPage(
       {
         colorScheme: "light",
@@ -49,10 +42,6 @@ suite.define(() => {
                     "<summary>Collapsed details</summary>",
                     "Hidden body",
                     "</details>",
-                    "",
-                    "```json",
-                    longJson,
-                    "```",
                   ].join("\n"),
                 },
               ],
@@ -87,8 +76,8 @@ suite.define(() => {
             return range.getBoundingClientRect();
           };
           const checkbox = root.querySelector(".task-list-item-checkbox");
-          const details = root.querySelector("details:not(.json-collapse)[open]");
-          const summary = root.querySelector("details:not(.json-collapse)[open] > summary");
+          const details = root.querySelector("details[open]");
+          const summary = root.querySelector("details[open] > summary");
           if (!checkbox || !details || !summary) {
             throw new Error("Missing task-list or disclosure markup");
           }
@@ -96,23 +85,14 @@ suite.define(() => {
           const summaryStyle = getComputedStyle(summary);
           const checkboxRect = checkbox.getBoundingClientRect();
           const taskTextRect = textRect(".task-list-item");
-          const collapsedSummary = root.querySelector(
-            "details:not(.json-collapse):not([open]) > summary",
-          );
-          const jsonCollapse = root.querySelector("details.json-collapse");
-          const jsonSummary = root.querySelector("details.json-collapse > summary");
-          const jsonCopy = root.querySelector("details.json-collapse .code-block-copy");
-          if (!collapsedSummary || !jsonCollapse || !jsonSummary || !jsonCopy) {
-            throw new Error("Missing authored or JSON disclosure markup");
+          const collapsedSummary = root.querySelector("details:not([open]) > summary");
+          if (!collapsedSummary) {
+            throw new Error("Missing authored disclosure markup");
           }
           const closedChevronStyle = getComputedStyle(collapsedSummary, "::before");
-          const collapsedSummaryTextRect = textRect(
-            "details:not(.json-collapse):not([open]) > summary",
-          );
-          const jsonCollapseStyle = getComputedStyle(jsonCollapse);
-          const jsonSummaryStyle = getComputedStyle(jsonSummary);
+          const collapsedSummaryTextRect = textRect("details:not([open]) > summary");
           return {
-            bodyTextX: textRect("details:not(.json-collapse) > p").x,
+            bodyTextX: textRect("details > p").x,
             borderInlineStartWidth: detailsStyle.borderInlineStartWidth,
             bulletTextX: textRect("ul:not(.contains-task-list) > li").x,
             checkboxGap: taskTextRect.x - checkboxRect.right,
@@ -128,11 +108,6 @@ suite.define(() => {
             collapsedSummaryTextX: collapsedSummaryTextRect.x,
             detailsRight: details.getBoundingClientRect().right,
             detailsX: details.getBoundingClientRect().x,
-            jsonBorderInlineStartWidth: jsonCollapseStyle.borderInlineStartWidth,
-            jsonCopyFloat: getComputedStyle(jsonCopy).float,
-            jsonDetailsX: jsonCollapse.getBoundingClientRect().x,
-            jsonSummaryDisplay: jsonSummaryStyle.display,
-            jsonSummaryPaddingInlineStart: jsonSummaryStyle.paddingInlineStart,
             numberedTextX: textRect("ol > li").x,
             rootRight: root.getBoundingClientRect().right,
             rootX: root.getBoundingClientRect().x,
@@ -159,11 +134,6 @@ suite.define(() => {
         ).toBeGreaterThanOrEqual(24);
         expect(geometry.collapsedSummaryTextX - geometry.detailsX).toBeGreaterThan(24);
         expect(geometry.chevronTransitionDuration).not.toBe("0s");
-        expect(Math.abs(geometry.jsonDetailsX - geometry.rootX)).toBeLessThanOrEqual(1);
-        expect(Number.parseFloat(geometry.jsonBorderInlineStartWidth)).toBe(1);
-        expect(geometry.jsonSummaryDisplay).toBe("list-item");
-        expect(Number.parseFloat(geometry.jsonSummaryPaddingInlineStart)).toBe(8);
-        expect(geometry.jsonCopyFloat).toBe("right");
 
         const collapsedSummary = markdown.locator("summary", { hasText: "Collapsed details" });
         await collapsedSummary.click();
@@ -276,8 +246,8 @@ suite.define(() => {
           const task = root.querySelector(".task-list-item");
           const unorderedList = root.querySelector("ul:not(.contains-task-list)");
           const orderedList = root.querySelector("ol");
-          const summary = root.querySelector("details:not(.json-collapse) > summary");
-          const details = root.querySelector("details:not(.json-collapse)");
+          const summary = root.querySelector("details > summary");
+          const details = root.querySelector("details");
           if (!checkbox || !task || !unorderedList || !orderedList || !summary || !details) {
             throw new Error("Missing RTL Markdown geometry");
           }
@@ -293,7 +263,7 @@ suite.define(() => {
             rootRight: rootRect.right,
             rootX: rootRect.x,
             summaryPaddingInlineStart: getComputedStyle(summary).paddingInlineStart,
-            summaryTextRight: textRight("details:not(.json-collapse) > summary"),
+            summaryTextRight: textRight("details > summary"),
             textStarts: [
               textRight("ul:not(.contains-task-list) > li"),
               textRight("ol > li"),

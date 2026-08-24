@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import {
   CHAT_SNAPSHOT_DB_NAME,
   CHAT_SNAPSHOT_STORE_NAME,
-} from "../pages/chat/session-snapshot-invalidation.ts";
+} from "../pages/chat/session-snapshot-database.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,

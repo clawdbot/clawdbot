@@ -226,10 +226,11 @@ describe("usage.status provider usage cache", () => {
     const stale = await runUsageStatus();
     expect(JSON.stringify(stale)).toBe(JSON.stringify(first));
     await mocks.loadProviderUsageSummary.mock.results[1]?.value;
+    now = 62_000;
     await vi.waitFor(async () => {
       const retained = (await runUsageStatus()) as UsageSummary;
       expect(retained.providers).toEqual(first.providers);
-      expect(retained.updatedAt).toBe(61_000);
+      expect(retained.updatedAt).toBe(first.updatedAt);
       expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
     });
   });
