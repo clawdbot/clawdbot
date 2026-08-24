@@ -1139,10 +1139,14 @@ describe("release validation no-push transport", () => {
     });
     expect(step(dockerProducer, "Setup trusted release harness").if).toBeUndefined();
     expect(validatePackage.env).toMatchObject({
-      EXPECTED_PACKAGE_FILE_NAME: "${{ inputs.package_file_name }}",
-      EXPECTED_PACKAGE_SHA256: "${{ inputs.package_sha256 }}",
-      EXPECTED_PACKAGE_SOURCE_SHA: "${{ inputs.package_source_sha }}",
-      EXPECTED_PACKAGE_VERSION: "${{ inputs.package_version }}",
+      EXPECTED_PACKAGE_FILE_NAME:
+        "${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_file_name || '' }}",
+      EXPECTED_PACKAGE_SHA256:
+        "${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_sha256 || '' }}",
+      EXPECTED_PACKAGE_SOURCE_SHA:
+        "${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_source_sha || '' }}",
+      EXPECTED_PACKAGE_VERSION:
+        "${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_version || '' }}",
     });
     expect(validatePackage.run).toContain('"$SHARED_IMAGE_POLICY" == "no-push-artifact"');
     expect(validatePackage.run).toContain(
