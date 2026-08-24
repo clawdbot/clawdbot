@@ -1313,7 +1313,7 @@ openclaw-chat-page {
   max-width: 100%;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: transparent;
   cursor: zoom-in;
 }
@@ -1323,12 +1323,17 @@ openclaw-chat-page {
   display: inline-flex;
   max-width: 100%;
   overflow: hidden;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
+}
+
+.chat-image-frame--managed {
+  width: min(100%, 400px);
 }
 
 .chat-image-frame--managed .chat-message-image-button {
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  width: 100%;
   min-width: 110px;
   min-height: 42px;
 }
@@ -1399,10 +1404,10 @@ openclaw-chat-page {
 
 .chat-message-image {
   width: auto;
-  max-width: min(100%, 300px);
+  max-width: min(100%, 400px);
   height: auto;
-  max-height: 200px;
-  border-radius: var(--radius-md);
+  max-height: 240px;
+  border-radius: var(--radius-lg);
   object-fit: contain;
   transition: transform 150ms ease-out;
 }
