@@ -12,19 +12,17 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OAuthProvider } from "./auth-profiles/types.js";
 import {
-  CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS,
-  hasClaudeCliKeychainItem,
-  readClaudeCliKeychainPayload,
-  readClaudeCliKeychainPayloadAsync,
-} from "./cli-credentials.claude-keychain.js";
+  type ClaudeCliCredential,
+  readClaudeCliCredentials,
+  resolveClaudeCliCredentialsPath,
+  resolveClaudeCliUserSettingsPath,
+} from "./cli-credentials.claude.js";
 
-const log = createSubsystemLogger("agents/auth-profiles");
+export type { ClaudeCliCredential };
+export { readClaudeCliCredentialsUncachedAsync } from "./cli-credentials.claude.js";
 
-const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
-const CLAUDE_CLI_USER_SETTINGS_RELATIVE_PATH = ".claude/settings.json";
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
 const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
 const GEMINI_CLI_CREDENTIALS_RELATIVE_PATH = ".gemini/oauth_creds.json";
@@ -49,33 +47,6 @@ function resetCliCredentialCachesForTest(): void {
   minimaxCliCache = null;
   geminiCliCache = null;
 }
-
-/** Credential shape parsed from Claude Code CLI storage. */
-export type ClaudeCliCredential =
-  | {
-      type: "oauth";
-      provider: "anthropic";
-      access: string;
-      refresh: string;
-      expires: number;
-      subscriptionType?: string;
-      rateLimitTier?: string;
-      email?: string;
-    }
-  | {
-      type: "token";
-      provider: "anthropic";
-      token: string;
-      expires: number;
-      subscriptionType?: string;
-      rateLimitTier?: string;
-      email?: string;
-    }
-  | {
-      type: "api_key_helper";
-      provider: "anthropic";
-      helperHash: string;
-    };
 
 /** Credential shape parsed from Codex CLI storage. */
 export type CodexCliCredential = {
@@ -116,66 +87,6 @@ export type GeminiCliCredential = {
 };
 
 type ExecSyncFn = typeof execSync;
-
-function resolveClaudeCliCredentialsPath(homeDir?: string) {
-  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
-  return path.join(baseDir, CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH);
-}
-
-function resolveClaudeCliUserSettingsPath(homeDir?: string) {
-  // Managed Claude CLI launches clear CLAUDE_CONFIG_DIR, so auth discovery
-  // inspects the canonical user settings tree that the child will use.
-  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
-  return path.join(baseDir, CLAUDE_CLI_USER_SETTINGS_RELATIVE_PATH);
-}
-
-function parseClaudeCliOauthCredential(claudeOauth: unknown): ClaudeCliCredential | null {
-  if (!claudeOauth || typeof claudeOauth !== "object") {
-    return null;
-  }
-  const data = claudeOauth as Record<string, unknown>;
-  const accessToken = data.accessToken;
-  const refreshToken = data.refreshToken;
-  const expiresAt = data.expiresAt;
-  // Plan metadata (e.g. subscriptionType "max", rateLimitTier "default_max_20x")
-  // lets usage surfaces label subscription windows without another API call.
-  const subscriptionType =
-    typeof data.subscriptionType === "string" && data.subscriptionType.trim()
-      ? data.subscriptionType.trim()
-      : undefined;
-  const rateLimitTier =
-    typeof data.rateLimitTier === "string" && data.rateLimitTier.trim()
-      ? data.rateLimitTier.trim()
-      : undefined;
-  const planFields = {
-    ...(subscriptionType ? { subscriptionType } : {}),
-    ...(rateLimitTier ? { rateLimitTier } : {}),
-  };
-
-  if (typeof accessToken !== "string" || !accessToken) {
-    return null;
-  }
-  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= 0) {
-    return null;
-  }
-  if (typeof refreshToken === "string" && refreshToken) {
-    return {
-      type: "oauth",
-      provider: "anthropic",
-      access: accessToken,
-      refresh: refreshToken,
-      expires: expiresAt,
-      ...planFields,
-    };
-  }
-  return {
-    type: "token",
-    provider: "anthropic",
-    token: accessToken,
-    expires: expiresAt,
-    ...planFields,
-  };
-}
 
 export function resolveCodexCliHomePath(codexHome?: string, env: NodeJS.ProcessEnv = process.env) {
   const configured = codexHome ?? env.CODEX_HOME;
@@ -463,185 +374,6 @@ function readGeminiCliCredentials(options?: { homeDir?: string }): GeminiCliCred
     ...(identity.email ? { email: identity.email } : {}),
     ...(identity.sub ? { accountId: identity.sub } : {}),
   };
-}
-
-function readClaudeCliUserApiKeyHelperCredential(homeDir?: string): ClaudeCliCredential | null {
-  const raw = loadJsonFileThroughSymlink(resolveClaudeCliUserSettingsPath(homeDir));
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return null;
-  }
-  const helper = (raw as Record<string, unknown>).apiKeyHelper;
-  return typeof helper === "string" && helper.trim().length > 0
-    ? {
-        type: "api_key_helper",
-        provider: "anthropic",
-        helperHash: createHash("sha256").update(helper.trim()).digest("hex"),
-      }
-    : null;
-}
-
-// The CLI login flow writes the account identity to the config file next to
-// the credential store, so the pair describes one login. Capturing it here
-// keeps usage surfaces from re-reading ambient config at fetch time, where a
-// later account switch could mislabel another credential's quota.
-function readClaudeCliAccountEmail(homeDir?: string): string | undefined {
-  const baseDir = resolveOsHomeRelativePath(homeDir ?? "~");
-  const raw = loadJsonFileThroughSymlink(path.join(baseDir, ".claude.json"));
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  const account = (raw as { oauthAccount?: unknown }).oauthAccount;
-  if (!account || typeof account !== "object") {
-    return undefined;
-  }
-  const email = (account as { emailAddress?: unknown }).emailAddress;
-  return typeof email === "string" && email.trim() ? email.trim() : undefined;
-}
-
-function withClaudeAccountEmail(
-  cliLogin: ClaudeCliCredential | null,
-  homeDir?: string,
-): ClaudeCliCredential | null {
-  if (!cliLogin) {
-    return null;
-  }
-  if (cliLogin.type === "api_key_helper") {
-    return cliLogin;
-  }
-  const email = readClaudeCliAccountEmail(homeDir);
-  return email ? { ...cliLogin, email } : cliLogin;
-}
-
-type ClaudeCliCredentialSourceOptions = {
-  allowKeychainPrompt?: boolean;
-  tryKeychainWithoutPrompt?: boolean;
-  onStoredCredentialUnreadable?: () => void;
-  platform?: NodeJS.Platform;
-  homeDir?: string;
-  execSync?: ExecSyncFn;
-};
-
-function shouldReadClaudeCliKeychain(
-  options: ClaudeCliCredentialSourceOptions | undefined,
-  platform: NodeJS.Platform,
-): boolean {
-  return (
-    platform === "darwin" &&
-    (options?.allowKeychainPrompt !== false || options?.tryKeychainWithoutPrompt === true)
-  );
-}
-
-function resolveClaudeCliKeychainTimeoutMs(
-  options: ClaudeCliCredentialSourceOptions | undefined,
-): number | undefined {
-  return options?.tryKeychainWithoutPrompt ? CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS : undefined;
-}
-
-function claudeCliCredentialFromKeychainPayload(
-  payload: Record<string, unknown> | null,
-  homeDir: string | undefined,
-): ClaudeCliCredential | null {
-  const keychainCreds = parseClaudeCliOauthCredential(payload?.claudeAiOauth);
-  if (!keychainCreds) {
-    return null;
-  }
-  log.info("read anthropic credentials from claude cli keychain", {
-    type: keychainCreds.type,
-  });
-  return withClaudeAccountEmail(keychainCreds, homeDir);
-}
-
-function readClaudeCliFileCredential(homeDir: string | undefined): ClaudeCliCredential | null {
-  const raw = loadJsonFileThroughSymlink(resolveClaudeCliCredentialsPath(homeDir));
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  return withClaudeAccountEmail(
-    parseClaudeCliOauthCredential((raw as Record<string, unknown>).claudeAiOauth),
-    homeDir,
-  );
-}
-
-// The Keychain existence probe is a second synchronous `security` invocation
-// with its own timeout, so it runs only when a caller consumes the signal.
-// Without a listener that probe bought nothing and cost a process spawn.
-function noteUnreadableClaudeCliCredential(
-  options: ClaudeCliCredentialSourceOptions | undefined,
-  platform: NodeJS.Platform,
-): void {
-  const onStoredCredentialUnreadable = options?.onStoredCredentialUnreadable;
-  if (!options?.tryKeychainWithoutPrompt || !onStoredCredentialUnreadable) {
-    return;
-  }
-  if (
-    fs.existsSync(resolveClaudeCliCredentialsPath(options.homeDir)) ||
-    (platform === "darwin" && hasClaudeCliKeychainItem(options.execSync))
-  ) {
-    onStoredCredentialUnreadable();
-  }
-}
-
-/** Reads Claude CLI credentials in Claude Code's credential precedence order. */
-function readClaudeCliCredentials(
-  options?: ClaudeCliCredentialSourceOptions,
-): ClaudeCliCredential | null {
-  const helperAuth = readClaudeCliUserApiKeyHelperCredential(options?.homeDir);
-  if (helperAuth) {
-    return helperAuth;
-  }
-
-  const platform = options?.platform ?? process.platform;
-  if (shouldReadClaudeCliKeychain(options, platform)) {
-    const keychainCredential = claudeCliCredentialFromKeychainPayload(
-      readClaudeCliKeychainPayload(options?.execSync, resolveClaudeCliKeychainTimeoutMs(options)),
-      options?.homeDir,
-    );
-    if (keychainCredential) {
-      return keychainCredential;
-    }
-  }
-
-  const fileCredential = readClaudeCliFileCredential(options?.homeDir);
-  if (fileCredential) {
-    return fileCredential;
-  }
-  noteUnreadableClaudeCliCredential(options, platform);
-  return null;
-}
-
-/**
- * Uncached, non-blocking read for callers that run inside a request.
- *
- * Precedence matches the synchronous reader, but the macOS Keychain lookup is
- * spawned asynchronously so a locked Keychain cannot stall the event loop.
- * Caching is deliberately absent: the Keychain exposes no mtime to fingerprint,
- * so a cached value could not be invalidated correctly.
- */
-export async function readClaudeCliCredentialsUncachedAsync(
-  options?: ClaudeCliCredentialSourceOptions,
-): Promise<ClaudeCliCredential | null> {
-  const helperAuth = readClaudeCliUserApiKeyHelperCredential(options?.homeDir);
-  if (helperAuth) {
-    return helperAuth;
-  }
-
-  const platform = options?.platform ?? process.platform;
-  if (shouldReadClaudeCliKeychain(options, platform)) {
-    const keychainCredential = claudeCliCredentialFromKeychainPayload(
-      await readClaudeCliKeychainPayloadAsync(resolveClaudeCliKeychainTimeoutMs(options)),
-      options?.homeDir,
-    );
-    if (keychainCredential) {
-      return keychainCredential;
-    }
-  }
-
-  const fileCredential = readClaudeCliFileCredential(options?.homeDir);
-  if (fileCredential) {
-    return fileCredential;
-  }
-  noteUnreadableClaudeCliCredential(options, platform);
-  return null;
 }
 
 type ClaudeCliCredentialReadOptions = {

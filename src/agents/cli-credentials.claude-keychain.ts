@@ -7,17 +7,11 @@ const CLAUDE_CLI_KEYCHAIN_DEFAULT_TIMEOUT_MS = 5_000;
 
 type ExecSyncFn = typeof execSync;
 
-type ClaudeCliKeychainExecFileFn = (
-  file: string,
-  args: readonly string[],
-  options: { encoding: "utf8"; timeout: number },
-) => Promise<{ stdout: string }>;
-
-const execFileAsync = promisify(execFile) as unknown as ClaudeCliKeychainExecFileFn;
+const execFileAsync = promisify(execFile);
 
 function parseClaudeCliKeychainPayload(raw: string): Record<string, unknown> | null {
-  const parsed: unknown = JSON.parse(raw.trim());
-  return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  const parsed = JSON.parse(raw.trim());
+  return parsed && typeof parsed === "object" ? parsed : null;
 }
 
 export function readClaudeCliKeychainPayload(
@@ -44,10 +38,9 @@ export function readClaudeCliKeychainPayload(
  */
 export async function readClaudeCliKeychainPayloadAsync(
   timeout = CLAUDE_CLI_KEYCHAIN_DEFAULT_TIMEOUT_MS,
-  execFileImpl: ClaudeCliKeychainExecFileFn = execFileAsync,
 ): Promise<Record<string, unknown> | null> {
   try {
-    const { stdout } = await execFileImpl(
+    const { stdout } = await execFileAsync(
       "security",
       ["find-generic-password", "-s", CLAUDE_CLI_KEYCHAIN_SERVICE, "-w"],
       { encoding: "utf8", timeout },

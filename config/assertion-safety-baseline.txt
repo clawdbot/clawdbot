@@ -1739,7 +1739,7 @@ src/agents/cache-trace.ts	3
 src/agents/channel-tools.ts	3
 src/agents/cli-auth-epoch.ts	1
 src/agents/cli-backends.ts	1
-src/agents/cli-credentials.ts	15
+src/agents/cli-credentials.ts	10
 src/agents/cli-executable-identity.ts	3
 src/agents/cli-output-records.ts	1
 src/agents/cli-runner.ts	1
