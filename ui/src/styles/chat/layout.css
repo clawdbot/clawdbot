@@ -1638,6 +1638,10 @@ openclaw-chat-video-player {
   height: 15px;
 }
 
+.chat-assistant-attachment-card__expand--icon svg {
+  transform: rotate(45deg);
+}
+
 .chat-assistant-attachment-card__action--labeled {
   width: auto;
   padding: 0 12px;
