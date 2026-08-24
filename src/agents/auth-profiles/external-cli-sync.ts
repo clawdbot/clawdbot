@@ -344,7 +344,7 @@ function listScopedExternalCliProfileIds(params: {
  * be detected without a network call; that matches existing behavior for a CLI
  * credential inside its validity window.
  */
-export function isLiveExternalCliRefreshOwner(params: {
+function isLiveExternalCliRefreshOwner(params: {
   profileId: string;
   credential: AuthProfileCredential | undefined;
   allowKeychainPrompt?: boolean;
