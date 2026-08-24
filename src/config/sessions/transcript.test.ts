@@ -15,7 +15,7 @@ import {
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
-import { evaluateSessionFreshness } from "./reset-policy.js";
+import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset-policy.js";
 import {
   loadTranscriptEvents,
   appendTranscriptEvent,
@@ -409,12 +409,16 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(saved?.updatedAt).toBe(appendedAt);
       expect(saved?.lastInteractionAt).toBe(appendedAt);
 
+      const policy = resolveSessionResetPolicy({
+        sessionCfg: { reset: { mode: "idle", idleMinutes: 180 } },
+        resetType: "direct",
+      });
       const freshness = evaluateSessionFreshness({
         updatedAt: saved?.updatedAt ?? 0,
         lastInteractionAt: saved?.lastInteractionAt,
         sessionStartedAt: saved?.sessionStartedAt,
         now: appendedAt + 19 * 60_000,
-        policy: { mode: "idle", idleMinutes: 180 },
+        policy,
       });
       expect(freshness.fresh).toBe(true);
     } finally {
