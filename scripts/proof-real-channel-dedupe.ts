@@ -128,7 +128,10 @@ const registryBuilder = createPluginRegistry({
   runtime: {} as PluginRuntime,
   activateGlobalSideEffects: false,
 });
-registryBuilder.registerChannel(record, telegramPlugin);
+registryBuilder.registerChannel(
+  record,
+  telegramPlugin as unknown as Parameters<typeof registryBuilder.registerChannel>[1],
+);
 registryBuilder.registry.plugins.push(record);
 setActivePluginRegistry(registryBuilder.registry, "pr-128580-real-channel-proof");
 
@@ -187,12 +190,16 @@ try {
   });
   const gatewayProof = await waitForGatewayRun(gateway, mock.baseUrl);
   setActivePluginRegistry(registryBuilder.registry, "pr-128580-real-channel-proof");
-  const blankPayload = { text: "duplicate text", mediaUrl: "   " };
-  const realPayload = {
+  const blankPayload: { text: string; mediaUrl?: string; mediaUrls?: string[] } = {
     text: "duplicate text",
-    mediaUrl: path.join(workspace, "report.png"),
+    mediaUrl: "   ",
   };
-  await writeFile(realPayload.mediaUrl, Buffer.from(TINY_PNG_BASE64, "base64"));
+  const realMediaPath = path.join(workspace, "report.png");
+  const realPayload: { text: string; mediaUrl?: string; mediaUrls?: string[] } = {
+    text: "duplicate text",
+    mediaUrl: realMediaPath,
+  };
+  await writeFile(realMediaPath, Buffer.from(TINY_PNG_BASE64, "base64"));
   const blankResult = await build(blankPayload);
   const realResult = await build(realPayload);
   const sendPayload = telegramPlugin.outbound?.sendPayload;
