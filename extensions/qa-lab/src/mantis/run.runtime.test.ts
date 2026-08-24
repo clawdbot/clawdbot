@@ -11,7 +11,44 @@ import {
   successfulCommandResult,
   timedOutCommandResult,
   writeLegacyLaneSummary,
+  worktreeListOutput,
 } from "./run.test-support.js";
+
+async function writePublishedGenerationSentinels(outputDir: string) {
+  const paths = {
+    baseline: path.join(outputDir, "baseline", "last-good.txt"),
+    candidate: path.join(outputDir, "candidate", "last-good.txt"),
+    comparison: path.join(outputDir, "comparison.json"),
+    manifest: path.join(outputDir, "mantis-evidence.json"),
+    report: path.join(outputDir, "mantis-report.md"),
+  };
+  await fs.mkdir(path.dirname(paths.baseline), { recursive: true });
+  await fs.mkdir(path.dirname(paths.candidate), { recursive: true });
+  await Promise.all(
+    Object.entries(paths).map(async ([component, filePath]) => {
+      await fs.writeFile(filePath, `old ${component}`, "utf8");
+    }),
+  );
+  return paths;
+}
+
+async function expectPublishedGenerationSentinels(
+  paths: Awaited<ReturnType<typeof writePublishedGenerationSentinels>>,
+) {
+  for (const [component, filePath] of Object.entries(paths)) {
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe(`old ${component}`);
+  }
+}
+
+async function expectNoMantisTransientEvidence(outputDir: string) {
+  const entries = await fs.readdir(outputDir);
+  expect(
+    entries.filter(
+      (entry) =>
+        entry.startsWith(".mantis-staged-run-") || entry.startsWith(".mantis-previous-run-"),
+    ),
+  ).toEqual([]);
+}
 
 describe("mantis before/after runtime", () => {
   let repoRoot: string;
@@ -472,6 +509,137 @@ describe("mantis before/after runtime", () => {
     await expect(fs.readFile(publishedSentinelPath, "utf8")).resolves.toBe("last good evidence");
   });
 
+  it("keeps one published comparison generation when the candidate lane fails", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "candidate-failure");
+    const sentinels = await writePublishedGenerationSentinels(outputDir);
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      if (command === "git" && execution.stage === "worktree-add") {
+        if (String(args[4]).endsWith(`${path.sep}candidate`)) {
+          return failedCommandResult();
+        }
+        await fs.mkdir(String(args[4]), { recursive: true });
+        return successfulCommandResult();
+      }
+      if (command === "pnpm" && execution.stage === "qa") {
+        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+        return successfulCommandResult();
+      }
+      if (command === "git" && execution.stage === "worktree-cleanup") {
+        await fs.rm(String(args[4]), { force: true, recursive: true });
+        return successfulCommandResult();
+      }
+      throw new Error(`unexpected ${execution.stage} command`);
+    });
+
+    await expect(
+      runMantisBeforeAfter({
+        baseline: "baseline-ref",
+        candidate: "candidate-ref",
+        commandRunner: runner,
+        outputDir: ".artifacts/qa-e2e/mantis/candidate-failure",
+        repoRoot,
+        skipBuild: true,
+        skipInstall: true,
+      }),
+    ).rejects.toThrow("candidate worktree-add");
+
+    await expectPublishedGenerationSentinels(sentinels);
+    await expectNoMantisTransientEvidence(outputDir);
+  });
+
+  it("removes uncommitted staged evidence when worktree cleanup fails", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-failure");
+    const sentinels = await writePublishedGenerationSentinels(outputDir);
+    let baselineWorktreeDir = "";
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      if (command === "git" && execution.stage === "worktree-add") {
+        baselineWorktreeDir = String(args[4]);
+        await fs.mkdir(baselineWorktreeDir, { recursive: true });
+        return successfulCommandResult();
+      }
+      if (command === "pnpm" && execution.stage === "qa") {
+        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+        return successfulCommandResult();
+      }
+      if (command === "git" && execution.stage === "worktree-cleanup") {
+        if (args[1] === "remove") {
+          return failedCommandResult();
+        }
+        return successfulCommandResult(worktreeListOutput(baselineWorktreeDir));
+      }
+      throw new Error(`unexpected ${execution.stage} command`);
+    });
+
+    await expect(
+      runMantisBeforeAfter({
+        baseline: "baseline-ref",
+        candidate: "candidate-ref",
+        commandRunner: runner,
+        outputDir: ".artifacts/qa-e2e/mantis/cleanup-failure",
+        repoRoot,
+        skipBuild: true,
+        skipInstall: true,
+      }),
+    ).rejects.toThrow("baseline worktree cleanup left registered path");
+
+    await expectPublishedGenerationSentinels(sentinels);
+    await expectNoMantisTransientEvidence(outputDir);
+  });
+
+  it("rolls back the complete comparison when component promotion fails", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "publish-failure");
+    const sentinels = await writePublishedGenerationSentinels(outputDir);
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      if (command === "git" && execution.stage === "worktree-add") {
+        await fs.mkdir(String(args[4]), { recursive: true });
+        return successfulCommandResult();
+      }
+      if (command === "pnpm" && execution.stage === "qa") {
+        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+        return successfulCommandResult();
+      }
+      if (command === "git" && execution.stage === "worktree-cleanup") {
+        await fs.rm(String(args[4]), { force: true, recursive: true });
+        return successfulCommandResult();
+      }
+      throw new Error(`unexpected ${execution.stage} command`);
+    });
+    const originalRename = fs.rename.bind(fs);
+    let promotionFailed = false;
+    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+      if (
+        !promotionFailed &&
+        path.basename(String(source)) === "comparison.json" &&
+        path.basename(path.dirname(String(source))).startsWith(".mantis-staged-run-") &&
+        path.resolve(String(target)) === path.join(outputDir, "comparison.json")
+      ) {
+        promotionFailed = true;
+        throw Object.assign(new Error("comparison promotion failed"), { code: "EACCES" });
+      }
+      await originalRename(source, target);
+    });
+
+    try {
+      await expect(
+        runMantisBeforeAfter({
+          baseline: "baseline-ref",
+          candidate: "candidate-ref",
+          commandRunner: runner,
+          outputDir: ".artifacts/qa-e2e/mantis/publish-failure",
+          repoRoot,
+          skipBuild: true,
+          skipInstall: true,
+        }),
+      ).rejects.toThrow("comparison promotion failed");
+    } finally {
+      rename.mockRestore();
+    }
+
+    expect(promotionFailed).toBe(true);
+    await expectPublishedGenerationSentinels(sentinels);
+    await expectNoMantisTransientEvidence(outputDir);
+  });
+
   it("fails closed when the worktree parent is replaced before fallback cleanup", async () => {
     const outputDir = path.join(
       repoRoot,
@@ -696,10 +864,9 @@ describe("mantis before/after runtime", () => {
     }
   });
 
-  it("cleans the worktree before reading published lane artifacts", async () => {
+  it("cleans the worktree before reading staged lane artifacts", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "publish-order");
     const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
-    const baselineSummaryPath = path.join(outputDir, "baseline", "discord-qa-summary.json");
     const cleanupStages: string[] = [];
     let releaseArtifactRead: (() => void) | undefined;
     const artifactReadRelease = new Promise<void>((resolve) => {
@@ -711,7 +878,12 @@ describe("mantis before/after runtime", () => {
     });
     const originalReadFile = fs.readFile.bind(fs);
     const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, ...args) => {
-      if (path.resolve(String(filePath)) === baselineSummaryPath) {
+      const relativePath = path.relative(outputDir, path.resolve(String(filePath))).split(path.sep);
+      if (
+        relativePath[0]?.startsWith(".mantis-staged-run-") &&
+        relativePath[1] === "baseline" &&
+        relativePath[2] === "discord-qa-summary.json"
+      ) {
         markArtifactReadStarted?.();
         await artifactReadRelease;
       }

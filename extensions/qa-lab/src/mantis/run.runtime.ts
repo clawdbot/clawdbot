@@ -7,7 +7,7 @@ import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-p
 import { trimToValue } from "../mantis-options.runtime.js";
 import {
   copyMantisLaneArtifact,
-  publishMantisLaneOutput,
+  publishMantisRunOutput,
   readMantisLaneResult,
   type LaneResult,
 } from "./run-artifacts.runtime.js";
@@ -195,6 +195,34 @@ function relativeArtifactPath(outputDir: string, artifactPath: string | undefine
   return path.isAbsolute(artifactPath) ? path.relative(outputDir, artifactPath) : artifactPath;
 }
 
+function remapStagedLaneResult(params: {
+  publishedLaneDir: string;
+  result: LaneResult;
+  stagedLaneDir: string;
+}): LaneResult {
+  const remap = (artifactPath: string | undefined): string | undefined => {
+    if (!artifactPath || !path.isAbsolute(artifactPath)) {
+      return artifactPath;
+    }
+    const relativePath = path.relative(params.stagedLaneDir, artifactPath);
+    if (
+      relativePath === ".." ||
+      relativePath.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativePath)
+    ) {
+      return artifactPath;
+    }
+    return path.join(params.publishedLaneDir, relativePath);
+  };
+  return {
+    ...params.result,
+    outputDir: params.publishedLaneDir,
+    screenshotPath: remap(params.result.screenshotPath),
+    summaryPath: remap(params.result.summaryPath) ?? params.result.summaryPath,
+    videoPath: remap(params.result.videoPath),
+  };
+}
+
 function formatMantisFailure(error: unknown): string {
   const lines: string[] = [];
   const append = (entry: unknown, pathParts: number[]) => {
@@ -215,6 +243,12 @@ function attachMantisFailureArtifact(error: unknown, errorPath: string): Error {
     return error;
   }
   return new Error(`${formatErrorMessage(error)}\n${artifactLine}`, { cause: error });
+}
+
+async function throwMantisRunFailure(outputDir: string, error: unknown): Promise<never> {
+  const errorPath = path.join(outputDir, "error.txt");
+  await fs.writeFile(errorPath, `${formatMantisFailure(error)}\n`, "utf8");
+  throw attachMantisFailureArtifact(error, errorPath);
 }
 
 function buildEvidenceManifest(params: {
@@ -313,12 +347,12 @@ function buildEvidenceManifest(params: {
 
 async function runLane(params: {
   lane: "baseline" | "candidate";
-  outputDir: string;
   ref: string;
   repoRoot: string;
   runner: MantisCommandRunner;
   scenario: string;
   signal?: AbortSignal;
+  stagedRunDir: string;
   commandTimeouts: MantisCommandTimeouts;
   worktreeRoot: string;
   opts: Required<
@@ -335,11 +369,7 @@ async function runLane(params: {
 }) {
   const worktreeDir = path.join(params.worktreeRoot, params.lane);
   const worktreeOutputDir = path.join(".artifacts", "qa-e2e", "mantis", "run", params.lane);
-  const publishedLaneDir = path.join(params.outputDir, params.lane);
-  const stagedLaneDir = path.join(
-    params.outputDir,
-    `.mantis-staged-${params.lane}-${process.pid}-${randomUUID()}`,
-  );
+  const stagedLaneDir = path.join(params.stagedRunDir, params.lane);
   const worktreeAddArgs = ["worktree", "add", "--detach", "--", worktreeDir, params.ref];
   const worktreeAddExecution = {
     cwd: params.repoRoot,
@@ -491,10 +521,9 @@ async function runLane(params: {
       cause: params.signal.reason,
     });
   }
-  await publishMantisLaneOutput({ publishedLaneDir, stagedLaneDir });
   const result = await readMantisLaneResult({
     laneOutputDir: path.join(worktreeDir, worktreeOutputDir),
-    publishedLaneDir,
+    publishedLaneDir: stagedLaneDir,
     scenario: params.scenario,
   });
   const copiedScreenshot = await copyMantisLaneArtifact({
@@ -549,9 +578,12 @@ export async function runMantisBeforeAfter(
   const comparisonPath = path.join(outputDir, "comparison.json");
   const manifestPath = path.join(outputDir, "mantis-evidence.json");
   const reportPath = path.join(outputDir, "mantis-report.md");
+  const stagedRunDir = path.join(outputDir, `.mantis-staged-run-${process.pid}-${randomUUID()}`);
   await fs.mkdir(worktreeRoot, { recursive: true });
 
+  let outcome: { error: unknown; ok: false } | { ok: true; value: MantisBeforeAfterResult };
   try {
+    await fs.mkdir(stagedRunDir);
     const commonOpts = {
       credentialRole: trimToValue(opts.credentialRole) ?? DEFAULT_CREDENTIAL_ROLE,
       credentialSource: trimToValue(opts.credentialSource) ?? DEFAULT_CREDENTIAL_SOURCE,
@@ -560,29 +592,39 @@ export async function runMantisBeforeAfter(
       skipBuild: opts.skipBuild ?? false,
       skipInstall: opts.skipInstall ?? false,
     };
-    const baselineResult = await runLane({
+    const stagedBaselineResult = await runLane({
       lane: "baseline",
-      outputDir,
       ref: baseline,
       repoRoot,
       runner,
       scenario,
       signal: opts.signal,
+      stagedRunDir,
       commandTimeouts,
       worktreeRoot,
       opts: commonOpts,
     });
-    const candidateResult = await runLane({
+    const stagedCandidateResult = await runLane({
       lane: "candidate",
-      outputDir,
       ref: candidate,
       repoRoot,
       runner,
       scenario,
       signal: opts.signal,
+      stagedRunDir,
       commandTimeouts,
       worktreeRoot,
       opts: commonOpts,
+    });
+    const baselineResult = remapStagedLaneResult({
+      publishedLaneDir: path.join(outputDir, "baseline"),
+      result: stagedBaselineResult,
+      stagedLaneDir: path.join(stagedRunDir, "baseline"),
+    });
+    const candidateResult = remapStagedLaneResult({
+      publishedLaneDir: path.join(outputDir, "candidate"),
+      result: stagedCandidateResult,
+      stagedLaneDir: path.join(stagedRunDir, "candidate"),
     });
     const comparison = {
       baseline: {
@@ -605,9 +647,13 @@ export async function runMantisBeforeAfter(
       scenario,
       transport,
     } satisfies Comparison;
-    await fs.writeFile(comparisonPath, `${JSON.stringify(comparison, null, 2)}\n`, "utf8");
     await fs.writeFile(
-      reportPath,
+      path.join(stagedRunDir, "comparison.json"),
+      `${JSON.stringify(comparison, null, 2)}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(stagedRunDir, "mantis-report.md"),
       renderReport({
         baseline: baselineResult,
         candidate: candidateResult,
@@ -618,7 +664,7 @@ export async function runMantisBeforeAfter(
       "utf8",
     );
     await fs.writeFile(
-      manifestPath,
+      path.join(stagedRunDir, "mantis-evidence.json"),
       `${JSON.stringify(
         buildEvidenceManifest({
           baseline: baselineResult,
@@ -632,16 +678,48 @@ export async function runMantisBeforeAfter(
       )}\n`,
       "utf8",
     );
-    return {
-      comparisonPath,
-      manifestPath,
-      outputDir,
-      reportPath,
-      status: comparison.pass ? "pass" : "fail",
+    if (opts.signal?.aborted) {
+      throw new Error("Mantis artifact publication aborted", { cause: opts.signal.reason });
+    }
+    await publishMantisRunOutput({ outputDir, stagedRunDir });
+    outcome = {
+      ok: true,
+      value: {
+        comparisonPath,
+        manifestPath,
+        outputDir,
+        reportPath,
+        status: comparison.pass ? "pass" : "fail",
+      },
     };
   } catch (error) {
-    const errorPath = path.join(outputDir, "error.txt");
-    await fs.writeFile(errorPath, `${formatMantisFailure(error)}\n`, "utf8");
-    throw attachMantisFailureArtifact(error, errorPath);
+    outcome = { error, ok: false };
   }
+
+  // The run-level owner removes every uncommitted screenshot/video together;
+  // otherwise cleanup failure or a late interrupt leaks hidden evidence.
+  const cleanupOutcome = await fs.rm(stagedRunDir, { force: true, recursive: true }).then(
+    () => ({ ok: true as const }),
+    (error: unknown) => ({ error, ok: false as const }),
+  );
+  if (!cleanupOutcome.ok) {
+    const cleanupFailure = new Error(`Mantis could not remove staged evidence ${stagedRunDir}`, {
+      cause: cleanupOutcome.error,
+    });
+    if (!outcome.ok) {
+      await throwMantisRunFailure(
+        outputDir,
+        new AggregateError(
+          [outcome.error, cleanupFailure],
+          `Mantis run failed and staged evidence cleanup failed: ${stagedRunDir}`,
+          { cause: outcome.error },
+        ),
+      );
+    }
+    await throwMantisRunFailure(outputDir, cleanupFailure);
+  }
+  if (!outcome.ok) {
+    await throwMantisRunFailure(outputDir, outcome.error);
+  }
+  return outcome.value;
 }

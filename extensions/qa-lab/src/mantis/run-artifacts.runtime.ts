@@ -26,64 +26,128 @@ function isNotFoundError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
+const MANTIS_RUN_OUTPUT_COMPONENTS = [
+  "baseline",
+  "candidate",
+  "comparison.json",
+  "mantis-report.md",
+  "mantis-evidence.json",
+] as const;
+
 function createMantisPublishRollbackError(params: {
-  previousLaneDir: string;
+  previousRunDir: string;
   publishError: unknown;
-  rollbackError: unknown;
+  rollbackErrors: unknown[];
 }): AggregateError {
   return new AggregateError(
-    [params.publishError, params.rollbackError],
-    `Mantis could not publish staged lane output or restore ${params.previousLaneDir}`,
+    [params.publishError, ...params.rollbackErrors],
+    `Mantis could not publish the staged comparison or completely restore ${params.previousRunDir}`,
     { cause: params.publishError },
   );
 }
 
-export async function publishMantisLaneOutput(params: {
-  publishedLaneDir: string;
-  stagedLaneDir: string;
-}): Promise<void> {
-  // Keep the old evidence recoverable until the staged directory becomes the
-  // stable lane path. A failed replacement rolls the previous directory back.
-  const previousLaneDir = path.join(
-    path.dirname(params.publishedLaneDir),
-    `.mantis-previous-${path.basename(params.publishedLaneDir)}-${process.pid}-${randomUUID()}`,
+function createMantisPublishRollbackCleanupError(params: {
+  cleanupError: unknown;
+  previousRunDir: string;
+  publishError: unknown;
+}): AggregateError {
+  const cleanupFailure = new Error(
+    `Mantis restored the previous comparison but could not remove ${params.previousRunDir}`,
+    { cause: params.cleanupError },
   );
-  let hasPreviousLane = false;
-  try {
-    await fs.rename(params.publishedLaneDir, previousLaneDir);
-    hasPreviousLane = true;
-  } catch (error) {
-    if (!isNotFoundError(error)) {
-      throw error;
-    }
-  }
+  return new AggregateError(
+    [params.publishError, cleanupFailure],
+    "Mantis comparison publication failed and rollback cleanup was incomplete",
+    { cause: params.publishError },
+  );
+}
+
+export async function publishMantisRunOutput(params: {
+  outputDir: string;
+  stagedRunDir: string;
+}): Promise<void> {
+  // One before/after run owns every stable component. Retain the complete old
+  // generation until every staged component is promoted, then roll all of it
+  // back if any rename fails so readers never observe a mixed final state.
+  const previousRunDir = path.join(
+    params.outputDir,
+    `.mantis-previous-run-${process.pid}-${randomUUID()}`,
+  );
+  const backedUpComponents: (typeof MANTIS_RUN_OUTPUT_COMPONENTS)[number][] = [];
+  const promotedComponents: (typeof MANTIS_RUN_OUTPUT_COMPONENTS)[number][] = [];
+  await fs.mkdir(previousRunDir);
 
   try {
-    await fs.rename(params.stagedLaneDir, params.publishedLaneDir);
-  } catch (publishError) {
-    if (!hasPreviousLane) {
-      throw publishError;
+    for (const component of MANTIS_RUN_OUTPUT_COMPONENTS) {
+      try {
+        await fs.rename(
+          path.join(params.outputDir, component),
+          path.join(previousRunDir, component),
+        );
+        backedUpComponents.push(component);
+      } catch (error) {
+        if (!isNotFoundError(error)) {
+          throw error;
+        }
+      }
     }
-    try {
-      await fs.rename(previousLaneDir, params.publishedLaneDir);
-    } catch (rollbackError) {
+
+    for (const component of MANTIS_RUN_OUTPUT_COMPONENTS) {
+      await fs.rename(
+        path.join(params.stagedRunDir, component),
+        path.join(params.outputDir, component),
+      );
+      promotedComponents.push(component);
+    }
+  } catch (publishError) {
+    const rollbackErrors: unknown[] = [];
+    for (const component of promotedComponents.toReversed()) {
+      try {
+        await fs.rename(
+          path.join(params.outputDir, component),
+          path.join(params.stagedRunDir, component),
+        );
+      } catch (error) {
+        rollbackErrors.push(error);
+      }
+    }
+    for (const component of backedUpComponents.toReversed()) {
+      try {
+        await fs.rename(
+          path.join(previousRunDir, component),
+          path.join(params.outputDir, component),
+        );
+      } catch (error) {
+        rollbackErrors.push(error);
+      }
+    }
+    if (rollbackErrors.length > 0) {
       throw createMantisPublishRollbackError({
-        previousLaneDir,
+        previousRunDir,
         publishError,
-        rollbackError,
+        rollbackErrors,
+      });
+    }
+    const cleanupOutcome = await fs.rm(previousRunDir, { force: true, recursive: true }).then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ error, ok: false as const }),
+    );
+    if (!cleanupOutcome.ok) {
+      throw createMantisPublishRollbackCleanupError({
+        cleanupError: cleanupOutcome.error,
+        previousRunDir,
+        publishError,
       });
     }
     throw publishError;
   }
 
-  if (hasPreviousLane) {
-    try {
-      await fs.rm(previousLaneDir, { force: true, recursive: true });
-    } catch (error) {
-      throw new Error(`Mantis published new evidence but could not remove ${previousLaneDir}`, {
-        cause: error,
-      });
-    }
+  try {
+    await fs.rm(previousRunDir, { force: true, recursive: true });
+  } catch (error) {
+    throw new Error(`Mantis published new evidence but could not remove ${previousRunDir}`, {
+      cause: error,
+    });
   }
 }
 
