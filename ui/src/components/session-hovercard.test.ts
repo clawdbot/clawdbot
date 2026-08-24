@@ -352,9 +352,7 @@ describe("renderSessionHovercard", () => {
     const name = container.querySelector<HTMLAnchorElement>(".session-hovercard__identity-name");
     expect(name?.getAttribute("href")).toBe("/ui/activity?person=alice");
     expect(
-      container
-        .querySelector(".session-hovercard__identity-avatar-link")
-        ?.getAttribute("aria-hidden"),
+      container.querySelector(".person-activity-avatar-link")?.getAttribute("aria-hidden"),
     ).toBe("true");
 
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
@@ -407,7 +405,7 @@ describe("renderSessionHovercard", () => {
     render(renderSessionHovercard({ row: row() }), container);
 
     expect(container.querySelector(".session-hovercard__identity-name")?.tagName).toBe("SPAN");
-    expect(container.querySelector(".session-hovercard__identity-avatar-link")).toBeNull();
+    expect(container.querySelector(".person-activity-avatar-link")).toBeNull();
   });
 
   it("keeps authoritative overflow when the participant projection is truncated", () => {

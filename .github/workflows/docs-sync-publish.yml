@@ -122,7 +122,7 @@ jobs:
             exit 0
           fi
 
-          if git fetch origin main:refs/remotes/origin/main; then
+          if timeout --signal=TERM --kill-after=10s 120s git fetch origin main:refs/remotes/origin/main; then
             skip_stale_source
           fi
 
@@ -131,7 +131,7 @@ jobs:
           git add docs .openclaw-sync
           git commit -m "chore(sync): mirror docs from $GITHUB_REPOSITORY@$GITHUB_SHA"
           for attempt in 1 2 3 4 5; do
-            if git fetch origin main:refs/remotes/origin/main; then
+            if timeout --signal=TERM --kill-after=10s 120s git fetch origin main:refs/remotes/origin/main; then
               skip_stale_source
               if git rebase -X theirs origin/main && git push origin HEAD:main; then
                 exit 0

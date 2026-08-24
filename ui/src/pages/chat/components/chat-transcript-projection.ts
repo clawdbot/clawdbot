@@ -341,6 +341,7 @@ export function projectChatTranscript(
       userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
+      personActivity: props.personActivity,
       showAvatarGutter: !isDirectThread,
       contextWindow: threadContextWindow,
       onReply: props.onSetReply

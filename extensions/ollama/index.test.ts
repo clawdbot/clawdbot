@@ -1,7 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  capturePluginRegistration,
+  createPluginRuntimeMock,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 // Ollama tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -146,6 +149,12 @@ function registerOllamaCloudProvider() {
 }
 
 describe("ollama tool-schema compatibility", () => {
+  it("registers local and cloud providers without accessing the inactive LLM runtime", () => {
+    const captured = capturePluginRegistration(plugin);
+
+    expect(captured.providers.map((provider) => provider.id)).toEqual(["ollama-cloud", "ollama"]);
+  });
+
   it("registers llama.cpp GBNF projection for local and cloud providers", () => {
     for (const provider of registerProvidersWithPluginConfig({})) {
       expect(provider).toMatchObject({

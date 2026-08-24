@@ -5195,8 +5195,24 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     }
   });
 
-  it("bounds mantis discord smoke validation git fetches", () => {
-    const workflowPath = ".github/workflows/mantis-discord-smoke.yml";
+  it("bounds docs publish-repository Git transports", () => {
+    const source = readFileSync(".github/workflows/docs-sync-publish.yml", "utf8");
+    const transports = source
+      .split("\n")
+      .filter((line) => line.includes("git clone") || line.includes("git fetch origin main:"));
+
+    expect(transports).toHaveLength(3);
+    expect(
+      transports.every((line) =>
+        line.trimStart().startsWith("if timeout --signal=TERM --kill-after=10s 120s git"),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    [".github/workflows/mantis-discord-smoke.yml"],
+    [".github/workflows/plugin-clawhub-release.yml"],
+  ])("bounds %s git fetches", (workflowPath) => {
     const source = readFileSync(workflowPath, "utf8");
     const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
 

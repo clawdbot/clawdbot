@@ -46,7 +46,9 @@ export function buildSubagentAnnounceMessages(params: {
     params.outcome.status === "ok"
       ? "completed; ready for parent review"
       : params.outcome.status === "timeout"
-        ? "timed out"
+        ? params.outcome.error
+          ? `timed out: ${params.outcome.error}`
+          : "timed out"
         : params.outcome.status === "error"
           ? `failed: ${params.outcome.error || "unknown error"}`
           : "finished with unknown status";

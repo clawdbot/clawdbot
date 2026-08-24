@@ -862,4 +862,90 @@ describe("applySubagentWaitOutcome", () => {
       elapsedMs: 50,
     });
   });
+
+  it.each(["restart", "aborted"] as const)(
+    "keeps %s stop reasons as cancellation even when liveness is blocked",
+    (stopReason) => {
+      // classifySubagentTerminalOutcome must win over the generic classifier
+      // here: blocked liveness alone would read as a failure, but an explicit
+      // restart/aborted stop reason owns the outcome (openclaw#125407).
+      const applied = applySubagentWaitOutcome({
+        wait: {
+          status: "ok",
+          startedAt: 100,
+          endedAt: 150,
+          stopReason,
+          livenessState: "blocked",
+          error: "Context overflow: prompt too large for the model.",
+        },
+        outcome: undefined,
+      });
+
+      expect(applied.outcome).toEqual({
+        status: "error",
+        error: "subagent run terminated",
+        startedAt: 100,
+        endedAt: 150,
+        elapsedMs: 50,
+      });
+    },
+  );
+
+  it("keeps the failure cause on pending-error timeout wait snapshots", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+        pendingError: true,
+        error: "model returned an unrecoverable tool-call sequence",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      error: "model returned an unrecoverable tool-call sequence",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it("leaves genuine budget timeouts without a cause", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it("ignores wait error text when the run did not end in a pending error", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+        error: "waited too long",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
 });

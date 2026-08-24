@@ -142,6 +142,34 @@ function makeIdleTimeoutFailureInput(options?: { replaySafe?: boolean }) {
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it.each(["auth", "auth_permanent"] as const)(
+    "carries %s profile failures into terminal resolution",
+    async (reason) => {
+      const fixture = makeExhaustedCredentialFailureInput();
+      if (!fixture.input.attemptAssistant) {
+        throw new Error("expected assistant fixture");
+      }
+      fixture.input.attemptAssistant.provider = "openai";
+      fixture.input.attemptAssistant.model = "gpt-5.6-luna";
+      fixture.input.attemptAssistant.errorMessage = undefined;
+      Object.assign(fixture.input, {
+        provider: "openai",
+        modelId: "gpt-5.6-luna",
+        model: "gpt-5.6-luna",
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        fallbackConfigured: false,
+        authProfileId: undefined,
+        resolveAuthProfileFailureReason: vi.fn(() => reason),
+      });
+      const outcome = await handleEmbeddedAssistantFailure(fixture.input);
+
+      expect(outcome).toMatchObject({
+        action: "proceed",
+        assistantProfileFailureReason: reason,
+      });
+    },
+  );
+
   it("uses prepared OpenRouter ownership for custom-provider billing failures", async () => {
     const fixture = makeExhaustedCredentialFailureInput();
     const provider = "custom-openrouter";

@@ -1945,6 +1945,42 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-author-avatar")).toBeNull();
   });
 
+  it("links a peer sender's name to their activity feed and leaves your own plain", () => {
+    const navigate = vi.fn();
+    const renderSender = (senderId: string) => {
+      const container = document.createElement("div");
+      const message = { role: "user", content: "hello", timestamp: 1000 };
+      render(
+        renderTestMessageGroup(
+          createMessageGroup(message, "user", {
+            key: `sender-link-${senderId}`,
+            senderLabel: "Alice Example",
+            sender: { id: senderId, name: "Alice Example" },
+            messages: [createMessageEntry(`sender-link-${senderId}-message`, message)],
+          }),
+          {
+            userId: "me",
+            userName: "Local User",
+            personActivity: { basePath: "", navigate },
+          },
+        ),
+        container,
+      );
+      return container;
+    };
+
+    const peer = renderSender("profile-alice");
+    const link = peer.querySelector<HTMLAnchorElement>("a.chat-sender-name");
+    expect(link?.textContent).toBe("Alice Example");
+    expect(link?.getAttribute("href")).toBe("/activity?person=profile-alice");
+    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(navigate).toHaveBeenCalledWith("profile-alice");
+
+    const own = renderSender("me");
+    expect(own.querySelector("a.chat-sender-name")).toBeNull();
+    expect(own.querySelector(".chat-sender-name")?.textContent).toBe("Local User");
+  });
+
   it("tints attributed user groups with the sender's stable identity hue", () => {
     const renderGroupFor = (sender?: { id: string; name: string }) => {
       const container = document.createElement("div");

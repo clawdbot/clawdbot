@@ -52,7 +52,10 @@ import {
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
-import { warmMacOSSystemCaOffMainThread } from "./system-ca-warmup.js";
+import {
+  beginMacOSSystemCaWarmupOnce,
+  type warmMacOSSystemCaOffMainThread,
+} from "./system-ca-warmup.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
@@ -1003,7 +1006,7 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
   scheduleGatewayUpdateCheck: async (...args) =>
     (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
   startGatewaySidecars,
-  warmSystemCa: warmMacOSSystemCaOffMainThread,
+  warmSystemCa: beginMacOSSystemCaWarmupOnce,
   loadSubagentRegistryActivation: async () =>
     (await import("../agents/subagents/registry/subagent-registry.js")).activateSubagentRegistry,
 };
