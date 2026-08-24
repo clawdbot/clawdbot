@@ -587,11 +587,9 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
   if (!payload) {
     return undefined;
   }
-  const turnId = readString(params.requestParams, "turnId");
   const resolveDeferredApproval = async () => {
     const approvalOutcome = await resolveNativeHookRelayDeferredToolApproval({
       relayId: nativeHookRelay.relayId,
-      turnId,
       toolUseId: params.context.approvalId,
       signal: params.signal,
     });
@@ -614,7 +612,6 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     hasNativeHookRelayInvocation({
       relayId: nativeHookRelay.relayId,
       event: "pre_tool_use",
-      turnId,
       toolUseId: params.context.approvalId,
     })
   ) {
@@ -647,7 +644,6 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
       !hasNativeHookRelayInvocation({
         relayId: nativeHookRelay.relayId,
         event: "pre_tool_use",
-        turnId,
         toolUseId: params.context.approvalId,
       })
     ) {

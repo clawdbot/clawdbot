@@ -99,7 +99,6 @@ type ResumeThreadContext = ThreadRequestContext & {
   clearCurrentBinding: (operation: string) => Promise<void>;
   prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
   prebuiltFinalConfigPatch?: {
-    activateThreadBinding?: () => void;
     configPatch?: JsonObject;
     nativeHookRelayGeneration?: string;
   };
@@ -331,7 +330,6 @@ export async function resumeExistingCodexThread(
         "committing a resumed thread",
       );
     }
-    finalConfigPatch.activateThreadBinding?.();
     if (contextEngineBinding) {
       embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
         sessionId: params.params.sessionId,
@@ -469,10 +467,7 @@ export async function startFreshCodexThread(
         params.pluginThreadConfig?.build(),
       )))
     : undefined;
-  const finalConfigPatch = params.buildFinalConfigPatch?.({
-    action: "start",
-    preserveExistingBinding,
-  }) ?? {
+  const finalConfigPatch = params.buildFinalConfigPatch?.({ action: "start" }) ?? {
     configPatch: params.finalConfigPatch,
     nativeHookRelayGeneration: params.nativeHookRelayGeneration,
   };
@@ -696,7 +691,6 @@ export async function startFreshCodexThread(
       });
     }
   }
-  finalConfigPatch.activateThreadBinding?.();
   lifecycleTiming.mark("thread-ready");
   lifecycleTiming.logSummary({
     runId: params.params.runId,

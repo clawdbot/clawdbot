@@ -25,11 +25,9 @@ export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding &
 
 type CodexThreadFinalConfigPatchDecision =
   | { action: "resume"; binding: CodexAppServerThreadBinding }
-  | { action: "start"; preserveExistingBinding: boolean };
+  | { action: "start" };
 
 type CodexThreadFinalConfigPatchResult = {
-  /** Activates attempt policy only after the canonical thread claim succeeds. */
-  activateThreadBinding?: () => void;
   configPatch?: JsonObject;
   nativeHookRelayGeneration?: string;
 };

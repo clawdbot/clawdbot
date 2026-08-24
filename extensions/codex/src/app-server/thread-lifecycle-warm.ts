@@ -27,7 +27,6 @@ import type { resolveCodexAppServerThreadModelSelection } from "./thread-model-s
 import { buildThreadResumeParams } from "./thread-requests.js";
 
 type CodexWarmThreadFinalConfigPatch = {
-  activateThreadBinding?: () => void;
   configPatch?: JsonObject;
   nativeHookRelayGeneration?: string;
 };
@@ -244,7 +243,6 @@ export async function tryReuseCodexLiveThread(
       throw new CodexThreadBindingConflictError(binding.threadId, "committing a reused thread");
     }
     throwIfAborted();
-    prebuiltFinalConfigPatch.activateThreadBinding?.();
     lifecycleTiming.mark("thread-ready");
     lifecycleTiming.logSummary({
       runId: params.params.runId,

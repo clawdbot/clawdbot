@@ -49,7 +49,6 @@ export async function startCodexAttemptTurn(
     markTrajectoryEndRecorded,
     activateNativePreToolUseFailureFallback,
     releaseCurrentRoute,
-    bindNativeTurn,
     releaseSandboxExecEnvironment,
     releaseSharedClientLeaseAndRetireOneShotClient,
   } = resources;
@@ -324,6 +323,6 @@ export async function startCodexAttemptTurn(
     };
   }
   turnIdRef.current = turn.turn.id;
-  bindNativeTurn(turn.turn.id);
+  resourceState.nativeSubagentMonitor?.bindTurn(turn.turn.id);
   return { turn };
 }

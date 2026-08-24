@@ -109,7 +109,6 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       event: "post_tool_use",
       rawPayload: {
         hook_event_name: "PostToolUse",
-        turn_id: "turn-1",
         tool_name: "Bash",
         tool_use_id: "native-call-1",
         tool_input: { command: "pnpm test" },
@@ -683,7 +682,6 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         event: "pre_tool_use",
         rawPayload: {
           hook_event_name: "PreToolUse",
-          turn_id: "turn-1",
           tool_name: "Bash",
           tool_use_id: "late-call-1",
           tool_input: { command: "python3 -c 'print(\"x\")'" },
@@ -807,7 +805,6 @@ describe("runCodexAppServerAttempt native hook relay", () => {
         requireGeneration: true,
         rawPayload: {
           hook_event_name: "PreToolUse",
-          turn_id: "turn-1",
           tool_name: "Bash",
           tool_use_id: "first-tool-after-restart",
           tool_input: { command: "pwd" },

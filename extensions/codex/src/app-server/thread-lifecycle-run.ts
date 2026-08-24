@@ -152,10 +152,7 @@ export async function startOrResumeThread(
             params.pluginThreadConfig?.build(),
           )
         : undefined;
-      const finalConfigPatch = params.buildFinalConfigPatch?.({
-        action: "start",
-        preserveExistingBinding: false,
-      }) ?? {
+      const finalConfigPatch = params.buildFinalConfigPatch?.({ action: "start" }) ?? {
         configPatch: params.finalConfigPatch,
         nativeHookRelayGeneration: params.nativeHookRelayGeneration,
       };
@@ -601,9 +598,8 @@ export async function startOrResumeThread(
       } else if (incognito) {
         if (binding.clientId && binding.clientId === clientId) {
           // Ephemeral threads have no cold-resume source; reuse only the live client that started it.
-          const finalConfigPatch = params.buildFinalConfigPatch?.({ action: "resume", binding });
+          params.buildFinalConfigPatch?.({ action: "resume", binding });
           throwIfAborted();
-          finalConfigPatch?.activateThreadBinding?.();
           lifecycleTiming.mark("thread-ready");
           lifecycleTiming.logSummary({
             runId: params.params.runId,

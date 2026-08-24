@@ -6,7 +6,6 @@ import {
 } from "../agents/harness/native-hook-relay.js";
 
 export type RetainedNativeHookRelayParams = RegisterNativeHookRelayParams & {
-  composeWithExistingRoute?: boolean;
   retention: NativeHookRelayRetention;
 };
 
