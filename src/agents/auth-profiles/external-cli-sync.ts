@@ -45,6 +45,10 @@ type ExternalCliSyncProvider = {
   readCredentials: (
     options?: Pick<ExternalCliAuthProfileOptions, "allowKeychainPrompt">,
   ) => OAuthCredential | null;
+  // The external CLI keeps rotating this credential after OpenClaw persists it,
+  // so the CLI — not OpenClaw — owns refresh for the profile even once stored.
+  // Only set this for a CLI that refreshes on its own schedule (Claude Code).
+  externalOwnsRefreshWhenPersisted?: boolean;
   // bootstrapOnly providers adopt the external CLI credential only to
   // seed an empty slot; once a local OAuth credential exists for the
   // profile, the local refresh token is treated as canonical and the
@@ -97,6 +101,7 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
       }
       return { ...credential, provider: "claude-cli" };
     },
+    externalOwnsRefreshWhenPersisted: true,
   },
   {
     profileId: MINIMAX_CLI_PROFILE_ID,
@@ -183,6 +188,36 @@ function hasManagedProviderOAuth(
       listExternalCliProviderIds(providerConfig).includes(credential.provider) &&
       hasInlineOAuthTokenMaterial(credential),
   );
+}
+
+/**
+ * Profile ids whose OAuth refresh is owned by an external CLI.
+ *
+ * `runtimeExternalCliProfileIds` only marks profiles this process adopted as a
+ * runtime overlay. The Claude CLI credential is persisted into the durable
+ * store, so after a gateway restart the profile is still CLI owned but carries
+ * no runtime marker. Health reporting needs both sources.
+ *
+ * Scoped to providers that declare `externalOwnsRefreshWhenPersisted`; every
+ * other persisted external CLI profile keeps its expiry visible.
+ */
+export function listExternalCliOwnedProfileIds(store: AuthProfileStore): string[] {
+  const owned = new Set<string>();
+  for (const providerConfig of EXTERNAL_CLI_SYNC_PROVIDERS) {
+    if (!providerConfig.externalOwnsRefreshWhenPersisted) {
+      continue;
+    }
+    for (const profileId of listExternalCliProfileIds(providerConfig)) {
+      const existing = store.profiles[profileId];
+      if (
+        existing?.type === "oauth" &&
+        listExternalCliProviderIds(providerConfig).includes(existing.provider)
+      ) {
+        owned.add(profileId);
+      }
+    }
+  }
+  return [...owned].toSorted();
 }
 
 /** Read a CLI credential only for safe bootstrap of an unusable local profile. */

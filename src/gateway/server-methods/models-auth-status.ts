@@ -25,6 +25,7 @@ import {
   listConfiguredExternalCliProfileMetadataIds,
   normalizeExternalCliProfileMetadata,
 } from "../../agents/auth-profiles/external-cli-profile-metadata.js";
+import { listExternalCliOwnedProfileIds } from "../../agents/auth-profiles/external-cli-sync.js";
 import { getRuntimeExternalCliProfileIds } from "../../agents/auth-profiles/runtime-external-profile-references.js";
 import {
   isNonSecretApiKeyMarker,
@@ -287,7 +288,7 @@ function mapProvider(
   apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>,
   logoutProfileIds: ReadonlySet<string>,
   configBoundProfileIds: ReadonlySet<string>,
-  externalCliProfileIds: ReadonlySet<string>,
+  externalCliOwnedProfileIds: ReadonlySet<string>,
 ): ModelAuthStatusProvider {
   const usageProfile =
     prov.profiles.find((profile) => profile.type === "oauth" || profile.type === "token") ??
@@ -310,7 +311,7 @@ function mapProvider(
   const externalCliOwnsOAuthRefresh =
     refreshableProfiles.length > 0 &&
     refreshableProfiles.every(
-      (profile) => profile.type === "oauth" && externalCliProfileIds.has(profile.profileId),
+      (profile) => profile.type === "oauth" && externalCliOwnedProfileIds.has(profile.profileId),
     );
   const rollup: ModelAuthStatusRollup =
     externalCliOwnsOAuthRefresh &&
@@ -676,6 +677,12 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
 
       const externalProfileIds = new Set(store.runtimeExternalProfileIds ?? []);
       const externalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
+      // Runtime overlay markers miss persisted external CLI profiles; union both
+      // so an idle-stale CLI access token is not reported as an operator login.
+      const externalCliOwnedProfileIds = new Set([
+        ...externalCliProfileIds,
+        ...listExternalCliOwnedProfileIds(store),
+      ]);
       const logoutProfileIds = new Set(
         Object.entries(store.profiles)
           .filter(
@@ -699,7 +706,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
             apiKeys,
             logoutProfileIds,
             configBoundProfileIds,
-            externalCliProfileIds,
+            externalCliOwnedProfileIds,
           ),
         ),
         externalCliProfileIds,

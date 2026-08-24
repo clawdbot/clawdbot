@@ -704,6 +704,57 @@ describe("models.authStatus", () => {
     expect(provider?.expiry).toBeUndefined();
   });
 
+  it("reports persisted external CLI OAuth as signed in without a runtime marker", async () => {
+    // Regression: the Claude CLI profile is persisted, not a runtime overlay, so
+    // after a gateway restart it carries no runtimeExternalCliProfileIds entry.
+    // An idle-stale CLI access token must still not surface as an operator login.
+    const profileId = "anthropic:claude-cli";
+    const profile = {
+      profileId,
+      provider: "claude-cli",
+      type: "oauth",
+      status: "expired",
+      expiresAt: 1,
+      remainingMs: -1,
+      source: "store",
+      label: profileId,
+    } satisfies AuthHealthSummary["profiles"][number];
+    setPreparedAuthStore({
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "expired-access",
+          refresh: "cli-owned-refresh",
+          expires: 1,
+        } satisfies AuthProfileStore["profiles"][string],
+      },
+    });
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 2,
+      warnAfterMs: 0,
+      profiles: [profile],
+      providers: [
+        {
+          provider: "claude-cli",
+          status: "expired",
+          expiresAt: 1,
+          remainingMs: -1,
+          profiles: [profile],
+        },
+      ],
+    });
+
+    const provider = await firstAuthStatusProvider();
+
+    expect(provider).toMatchObject({
+      provider: "claude-cli",
+      status: "ok",
+      profiles: [{ profileId, status: "expired" }],
+    });
+  });
+
   it("keeps an unrelated effective token expiry visible beside owned CLI OAuth", async () => {
     const profileId = "anthropic:claude-cli";
     const ownedProfile = {
