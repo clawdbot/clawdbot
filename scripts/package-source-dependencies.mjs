@@ -1,14 +1,10 @@
 const PRIVATE_WORKSPACE_VERSION = "0.0.0-private";
 
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function dependenciesRecord(value, label) {
   if (value === undefined) {
     return {};
   }
-  if (!isRecord(value)) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`${label} dependencies must be an object when present`);
   }
   return value;
