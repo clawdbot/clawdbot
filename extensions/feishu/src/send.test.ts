@@ -868,31 +868,30 @@ describe("editMessageFeishu", () => {
 
   it("routes card and rich-post edits through their distinct Feishu SDK HTTP methods", async () => {
     const Lark = await import("@larksuiteoapi/node-sdk");
-    const requests: Array<{
-      method: string;
-      url: string;
-      data: { content?: string; msg_type?: string };
-    }> = [];
-    const tokenRequest = vi.fn().mockRejectedValue(new Error("Unexpected Feishu authentication"));
-    const transport: HttpInstance = Lark.defaultHttpInstance.create();
-    Object.defineProperty(transport, "post", { value: tokenRequest });
+    const requests: Array<{ method: string; url: string; data: unknown }> = [];
+    const tokenRequest = vi.fn(async (): Promise<never> => {
+      throw new Error("Unexpected Feishu HTTP request");
+    });
+    const transport: HttpInstance = {
+      request: tokenRequest,
+      get: tokenRequest,
+      delete: tokenRequest,
+      head: tokenRequest,
+      options: tokenRequest,
+      post: tokenRequest,
+      put: tokenRequest,
+      patch: tokenRequest,
+    };
     Object.defineProperty(transport, "request", {
       value: async (options: HttpRequestOptions<{ content?: string; msg_type?: string }>) => {
         const method = options.method ?? "GET";
         const data = options.data ?? {};
         requests.push({ method, url: options.url ?? "", data });
-        const content = JSON.parse(data.content ?? "{}") as {
-          schema?: string;
-          zh_cn?: unknown;
-        };
-
-        if (content.schema && method !== "PATCH") {
-          return Response.json({ code: 230020, msg: "interactive cards require PATCH" }).json();
-        }
-        if (content.zh_cn && (method !== "PUT" || data.msg_type !== "post")) {
-          return Response.json({ code: 230020, msg: "rich posts require PUT" }).json();
-        }
-        return Response.json({ code: 0, msg: "success" }).json();
+        const content = JSON.parse(data.content ?? "{}") as { schema?: string };
+        const valid = content.schema
+          ? method === "PATCH"
+          : method === "PUT" && data.msg_type === "post";
+        return Response.json({ code: valid ? 0 : 230020, msg: "edit contract" }).json();
       },
     });
     mockCreateFeishuClient.mockReturnValue(
