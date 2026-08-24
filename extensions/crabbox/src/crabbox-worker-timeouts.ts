@@ -31,6 +31,11 @@ const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS = 5 * 60_000;
 export const CRABBOX_SETUP_TIMEOUT_MS = 15 * 60_000;
 export const CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS = 15 * 60_000;
 
+// Match Machine0's provider-read cadence; fast re-inspection can exhaust its hourly API budget.
+export function resolveCrabboxReadyPollIntervalMs(provider: string): number {
+  return provider === "machine0" ? 60_000 : 2_000;
+}
+
 export function resolveCrabboxLifecycleTimeoutMs(provider: string): number {
   return provider === "machine0"
     ? CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS

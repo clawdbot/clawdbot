@@ -79,13 +79,14 @@ function lifecycleLease(leaseId = LEASE_ID, profile: WorkerProfile = PROFILE) {
 function providerWithRawRunner(
   runCommand: CrabboxCommandRunner,
   warn?: (message: string) => void,
+  sleep: (milliseconds: number) => Promise<void> = async () => {},
 ): WorkerProvider {
   const provider = createCrabboxWorkerProvider({
     runCommand,
     openclawRoot: OPENCLAW_ROOT,
     pathEnv: "",
     isExecutable: (candidate) => candidate === SIBLING_BINARY,
-    sleep: async () => {},
+    sleep,
     wallpaperPath: WORKER_WALLPAPER_PATH,
     ...(warn ? { warn } : {}),
   });
@@ -109,13 +110,21 @@ function providerWithRawRunner(
   };
 }
 
-function providerWithRunner(runCommand: CrabboxCommandRunner, warn?: (message: string) => void) {
-  return providerWithRawRunner(async (argv, options) => {
-    if (argv[1] === "config" && argv[2] === "show") {
-      return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
-    }
-    return runCommand(argv, options);
-  }, warn);
+function providerWithRunner(
+  runCommand: CrabboxCommandRunner,
+  warn?: (message: string) => void,
+  sleep?: (milliseconds: number) => Promise<void>,
+) {
+  return providerWithRawRunner(
+    async (argv, options) => {
+      if (argv[1] === "config" && argv[2] === "show") {
+        return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
+      }
+      return runCommand(argv, options);
+    },
+    warn,
+    sleep,
+  );
 }
 
 function failedNodeEnrollment(
@@ -1806,6 +1815,38 @@ describe("Crabbox worker provider", () => {
         ["inspect", lifecycleTimeoutMs],
         ["stop", lifecycleTimeoutMs],
       ]);
+    },
+  );
+
+  it.each([
+    { providerId: "aws", expectedIntervalMs: 2_000 },
+    { providerId: "hetzner", expectedIntervalMs: 2_000 },
+    { providerId: "machine0", expectedIntervalMs: 60_000 },
+  ])(
+    "paces $providerId readiness re-inspection at $expectedIntervalMs ms",
+    async ({ providerId, expectedIntervalMs }) => {
+      let inspections = 0;
+      const delays: number[] = [];
+      const provider = providerWithRunner(
+        async (argv) => {
+          if (argv[1] === "inspect") {
+            inspections += 1;
+            return commandResult({
+              stdout: inspectJson({ ready: inspections > 1, sshHostKey: HOST_KEY }),
+            });
+          }
+          return commandResult();
+        },
+        undefined,
+        async (milliseconds) => {
+          delays.push(milliseconds);
+        },
+      );
+
+      await expect(
+        provider.provision({ ...PROFILE, provider: providerId }, OPERATION_ID),
+      ).resolves.toMatchObject({ leaseId: LEASE_ID });
+      expect(delays).toEqual([expectedIntervalMs]);
     },
   );
 

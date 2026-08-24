@@ -51,12 +51,12 @@ import {
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxProvisionBaseTimeoutMs,
   resolveCrabboxProvisionCallTimeoutMs,
+  resolveCrabboxReadyPollIntervalMs,
 } from "./crabbox-worker-timeouts.js";
 import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js";
 
 export { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 
-const READY_POLL_INTERVAL_MS = 2_000;
 const MAX_ERROR_DETAIL_CHARS = 512;
 // Only states that prove the resource is gone or stopped map to `destroyed`. Crabbox also
 // treats `deleting` and `failed` as unable to become ready, but those can retain resources
@@ -271,7 +271,7 @@ async function waitForProvisionReady(
     assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     while (inspect.ready !== true && !isUnusableProvisionState(inspect.state)) {
       const remaining = remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS);
-      await params.sleep(Math.min(READY_POLL_INTERVAL_MS, remaining));
+      await params.sleep(Math.min(resolveCrabboxReadyPollIntervalMs(params.provider), remaining));
       inspect = await inspectAgain();
       assertProvisionSecurityPolicy({ inspect, provider: params.provider });
     }
