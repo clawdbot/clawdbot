@@ -501,6 +501,42 @@ export function renderAssistantAttachments(
             sizeBytes,
             durationMs: serverDurationMs,
             voiceNote: attachment.isVoiceNote === true,
+            resolveSource: (sidebarUpdate) => {
+              const nextAssistantAvailability = resolveAssistantAttachmentAvailability(
+                attachment.url,
+                localMediaPreviewRoots,
+                resourceBasePath,
+                authToken,
+                sidebarUpdate,
+              );
+              if (nextAssistantAvailability.status !== "available") {
+                return null;
+              }
+              const nextManagedAvailability = resolveManagedAttachmentAvailability(
+                attachment,
+                resolveArtifactDownload,
+                sidebarUpdate,
+              );
+              if (nextManagedAvailability.status !== "available") {
+                return null;
+              }
+              return {
+                src: isLocalAssistantAttachmentSource(attachment.url)
+                  ? buildAssistantAttachmentUrl(
+                      attachment.url,
+                      resourceBasePath,
+                      nextAssistantAvailability.mediaTicket,
+                    )
+                  : nextManagedAvailability.url,
+                playback:
+                  nextAssistantAvailability.playback ?? attachment.playback ?? "native",
+                authToken: isLocalAssistantAttachmentSource(attachment.url)
+                  ? (authToken ?? null)
+                  : null,
+                sizeBytes: nextAssistantAvailability.sizeBytes ?? attachment.sizeBytes,
+                durationMs: nextAssistantAvailability.durationMs ?? attachment.durationMs,
+              };
+            },
           })
       : undefined;
     if (attachment.kind === "image") {

@@ -43,6 +43,14 @@ type ImageSidebarContent = {
   rawText?: string | null;
 };
 
+export type AttachmentSidebarSource = {
+  src: string;
+  playback?: ChatMediaPlaybackMode;
+  authToken?: string | null;
+  sizeBytes?: number;
+  durationMs?: number;
+};
+
 type AttachmentSidebarContent = {
   kind: "attachment";
   attachmentKind?: "audio" | "video" | "document" | "image";
@@ -55,6 +63,7 @@ type AttachmentSidebarContent = {
   sizeBytes?: number;
   durationMs?: number;
   voiceNote?: boolean;
+  resolveSource?: (onRequestUpdate: () => void) => AttachmentSidebarSource | null;
 };
 
 type SessionDiffSidebarContent = {

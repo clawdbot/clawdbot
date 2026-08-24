@@ -24,6 +24,7 @@ import {
 } from "./chat-message.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
+import "./chat-sidebar.ts";
 
 const localStorageValues = new Map<string, string>();
 const documentPreviewSubscribers = new Set<() => void>();
@@ -5093,6 +5094,70 @@ describe("grouped chat rendering", () => {
     expect(onOpenSidebar).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "attachment", attachmentKind: "document" }),
     );
+  });
+
+  it("refreshes a managed attachment ticket while its sidebar preview stays open", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-24T00:00:00.000Z"));
+    const attachmentId = crypto.randomUUID();
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
+    const artifactId = `artifact_managed_video_${attachmentId}`;
+    const firstTicket = `${source}?mediaTicket=first`;
+    const refreshedTicket = `${source}?mediaTicket=refreshed`;
+    const resolveArtifactDownload = vi
+      .fn<() => Promise<{ url: string; expiresAt: string }>>()
+      .mockResolvedValueOnce({
+        url: firstTicket,
+        expiresAt: new Date(Date.now() + 31_000).toISOString(),
+      })
+      .mockResolvedValueOnce({
+        url: refreshedTicket,
+        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+      });
+    const container = document.body.appendChild(document.createElement("div"));
+    let sidebarContent: unknown;
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        createAssistantMessage([
+          createAttachmentBlock(source, "video", "clip.mp4", "video/mp4", { artifactId }),
+        ]),
+        {
+          showToolCalls: false,
+          onRequestUpdate: rerender,
+          resolveArtifactDownload,
+          onOpenSidebar: (content) => {
+            sidebarContent = content;
+          },
+        },
+      );
+
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
+    const transcriptPlayer = await requireVideoPlayer(container);
+    expectElement(
+      transcriptPlayer,
+      ".chat-assistant-attachment-card__expand",
+      HTMLButtonElement,
+    ).click();
+
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete: Promise<unknown>;
+    };
+    panel.content = sidebarContent;
+    document.body.append(panel);
+    await panel.updateComplete;
+    expect(panel.querySelector("video")?.getAttribute("src")).toBe(firstTicket);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+    await panel.updateComplete;
+
+    expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    expect(panel.querySelector("video")?.getAttribute("src")).toBe(refreshedTicket);
+    panel.remove();
+    container.remove();
   });
 
   it("downloads a managed image from the compact preview header", async () => {

@@ -18,6 +18,7 @@ import {
   handleSidebarKeydown,
   renderSidebarPanel,
 } from "./chat-sidebar-content.ts";
+import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import {
   computeFileMatches,
   emptyCopyFeedback,
@@ -75,6 +76,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     FileCopyAction,
     ReturnType<typeof globalThis.setTimeout>
   >();
+  private readonly requestAttachmentUpdate = () => this.requestUpdate();
 
   constructor() {
     super();
@@ -91,6 +93,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown);
     this.destroyFileEditor();
     this.clearFileCopyFeedback();
+    releaseChatMediaResourceSubscriber(this.requestAttachmentUpdate);
     super.disconnectedCallback();
   }
 
@@ -98,6 +101,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (!changed.has("content")) {
       return;
     }
+    releaseChatMediaResourceSubscriber(this.requestAttachmentUpdate);
     this.visibleContent = this.content;
     this.error = null;
     this.showingRawText = false;
@@ -638,6 +642,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       onViewRawText: this.showRawText,
       onClick: this.handlePanelClick,
       onKeydown: this.handlePanelKeyDown,
+      onAttachmentUpdate: this.requestAttachmentUpdate,
     });
   }
 }

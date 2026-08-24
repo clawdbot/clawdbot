@@ -42,8 +42,14 @@ type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 
 function renderSidebarAttachment(
   content: Extract<SidebarContent, { kind: "attachment" }>,
+  onRequestUpdate: () => void,
 ) {
-  const src = safeAttachmentHref(content.src);
+  const liveSource = content.resolveSource?.(onRequestUpdate);
+  const source = content.resolveSource ? liveSource : content;
+  const src = safeAttachmentHref(source?.src ?? "");
+  const authToken = content.resolveSource
+    ? (liveSource?.authToken ?? null)
+    : (content.authToken ?? null);
   const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   const extension = content.title.split(".").pop()?.toLowerCase() ?? "";
   if (!src) {
@@ -57,9 +63,9 @@ function renderSidebarAttachment(
       .sourceIdentity=${content.sourceIdentity ?? content.src}
       .label=${content.title}
       .mimeType=${content.mimeType ?? ""}
-      .playback=${content.playback ?? "native"}
-      .authToken=${content.authToken ?? null}
-      .sizeBytes=${content.sizeBytes}
+      .playback=${source?.playback ?? content.playback ?? "native"}
+      .authToken=${authToken}
+      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
     ></openclaw-chat-video-player>`;
   }
   if (content.attachmentKind === "audio" || mimeType.startsWith("audio/")) {
@@ -68,10 +74,10 @@ function renderSidebarAttachment(
       .sourceIdentity=${content.sourceIdentity ?? content.src}
       .label=${content.title}
       .mimeType=${content.mimeType ?? ""}
-      .playback=${content.playback ?? "native"}
-      .authToken=${content.authToken ?? null}
-      .sizeBytes=${content.sizeBytes}
-      .serverDurationMs=${content.durationMs}
+      .playback=${source?.playback ?? content.playback ?? "native"}
+      .authToken=${authToken}
+      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
+      .serverDurationMs=${source?.durationMs ?? content.durationMs}
       .voiceNote=${content.voiceNote === true}
     ></openclaw-chat-audio-player>`;
   }
@@ -164,6 +170,7 @@ type MarkdownSidebarProps = {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   embedded?: boolean;
+  onAttachmentUpdate: () => void;
 };
 
 function renderMarkdownSidebar(props: MarkdownSidebarProps) {
@@ -313,7 +320,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                       `
                     : content.kind === "attachment"
                       ? html`<div class="sidebar-attachment-preview">
-                          ${renderSidebarAttachment(content)}
+                          ${renderSidebarAttachment(content, props.onAttachmentUpdate)}
                         </div>`
                     : html`
                         <section class="sidebar-markdown-shell">
