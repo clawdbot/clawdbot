@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -428,5 +429,69 @@ describe("shouldSkipPreferredPluginAutoEnable on preference rings", () => {
         preferOverCache: new Map<string, string[]>(),
       }),
     ).toBe(false);
+  });
+
+  // An operator can break a ring by disabling one member under a legacy alias. The preference
+  // graph must drop that member's edges exactly as it drops an exact-id disablement: reading the
+  // graph raw keeps the disabled member's edge, closes the cycle, and the ring stand-off keeps a
+  // member whose displacer is alive and unopposed.
+  it("resolves a ring broken by disabling one member through its legacy alias", () => {
+    const registry = {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "zzring-alpha",
+          origin: "workspace",
+          channels: ["ringchat"],
+          channelConfigs: { ringchat: { preferOver: ["zzring-beta"] } },
+        },
+        {
+          id: "zzring-beta",
+          origin: "workspace",
+          channels: ["ringchat"],
+          legacyPluginIds: ["zzring-beta-legacy"],
+          channelConfigs: { ringchat: { preferOver: ["zzring-gamma"] } },
+        },
+        {
+          id: "zzring-gamma",
+          origin: "workspace",
+          channels: ["ringchat"],
+          channelConfigs: { ringchat: { preferOver: ["zzring-alpha"] } },
+        },
+      ],
+    } as unknown as PluginManifestRegistry;
+    // The deny spelling below reaches the ring member through the real manifest alias map.
+    expect(createManifestPluginAliasResolver(registry)("zzring-beta-legacy")).toBe("zzring-beta");
+    const alphaEntry = {
+      kind: "channel-configured",
+      pluginId: "zzring-alpha",
+      channelId: "ringchat",
+    } as PluginAutoEnableCandidate;
+    const betaEntry = {
+      kind: "channel-configured",
+      pluginId: "zzring-beta",
+      channelId: "ringchat",
+    } as PluginAutoEnableCandidate;
+    const gammaEntry = {
+      kind: "channel-configured",
+      pluginId: "zzring-gamma",
+      channelId: "ringchat",
+    } as PluginAutoEnableCandidate;
+    const config = { plugins: { deny: ["zzring-beta-legacy"] } } as OpenClawConfig;
+    const preferOverCache = new Map<string, string[]>();
+    const skipFor = (entry: PluginAutoEnableCandidate) =>
+      shouldSkipPreferredPluginAutoEnable({
+        config,
+        entry,
+        configured: [alphaEntry, betaEntry, gammaEntry],
+        env: {},
+        registry,
+        preferOverCache,
+      });
+
+    // gamma's only displacer is the disabled member, so gamma survives; alpha's displacer gamma
+    // is alive and no longer shares a cycle with it, so alpha is genuinely displaced.
+    expect(skipFor(alphaEntry)).toBe(true);
+    expect(skipFor(gammaEntry)).toBe(false);
   });
 });

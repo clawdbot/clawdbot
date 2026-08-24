@@ -9,6 +9,7 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: logWarnSpy }),
 }));
 
+import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
@@ -588,6 +589,40 @@ describe("applyPluginAutoEnable channels", () => {
       );
     });
 
+    // The disablement can be written under any spelling Gateway startup canonicalizes. A raw
+    // policy check reads the legacy-id entry as some other plugin, keeps the preferred claimant
+    // eligible, and disables its fallback: both plugins end up off while validation selected the
+    // fallback's schema.
+    it("falls back when the preferred plugin is disabled through its legacy alias", () => {
+      const manifestRegistry = makeRegistry([
+        { id: "zzchat-classic", channels: ["zzchat"] },
+        {
+          id: "zzchat-modern",
+          channels: ["zzchat"],
+          legacyPluginIds: ["zzchat-modern-legacy"],
+          channelConfigs: {
+            zzchat: { schema: { type: "object" }, preferOver: ["zzchat-classic"] },
+          },
+        },
+      ]);
+      // The entry key below reaches the preferred plugin through the real manifest alias map.
+      expect(createManifestPluginAliasResolver(manifestRegistry)("zzchat-modern-legacy")).toBe(
+        "zzchat-modern",
+      );
+
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { zzchat: { someKey: "value" } },
+          plugins: { entries: { "zzchat-modern-legacy": { enabled: false } } },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry,
+      });
+
+      expect(result.config.plugins?.entries?.["zzchat-classic"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["zzchat-modern"]).toBeUndefined();
+    });
+
     it("does not auto-disable a lower-priority channel plugin that was explicitly selected", () => {
       const result = applyPluginAutoEnable({
         config: {
@@ -616,6 +651,77 @@ describe("applyPluginAutoEnable channels", () => {
 
       expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.qqbot?.enabled).toBe(true);
+    });
+
+    // Hand-picking can use any manifest-declared spelling. The preservation check must
+    // canonicalize the same way Gateway startup does, or an allowlist entry written as a legacy id
+    // keeps the fallback's strict schema for validation while auto-enable still writes
+    // `enabled: false` for it.
+    it("does not auto-disable a fallback selected through a legacy alias in plugins.allow", () => {
+      const manifestRegistry = makeRegistry([
+        {
+          id: "zzclickclack-plus",
+          channels: ["zzclickclack"],
+          legacyPluginIds: ["zzclickclack-legacy"],
+        },
+        {
+          id: "zzclickclack-ultra",
+          channels: ["zzclickclack"],
+          channelConfigs: {
+            zzclickclack: { schema: { type: "object" }, preferOver: ["zzclickclack-plus"] },
+          },
+        },
+      ]);
+      // The allow spelling below reaches the fallback through the real manifest alias map.
+      expect(createManifestPluginAliasResolver(manifestRegistry)("zzclickclack-legacy")).toBe(
+        "zzclickclack-plus",
+      );
+
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { zzclickclack: { someKey: "value" } },
+          plugins: { allow: ["zzclickclack-legacy"] },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry,
+      });
+
+      expect(result.config.plugins?.entries?.["zzclickclack-ultra"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["zzclickclack-plus"]).toBeUndefined();
+    });
+
+    // Allowlist materialization shares the same policy filter: a deny written under a legacy
+    // alias must keep the plugin's material entry off the allowlist, or the materializer
+    // re-admits a plugin the loader refuses to run.
+    it("does not allowlist a material entry for a plugin denied through its legacy alias", () => {
+      const manifestRegistry = makeRegistry([
+        {
+          id: "zzclickclack-ultra",
+          channels: ["zzultra-chat"],
+          legacyPluginIds: ["zzultra-legacy"],
+        },
+      ]);
+      // The deny spelling below reaches the plugin through the real manifest alias map.
+      expect(createManifestPluginAliasResolver(manifestRegistry)("zzultra-legacy")).toBe(
+        "zzclickclack-ultra",
+      );
+
+      const result = applyPluginAutoEnable({
+        config: {
+          plugins: {
+            allow: ["zzkeeper"],
+            deny: ["zzultra-legacy"],
+            entries: { "zzclickclack-ultra": { config: { token: "x" } } },
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry,
+      });
+
+      expect(result.config.plugins?.allow).toEqual(["zzkeeper"]);
+      expect(result.changes).not.toContain(
+        "zzclickclack-ultra plugin config present, added to plugin allowlist.",
+      );
     });
 
     it("does not synthesize plugin entries when no installed manifest declares the channel", () => {
