@@ -85,6 +85,7 @@ type ModelSetupViewProps = {
   canAdmin: boolean;
   canVerify: boolean;
   canPrepare: boolean;
+  modelConfigured?: boolean;
   gatewayTooOld: boolean;
   refreshWarning: string | null;
   actionsDisabled: boolean;
@@ -613,7 +614,7 @@ function renderLoadingSection(params: {
   `;
 }
 
-function renderLoading() {
+function renderLoading(modelConfigured: boolean) {
   return html`
     <div
       class="model-setup__loading"
@@ -622,14 +623,17 @@ function renderLoading() {
       aria-label=${t("modelSetup.loading")}
     >
       <div class="model-setup__loading-sections" aria-hidden="true">
-        ${renderLoadingSection({
-          title: t("modelSetup.verify.title"),
-          className: "model-setup__loading-section--selected",
-          status: t("modelSetup.loading"),
-        })}
+        ${modelConfigured
+          ? renderLoadingSection({
+              title: t("modelSetup.verify.title"),
+              className: "model-setup__loading-section--selected",
+              status: t("modelSetup.loading"),
+            })
+          : nothing}
         ${renderLoadingSection({
           title: t("modelSetup.candidates.title"),
           className: "model-setup__loading-section--candidates",
+          status: modelConfigured ? undefined : t("modelSetup.loading"),
         })}
         ${renderLoadingSection({
           title: t("modelSetup.prepare.title"),
@@ -659,7 +663,7 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
       ${t("modelSetup.access.gatewayTooOld")}
     </div>`;
   } else if (props.page.phase === "loading") {
-    body = renderLoading();
+    body = renderLoading(props.modelConfigured === true);
   } else if (props.page.phase === "detect-error") {
     body = html`
       <div class="callout danger" role="alert">${props.page.message}</div>

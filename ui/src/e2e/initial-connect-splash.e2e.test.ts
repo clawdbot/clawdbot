@@ -255,12 +255,11 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await loading.waitFor();
     const loadingSections = page.locator('.model-setup__loading[role="status"][aria-busy="true"]');
     await loadingSections.locator(".model-setup__loading-sections").waitFor();
-    expect(await loadingSections.locator(".settings-section").count()).toBe(5);
-    expect(await loadingSections.locator(".model-setup__loading-row").count()).toBe(6);
+    expect(await loadingSections.locator(".settings-section").count()).toBe(4);
+    expect(await loadingSections.locator(".model-setup__loading-row").count()).toBe(5);
     expect(await loadingSections.locator("button, input, wa-dropdown").count()).toBe(0);
     await page.evaluate(() => document.fonts.ready);
     const sectionTitles = [
-      "Selected model",
       "Found on this Gateway",
       "Run a model locally",
       "Sign in with a provider",
@@ -313,7 +312,6 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
         { id: "ollama", brandId: "ollama", label: "Ollama" },
         { id: "lmstudio", brandId: "lmstudio", label: "LM Studio" },
       ],
-      configuredModel: "openai/gpt-5.6-sol",
       setupComplete: false,
       workspace: "/tmp/openclaw-e2e",
     });
