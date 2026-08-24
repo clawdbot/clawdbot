@@ -2,7 +2,7 @@ import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 // Assembles the channel ownership policy from operator config so config validation and the
 // operator-facing runtime schema pick the same channel owner plugin activation does.
 import { normalizeChatChannelId } from "../channels/registry.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { normalizePluginsConfigWithResolver } from "../plugins/config-policy.js";
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -92,7 +92,13 @@ export function createConfiguredChannelOwnershipPolicy(params: {
   // `isActivatedManifestOwner` is that decision without the auto-enable arm, read from the
   // effective config like `isPluginActive`'s policy check: a claimant only candidacy would load
   // stays inactive, while one the runtime serves regardless stays active.
-  let normalizedPluginsPolicy: ReturnType<typeof normalizePluginsConfig> | undefined;
+  //
+  // Normalized through `canonicalId`, like every other policy read in this factory: startup
+  // canonicalizes `plugins.allow`/`plugins.deny`/`plugins.entries` keys through the registry
+  // resolver (`normalizePluginsConfigWithRegistry`), so a bundled fallback admitted by a
+  // restrictive allowlist under a manifest alias loads. The built-in-only fold cannot see
+  // manifest aliases and reported that loaded fallback "not-in-allowlist".
+  let normalizedPluginsPolicy: ReturnType<typeof normalizePluginsConfigWithResolver> | undefined;
   // Memoized like `configuredChannelIds` and `candidatesByChannel`: the displacement walk's
   // fixpoint asks per claimant per pass, so a linear registry scan per call is quadratic on large
   // registries. First manifest record per canonical id wins, matching the `.find` it replaces,
@@ -116,7 +122,10 @@ export function createConfiguredChannelOwnershipPolicy(params: {
     const record = recordByCanonicalId.get(canonicalPluginId);
     let activated = false;
     if (record) {
-      normalizedPluginsPolicy ??= normalizePluginsConfig(params.config.plugins);
+      normalizedPluginsPolicy ??= normalizePluginsConfigWithResolver(
+        params.config.plugins,
+        canonicalId,
+      );
       activated = isActivatedManifestOwner({
         plugin: record,
         normalizedConfig: normalizedPluginsPolicy,

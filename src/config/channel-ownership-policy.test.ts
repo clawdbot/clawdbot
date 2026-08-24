@@ -1,7 +1,9 @@
 /** Covers how the configured channel ownership policy reads operator intent. */
 import { afterEach, describe, expect, it } from "vitest";
+import type { InstalledPluginIndex } from "../plugins/installed-plugin-index-types.js";
 import { collectCededChannelIdsByPlugin } from "../plugins/loader-shared.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginRegistryIdNormalizer } from "../plugins/plugin-registry-id-normalizer.js";
 import { collectRuntimeChannelOwnership } from "./channel-config-metadata.js";
 import { createConfiguredChannelOwnershipPolicy } from "./channel-ownership-policy.js";
 import {
@@ -267,6 +269,130 @@ describe("createConfiguredChannelOwnershipPolicy", () => {
     // Both planes then hand the channel to the claimant the runtime actually serves.
     const { winners } = collectRuntimeChannelOwnership(registry, policy);
     expect(winners.get("zzproofchat")).toBe("zzproof-plus");
+  });
+
+  // The default-activation read above must canonicalize `plugins.entries` keys through the
+  // REGISTRY resolver, where an exact manifest id beats the built-in legacy fold
+  // (`BUILT_IN_PLUGIN_ALIAS_FALLBACKS` in `config-state.ts`). An installed plugin may claim a
+  // fold key ("minimax-portal") as its exact manifest id, and startup pre-seeds exact installed
+  // ids without ever folding, so its entry disable stays on the installed plugin at startup.
+  // Folding the entries key — before the resolver or after it — rewrites that disable onto the
+  // bundled owner the fold names and reports the default-enabled fallback inactive while the
+  // runtime serves it.
+  it("keeps a fold-key entry disable off the bundled fallback the fold names", () => {
+    const foldKeyRegistry = {
+      diagnostics: [],
+      plugins: [
+        { id: "zzproof-core", origin: "config", channels: ["zzproofchat"] },
+        {
+          id: "minimax",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: ["zzproofchat"],
+          providers: ["minimax", "minimax-portal"],
+        },
+        { id: "minimax-portal", origin: "config", channels: [] },
+      ],
+    } as unknown as PluginManifestRegistry;
+    // Fixture reachability, asserted through startup's own normalizer: the registry normalizer
+    // pre-seeds exact installed ids before any alias claim (`createPluginRegistryIdNormalizer`),
+    // so the operator's "minimax-portal" entry key lands on the installed plugin at startup —
+    // never on bundled "minimax", even though the bundled manifest lists the same id as a
+    // provider alias and the built-in fold table names it too.
+    const startupNormalizePluginId = createPluginRegistryIdNormalizer(
+      { plugins: [{ pluginId: "minimax-portal" }] } as unknown as InstalledPluginIndex,
+      { manifestRegistry: foldKeyRegistry },
+    );
+    expect(startupNormalizePluginId("minimax-portal")).toBe("minimax-portal");
+
+    const config = {
+      channels: { zzproofchat: { accountLabel: "zz-proof" } },
+      plugins: {
+        entries: {
+          "zzproof-core": { enabled: false },
+          "minimax-portal": { enabled: false },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = createConfiguredChannelOwnershipPolicy({
+      config,
+      sourceConfig: config,
+      registry: foldKeyRegistry,
+      env: {},
+    });
+
+    // Neither disable belongs to bundled "minimax", so its default enablement keeps it active
+    // on the channel the first claimant no longer serves.
+    expect(policy.isPluginActive("minimax", "zzproofchat")).toBe(true);
+    const { winners } = collectRuntimeChannelOwnership(foldKeyRegistry, policy);
+    expect(winners.get("zzproofchat")).toBe("minimax");
+  });
+
+  // Codex review P2: policy lists accept a plugin's manifest aliases, and Gateway startup
+  // canonicalizes them through the registry resolver (`normalizePluginsConfigWithRegistry`)
+  // before the activation decision. The default-activation check above normalized through the
+  // built-in fold only, which cannot see `legacyPluginIds`, so an enabled-by-default bundled
+  // fallback admitted by a restrictive `plugins.allow` list under such an alias loaded at
+  // startup while ownership reported it "not-in-allowlist" and kept the disabled claimant's
+  // schema.
+  const makeAllowlistAliasRegistry = (enabledByDefault: boolean) =>
+    ({
+      diagnostics: [],
+      plugins: [
+        { id: "zzproof-core", origin: "config", channels: ["zzproofchat"] },
+        {
+          id: "zzfall-back",
+          origin: "bundled",
+          enabledByDefault,
+          channels: ["zzproofchat"],
+          legacyPluginIds: ["zzfall-legacy"],
+        },
+      ],
+    }) as unknown as PluginManifestRegistry;
+
+  it("admits the default-enabled fallback a restrictive allowlist names by manifest alias", () => {
+    const config = {
+      channels: { zzproofchat: { accountLabel: "zz-proof" } },
+      plugins: {
+        allow: ["zzproof-core", "zzfall-legacy"],
+        entries: { "zzproof-core": { enabled: false } },
+      },
+    } as unknown as OpenClawConfig;
+
+    const aliasRegistry = makeAllowlistAliasRegistry(true);
+    const policy = createConfiguredChannelOwnershipPolicy({
+      config,
+      sourceConfig: config,
+      registry: aliasRegistry,
+      env: {},
+    });
+
+    expect(policy.isPluginActive("zzfall-back", "zzproofchat")).toBe(true);
+    const { winners } = collectRuntimeChannelOwnership(aliasRegistry, policy);
+    expect(winners.get("zzproofchat")).toBe("zzfall-back");
+  });
+
+  // The admission above must come from default enablement passing the canonicalized allowlist,
+  // not from reading the alias listing itself as activation: for a bundled plugin the allowlist
+  // only permits loading, so without default enablement startup leaves the fallback off
+  // ("bundled-disabled-by-default") and ownership must keep reporting it inactive.
+  it("keeps an alias-allowlisted bundled fallback without default enablement inactive", () => {
+    const config = {
+      channels: { zzproofchat: { accountLabel: "zz-proof" } },
+      plugins: {
+        allow: ["zzproof-core", "zzfall-legacy"],
+        entries: { "zzproof-core": { enabled: false } },
+      },
+    } as unknown as OpenClawConfig;
+    const policy = createConfiguredChannelOwnershipPolicy({
+      config,
+      sourceConfig: config,
+      registry: makeAllowlistAliasRegistry(false),
+      env: {},
+    });
+
+    expect(policy.isPluginActive("zzfall-back", "zzproofchat")).toBe(false);
   });
 
   // The narrowing this fallback must not undo: a claimant startup leaves off — a bundled plugin
