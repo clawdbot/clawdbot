@@ -15,12 +15,13 @@ import {
 } from "./run.test-support.js";
 
 async function writePublishedGenerationSentinels(outputDir: string) {
+  const generationDir = path.join(outputDir, ".mantis-generations", "generation-old");
   const paths = {
-    baseline: path.join(outputDir, "baseline", "last-good.txt"),
-    candidate: path.join(outputDir, "candidate", "last-good.txt"),
-    comparison: path.join(outputDir, "comparison.json"),
-    manifest: path.join(outputDir, "mantis-evidence.json"),
-    report: path.join(outputDir, "mantis-report.md"),
+    baseline: path.join(generationDir, "baseline", "last-good.txt"),
+    candidate: path.join(generationDir, "candidate", "last-good.txt"),
+    comparison: path.join(generationDir, "comparison.json"),
+    manifest: path.join(generationDir, "mantis-evidence.json"),
+    report: path.join(generationDir, "mantis-report.md"),
   };
   await fs.mkdir(path.dirname(paths.baseline), { recursive: true });
   await fs.mkdir(path.dirname(paths.candidate), { recursive: true });
@@ -28,6 +29,11 @@ async function writePublishedGenerationSentinels(outputDir: string) {
     Object.entries(paths).map(async ([component, filePath]) => {
       await fs.writeFile(filePath, `old ${component}`, "utf8");
     }),
+  );
+  await fs.writeFile(
+    path.join(outputDir, "mantis-current.json"),
+    `${JSON.stringify({ generation: ".mantis-generations/generation-old", schemaVersion: 1 })}\n`,
+    "utf8",
   );
   return paths;
 }
@@ -40,10 +46,7 @@ async function expectPublishedGenerationSentinels(
   }
 }
 
-async function expectNoMantisTransientEvidence(
-  outputDir: string,
-  options: { allowWorktreeRoot?: boolean } = {},
-) {
+async function expectNoMantisTransientEvidence(outputDir: string) {
   const outputEntries = await fs.readdir(outputDir);
   const siblingEntries = await fs.readdir(path.dirname(outputDir));
   expect([
@@ -51,9 +54,7 @@ async function expectNoMantisTransientEvidence(
       (entry) => entry.startsWith(".mantis-staged-") || entry.startsWith(".mantis-previous-"),
     ),
     ...siblingEntries.filter(
-      (entry) =>
-        entry.startsWith(".mantis-staged-") ||
-        (!options.allowWorktreeRoot && entry === `${path.basename(outputDir)}.worktrees`),
+      (entry) => entry.startsWith(".mantis-staged-") || entry.startsWith(".mantis-previous-"),
     ),
   ]).toEqual([]);
 }
@@ -70,6 +71,7 @@ describe("mantis before/after runtime", () => {
   });
 
   it("runs baseline and candidate worktrees and writes stable comparison artifacts", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "test-run");
     const commands: { args: readonly string[]; command: string; stage: string }[] = [];
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       commands.push({ command, args, stage: execution.stage });
@@ -78,7 +80,9 @@ describe("mantis before/after runtime", () => {
         return successfulCommandResult();
       }
       if (command === "git" && execution.stage === "worktree-cleanup") {
-        await fs.rm(String(args[4]), { force: true, recursive: true });
+        if (args[1] === "remove") {
+          await fs.rm(String(args[4]), { force: true, recursive: true });
+        }
         return successfulCommandResult();
       }
       if (command !== "pnpm" || !args.includes("openclaw")) {
@@ -87,10 +91,10 @@ describe("mantis before/after runtime", () => {
       const repoRootArg = requireArgAfter(args, "--repo-root");
       const outputDirArg = requireArgAfter(args, "--output-dir");
       const lane = outputDirArg.endsWith("baseline") ? "baseline" : "candidate";
-      const outputDir = path.join(repoRootArg, outputDirArg);
-      await fs.mkdir(outputDir, { recursive: true });
-      const screenshotPath = path.join(outputDir, `${lane}-timeline.png`);
-      const videoPath = path.join(outputDir, `${lane}-timeline.mp4`);
+      const laneOutputDir = path.join(repoRootArg, outputDirArg);
+      await fs.mkdir(laneOutputDir, { recursive: true });
+      const screenshotPath = path.join(laneOutputDir, `${lane}-timeline.png`);
+      const videoPath = path.join(laneOutputDir, `${lane}-timeline.mp4`);
       await fs.writeFile(screenshotPath, `${lane} screenshot`);
       await fs.writeFile(videoPath, `${lane} video`);
       const title = "Discord explicit status reactions run in tool-only reply mode";
@@ -124,7 +128,7 @@ describe("mantis before/after runtime", () => {
         ],
       });
       await fs.writeFile(
-        path.join(outputDir, QA_EVIDENCE_FILENAME),
+        path.join(laneOutputDir, QA_EVIDENCE_FILENAME),
         `${JSON.stringify(summary, null, 2)}\n`,
       );
       return successfulCommandResult();
@@ -142,57 +146,61 @@ describe("mantis before/after runtime", () => {
     });
 
     expect(result.status).toBe("pass");
-    expect(commands).toHaveLength(6);
+    expect(commands).toHaveLength(8);
     expect(commands.map((entry) => entry.stage)).toEqual([
       "worktree-add",
       "qa",
       "worktree-cleanup",
+      "worktree-cleanup",
       "worktree-add",
       "qa",
       "worktree-cleanup",
+      "worktree-cleanup",
     ]);
+    const baselineWorktreeDir = String(commands[0]?.args[4]);
+    const candidateWorktreeDir = String(commands[4]?.args[4]);
+    expect(path.dirname(baselineWorktreeDir)).toBe(`${outputDir}.worktrees`);
+    expect(path.basename(baselineWorktreeDir)).toMatch(/^baseline-/u);
+    expect(path.dirname(candidateWorktreeDir)).toBe(`${outputDir}.worktrees`);
+    expect(path.basename(candidateWorktreeDir)).toMatch(/^candidate-/u);
     expect(commands[0]?.command).toBe("git");
     expect(commands[0]?.args).toEqual([
       "worktree",
       "add",
       "--detach",
       "--",
-      path.join(`${result.outputDir}.worktrees`, "baseline"),
+      baselineWorktreeDir,
       "--lock",
     ]);
     expect(commands[1]?.command).toBe("pnpm");
     expect(commands[1]?.args[0]).toBe("--dir");
-    expect(commands[1]?.args[1]).toBe(path.join(`${result.outputDir}.worktrees`, "baseline"));
+    expect(commands[1]?.args[1]).toBe(baselineWorktreeDir);
     expect(commands[1]?.args.slice(2, 4)).toEqual(["openclaw", "qa"]);
     expect(commands[2]?.command).toBe("git");
-    expect(commands[2]?.args).toEqual([
-      "worktree",
-      "remove",
-      "--force",
-      "--",
-      path.join(`${result.outputDir}.worktrees`, "baseline"),
-    ]);
-    expect(commands[3]?.command).toBe("git");
-    expect(commands[3]?.args).toEqual([
+    expect(commands[2]?.args).toEqual(["worktree", "remove", "--force", "--", baselineWorktreeDir]);
+    expect(commands[3]?.args).toEqual(["worktree", "list", "--porcelain", "-z"]);
+    expect(commands[4]?.command).toBe("git");
+    expect(commands[4]?.args).toEqual([
       "worktree",
       "add",
       "--detach",
       "--",
-      path.join(`${result.outputDir}.worktrees`, "candidate"),
+      candidateWorktreeDir,
       "--force",
     ]);
-    expect(commands[4]?.command).toBe("pnpm");
-    expect(commands[4]?.args[0]).toBe("--dir");
-    expect(commands[4]?.args[1]).toBe(path.join(`${result.outputDir}.worktrees`, "candidate"));
-    expect(commands[4]?.args.slice(2, 4)).toEqual(["openclaw", "qa"]);
-    expect(commands[5]?.command).toBe("git");
-    expect(commands[5]?.args).toEqual([
+    expect(commands[5]?.command).toBe("pnpm");
+    expect(commands[5]?.args[0]).toBe("--dir");
+    expect(commands[5]?.args[1]).toBe(candidateWorktreeDir);
+    expect(commands[5]?.args.slice(2, 4)).toEqual(["openclaw", "qa"]);
+    expect(commands[6]?.command).toBe("git");
+    expect(commands[6]?.args).toEqual([
       "worktree",
       "remove",
       "--force",
       "--",
-      path.join(`${result.outputDir}.worktrees`, "candidate"),
+      candidateWorktreeDir,
     ]);
+    expect(commands[7]?.args).toEqual(["worktree", "list", "--porcelain", "-z"]);
 
     const comparison = JSON.parse(await fs.readFile(result.comparisonPath, "utf8")) as {
       baseline: { reproduced: boolean; status: string };
@@ -216,20 +224,26 @@ describe("mantis before/after runtime", () => {
     await expect(
       fs.readFile(path.join(result.outputDir, "candidate", "candidate.mp4"), "utf8"),
     ).resolves.toBe("candidate video");
-    await expect(
-      fs.stat(path.join(`${result.outputDir}.worktrees`, "baseline")),
-    ).rejects.toMatchObject({
+    await expect(fs.stat(baselineWorktreeDir)).rejects.toMatchObject({
       code: "ENOENT",
     });
-    await expect(
-      fs.stat(path.join(`${result.outputDir}.worktrees`, "candidate")),
-    ).rejects.toMatchObject({
+    await expect(fs.stat(candidateWorktreeDir)).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
 
   it("supports the Discord thread filePath attachment Mantis scenario", async () => {
-    const runner = vi.fn(async (command: string, args: readonly string[]) => {
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      if (command === "git" && execution.stage === "worktree-add") {
+        await fs.mkdir(String(args[4]), { recursive: true });
+        return successfulCommandResult();
+      }
+      if (command === "git" && execution.stage === "worktree-cleanup") {
+        if (args[1] === "remove") {
+          await fs.rm(String(args[4]), { force: true, recursive: true });
+        }
+        return successfulCommandResult();
+      }
       if (command !== "pnpm" || !args.includes("openclaw")) {
         return successfulCommandResult();
       }
@@ -311,13 +325,20 @@ describe("mantis before/after runtime", () => {
       scenario: "discord-thread-reply-filepath-attachment",
     },
   ])("runs %s commands with stage-owned total deadlines", async ({ qaTimeoutMs, scenario }) => {
+    const outputDir = path.join(
+      repoRoot,
+      ".artifacts",
+      "qa-e2e",
+      "mantis",
+      `${scenario}-deadlines`,
+    );
     const executions: { stage: string; timeoutMs: number }[] = [];
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       executions.push({ stage: execution.stage, timeoutMs: execution.timeoutMs });
       if (command === "git" && execution.stage === "worktree-add") {
         await fs.mkdir(String(args[4]), { recursive: true });
       }
-      if (command === "git" && execution.stage === "worktree-cleanup") {
+      if (command === "git" && execution.stage === "worktree-cleanup" && args[1] === "remove") {
         await fs.rm(String(args[4]), { force: true, recursive: true });
       }
       if (command === "pnpm" && args.includes("openclaw")) {
@@ -337,26 +358,19 @@ describe("mantis before/after runtime", () => {
     });
 
     expect(result.status).toBe("pass");
-    await expect(
-      fs.stat(path.join(`${result.outputDir}.worktrees`, "baseline")),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(
-      fs.stat(path.join(`${result.outputDir}.worktrees`, "candidate")),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expect(fs.readdir(`${outputDir}.worktrees`)).resolves.toEqual([]);
     expect(executions).toEqual([
       { stage: "worktree-add", timeoutMs: 300_000 },
       { stage: "install", timeoutMs: 1_800_000 },
       { stage: "build", timeoutMs: 1_800_000 },
       { stage: "qa", timeoutMs: qaTimeoutMs },
       { stage: "worktree-cleanup", timeoutMs: expect.any(Number) },
+      { stage: "worktree-cleanup", timeoutMs: expect.any(Number) },
       { stage: "worktree-add", timeoutMs: 300_000 },
       { stage: "install", timeoutMs: 1_800_000 },
       { stage: "build", timeoutMs: 1_800_000 },
       { stage: "qa", timeoutMs: qaTimeoutMs },
+      { stage: "worktree-cleanup", timeoutMs: expect.any(Number) },
       { stage: "worktree-cleanup", timeoutMs: expect.any(Number) },
     ]);
     for (const execution of executions.filter((entry) => entry.stage === "worktree-cleanup")) {
@@ -372,7 +386,7 @@ describe("mantis before/after runtime", () => {
       if (command === "git" && execution.stage === "worktree-add") {
         await fs.mkdir(String(args[4]), { recursive: true });
       }
-      if (command === "git" && execution.stage === "worktree-cleanup") {
+      if (command === "git" && execution.stage === "worktree-cleanup" && args[1] === "remove") {
         await fs.rm(String(args[4]), { force: true, recursive: true });
       }
       if (command === "pnpm" && args.includes("openclaw")) {
@@ -397,15 +411,18 @@ describe("mantis before/after runtime", () => {
       repoRoot,
     });
 
-    expect(executions.slice(0, 5)).toEqual([
+    expect(executions.slice(0, 6)).toEqual([
       { stage: "worktree-add", timeoutMs: 111 },
       { stage: "install", timeoutMs: 222 },
       { stage: "build", timeoutMs: 1_800_000 },
       { stage: "qa", timeoutMs: 444 },
       { stage: "worktree-cleanup", timeoutMs: expect.any(Number) },
+      { stage: "worktree-cleanup", timeoutMs: expect.any(Number) },
     ]);
-    expect(executions[4]?.timeoutMs).toBeGreaterThan(0);
-    expect(executions[4]?.timeoutMs).toBeLessThanOrEqual(120_000);
+    for (const execution of executions.filter((entry) => entry.stage === "worktree-cleanup")) {
+      expect(execution.timeoutMs).toBeGreaterThan(0);
+      expect(execution.timeoutMs).toBeLessThanOrEqual(120_000);
+    }
   });
 
   it("does not dispatch a lane command when already aborted", async () => {
@@ -430,7 +447,8 @@ describe("mantis before/after runtime", () => {
 
   it("cleans up the exact worktree path after worktree-add times out", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "add-timeout");
-    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
+    let baselineWorktreeDir = "";
+    let registered = false;
     const calls: {
       args: readonly string[];
       command: string;
@@ -447,10 +465,17 @@ describe("mantis before/after runtime", () => {
         timeoutMs: execution.timeoutMs,
       });
       if (execution.stage === "worktree-add") {
+        baselineWorktreeDir = String(args[4]);
+        await fs.mkdir(baselineWorktreeDir, { recursive: true });
+        registered = true;
         return timedOutCommandResult();
       }
       if (execution.stage === "worktree-cleanup" && args[1] === "remove") {
         await fs.rm(String(args[4]), { force: true, recursive: true });
+        registered = false;
+      }
+      if (execution.stage === "worktree-cleanup" && args[1] === "list") {
+        return successfulCommandResult(registered ? worktreeListOutput(baselineWorktreeDir) : "");
       }
       return successfulCommandResult();
     });
@@ -468,6 +493,8 @@ describe("mantis before/after runtime", () => {
       }),
     ).rejects.toThrow("baseline worktree-add timed out after 123ms");
 
+    expect(path.dirname(baselineWorktreeDir)).toBe(`${outputDir}.worktrees`);
+    expect(path.basename(baselineWorktreeDir)).toMatch(/^baseline-/u);
     expect(calls).toEqual([
       {
         args: ["worktree", "add", "--detach", "--", baselineWorktreeDir, "baseline-ref"],
@@ -477,44 +504,31 @@ describe("mantis before/after runtime", () => {
         timeoutMs: 123,
       },
       {
+        args: ["worktree", "list", "--porcelain", "-z"],
+        command: "git",
+        signal: undefined,
+        stage: "worktree-cleanup",
+        timeoutMs: expect.any(Number),
+      },
+      {
         args: ["worktree", "remove", "--force", "--", baselineWorktreeDir],
         command: "git",
         signal: undefined,
         stage: "worktree-cleanup",
         timeoutMs: expect.any(Number),
       },
+      {
+        args: ["worktree", "list", "--porcelain", "-z"],
+        command: "git",
+        signal: undefined,
+        stage: "worktree-cleanup",
+        timeoutMs: expect.any(Number),
+      },
     ]);
-    expect(calls[1]?.timeoutMs).toBeGreaterThan(0);
-    expect(calls[1]?.timeoutMs).toBeLessThanOrEqual(456);
-  });
-
-  it("refuses to reuse an existing worktree directory", async () => {
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "existing-worktree");
-    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
-    const sentinelPath = path.join(baselineWorktreeDir, "keep.txt");
-    const publishedSentinelPath = path.join(outputDir, "baseline", "last-good.txt");
-    await fs.mkdir(baselineWorktreeDir, { recursive: true });
-    await fs.mkdir(path.dirname(publishedSentinelPath), { recursive: true });
-    await fs.writeFile(sentinelPath, "keep", "utf8");
-    await fs.writeFile(publishedSentinelPath, "last good evidence", "utf8");
-    const runner = vi.fn(async () => successfulCommandResult());
-
-    await expect(
-      runMantisBeforeAfter({
-        baseline: "baseline-ref",
-        candidate: "candidate-ref",
-        commandRunner: runner,
-        outputDir: ".artifacts/qa-e2e/mantis/existing-worktree",
-        repoRoot,
-        skipBuild: true,
-        skipInstall: true,
-      }),
-    ).rejects.toThrow(
-      `baseline worktree path already exists; refusing to reuse ${baselineWorktreeDir}`,
-    );
-    expect(runner).not.toHaveBeenCalled();
-    await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("keep");
-    await expect(fs.readFile(publishedSentinelPath, "utf8")).resolves.toBe("last good evidence");
+    for (const call of calls.filter((entry) => entry.stage === "worktree-cleanup")) {
+      expect(call.timeoutMs).toBeGreaterThan(0);
+      expect(call.timeoutMs).toBeLessThanOrEqual(456);
+    }
   });
 
   it("keeps one published comparison generation when the candidate lane fails", async () => {
@@ -522,7 +536,7 @@ describe("mantis before/after runtime", () => {
     const sentinels = await writePublishedGenerationSentinels(outputDir);
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       if (command === "git" && execution.stage === "worktree-add") {
-        if (String(args[4]).endsWith(`${path.sep}candidate`)) {
+        if (path.basename(String(args[4])).startsWith("candidate-")) {
           return failedCommandResult();
         }
         await fs.mkdir(String(args[4]), { recursive: true });
@@ -533,7 +547,9 @@ describe("mantis before/after runtime", () => {
         return successfulCommandResult();
       }
       if (command === "git" && execution.stage === "worktree-cleanup") {
-        await fs.rm(String(args[4]), { force: true, recursive: true });
+        if (args[1] === "remove") {
+          await fs.rm(String(args[4]), { force: true, recursive: true });
+        }
         return successfulCommandResult();
       }
       throw new Error(`unexpected ${execution.stage} command`);
@@ -555,7 +571,7 @@ describe("mantis before/after runtime", () => {
     await expectNoMantisTransientEvidence(outputDir);
   });
 
-  it("removes uncommitted staged evidence when worktree cleanup fails", async () => {
+  it("keeps the previous pointer when worktree cleanup fails", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-failure");
     const sentinels = await writePublishedGenerationSentinels(outputDir);
     let baselineWorktreeDir = "";
@@ -591,11 +607,11 @@ describe("mantis before/after runtime", () => {
     ).rejects.toThrow("baseline worktree cleanup left registered path");
 
     await expectPublishedGenerationSentinels(sentinels);
-    await expectNoMantisTransientEvidence(outputDir, { allowWorktreeRoot: true });
+    await expectNoMantisTransientEvidence(outputDir);
     await expect(fs.stat(baselineWorktreeDir)).resolves.toBeDefined();
   });
 
-  it("rolls back the complete comparison when generation promotion fails", async () => {
+  it("publishes without renaming a generation over the caller output directory", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "publish-failure");
     const sentinels = await writePublishedGenerationSentinels(outputDir);
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
@@ -608,180 +624,49 @@ describe("mantis before/after runtime", () => {
         return successfulCommandResult();
       }
       if (command === "git" && execution.stage === "worktree-cleanup") {
-        await fs.rm(String(args[4]), { force: true, recursive: true });
+        if (args[1] === "remove") {
+          await fs.rm(String(args[4]), { force: true, recursive: true });
+        }
         return successfulCommandResult();
       }
       throw new Error(`unexpected ${execution.stage} command`);
     });
     const originalRename = fs.rename.bind(fs);
-    let promotionFailed = false;
+    let directoryPromotionAttempted = false;
     const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
       if (
-        !promotionFailed &&
-        path.basename(String(source)) === "generation" &&
+        String(source).includes(`${path.sep}.mantis-generations${path.sep}`) &&
         path.resolve(String(target)) === outputDir
       ) {
-        promotionFailed = true;
-        throw Object.assign(new Error("generation promotion failed"), { code: "EACCES" });
+        directoryPromotionAttempted = true;
+        throw new Error("generation directory promotion is forbidden");
       }
       await originalRename(source, target);
     });
 
+    let result: Awaited<ReturnType<typeof runMantisBeforeAfter>>;
     try {
-      await expect(
-        runMantisBeforeAfter({
-          baseline: "baseline-ref",
-          candidate: "candidate-ref",
-          commandRunner: runner,
-          outputDir: ".artifacts/qa-e2e/mantis/publish-failure",
-          repoRoot,
-          skipBuild: true,
-          skipInstall: true,
-        }),
-      ).rejects.toThrow("generation promotion failed");
+      result = await runMantisBeforeAfter({
+        baseline: "baseline-ref",
+        candidate: "candidate-ref",
+        commandRunner: runner,
+        outputDir: ".artifacts/qa-e2e/mantis/publish-failure",
+        repoRoot,
+        skipBuild: true,
+        skipInstall: true,
+      });
     } finally {
       rename.mockRestore();
     }
 
-    expect(promotionFailed).toBe(true);
+    expect(directoryPromotionAttempted).toBe(false);
+    expect(result).toBeDefined();
+    if (!result) {
+      throw new Error("Mantis publication did not return a result");
+    }
+    await expect(fs.stat(result.outputDir)).resolves.toBeDefined();
     await expectPublishedGenerationSentinels(sentinels);
     await expectNoMantisTransientEvidence(outputDir);
-  });
-
-  it("fails closed when the worktree parent is replaced before fallback cleanup", async () => {
-    const outputDir = path.join(
-      repoRoot,
-      ".artifacts",
-      "qa-e2e",
-      "mantis",
-      "cleanup-parent-replaced",
-    );
-    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
-    const worktreeParentDir = path.dirname(baselineWorktreeDir);
-    const displacedParentDir = path.join(repoRoot, "displaced-worktree-parent");
-    const displacedSentinelPath = path.join(displacedParentDir, "baseline", "keep.txt");
-    const replacementSentinelPath = path.join(baselineWorktreeDir, "replacement.txt");
-    const stages: string[] = [];
-    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
-      stages.push(`${execution.stage}:${args[1] ?? ""}`);
-      if (command === "git" && execution.stage === "worktree-add") {
-        return successfulCommandResult();
-      }
-      if (command === "pnpm" && execution.stage === "qa") {
-        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
-        return successfulCommandResult();
-      }
-      if (command === "git" && execution.stage === "worktree-cleanup") {
-        if (args[1] === "remove") {
-          await fs.writeFile(path.join(baselineWorktreeDir, "keep.txt"), "keep", "utf8");
-          await fs.rename(worktreeParentDir, displacedParentDir);
-          await fs.mkdir(baselineWorktreeDir, { recursive: true });
-          await fs.writeFile(replacementSentinelPath, "replacement", "utf8");
-          return failedCommandResult();
-        }
-        return successfulCommandResult("");
-      }
-      throw new Error(`unexpected ${execution.stage} command`);
-    });
-
-    const result = await runMantisBeforeAfter({
-      baseline: "baseline-ref",
-      candidate: "candidate-ref",
-      commandRunner: runner,
-      outputDir: ".artifacts/qa-e2e/mantis/cleanup-parent-replaced",
-      repoRoot,
-      skipBuild: true,
-      skipInstall: true,
-    }).then(
-      () => ({ status: "fulfilled" as const }),
-      (error: unknown) => ({ error, status: "rejected" as const }),
-    );
-
-    expect(result.status).toBe("rejected");
-    if (result.status === "rejected") {
-      expect(result.error).toBeInstanceOf(AggregateError);
-      const aggregate = result.error as AggregateError;
-      const laneCleanup = aggregate.errors[0] as AggregateError;
-      expect((laneCleanup.errors[1] as Error).message).toContain(
-        `Mantis owned path was replaced before cleanup: ${baselineWorktreeDir}`,
-      );
-    }
-
-    expect(stages).toEqual([
-      "worktree-add:add",
-      `qa:${baselineWorktreeDir}`,
-      "worktree-cleanup:remove",
-      "worktree-cleanup:list",
-    ]);
-    await expect(fs.readFile(displacedSentinelPath, "utf8")).resolves.toBe("keep");
-    await expect(fs.readFile(replacementSentinelPath, "utf8")).resolves.toBe("replacement");
-  });
-
-  it("fails closed after a successful Git cleanup when the worktree target was replaced", async () => {
-    const outputDir = path.join(
-      repoRoot,
-      ".artifacts",
-      "qa-e2e",
-      "mantis",
-      "cleanup-target-replaced",
-    );
-    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
-    const displacedWorktreeDir = path.join(repoRoot, "displaced-worktree");
-    const displacedSentinelPath = path.join(displacedWorktreeDir, "keep.txt");
-    const replacementSentinelPath = path.join(baselineWorktreeDir, "replacement.txt");
-    const stages: string[] = [];
-    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
-      stages.push(`${execution.stage}:${args[1] ?? ""}`);
-      if (command === "git" && execution.stage === "worktree-add") {
-        return successfulCommandResult();
-      }
-      if (command === "pnpm" && execution.stage === "qa") {
-        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
-        return successfulCommandResult();
-      }
-      if (command === "git" && execution.stage === "worktree-cleanup") {
-        if (args[1] === "remove") {
-          await fs.writeFile(path.join(baselineWorktreeDir, "keep.txt"), "keep", "utf8");
-          await fs.rename(baselineWorktreeDir, displacedWorktreeDir);
-          await fs.mkdir(baselineWorktreeDir);
-          await fs.writeFile(replacementSentinelPath, "replacement", "utf8");
-          return successfulCommandResult();
-        }
-        return successfulCommandResult("");
-      }
-      throw new Error(`unexpected ${execution.stage} command`);
-    });
-
-    const result = await runMantisBeforeAfter({
-      baseline: "baseline-ref",
-      candidate: "candidate-ref",
-      commandRunner: runner,
-      outputDir: ".artifacts/qa-e2e/mantis/cleanup-target-replaced",
-      repoRoot,
-      skipBuild: true,
-      skipInstall: true,
-    }).then(
-      () => ({ status: "fulfilled" as const }),
-      (error: unknown) => ({ error, status: "rejected" as const }),
-    );
-
-    expect(result.status).toBe("rejected");
-    if (result.status === "rejected") {
-      expect(result.error).toBeInstanceOf(AggregateError);
-      const aggregate = result.error as AggregateError;
-      expect((aggregate.errors[1] as Error).message).toContain(
-        `Mantis owned path was replaced before cleanup: ${baselineWorktreeDir}`,
-      );
-    }
-
-    expect(stages).toEqual([
-      "worktree-add:add",
-      `qa:${baselineWorktreeDir}`,
-      "worktree-cleanup:remove",
-      "worktree-cleanup:list",
-    ]);
-    await expect(fs.readFile(displacedSentinelPath, "utf8")).resolves.toBe("keep");
-    await expect(fs.readFile(replacementSentinelPath, "utf8")).resolves.toBe("replacement");
   });
 
   it("accepts an already-absent unregistered worktree after Git cleanup fails", async () => {
@@ -792,8 +677,10 @@ describe("mantis before/after runtime", () => {
       "mantis",
       "cleanup-already-absent",
     );
+    const removedWorktreeDirs: string[] = [];
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       if (command === "git" && execution.stage === "worktree-add") {
+        await fs.mkdir(String(args[4]), { recursive: true });
         return successfulCommandResult();
       }
       if (command === "pnpm" && execution.stage === "qa") {
@@ -802,6 +689,7 @@ describe("mantis before/after runtime", () => {
       }
       if (command === "git" && execution.stage === "worktree-cleanup") {
         if (args[1] === "remove") {
+          removedWorktreeDirs.push(String(args[4]));
           await fs.rm(String(args[4]), { force: true, recursive: true });
           return failedCommandResult();
         }
@@ -821,12 +709,12 @@ describe("mantis before/after runtime", () => {
     });
 
     expect(result.status).toBe("pass");
-    await expect(fs.stat(path.join(`${outputDir}.worktrees`, "baseline"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.stat(path.join(`${outputDir}.worktrees`, "candidate"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    expect(removedWorktreeDirs).toHaveLength(2);
+    expect(removedWorktreeDirs.map((entry) => path.basename(entry))).toEqual([
+      expect.stringMatching(/^baseline-/u),
+      expect.stringMatching(/^candidate-/u),
+    ]);
+    await expect(fs.readdir(`${outputDir}.worktrees`)).resolves.toEqual([]);
   });
 
   it("keeps workload failure first when cleanup also fails", async () => {
@@ -864,43 +752,21 @@ describe("mantis before/after runtime", () => {
       expect((aggregate.cause as Error).message).toContain("baseline worktree-add failed to run");
       expect(aggregate.errors).toHaveLength(2);
       expect(aggregate.errors[0]).toBe(aggregate.cause);
-      expect(aggregate.errors[1]).toBeInstanceOf(AggregateError);
-      const cleanupAggregate = aggregate.errors[1] as AggregateError;
-      expect(cleanupAggregate.errors[0]).toBeInstanceOf(Error);
-      expect((cleanupAggregate.errors[0] as Error).message).toContain(
+      expect(aggregate.errors[1]).toBeInstanceOf(Error);
+      expect((aggregate.errors[1] as Error).message).toContain(
         "baseline worktree-cleanup failed to run",
       );
     }
   });
 
-  it("cleans the worktree before reading staged lane artifacts", async () => {
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "publish-order");
-    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
-    const cleanupStages: string[] = [];
-    let releaseArtifactRead: (() => void) | undefined;
-    const artifactReadRelease = new Promise<void>((resolve) => {
-      releaseArtifactRead = resolve;
-    });
-    let markArtifactReadStarted: (() => void) | undefined;
-    const artifactReadStarted = new Promise<void>((resolve) => {
-      markArtifactReadStarted = resolve;
-    });
-    const originalReadFile = fs.readFile.bind(fs);
-    const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, ...args) => {
-      const relativePath =
-        typeof filePath === "string"
-          ? path.relative(path.dirname(outputDir), path.resolve(filePath)).split(path.sep)
-          : [];
-      if (
-        relativePath[0]?.startsWith(".mantis-staged-run-") &&
-        relativePath[1] === "generation" &&
-        relativePath[2] === "baseline" &&
-        relativePath[3] === "discord-qa-summary.json"
-      ) {
-        markArtifactReadStarted?.();
-        await artifactReadRelease;
-      }
-      return await originalReadFile(filePath, ...args);
+  it("copies lane artifacts before asking Git to remove the worktree", async () => {
+    const events: string[] = [];
+    const originalCopy = fs.cp.bind(fs);
+    const copy = vi.spyOn(fs, "cp").mockImplementation(async (source, target, options) => {
+      const sourcePath = String(source);
+      const artifactMarker = `${path.sep}.artifacts${path.sep}`;
+      events.push(`copy:${sourcePath.slice(0, sourcePath.lastIndexOf(artifactMarker))}`);
+      await originalCopy(source, target, options);
     });
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       if (command === "git" && execution.stage === "worktree-add") {
@@ -912,31 +778,38 @@ describe("mantis before/after runtime", () => {
         return successfulCommandResult();
       }
       if (command === "git" && execution.stage === "worktree-cleanup") {
-        cleanupStages.push(String(args[4]));
-        await fs.rm(String(args[4]), { force: true, recursive: true });
+        if (args[1] === "remove") {
+          events.push(`remove:${String(args[4])}`);
+          await fs.rm(String(args[4]), { force: true, recursive: true });
+        }
         return successfulCommandResult();
       }
       throw new Error(`unexpected ${execution.stage} command`);
     });
 
     try {
-      const run = runMantisBeforeAfter({
-        baseline: "baseline-ref",
-        candidate: "candidate-ref",
-        commandRunner: runner,
-        outputDir: ".artifacts/qa-e2e/mantis/publish-order",
-        repoRoot,
-        skipBuild: true,
-        skipInstall: true,
-      });
-      await artifactReadStarted;
-      expect(cleanupStages).toContain(baselineWorktreeDir);
-      await expect(fs.stat(baselineWorktreeDir)).rejects.toMatchObject({ code: "ENOENT" });
-      releaseArtifactRead?.();
-      await expect(run).resolves.toMatchObject({ status: "pass" });
+      await expect(
+        runMantisBeforeAfter({
+          baseline: "baseline-ref",
+          candidate: "candidate-ref",
+          commandRunner: runner,
+          outputDir: ".artifacts/qa-e2e/mantis/publish-order",
+          repoRoot,
+          skipBuild: true,
+          skipInstall: true,
+        }),
+      ).resolves.toMatchObject({ status: "pass" });
     } finally {
-      releaseArtifactRead?.();
-      readFile.mockRestore();
+      copy.mockRestore();
+    }
+
+    const copies = events.filter((event) => event.startsWith("copy:"));
+    const removals = events.filter((event) => event.startsWith("remove:"));
+    expect(copies).toHaveLength(2);
+    expect(removals).toHaveLength(2);
+    for (const copyEvent of copies) {
+      const worktreeDir = copyEvent.slice("copy:".length);
+      expect(events.indexOf(copyEvent)).toBeLessThan(events.indexOf(`remove:${worktreeDir}`));
     }
   });
 });

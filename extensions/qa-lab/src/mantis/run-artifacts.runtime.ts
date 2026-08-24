@@ -4,10 +4,6 @@ import path from "node:path";
 import { root } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence-summary.js";
-import {
-  assertMantisDirectoryOwnership,
-  type MantisDirectoryOwnership,
-} from "./run-directory.runtime.js";
 
 type NormalizedScenarioSummary = {
   details?: string;
@@ -30,33 +26,6 @@ function isNotFoundError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-function createMantisPublishRollbackError(params: {
-  publishError: unknown;
-  rollbackErrors: unknown[];
-}): AggregateError {
-  return new AggregateError(
-    [params.publishError, ...params.rollbackErrors],
-    "Mantis could not publish the staged comparison or completely restore the previous generation",
-    { cause: params.publishError },
-  );
-}
-
-function toRootRelative(repoRoot: string, targetPath: string): string {
-  return path.relative(repoRoot, targetPath).split(path.sep).join(path.posix.sep);
-}
-
-function ownershipAtParent(
-  parent: MantisDirectoryOwnership,
-  target: MantisDirectoryOwnership,
-): MantisDirectoryOwnership {
-  return {
-    parentDevice: parent.targetDevice,
-    parentInode: parent.targetInode,
-    targetDevice: target.targetDevice,
-    targetInode: target.targetInode,
-  };
-}
-
 function throwIfMantisPublicationAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new Error("Mantis artifact publication aborted", { cause: signal.reason });
@@ -64,121 +33,47 @@ function throwIfMantisPublicationAborted(signal: AbortSignal | undefined): void 
 }
 
 export type MantisRunPublication = {
-  outputOwnership: MantisDirectoryOwnership;
-  previousRunDir: string;
-  previousRunOwnership: MantisDirectoryOwnership;
+  currentPath: string;
+  generationDir: string;
 };
 
+type MantisOutputRoot = Pick<Awaited<ReturnType<typeof root>>, "stat" | "write" | "writeJson">;
+
 export async function publishMantisRunOutput(params: {
+  generationDir: string;
   outputDir: string;
-  outputOwnership: MantisDirectoryOwnership;
-  repoRoot: string;
-  runWorkspaceDir: string;
-  runWorkspaceOwnership: MantisDirectoryOwnership;
+  outputRoot: MantisOutputRoot;
   signal?: AbortSignal;
-  stagedRunDir: string;
-  stagedRunOwnership: MantisDirectoryOwnership;
 }): Promise<MantisRunPublication> {
-  // Publish the entire evidence tree as one generation. The two directory
-  // renames can expose a brief absent target, but never a component-mixed run.
-  const previousRunDir = path.join(params.runWorkspaceDir, "previous");
-  const previousRunOwnership = ownershipAtParent(
-    params.runWorkspaceOwnership,
-    params.outputOwnership,
-  );
-  const publishedOwnership = {
-    parentDevice: params.outputOwnership.parentDevice,
-    parentInode: params.outputOwnership.parentInode,
-    targetDevice: params.stagedRunOwnership.targetDevice,
-    targetInode: params.stagedRunOwnership.targetInode,
-  } satisfies MantisDirectoryOwnership;
-  const repoRootHandle = await root(params.repoRoot);
-  const outputRelative = toRootRelative(params.repoRoot, params.outputDir);
-  const previousRelative = toRootRelative(params.repoRoot, previousRunDir);
-  const stagedRelative = toRootRelative(params.repoRoot, params.stagedRunDir);
-  let previousMoved = false;
-  let stagedMoved = false;
-
-  try {
-    await assertMantisDirectoryOwnership({
-      directoryPath: params.outputDir,
-      ownership: params.outputOwnership,
-      repoRoot: params.repoRoot,
-    });
-    await assertMantisDirectoryOwnership({
-      directoryPath: params.stagedRunDir,
-      ownership: params.stagedRunOwnership,
-      repoRoot: params.repoRoot,
-    });
-    throwIfMantisPublicationAborted(params.signal);
-
-    await repoRootHandle.move(outputRelative, previousRelative, { overwrite: true });
-    previousMoved = true;
-    await assertMantisDirectoryOwnership({
-      directoryPath: previousRunDir,
-      ownership: previousRunOwnership,
-      repoRoot: params.repoRoot,
-    });
-    throwIfMantisPublicationAborted(params.signal);
-
-    await repoRootHandle.move(stagedRelative, outputRelative, { overwrite: true });
-    stagedMoved = true;
-    await assertMantisDirectoryOwnership({
-      directoryPath: params.outputDir,
-      ownership: publishedOwnership,
-      repoRoot: params.repoRoot,
-    });
-    throwIfMantisPublicationAborted(params.signal);
-
-    return {
-      outputOwnership: publishedOwnership,
-      previousRunDir,
-      previousRunOwnership,
-    };
-  } catch (publishError) {
-    const rollbackErrors: unknown[] = [];
-    if (stagedMoved) {
-      try {
-        await assertMantisDirectoryOwnership({
-          directoryPath: params.outputDir,
-          ownership: publishedOwnership,
-          repoRoot: params.repoRoot,
-        });
-        await repoRootHandle.move(outputRelative, stagedRelative, { overwrite: true });
-        await assertMantisDirectoryOwnership({
-          directoryPath: params.stagedRunDir,
-          ownership: params.stagedRunOwnership,
-          repoRoot: params.repoRoot,
-        });
-      } catch (error) {
-        rollbackErrors.push(error);
-      }
-    }
-    if (previousMoved) {
-      try {
-        await assertMantisDirectoryOwnership({
-          directoryPath: previousRunDir,
-          ownership: previousRunOwnership,
-          repoRoot: params.repoRoot,
-        });
-        await repoRootHandle.move(previousRelative, outputRelative, { overwrite: true });
-        await assertMantisDirectoryOwnership({
-          directoryPath: params.outputDir,
-          ownership: params.outputOwnership,
-          repoRoot: params.repoRoot,
-        });
-      } catch (error) {
-        rollbackErrors.push(error);
-      }
-    }
-    if (rollbackErrors.length > 0) {
-      throw createMantisPublishRollbackError({
-        publishError,
-        rollbackErrors,
-      });
-    }
-    throw publishError;
+  const generationRelative = path
+    .relative(params.outputDir, params.generationDir)
+    .split(path.sep)
+    .join(path.posix.sep);
+  if (
+    generationRelative === "" ||
+    generationRelative === ".." ||
+    generationRelative.startsWith("../") ||
+    path.posix.isAbsolute(generationRelative)
+  ) {
+    throw new Error(`Mantis generation escaped the output directory: ${params.generationDir}`);
   }
+  const generationStat = await params.outputRoot.stat(generationRelative);
+  if (generationStat.isSymbolicLink || !generationStat.isDirectory) {
+    throw new Error(`Mantis generation is not a real directory: ${params.generationDir}`);
+  }
+
+  throwIfMantisPublicationAborted(params.signal);
+  // Clearing the fixed failure artifact first cannot invalidate the previous
+  // pointer. The following atomic JSON replacement is the only commit point.
+  await params.outputRoot.write("error.txt", "");
+  throwIfMantisPublicationAborted(params.signal);
+  const currentPath = path.join(params.outputDir, "mantis-current.json");
+  await params.outputRoot.writeJson(
+    "mantis-current.json",
+    { generation: generationRelative, schemaVersion: 1 },
+    { space: 2 },
+  );
+  return { currentPath, generationDir: params.generationDir };
 }
 
 function remapPublishedArtifactPath(params: {

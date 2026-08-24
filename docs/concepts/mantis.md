@@ -91,16 +91,25 @@ labels (`extensions/qa-lab/src/mantis/run.runtime.ts`):
 (default `convex`), `--credential-role` (default `ci`), `--provider-mode`
 (default `live-frontier`), `--fast` (default on), `--skip-install`, `--skip-build`.
 
-The runner creates detached `git worktree` checkouts for baseline and
-candidate under `<output-dir>/worktrees/`, runs `pnpm install`/`pnpm build` in
-each (unless skipped), then runs
+The runner treats `--output-dir` as a stable container and creates detached
+`git worktree` checkouts under `<output-dir>.worktrees/`. Each checkout has a
+unique `<lane>-<run-id>` name, so an interrupted run cannot collide with a
+later baseline or candidate. The runner runs `pnpm install`/`pnpm build` in
+each checkout (unless skipped), then runs
 `pnpm openclaw qa discord --scenario <id> --model openai/gpt-5.4 --alt-model openai/gpt-5.4 --allow-failures`
 against each worktree. Each lane writes `discord-qa-reaction-timelines.json`
-plus a `<scenario-id>-timeline.html`/`.png` pair; the runner copies this
-evidence back under `baseline/`/`candidate/`, writes `comparison.json`,
-`mantis-report.md`, and `mantis-evidence.json` in the output directory, and
-exits nonzero if the comparison did not pass (baseline `fail` and candidate
-`pass`).
+plus a `<scenario-id>-timeline.html`/`.png` pair. Before asking Git to remove
+the checkout, the runner copies the lane evidence into a fresh immutable
+generation under `<output-dir>/.mantis-generations/`.
+
+After both lanes finish, the runner writes `comparison.json`,
+`mantis-report.md`, and `mantis-evidence.json` in that generation. An atomic
+replacement of `<output-dir>/mantis-current.json` is the only publication
+commit point. Readers should resolve the `generation` field in that file to
+find the current `baseline/`, `candidate/`, report, manifest, and comparison.
+Existing files in the output container and older generations are preserved.
+The command exits nonzero if the comparison did not pass (baseline `fail` and
+candidate `pass`).
 
 The second Discord scenario (`discord-thread-reply-filepath-attachment`) posts
 a parent message with the driver bot, creates a real thread, calls the SUT's
@@ -327,16 +336,36 @@ Artifact kinds: `timeline` (deterministic before/after screenshot),
 GIF from the recording), `motionClip` (motion-trimmed MP4), `fullVideo` (full
 recording), `metadata` (JSON/log sidecar), `report` (Markdown report).
 
-A run's on-disk artifact layout:
+For `qa mantis run`, the stable output container and its current immutable
+generation have this layout:
 
 ```text
 .artifacts/qa-e2e/mantis/<run-id>/
-  mantis-report.md
-  mantis-evidence.json
-  baseline/
-  candidate/
-  comparison.json
+  error.txt
+  mantis-current.json
+  .mantis-generations/
+    generation-<pid>-<uuid>/
+      mantis-report.md
+      mantis-evidence.json
+      baseline/
+      candidate/
+      comparison.json
+.artifacts/qa-e2e/mantis/<run-id>.worktrees/
+  baseline-<pid>-<uuid>/
+  candidate-<pid>-<uuid>/
 ```
+
+The worktree root is normally empty after a completed run; lane directories
+appear only while active or when cleanup deliberately preserves one for
+diagnosis.
+
+`error.txt` is written at the container root when a run fails and atomically
+cleared after a successful publication. A failure or crash before publication
+leaves `mantis-current.json` pointing to the previous complete generation.
+Mantis does not recursively delete a worktree after Git no longer owns its
+registration: if cleanup fails, inspect the retained unique directory under
+`<output-dir>.worktrees/` together with `error.txt`, then remove it through Git
+after resolving the failure.
 
 Screenshots are evidence, not secrets, but still need redaction discipline:
 private channel names, usernames, or message content may appear. Set
