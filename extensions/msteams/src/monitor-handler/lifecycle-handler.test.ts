@@ -170,6 +170,7 @@ describe("handleMSTeamsLifecycleRemove", () => {
         providerOverride: "openai",
         modelOverride: "gpt-5",
         modelOverrideSource: "user",
+        modelOverrideRouteResolution: "resolved",
         modelOverrideFallbackOriginProvider: "anthropic",
         modelOverrideFallbackOriginModel: "claude-opus-4",
         authProfileOverride: "work",
@@ -265,6 +266,7 @@ describe("handleMSTeamsLifecycleRemove", () => {
     expect(store["msteams:direct:user-aad"].providerOverride).toBe("openai");
     expect(store["msteams:direct:user-aad"].modelOverride).toBe("gpt-5");
     expect(store["msteams:direct:user-aad"].modelOverrideSource).toBe("user");
+    expect(store["msteams:direct:user-aad"].modelOverrideRouteResolution).toBe("resolved");
     expect(store["msteams:direct:user-aad"].modelOverrideFallbackOriginProvider).toBeUndefined();
     expect(store["msteams:direct:user-aad"].modelOverrideFallbackOriginModel).toBeUndefined();
     expect(store["msteams:direct:user-aad"].authProfileOverride).toBe("work");

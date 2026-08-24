@@ -112,6 +112,7 @@ type MSTeamsResetCandidateEntry = {
   providerOverride?: unknown;
   modelOverride?: unknown;
   modelOverrideSource?: unknown;
+  modelOverrideRouteResolution?: unknown;
   modelOverrideFallbackOriginProvider?: unknown;
   modelOverrideFallbackOriginModel?: unknown;
   authProfileOverride?: unknown;
@@ -190,6 +191,7 @@ function copyResetPreservedSelection<T extends MSTeamsResetCandidateEntry>(
   if (preserveLegacyUserModelOverride && normalizeOptionalResetString(source.modelOverride)) {
     copyDefinedResetField(target, source, "providerOverride");
     copyDefinedResetField(target, source, "modelOverride");
+    copyDefinedResetField(target, source, "modelOverrideRouteResolution");
     // SAFETY: T's reset-candidate slot accepts the preserved user provenance value.
     target.modelOverrideSource = "user" as T[keyof T];
   }
