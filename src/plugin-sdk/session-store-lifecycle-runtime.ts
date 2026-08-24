@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import {
   resolveSessionFilePathCore as resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -81,8 +80,12 @@ async function publishReleasedOwnerReplacement(params: {
   ) => string;
 }): Promise<boolean> {
   const current = loadSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath });
-  if (!current || !isDeepStrictEqual(current, params.expectedReservedEntry)) {
-    // A writer that advanced the reserved row owns the newer state. Never
+  if (
+    !current ||
+    current.sessionId !== params.expectedReservedEntry.sessionId ||
+    current.lifecycleRevision !== params.expectedReservedEntry.lifecycleRevision
+  ) {
+    // A different identity or lifecycle generation owns the newer state. Never
     // overwrite it merely to clean up this failed lifecycle transaction.
     return false;
   }
@@ -100,7 +103,11 @@ async function publishReleasedOwnerReplacement(params: {
       storePath: params.storePath,
       target: { canonicalKey: params.sessionKey, storeKeys: [params.sessionKey] },
       buildNextEntry: ({ currentEntry }) => {
-        if (!currentEntry || !isDeepStrictEqual(currentEntry, params.expectedReservedEntry)) {
+        if (
+          !currentEntry ||
+          currentEntry.sessionId !== params.expectedReservedEntry.sessionId ||
+          currentEntry.lifecycleRevision !== params.expectedReservedEntry.lifecycleRevision
+        ) {
           throw new SessionLifecycleResetSkipped();
         }
         // The physical harness is already gone. Publish a minimal fresh row so

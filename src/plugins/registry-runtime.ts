@@ -774,20 +774,38 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           }
           const ownerRecord = pluginRuntimeRecordById.get(pluginId);
           const channel: PluginRuntime["channel"] = ownerRecord
-            ? resolveRecordChannelRuntime(ownerRecord, true)
+            ? resolveRecordChannelRuntime(ownerRecord, false)
             : getRuntimeProperty();
+          let lifecycleOwner = ownerRecord
+            ? registeredAdmissionOwnerByRecord.get(ownerRecord)
+            : undefined;
+          const requireActiveLifecycleOwner = (): PluginRecord => {
+            if (!lifecycleOwner && ownerRecord) {
+              resolveRecordChannelRuntime(ownerRecord, false);
+              lifecycleOwner = registeredAdmissionOwnerByRecord.get(ownerRecord);
+            }
+            if (!ownerRecord || !lifecycleOwner?.isLive()) {
+              throw new Error(`Plugin "${pluginId}" channel session runtime is no longer active.`);
+            }
+            return ownerRecord;
+          };
           const scopedSession = {
             ...channel.session,
             resetSessionEntryLifecycle: async (params) =>
               await runWithPluginScope(() => {
-                const record =
-                  pluginRuntimeRecordById.get(pluginId) ??
-                  registry.plugins.find((entry) => entry.id === pluginId);
+                // The retained runtime must still own the exact active plugin generation;
+                // otherwise revocation or replacement would leave mutation authority alive.
+                const activeOwnerRecord = requireActiveLifecycleOwner();
                 return resetPluginChannelSessionEntryLifecycle({
-                  channelIds: record?.channelIds ?? [],
+                  channelIds: activeOwnerRecord.channelIds,
                   pluginId,
                   request: params,
-                  reset: registryParams.runtime.agent.session.resetSessionEntryLifecycle,
+                  reset: async (request) => {
+                    requireActiveLifecycleOwner();
+                    return await registryParams.runtime.agent.session.resetSessionEntryLifecycle(
+                      request,
+                    );
+                  },
                   resolveLockedSessionHarnessRegistration,
                 });
               }),
@@ -1035,6 +1053,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
     resolveRegisteredChannelRuntime: (record: PluginRecord) =>
       resolveRecordChannelRuntime(record, false),
     setPluginRuntimeRecord: (record: PluginRecord) => {
+      const previousRecord = pluginRuntimeRecordById.get(record.id);
+      if (previousRecord && previousRecord !== record) {
+        activePluginRuntimeRecords.delete(previousRecord);
+        revokePluginRecordLifecycleEpoch(registry, previousRecord);
+        pluginRuntimeById.delete(record.id);
+      }
       pluginRuntimeRecordById.set(record.id, record);
       activePluginRuntimeRecords.add(record);
     },
@@ -1047,6 +1071,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         registeredAdmissionOwnerByRecord.delete(ownedRecord);
         if (registeredRuntimeRecordById.get(pluginId) === ownedRecord) {
           registeredRuntimeRecordById.delete(pluginId);
+        }
+        if (pluginRuntimeRecordById.get(pluginId) === ownedRecord) {
+          pluginRuntimeRecordById.delete(pluginId);
+          pluginRuntimeById.delete(pluginId);
         }
       }
     },

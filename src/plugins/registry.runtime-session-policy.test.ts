@@ -6,6 +6,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRecord } from "./loader-records.js";
+import type { OpenClawPluginApi } from "./plugin-api.types.js";
+import { markPluginRegistryActive } from "./registry-lifecycle.js";
 import { createPluginRegistry } from "./registry.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -36,6 +38,27 @@ function createRecord(params: { id: string; channelIds?: string[] }) {
   });
   record.channelIds = params.channelIds ?? [];
   return record;
+}
+
+function registerTestChannel(api: OpenClawPluginApi, id: string) {
+  api.registerChannel({
+    plugin: {
+      id,
+      meta: {
+        id,
+        label: id,
+        selectionLabel: id,
+        docsPath: `/channels/${id}`,
+        blurb: "test channel",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    },
+  });
 }
 
 describe("plugin registry runtime session policy", () => {
@@ -79,19 +102,22 @@ describe("plugin registry runtime session policy", () => {
       });
 
       const pluginRegistry = createTestRegistry(runtime);
-      const ownerApi = pluginRegistry.createApi(createRecord({ id: "codex-owner" }), {
+      const ownerRecord = createRecord({ id: "codex-owner" });
+      const teamsRecord = createRecord({ id: "msteams", channelIds: ["msteams"] });
+      const otherRecord = createRecord({ id: "other-plugin" });
+      const voiceRecord = createRecord({ id: "voice-call" });
+      const ownerApi = pluginRegistry.createApi(ownerRecord, {
         config: emptyConfig,
       });
-      const teamsApi = pluginRegistry.createApi(
-        createRecord({ id: "msteams", channelIds: ["msteams"] }),
-        { config: emptyConfig },
-      );
-      const otherApi = pluginRegistry.createApi(createRecord({ id: "other-plugin" }), {
+      const teamsApi = pluginRegistry.createApi(teamsRecord, { config: emptyConfig });
+      const otherApi = pluginRegistry.createApi(otherRecord, {
         config: emptyConfig,
       });
-      const voiceApi = pluginRegistry.createApi(createRecord({ id: "voice-call" }), {
+      const voiceApi = pluginRegistry.createApi(voiceRecord, {
         config: emptyConfig,
       });
+      registerTestChannel(teamsApi, "msteams");
+      registerTestChannel(otherApi, "other-plugin");
       const harnessReset = vi.fn(async () => {});
       ownerApi.registerAgentHarness({
         id: "codex",
@@ -103,6 +129,11 @@ describe("plugin registry runtime session policy", () => {
           throw new Error("unused");
         },
       });
+      pluginRegistry.registry.plugins.push(ownerRecord, teamsRecord, otherRecord, voiceRecord);
+      markPluginRegistryActive(pluginRegistry.registry);
+      for (const registration of pluginRegistry.registry.channels) {
+        expect(registration.resolveChannelRuntime?.()).toBeDefined();
+      }
 
       await expect(
         voiceApi.runtime.agent.session.resetSessionEntryLifecycle({
@@ -176,6 +207,67 @@ describe("plugin registry runtime session policy", () => {
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }
+  });
+
+  it("rejects a retained channel reset runtime after its plugin record is revoked", async () => {
+    const runtime = createPluginRuntime();
+    const reset = vi.spyOn(runtime.agent.session, "resetSessionEntryLifecycle");
+    const pluginRegistry = createTestRegistry(runtime);
+    const teamsRecord = createRecord({ id: "msteams", channelIds: ["msteams"] });
+    const teamsApi = pluginRegistry.createApi(teamsRecord, { config: emptyConfig });
+    registerTestChannel(teamsApi, "msteams");
+    pluginRegistry.registry.plugins.push(teamsRecord);
+    markPluginRegistryActive(pluginRegistry.registry);
+    expect(pluginRegistry.registry.channels[0]?.resolveChannelRuntime?.()).toBeDefined();
+    const retainedSessionRuntime = teamsApi.runtime.channel.session;
+
+    pluginRegistry.rollbackPluginGlobalSideEffects("msteams", teamsRecord);
+
+    await expect(
+      retainedSessionRuntime.resetSessionEntryLifecycle({
+        channelId: "msteams",
+        sessionKey: "agent:main:msteams:direct:user-aad",
+        storePath: "/tmp/unused-session-store",
+        update: () => ({ updatedAt: 0 }),
+      }),
+    ).rejects.toThrow('Plugin "msteams" channel session runtime is no longer active.');
+    expect(reset).not.toHaveBeenCalled();
+  });
+
+  it("rejects a replaced channel reset runtime while the replacement remains active", async () => {
+    const runtime = createPluginRuntime();
+    const reset = vi
+      .spyOn(runtime.agent.session, "resetSessionEntryLifecycle")
+      .mockResolvedValue(null);
+    const pluginRegistry = createTestRegistry(runtime);
+    const firstRecord = createRecord({ id: "msteams", channelIds: ["msteams"] });
+    const firstApi = pluginRegistry.createApi(firstRecord, { config: emptyConfig });
+    registerTestChannel(firstApi, "msteams");
+    pluginRegistry.registry.plugins.push(firstRecord);
+    markPluginRegistryActive(pluginRegistry.registry);
+    expect(pluginRegistry.registry.channels[0]?.resolveChannelRuntime?.()).toBeDefined();
+    const retainedSessionRuntime = firstApi.runtime.channel.session;
+
+    pluginRegistry.rollbackPluginGlobalSideEffects("msteams", firstRecord);
+    pluginRegistry.registry.plugins.splice(0, 1);
+    const replacementRecord = createRecord({ id: "msteams", channelIds: ["msteams"] });
+    const replacementApi = pluginRegistry.createApi(replacementRecord, { config: emptyConfig });
+    registerTestChannel(replacementApi, "msteams");
+    pluginRegistry.registry.plugins.push(replacementRecord);
+    expect(pluginRegistry.registry.channels[0]?.resolveChannelRuntime?.()).toBeDefined();
+    const replacementSessionRuntime = replacementApi.runtime.channel.session;
+    const request = {
+      channelId: "msteams",
+      sessionKey: "agent:main:msteams:direct:user-aad",
+      storePath: "/tmp/unused-session-store",
+      update: () => ({ updatedAt: 0 }),
+    };
+
+    await expect(retainedSessionRuntime.resetSessionEntryLifecycle(request)).rejects.toThrow(
+      'Plugin "msteams" channel session runtime is no longer active.',
+    );
+    await expect(replacementSessionRuntime.resetSessionEntryLifecycle(request)).resolves.toBeNull();
+    expect(reset).toHaveBeenCalledTimes(1);
   });
 
   it("guards branch, rewind, and fork gateway mutations for harness-owned sessions", async () => {
