@@ -110,6 +110,27 @@ function resolveSharedChatNoun(chatType?: string | null): "group chat" | "channe
 }
 
 /**
+ * message_tool_only delivery guidance, split so the visibility decision cannot be
+ * read as a delivery choice: `mechanism` states the single delivery path as a fact,
+ * `gate` gives that decision exactly two adjacent exits. Never pair "no visible
+ * response is needed" with "your final answer stays private" — that reads as a
+ * sanctioned third option and turns a decided reply into a silent non-delivery.
+ */
+function buildMessageToolOnlyDelivery(params: {
+  destinationLabel: string;
+  responseLabel: string;
+}): { mechanism: string; gate: string[] } {
+  const { destinationLabel, responseLabel } = params;
+  return {
+    mechanism: `In ${destinationLabel} the message tool with action=send is your only way to be heard; the target defaults to ${destinationLabel}. Your normal final answer is private and is never posted to ${destinationLabel}.`,
+    gate: [
+      `If this turn needs no ${responseLabel}, do not call message(action=send) and end the turn.`,
+      "If it does, deliver it with message(action=send) before the turn ends; a reply left in your final answer reaches nobody.",
+    ],
+  };
+}
+
+/**
  * Builds trusted group/channel delivery guidance.
  *
  * Room names, members, and history are rendered separately as untrusted inbound
@@ -124,16 +145,20 @@ export function buildGroupChatContext(params: {
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const provider = normalizeOptionalLowercaseString(params.sessionCtx.Provider);
-  const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const sharedChatNoun = resolveSharedChatNoun(params.sessionCtx.ChatType);
   const destinationLabel = sharedChatNoun === "channel" ? "this channel" : "this group chat";
+  const toolOnlyDelivery =
+    params.sourceReplyDeliveryMode === "message_tool_only"
+      ? buildMessageToolOnlyDelivery({
+          destinationLabel,
+          responseLabel: `visible ${sharedChatNoun === "channel" ? "channel" : "group"} response`,
+        })
+      : undefined;
 
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} ${sharedChatNoun}.`);
-  if (messageToolOnly) {
-    lines.push(
-      `Normal final replies are private and are not automatically sent to ${destinationLabel}. To post visible output here, use the message tool with action=send; the target defaults to ${destinationLabel}.`,
-    );
+  if (toolOnlyDelivery) {
+    lines.push(toolOnlyDelivery.mechanism);
   } else {
     lines.push(
       `Your text replies are automatically sent to ${destinationLabel} unless the current-turn context says final replies stay private. For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send). Use message(action=send) only when you need to send files, images, or other attachments to this same ${sharedChatNoun === "channel" ? "channel/thread" : "group/topic"}.`,
@@ -157,12 +182,13 @@ export function buildGroupChatContext(params: {
     "When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value.",
   );
   const canUseSilentReply =
-    !messageToolOnly && params.silentToken && params.silentReplyPolicy !== "disallow";
-  if (messageToolOnly) {
-    lines.push(
-      `If no visible ${sharedChatNoun === "channel" ? "channel" : "group"} response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to ${destinationLabel}.`,
-    );
+    !toolOnlyDelivery && params.silentToken && params.silentReplyPolicy !== "disallow";
+  if (toolOnlyDelivery) {
+    // Selectivity gates whether to speak; the gate below owns how. Naming the split
+    // stops "be extremely selective" from reading as permission to answer privately.
+    lines.push("Selectivity governs whether you reply, never how you deliver it.");
     lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
+    lines.push(...toolOnlyDelivery.gate);
   }
   if (canUseSilentReply) {
     lines.push(
@@ -188,16 +214,14 @@ export function buildDirectChatContext(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
-  const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} direct conversation.`);
-  if (messageToolOnly) {
-    lines.push(
-      "Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation.",
-    );
-    lines.push(
-      "If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.",
-    );
+  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+    const delivery = buildMessageToolOnlyDelivery({
+      destinationLabel: "this conversation",
+      responseLabel: "visible direct response",
+    });
+    lines.push(delivery.mechanism, ...delivery.gate);
     return lines.join(" ");
   }
   lines.push(

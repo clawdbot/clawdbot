@@ -58,8 +58,7 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
       silentToken: "NO_REPLY",
     });
-    expect(toolOnlyContext).toContain("Normal final replies are private");
-    expect(toolOnlyContext).toContain("message tool with action=send");
+    expect(toolOnlyContext).toContain("message tool with action=send is your only way to be heard");
     expect(toolOnlyContext).toContain("Be a good group participant");
     expect(toolOnlyContext).toContain("Avoid Markdown tables");
     expect(toolOnlyContext).toContain("wrap bare URLs");
@@ -117,11 +116,87 @@ describe("group runtime loading", () => {
       sessionCtx: { ChatType: "direct", Provider: "telegram" },
       sourceReplyDeliveryMode: "message_tool_only",
     });
-    expect(toolOnlyContext).toContain("Normal final replies are private");
-    expect(toolOnlyContext).toContain("message tool with action=send");
+    expect(toolOnlyContext).toContain("message tool with action=send is your only way to be heard");
     expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).not.toContain("NO_REPLY");
     expect(toolOnlyContext).not.toContain("Your replies are automatically sent");
+  });
+
+  // The prompt failure this pins: an agent that has already decided to answer reads
+  // "your final answer stays private" as a sanctioned quiet way to answer, emits plain
+  // text, calls no tool, and the person waiting gets nothing. Both message_tool_only
+  // surfaces must state one delivery path and must never offer a private-answer exit.
+  it.each([
+    {
+      name: "group chat",
+      context: () =>
+        groups.buildGroupChatContext({
+          sessionCtx: { ChatType: "group", Provider: "whatsapp" },
+          sourceReplyDeliveryMode: "message_tool_only",
+          silentReplyPolicy: "allow",
+          silentToken: "NO_REPLY",
+        }),
+      destination: "this group chat",
+      responseLabel: "visible group response",
+    },
+    {
+      name: "channel",
+      context: () =>
+        groups.buildGroupChatContext({
+          sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+          sourceReplyDeliveryMode: "message_tool_only",
+        }),
+      destination: "this channel",
+      responseLabel: "visible channel response",
+    },
+    {
+      name: "direct conversation",
+      context: () =>
+        groups.buildDirectChatContext({
+          sessionCtx: { ChatType: "direct", Provider: "telegram" },
+          sourceReplyDeliveryMode: "message_tool_only",
+        }),
+      destination: "this conversation",
+      responseLabel: "visible direct response",
+    },
+  ])(
+    "keeps the message_tool_only reply decision separable from its delivery path: $name",
+    ({ context, destination, responseLabel }) => {
+      const prompt = context();
+
+      // Mechanism: exactly one delivery path, stated as a fact about the destination.
+      expect(prompt).toContain(
+        `In ${destination} the message tool with action=send is your only way to be heard`,
+      );
+      expect(prompt).toContain(
+        `Your normal final answer is private and is never posted to ${destination}.`,
+      );
+
+      // Gate: both exits adjacent, and the "no reply" exit never grants a private answer.
+      expect(prompt).toContain(
+        `If this turn needs no ${responseLabel}, do not call message(action=send) and end the turn. If it does, deliver it with message(action=send) before the turn ends; a reply left in your final answer reaches nobody.`,
+      );
+      expect(prompt).not.toContain("stays private and will not be posted");
+      expect(prompt).not.toMatch(/no visible[^.]*response is needed[^.]*\.\s*Your normal final/u);
+    },
+  );
+
+  it("scopes the whether-versus-how reminder to group message_tool_only turns", () => {
+    const selectivitySplit = "Selectivity governs whether you reply, never how you deliver it.";
+    expect(
+      groups.buildGroupChatContext({
+        sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    ).toContain(selectivitySplit);
+    expect(
+      groups.buildGroupChatContext({
+        sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+        sourceReplyDeliveryMode: "automatic",
+        silentReplyPolicy: "allow",
+        silentToken: "NO_REPLY",
+      }),
+    ).not.toContain(selectivitySplit);
   });
 
   it("reads markdown table guidance from channel metadata", () => {
