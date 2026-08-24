@@ -402,7 +402,7 @@ jobs:
           ${{
             always() &&
             (
-              steps.collect.outputs.comparison_status == 'fail' ||
+              steps.collect.outputs.comparison_status != 'pass' ||
               steps.cleanup.outcome == 'failure' ||
               steps.release.outcome == 'failure' ||
               steps.publish.outcome == 'failure'

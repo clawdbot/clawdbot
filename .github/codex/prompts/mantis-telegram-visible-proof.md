@@ -48,8 +48,9 @@ lane cannot establish the needed fact. Inspect the resulting files under
 `$MANTIS_OUTPUT_DIR/baseline` and `$MANTIS_OUTPUT_DIR/candidate`, including the
 complete `mantis-lane-facts.json` event/request streams and media.
 
-Then write `$MANTIS_OUTPUT_DIR/agent-evidence.json`. This is only the publication
-summary, not a scenario contract:
+Then write `$MANTIS_OUTPUT_DIR/agent-evidence.json`. This is Codex's advisory
+judgment for publication, not a scenario contract or an independently derived
+verdict:
 
 ```json
 {
@@ -79,6 +80,7 @@ summary, not a scenario contract:
 `outcome` is `pass`, `blocked`, or `fail`; `pass` is true only for `pass`.
 Everything else is free-form judgment. The trusted collector replaces refs,
 attestations, and artifact paths from the independently recorded lane facts.
+Readers receive both the advisory judgment and the complete raw evidence.
 
 Do not stop at a plan or handoff. Complete the proof and write the summary, or
 write a precise blocked result after exhausting useful in-scope experiments.

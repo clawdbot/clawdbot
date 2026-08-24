@@ -51,6 +51,17 @@ describe("Mantis Telegram proof workflow", () => {
     }
   });
 
+  it("stops Codex and snapshots its judgment before trusted collection", () => {
+    const collect = readFileSync("scripts/mantis/telegram-visible-collect-proof.sh", "utf8");
+    const stop = collect.indexOf("pkill -TERM -u codex");
+    const snapshot = collect.indexOf('install -m 0400 "$output_root/agent-evidence.json"');
+    const build = collect.indexOf("telegram-visible-proof.mjs collect");
+    expect(stop).toBeGreaterThan(-1);
+    expect(snapshot).toBeGreaterThan(stop);
+    expect(build).toBeGreaterThan(snapshot);
+    expect(collect).toContain("${RUNNER_TEMP}/mantis-trusted-evidence-");
+  });
+
   it("retains the real userbot, isolated SUT, recorder, lease, and cleanup", () => {
     const install = readFileSync("scripts/mantis/telegram-visible-install-tools.sh", "utf8");
     const credential = readFileSync("scripts/mantis/telegram-visible-lease-user.sh", "utf8");
