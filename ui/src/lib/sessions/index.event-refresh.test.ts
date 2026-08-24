@@ -285,11 +285,27 @@ describe("event-driven session list refresh", () => {
   });
 
   it.each([
-    { filter: "ownerId", query: { ownerId: "profile-ada" } },
-    { filter: "involvingMe", query: { involvingMe: true } },
+    {
+      filter: "ownerId",
+      query: { ownerId: "profile-ada" },
+      applyFilter: (sessions: ReturnType<typeof createSessionCapability>) =>
+        sessions.setOwnerFilter("profile-ada"),
+    },
+    {
+      filter: "involvingMe",
+      query: { involvingMe: true },
+      applyFilter: (sessions: ReturnType<typeof createSessionCapability>) =>
+        sessions.setInvolvingMeFilter(true),
+    },
+    {
+      filter: "search",
+      query: { search: "Ada" },
+      applyFilter: (sessions: ReturnType<typeof createSessionCapability>) =>
+        sessions.refresh({ agentId: "main", search: "Ada", force: true }),
+    },
   ])(
     "refreshes the $filter-filtered primary roster after a terminal session message",
-    async ({ filter, query }) => {
+    async ({ applyFilter, query }) => {
       vi.useFakeTimers();
       const key = "agent:main:main";
       let matchesFilteredRoster = true;
@@ -299,14 +315,18 @@ describe("event-driven session list refresh", () => {
         updatedAt: 1,
         hasActiveRun: true,
         status: "running" as const,
+        label: "Ada",
         owner: { actor: { type: "human" as const, id: "profile-ada", label: "Ada" } },
       };
       const request = vi.fn(
-        async (method: string, params?: { ownerId?: string; involvingMe?: boolean }) => {
+        async (
+          method: string,
+          params?: { ownerId?: string; involvingMe?: boolean; search?: string },
+        ) => {
           if (method !== "sessions.list") {
             throw new Error(`Unexpected request: ${method}`);
           }
-          const filtered = Boolean(params?.ownerId || params?.involvingMe);
+          const filtered = Boolean(params?.ownerId || params?.involvingMe || params?.search);
           return sessionsResult(
             matchesFilteredRoster ? 1 : 2,
             filtered && !matchesFilteredRoster ? [] : [row],
@@ -319,9 +339,7 @@ describe("event-driven session list refresh", () => {
 
       try {
         await sessions.refresh({ agentId: "main", force: true });
-        await (filter === "ownerId"
-          ? sessions.setOwnerFilter("profile-ada")
-          : sessions.setInvolvingMeFilter(true));
+        await applyFilter(sessions);
         expect(sessions.state.result?.sessions.map((session) => session.key)).toEqual([key]);
         request.mockClear();
         matchesFilteredRoster = false;
@@ -338,6 +356,7 @@ describe("event-driven session list refresh", () => {
               updatedAt: 2,
               hasActiveRun: false,
               status: "done",
+              label: "Bob",
               owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
             },
           },

@@ -552,9 +552,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return refresh({ ...options, force: true });
     },
     lastOptions: () => lastListOptions,
-    // Ownership and participation membership can only be reevaluated by the Gateway.
-    canApplyPrimarySnapshot: () =>
-      !lastListOptions.ownerId?.trim() && lastListOptions.involvingMe !== true,
+    // Gateway-owned membership filters require an authoritative list refresh.
+    canApplyPrimarySnapshot: () => isPrimarySessionListQuery(lastListOptions),
     scheduleEvent(options: { agentId?: string | null; primarySnapshotApplied?: boolean } = {}) {
       if (!options.primarySnapshotApplied) {
         eventRefreshCoordinator.schedule();
