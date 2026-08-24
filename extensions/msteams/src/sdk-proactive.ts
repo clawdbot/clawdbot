@@ -64,9 +64,9 @@ type MSTeamsProactiveOptions = {
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
 };
 
-// SAFETY: the 2.0.14 CJS root exports MessageActivityInput, while its declarations omit that export.
 const loadMSTeamsApiModule = createLazyRuntimeModule(
   () =>
+    // SAFETY: the 2.0.14 CJS root exports MessageActivityInput, while its declarations omit it.
     import("@microsoft/teams.api") as unknown as Promise<
       typeof import("@microsoft/teams.api") & {
         MessageActivityInput: typeof import("@microsoft/teams.api/dist/activities/message/message.js").MessageActivityInput;
