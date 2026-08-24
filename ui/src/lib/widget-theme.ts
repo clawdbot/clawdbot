@@ -94,6 +94,8 @@ export function installWidgetThemeObserver(): void {
     }
   }).observe(root, {
     attributes: true,
-    attributeFilter: ["data-theme", "data-theme-mode"],
+    // "style" carries the accent override (inline custom properties on <html>);
+    // without it a user accent change would only reach frames incidentally.
+    attributeFilter: ["data-theme", "data-theme-mode", "style"],
   });
 }
