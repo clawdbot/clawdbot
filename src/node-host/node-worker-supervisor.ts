@@ -39,6 +39,7 @@ import {
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
 import {
+  assertNodeWorkerLaunchIdentity,
   nodeWorkerPlanHash,
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorIdentity,
@@ -144,9 +145,7 @@ class NodeWorkerSupervisor {
     }
     const plan = parseWorkerLaunchPlan(structuredClone(input.descriptor));
     const descriptor = completeWorkerLaunchDescriptor(plan, connectionEndpoint);
-    if (descriptor.admission.handshake.bundleHash !== input.expectedBundleHash) {
-      throw new Error("node worker descriptor bundle hash does not match the launch bundle");
-    }
+    assertNodeWorkerLaunchIdentity(input, descriptor);
     const planHash = nodeWorkerPlanHash(input);
     if (this.closed) {
       throw new Error("node worker supervisor is closed");
