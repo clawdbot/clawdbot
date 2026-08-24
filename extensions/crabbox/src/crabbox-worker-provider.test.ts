@@ -442,6 +442,22 @@ describe("Crabbox worker provider", () => {
     }
   });
 
+  it("rejects an unsupported execution mode before invoking Crabbox", async () => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return commandResult();
+    });
+
+    await expect(
+      provider.provision(PROFILE, OPERATION_ID, { executionMode: "unsupported" as never }),
+    ).rejects.toMatchObject({
+      name: "WorkerProviderError",
+      message: "Crabbox execution mode is unsupported",
+    });
+    expect(calls).toEqual([]);
+  });
+
   it("resumes a bound node without replaying the consumed setup code", async () => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
     const provider = providerWithRunner(async (argv, options) => {

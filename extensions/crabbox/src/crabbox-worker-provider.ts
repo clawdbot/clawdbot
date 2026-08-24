@@ -537,6 +537,14 @@ export function createCrabboxWorkerProvider(
       operationId: string,
       options: Parameters<WorkerProvider["provision"]>[2],
     ): Promise<WorkerLease> {
+      const executionMode: unknown = options?.executionMode;
+      if (
+        executionMode !== undefined &&
+        executionMode !== "worker-turn" &&
+        executionMode !== "remote-exec"
+      ) {
+        throw new WorkerProviderError("Crabbox execution mode is unsupported");
+      }
       const configured = parseCrabboxProfile(profile);
       const requestedClass = nonEmptyString(options?.machineClass);
       if (options?.machineClass !== undefined && (!requestedClass || requestedClass.length > 128)) {
@@ -667,7 +675,7 @@ export function createCrabboxWorkerProvider(
       }
       const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({
         enrollment,
-        executionMode: options?.executionMode,
+        executionMode,
         leaseId,
       });
       inspectedParams.inspect = await runProvisionSetupAndWaitReady({
