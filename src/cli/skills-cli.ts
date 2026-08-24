@@ -28,6 +28,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
+  checkSkillsFromClawHub,
   installSkillFromClawHub,
   readVerifiedClawHubSkillSourceUrl,
   readTrackedClawHubSkillSlugs,
@@ -112,7 +113,11 @@ function formatClawHubSearchText(value: string): string {
   return sanitizeForLog(value.replace(/\s+/gu, " ")).trim();
 }
 
-function isClawHubSkillBlockedCliFailure(result: { code?: string; warning?: string }): boolean {
+function isClawHubSkillBlockedCliFailure(result: {
+  code?: string;
+  warning?: string;
+  error?: string;
+}): boolean {
   return (
     result.code === CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED &&
     typeof result.warning === "string" &&
@@ -775,6 +780,8 @@ export function registerSkillsCli(program: Command) {
     .argument("[skill-ref]", "Single ClawHub skill ref (@owner/slug)")
     .option("--all", "Update all tracked ClawHub skills", false)
     .option("--force", "Replace installed skills even when they have local changes", false)
+    .option("--dry-run", "Check for updates without downloading or writing", false)
+    .option("--json", "Output dry-run results as JSON", false)
     .option(
       "--force-install",
       "Install a pending GitHub-backed skill before ClawHub scan completes",
@@ -798,6 +805,8 @@ export function registerSkillsCli(program: Command) {
         opts: {
           all?: boolean;
           force?: boolean;
+          dryRun?: boolean;
+          json?: boolean;
           forceInstall?: boolean;
           acknowledgeClawhubRisk?: boolean;
           acknowledgeClawHubRisk?: boolean;
@@ -818,51 +827,75 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
             return;
           }
+          const jsonOutput = hasJsonOutput(opts);
+          if (jsonOutput && !opts.dryRun) {
+            defaultRuntime.error("--json requires --dry-run.");
+            defaultRuntime.exit(1);
+            return;
+          }
           const target = resolveClawHubTargetWorkspace(command, opts);
           if (!target) {
             return;
           }
           const tracked = await readTrackedClawHubSkillSlugs(target.workspaceDir);
           if (opts.all && tracked.length === 0) {
-            defaultRuntime.log("No tracked ClawHub skills to update.");
+            if (opts.dryRun && jsonOutput) {
+              defaultRuntime.writeJson({ results: [] });
+            } else {
+              defaultRuntime.log(
+                opts.dryRun
+                  ? "No tracked ClawHub skills to check."
+                  : "No tracked ClawHub skills to update.",
+              );
+            }
             return;
           }
-          const results = await updateSkillsFromClawHub({
-            workspaceDir: target.workspaceDir,
-            slug,
-            ...(opts.force ? { force: true } : {}),
-            ...(opts.forceInstall ? { forceInstall: true } : {}),
-            ...resolveInstallPolicyWarningAcknowledgementCliOptions({
-              acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
-            }),
-            ...resolveSkillClawHubRiskOptions(
-              opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
-              "updating",
-            ),
-            logger: {
-              info: (message) => defaultRuntime.log(message),
-              warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
-            },
-            config: target.config,
-          });
-          let failed = false;
-          for (const result of results) {
-            if (!result.ok) {
-              failed = true;
-              if (result.code === "force_required") {
-                defaultRuntime.error(`${result.error} Re-run with --force to update it anyway.`);
-              } else if (!isClawHubSkillBlockedCliFailure(result)) {
-                defaultRuntime.error(result.error);
+          const results = opts.dryRun
+            ? await checkSkillsFromClawHub({
+                workspaceDir: target.workspaceDir,
+                slug,
+              })
+            : await updateSkillsFromClawHub({
+                workspaceDir: target.workspaceDir,
+                slug,
+                ...(opts.force ? { force: true } : {}),
+                ...(opts.forceInstall ? { forceInstall: true } : {}),
+                ...resolveInstallPolicyWarningAcknowledgementCliOptions({
+                  acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
+                }),
+                ...resolveSkillClawHubRiskOptions(
+                  opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true,
+                  "updating",
+                ),
+                logger: {
+                  info: (message) => defaultRuntime.log(message),
+                  warn: (message) => defaultRuntime.log(formatSkillWarning(message)),
+                },
+                config: target.config,
+              });
+          const failed = results.some((result) => !result.ok);
+          if (opts.dryRun && jsonOutput) {
+            defaultRuntime.writeJson({ results });
+          } else {
+            for (const result of results) {
+              if (!result.ok) {
+                if ("code" in result && result.code === "force_required") {
+                  defaultRuntime.error(`${result.error} Re-run with --force to update it anyway.`);
+                } else if (!isClawHubSkillBlockedCliFailure(result)) {
+                  defaultRuntime.error(result.error);
+                }
+                continue;
               }
-              continue;
+              if (result.changed) {
+                defaultRuntime.log(
+                  opts.dryRun
+                    ? `Update available ${result.slug}: ${result.previousVersion ?? "unknown"} -> ${result.version}`
+                    : `Updated ${result.slug}: ${result.previousVersion ?? "unknown"} -> ${result.version}`,
+                );
+                continue;
+              }
+              defaultRuntime.log(`${result.slug} already at ${result.version}`);
             }
-            if (result.changed) {
-              defaultRuntime.log(
-                `Updated ${result.slug}: ${result.previousVersion ?? "unknown"} -> ${result.version}`,
-              );
-              continue;
-            }
-            defaultRuntime.log(`${result.slug} already at ${result.version}`);
           }
           if (failed) {
             defaultRuntime.exit(1);

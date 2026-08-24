@@ -82,6 +82,7 @@ vi.mock("../../state/claw-package-adoption.js", () => ({
 const { ClawHubRequestError } = await import("../../infra/clawhub-client.js");
 
 const {
+  checkSkillsFromClawHub,
   installSkillFromClawHub,
   preflightSkillFromClawHub,
   readVerifiedClawHubSkillSourceUrl,
@@ -228,6 +229,33 @@ async function writeClawHubOriginFixture(params: {
 }
 
 describe("skills-clawhub", () => {
+  it("checks tracked skill versions without downloading or writing", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skills-check-");
+    await writeClawHubOriginFixture({
+      workspaceDir,
+      slug: "agentreceipt",
+      installedVersion: "0.9.0",
+    });
+
+    const results = await checkSkillsFromClawHub({ workspaceDir });
+
+    expect(results).toEqual([
+      {
+        ok: true,
+        slug: "agentreceipt",
+        previousVersion: "0.9.0",
+        version: "1.0.0",
+        changed: true,
+      },
+    ]);
+    expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({
+      slug: "agentreceipt",
+      baseUrl: "https://private.example.com/clawhub",
+    });
+    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
+    expect(installPackageDirMock).not.toHaveBeenCalled();
+  });
+
   afterEach(async () => {
     await tempDirs.cleanup();
   });

@@ -96,6 +96,16 @@ type UpdateClawHubSkillResult =
       warning?: string;
     };
 
+export type ClawHubSkillUpdateCheckResult =
+  | {
+      ok: true;
+      slug: string;
+      previousVersion: string | null;
+      version: string;
+      changed: boolean;
+    }
+  | { ok: false; slug: string; error: string };
+
 type TrackedUpdateTarget =
   | {
       ok: true;
@@ -385,6 +395,53 @@ async function guardTrackedSkillLocalState(params: {
     return { ok: true, plan: local.plan };
   }
   return { ok: false, error: local.error };
+}
+
+export async function checkSkillsFromClawHub(params: {
+  workspaceDir: string;
+  slug?: string;
+  baseUrl?: string;
+}): Promise<ClawHubSkillUpdateCheckResult[]> {
+  const lock = await readClawHubSkillsLockfile(params.workspaceDir);
+  const slugs = params.slug
+    ? [
+        await resolveRequestedUpdateSlug({
+          workspaceDir: params.workspaceDir,
+          requestedSlug: params.slug,
+          lock,
+        }),
+      ]
+    : Object.keys(lock.skills).map((slug) => normalizeTrackedSkillSlug(slug));
+  const results: ClawHubSkillUpdateCheckResult[] = [];
+  for (const slug of slugs) {
+    const tracked = await resolveTrackedUpdateTarget({
+      workspaceDir: params.workspaceDir,
+      slug,
+      lock,
+      baseUrl: params.baseUrl,
+    });
+    if (!tracked.ok) {
+      results.push({ ok: false, slug: tracked.slug, error: tracked.error });
+      continue;
+    }
+    try {
+      const resolved = await resolveInstallVersion({
+        slug: tracked.slug,
+        ...(tracked.ownerHandle ? { ownerHandle: tracked.ownerHandle } : {}),
+        baseUrl: tracked.baseUrl,
+      });
+      results.push({
+        ok: true,
+        slug: tracked.slug,
+        previousVersion: tracked.previousVersion,
+        version: resolved.version,
+        changed: tracked.previousVersion !== resolved.version,
+      });
+    } catch (err) {
+      results.push({ ok: false, slug: tracked.slug, error: formatErrorMessage(err) });
+    }
+  }
+  return results;
 }
 
 export async function updateSkillsFromClawHub(params: {

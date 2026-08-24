@@ -113,6 +113,7 @@ const mocks = vi.hoisted(() => {
       (_configForTest: unknown, _agentId: string) => "/tmp/workspace",
     ),
     searchSkillsFromClawHubMock: vi.fn(),
+    checkSkillsFromClawHubMock: vi.fn(),
     installSkillFromClawHubMock: vi.fn(),
     installSkillFromSourceMock: vi.fn(),
     updateSkillsFromClawHubMock: vi.fn(),
@@ -141,6 +142,7 @@ const {
   resolveConfiguredAgentIdMock,
   resolveAgentWorkspaceDirMock,
   searchSkillsFromClawHubMock,
+  checkSkillsFromClawHubMock,
   installSkillFromClawHubMock,
   installSkillFromSourceMock,
   updateSkillsFromClawHubMock,
@@ -287,6 +289,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../skills/lifecycle/clawhub.js", () => ({
   searchSkillsFromClawHub: (...args: unknown[]) => mocks.searchSkillsFromClawHubMock(...args),
+  checkSkillsFromClawHub: (...args: unknown[]) => mocks.checkSkillsFromClawHubMock(...args),
   installSkillFromClawHub: (...args: unknown[]) => mocks.installSkillFromClawHubMock(...args),
   updateSkillsFromClawHub: (...args: unknown[]) => mocks.updateSkillsFromClawHubMock(...args),
   readTrackedClawHubSkillSlugs: (...args: unknown[]) =>
@@ -357,6 +360,7 @@ describe("skills cli commands", () => {
     resolveConfiguredAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     searchSkillsFromClawHubMock.mockReset();
+    checkSkillsFromClawHubMock.mockReset();
     installSkillFromClawHubMock.mockReset();
     installSkillFromSourceMock.mockReset();
     updateSkillsFromClawHubMock.mockReset();
@@ -377,6 +381,7 @@ describe("skills cli commands", () => {
     resolveConfiguredAgentIdMock.mockImplementation((_config, agentId: string) => agentId);
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     searchSkillsFromClawHubMock.mockResolvedValue([]);
+    checkSkillsFromClawHubMock.mockResolvedValue([]);
     installSkillFromClawHubMock.mockResolvedValue({
       ok: false,
       error: "install disabled in test",
@@ -947,6 +952,47 @@ describe("skills cli commands", () => {
     await expect(runCommand(args)).rejects.toThrow("__exit__:1");
     expect(runtimeErrors).toContain("Use either --global or --agent, not both.");
     expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("previews all tracked ClawHub skill updates without writing", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    checkSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+      },
+    ]);
+
+    await runCommand(["skills", "update", "--all", "--dry-run", "--json"]);
+
+    expect(checkSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: undefined,
+    });
+    expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
+    expect(JSON.parse(runtimeStdout[0] ?? "")).toEqual({
+      results: [
+        {
+          ok: true,
+          slug: "calendar",
+          previousVersion: "1.2.2",
+          version: "1.2.3",
+          changed: true,
+        },
+      ],
+    });
+  });
+
+  it("prints an empty JSON result when no tracked skills are available", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
+
+    await runCommand(["skills", "--json", "update", "--all", "--dry-run"]);
+
+    expect(checkSkillsFromClawHubMock).not.toHaveBeenCalled();
+    expect(JSON.parse(runtimeStdout[0] ?? "")).toEqual({ results: [] });
   });
 
   it("updates all tracked ClawHub skills", async () => {

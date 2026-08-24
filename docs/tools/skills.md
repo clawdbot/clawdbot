@@ -209,6 +209,7 @@ publish and sync.
 | Install from a Git repository      | `openclaw skills install git:owner/repo@ref`           |
 | Install a local skill directory    | `openclaw skills install ./path/to/skill --as my-tool` |
 | Install for all local agents       | `openclaw skills install @owner/<slug> --global`       |
+| Preview workspace skill updates    | `openclaw skills update --all --dry-run --json`        |
 | Update all workspace skills        | `openclaw skills update --all`                         |
 | Update a shared managed skill      | `openclaw skills update @owner/<slug> --global`        |
 | Update all shared managed skills   | `openclaw skills update --all --global`                |
@@ -226,7 +227,9 @@ publish and sync.
     Git and local installs expect `SKILL.md` at the source root. The slug comes
     from `SKILL.md` frontmatter `name` when valid, then falls back to the
     directory or repository name. Use `--as <slug>` to override.
-    `openclaw skills update` tracks ClawHub installs only — reinstall Git or
+    `openclaw skills update --dry-run` checks ClawHub-tracked installs without
+    downloading or writing. `openclaw skills update` tracks ClawHub installs only
+    — reinstall Git or
     local sources to refresh them.
 
   </Accordion>

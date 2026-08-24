@@ -40,11 +40,13 @@ openclaw skills install @owner/<slug> --agent <id>
 openclaw skills install @owner/<slug> --global
 openclaw skills update @owner/<slug>
 openclaw skills update @owner/<slug> --force
+openclaw skills update @owner/<slug> --dry-run
 openclaw skills update @owner/<slug> --force-install
 openclaw skills update @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills update @owner/<slug> --acknowledge-install-policy-warning
 openclaw skills update @owner/<slug> --global
 openclaw skills update --all
+openclaw skills update --all --dry-run --json
 openclaw skills update --all --agent <id>
 openclaw skills update --all --global
 openclaw skills verify @owner/<slug>
@@ -76,7 +78,9 @@ openclaw skills workshop reject <proposal-id> --reason "Not reusable"
 openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
 
-`search`, `update`, and `verify` use ClawHub directly. `install @owner/<slug>`
+`search`, `update`, and `verify` use ClawHub directly. `update --dry-run`
+only reads tracked install metadata and ClawHub release metadata; it does not
+download archives or write the workspace. `install @owner/<slug>`
 installs a native ClawHub skill. `install skills-sh:<owner>/<repo>/<slug>` asks
 ClawHub to resolve an external listing to its exact synchronized GitHub commit;
 OpenClaw does not download from skills.sh. These entries are shown as
