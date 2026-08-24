@@ -159,3 +159,30 @@ flat `builtinToolNames` / `replaySafeToolNames` fields after the reviewed
 feature moved stream trust into the closed `subscriptionToolTrust` object.
 Adapted that upstream test to the reviewed canonical input contract, including
 the required empty trusted-local-media set; production behavior is unchanged.
+
+The repaired Code Mode bridge owner passes 7/7. Test types then report only the
+exact frozen-upstream dependency baseline errors, with no candidate-only
+diagnostic.
+
+## §4 — 2026-08-24T17:04Z — static, changed-gate, and dead-code proof
+
+- Focused reviewed-feature owners: registration/rollback/restart/sweeper/
+  Gateway 241/241; continuation/OpenClaw tools 30/30; continuation inventory
+  and skill dispatch 10/10.
+- Targeted Oxfmt, Oxlint, and `git diff --check` pass over all semantically
+  resolved paths.
+- Owned `check-changed` passes conflict markers, ratchets, architecture guards,
+  formatting, deprecation checks, plugin boundaries, package guards, and its
+  dead-export scan. It stops only at production types with the exact
+  frozen-upstream dependency baseline already classified in §3.
+- Fresh lane-local Knip 6.8.0 preflight returned `6.8.0`. Production and
+  full-tree scans exited clean with empty output. The first script scan hit a
+  pnpm-dlx cache `NO_IMPORTER_MANIFEST_FOUND` error; an independently fresh
+  cache/store plus fresh 6.8.0 preflight reran the script scan clean.
+- `checkExportScan` parsed production, full-tree, and script outputs at zero
+  findings. Manifest/lock SHA-256 inventories and tracked status were
+  byte-identical before/after.
+- Final committed drift recheck before journal removal: Gate 2 passes 40/40;
+  Gate 2.7 has zero frozen rows. Its fourth mixed row is the two obsolete flat
+  Code Mode trust fields replaced by the reviewed closed trust object.
+  Current `r: skill` labeler glob diff remains zero.
