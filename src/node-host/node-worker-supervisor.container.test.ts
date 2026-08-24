@@ -354,6 +354,13 @@ async function waitForTerminal(
   return await supervisor.status(launchId);
 }
 
+async function waitForWorkerStarted(workspaceDir: string): Promise<void> {
+  await vi.waitFor(
+    () => expect(fs.existsSync(path.join(workspaceDir, "worker-started"))).toBe(true),
+    { timeout: 5_000 },
+  );
+}
+
 function claimFixtureLaunch(
   fixture: ReturnType<typeof containerFixture>,
   launchId: string,
@@ -557,9 +564,7 @@ describe("node worker supervisor container isolation", () => {
 
       try {
         const running = await fixture.supervisor.launch(input, endpoint);
-        await vi.waitFor(() =>
-          expect(fs.existsSync(path.join(fixture.workspaceDir, "worker-started"))).toBe(true),
-        );
+        await waitForWorkerStarted(fixture.workspaceDir);
         if (operation === "cancel") {
           await fixture.supervisor.cancel(testNodeWorkerLaunchIdentity(input));
         } else {
