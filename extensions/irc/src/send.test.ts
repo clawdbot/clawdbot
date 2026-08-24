@@ -12,6 +12,9 @@ const hoisted = vi.hoisted(() => {
   const convertMarkdownTables = vi.fn((text: string) => text);
   const stripMarkdown = vi.fn((text: string) => text);
   const record = vi.fn();
+  const buildIrcConnectOptions = vi.fn(
+    (_account: unknown, overrides: Record<string, unknown> = {}) => overrides,
+  );
   return {
     loadConfig,
     resolveMarkdownTableMode,
@@ -20,7 +23,7 @@ const hoisted = vi.hoisted(() => {
     record,
     normalizeIrcMessagingTarget: vi.fn((value: string) => value.trim()),
     connectIrcClient: vi.fn(),
-    buildIrcConnectOptions: vi.fn(() => ({})),
+    buildIrcConnectOptions,
   };
 });
 
@@ -373,6 +376,53 @@ describe("sendMessageIrc cfg threading", () => {
     expect(onPlatformSendDispatch).toHaveBeenCalledTimes(chunks.length);
     expect(onDeliveryResult).toHaveBeenCalledTimes(chunks.length);
     expect(results).toHaveLength(chunks.length);
+  });
+
+  it("does not join after cancellation during transient connection setup", async () => {
+    const providedCfg = {
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "openclaw",
+        },
+      },
+    } as unknown as CoreConfig;
+    const client = {
+      isReady: vi.fn(() => true),
+      join: vi.fn(),
+      sendPrivmsg: vi.fn(),
+      quit: vi.fn(),
+    } as unknown as IrcClient & {
+      join: ReturnType<typeof vi.fn>;
+      sendPrivmsg: ReturnType<typeof vi.fn>;
+      quit: ReturnType<typeof vi.fn>;
+    };
+    let resolveConnect!: (client: IrcClient) => void;
+    const connect = new Promise<IrcClient>((resolve) => {
+      resolveConnect = resolve;
+    });
+    hoisted.buildIrcConnectOptions.mockImplementation((_account, overrides = {}) => overrides);
+    hoisted.connectIrcClient.mockReturnValue(connect);
+    const abortController = new AbortController();
+
+    const send = sendFormattedIrcText({
+      cfg: providedCfg,
+      to: "#room",
+      text: "hello",
+      abortSignal: abortController.signal,
+    });
+    await vi.waitFor(() => expect(hoisted.connectIrcClient).toHaveBeenCalledOnce());
+    abortController.abort();
+    resolveConnect(client);
+
+    await expect(send).rejects.toMatchObject({ name: "AbortError" });
+    expect(hoisted.buildIrcConnectOptions).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ abortSignal: abortController.signal }),
+    );
+    expect(client.join).not.toHaveBeenCalled();
+    expect(client.sendPrivmsg).not.toHaveBeenCalled();
+    expect(client.quit).toHaveBeenCalledOnce();
   });
 
   it("declares message adapter durable text, media, and reply with receipt proofs", async () => {

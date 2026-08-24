@@ -107,16 +107,16 @@ export async function sendIrcMessages(
     : (transient = await connectIrcClient(
         buildIrcConnectOptions(account, {
           connectTimeoutMs: 12000,
+          abortSignal: opts.abortSignal,
         }),
       ));
-  if (transient) {
-    if (target.startsWith("#") || target.startsWith("&")) {
-      client.join(target);
-    }
-  }
 
   const results: SendIrcResult[] = [];
   try {
+    opts.abortSignal?.throwIfAborted();
+    if (transient && (target.startsWith("#") || target.startsWith("&"))) {
+      client.join(target);
+    }
     for (const message of preparedMessages) {
       opts.abortSignal?.throwIfAborted();
       await opts.onPlatformSendDispatch?.();
