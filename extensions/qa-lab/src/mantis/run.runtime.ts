@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { root } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { trimToValue } from "../mantis-options.runtime.js";
 import {
@@ -12,9 +13,9 @@ import {
   type LaneResult,
 } from "./run-artifacts.runtime.js";
 import {
-  createMantisWorktreeDirectory,
+  removeMantisEmptyOwnedDirectory,
+  removeMantisOwnedDirectory,
   removeMantisWorktree,
-  type MantisWorktreeOwnership,
 } from "./run-cleanup.runtime.js";
 import {
   assertMantisCommandNotAborted,
@@ -26,6 +27,19 @@ import {
   type MantisCommandTimeoutOverrides,
   type MantisCommandTimeouts,
 } from "./run-command.runtime.js";
+import {
+  assertMantisDirectoryOwnership,
+  captureMantisDirectoryOwnership,
+  createMantisOwnedDirectory,
+  isMantisDirectoryNotEmptyError,
+  type MantisDirectoryOwnership,
+} from "./run-directory.runtime.js";
+import {
+  buildEvidenceManifest,
+  renderReport,
+  type MantisComparison,
+  type MantisScenarioConfig,
+} from "./run-evidence.runtime.js";
 
 export type MantisBeforeAfterOptions = {
   allowFailures?: boolean;
@@ -53,40 +67,6 @@ type MantisBeforeAfterResult = {
   outputDir: string;
   reportPath: string;
   status: "pass" | "fail";
-};
-
-type MantisScenarioConfig = {
-  baselineExpected: string;
-  baselineLabel: string;
-  baselineScreenshotAlt: string;
-  candidateExpected: string;
-  candidateLabel: string;
-  candidateScreenshotAlt: string;
-  defaultBaselineRef: string;
-  id: string;
-  title: string;
-};
-
-type Comparison = {
-  baseline: {
-    expected: string;
-    ref: string;
-    reproduced: boolean;
-    screenshotPath?: string;
-    status: string;
-    videoPath?: string;
-  };
-  candidate: {
-    expected: string;
-    fixed: boolean;
-    ref: string;
-    screenshotPath?: string;
-    status: string;
-    videoPath?: string;
-  };
-  pass: boolean;
-  scenario: string;
-  transport: "discord";
 };
 
 const DEFAULT_BASELINE_REF = "0bf06e953fdda290799fc9fb9244a8f67fdae593";
@@ -141,60 +121,6 @@ function defaultOutputDir(repoRoot: string, startedAt: Date) {
   return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `run-${stamp}`);
 }
 
-function renderReport(params: {
-  baseline: LaneResult;
-  candidate: LaneResult;
-  comparison: Comparison;
-  outputDir: string;
-  scenarioConfig: MantisScenarioConfig;
-}) {
-  const lines = [
-    `# ${params.scenarioConfig.title}`,
-    "",
-    `Status: ${params.comparison.pass ? "pass" : "fail"}`,
-    `Transport: ${params.comparison.transport}`,
-    `Scenario: ${params.comparison.scenario}`,
-    `Output: ${params.outputDir}`,
-    "",
-    "## Baseline",
-    "",
-    `- Ref: \`${params.comparison.baseline.ref}\``,
-    `- Expected: ${params.comparison.baseline.expected}`,
-    `- Status: \`${params.baseline.status}\``,
-    `- Reproduced: \`${params.comparison.baseline.reproduced}\``,
-    params.baseline.screenshotPath
-      ? `- Screenshot: \`${path.join("baseline", path.basename(params.baseline.screenshotPath))}\``
-      : "- Screenshot: missing",
-    params.baseline.videoPath
-      ? `- Video: \`${path.join("baseline", path.basename(params.baseline.videoPath))}\``
-      : "- Video: missing",
-    params.baseline.scenarioDetails ? `- Details: ${params.baseline.scenarioDetails}` : undefined,
-    "",
-    "## Candidate",
-    "",
-    `- Ref: \`${params.comparison.candidate.ref}\``,
-    `- Expected: ${params.comparison.candidate.expected}`,
-    `- Status: \`${params.candidate.status}\``,
-    `- Fixed: \`${params.comparison.candidate.fixed}\``,
-    params.candidate.screenshotPath
-      ? `- Screenshot: \`${path.join("candidate", path.basename(params.candidate.screenshotPath))}\``
-      : "- Screenshot: missing",
-    params.candidate.videoPath
-      ? `- Video: \`${path.join("candidate", path.basename(params.candidate.videoPath))}\``
-      : "- Video: missing",
-    params.candidate.scenarioDetails ? `- Details: ${params.candidate.scenarioDetails}` : undefined,
-    "",
-  ].filter((line) => line !== undefined);
-  return `${lines.join("\n")}\n`;
-}
-
-function relativeArtifactPath(outputDir: string, artifactPath: string | undefined) {
-  if (!artifactPath) {
-    return undefined;
-  }
-  return path.isAbsolute(artifactPath) ? path.relative(outputDir, artifactPath) : artifactPath;
-}
-
 function remapStagedLaneResult(params: {
   publishedLaneDir: string;
   result: LaneResult;
@@ -245,104 +171,46 @@ function attachMantisFailureArtifact(error: unknown, errorPath: string): Error {
   return new Error(`${formatErrorMessage(error)}\n${artifactLine}`, { cause: error });
 }
 
-async function throwMantisRunFailure(outputDir: string, error: unknown): Promise<never> {
-  const errorPath = path.join(outputDir, "error.txt");
-  await fs.writeFile(errorPath, `${formatMantisFailure(error)}\n`, "utf8");
-  throw attachMantisFailureArtifact(error, errorPath);
+function createMantisFailureArtifactWriteError(params: {
+  artifactError: unknown;
+  error: unknown;
+  errorPath: string;
+}): AggregateError {
+  return new AggregateError(
+    [params.error, params.artifactError],
+    `Mantis run failed and could not safely write ${params.errorPath}: ${formatErrorMessage(params.error)}`,
+    { cause: params.artifactError },
+  );
 }
 
-function buildEvidenceManifest(params: {
-  baseline: LaneResult;
-  candidate: LaneResult;
-  comparison: Comparison;
+async function throwMantisRunFailure(params: {
+  error: unknown;
   outputDir: string;
-  scenarioConfig: MantisScenarioConfig;
-}) {
-  const artifacts: {
-    alt?: string;
-    kind: string;
-    label: string;
-    lane: "baseline" | "candidate" | "run";
-    path: string;
-    required?: boolean;
-    targetPath: string;
-    width?: number;
-  }[] = [
-    {
-      kind: "metadata",
-      label: "Comparison JSON",
-      lane: "run",
-      path: "comparison.json",
-      targetPath: "comparison.json",
-    },
-    {
-      kind: "report",
-      label: "Mantis report",
-      lane: "run",
-      path: "mantis-report.md",
-      targetPath: "mantis-report.md",
-    },
-  ];
-  const baselineScreenshot = relativeArtifactPath(params.outputDir, params.baseline.screenshotPath);
-  if (baselineScreenshot) {
-    artifacts.push({
-      alt: params.scenarioConfig.baselineScreenshotAlt,
-      kind: "timeline",
-      label: params.scenarioConfig.baselineLabel,
-      lane: "baseline",
-      path: baselineScreenshot,
-      targetPath: "baseline.png",
-      width: 420,
+  outputOwnership: MantisDirectoryOwnership;
+  repoRoot: string;
+}): Promise<never> {
+  const errorPath = path.join(params.outputDir, "error.txt");
+  try {
+    await assertMantisDirectoryOwnership({
+      directoryPath: params.outputDir,
+      ownership: params.outputOwnership,
+      repoRoot: params.repoRoot,
+    });
+    const outputRoot = await root(params.outputDir);
+    await assertMantisDirectoryOwnership({
+      directoryPath: params.outputDir,
+      ownership: params.outputOwnership,
+      repoRoot: params.repoRoot,
+    });
+    await outputRoot.write("error.txt", `${formatMantisFailure(params.error)}\n`);
+  } catch (artifactError) {
+    throw createMantisFailureArtifactWriteError({
+      artifactError,
+      error: params.error,
+      errorPath,
     });
   }
-  const candidateScreenshot = relativeArtifactPath(
-    params.outputDir,
-    params.candidate.screenshotPath,
-  );
-  if (candidateScreenshot) {
-    artifacts.push({
-      alt: params.scenarioConfig.candidateScreenshotAlt,
-      kind: "timeline",
-      label: params.scenarioConfig.candidateLabel,
-      lane: "candidate",
-      path: candidateScreenshot,
-      targetPath: "candidate.png",
-      width: 420,
-    });
-  }
-  const baselineVideo = relativeArtifactPath(params.outputDir, params.baseline.videoPath);
-  if (baselineVideo) {
-    artifacts.push({
-      kind: "fullVideo",
-      label: "Baseline MP4",
-      lane: "baseline",
-      path: baselineVideo,
-      targetPath: "baseline.mp4",
-      required: false,
-    });
-  }
-  const candidateVideo = relativeArtifactPath(params.outputDir, params.candidate.videoPath);
-  if (candidateVideo) {
-    artifacts.push({
-      kind: "fullVideo",
-      label: "Candidate MP4",
-      lane: "candidate",
-      path: candidateVideo,
-      targetPath: "candidate.mp4",
-      required: false,
-    });
-  }
-
-  return {
-    artifacts,
-    comparison: params.comparison,
-    id: params.comparison.scenario,
-    scenario: params.comparison.scenario,
-    schemaVersion: 1,
-    summary:
-      "Mantis ran the before/after scenario, captured baseline and candidate evidence, and compared the expected bug reproduction against the candidate fix.",
-    title: params.scenarioConfig.title,
-  };
+  throw attachMantisFailureArtifact(params.error, errorPath);
 }
 
 async function runLane(params: {
@@ -378,7 +246,7 @@ async function runLane(params: {
     stage: "worktree-add",
     timeoutMs: params.commandTimeouts["worktree-add"],
   } satisfies MantisCommandExecution;
-  let worktreeOwnership: MantisWorktreeOwnership | undefined;
+  let worktreeOwnership: MantisDirectoryOwnership | undefined;
   let workloadFailed = false;
   let workloadError: unknown;
   let cleanupFailed = false;
@@ -392,9 +260,9 @@ async function runLane(params: {
   });
   try {
     try {
-      worktreeOwnership = await createMantisWorktreeDirectory({
+      worktreeOwnership = await createMantisOwnedDirectory({
+        directoryPath: worktreeDir,
         repoRoot: params.repoRoot,
-        worktreeDir,
       });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
@@ -574,16 +442,66 @@ export async function runMantisBeforeAfter(
   const candidate = trimToValue(opts.candidate) ?? DEFAULT_CANDIDATE_REF;
   const commandTimeouts = resolveMantisCommandTimeouts(scenario, opts.commandTimeouts);
   const runner = opts.commandRunner ?? defaultMantisCommandRunner;
-  const worktreeRoot = path.join(outputDir, "worktrees");
+  const legacyWorktreeRoot = path.join(outputDir, "worktrees");
+  const legacyWorktreeOwnership = await captureMantisDirectoryOwnership({
+    directoryPath: legacyWorktreeRoot,
+    repoRoot,
+  }).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (legacyWorktreeOwnership) {
+    await removeMantisEmptyOwnedDirectory({
+      cleanupTimeoutMs: commandTimeouts["worktree-cleanup"],
+      directoryPath: legacyWorktreeRoot,
+      ownership: legacyWorktreeOwnership,
+      repoRoot,
+    });
+  }
+  const outputOwnership = await captureMantisDirectoryOwnership({
+    directoryPath: outputDir,
+    repoRoot,
+  });
+  const runWorkspaceDir = path.join(
+    path.dirname(outputDir),
+    `.mantis-staged-run-${process.pid}-${randomUUID()}`,
+  );
+  const worktreeRoot = `${outputDir}.worktrees`;
+  const stagedRunDir = path.join(runWorkspaceDir, "generation");
   const comparisonPath = path.join(outputDir, "comparison.json");
   const manifestPath = path.join(outputDir, "mantis-evidence.json");
   const reportPath = path.join(outputDir, "mantis-report.md");
-  const stagedRunDir = path.join(outputDir, `.mantis-staged-run-${process.pid}-${randomUUID()}`);
-  await fs.mkdir(worktreeRoot, { recursive: true });
 
+  let runWorkspaceOwnership: MantisDirectoryOwnership | undefined;
+  let worktreeRootOwnership: MantisDirectoryOwnership | undefined;
+  let stagedRunOwnership: MantisDirectoryOwnership | undefined;
+  let publication: Awaited<ReturnType<typeof publishMantisRunOutput>> | undefined;
   let outcome: { error: unknown; ok: false } | { ok: true; value: MantisBeforeAfterResult };
   try {
-    await fs.mkdir(stagedRunDir);
+    runWorkspaceOwnership = await createMantisOwnedDirectory({
+      directoryPath: runWorkspaceDir,
+      repoRoot,
+    });
+    try {
+      worktreeRootOwnership = await createMantisOwnedDirectory({
+        directoryPath: worktreeRoot,
+        repoRoot,
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+      worktreeRootOwnership = await captureMantisDirectoryOwnership({
+        directoryPath: worktreeRoot,
+        repoRoot,
+      });
+    }
+    stagedRunOwnership = await createMantisOwnedDirectory({
+      directoryPath: stagedRunDir,
+      repoRoot,
+    });
     const commonOpts = {
       credentialRole: trimToValue(opts.credentialRole) ?? DEFAULT_CREDENTIAL_ROLE,
       credentialSource: trimToValue(opts.credentialSource) ?? DEFAULT_CREDENTIAL_SOURCE,
@@ -646,7 +564,7 @@ export async function runMantisBeforeAfter(
       pass: baselineResult.status === "fail" && candidateResult.status === "pass",
       scenario,
       transport,
-    } satisfies Comparison;
+    } satisfies MantisComparison;
     await fs.writeFile(
       path.join(stagedRunDir, "comparison.json"),
       `${JSON.stringify(comparison, null, 2)}\n`,
@@ -681,7 +599,16 @@ export async function runMantisBeforeAfter(
     if (opts.signal?.aborted) {
       throw new Error("Mantis artifact publication aborted", { cause: opts.signal.reason });
     }
-    await publishMantisRunOutput({ outputDir, stagedRunDir });
+    publication = await publishMantisRunOutput({
+      outputDir,
+      outputOwnership,
+      repoRoot,
+      runWorkspaceDir,
+      runWorkspaceOwnership,
+      signal: opts.signal,
+      stagedRunDir,
+      stagedRunOwnership,
+    });
     outcome = {
       ok: true,
       value: {
@@ -696,30 +623,80 @@ export async function runMantisBeforeAfter(
     outcome = { error, ok: false };
   }
 
-  // The run-level owner removes every uncommitted screenshot/video together;
-  // otherwise cleanup failure or a late interrupt leaks hidden evidence.
-  const cleanupOutcome = await fs.rm(stagedRunDir, { force: true, recursive: true }).then(
-    () => ({ ok: true as const }),
-    (error: unknown) => ({ error, ok: false as const }),
-  );
-  if (!cleanupOutcome.ok) {
-    const cleanupFailure = new Error(`Mantis could not remove staged evidence ${stagedRunDir}`, {
-      cause: cleanupOutcome.error,
+  const cleanupTimeoutMs = commandTimeouts["worktree-cleanup"];
+  const cleanupExpiresAtMs = Date.now() + cleanupTimeoutMs;
+  const cleanupErrors: unknown[] = [];
+  if (publication) {
+    await removeMantisOwnedDirectory({
+      cleanupExpiresAtMs,
+      cleanupTimeoutMs,
+      directoryPath: publication.previousRunDir,
+      ownership: publication.previousRunOwnership,
+      repoRoot,
+    }).catch((error: unknown) => cleanupErrors.push(error));
+  } else if (stagedRunOwnership) {
+    await removeMantisOwnedDirectory({
+      cleanupExpiresAtMs,
+      cleanupTimeoutMs,
+      directoryPath: stagedRunDir,
+      ownership: stagedRunOwnership,
+      repoRoot,
+    }).catch((error: unknown) => cleanupErrors.push(error));
+  }
+  if (worktreeRootOwnership) {
+    await removeMantisEmptyOwnedDirectory({
+      cleanupExpiresAtMs,
+      cleanupTimeoutMs,
+      directoryPath: worktreeRoot,
+      ownership: worktreeRootOwnership,
+      repoRoot,
+    }).catch((error: unknown) => {
+      // Failed runs can intentionally leave a registered or pre-existing
+      // worktree for operator repair. Its non-empty parent is not a new failure.
+      if (!outcome.ok && isMantisDirectoryNotEmptyError(error)) {
+        return;
+      }
+      cleanupErrors.push(error);
     });
-    if (!outcome.ok) {
-      await throwMantisRunFailure(
-        outputDir,
-        new AggregateError(
+  }
+  if (runWorkspaceOwnership && cleanupErrors.length === 0) {
+    await removeMantisEmptyOwnedDirectory({
+      cleanupExpiresAtMs,
+      cleanupTimeoutMs,
+      directoryPath: runWorkspaceDir,
+      ownership: runWorkspaceOwnership,
+      repoRoot,
+    }).catch((error: unknown) => cleanupErrors.push(error));
+  }
+
+  const currentOutputOwnership = publication?.outputOwnership ?? outputOwnership;
+  if (cleanupErrors.length > 0) {
+    const cleanupFailure = new AggregateError(
+      cleanupErrors,
+      `Mantis run cleanup was incomplete for ${runWorkspaceDir}: ${formatErrorMessage(cleanupErrors[0])}`,
+      { cause: cleanupErrors[0] },
+    );
+    const error = outcome.ok
+      ? cleanupFailure
+      : new AggregateError(
           [outcome.error, cleanupFailure],
-          `Mantis run failed and staged evidence cleanup failed: ${stagedRunDir}`,
+          `Mantis run failed and cleanup was incomplete for ${runWorkspaceDir}: ${formatErrorMessage(outcome.error)}`,
           { cause: outcome.error },
-        ),
-      );
-    }
-    await throwMantisRunFailure(outputDir, cleanupFailure);
+        );
+    await throwMantisRunFailure({
+      error,
+      outputDir,
+      outputOwnership: currentOutputOwnership,
+      repoRoot,
+    });
   }
   if (!outcome.ok) {
-    await throwMantisRunFailure(outputDir, outcome.error);
+    await throwMantisRunFailure({
+      error: outcome.error,
+      outputDir,
+      outputOwnership: currentOutputOwnership,
+      repoRoot,
+    });
   }
   return outcome.value;
 }

@@ -40,14 +40,22 @@ async function expectPublishedGenerationSentinels(
   }
 }
 
-async function expectNoMantisTransientEvidence(outputDir: string) {
-  const entries = await fs.readdir(outputDir);
-  expect(
-    entries.filter(
-      (entry) =>
-        entry.startsWith(".mantis-staged-run-") || entry.startsWith(".mantis-previous-run-"),
+async function expectNoMantisTransientEvidence(
+  outputDir: string,
+  options: { allowWorktreeRoot?: boolean } = {},
+) {
+  const outputEntries = await fs.readdir(outputDir);
+  const siblingEntries = await fs.readdir(path.dirname(outputDir));
+  expect([
+    ...outputEntries.filter(
+      (entry) => entry.startsWith(".mantis-staged-") || entry.startsWith(".mantis-previous-"),
     ),
-  ).toEqual([]);
+    ...siblingEntries.filter(
+      (entry) =>
+        entry.startsWith(".mantis-staged-") ||
+        (!options.allowWorktreeRoot && entry === `${path.basename(outputDir)}.worktrees`),
+    ),
+  ]).toEqual([]);
 }
 
 describe("mantis before/after runtime", () => {
@@ -149,12 +157,12 @@ describe("mantis before/after runtime", () => {
       "add",
       "--detach",
       "--",
-      path.join(result.outputDir, "worktrees", "baseline"),
+      path.join(`${result.outputDir}.worktrees`, "baseline"),
       "--lock",
     ]);
     expect(commands[1]?.command).toBe("pnpm");
     expect(commands[1]?.args[0]).toBe("--dir");
-    expect(commands[1]?.args[1]).toBe(path.join(result.outputDir, "worktrees", "baseline"));
+    expect(commands[1]?.args[1]).toBe(path.join(`${result.outputDir}.worktrees`, "baseline"));
     expect(commands[1]?.args.slice(2, 4)).toEqual(["openclaw", "qa"]);
     expect(commands[2]?.command).toBe("git");
     expect(commands[2]?.args).toEqual([
@@ -162,7 +170,7 @@ describe("mantis before/after runtime", () => {
       "remove",
       "--force",
       "--",
-      path.join(result.outputDir, "worktrees", "baseline"),
+      path.join(`${result.outputDir}.worktrees`, "baseline"),
     ]);
     expect(commands[3]?.command).toBe("git");
     expect(commands[3]?.args).toEqual([
@@ -170,12 +178,12 @@ describe("mantis before/after runtime", () => {
       "add",
       "--detach",
       "--",
-      path.join(result.outputDir, "worktrees", "candidate"),
+      path.join(`${result.outputDir}.worktrees`, "candidate"),
       "--force",
     ]);
     expect(commands[4]?.command).toBe("pnpm");
     expect(commands[4]?.args[0]).toBe("--dir");
-    expect(commands[4]?.args[1]).toBe(path.join(result.outputDir, "worktrees", "candidate"));
+    expect(commands[4]?.args[1]).toBe(path.join(`${result.outputDir}.worktrees`, "candidate"));
     expect(commands[4]?.args.slice(2, 4)).toEqual(["openclaw", "qa"]);
     expect(commands[5]?.command).toBe("git");
     expect(commands[5]?.args).toEqual([
@@ -183,7 +191,7 @@ describe("mantis before/after runtime", () => {
       "remove",
       "--force",
       "--",
-      path.join(result.outputDir, "worktrees", "candidate"),
+      path.join(`${result.outputDir}.worktrees`, "candidate"),
     ]);
 
     const comparison = JSON.parse(await fs.readFile(result.comparisonPath, "utf8")) as {
@@ -209,12 +217,12 @@ describe("mantis before/after runtime", () => {
       fs.readFile(path.join(result.outputDir, "candidate", "candidate.mp4"), "utf8"),
     ).resolves.toBe("candidate video");
     await expect(
-      fs.stat(path.join(result.outputDir, "worktrees", "baseline")),
+      fs.stat(path.join(`${result.outputDir}.worktrees`, "baseline")),
     ).rejects.toMatchObject({
       code: "ENOENT",
     });
     await expect(
-      fs.stat(path.join(result.outputDir, "worktrees", "candidate")),
+      fs.stat(path.join(`${result.outputDir}.worktrees`, "candidate")),
     ).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -330,12 +338,12 @@ describe("mantis before/after runtime", () => {
 
     expect(result.status).toBe("pass");
     await expect(
-      fs.stat(path.join(result.outputDir, "worktrees", "baseline")),
+      fs.stat(path.join(`${result.outputDir}.worktrees`, "baseline")),
     ).rejects.toMatchObject({
       code: "ENOENT",
     });
     await expect(
-      fs.stat(path.join(result.outputDir, "worktrees", "candidate")),
+      fs.stat(path.join(`${result.outputDir}.worktrees`, "candidate")),
     ).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -422,7 +430,7 @@ describe("mantis before/after runtime", () => {
 
   it("cleans up the exact worktree path after worktree-add times out", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "add-timeout");
-    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
     const calls: {
       args: readonly string[];
       command: string;
@@ -482,7 +490,7 @@ describe("mantis before/after runtime", () => {
 
   it("refuses to reuse an existing worktree directory", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "existing-worktree");
-    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
     const sentinelPath = path.join(baselineWorktreeDir, "keep.txt");
     const publishedSentinelPath = path.join(outputDir, "baseline", "last-good.txt");
     await fs.mkdir(baselineWorktreeDir, { recursive: true });
@@ -583,10 +591,11 @@ describe("mantis before/after runtime", () => {
     ).rejects.toThrow("baseline worktree cleanup left registered path");
 
     await expectPublishedGenerationSentinels(sentinels);
-    await expectNoMantisTransientEvidence(outputDir);
+    await expectNoMantisTransientEvidence(outputDir, { allowWorktreeRoot: true });
+    await expect(fs.stat(baselineWorktreeDir)).resolves.toBeDefined();
   });
 
-  it("rolls back the complete comparison when component promotion fails", async () => {
+  it("rolls back the complete comparison when generation promotion fails", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "publish-failure");
     const sentinels = await writePublishedGenerationSentinels(outputDir);
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
@@ -609,12 +618,11 @@ describe("mantis before/after runtime", () => {
     const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
       if (
         !promotionFailed &&
-        path.basename(String(source)) === "comparison.json" &&
-        path.basename(path.dirname(String(source))).startsWith(".mantis-staged-run-") &&
-        path.resolve(String(target)) === path.join(outputDir, "comparison.json")
+        path.basename(String(source)) === "generation" &&
+        path.resolve(String(target)) === outputDir
       ) {
         promotionFailed = true;
-        throw Object.assign(new Error("comparison promotion failed"), { code: "EACCES" });
+        throw Object.assign(new Error("generation promotion failed"), { code: "EACCES" });
       }
       await originalRename(source, target);
     });
@@ -630,7 +638,7 @@ describe("mantis before/after runtime", () => {
           skipBuild: true,
           skipInstall: true,
         }),
-      ).rejects.toThrow("comparison promotion failed");
+      ).rejects.toThrow("generation promotion failed");
     } finally {
       rename.mockRestore();
     }
@@ -648,7 +656,7 @@ describe("mantis before/after runtime", () => {
       "mantis",
       "cleanup-parent-replaced",
     );
-    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
     const worktreeParentDir = path.dirname(baselineWorktreeDir);
     const displacedParentDir = path.join(repoRoot, "displaced-worktree-parent");
     const displacedSentinelPath = path.join(displacedParentDir, "baseline", "keep.txt");
@@ -693,8 +701,9 @@ describe("mantis before/after runtime", () => {
     if (result.status === "rejected") {
       expect(result.error).toBeInstanceOf(AggregateError);
       const aggregate = result.error as AggregateError;
-      expect((aggregate.errors[1] as Error).message).toContain(
-        `Mantis worktree path was replaced before cleanup: ${baselineWorktreeDir}`,
+      const laneCleanup = aggregate.errors[0] as AggregateError;
+      expect((laneCleanup.errors[1] as Error).message).toContain(
+        `Mantis owned path was replaced before cleanup: ${baselineWorktreeDir}`,
       );
     }
 
@@ -716,7 +725,7 @@ describe("mantis before/after runtime", () => {
       "mantis",
       "cleanup-target-replaced",
     );
-    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
     const displacedWorktreeDir = path.join(repoRoot, "displaced-worktree");
     const displacedSentinelPath = path.join(displacedWorktreeDir, "keep.txt");
     const replacementSentinelPath = path.join(baselineWorktreeDir, "replacement.txt");
@@ -761,7 +770,7 @@ describe("mantis before/after runtime", () => {
       expect(result.error).toBeInstanceOf(AggregateError);
       const aggregate = result.error as AggregateError;
       expect((aggregate.errors[1] as Error).message).toContain(
-        `Mantis worktree path was replaced before cleanup: ${baselineWorktreeDir}`,
+        `Mantis owned path was replaced before cleanup: ${baselineWorktreeDir}`,
       );
     }
 
@@ -812,10 +821,10 @@ describe("mantis before/after runtime", () => {
     });
 
     expect(result.status).toBe("pass");
-    await expect(fs.stat(path.join(outputDir, "worktrees", "baseline"))).rejects.toMatchObject({
+    await expect(fs.stat(path.join(`${outputDir}.worktrees`, "baseline"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    await expect(fs.stat(path.join(outputDir, "worktrees", "candidate"))).rejects.toMatchObject({
+    await expect(fs.stat(path.join(`${outputDir}.worktrees`, "candidate"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
@@ -866,7 +875,7 @@ describe("mantis before/after runtime", () => {
 
   it("cleans the worktree before reading staged lane artifacts", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "publish-order");
-    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
     const cleanupStages: string[] = [];
     let releaseArtifactRead: (() => void) | undefined;
     const artifactReadRelease = new Promise<void>((resolve) => {
@@ -878,11 +887,15 @@ describe("mantis before/after runtime", () => {
     });
     const originalReadFile = fs.readFile.bind(fs);
     const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (filePath, ...args) => {
-      const relativePath = path.relative(outputDir, path.resolve(String(filePath))).split(path.sep);
+      const relativePath =
+        typeof filePath === "string"
+          ? path.relative(path.dirname(outputDir), path.resolve(filePath)).split(path.sep)
+          : [];
       if (
         relativePath[0]?.startsWith(".mantis-staged-run-") &&
-        relativePath[1] === "baseline" &&
-        relativePath[2] === "discord-qa-summary.json"
+        relativePath[1] === "generation" &&
+        relativePath[2] === "baseline" &&
+        relativePath[3] === "discord-qa-summary.json"
       ) {
         markArtifactReadStarted?.();
         await artifactReadRelease;

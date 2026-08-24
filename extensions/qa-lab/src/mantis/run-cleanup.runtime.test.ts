@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMantisWorktreeDirectory, removeMantisWorktree } from "./run-cleanup.runtime.js";
+import { removeMantisWorktree } from "./run-cleanup.runtime.js";
+import { createMantisOwnedDirectory } from "./run-directory.runtime.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
 import {
   failedCommandResult,
@@ -28,7 +29,7 @@ describe("mantis worktree cleanup runtime", () => {
 
   it("shares one decreasing cleanup budget across remove and both worktree list forms", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-budget");
-    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
     const cleanupTimeouts: number[] = [];
     let clockMs = 1_000;
     const now = vi.spyOn(Date, "now").mockImplementation(() => clockMs);
@@ -73,7 +74,7 @@ describe("mantis worktree cleanup runtime", () => {
 
   it("bounds stalled filesystem fallback work with the same total cleanup deadline", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-fs-deadline");
-    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
     const originalRealpath = fs.realpath.bind(fs);
     let normalizedWorktree = false;
     const realpath = vi.spyOn(fs, "realpath").mockImplementation(async (target) => {
@@ -122,7 +123,10 @@ describe("mantis worktree cleanup runtime", () => {
     const worktreeParent = path.join(repoRoot, "worktrees");
     const worktreeDir = path.join(worktreeParent, "baseline");
     await fs.mkdir(worktreeParent, { recursive: true });
-    const ownership = await createMantisWorktreeDirectory({ repoRoot, worktreeDir });
+    const ownership = await createMantisOwnedDirectory({
+      directoryPath: worktreeDir,
+      repoRoot,
+    });
     let releaseMove: (() => void) | undefined;
     const moveRelease = new Promise<void>((resolve) => {
       releaseMove = resolve;
@@ -239,18 +243,18 @@ describe("mantis worktree cleanup runtime", () => {
       ["worktree", "list", "--porcelain", "-z"],
       ["worktree", "list", "--porcelain"],
     ]);
-    await expect(fs.stat(path.join(outputDir, "worktrees", "baseline"))).rejects.toMatchObject({
+    await expect(fs.stat(path.join(`${outputDir}.worktrees`, "baseline"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    await expect(fs.stat(path.join(outputDir, "worktrees", "candidate"))).rejects.toMatchObject({
+    await expect(fs.stat(path.join(`${outputDir}.worktrees`, "candidate"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    await expect(fs.readdir(path.join(outputDir, "worktrees"))).resolves.toEqual([]);
+    await expect(fs.readdir(`${outputDir}.worktrees`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("fails closed when cleanup registration output is truncated", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-truncated");
-    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
     const stages: string[] = [];
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       stages.push(`${execution.stage}:${args[1]}`);
@@ -312,7 +316,7 @@ describe("mantis worktree cleanup runtime", () => {
 
   it("leaves a registered exact worktree path for operator cleanup with legacy Git", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-registered");
-    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
     const stages: string[] = [];
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       stages.push(`${execution.stage}:${args[1]}`);
@@ -361,7 +365,7 @@ describe("mantis worktree cleanup runtime", () => {
     "treats a registered symlink alias as the exact POSIX worktree path",
     async () => {
       const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-alias");
-      const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+      const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
       const aliasDir = path.join(repoRoot, "baseline-alias");
       const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
         if (command === "git" && execution.stage === "worktree-add") {
@@ -406,7 +410,7 @@ describe("mantis worktree cleanup runtime", () => {
       "mantis",
       "timeout-cleanup-registered",
     );
-    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       if (command === "git" && execution.stage === "worktree-add") {
         await fs.mkdir(String(args[4]), { recursive: true });
@@ -460,7 +464,7 @@ describe("mantis worktree cleanup runtime", () => {
 
   it("preserves remove failure first when registration listing fails", async () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-list-fails");
-    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
     const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
       if (command === "git" && execution.stage === "worktree-add") {
         await fs.mkdir(String(args[4]), { recursive: true });

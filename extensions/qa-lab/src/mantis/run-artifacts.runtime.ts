@@ -1,9 +1,13 @@
 // Qa Lab plugin module implements Mantis evidence artifact handling.
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence-summary.js";
+import {
+  assertMantisDirectoryOwnership,
+  type MantisDirectoryOwnership,
+} from "./run-directory.runtime.js";
 
 type NormalizedScenarioSummary = {
   details?: string;
@@ -26,128 +30,154 @@ function isNotFoundError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-const MANTIS_RUN_OUTPUT_COMPONENTS = [
-  "baseline",
-  "candidate",
-  "comparison.json",
-  "mantis-report.md",
-  "mantis-evidence.json",
-] as const;
-
 function createMantisPublishRollbackError(params: {
-  previousRunDir: string;
   publishError: unknown;
   rollbackErrors: unknown[];
 }): AggregateError {
   return new AggregateError(
     [params.publishError, ...params.rollbackErrors],
-    `Mantis could not publish the staged comparison or completely restore ${params.previousRunDir}`,
+    "Mantis could not publish the staged comparison or completely restore the previous generation",
     { cause: params.publishError },
   );
 }
 
-function createMantisPublishRollbackCleanupError(params: {
-  cleanupError: unknown;
-  previousRunDir: string;
-  publishError: unknown;
-}): AggregateError {
-  const cleanupFailure = new Error(
-    `Mantis restored the previous comparison but could not remove ${params.previousRunDir}`,
-    { cause: params.cleanupError },
-  );
-  return new AggregateError(
-    [params.publishError, cleanupFailure],
-    "Mantis comparison publication failed and rollback cleanup was incomplete",
-    { cause: params.publishError },
-  );
+function toRootRelative(repoRoot: string, targetPath: string): string {
+  return path.relative(repoRoot, targetPath).split(path.sep).join(path.posix.sep);
 }
+
+function ownershipAtParent(
+  parent: MantisDirectoryOwnership,
+  target: MantisDirectoryOwnership,
+): MantisDirectoryOwnership {
+  return {
+    parentDevice: parent.targetDevice,
+    parentInode: parent.targetInode,
+    targetDevice: target.targetDevice,
+    targetInode: target.targetInode,
+  };
+}
+
+function throwIfMantisPublicationAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new Error("Mantis artifact publication aborted", { cause: signal.reason });
+  }
+}
+
+export type MantisRunPublication = {
+  outputOwnership: MantisDirectoryOwnership;
+  previousRunDir: string;
+  previousRunOwnership: MantisDirectoryOwnership;
+};
 
 export async function publishMantisRunOutput(params: {
   outputDir: string;
+  outputOwnership: MantisDirectoryOwnership;
+  repoRoot: string;
+  runWorkspaceDir: string;
+  runWorkspaceOwnership: MantisDirectoryOwnership;
+  signal?: AbortSignal;
   stagedRunDir: string;
-}): Promise<void> {
-  // One before/after run owns every stable component. Retain the complete old
-  // generation until every staged component is promoted, then roll all of it
-  // back if any rename fails so readers never observe a mixed final state.
-  const previousRunDir = path.join(
-    params.outputDir,
-    `.mantis-previous-run-${process.pid}-${randomUUID()}`,
+  stagedRunOwnership: MantisDirectoryOwnership;
+}): Promise<MantisRunPublication> {
+  // Publish the entire evidence tree as one generation. The two directory
+  // renames can expose a brief absent target, but never a component-mixed run.
+  const previousRunDir = path.join(params.runWorkspaceDir, "previous");
+  const previousRunOwnership = ownershipAtParent(
+    params.runWorkspaceOwnership,
+    params.outputOwnership,
   );
-  const backedUpComponents: (typeof MANTIS_RUN_OUTPUT_COMPONENTS)[number][] = [];
-  const promotedComponents: (typeof MANTIS_RUN_OUTPUT_COMPONENTS)[number][] = [];
-  await fs.mkdir(previousRunDir);
+  const publishedOwnership = {
+    parentDevice: params.outputOwnership.parentDevice,
+    parentInode: params.outputOwnership.parentInode,
+    targetDevice: params.stagedRunOwnership.targetDevice,
+    targetInode: params.stagedRunOwnership.targetInode,
+  } satisfies MantisDirectoryOwnership;
+  const repoRootHandle = await root(params.repoRoot);
+  const outputRelative = toRootRelative(params.repoRoot, params.outputDir);
+  const previousRelative = toRootRelative(params.repoRoot, previousRunDir);
+  const stagedRelative = toRootRelative(params.repoRoot, params.stagedRunDir);
+  let previousMoved = false;
+  let stagedMoved = false;
 
   try {
-    for (const component of MANTIS_RUN_OUTPUT_COMPONENTS) {
-      try {
-        await fs.rename(
-          path.join(params.outputDir, component),
-          path.join(previousRunDir, component),
-        );
-        backedUpComponents.push(component);
-      } catch (error) {
-        if (!isNotFoundError(error)) {
-          throw error;
-        }
-      }
-    }
+    await assertMantisDirectoryOwnership({
+      directoryPath: params.outputDir,
+      ownership: params.outputOwnership,
+      repoRoot: params.repoRoot,
+    });
+    await assertMantisDirectoryOwnership({
+      directoryPath: params.stagedRunDir,
+      ownership: params.stagedRunOwnership,
+      repoRoot: params.repoRoot,
+    });
+    throwIfMantisPublicationAborted(params.signal);
 
-    for (const component of MANTIS_RUN_OUTPUT_COMPONENTS) {
-      await fs.rename(
-        path.join(params.stagedRunDir, component),
-        path.join(params.outputDir, component),
-      );
-      promotedComponents.push(component);
-    }
+    await repoRootHandle.move(outputRelative, previousRelative, { overwrite: true });
+    previousMoved = true;
+    await assertMantisDirectoryOwnership({
+      directoryPath: previousRunDir,
+      ownership: previousRunOwnership,
+      repoRoot: params.repoRoot,
+    });
+    throwIfMantisPublicationAborted(params.signal);
+
+    await repoRootHandle.move(stagedRelative, outputRelative, { overwrite: true });
+    stagedMoved = true;
+    await assertMantisDirectoryOwnership({
+      directoryPath: params.outputDir,
+      ownership: publishedOwnership,
+      repoRoot: params.repoRoot,
+    });
+    throwIfMantisPublicationAborted(params.signal);
+
+    return {
+      outputOwnership: publishedOwnership,
+      previousRunDir,
+      previousRunOwnership,
+    };
   } catch (publishError) {
     const rollbackErrors: unknown[] = [];
-    for (const component of promotedComponents.toReversed()) {
+    if (stagedMoved) {
       try {
-        await fs.rename(
-          path.join(params.outputDir, component),
-          path.join(params.stagedRunDir, component),
-        );
+        await assertMantisDirectoryOwnership({
+          directoryPath: params.outputDir,
+          ownership: publishedOwnership,
+          repoRoot: params.repoRoot,
+        });
+        await repoRootHandle.move(outputRelative, stagedRelative, { overwrite: true });
+        await assertMantisDirectoryOwnership({
+          directoryPath: params.stagedRunDir,
+          ownership: params.stagedRunOwnership,
+          repoRoot: params.repoRoot,
+        });
       } catch (error) {
         rollbackErrors.push(error);
       }
     }
-    for (const component of backedUpComponents.toReversed()) {
+    if (previousMoved) {
       try {
-        await fs.rename(
-          path.join(previousRunDir, component),
-          path.join(params.outputDir, component),
-        );
+        await assertMantisDirectoryOwnership({
+          directoryPath: previousRunDir,
+          ownership: previousRunOwnership,
+          repoRoot: params.repoRoot,
+        });
+        await repoRootHandle.move(previousRelative, outputRelative, { overwrite: true });
+        await assertMantisDirectoryOwnership({
+          directoryPath: params.outputDir,
+          ownership: params.outputOwnership,
+          repoRoot: params.repoRoot,
+        });
       } catch (error) {
         rollbackErrors.push(error);
       }
     }
     if (rollbackErrors.length > 0) {
       throw createMantisPublishRollbackError({
-        previousRunDir,
         publishError,
         rollbackErrors,
       });
     }
-    const cleanupOutcome = await fs.rm(previousRunDir, { force: true, recursive: true }).then(
-      () => ({ ok: true as const }),
-      (error: unknown) => ({ error, ok: false as const }),
-    );
-    if (!cleanupOutcome.ok) {
-      throw createMantisPublishRollbackCleanupError({
-        cleanupError: cleanupOutcome.error,
-        previousRunDir,
-        publishError,
-      });
-    }
     throw publishError;
-  }
-
-  try {
-    await fs.rm(previousRunDir, { force: true, recursive: true });
-  } catch (error) {
-    throw new Error(`Mantis published new evidence but could not remove ${previousRunDir}`, {
-      cause: error,
-    });
   }
 }
 

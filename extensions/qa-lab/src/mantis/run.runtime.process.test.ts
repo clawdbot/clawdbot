@@ -177,7 +177,7 @@ describe("mantis before/after process runtime", () => {
       "seed",
     ]);
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "invalid-ref");
-    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
 
     await expect(
       runMantisBeforeAfter({
@@ -191,7 +191,7 @@ describe("mantis before/after process runtime", () => {
     ).rejects.toThrow("baseline worktree-add failed");
 
     await expect(fs.stat(baselineWorktreeDir)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.readdir(path.join(outputDir, "worktrees"))).resolves.toEqual([]);
+    await expect(fs.readdir(`${outputDir}.worktrees`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("stops an active injected lane command when aborted", async () => {
@@ -407,7 +407,7 @@ describe("mantis before/after process runtime", () => {
       process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
       const controller = new AbortController();
       const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "real-qa-timeout");
-      const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+      const baselineWorktreeDir = path.join(`${outputDir}.worktrees`, "baseline");
       let parentPid: number | undefined;
       let descendantPid: number | undefined;
       const run = runMantisBeforeAfter({
