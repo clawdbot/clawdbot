@@ -24,6 +24,7 @@ import {
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
+import type { SubagentRegistrationIdentity } from "./subagent-registry-run-launch.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -40,6 +41,7 @@ class SubagentRunManager extends SubagentLaunchManager {
     reason: string;
     expectedSessionId?: string;
     expectedLifecycleRevision?: string;
+    expectedRegistration?: SubagentRegistrationIdentity;
   }):
     | { status: "persisted" }
     | { status: "pending-persistence"; error: unknown }
@@ -48,7 +50,16 @@ class SubagentRunManager extends SubagentLaunchManager {
     const gatewayRunId = params.gatewayRunId.trim();
     const reason = params.reason.trim() || "Accepted subagent rollback pending.";
     const entry = this.options.runs.get(runId);
-    if (!entry || entry.childSessionKey !== params.childSessionKey || !gatewayRunId) {
+    if (
+      !entry ||
+      entry.childSessionKey !== params.childSessionKey ||
+      !gatewayRunId ||
+      (params.expectedRegistration !== undefined &&
+        (entry.runId !== params.expectedRegistration.runId ||
+          entry.childSessionKey !== params.expectedRegistration.childSessionKey ||
+          entry.generation !== params.expectedRegistration.generation ||
+          entry.createdAt !== params.expectedRegistration.createdAt))
+    ) {
       return { status: "rejected" };
     }
     const existing = entry.acceptedSpawnRollback;
@@ -79,9 +90,16 @@ class SubagentRunManager extends SubagentLaunchManager {
   readonly rollbackSubagentRunRegistration = (params: {
     runId: string;
     childSessionKey: string;
+    expectedRegistration?: SubagentRegistrationIdentity;
   }): boolean => {
     const entry = this.options.runs.get(params.runId);
-    if (!entry || entry.childSessionKey !== params.childSessionKey) {
+    if (
+      !entry ||
+      entry.childSessionKey !== params.childSessionKey ||
+      (params.expectedRegistration !== undefined &&
+        (entry.generation !== params.expectedRegistration.generation ||
+          entry.createdAt !== params.expectedRegistration.createdAt))
+    ) {
       return false;
     }
     this.options.runs.delete(params.runId);

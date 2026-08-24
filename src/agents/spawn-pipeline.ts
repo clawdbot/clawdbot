@@ -1,4 +1,9 @@
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
+import type {
+  SubagentRegistrationError,
+  SubagentRegistrationIdentity,
+  SubagentRegistrationOwnership,
+} from "./subagents/registry/subagent-registry-run-launch.js";
 import { registerSubagentRun } from "./subagents/registry/subagent-registry.js";
 export { summarizeSpawnError } from "./spawn-error.js";
 
@@ -49,6 +54,13 @@ function combineSpawnRollbackError(error: unknown, rollbackError: unknown, messa
   return aggregate;
 }
 
+function readRegistrationOwnership(error: unknown): SubagentRegistrationOwnership | undefined {
+  if (!(error instanceof Error) || !("registrationOwnership" in error)) {
+    return undefined;
+  }
+  return (error as SubagentRegistrationError).registrationOwnership;
+}
+
 type SpawnPipelineParams<TState> = {
   adapter: SpawnBackendAdapter<TState>;
   admissionReservation?: { release: () => void };
@@ -65,12 +77,16 @@ type SpawnPipelineParams<TState> = {
   afterRegistration?: (state: TState, runId: string) => Promise<void>;
   recordAcceptedRollback?: (
     registration: RegisterSubagentRunInput,
+    ownership: SubagentRegistrationIdentity,
     error: unknown,
   ) =>
     | { status: "persisted" }
     | { status: "pending-persistence"; error: unknown }
     | { status: "rejected" };
-  rollbackRegistration?: (registration: RegisterSubagentRunInput) => boolean;
+  rollbackRegistration?: (
+    registration: RegisterSubagentRunInput,
+    ownership: SubagentRegistrationIdentity,
+  ) => boolean;
 };
 
 export async function runSpawnPipeline<TState>(
@@ -103,12 +119,12 @@ async function executeSpawnPipeline<TState>(
   }
 
   let registration!: RegisterSubagentRunInput;
-  let registrationActive = false;
+  let registrationOwnership: SubagentRegistrationIdentity | undefined;
   let rollbackPromise: Promise<void> | undefined;
   const rollbackAccepted = (
     error: unknown = new Error("Accepted subagent registration rolled back."),
   ): Promise<void> => {
-    if (!registrationActive) {
+    if (!registrationOwnership) {
       return rollbackPromise ?? Promise.resolve();
     }
     if (rollbackPromise) {
@@ -116,7 +132,8 @@ async function executeSpawnPipeline<TState>(
     }
     rollbackPromise = (async () => {
       const failures: unknown[] = [];
-      const rollbackOwner = params.recordAcceptedRollback?.(registration, error);
+      const ownership = registrationOwnership;
+      const rollbackOwner = params.recordAcceptedRollback?.(registration, ownership, error);
       if (rollbackOwner?.status === "rejected") {
         failures.push(new Error(`Accepted subagent rollback owner was rejected: ${runId}`));
       } else if (rollbackOwner?.status === "pending-persistence") {
@@ -135,10 +152,10 @@ async function executeSpawnPipeline<TState>(
       }
       if (cleanupComplete) {
         try {
-          if (params.rollbackRegistration?.(registration) === false) {
+          if (params.rollbackRegistration?.(registration, ownership) === false) {
             throw new Error(`Accepted subagent registration rollback lost ownership: ${runId}`);
           }
-          registrationActive = false;
+          registrationOwnership = undefined;
         } catch (rollbackError) {
           failures.push(rollbackError);
         }
@@ -161,13 +178,17 @@ async function executeSpawnPipeline<TState>(
     // can revalidate shared admission state without an interleaving await.
     registration = params.buildRegistration(state, runId);
     params.assertRegistrationAdmission?.();
-    registerSubagentRun(registration);
-    registrationActive = true;
+    const registrationResult = registerSubagentRun(registration);
+    registrationOwnership = registrationResult.attempted;
     params.publishRegistration?.(registration);
     // Registry insertion takes ownership synchronously; keeping the slot would double-count it.
     params.admissionReservation?.release();
   } catch (error) {
-    if (registrationActive) {
+    const failedOwnership = readRegistrationOwnership(error);
+    if (failedOwnership?.status === "new-row-survived") {
+      registrationOwnership = failedOwnership.attempted;
+    }
+    if (registrationOwnership) {
       try {
         await rollbackAccepted(error);
       } catch (rollbackError) {

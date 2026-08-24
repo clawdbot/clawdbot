@@ -399,8 +399,20 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }));
 
   const countActiveRunsForSessionImpl = params.countActiveRunsForSession ?? (() => 0);
-  const registerSubagentRunImpl =
-    params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined);
+  const registerSubagentRunImpl = vi.fn((record: Record<string, unknown>) => {
+    const result = params.registerSubagentRunMock?.(record);
+    return (
+      result ?? {
+        status: "new-row-committed",
+        attempted: {
+          runId: String(record.runId),
+          childSessionKey: String(record.childSessionKey),
+          generation: 1,
+          createdAt: 1,
+        },
+      }
+    );
+  });
   vi.doMock("../registry/subagent-registry.js", () => ({
     completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: countActiveRunsForSessionImpl,

@@ -6,7 +6,13 @@ import "./subagents/registry/subagent-registry.mocks.shared.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import * as detachedTaskRuntime from "../tasks/detached-task-runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { runSpawnPipeline } from "./spawn-pipeline.js";
+import type { SubagentRegistrationIdentity } from "./subagents/registry/subagent-registry-run-launch.js";
 import { persistSubagentRunsToDiskOrThrow } from "./subagents/registry/subagent-registry-state.js";
+import {
+  recordAcceptedSubagentSpawnRollback,
+  rollbackSubagentRunRegistration,
+} from "./subagents/registry/subagent-registry.js";
 import {
   createSubagentRegistryTestDeps,
   canonicalSubagentRunFixtures,
@@ -93,6 +99,51 @@ describe("subagent registration rollback", () => {
     cleanupCompletedAt: 4,
   });
 
+  function createRegistration(runId: string, childSessionKey: string) {
+    return {
+      runId,
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "registration ownership integration",
+      cleanup: "keep" as const,
+      taskRowOwnership: "required" as const,
+    };
+  }
+
+  function createPipelineAdapter(cleanupOnFailure: () => Promise<void>) {
+    return {
+      initialize: async () => ({}),
+      dispatchTurn: async () => ({ runId: "run-pipeline-registration" }),
+      cleanupOnFailure,
+    };
+  }
+
+  function recordAcceptedRollback(
+    registration: ReturnType<typeof createRegistration>,
+    ownership: SubagentRegistrationIdentity,
+    error: unknown,
+  ) {
+    return recordAcceptedSubagentSpawnRollback({
+      runId: registration.runId,
+      childSessionKey: registration.childSessionKey,
+      gatewayRunId: registration.runId,
+      reason: error instanceof Error ? error.message : String(error),
+      expectedRegistration: ownership,
+    });
+  }
+
+  function rollbackRegistration(
+    registration: ReturnType<typeof createRegistration>,
+    ownership: SubagentRegistrationIdentity,
+  ) {
+    return rollbackSubagentRunRegistration({
+      runId: registration.runId,
+      childSessionKey: registration.childSessionKey,
+      expectedRegistration: ownership,
+    });
+  }
+
   it("restores same-id and older kill state after task registration throws", () => {
     const childSessionKey = "agent:main:subagent:task-registration-fails";
     const runId = "run-task-registration-fails";
@@ -135,7 +186,7 @@ describe("subagent registration rollback", () => {
           cleanup: "keep",
           taskRowOwnership: "required",
         }),
-      ).toThrow(taskError);
+      ).toThrow(expect.objectContaining({ cause: taskError }));
       expect(
         listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId),
       ).toMatchObject({
@@ -188,7 +239,7 @@ describe("subagent registration rollback", () => {
         task: "replacement that must roll back",
         cleanup: "keep",
       }),
-    ).toThrow(persistError);
+    ).toThrow(expect.objectContaining({ cause: persistError }));
     expect(
       listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId),
     ).toMatchObject({
@@ -248,5 +299,187 @@ describe("subagent registration rollback", () => {
     } finally {
       createTaskSpy.mockRestore();
     }
+  });
+
+  it("retains exact rollback authority when registration survives and termination is incomplete", async () => {
+    const taskError = new Error("task runtime unavailable");
+    const rollbackPersistError = new Error("rollback sqlite busy");
+    const terminationError = new Error("gateway termination unavailable");
+    let persistAttempt = 0;
+    testing.setDepsForTest({
+      ...createSubagentRegistryTestDeps(),
+      persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
+        persistAttempt += 1;
+        if (persistAttempt === 2) {
+          throw rollbackPersistError;
+        }
+        persistSubagentRunsToDiskOrThrow(runs, changedRunIds);
+      },
+    });
+    const createTaskSpy = vi
+      .spyOn(detachedTaskRuntime, "createRunningTaskRun")
+      .mockImplementationOnce(() => {
+        throw taskError;
+      });
+    const cleanupOnFailure = vi.fn(async () => {
+      throw terminationError;
+    });
+    const childSessionKey = "agent:main:subagent:pipeline-registration";
+    const registration = createRegistration("run-pipeline-registration", childSessionKey);
+
+    try {
+      let thrown: unknown;
+      try {
+        await runSpawnPipeline({
+          adapter: createPipelineAdapter(cleanupOnFailure),
+          progressSessionKey: "agent:main:main",
+          buildRegistration: () => registration,
+          recordAcceptedRollback,
+          rollbackRegistration,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(cleanupOnFailure).toHaveBeenCalledOnce();
+      expect(thrown).toBeInstanceOf(AggregateError);
+      const registrationError = (thrown as AggregateError).errors[0] as AggregateError & {
+        registrationOwnership: { status: string };
+      };
+      expect(registrationError.errors).toEqual([taskError, rollbackPersistError]);
+      expect(registrationError.cause).toBe(taskError);
+      expect(registrationError.registrationOwnership.status).toBe("new-row-survived");
+      const retained = getSubagentRunByChildSessionKey(childSessionKey);
+      expect(retained).toMatchObject({
+        runId: registration.runId,
+        acceptedSpawnRollback: {
+          gatewayRunId: registration.runId,
+          reason: expect.stringContaining("rollback persistence both failed"),
+        },
+        suppressCompletionDelivery: true,
+        execution: { suppressSessionEffects: true },
+      });
+      expect(retained?.execution.restartRecovery).toBeUndefined();
+      expect(loadSubagentRegistryFromSqlite().get(registration.runId)).toMatchObject({
+        acceptedSpawnRollback: { gatewayRunId: registration.runId },
+        suppressCompletionDelivery: true,
+        execution: { suppressSessionEffects: true },
+      });
+      await testing.sweepOnceForTests();
+      expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+        runId: registration.runId,
+        acceptedSpawnRollback: { gatewayRunId: registration.runId },
+        suppressCompletionDelivery: true,
+        execution: { suppressSessionEffects: true },
+      });
+    } finally {
+      createTaskSpy.mockRestore();
+    }
+  });
+
+  it("preserves a restored same-id predecessor after failed replacement registration", async () => {
+    const runId = "run-pipeline-registration";
+    const childSessionKey = "agent:main:subagent:pipeline-predecessor";
+    const predecessor = createPriorSameIdRun(runId, childSessionKey);
+    addSubagentRunForTests(predecessor);
+    saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(new Map([[runId, predecessor]])));
+    const taskError = new Error("task runtime unavailable");
+    const createTaskSpy = vi
+      .spyOn(detachedTaskRuntime, "createRunningTaskRun")
+      .mockImplementationOnce(() => {
+        throw taskError;
+      });
+    const cleanupOnFailure = vi.fn(async () => {});
+
+    try {
+      const result = await runSpawnPipeline({
+        adapter: createPipelineAdapter(cleanupOnFailure),
+        progressSessionKey: "agent:main:main",
+        buildRegistration: () => createRegistration(runId, childSessionKey),
+        recordAcceptedRollback,
+        rollbackRegistration,
+      });
+
+      expect(result).toMatchObject({ ok: false, phase: "register" });
+      if (result.ok) {
+        throw new Error("expected replacement registration failure");
+      }
+      expect(
+        (
+          result.error as Error & {
+            registrationOwnership: { status: string; predecessor: { createdAt: number } };
+          }
+        ).registrationOwnership,
+      ).toEqual(
+        expect.objectContaining({
+          status: "predecessor-restored",
+          predecessor: expect.objectContaining({ createdAt: predecessor.createdAt }),
+        }),
+      );
+      expect(cleanupOnFailure).toHaveBeenCalledOnce();
+      const restored = getSubagentRunByChildSessionKey(childSessionKey);
+      expect(restored).toMatchObject({
+        runId,
+        task: predecessor.task,
+        generation: predecessor.generation,
+      });
+      expect(restored?.acceptedSpawnRollback).toBeUndefined();
+      expect(restored?.execution).toEqual(predecessor.execution);
+    } finally {
+      createTaskSpy.mockRestore();
+    }
+  });
+
+  it("attempts external cleanup without a rollback marker when no durable row survives", async () => {
+    const persistError = new Error("initial sqlite busy");
+    testing.setDepsForTest({
+      ...createSubagentRegistryTestDeps(),
+      persistSubagentRunsToDiskOrThrow: () => {
+        throw persistError;
+      },
+    });
+    const cleanupOnFailure = vi.fn(async () => {});
+    const childSessionKey = "agent:main:subagent:pipeline-no-row";
+
+    const result = await runSpawnPipeline({
+      adapter: createPipelineAdapter(cleanupOnFailure),
+      progressSessionKey: "agent:main:main",
+      buildRegistration: () => createRegistration("run-pipeline-registration", childSessionKey),
+      recordAcceptedRollback,
+      rollbackRegistration,
+    });
+
+    expect(result).toMatchObject({ ok: false, phase: "register" });
+    if (result.ok) {
+      throw new Error("expected registration persistence failure");
+    }
+    expect(
+      (result.error as Error & { registrationOwnership: { status: string } }).registrationOwnership
+        .status,
+    ).toBe("no-new-row");
+    expect(cleanupOnFailure).toHaveBeenCalledOnce();
+    expect(getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
+    expect(loadSubagentRegistryFromSqlite().has("run-pipeline-registration")).toBe(false);
+  });
+
+  it("keeps normal registration and rollback exactly once", async () => {
+    const cleanupOnFailure = vi.fn(async () => {});
+    const childSessionKey = "agent:main:subagent:pipeline-success";
+    const result = await runSpawnPipeline({
+      adapter: createPipelineAdapter(cleanupOnFailure),
+      progressSessionKey: "agent:main:main",
+      buildRegistration: () => createRegistration("run-pipeline-registration", childSessionKey),
+      recordAcceptedRollback,
+      rollbackRegistration,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe(result.runId);
+    await result.rollbackAccepted();
+    expect(getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
+    expect(cleanupOnFailure).toHaveBeenCalledOnce();
   });
 });

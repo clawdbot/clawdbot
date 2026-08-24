@@ -626,13 +626,19 @@ export async function spawnSubagentDirect(
       afterRegistration: params.collect
         ? undefined
         : (_state, runId) => emitSpawnLifecycleHooks(runId),
-      rollbackRegistration: rollbackSubagentRunRegistration,
-      recordAcceptedRollback: (registration, error) =>
+      rollbackRegistration: (registration, ownership) =>
+        rollbackSubagentRunRegistration({
+          runId: registration.runId,
+          childSessionKey: registration.childSessionKey,
+          expectedRegistration: ownership,
+        }),
+      recordAcceptedRollback: (registration, ownership, error) =>
         recordAcceptedSubagentSpawnRollback({
           runId: registration.runId,
           childSessionKey: registration.childSessionKey,
           gatewayRunId: acceptedChildRunId ?? registration.runId,
           reason: error instanceof Error ? error.message : String(error),
+          expectedRegistration: ownership,
           ...provisionalSessionIdentity,
         }),
     });
