@@ -193,7 +193,7 @@ function loadLane({ factsFile, expectedSha, lane, outputDir, publishedRoot }) {
   return { artifacts, facts, status: facts.status === "complete" ? "pass" : "blocked" };
 }
 
-export function collectProof(options) {
+function collectProof(options) {
   const judgment = validateAgentJudgment(options.agentManifest);
   if (fs.existsSync(options.outputDir)) {
     fail(`Trusted output already exists: ${options.outputDir}`);
@@ -268,7 +268,7 @@ export function collectProof(options) {
   return manifest;
 }
 
-export function main(argv = process.argv.slice(2)) {
+function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
   if (command !== "collect") {
     fail("Usage: telegram-visible-proof.mjs collect [arguments]");
