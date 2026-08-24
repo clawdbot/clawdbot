@@ -197,7 +197,7 @@ describe("auth profile batch persistence", () => {
               failureCounts: { auth_permanent: 4 },
               blockedUntil: Date.now() + 60_000,
               blockedReason: "subscription_limit",
-              blockedSource: "usage",
+              blockedSource: "wham",
               blockedModel: "gpt-5.6",
               blockedScope: "model",
               cooldownUntil: Date.now() + 60_000,
