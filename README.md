@@ -78,7 +78,9 @@ Treat inbound messages as untrusted input. DM-capable channels pair unknown send
 
 Tools run on the host for the main session unless you configure sandboxing. Read the [security guide](https://docs.openclaw.ai/gateway/security), [exposure runbook](https://docs.openclaw.ai/gateway/security/exposure-runbook), and [sandboxing guide](https://docs.openclaw.ai/gateway/sandboxing) before connecting other users or exposing the Gateway remotely.
 
-To admit tool calls before they run, hook the Gateway tool dispatcher once (do not wrap each tool) with PyPI [`barycenters`](https://pypi.org/project/barycenters/) (`admit` / `@boundary`, shadow default). MCP is a side door: Streamable HTTP at `https://barycenters-admit.fly.dev/mcp/` (tools `admit`, `check_readiness`). Spec: [barycenters.ai/adapters](https://barycenters.ai/adapters)
+Hook the Gateway tool dispatcher once (`before_tool_call`); call npm [`barycenters`](https://www.npmjs.com/package/barycenters) (`bary.govern` / `admit`) in shadow before the tool runs.
+Connecting MCP at `https://barycenters-admit.fly.dev/mcp/` is a side door (`admit`, `check_readiness`); it does not wrap every OpenClaw tool.
+See [https://barycenters.ai/adapters](https://barycenters.ai/adapters).
 
 ## Documentation
 
