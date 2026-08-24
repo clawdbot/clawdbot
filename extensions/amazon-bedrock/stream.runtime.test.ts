@@ -983,11 +983,19 @@ describe("Bedrock toolUse.input replay sanitization", () => {
 
   it.each([
     { label: "a raw string", value: "not-an-object" },
+    { label: "a malformed JSON string", value: '{"path":"README.md"' },
     { label: "an array", value: ["a", "b"] },
     { label: "a number", value: 42 },
     { label: "null", value: null },
   ])("falls back to an empty document when toolCall arguments is $label", async ({ value }) => {
     expect(await toolUseInputOf(value)).toEqual({});
+  });
+
+  it("recovers a serialized JSON-object string as the parsed arguments", async () => {
+    // A non-Anthropic model can leave stored arguments as a serialized JSON
+    // object string; the canonical transport coercion parses it back into the
+    // object Bedrock Converse accepts, rather than dropping a valid payload.
+    expect(await toolUseInputOf('{"path":"README.md"}')).toEqual({ path: "README.md" });
   });
 
   it("preserves a well-formed object toolCall arguments as-is", async () => {

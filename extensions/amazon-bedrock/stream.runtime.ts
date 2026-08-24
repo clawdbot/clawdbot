@@ -71,6 +71,7 @@ import {
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
+  coerceTransportToolCallArguments,
   describeToolResultMediaPlaceholder,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpMetadata,
@@ -1011,12 +1012,11 @@ function convertMessages(
                 toolUse: {
                   toolUseId: c.id,
                   name: c.name,
-                  // Bedrock Converse rejects a non-object toolUse.input on replay
-                  // with "Invalid 'input': value did not match any expected variant";
-                  // a non-Anthropic model can leave stored arguments as a raw
-                  // string/array/primitive. Fall back to an empty document rather
-                  // than replaying malformed input that poisons every later turn.
-                  input: isRecord(c.arguments) ? (c.arguments as DocumentType) : {},
+                  // Canonical transport coercion shared with sibling provider replay
+                  // (e.g. Anthropic): preserves object args, parses serialized
+                  // JSON-string args, and empties malformed/scalar values Bedrock
+                  // rejects on replay ("Invalid 'input': value did not match any expected variant").
+                  input: coerceTransportToolCallArguments(c.arguments) as DocumentType,
                 },
               });
               break;
