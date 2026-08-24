@@ -9,9 +9,12 @@ import {
   type ChatMessageCache,
 } from "./session-message-cache.ts";
 
-function createState(handler: (params?: unknown) => unknown) {
+function createState(
+  handler: (params?: unknown) => unknown,
+  startupHandler: (params?: unknown) => unknown = handler,
+) {
   return makeChatHost({
-    requestHandlers: { "chat.history": handler },
+    requestHandlers: { "chat.history": handler, "chat.startup": startupHandler },
     sessionKey: "main",
     connectionEpoch: 1,
   });
@@ -46,6 +49,48 @@ function seedCachedHistory(
 }
 
 describe("chat history cursor revalidation", () => {
+  it("restores an in-flight run from a startup cursor delta", async () => {
+    const cached = message("user", "cached", "cached-user", 1);
+    const startupHandler = vi.fn(async () => ({
+      kind: "delta",
+      messages: [],
+      deltaCursor: "cursor-2",
+      sessionInfo: {
+        key: "main",
+        kind: "direct",
+        sessionId: "session-cursor",
+        updatedAt: 2,
+        hasActiveRun: true,
+        activeRunIds: ["run-live"],
+        status: "running",
+      },
+      inFlightRun: {
+        runId: "run-live",
+        text: "The active response survived reconnect.",
+        startedAt: 1_000,
+      },
+    }));
+    const state = createState(
+      async () => ({
+        messages: [cached],
+        deltaCursor: "cursor-2",
+      }),
+      startupHandler,
+    );
+    seedCachedHistory(state, [cached], "cursor-1");
+    state.chatRunId = "run-live";
+    state.chatStream = null;
+
+    await loadChatHistory(state, { startup: true });
+
+    expect(startupHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ cursor: "cursor-1", sessionKey: "main" }),
+    );
+    expect(state.chatStream).toBe("The active response survived reconnect.");
+    expect(state.chatStreamStartedAt).toBe(1_000);
+    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-live" });
+  });
+
   it("keeps cached paint while replay updates an existing tool message in place", async () => {
     const cached = message(
       "assistant",

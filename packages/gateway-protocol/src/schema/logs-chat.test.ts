@@ -56,6 +56,7 @@ describe("ChatHistoryCursorResultSchema", () => {
       messages: [],
       deltaCursor: "cursor-2",
       sessionInfo,
+      inFlightRun: { runId: "run-1", text: "still working" },
     };
     expect(Value.Check(ChatHistoryCursorResultSchema, delta)).toBe(true);
     expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset" })).toBe(true);

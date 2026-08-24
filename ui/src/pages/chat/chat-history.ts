@@ -313,6 +313,7 @@ type ChatHistoryDeltaResult = {
   messages: unknown[];
   deltaCursor: string;
   sessionInfo: GatewaySessionRow;
+  inFlightRun?: ChatHistoryResult["inFlightRun"];
   agentsList?: AgentsListResult;
   metadata?: ChatMetadataResult;
 };
@@ -399,6 +400,86 @@ function mergeInFlightAssistantTails(
   // Every Gateway delta carries its full assistant message. Comparing complete
   // projections preserves repeated tokens without guessing delta overlap.
   return cumulativeLiveTail;
+}
+
+function reconcileInFlightRunSnapshot(
+  state: ChatState,
+  {
+    activeStreamBeforeReset,
+    historyProjection,
+    previousRunProjections,
+    resetStream,
+    run,
+    runProjectionsBeforeApply,
+    sessionInfo,
+  }: {
+    activeStreamBeforeReset: string | null;
+    historyProjection: ReturnType<typeof getChatSessionProjection>;
+    previousRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
+    resetStream: boolean;
+    run: ChatHistoryResult["inFlightRun"];
+    runProjectionsBeforeApply: ReturnType<typeof getChatSessionProjection>["runs"];
+    sessionInfo: GatewaySessionRow | undefined;
+  },
+): void {
+  const inFlightRunId = run?.runId?.trim();
+  const activeRunIds = sessionInfo?.activeRunIds;
+  const projectedInFlightRun = inFlightRunId ? historyProjection.runs[inFlightRunId] : undefined;
+  const sameRunContinued = Boolean(
+    inFlightRunId &&
+    state.chatRunId === inFlightRunId &&
+    projectedInFlightRun?.status === "streaming" &&
+    onlyInFlightRunProjectionChanged(previousRunProjections, historyProjection.runs, inFlightRunId),
+  );
+  const inFlightRunIsActive = Boolean(
+    inFlightRunId &&
+    isSessionRunActive(sessionInfo ?? {}) &&
+    (!Array.isArray(activeRunIds) || activeRunIds.includes(inFlightRunId)) &&
+    (!projectedInFlightRun || projectedInFlightRun.status === "streaming"),
+  );
+  const canAdoptInFlightRun = Boolean(
+    inFlightRunId &&
+    inFlightRunIsActive &&
+    ((resetStream &&
+      !state.chatRunId &&
+      runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)) ||
+      sameRunContinued),
+  );
+  if (inFlightRunId && canAdoptInFlightRun) {
+    // Canonical run projections change on every live delta or terminal.
+    // Their identity fences ABA races where a run starts and finishes while
+    // history is pending; deltas from this same live run must still merge.
+    state.chatRunId = inFlightRunId;
+  }
+  if (!inFlightRunIsActive || !run || state.chatRunId !== inFlightRunId) {
+    return;
+  }
+  const snapshotStartedAt =
+    typeof run.startedAt === "number" && Number.isFinite(run.startedAt) ? run.startedAt : null;
+  const snapshotTail = resolveInFlightAssistantTail(state.chatMessages, run.text, inFlightRunId);
+  const liveTail = sameRunContinued
+    ? resolveInFlightAssistantTail(
+        state.chatMessages,
+        extractText(projectedInFlightRun?.message),
+        inFlightRunId,
+      )
+    : activeStreamBeforeReset;
+  const tail = mergeInFlightAssistantTails(snapshotTail, liveTail);
+  state.chatStream = tail;
+  state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
+  const persistedBoundary = latestPersistedSteerBoundary(state.chatMessages, inFlightRunId);
+  if (tail && persistedBoundary) {
+    markChatStreamAfterBoundary(state, {
+      runId: inFlightRunId,
+      boundaryRunId: persistedBoundary.runId,
+      timestamp: state.chatStreamStartedAt,
+    });
+  }
+  state.chatRunStartup = { state: "activity", runId: inFlightRunId };
+  // Disconnect cleanup intentionally removes transient activity rows while
+  // retaining the owned run. Replay fills that gap; per-identity sequence
+  // fences keep a delayed snapshot from replacing newer live progress.
+  replayInFlightRunEvents(state, run);
 }
 
 export function resolveChatHistoryPagination(
@@ -1561,6 +1642,9 @@ async function loadChatHistoryUncached(
       }
     }
     if (isChatHistoryCursorResult(response) && response.kind === "delta") {
+      const activeStreamBeforeReset = state.chatRunId ? state.chatStream : null;
+      const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
+      const runProjectionsBeforeApply = getChatSessionProjection(state, state.chatMessages).runs;
       const runActive = isSessionRunActive(response.sessionInfo);
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
@@ -1573,6 +1657,16 @@ async function loadChatHistoryUncached(
       state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
+      const historyProjection = getChatSessionProjection(state, state.chatMessages);
+      reconcileInFlightRunSnapshot(state, {
+        activeStreamBeforeReset,
+        historyProjection,
+        previousRunProjections,
+        resetStream,
+        run: response.inFlightRun,
+        runProjectionsBeforeApply,
+        sessionInfo: response.sessionInfo,
+      });
       replaceCachedChatMessages(state, sessionKey, requestAgentId, response.deltaCursor);
       recordChatHistoryTiming(state, "applied", startedAtMs, {
         requestSessionKey: sessionKey,
@@ -1586,6 +1680,7 @@ async function loadChatHistoryUncached(
         messages: state.chatMessages,
         deltaCursor: response.deltaCursor,
         sessionInfo: response.sessionInfo,
+        ...(response.inFlightRun ? { inFlightRun: response.inFlightRun } : {}),
         ...(response.agentsList ? { agentsList: response.agentsList } : {}),
         ...(response.metadata ? { metadata: response.metadata } : {}),
         sourceCanonicalListRevision: response.sourceCanonicalListRevision,
@@ -1757,73 +1852,15 @@ async function loadChatHistoryUncached(
       }
     }
 
-    const inFlightRunId = res.inFlightRun?.runId?.trim();
-    const activeRunIds = res.sessionInfo?.activeRunIds;
-    const projectedInFlightRun = inFlightRunId ? historyProjection.runs[inFlightRunId] : undefined;
-    const sameRunContinued = Boolean(
-      inFlightRunId &&
-      state.chatRunId === inFlightRunId &&
-      projectedInFlightRun?.status === "streaming" &&
-      onlyInFlightRunProjectionChanged(
-        previousRunProjections,
-        historyProjection.runs,
-        inFlightRunId,
-      ),
-    );
-    const inFlightRunIsActive = Boolean(
-      inFlightRunId &&
-      isSessionRunActive(res.sessionInfo ?? {}) &&
-      (!Array.isArray(activeRunIds) || activeRunIds.includes(inFlightRunId)) &&
-      (!projectedInFlightRun || projectedInFlightRun.status === "streaming"),
-    );
-    const canAdoptInFlightRun = Boolean(
-      inFlightRunId &&
-      inFlightRunIsActive &&
-      ((resetStream &&
-        !state.chatRunId &&
-        runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)) ||
-        sameRunContinued),
-    );
-    if (inFlightRunId && canAdoptInFlightRun) {
-      // Canonical run projections change on every live delta or terminal.
-      // Their identity fences ABA races where a run starts and finishes while
-      // history is pending; deltas from this same live run must still merge.
-      state.chatRunId = inFlightRunId;
-    }
-    if (inFlightRunIsActive && res.inFlightRun && state.chatRunId === inFlightRunId) {
-      const snapshotStartedAt =
-        typeof res.inFlightRun.startedAt === "number" && Number.isFinite(res.inFlightRun.startedAt)
-          ? res.inFlightRun.startedAt
-          : null;
-      const snapshotTail = resolveInFlightAssistantTail(
-        state.chatMessages,
-        res.inFlightRun?.text,
-        inFlightRunId,
-      );
-      const liveTail = sameRunContinued
-        ? resolveInFlightAssistantTail(
-            state.chatMessages,
-            extractText(projectedInFlightRun?.message),
-            inFlightRunId,
-          )
-        : activeStreamBeforeReset;
-      const tail = mergeInFlightAssistantTails(snapshotTail, liveTail);
-      state.chatStream = tail;
-      state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
-      const persistedBoundary = latestPersistedSteerBoundary(state.chatMessages, inFlightRunId);
-      if (tail && persistedBoundary) {
-        markChatStreamAfterBoundary(state, {
-          runId: inFlightRunId,
-          boundaryRunId: persistedBoundary.runId,
-          timestamp: state.chatStreamStartedAt,
-        });
-      }
-      state.chatRunStartup = { state: "activity", runId: inFlightRunId };
-      // Disconnect cleanup intentionally removes transient activity rows while
-      // retaining the owned run. Replay fills that gap; per-identity sequence
-      // fences keep a delayed snapshot from replacing newer live progress.
-      replayInFlightRunEvents(state, res.inFlightRun);
-    }
+    reconcileInFlightRunSnapshot(state, {
+      activeStreamBeforeReset,
+      historyProjection,
+      previousRunProjections,
+      resetStream,
+      run: res.inFlightRun,
+      runProjectionsBeforeApply,
+      sessionInfo: res.sessionInfo,
+    });
 
     recordChatHistoryTiming(state, "applied", startedAtMs, {
       requestSessionKey: sessionKey,

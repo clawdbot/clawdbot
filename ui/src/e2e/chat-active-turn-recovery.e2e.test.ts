@@ -19,6 +19,7 @@ const suite = createControlUiE2eSuite({
 const proofDir = path.resolve(".artifacts/control-ui-e2e/active-turn-recovery");
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 type ActiveRunSnapshotOptions = {
+  deltaCursor?: string;
   events?: unknown[];
   messages?: unknown[];
   persistedToolCall?: boolean;
@@ -40,6 +41,7 @@ function activeRunSnapshot(
   opts?: ActiveRunSnapshotOptions,
 ) {
   return {
+    ...(opts?.deltaCursor ? { deltaCursor: opts.deltaCursor } : {}),
     inFlightRun: {
       runId,
       text: streamText,
@@ -144,7 +146,7 @@ async function installActiveRunSnapshot(
   prompt: string,
   streamText: string,
   opts?: ActiveRunSnapshotOptions,
-): Promise<void> {
+): Promise<ReturnType<typeof activeRunSnapshot>> {
   const snapshot = activeRunSnapshot(runId, prompt, streamText, opts);
   await gateway.setMethodResponse("chat.startup", snapshot);
   await gateway.setMethodResponse("chat.history", snapshot);
@@ -155,6 +157,7 @@ async function installActiveRunSnapshot(
     sessions: [snapshot.sessionInfo],
     ts: 1_000,
   });
+  return snapshot;
 }
 
 async function assertActiveTurnVisible(page: Page, streamText: string): Promise<void> {
@@ -317,7 +320,29 @@ suite.define(() => {
       const streamText = "Reconnect progress is still running.";
       const runId = await startActiveTurn(page, gateway, prompt, streamText);
       const startedAt = Date.now() - 10 * 60_000;
-      await installActiveRunSnapshot(gateway, runId, prompt, streamText, { startedAt });
+      const snapshot = await installActiveRunSnapshot(gateway, runId, prompt, streamText, {
+        deltaCursor: "cursor-before-reconnect",
+        startedAt,
+      });
+      const startupCountBeforeSeed = (await gateway.getRequests("chat.startup")).length;
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.locator(".sidebar-identity-card").click();
+      await sidebar
+        .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:usage"]')
+        .click();
+      await waitForControlUiRoute(page, { pathname: "/usage", routeId: "usage" });
+      await sidebar.getByRole("link", { name: "Home" }).click();
+      await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.startup")).length)
+        .toBeGreaterThan(startupCountBeforeSeed);
+      await gateway.setMethodResponse("chat.startup", {
+        kind: "delta",
+        messages: [],
+        deltaCursor: "cursor-after-reconnect",
+        sessionInfo: snapshot.sessionInfo,
+        inFlightRun: snapshot.inFlightRun,
+      });
       await capture(page, "03-reconnect-before");
 
       const startupCount = (await gateway.getRequests("chat.startup")).length;
@@ -327,6 +352,10 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("chat.startup")).length, { timeout: 15_000 })
         .toBeGreaterThan(startupCount);
       await waitForGatewayConnected(page);
+      const reconnectStartup = (await gateway.getRequests("chat.startup")).at(-1);
+      expect(reconnectStartup?.params).toEqual(
+        expect.objectContaining({ cursor: "cursor-before-reconnect" }),
+      );
       await assertActiveTurnVisible(page, streamText);
       expect(await readWorkingStartedAts(page)).toContain(startedAt);
       await expect(

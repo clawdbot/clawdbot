@@ -588,6 +588,7 @@ async function handleChatHistoryRequest({
       messages: delta.messages,
       deltaCursor: delta.deltaCursor,
       sessionInfo,
+      ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
       ...(includeAgentsList && startupAgentsList ? { agentsList: startupAgentsList } : {}),
       ...(startupMetadata ? { metadata: startupMetadata } : {}),
     });

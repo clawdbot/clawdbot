@@ -484,6 +484,19 @@ describe("chat.history cursor catch-up", () => {
   test("chat.startup returns startup projections with a delta", async () => {
     const { context, storePath } = await createCursorSession();
     context.readChatMetadata = async () => ({}) as never;
+    const runId = "run-startup-cursor";
+    const startedAt = 1_000;
+    context.chatAbortControllers.set(runId, {
+      controller: new AbortController(),
+      sessionId,
+      sessionKey,
+      agentId: "main",
+      startedAtMs: startedAt,
+      expiresAtMs: startedAt + 60_000,
+      projectSessionActive: true,
+      kind: "chat-send",
+    });
+    context.chatRunState.getOrCreate(runId).buffer = "still working";
     const page = await callChat<{ deltaCursor?: string }>(context, "chat.startup");
     await appendTranscriptMessage(currentScope(storePath), {
       eventId: "startup-append",
@@ -495,6 +508,7 @@ describe("chat.history cursor catch-up", () => {
       kind?: string;
       messages?: unknown[];
       metadata?: unknown;
+      inFlightRun?: unknown;
       sessionInfo?: unknown;
     }>(context, "chat.startup", { cursor: page.payload?.deltaCursor });
     expect(delta).toMatchObject({
@@ -505,6 +519,7 @@ describe("chat.history cursor catch-up", () => {
         sessionInfo: expect.any(Object),
         agentsList: expect.any(Object),
         metadata: expect.any(Object),
+        inFlightRun: { runId, text: "still working", startedAt },
       },
     });
   });
