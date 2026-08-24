@@ -95,42 +95,65 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
     mocks.inferAuthChoice.mockReturnValue({ matches: [] });
   });
 
-  it("rejects ambiguous provider flags before creating an agent or writing setup state", async () => {
-    mocks.inferAuthChoice.mockReturnValue({
-      matches: [
-        { optionKey: "openaiApiKey", authChoice: "openai-api-key", label: "--openai-api-key" },
-        {
-          optionKey: "anthropicApiKey",
-          authChoice: "anthropic-api-key",
-          label: "--anthropic-api-key",
+  it.each([false, true])(
+    "rejects ambiguous provider flags before creating an agent or writing setup state (json: %s)",
+    async (json) => {
+      mocks.inferAuthChoice.mockReturnValue({
+        matches: [
+          { optionKey: "openaiApiKey", authChoice: "openai-api-key", label: "--openai-api-key" },
+          {
+            optionKey: "anthropicApiKey",
+            authChoice: "anthropic-api-key",
+            label: "--anthropic-api-key",
+          },
+        ],
+      });
+
+      await runNonInteractiveLocalSetup({
+        opts: {
+          nonInteractive: true,
+          mode: "local",
+          openaiApiKey: "openai-test-key",
+          anthropicApiKey: "anthropic-test-key",
+          skipHooks: true,
+          skipSkills: true,
+          skipHealth: true,
+          json,
         },
-      ],
-    });
+        runtime,
+        baseConfig: {},
+      });
 
-    await runNonInteractiveLocalSetup({
-      opts: {
-        nonInteractive: true,
-        mode: "local",
-        openaiApiKey: "openai-test-key",
-        anthropicApiKey: "anthropic-test-key",
-        skipHooks: true,
-        skipSkills: true,
-        skipHealth: true,
-      },
-      runtime,
-      baseConfig: {},
-    });
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Multiple API key flags were provided"),
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.applyGatewayConfig).not.toHaveBeenCalled();
-    expect(mocks.applyAuthChoice).not.toHaveBeenCalled();
-    expect(mocks.ensureOnboardingAgent).not.toHaveBeenCalled();
-    expect(mocks.commitConfig).not.toHaveBeenCalled();
-    expect(mocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
-  });
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Multiple API key flags were provided"),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      if (json) {
+        expect(runtime.log).toHaveBeenCalledWith(
+          JSON.stringify(
+            {
+              ok: false,
+              phase: "options",
+              message: [
+                "Multiple API key flags were provided for non-interactive setup.",
+                "Use a single provider flag or pass --auth-choice explicitly.",
+                "Flags: --openai-api-key, --anthropic-api-key",
+              ].join("\n"),
+            },
+            null,
+            2,
+          ),
+        );
+      } else {
+        expect(runtime.log).not.toHaveBeenCalled();
+      }
+      expect(mocks.applyGatewayConfig).not.toHaveBeenCalled();
+      expect(mocks.applyAuthChoice).not.toHaveBeenCalled();
+      expect(mocks.ensureOnboardingAgent).not.toHaveBeenCalled();
+      expect(mocks.commitConfig).not.toHaveBeenCalled();
+      expect(mocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves provider auth in the requested first-agent workspace before creating state", async () => {
     const workspace = "/tmp/requested-provider-workspace";
@@ -198,7 +221,6 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
               robby: {
                 name: "robby",
                 workspace,
-                agentDir: "/tmp/robby-agent",
               },
             },
           },
@@ -215,7 +237,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         mode: "local",
         agentName: "robby",
         workspace,
-        authChoice: "skip",
+        authChoice: "demo-api-key",
         skipHooks: true,
         skipSkills: true,
         skipHealth: true,
@@ -225,6 +247,18 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       baseConfig: {},
     });
 
+    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          agentId: "robby",
+          agentDir: expect.stringMatching(/[/\\]agents[/\\]robby[/\\]agent$/),
+          workspaceDir: workspace,
+        }),
+      }),
+    );
+    expect(mocks.applyAuthChoice.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.ensureOnboardingAgent).toHaveBeenCalledOnce();
     expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
       expect.objectContaining({ firstAgent: { name: "robby" } }),
@@ -306,8 +340,9 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       opts: {
         nonInteractive: true,
         mode: "local",
+        agentName: "robby",
         workspace: "/tmp/global-workspace",
-        authChoice: "skip",
+        authChoice: "demo-api-key",
         skipHooks: true,
         skipSkills: true,
         skipHealth: true,
@@ -318,6 +353,15 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       baseConfig,
     });
 
+    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          agentId: "ops",
+          agentDir: "/tmp/ops-agent",
+          workspaceDir: "/tmp/ops-workspace",
+        }),
+      }),
+    );
     expect(mocks.commitConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         nextConfig: expect.objectContaining({

@@ -287,6 +287,7 @@ vi.mock("../agents/cli-credentials.js", () => ({
 }));
 
 vi.mock("../agents/auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => [],
   syncExternalCliCredentials: () => false,
 }));
 

@@ -40,6 +40,7 @@ describe("buildCliAgentSystemPrompt", () => {
   it("uses CLI backend tool fallback instead of OpenClaw tool assumptions", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      docsPath: "/tmp/openclaw/docs",
       tools: [],
       modelDisplay: "test/model",
     });
@@ -50,6 +51,10 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("No OpenClaw tool list is injected");
+    expect(prompt).toContain("docs first via `read`");
+    expect(prompt).not.toContain("exec approval-pending");
+    expect(prompt).not.toContain("Config read: `gateway`");
+    expect(prompt).not.toContain("`gateway(config.schema.lookup)`");
   });
 
   it("describes bundled exec as synchronous node execution", () => {

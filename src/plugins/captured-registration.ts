@@ -23,7 +23,7 @@ import type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
-import type { PluginRuntime } from "./runtime/types.js";
+import { createPluginRuntime } from "./runtime/index.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import type {
@@ -179,7 +179,7 @@ export function createCapturedPluginRegistration(params?: {
       source: pluginSource,
       registrationMode: params?.registrationMode ?? "full",
       config: params?.config ?? ({} as OpenClawConfig),
-      runtime: {} as PluginRuntime,
+      runtime: createPluginRuntime(),
       logger: noopLogger,
       resolvePath: (input) => input,
       handlers: {

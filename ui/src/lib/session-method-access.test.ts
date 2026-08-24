@@ -53,6 +53,7 @@ describe("readSessionMethodAccess", () => {
 
   it.each([
     ["sessions.dispatch", { key: "agent:main:device", deviceId: "runner" }],
+    ["sessions.dispatch", { key: "agent:main:auto", autoDevice: true }],
     ["sessions.move", { key: "agent:main:device", target: { kind: "device", deviceId: "runner" } }],
   ])("allows write-scoped device placement through %s", (method, params) => {
     expect(

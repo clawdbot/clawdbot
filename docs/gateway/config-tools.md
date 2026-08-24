@@ -215,13 +215,18 @@ Controls elevated exec access outside the sandbox:
 
 GitHub CLI identity is native by default. When `tools.github` is omitted, local agent tools, the Codex harness, and Agent Settings follow normal `gh` resolution: `GH_TOKEN` or `GITHUB_TOKEN` from the Gateway process takes precedence, followed by the runtime user's `gh` keyring/config. The Git author comes from the selected agent's workspace.
 
-Use **Agents → Tools → GitHub Identity** to configure a managed fine-grained personal access token. The browser places the pasted token in the secret store as a one-use handoff. The Gateway hard-deletes that handoff before passing its value to `gh auth login` on stdin, verifies the account, publishes an account-owned managed `gh` profile, and stores only this secret-free config:
+Use **Agents → Tools → GitHub Identity → Connect GitHub** for the recommended setup. OpenClaw displays a one-time user code and a fixed link to `https://github.com/login/device`; you open GitHub explicitly and approve `repo`, `workflow`, `read:org`, and `gist`. The latter two are part of GitHub CLI's minimum classic-token contract. The Gateway owns the device code, token exchange, account verification, private managed `gh` profile, and rotating refresh token. None of those credentials enter browser responses, config, logs, command arguments, transcripts, or model environments.
+
+OAuth access tokens expire after about eight hours. The Gateway refreshes them before expiry, verifies the durable GitHub account ID, and atomically replaces the credential inside the same private profile so already-running local tools continue using that identity. An expired or rejected refresh token is shown as **Reconnect required**. Refresh never blocks Gateway startup.
+
+**Use a PAT instead** preserves the fine-grained personal access token setup as an explicit fallback. The browser places the pasted token in the secret store as a one-use handoff. The Gateway hard-deletes that handoff before passing its value to `gh auth login` on stdin. Both setup paths verify `/user`, publish an account-owned managed profile, default Git authorship to the account's canonical GitHub noreply identity, and store only secret-free config:
 
 ```json5
 {
   tools: {
     github: {
       profileId: "ghp_0123456789abcdef0123456789abcdef",
+      kind: "oauth",
       gitAuthor: { name: "Automation User", email: "automation@example.com" },
     },
   },
@@ -240,9 +245,9 @@ Use **Agents → Tools → GitHub Identity** to configure a managed fine-grained
 }
 ```
 
-Omitting `agents.entries.<id>.tools.github` inherits the system identity. An agent object is a complete managed override. If a configured managed profile is missing or unusable, GitHub status reports `configured_unavailable`; it never falls back to the native profile.
+Omitting `agents.entries.<id>.tools.github` inherits the system identity. An agent object is a complete managed override. Settings shows the effective identity and the selected configuration scope separately, so editing **System** never masquerades as an agent override. If a configured managed profile is missing or unusable, GitHub status reports `configured_unavailable`; it never falls back to the native profile.
 
-Managed identity applies to the `gh` CLI/API account and optional Git author/committer metadata in local OpenClaw exec and the local Codex harness. OpenClaw supplies a private `GH_CONFIG_DIR`, clears ambient `GH_TOKEN` and `GITHUB_TOKEN` precedence, and applies configured author fields through process-local environment and Git config overlays. It does not install a credential helper, rewrite SSH remotes, add HTTP authorization headers, or otherwise override an existing repository's Git network credentials. New runs switch to a replacement or inherited identity immediately. Existing local processes keep their immutable profile generation until they close; retired profile files are cleaned on the next Gateway restart, so changing this setting is not immediate credential revocation.
+Managed identity applies to the `gh` CLI/API account and optional Git author/committer metadata in local OpenClaw exec and the local Codex harness. OpenClaw supplies a private `GH_CONFIG_DIR`, clears ambient `GH_TOKEN` and `GITHUB_TOKEN` precedence, and applies configured author fields through process-local environment and Git config overlays. It does not install a credential helper, rewrite SSH remotes, add HTTP authorization headers, or otherwise override an existing repository's Git network credentials. OAuth refresh keeps the same profile path and atomically replaces only its credential after verifying the durable account ID, so admitted local processes see the refreshed token on their next `gh` command. Choosing a different identity or inheritance target creates or selects another profile for new runs; existing processes keep their prior selected profile until they close. Retired profile files are cleaned on the next Gateway restart, so changing this setting is not immediate credential revocation.
 
 Managed profiles provide execution and coordination identity; they are not an OS-user security sandbox. A process with unrestricted host execution under the same OS account can access account-owned files, including managed `gh` profiles. Use an OpenClaw sandbox, a dedicated host, or a dedicated OS user when adversarial isolation is required.
 
@@ -250,7 +255,9 @@ The profile is not forwarded to node hosts, OpenClaw sandboxes, remote-exec plac
 
 Local session-owned worktrees can use the same **Publish PR** action in the Control UI. The Gateway derives the managed worktree, repository, branch, base, and head from current session ownership. It never accepts those authority facts from the browser or model. Publication retries use a durable request ID, an exact commit marker, remote branch observation, and pull-request lookup by head branch so a Gateway restart or lost response does not create duplicate commits, pushes, or pull requests.
 
-Verification proves which account answered the GitHub API request. Status distinguishes missing or invalid managed credentials, unverified transport failures, and GitHub rate limiting without returning `gh` diagnostics. It does not claim that fine-grained repository grants were remotely verified. This brokered-publication flow does not add browser or device authorization; the Settings setup remains PAT-based.
+Verification proves which account answered the GitHub API request. Status reports the credential kind, access expiry, refresh availability, OAuth scopes, and Git author while distinguishing missing credentials, unverified transport failures, and GitHub rate limiting without returning `gh` diagnostics. Repository-specific grants remain unknown until an exact repository operation succeeds; `/user` does not prove write access.
+
+Removing an agent override or choosing native credentials deletes the associated local refresh record after the config change. Already-running local processes may retain the old profile and its current access token until they exit, restart, or the token expires, while new runs use the updated identity immediately. This local change does not revoke the authorization at GitHub; revoke it separately from the OAuth application's GitHub settings when required.
 
 Control UI repository previews and project discovery use the separate optional `gateway.controlUi.github.token` service credential. They never consume an agent tool identity. When this SecretRef is explicit, OpenClaw excludes its exact environment or store name from agent execution. A custom name does not clear unrelated `GH_TOKEN` or `GITHUB_TOKEN` values used by native identity; a ref named `GH_TOKEN` or `GITHUB_TOKEN` excludes that exact variable.
 

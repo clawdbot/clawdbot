@@ -2,6 +2,7 @@
  * Early gateway startup helper tests.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runGatewayShutdownSteps } from "./server-shutdown.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 type StartGatewayDiscovery = typeof import("./server-discovery-runtime.js").startGatewayDiscovery;
@@ -82,6 +83,7 @@ function earlyRuntimeInput(
     log,
     logDiscovery: log,
     nodeRegistry: {} as never,
+    swapBonjourStop: () => null,
     ...maintenanceState,
     skillsRefreshDelayMs: 30_000,
     getSkillsRefreshTimer: () => null,
@@ -150,6 +152,48 @@ describe("startGatewayEarlyRuntime", () => {
     expect(mocks.closeSkillsWatchers).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])(
+    "stops acquired discovery exactly once after later startup failure (cleanup rejects: %s)",
+    async (cleanupRejects) => {
+      const startupError = new Error("remote skills registry failed");
+      const cleanupError = new Error("discovery cleanup failed");
+      const stopDiscovery = vi.fn(async () => {
+        if (cleanupRejects) {
+          throw cleanupError;
+        }
+      });
+      const owner: { current: (() => Promise<void>) | null } = { current: null };
+      const swapBonjourStop = (next: typeof owner.current) => {
+        const previous = owner.current;
+        owner.current = next;
+        return previous;
+      };
+      mocks.startGatewayDiscovery.mockResolvedValueOnce({ bonjourStop: stopDiscovery });
+      mocks.setSkillsRemoteRegistry.mockImplementationOnce(() => {
+        throw startupError;
+      });
+      const onCleanupError = vi.fn();
+
+      const startup = startGatewayEarlyRuntime(
+        earlyRuntimeInput({ minimalTestGateway: false, swapBonjourStop }),
+      ).catch(async (error: unknown) => {
+        await runGatewayShutdownSteps({
+          steps: [
+            { name: "discovery resident", run: async () => await swapBonjourStop(null)?.() },
+            { name: "gateway close", run: async () => await swapBonjourStop(null)?.() },
+          ],
+          onError: onCleanupError,
+        });
+        throw error;
+      });
+
+      await expect(startup).rejects.toBe(startupError);
+      expect(stopDiscovery).toHaveBeenCalledOnce();
+      expect(owner.current).toBeNull();
+      expect(onCleanupError).toHaveBeenCalledTimes(cleanupRejects ? 1 : 0);
+    },
+  );
+
   it("broadcasts remote-node skill invalidations to operator clients", async () => {
     const broadcast = vi.fn();
 
@@ -212,6 +256,9 @@ describe("startGatewayEarlyRuntime", () => {
   });
 
   it("fails before discovery and task maintenance when task state cannot restore", async () => {
+    const stopDiscovery = vi.fn(async () => {});
+    const swapBonjourStop = vi.fn(() => null);
+    mocks.startGatewayDiscovery.mockResolvedValue({ bonjourStop: stopDiscovery });
     mocks.ensureTaskRuntimeStateReady.mockImplementationOnce(() => {
       throw new Error("task-flow registry restore failed");
     });
@@ -220,11 +267,14 @@ describe("startGatewayEarlyRuntime", () => {
       startGatewayEarlyRuntime(
         earlyRuntimeInput({
           minimalTestGateway: false,
+          swapBonjourStop,
         }),
       ),
     ).rejects.toThrow("task-flow registry restore failed");
 
     expect(mocks.startGatewayDiscovery).not.toHaveBeenCalled();
+    expect(swapBonjourStop).not.toHaveBeenCalled();
+    expect(stopDiscovery).not.toHaveBeenCalled();
     expect(mocks.configureTaskRegistryMaintenance).not.toHaveBeenCalled();
     expect(mocks.startTaskRegistryMaintenance).not.toHaveBeenCalled();
   });

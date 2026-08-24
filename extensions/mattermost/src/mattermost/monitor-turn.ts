@@ -88,7 +88,6 @@ export async function dispatchMattermostInboundTurn(
   const { channelId, kind, route, senderId, thread, to } = eventPlan;
   const { effectiveReplyToId } = thread;
   const {
-    deliveryBarrier,
     replyOptions,
     replyPipeline: baseReplyPipeline,
     tableMode,
@@ -282,8 +281,6 @@ export async function dispatchMattermostInboundTurn(
 
   const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
     ...dispatcherPipeline,
-    resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
-    onDeliverySettled: deliveryBarrier.markDeliverySettled,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     typingCallbacks,
   };
@@ -335,7 +332,7 @@ export async function dispatchMattermostInboundTurn(
             core,
             cfg,
             payload: resolvedPayload,
-            to,
+            channelId,
             accountId: account.accountId,
             agentId: route.agentId,
             replyToId: resolveMattermostReplyRootId({
@@ -346,7 +343,6 @@ export async function dispatchMattermostInboundTurn(
             textLimit,
             tableMode,
             sendMessage: sendMessageMattermost,
-            onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
           }).catch((error: unknown) => {
             if (isChannelPartialDeliveryError(error)) {
               markThreadParticipation();

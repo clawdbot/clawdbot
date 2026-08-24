@@ -6,7 +6,6 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
-import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
@@ -380,24 +379,6 @@ export async function modelsStatusCommand(
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
     : undefined;
-  const resolvedConfig =
-    agentModelPrimary && agentModelPrimary.length > 0
-      ? {
-          ...cfg,
-          agents: {
-            ...cfg.agents,
-            defaults: {
-              ...cfg.agents?.defaults,
-              model: {
-                ...(typeof cfg.agents?.defaults?.model === "object"
-                  ? cfg.agents.defaults.model
-                  : {}),
-                primary: agentModelPrimary,
-              },
-            },
-          },
-        }
-      : cfg;
   const metadataSnapshot = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir,
@@ -453,8 +434,13 @@ export async function modelsStatusCommand(
     env: process.env,
   });
   try {
+    // agentId, not a synthetic config carrying the agent's primary into global
+    // defaults: the canonical resolvers merge per-agent model rows themselves, so
+    // the synthetic route resolved a bare per-agent alias against global defaults
+    // and reported a different provider than runtime selects.
     const resolved = resolveConfiguredModelRef({
-      cfg: resolvedConfig,
+      cfg,
+      agentId,
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
       ...DISPLAY_MODEL_PARSE_OPTIONS,
@@ -485,15 +471,6 @@ export async function modelsStatusCommand(
           : utilityModelRef
             ? "provider-default"
             : "none";
-    const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<
-      Record<string, string>
-    >((acc, [key, entry]) => {
-      const alias = normalizeOptionalString(entry?.alias);
-      if (alias) {
-        acc[alias] = key;
-      }
-      return acc;
-    }, {});
     const configuredAllowRefs = [
       ...resolveConfiguredModelPolicyAllow({ cfg, agentId: workspaceAgentId }).refs,
     ];
@@ -501,9 +478,19 @@ export async function modelsStatusCommand(
     const modelsPath = path.join(agentDir, "models.json");
     const aliasIndex = buildModelAliasIndex({
       cfg,
+      agentId,
       defaultProvider: DEFAULT_PROVIDER,
       ...DISPLAY_MODEL_PARSE_OPTIONS,
     });
+    // The index is the same effective alias set the resolvers use, so per-agent
+    // rows that replace or empty-disable a default alias are reflected here
+    // instead of being read straight off `agents.defaults.models`.
+    const aliases = Object.fromEntries(
+      [...aliasIndex.byAlias.values()].map((match) => [
+        match.alias,
+        modelKey(match.ref.provider, match.ref.model),
+      ]),
+    );
     const resolveStatusModelRef = (raw: string | undefined) => {
       const modelRef = raw?.trim();
       if (!modelRef) {
@@ -511,6 +498,7 @@ export async function modelsStatusCommand(
       }
       return resolveModelRefFromString({
         cfg,
+        agentId,
         raw: modelRef,
         defaultProvider: DEFAULT_PROVIDER,
         aliasIndex,
@@ -650,13 +638,9 @@ export async function modelsStatusCommand(
         ...(probedProvider ? [normalizeProviderId(probedProvider)] : []),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
-    // Omitting agentId lets the catalog resolve its own owner, which still dead-ends on an
-    // ambiguous roster (prepared-model-catalog.ts resolveInputs). Keep the historical omission
-    // for single-agent installs and name the resolved owner only when the roster needs one.
-    const catalogAgentId = agentId ?? (listAgentIds(cfg).length > 1 ? workspaceAgentId : undefined);
     const catalog = await loadPreparedModelCatalogSnapshot({
       config: cfg,
-      ...(catalogAgentId ? { agentId: catalogAgentId } : {}),
+      agentId: workspaceAgentId,
       providerDiscoveryProviderIds,
       readOnly: true,
     });
@@ -1200,6 +1184,8 @@ export async function modelsStatusCommand(
       .map(
         (raw) =>
           resolveModelRefFromString({
+            cfg,
+            agentId,
             raw: raw ?? "",
             defaultProvider: DEFAULT_PROVIDER,
             aliasIndex,

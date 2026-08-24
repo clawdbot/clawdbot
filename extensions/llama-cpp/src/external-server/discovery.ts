@@ -12,9 +12,7 @@ export type LlamaServerDiscoveryResult =
   | {
       kind: "success";
       endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
-      health: "ready" | "loading" | "unknown";
       models: LlamaServerDiscoveredModel[];
-      fetchedAt: number;
     }
   | {
       kind: "unreachable";
@@ -76,8 +74,6 @@ export async function discoverLlamaServer(params: {
       return {
         kind: "success" as const,
         endpoint,
-        health: result.health,
-        fetchedAt: result.fetchedAt,
         models: result.rows.flatMap(({ model, props }) => {
           const mapped = mapLlamaServerModel(model, props);
           return mapped ? [mapped] : [];

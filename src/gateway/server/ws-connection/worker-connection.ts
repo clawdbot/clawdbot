@@ -493,6 +493,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     setSocketMaxPayload(params.socket, workerMaxPayload(admission.identity));
     params.advanceHandshakePhase("hello_payload_prepared");
     params.send({ type: "res", id, ok: true, payload: buildWorkerHello(admission.identity) });
+    if (disposed || params.isClosed()) {
+      return;
+    }
     params.advanceHandshakePhase("ready");
     expiryTimer = setTimeout(
       () => {

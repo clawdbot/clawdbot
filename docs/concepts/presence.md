@@ -28,6 +28,7 @@ Presence entries are structured objects with fields like:
 - `ip`: best-effort IP address
 - `version`: client version string
 - `deviceFamily` / `modelIdentifier`: hardware hints
+- `timeZone`: self-reported IANA zone (for example `Europe/Vienna`); browsers report it during connect, and it stays useful when the connecting IP is loopback, tunneled, or CGNAT
 - `mode`: `ui`, `webchat`, `cli`, `backend`, `node`, `probe`, `test`
 - `lastInputSeconds`: seconds since last user input, if known
 - `reason`: free-form client-supplied string; the Gateway itself only emits `self`, `connect`, and `disconnect`

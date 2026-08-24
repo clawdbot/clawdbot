@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345578,
-  "reason": "GitHub publication controls: lazy request chunk and branch-row state",
-  "updatedAt": "2026-08-19"
+  "startupJsGzipBytes": 345049,
+  "reason": "streamed-markdown highlighting changes (#127749, #127754) consumed the ratchet",
+  "updatedAt": "2026-08-22"
 }

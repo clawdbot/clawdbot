@@ -2,6 +2,7 @@
 import { MessageFlags } from "discord-api-types/v10";
 import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeDiscordRest } from "./send.test-harness.js";
 
 const recordChannelActivityMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ channels: { discord: {} } })));
@@ -28,6 +29,8 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
 });
 
 let sendWebhookMessageDiscord: typeof import("./send.webhook.js").sendWebhookMessageDiscord;
+let sendPollDiscord: typeof import("./send.outbound.js").sendPollDiscord;
+let sendStickerDiscord: typeof import("./send.outbound.js").sendStickerDiscord;
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
@@ -39,9 +42,19 @@ function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
   return call;
 }
 
-describe("sendWebhookMessageDiscord activity", () => {
+async function sendStructuredMessage(
+  kind: "poll" | "sticker",
+  opts: Parameters<typeof sendStickerDiscord>[2],
+) {
+  return kind === "poll"
+    ? sendPollDiscord("channel:789", { question: "Lunch?", options: ["Pizza", "Sushi"] }, opts)
+    : sendStickerDiscord("channel:789", ["123"], opts);
+}
+
+describe("Discord outbound channel activity", () => {
   beforeAll(async () => {
     ({ sendWebhookMessageDiscord } = await import("./send.webhook.js"));
+    ({ sendPollDiscord, sendStickerDiscord } = await import("./send.outbound.js"));
   });
 
   beforeEach(() => {
@@ -125,6 +138,68 @@ describe("sendWebhookMessageDiscord activity", () => {
     ).toBe(true);
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { kind: "poll", accountId: undefined, defaultAccount: undefined, expectedAccountId: "default" },
+    { kind: "poll", accountId: " Work ", defaultAccount: undefined, expectedAccountId: "work" },
+    { kind: "poll", accountId: undefined, defaultAccount: "work", expectedAccountId: "work" },
+    {
+      kind: "sticker",
+      accountId: undefined,
+      defaultAccount: undefined,
+      expectedAccountId: "default",
+    },
+    { kind: "sticker", accountId: " Work ", defaultAccount: undefined, expectedAccountId: "work" },
+    { kind: "sticker", accountId: undefined, defaultAccount: "work", expectedAccountId: "work" },
+  ] as const)(
+    "records successful $kind sends for the resolved $expectedAccountId account",
+    async ({ kind, accountId, defaultAccount, expectedAccountId }) => {
+      const { rest, postMock } = makeDiscordRest();
+      postMock.mockResolvedValue({ id: "msg-1", channel_id: "789" });
+      const cfg = {
+        channels: {
+          discord: {
+            token: "resolved-token",
+            accounts: {
+              default: { token: "default-token" },
+              work: { token: "work-token" },
+            },
+            ...(defaultAccount ? { defaultAccount } : {}),
+          },
+        },
+      };
+
+      await sendStructuredMessage(kind, {
+        cfg,
+        rest,
+        token: "test-token",
+        ...(accountId ? { accountId } : {}),
+      });
+
+      expect(recordChannelActivityMock).toHaveBeenCalledExactlyOnceWith({
+        channel: "discord",
+        accountId: expectedAccountId,
+        direction: "outbound",
+      });
+    },
+  );
+
+  it.each(["poll", "sticker"] as const)(
+    "does not record outbound activity when a %s send fails",
+    async (kind) => {
+      const { rest, postMock } = makeDiscordRest();
+      postMock.mockRejectedValue(new Error("provider rejected"));
+
+      await expect(
+        sendStructuredMessage(kind, {
+          cfg: { channels: { discord: { token: "resolved-token" } } },
+          rest,
+          token: "test-token",
+        }),
+      ).rejects.toThrow("provider rejected");
+      expect(recordChannelActivityMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rewrites configured mention aliases for webhook sends", async () => {
     const cfg = {

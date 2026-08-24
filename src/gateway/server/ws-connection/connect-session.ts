@@ -563,6 +563,7 @@ export async function attachAuthenticatedGatewayConnect(
       platform: connectParams.client.platform,
       deviceFamily: connectParams.client.deviceFamily,
       modelIdentifier: connectParams.client.modelIdentifier,
+      timeZone: connectParams.client.timeZone,
       mode: connectParams.client.mode,
       deviceId: device?.id,
       roles: [role],

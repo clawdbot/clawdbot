@@ -4,7 +4,10 @@ import {
   hasCompletedTerminalDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import {
+  hasDeliberateSilentTerminalReply,
+  hasIntentionalTerminalCompletion,
+} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { deriveContextPromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -169,6 +172,7 @@ export async function prepareReplyAgentPayloads(state: {
         hasPendingContinuation: pendingContinuation,
         hasExplicitSilentReply: deliberateSilentTerminalReply,
         hasCommittedDelivery: successfulTerminalDelivery,
+        hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(runResult),
         sessionCtx,
         cfg,
       });

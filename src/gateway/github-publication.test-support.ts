@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   type OpenClawStateDatabase,
@@ -22,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   getConfigSnapshot: vi.fn(),
   attribution: vi.fn(),
   updateIndex: vi.fn(),
+  refreshIdentity: vi.fn(),
 }));
 
 export function githubPublicationTestMocks() {
@@ -36,6 +38,10 @@ vi.mock("../agents/github-tool-identity.js", async (importOriginal) => {
     prepareGitHubPublicationIdentity: mocks.prepareIdentity,
   };
 });
+
+vi.mock("./github-oauth-lifecycle.js", () => ({
+  requestCurrentGitHubOAuthRefresh: mocks.refreshIdentity,
+}));
 
 vi.mock("../agents/git-coauthor-attribution.js", () => ({
   resolveGitCoauthorAttribution: mocks.attribution,
@@ -206,6 +212,7 @@ export function installGitHubPublicationTestHarness(): void {
       prompt: "",
     });
     mocks.getConfigSnapshot.mockReset().mockReturnValue(null);
+    mocks.refreshIdentity.mockReset().mockResolvedValue(undefined);
     mocks.matchesIdentity.mockReset().mockReturnValue(true);
     mocks.prepareIdentity.mockReset().mockResolvedValue({
       source: "system-configured",
@@ -343,6 +350,9 @@ export function installGitHubPublicationTestHarness(): void {
   });
 
   afterEach(async () => {
+    // Agent close releases leases through shared state; closing shared state first can
+    // reopen it during teardown and leave a Windows handle under the fixture root.
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });

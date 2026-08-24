@@ -15,6 +15,7 @@ type BoardWidgetSandboxHostOptions = {
   sandboxOrigin: string;
   sandboxUrl: string;
   sourceOrigin: string;
+  controlUiBaseUrl?: string;
   client?: BoardWidgetBridgeGatewayClient;
   resolveFrameUrl: BoardWidgetFrameUrl;
   confirmPrompt: (text: string) => boolean;
@@ -346,7 +347,15 @@ export class BoardWidgetSandboxHost {
       return;
     }
     this.offeredTicket = ticket;
-    this.bridgePort.postMessage({ type: "openclaw:widget-host-init", ticket }, []);
+    const controlUiBaseUrl = this.options.controlUiBaseUrl?.trim();
+    this.bridgePort.postMessage(
+      {
+        type: "openclaw:widget-host-init",
+        ticket,
+        ...(controlUiBaseUrl ? { controlUiBaseUrl } : {}),
+      },
+      [],
+    );
   }
 
   private async loadDocument(): Promise<void> {

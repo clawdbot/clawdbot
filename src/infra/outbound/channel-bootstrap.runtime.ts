@@ -13,7 +13,6 @@ import { loadPluginRegistryHandle } from "../../plugins/loader.js";
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { pruneMapToMaxSize } from "../map-size.js";
 
 const MAX_BOOTSTRAP_CONFIG_GENERATIONS = 64;
@@ -102,14 +101,12 @@ export function bootstrapOutboundChannelPlugin(params: {
 
   // Outbound callers already know the admitted run owner. Preserve it here so
   // explicit fleets do not fall back to forbidden ambient-agent selection.
-  // Agent-less sends route through the configured ambient owner (legacy
-  // default, then systemAgent); ownerless fleets never throw — startup
+  // Agent-less sends route through the configured ambient owner (systemAgent,
+  // then the legacy default); ownerless fleets never throw — startup
   // delivery recovery runs this path — and bootstrap with global-scope
-  // plugin discovery only. normalizeAgentId never returns "", so "" is a
+  // plugin discovery only. Normalized agent ids never equal "", so "" is a
   // collision-free ownerless cache slot.
-  const agentId = params.agentId?.trim()
-    ? normalizeAgentId(params.agentId)
-    : tryResolveAmbientOwnerAgentId(cfg);
+  const agentId = tryResolveAmbientOwnerAgentId(cfg, params.agentId);
   const outcomeKey = `${agentId ?? ""}\0${params.channel}`;
   const registries = resolveBootstrapRegistries(cfg);
   const cachedRegistry = registries.get(outcomeKey);

@@ -1,0 +1,95 @@
+name: Authorized Beta Focused Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  attestations: write
+  contents: read
+  id-token: write
+
+concurrency:
+  group: authorized-beta-focused-validation
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.16.0"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate protected tooling identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${GITHUB_REF}" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
+            echo "Authorized beta focused validation requires a protected release-publish tag." >&2
+            exit 1
+          fi
+          if [[ "${GITHUB_SHA:0:12}" != "${BASH_REMATCH[1]}" ]]; then
+            echo "Protected release-publish tag does not match the workflow SHA." >&2
+            exit 1
+          fi
+          tag="${GITHUB_REF#refs/tags/}"
+          remote_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" \
+              --jq '.object | select(.type == "commit") | .sha'
+          )"
+          [[ "${remote_sha}" == "${GITHUB_SHA}" ]] || {
+            echo "Protected release-publish tag moved after dispatch." >&2
+            exit 1
+          }
+
+      - name: Checkout trusted tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout frozen candidate
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: 3fbe94065c2b94f4c08acb6742a69938bf408d94
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Build focused evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/authorized-beta-focused"
+          node --import tsx scripts/validate-authorized-beta-focused-evidence.mts create \
+            --candidate-root candidate \
+            --output "${RUNNER_TEMP}/authorized-beta-focused/evidence.json" \
+            --producer-run-id "${GITHUB_RUN_ID}" \
+            --producer-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --producer-workflow-full-ref "${GITHUB_REF}" \
+            --producer-workflow-sha "${GITHUB_SHA}"
+
+      - name: Attest focused evidence
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ runner.temp }}/authorized-beta-focused/evidence.json
+
+      - name: Upload focused evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: authorized-beta-focused-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/authorized-beta-focused/evidence.json
+          if-no-files-found: error
+          retention-days: 30

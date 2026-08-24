@@ -19,6 +19,27 @@ import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { activatePanel, openSlot } from "./sidebar-layout.ts";
 
+const swarmModuleImport = vi.hoisted(() => {
+  let markStarted!: () => void;
+  let release!: () => void;
+  return {
+    started: new Promise<void>((resolve) => {
+      markStarted = resolve;
+    }),
+    pending: new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+    markStarted,
+    release,
+  };
+});
+
+vi.mock("../../lib/sessions/swarm-roster.ts", async (importOriginal) => {
+  swarmModuleImport.markStarted();
+  await swarmModuleImport.pending;
+  return importOriginal();
+});
+
 type TestChatPane = HTMLElement & {
   boardChatDockSize: { height: number };
   boardProvider?: BoardProvider;
@@ -47,6 +68,7 @@ type TestChatPane = HTMLElement & {
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
+  refreshSwarmRoster: () => void;
 };
 
 type MockProvider = BoardProvider & { emitCommand(command: BoardCommandEvent["command"]): void };
@@ -151,6 +173,34 @@ afterEach(() => {
 });
 
 describe("chat pane board shell", () => {
+  it("does not hydrate the swarm after becoming hidden during module loading", async () => {
+    vi.useFakeTimers();
+    const list = vi.fn().mockResolvedValue({ sessions: [] });
+    const sessions = { canonicalListRevision: 0, list } as unknown as SessionCapability;
+    const pane = createTestPane(sessions);
+    pane.context = {
+      ...pane.context,
+      runtimeConfig: {
+        state: { configSnapshot: { config: { tools: { swarm: { enabled: true } } } } },
+      },
+    } as unknown as ApplicationContext;
+    pane.presentedChanged = () => undefined;
+
+    try {
+      pane.refreshSwarmRoster();
+      await swarmModuleImport.started;
+      pane.presented = false;
+      swarmModuleImport.release();
+      await import("../../lib/sessions/swarm-roster.ts");
+      await Promise.resolve();
+      await vi.runAllTimersAsync();
+
+      expect(list).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("gates New Chat when the current session has a board", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),

@@ -11,8 +11,6 @@ const mocks = vi.hoisted(() => ({
   ensureModel: vi.fn(),
   prepareServer: vi.fn(),
   removeProfiles: vi.fn(),
-  selectAsset: vi.fn(() => ({ backend: "metal" })),
-  resolvePaths: vi.fn(() => ({ presetPath: "/runtime/models.ini" })),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
@@ -24,12 +22,6 @@ vi.mock("./managed-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./managed-server.js")>()),
   ensureLlamaCppModel: mocks.ensureModel,
   prepareManagedLlamaServer: mocks.prepareServer,
-}));
-
-vi.mock("./llama-server-install.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./llama-server-install.js")>()),
-  selectLlamaServerAsset: mocks.selectAsset,
-  resolveManagedLlamaServerPaths: mocks.resolvePaths,
 }));
 
 import {
@@ -60,11 +52,9 @@ beforeEach(async () => {
   });
   mocks.prepareServer.mockReset().mockResolvedValue({
     command: path.join(tempRoot, "llama-server"),
-    presetPath: path.join(tempRoot, "models.ini"),
     baseUrl: "http://127.0.0.1:19432/v1",
     healthUrl: "http://127.0.0.1:19432/health",
     args: ["--host", "127.0.0.1", "--port", "19432"],
-    backend: "metal",
   });
   mocks.removeProfiles.mockReset().mockResolvedValue({ version: 1, profiles: {} });
 });

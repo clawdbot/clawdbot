@@ -188,18 +188,24 @@ function attachHarness(
   options: {
     admissionFailure?: WorkerAdmissionFailureReason;
     commitFailure?: WorkerTranscriptCommitErrorReason;
+    closeDuringHello?: boolean;
     identity?: WorkerConnectionIdentity;
     liveFailure?: WorkerLiveEventErrorDetails;
     omitPublicAdmission?: boolean;
     rateLimiter?: AuthRateLimiter;
     onInferenceLaunch?: (sink: InferenceSink) => void;
     onSessionTool?: (signal: AbortSignal | undefined) => Promise<WorkerSessionToolResult>;
+    startupPending?: () => boolean;
     validationFailure?: ReturnType<WorkerConnectionService["validateWorkerConnection"]>;
   } = {},
 ) {
   const socket = createGatewayWsTestSocket();
   const responses: unknown[] = [];
-  const close = vi.fn();
+  let closed = false;
+  const close = vi.fn(() => {
+    closed = true;
+    cleanup();
+  });
   const service = {
     admitWorker: vi.fn(async () =>
       options.admissionFailure
@@ -253,21 +259,28 @@ function attachHarness(
   const logWsControl = createLogger();
   const setCloseCause = vi.fn();
   const setLastFrameMeta = vi.fn();
+  const advanceHandshakePhase = vi.fn();
   const cleanup = attachWorkerWsMessageHandler({
     socket: socket as unknown as WebSocket,
     connId: "worker-connection",
     service,
+    isStartupPending: options.startupPending,
     publicAdmission: options.omitPublicAdmission
       ? undefined
       : { clientIp: "203.0.113.10", rateLimiter: options.rateLimiter },
-    send: (frame) => responses.push(frame),
+    send: (frame) => {
+      responses.push(frame);
+      if (options.closeDuringHello) {
+        close();
+      }
+    },
     close,
-    isClosed: () => false,
+    isClosed: () => closed,
     clearHandshakeTimer: vi.fn(),
     getClient: () => client,
     setClient,
     setHandshakeState: vi.fn(),
-    advanceHandshakePhase: vi.fn(),
+    advanceHandshakePhase,
     setCloseCause,
     setLastFrameMeta,
     logGateway,
@@ -279,6 +292,7 @@ function attachHarness(
     client: () => client,
     cleanup,
     close,
+    advanceHandshakePhase,
     logGateway,
     logWsControl,
     responses,
@@ -300,6 +314,7 @@ async function admit(harness: ReturnType<typeof attachHarness>): Promise<void> {
 
 describe("dedicated worker websocket protocol", () => {
   afterEach(() => {
+    vi.useRealTimers();
     resetGatewayWorkAdmission();
     for (const cleanup of cleanups.splice(0)) {
       cleanup();
@@ -315,6 +330,33 @@ describe("dedicated worker websocket protocol", () => {
     expect(harness.client()).toMatchObject({
       connectionKind: "worker",
       connect: { role: "worker" },
+    });
+  });
+
+  it("does not mark a synchronously closed hello ready or recreate its expiry timer", async () => {
+    vi.useFakeTimers();
+    const harness = attachHarness({ closeDuringHello: true });
+
+    harness.sendConnect();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.responses).toHaveLength(1);
+    expect(harness.close).toHaveBeenCalledOnce();
+    expect(harness.advanceHandshakePhase).not.toHaveBeenCalledWith("ready");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps unrelated worker admission closed while startup is pending", async () => {
+    const harness = attachHarness({ startupPending: () => true });
+    harness.sendConnect();
+
+    await waitForWorkerProtocol(() =>
+      expect(harness.close).toHaveBeenCalledWith(1013, "gateway-unavailable"),
+    );
+    expect(harness.service.admitWorker).not.toHaveBeenCalled();
+    expect(harness.responses[0]).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", retryable: true },
     });
   });
 

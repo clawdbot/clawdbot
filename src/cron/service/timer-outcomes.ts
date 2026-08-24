@@ -8,7 +8,11 @@ import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
-import { maybeEmitFailureAlert, resolveFailureAlert } from "./failure-alerts.js";
+import {
+  finalizeCronFailureNotifications,
+  maybeEmitFailureAlert,
+  resolveFailureAlert,
+} from "./failure-alerts.js";
 import {
   computeJobNextRunAtMs,
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
@@ -129,7 +133,6 @@ export function applyJobResult(
       delivered: result.delivered,
       deliveryAttempted: result.deliveryAttempted,
       error: result.deliveryError ?? result.error,
-      globalFailureDestination: state.deps.cronConfig?.failureAlert,
     });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
@@ -137,9 +140,9 @@ export function applyJobResult(
     deliveryState.status === "not-delivered" && deliveryState.error
       ? deliveryState.error
       : undefined;
-  job.state.lastFailureNotificationDelivered = deliveryState.failureNotification.delivered;
-  job.state.lastFailureNotificationDeliveryStatus = deliveryState.failureNotification.status;
-  job.state.lastFailureNotificationDeliveryError = deliveryState.failureNotification.error;
+  job.state.lastFailureNotificationDelivered = undefined;
+  job.state.lastFailureNotificationDeliveryStatus = "not-requested";
+  job.state.lastFailureNotificationDeliveryError = undefined;
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable; skipped runs use a
@@ -149,20 +152,6 @@ export function applyJobResult(
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     job.state.consecutiveSkipped = 0;
-    maybeEmitFailureAlert(state, {
-      job,
-      alertConfig,
-      status: "error",
-      error: result.error,
-      errorReason: job.state.lastErrorReason,
-      failureNotificationDetail: result.failureNotificationDetail,
-      runAtMs: result.startedAt,
-      consecutiveCount: job.state.consecutiveErrors,
-      ...(opts?.replayFailureAlertAtMs !== undefined
-        ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
-        : {}),
-      deferredNotifications: opts?.deferredNotifications,
-    });
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
     job.state.consecutiveSkipped = (job.state.consecutiveSkipped ?? 0) + 1;
@@ -198,15 +187,28 @@ export function applyJobResult(
     previousScheduleState.nextRunAtMs > (opts.scheduleOwnershipAtMs ?? result.startedAt);
   const ownsSchedule = opts?.scheduleOwnership !== "stale";
   const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
+  const completionStatus =
+    result.completionStatus ??
+    resolveAdmittedCronCompletionStatus(job, result.status, deliveryState.status);
   const shouldDelete =
     ownsSchedule &&
     isOneShotSchedule &&
     !preserveOneShotSchedule &&
     job.deleteAfterRun === true &&
-    (result.completionStatus ??
-      resolveAdmittedCronCompletionStatus(job, result.status, deliveryState.status)) ===
-      "succeeded";
-  const retryDisabledHeartbeatOneShot = shouldRetryDisabledHeartbeatOneShot(job, result);
+    completionStatus === "succeeded";
+  let autoDisableNotificationOwnsFailure = false;
+  const finish = () => {
+    finalizeCronFailureNotifications(state, {
+      job,
+      alertConfig,
+      result,
+      completionFailed: completionStatus === "failed",
+      autoDisableNotificationOwnsFailure,
+      replayFailureAlertAtMs: opts?.replayFailureAlertAtMs,
+      deferredNotifications: opts?.deferredNotifications,
+    });
+    return shouldDelete;
+  };
 
   if (!ownsSchedule) {
     // The completed invocation still owns its outcome, but the latest durable
@@ -221,7 +223,7 @@ export function applyJobResult(
       job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
       job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
     } else if (job.schedule.kind === "at") {
-      if (retryDisabledHeartbeatOneShot) {
+      if (shouldRetryDisabledHeartbeatOneShot(job, result)) {
         const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
           cronConfig: state.deps.cronConfig,
           consecutiveSkipped: job.state.consecutiveSkipped,
@@ -331,6 +333,7 @@ export function applyJobResult(
         deferredNotifications: opts?.deferredNotifications,
       })
     ) {
+      autoDisableNotificationOwnsFailure = true;
       // Keep this after the ownership and immediate-preserve gates: those paths
       // restore schedule state and would otherwise silently undo the disable.
       state.deps.log.error(
@@ -389,7 +392,7 @@ export function applyJobResult(
             deferredNotifications: opts?.deferredNotifications,
           });
           if (retryNextRunAtMs === undefined) {
-            return shouldDelete;
+            return finish();
           }
           if (retryNextRunAtMs < normalNext) {
             state.deps.log.info(
@@ -404,7 +407,7 @@ export function applyJobResult(
               },
               "cron: scheduling recurring retry after transient error",
             );
-            return shouldDelete;
+            return finish();
           }
         }
       }
@@ -421,7 +424,7 @@ export function applyJobResult(
           candidate: undefined,
           deferredNotifications: opts?.deferredNotifications,
         });
-        return shouldDelete;
+        return finish();
       }
       const backoffNext = assignNextRunAtMs({
         state,
@@ -430,7 +433,7 @@ export function applyJobResult(
         deferredNotifications: opts?.deferredNotifications,
       });
       if (backoffNext === undefined) {
-        return shouldDelete;
+        return finish();
       }
       // Use whichever is later: the natural next run or the backoff delay.
       job.state.nextRunAtMs =
@@ -536,7 +539,7 @@ export function applyJobResult(
     }
   }
 
-  return shouldDelete;
+  return finish();
 }
 
 /** Commits payload-script state only after the complete cron run succeeds. */

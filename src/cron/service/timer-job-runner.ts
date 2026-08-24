@@ -226,7 +226,13 @@ async function executeJobCoreWithTimeoutUnfinalized(
       error: `cron webhook delivery cancelled: ${error}`,
     });
   };
-  if (!isCronActiveJobMarkerCurrent(opts?.activeJobMarker)) {
+  const reservation = opts?.runReceipt ? state.queuedRunReservationsByJobId.get(job.id) : undefined;
+  if (
+    !isCronActiveJobMarkerCurrent(opts?.activeJobMarker) ||
+    (opts?.runReceipt &&
+      (reservation?.runReceipt.receiptId !== opts.runReceipt.receiptId ||
+        reservation.lifecycleGeneration !== state.lifecycleGeneration))
+  ) {
     runAbortController.abort("Gateway restarting.");
     return createOperatorCancellationOutcome();
   }
@@ -444,14 +450,13 @@ export function authorCronRunCompletion<
     CronJobRunResult,
     "status" | "error" | "deliveryError" | "delivered" | "deliveryAttempted"
   >,
->(state: CronServiceState, job: CronJob, result: T) {
+>(_state: CronServiceState, job: CronJob, result: T) {
   const deliveryState = resolveDeliveryState({
     job,
     runStatus: result.status,
     delivered: result.delivered,
     deliveryAttempted: result.deliveryAttempted,
     error: result.deliveryError ?? result.error,
-    globalFailureDestination: state.deps.cronConfig?.failureAlert,
   });
   return {
     ...result,

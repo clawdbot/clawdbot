@@ -5,13 +5,6 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/app/app-shell-view.ts",
-      "text": "device scope upgrade banner"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
       "text": "approval page"
     },
@@ -227,6 +220,41 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateConfiguredUnavailable"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateRateLimited"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateUnavailable"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateUnverified"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateVerified"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/agents/memory/view.ts",
@@ -259,41 +287,6 @@
       "name": "text",
       "path": "ui/src/pages/agents/panels-overview.ts",
       "text": "&times;"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/panels-tools-skills.ts",
-      "text": "agentTools.githubStateConfiguredUnavailable"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/panels-tools-skills.ts",
-      "text": "agentTools.githubStateRateLimited"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/panels-tools-skills.ts",
-      "text": "agentTools.githubStateUnavailable"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/panels-tools-skills.ts",
-      "text": "agentTools.githubStateUnverified"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/panels-tools-skills.ts",
-      "text": "agentTools.githubStateVerified"
     },
     {
       "count": 1,
@@ -357,6 +350,13 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "W"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/chat/components/chat-pane-header.test-support.ts",
+      "text": "Session title"
     },
     {
       "count": 1,

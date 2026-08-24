@@ -151,8 +151,8 @@ describe("qa scenario catalog", () => {
     expect(fallbackFlow).toContain("!tools.has('memory_search')");
     expect(fallbackFlow).toContain("outbound.text.trim().length > 0");
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
-    expect(bundledSkillConfig?.pluginId).toBe("open-prose");
-    expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
+    expect(bundledSkillConfig?.pluginId).toBe("diffs");
+    expect(bundledSkillConfig?.expectedSkillName).toBe("diffs");
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-1: ok");
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-2: ok");
   });

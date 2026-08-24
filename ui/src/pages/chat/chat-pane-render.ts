@@ -4,6 +4,7 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
+import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { t } from "../../i18n/index.ts";
 import {
   resolveControlUiFollowUpMode,
@@ -130,7 +131,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       ),
     );
     const currentAgentId = resolveChatAgentId(state);
-    const { catalogKey, fullMessageLoader, chatProps } = resolveChatMessageAccess(state);
+    const { catalogKey, chatProps } = resolveChatMessageAccess(state);
     const overlays = this.context?.overlays;
     const inlineApproval = findInlineApproval(
       overlays?.snapshot?.approvalQueue ?? [],
@@ -228,6 +229,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         sidebarLayout,
         paneWidth: this.paneWidth,
         presentationId: this.presentationId,
+        presented: this.presented,
         gatewaySnapshot,
         setObserverVisibility: this.setSessionObserverVisibility,
       });
@@ -279,6 +281,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           effortAccess: mutationAccess.effort,
           permissionAccess: mutationAccess.permission,
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
+          toastAnchor: this,
           onModelSetup: () => this.context.navigate("model-setup"),
         });
     const props: ChatProps = {
@@ -340,6 +343,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
+      modelCatalog: state.chatModelCatalog,
+      modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
       queue: state.chatQueue,
       queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,
@@ -358,7 +363,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       composerHoldToRecord: state.settings.composerHoldToRecord,
       suggestionComposer: suggestionViewer,
       typingActors: multiIdentity ? this.typingActorViews() : [],
-      onTypingChange: typingEnabled ? (typing) => this.sendTypingState(typing) : undefined,
+      onTypingChange: typingEnabled
+        ? (typing, preview) => this.sendTypingState(typing, preview)
+        : undefined,
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
         : !modelSetupRequired &&
@@ -387,7 +394,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       approvalBusy: overlays?.snapshot?.approvalBusy,
       approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
       approvalErrors: overlays?.snapshot?.approvalErrors,
-      approvalNowMs: overlays?.snapshot?.approvalNowMs,
       onApprovalDecision:
         overlays && !sessionParticipationBlocked
           ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
@@ -529,7 +535,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         state.requestUpdate?.();
       },
       onRemoveAttachment: this.removeBrowserAnnotation,
-      onSend: (followUpModeOverride) =>
+      onSend: (followUpModeOverride, submissionAction) =>
         catalogKey
           ? void this.continueCatalogSession(catalogKey)
           : suggestionViewer
@@ -537,6 +543,7 @@ export class ChatPane extends ChatPaneLayoutRender {
             : void state.handleSendChat(
                 undefined,
                 followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
+                submissionAction,
               ),
       onCompact: sessionActionCallbacks.onCompact,
       // Checkpoint deep-link carries the archived filter so the row stays findable.
@@ -613,6 +620,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       userId: selfUser?.id ?? null,
       userName: selfUser?.name ?? state.userName,
       userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
+      personActivity: personActivityRouting(this.context),
       localMediaPreviewRoots: state.localMediaPreviewRoots,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
@@ -634,7 +642,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       sessionWorkspace,
       backgroundTasks,
       chatProps: props,
-      fullMessageLoader,
       observerDigest,
       observerRunId,
       catalog: Boolean(catalogKey),

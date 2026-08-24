@@ -72,19 +72,13 @@ function stripAuthOverrides(
     return provider;
   }
   const headers = removeAuthorization
-    ? Object.fromEntries(
-        Object.entries(provider.headers ?? {}).filter(
-          ([name]) => name.toLowerCase() !== "authorization",
-        ),
-      )
+    ? stripAuthorizationHeader(provider.headers)
     : provider.headers;
   return {
     ...provider,
     auth: undefined,
     apiKey: undefined,
-    ...(removeAuthorization
-      ? { headers: headers && Object.keys(headers).length > 0 ? headers : undefined }
-      : {}),
+    ...(removeAuthorization ? { headers } : {}),
   };
 }
 
@@ -146,25 +140,32 @@ function stripLlamaServerEndpointAuth(config: OpenClawConfig): OpenClawConfig {
   };
 }
 
-type EndpointTransition<T> = {
-  endpoint: "unchanged" | "replacement";
-  auth: { kind: "preserve" } | { kind: "api-key"; value: T } | { kind: "no-api-key" };
-};
+type AuthPersistence<T> =
+  | { kind: "preserve" }
+  | { kind: "upsert"; credential: T }
+  | { kind: "remove" };
+
+function stripAuthorizationHeader<T>(
+  headers: Record<string, T> | undefined,
+): Record<string, T> | undefined {
+  const filtered = Object.fromEntries(
+    Object.entries(headers ?? {}).filter(([name]) => name.toLowerCase() !== "authorization"),
+  );
+  return Object.keys(filtered).length > 0 ? filtered : undefined;
+}
 
 function buildExistingProviderConfig(params: {
   config: OpenClawConfig;
   discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>;
-  transition: EndpointTransition<unknown>;
+  resetEndpoint: boolean;
+  persistence: AuthPersistence<unknown>;
 }): ModelProviderConfig {
   const configured = params.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const endpointSafe =
-    params.transition.endpoint === "replacement"
-      ? stripEndpointCredentials(configured)
-      : configured;
+  const endpointSafe = params.resetEndpoint ? stripEndpointCredentials(configured) : configured;
   const existing =
-    params.transition.auth.kind === "preserve"
+    params.persistence.kind === "preserve"
       ? endpointSafe
-      : stripAuthOverrides(endpointSafe, params.transition.auth.kind === "api-key");
+      : stripAuthOverrides(endpointSafe, params.persistence.kind === "upsert");
   return buildLlamaServerProviderConfig({
     configured: {
       ...existing,
@@ -179,24 +180,27 @@ function buildSetupResult(params: {
   config: OpenClawConfig;
   discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>;
   modelId: string;
-  transition: EndpointTransition<SecretInput | undefined>;
+  resetEndpoint: boolean;
+  persistence: AuthPersistence<SecretInput>;
 }): ProviderAuthResult {
-  const credentialInput =
-    params.transition.auth.kind === "api-key" ? params.transition.auth.value : undefined;
   return {
-    profiles: credentialInput
-      ? [
-          {
-            profileId: PROFILE_ID,
-            credential: buildApiKeyCredential(LLAMA_CPP_PROVIDER_ID, credentialInput, undefined, {
-              config: params.config,
-            }),
-          },
-        ]
-      : [],
+    profiles:
+      params.persistence.kind === "upsert"
+        ? [
+            {
+              profileId: PROFILE_ID,
+              credential: buildApiKeyCredential(
+                LLAMA_CPP_PROVIDER_ID,
+                params.persistence.credential,
+                undefined,
+                { config: params.config },
+              ),
+            },
+          ]
+        : [],
     defaultModel: `${LLAMA_CPP_PROVIDER_ID}/${params.modelId}`,
     configPatch: {
-      ...(params.transition.auth.kind !== "preserve" && !credentialInput
+      ...(params.persistence.kind === "remove"
         ? buildLlamaCppAuthProfileRemovalPatch(params.config)
         : {}),
       models: {
@@ -225,33 +229,37 @@ async function removeDefaultAuthProfile(agentDir?: string): Promise<void> {
 async function discoverForSetup(params: {
   config: OpenClawConfig;
   baseUrl: string;
-  agentDir?: string;
   env?: NodeJS.ProcessEnv;
-  apiKey?: string;
   signal?: AbortSignal;
-  reuseStoredAuth?: boolean;
 }): Promise<LlamaServerDiscoveryResult> {
-  const reuseStoredAuth = params.reuseStoredAuth !== false;
   const providerConfig = params.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const headers = reuseStoredAuth
-    ? await resolveLlamaServerProviderHeaders({
-        config: params.config,
-        env: params.env,
-        headers: providerConfig?.headers,
-      })
+  const headers = await resolveLlamaServerProviderHeaders({
+    config: params.config,
+    env: params.env,
+    headers: providerConfig?.headers,
+  });
+  const resolvedApiKey = !hasLlamaServerAuthorizationHeader(headers)
+    ? await resolveLlamaServerRuntimeApiKey({ config: params.config })
     : undefined;
-  const resolvedApiKey =
-    params.apiKey ??
-    (reuseStoredAuth && !hasLlamaServerAuthorizationHeader(headers)
-      ? await resolveLlamaServerRuntimeApiKey({
-          config: params.config,
-          agentDir: params.agentDir,
-        })
-      : undefined);
   return await discoverLlamaServer({
     baseUrl: params.baseUrl,
     apiKey: resolvedApiKey,
     headers,
+    signal: params.signal,
+    cacheTtlMs: 0,
+  });
+}
+
+async function discoverWithAccess(params: {
+  baseUrl: string;
+  apiKey?: string;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+}): Promise<LlamaServerDiscoveryResult> {
+  return await discoverLlamaServer({
+    baseUrl: params.baseUrl,
+    apiKey: params.apiKey,
+    headers: params.headers,
     signal: params.signal,
     cacheTtlMs: 0,
   });
@@ -321,7 +329,8 @@ export async function prepareLlamaServerSetup(
     config: ctx.config,
     discovery,
     modelId,
-    transition: { endpoint: "unchanged", auth: { kind: "preserve" } },
+    resetEndpoint: false,
+    persistence: { kind: "preserve" },
   });
 }
 
@@ -338,45 +347,66 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
   const endpoint = resolveLlamaServerEndpoint(baseUrl);
   const endpointChanged =
     Boolean(existing?.localService) || hasEndpointChanged(existing, endpoint.inferenceBaseUrl);
-
-  const hasExplicitAuthorization =
-    !endpointChanged && hasLlamaServerAuthorizationHeader(existing?.headers);
-  let credentialInput: SecretInput | undefined;
-  let apiKey =
-    endpointChanged || hasExplicitAuthorization
-      ? undefined
-      : ctx.env?.[LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR]?.trim();
-  const usesApiKey =
-    Boolean(apiKey) ||
-    (await ctx.prompter.confirm({
-      message: "Does this llama-server require an API key?",
-      initialValue: false,
-    }));
-  if (usesApiKey && !apiKey) {
-    apiKey = await ensureApiKeyFromEnvOrPrompt({
-      config: endpointChanged ? stripLlamaServerEndpointAuth(ctx.config) : ctx.config,
-      env: endpointChanged ? {} : ctx.env,
-      provider: LLAMA_CPP_PROVIDER_ID,
-      envLabel: LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
-      promptMessage: "Enter the llama-server API key",
-      normalize: (value) => value.trim(),
-      validate: (value) => (value.trim() ? undefined : "Required"),
-      prompter: ctx.prompter,
-      secretInputMode: ctx.secretInputMode,
-      setCredential: async (input) => {
-        credentialInput = input;
-      },
-    });
+  const resolvedHeaders = endpointChanged
+    ? undefined
+    : await resolveLlamaServerProviderHeaders({
+        config: ctx.config,
+        env: ctx.env,
+        headers: existing?.headers,
+      });
+  const usesApiKey = await ctx.prompter.confirm({
+    message: "Does this llama-server require an API key?",
+    initialValue: false,
+  });
+  let apiKey: string | undefined;
+  let headers = resolvedHeaders;
+  let persistence: AuthPersistence<SecretInput>;
+  if (!usesApiKey) {
+    persistence = { kind: "remove" };
+  } else {
+    const hasConfiguredProfile = Boolean(ctx.config.auth?.profiles?.[PROFILE_ID]);
+    const profileApiKey =
+      !endpointChanged &&
+      !hasLlamaServerAuthorizationHeader(resolvedHeaders) &&
+      hasConfiguredProfile
+        ? await resolveLlamaServerRuntimeApiKey({
+            config: ctx.config,
+            agentDir: ctx.agentDir,
+            profileId: PROFILE_ID,
+          })
+        : undefined;
+    if (profileApiKey) {
+      apiKey = profileApiKey;
+      persistence = { kind: "preserve" };
+    } else {
+      let credentialInput: SecretInput | undefined;
+      apiKey = await ensureApiKeyFromEnvOrPrompt({
+        config: endpointChanged ? stripLlamaServerEndpointAuth(ctx.config) : ctx.config,
+        env: endpointChanged ? {} : ctx.env,
+        provider: LLAMA_CPP_PROVIDER_ID,
+        envLabel: LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
+        promptMessage: "Enter the llama-server API key",
+        normalize: (value) => value.trim(),
+        validate: (value) => (value.trim() ? undefined : "Required"),
+        prompter: ctx.prompter,
+        secretInputMode: ctx.secretInputMode,
+        setCredential: async (input) => {
+          credentialInput = input;
+        },
+      });
+      if (credentialInput === undefined) {
+        throw new Error("llama-server API-key setup did not produce a credential");
+      }
+      headers = stripAuthorizationHeader(resolvedHeaders);
+      persistence = { kind: "upsert", credential: credentialInput };
+    }
   }
 
-  const discovery = await discoverForSetup({
-    config: ctx.config,
-    agentDir: ctx.agentDir,
+  const discovery = await discoverWithAccess({
     baseUrl: endpoint.inferenceBaseUrl,
-    env: ctx.env,
     apiKey,
+    headers,
     signal: ctx.signal,
-    reuseStoredAuth: !endpointChanged,
   });
   if (discovery.kind !== "success") {
     throw new Error(describeDiscoveryFailure(discovery));
@@ -385,17 +415,15 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
   if (!modelId) {
     throw new Error(`No llama-server text models were found at ${discovery.endpoint.origin}.`);
   }
-  if (!credentialInput) {
+  if (persistence.kind === "remove") {
     await removeDefaultAuthProfile(ctx.agentDir);
   }
   return buildSetupResult({
     config: ctx.config,
     discovery,
     modelId,
-    transition: {
-      endpoint: endpointChanged ? "replacement" : "unchanged",
-      auth: usesApiKey ? { kind: "api-key", value: credentialInput } : { kind: "no-api-key" },
-    },
+    resetEndpoint: endpointChanged,
+    persistence,
   });
 }
 
@@ -404,7 +432,8 @@ async function validateNonInteractiveDiscovery(
 ): Promise<{
   discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>;
   modelId: string;
-  transition: EndpointTransition<NonNullable<Awaited<ReturnType<typeof ctx.resolveApiKey>>>>;
+  resetEndpoint: boolean;
+  persistence: AuthPersistence<NonNullable<Awaited<ReturnType<typeof ctx.resolveApiKey>>>>;
 } | null> {
   const configuredProvider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const baseUrl =
@@ -415,34 +444,42 @@ async function validateNonInteractiveDiscovery(
     Boolean(configuredProvider?.localService) || hasEndpointChanged(configuredProvider, baseUrl);
   const providerApiKey = normalizeOptionalSecretInput(ctx.opts.llamaServerApiKey);
   const customApiKey = normalizeOptionalSecretInput(ctx.opts.customApiKey);
+  const authoredApiKey = providerApiKey ?? customApiKey;
+  const hasAuthoredApiKey = authoredApiKey !== undefined;
   const resolvedApiKey = await ctx.resolveApiKey({
     provider: LLAMA_CPP_PROVIDER_ID,
-    flagValue: providerApiKey ?? customApiKey,
+    flagValue: authoredApiKey,
     flagName: providerApiKey === undefined ? "--custom-api-key" : "--llama-server-api-key",
     envVar: LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
     envVarName: LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
     required: false,
   });
-  const headers = endpointChanged
+  const resolvedHeaders = endpointChanged
     ? undefined
     : await resolveLlamaServerProviderHeaders({
         config: ctx.config,
         env: process.env,
         headers: configuredProvider?.headers,
       });
-  const selectedApiKey = endpointChanged
-    ? resolvedApiKey?.source === "flag"
-      ? resolvedApiKey
-      : null
-    : hasLlamaServerAuthorizationHeader(headers) && resolvedApiKey?.source !== "flag"
-      ? null
-      : resolvedApiKey;
-  const discovery = await discoverLlamaServer({
-    baseUrl,
-    apiKey: selectedApiKey?.key,
-    headers,
-    cacheTtlMs: 0,
-  });
+  let apiKey: string | undefined;
+  let headers = resolvedHeaders;
+  let persistence: AuthPersistence<NonNullable<typeof resolvedApiKey>>;
+  if (hasAuthoredApiKey && resolvedApiKey) {
+    apiKey = resolvedApiKey.key;
+    headers = stripAuthorizationHeader(resolvedHeaders);
+    persistence = { kind: "upsert", credential: resolvedApiKey };
+  } else if (endpointChanged || hasLlamaServerAuthorizationHeader(resolvedHeaders)) {
+    persistence = { kind: "remove" };
+  } else if (resolvedApiKey?.source === "profile") {
+    apiKey = resolvedApiKey.key;
+    persistence = { kind: "preserve" };
+  } else if (resolvedApiKey) {
+    apiKey = resolvedApiKey.key;
+    persistence = { kind: "upsert", credential: resolvedApiKey };
+  } else {
+    persistence = { kind: "remove" };
+  }
+  const discovery = await discoverWithAccess({ baseUrl, apiKey, headers });
   if (discovery.kind !== "success") {
     ctx.runtime.error(describeDiscoveryFailure(discovery));
     ctx.runtime.exit(1);
@@ -463,10 +500,8 @@ async function validateNonInteractiveDiscovery(
   return {
     discovery,
     modelId,
-    transition: {
-      endpoint: endpointChanged ? "replacement" : "unchanged",
-      auth: selectedApiKey ? { kind: "api-key", value: selectedApiKey } : { kind: "preserve" },
-    },
+    resetEndpoint: endpointChanged,
+    persistence,
   };
 }
 
@@ -487,7 +522,8 @@ export async function configureLlamaServerNonInteractive(
   const providerConfig = buildExistingProviderConfig({
     config: ctx.config,
     discovery: validated.discovery,
-    transition: validated.transition,
+    resetEndpoint: validated.resetEndpoint,
+    persistence: validated.persistence,
   });
   let config: OpenClawConfig = {
     ...ctx.config,
@@ -501,10 +537,10 @@ export async function configureLlamaServerNonInteractive(
     },
   };
 
-  if (validated.transition.auth.kind === "api-key") {
+  if (validated.persistence.kind === "upsert") {
     const credential = ctx.toApiKeyCredential({
       provider: LLAMA_CPP_PROVIDER_ID,
-      resolved: validated.transition.auth.value,
+      resolved: validated.persistence.credential,
     });
     if (!credential) {
       return null;
@@ -519,7 +555,7 @@ export async function configureLlamaServerNonInteractive(
       provider: LLAMA_CPP_PROVIDER_ID,
       mode: "api_key",
     });
-  } else {
+  } else if (validated.persistence.kind === "remove") {
     await removeDefaultAuthProfile(ctx.agentDir);
     config = removeAuthProfileConfig(config, PROFILE_ID);
   }

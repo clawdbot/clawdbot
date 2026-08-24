@@ -14,6 +14,7 @@ import type {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext } from "../../app/context.ts";
+import { observeNativeGateway } from "../../app/native-editor-locality.runtime.ts";
 import type {
   NativeGatewaysCapability,
   NativeGatewaysSnapshot,
@@ -408,7 +409,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionSuggestionTargetSignature = "";
   protected sessionSuggestionAddOperation: symbol | undefined;
   protected sessionSuggestionEditOperation: symbol | undefined;
-  protected readonly typingActors = new Map<string, { label: string; expiresAt: number }>();
+  protected readonly typingActors = new Map<
+    string,
+    { label: string; expiresAt: number; preview?: string }
+  >();
   protected readonly typingTimers = new Map<string, number>();
   protected sessionPullRequests: ControlUiSessionPullRequest[] = [];
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
@@ -447,6 +451,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
 
   constructor() {
     super();
+    observeNativeGateway(this);
     void new SubscriptionsController(this)
       .watch(
         () => this.context?.overlays,

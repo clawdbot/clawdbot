@@ -70,9 +70,9 @@ export const controlUiCodeSplitting = {
         normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
       tags: ["$initial"] as ["$initial"],
       priority: 10,
-      // 576 KiB keeps the shared normalization graph in one chunk; the previous
-      // 512 KiB boundary split it in two, adding a startup request and ~700 B gzip.
-      maxSize: 576 * 1024,
+      // 640 KiB keeps the startup graph together; the previous 576 KiB boundary
+      // split it into two extra requests and added roughly 1 KiB of gzip.
+      maxSize: 640 * 1024,
     },
   ],
 };

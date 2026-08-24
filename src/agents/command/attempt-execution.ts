@@ -492,6 +492,7 @@ export function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
   modelHasVision?: boolean;
+  modelThinkingCapability?: RunEmbeddedAgentInternalParams["modelThinkingCapability"];
   configuredAuthProfileId?: string;
   originalProvider: string;
   cfg: OpenClawConfig;
@@ -921,6 +922,7 @@ export function runAgentAttempt(params: {
             sessionTarget: params.sessionTarget,
             sessionEntry: params.sessionEntry,
             chatType: params.sessionEntry?.chatType,
+            contextWindow: params.sessionEntry?.contextWindow,
             agentId: params.sessionAgentId,
             trigger: "user",
             sessionFile: params.sessionFile,
@@ -1136,6 +1138,7 @@ export function runAgentAttempt(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     chatType: params.sessionEntry?.chatType,
+    contextWindow: params.sessionEntry?.contextWindow,
     sessionTarget: params.sessionTarget,
     sandboxSessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
@@ -1170,6 +1173,8 @@ export function runAgentAttempt(params: {
     agentHarnessId: embeddedAgentHarnessOverride,
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
+    agentHarnessRuntimePreparationHint:
+      agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
     skillsSnapshot: params.skillsSnapshot,
     prompt: embeddedModelPrompt,
     transcriptPrompt: embeddedPersistencePrompt,
@@ -1182,6 +1187,7 @@ export function runAgentAttempt(params: {
     provider: embeddedAgentProvider,
     model: params.modelOverride,
     modelHasVision: params.modelHasVision,
+    modelThinkingCapability: params.modelThinkingCapability,
     modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,

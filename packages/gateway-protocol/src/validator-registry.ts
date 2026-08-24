@@ -330,6 +330,7 @@ export const validateTalkSessionAcknowledgeMarkParams = compile(
   S.TalkSessionAcknowledgeMarkParamsSchema,
 );
 export const validateTalkSessionCancelOutputParams = compile(S.TalkSessionCancelOutputParamsSchema);
+export const validateTalkSessionCancelOutputResult = compile(S.TalkSessionCancelOutputResultSchema);
 export const validateTalkSessionSteerParams = compile(S.TalkSessionSteerParamsSchema);
 export const validateTalkSessionSubmitToolResultParams = compile(
   S.TalkSessionSubmitToolResultParamsSchema,
@@ -351,7 +352,26 @@ export const validateSkillsStatusParams = compile(S.SkillsStatusParamsSchema);
 export const validateHooksStatusParams = compile(S.HooksStatusParamsSchema);
 export const validateToolsCatalogParams = compile(S.ToolsCatalogParamsSchema);
 export const validateToolsGitHubStatusParams = compile(S.ToolsGitHubStatusParamsSchema);
+export const validateToolsGitHubStatusResult = compile(S.ToolsGitHubStatusResultSchema);
 export const validateToolsGitHubConfigureParams = compile(S.ToolsGitHubConfigureParamsSchema);
+export const validateToolsGitHubAuthorizeStartParams = compile(
+  S.ToolsGitHubAuthorizeStartParamsSchema,
+);
+export const validateToolsGitHubAuthorizeStartResult = compile(
+  S.ToolsGitHubAuthorizeStartResultSchema,
+);
+export const validateToolsGitHubAuthorizePollParams = compile(
+  S.ToolsGitHubAuthorizePollParamsSchema,
+);
+export const validateToolsGitHubAuthorizePollResult = compile(
+  S.ToolsGitHubAuthorizePollResultSchema,
+);
+export const validateToolsGitHubAuthorizeCancelParams = compile(
+  S.ToolsGitHubAuthorizeCancelParamsSchema,
+);
+export const validateToolsGitHubAuthorizeCancelResult = compile(
+  S.ToolsGitHubAuthorizeCancelResultSchema,
+);
 export const validateSessionGitHubPublishParams = compile(S.SessionGitHubPublishParamsSchema);
 export const validateWorkerGitHubPublishParams = compile(S.WorkerGitHubPublishParamsSchema);
 export const validateToolsEffectiveParams = compile(S.ToolsEffectiveParamsSchema);

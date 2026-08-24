@@ -148,7 +148,10 @@ const bundledPluginAssetBuildArgs = [
 const RUN_NODE_SIGNAL_FORCE_KILL_AFTER_MS = 5_000;
 
 const runtimePostBuildWatchedPaths = [
+  "scripts/check-built-plugin-control-plane-modules.mts",
   "scripts/copy-bundled-plugin-metadata.mjs",
+  "scripts/copy-bundled-plugin-metadata.mts",
+  "scripts/copy-hook-metadata.ts",
   "scripts/lib",
   "scripts/lib/local-build-metadata.mts",
   "scripts/lib/local-build-metadata-paths.mts",
@@ -156,9 +159,12 @@ const runtimePostBuildWatchedPaths = [
   "scripts/runtime-postbuild-stamp.mts",
   "scripts/runtime-postbuild-shared.mjs",
   "scripts/runtime-postbuild.mjs",
+  "scripts/runtime-postbuild.mts",
   "scripts/stage-bundled-plugin-runtime.mjs",
+  "scripts/stage-bundled-plugin-runtime.mts",
   "scripts/windows-cmd-helpers.mjs",
   "scripts/write-official-channel-catalog.mjs",
+  "scripts/write-official-channel-catalog.mts",
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
 const runtimePostBuildScriptPaths = new Set(

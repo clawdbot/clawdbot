@@ -61,11 +61,33 @@ const schemaNames = new Map<string, string>([
   ["WorkerDesktopLaunchParams", "WorkerDesktopLaunchParams"],
   ["WorkerDesktopLaunchResult", "WorkerDesktopLaunchResult"],
   ["ProjectsListResult", "ProjectsListResult"],
+  ["GitHubIdentityFacts", "GitHubIdentityFacts"],
+  ["GitHubSelectedIdentity", "GitHubSelectedIdentity"],
+  ["ToolsGitHubStatusParams", "ToolsGitHubStatusParams"],
+  ["ToolsGitHubStatusResult", "ToolsGitHubStatusResult"],
+  ["ToolsGitHubAuthorizeStartParams", "ToolsGitHubAuthorizeStartParams"],
+  ["ToolsGitHubAuthorizeStartResult", "ToolsGitHubAuthorizeStartResult"],
+  ["ToolsGitHubAuthorizePollParams", "ToolsGitHubAuthorizePollParams"],
+  ["ToolsGitHubAuthorizePendingResult", "ToolsGitHubAuthorizePendingResult"],
+  ["ToolsGitHubAuthorizeSlowDownResult", "ToolsGitHubAuthorizeSlowDownResult"],
+  ["ToolsGitHubAuthorizeAccessDeniedResult", "ToolsGitHubAuthorizeAccessDeniedResult"],
+  ["ToolsGitHubAuthorizeExpiredResult", "ToolsGitHubAuthorizeExpiredResult"],
+  [
+    "ToolsGitHubAuthorizeIncorrectDeviceCodeResult",
+    "ToolsGitHubAuthorizeIncorrectDeviceCodeResult",
+  ],
+  ["ToolsGitHubAuthorizeNetworkErrorResult", "ToolsGitHubAuthorizeNetworkErrorResult"],
+  ["ToolsGitHubAuthorizeFailedResult", "ToolsGitHubAuthorizeFailedResult"],
+  ["ToolsGitHubAuthorizeSuccessResult", "ToolsGitHubAuthorizeSuccessResult"],
+  ["ToolsGitHubAuthorizePollResult", "ToolsGitHubAuthorizePollResult"],
+  ["ToolsGitHubAuthorizeCancelParams", "ToolsGitHubAuthorizeCancelParams"],
+  ["ToolsGitHubAuthorizeCancelResult", "ToolsGitHubAuthorizeCancelResult"],
   ["SessionGitHubPublicationRequested", "SessionGitHubPublicationRequested"],
   ["SessionGitHubPublicationPublishing", "SessionGitHubPublicationPublishing"],
   ["SessionGitHubPublicationPublished", "SessionGitHubPublicationPublished"],
   ["SessionGitHubPublicationFailed", "SessionGitHubPublicationFailed"],
   ["SessionGitHubPublicationResult", "SessionGitHubPublicationResult"],
+  ["TalkSessionCancelOutputResult", "TalkSessionCancelOutputResult"],
 ]);
 
 const androidEnums: EnumSpec[] = [
@@ -314,17 +336,26 @@ function emitWireModels(): string[] {
         const type = kotlinType(propertySchema, `${name}${upperCamel(wireName)}`);
         const literal = literalValue(propertySchema);
         const optional = !required.has(wireName);
+        const useLiteralDefault =
+          literal !== undefined && (optional || typeof literal !== "boolean");
         return {
           annotation:
             propertyName === wireName ? [] : [`  @SerialName(${JSON.stringify(wireName)})`],
           declaration: `  val ${propertyName}: ${type}${optional ? "?" : ""}${
-            literal !== undefined ? ` = ${kotlinLiteral(literal)}` : optional ? " = null" : ""
+            useLiteralDefault ? ` = ${kotlinLiteral(literal)}` : optional ? " = null" : ""
           },`,
         };
       });
     const fields: string[] = [];
     for (const property of properties) {
       fields.push(...property.annotation, property.declaration);
+    }
+    if (properties.length === 0 && variant) {
+      return [
+        `@SerialName(${JSON.stringify(variant.literal)})`,
+        "@Serializable",
+        `data object ${name} : ${variant.unionName}`,
+      ].join("\n");
     }
     return [
       ...(variant ? [`@SerialName(${JSON.stringify(variant.literal)})`] : []),

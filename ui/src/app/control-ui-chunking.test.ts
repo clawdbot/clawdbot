@@ -45,7 +45,7 @@ describe("Control UI build chunking", () => {
     expect(controlUiCodeSplitting.includeDependenciesRecursively).toBe(false);
     expect(controlUiCodeSplitting.groups[1]).toMatchObject({
       tags: ["$initial"],
-      maxSize: 576 * 1024,
+      maxSize: 640 * 1024,
     });
   });
 

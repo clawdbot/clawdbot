@@ -13,6 +13,7 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   type MemoryProviderStatus,
+  type MemoryReadResult,
   type MemorySearchManager,
   type MemorySessionSyncTarget,
   type MemorySource,
@@ -136,6 +137,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     cfg: OpenClawConfig;
     agentId: string;
     purpose?: MemoryIndexManagerPurpose;
+    inspectSources?: boolean;
     acquireLocalService?: MemoryCoreAcquireLocalService;
   }): Promise<MemoryIndexManager | null> {
     const agentId = normalizeAgentId(params.agentId);
@@ -177,12 +179,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                 purpose: params.purpose,
                 acquireLocalService: params.acquireLocalService,
               });
-              if (purpose === "status" && manager.sources.has("sessions")) {
-                try {
-                  await manager.markSessionStartupCatchupDirtyFiles();
-                } catch (err) {
-                  log.warn("memory status session dirty detection failed: " + String(err));
-                }
+              if (params.inspectSources) {
+                await manager.inspectDiagnosticSourceState();
               }
               return manager;
             },
@@ -261,13 +259,14 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           row.source === "memory" || row.source === "sessions" ? [row.source] : [],
         ),
       );
+      this.memorySourceProvenanceRepairPending =
+        this.sources.has("memory") && invalidatedSources.has("memory");
       this.dirty =
         resolveInitialMemoryDirty({
           hasMemorySource: this.sources.has("memory"),
           statusOnly: params.purpose === "status",
           hasIndexedMeta: Boolean(meta),
-        }) ||
-        (this.sources.has("memory") && invalidatedSources.has("memory"));
+        }) || this.memorySourceProvenanceRepairPending;
       if (this.sources.has("sessions") && invalidatedSources.has("sessions")) {
         // Migration cannot map a durable session source path back to one live
         // transcript file. Carry a full-session retry so unchanged and deleted
@@ -439,7 +438,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     relPath: string;
     from?: number;
     lines?: number;
-  }): Promise<{ text: string; path: string }> {
+  }): Promise<MemoryReadResult> {
     return await readMemoryFile({
       workspaceDir: this.workspaceDir,
       extraPaths: this.settings.extraPaths,
@@ -496,7 +495,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       requestedProvider: this.requestedProvider,
       sources: Array.from(this.sources),
       extraPaths: this.settings.extraPaths,
-      sourceCounts: aggregateState.sourceCounts,
+      sourceCounts: aggregateState.sourceCounts.map((entry) =>
+        Object.assign(entry, this.sourceInspections.get(entry.source) ?? {}),
+      ),
       cache: this.cache.enabled
         ? {
             enabled: true,

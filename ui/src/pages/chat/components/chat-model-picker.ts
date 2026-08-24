@@ -1,9 +1,13 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/tooltip.ts";
 import { providerDisplayLabel } from "../../../components/provider-icon.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import {
+  type ChatContextWindowControlParams,
+  renderContextWindowControl,
+} from "./chat-context-window-control.ts";
 import {
   renderChatModelPickerOption,
   renderChatModelPickerTargetOption,
@@ -19,7 +23,7 @@ export type ChatModelCatalogState = {
 };
 
 type ChatModelPickerParams = {
-  defaultModelLabel: string;
+  contextWindow?: ChatContextWindowControlParams;
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ChatModelCatalogState;
@@ -305,6 +309,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       ? defaultModelOption
       : params.modelOptions.find((option) => option.value === params.selectedModelValue);
   const modelToolsUnavailable = activeModelOption?.supportsTools === false;
+  const selectedContextWindowOption = params.contextWindow?.options.find(
+    (option) => option.id === params.contextWindow?.selected,
+  );
+  const showContextWindowBadge =
+    selectedContextWindowOption !== undefined &&
+    params.contextWindow?.selected !== params.contextWindow?.defaultId;
   const triggerTitle = [
     params.triggerStatusLabel ?? params.triggerModelLabel,
     modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
@@ -431,6 +441,16 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         <span class="chat-controls__inline-select-label">
           ${params.triggerStatusLabel ?? params.triggerModelLabel}
         </span>
+        ${showContextWindowBadge
+          ? html`
+              <span
+                class="chat-controls__locked-model-badge chat-controls__model-context-badge"
+                data-chat-model-context-badge
+              >
+                ${selectedContextWindowOption.label}
+              </span>
+            `
+          : nothing}
       </summary>
       <wa-popup data-anchored-overlay>
         <div
@@ -577,38 +597,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                       >
                         ${t("chat.modelControls.noMatchingModels")}
                       </div>
+                      ${params.contextWindow
+                        ? renderContextWindowControl(params.contextWindow, params.sessionKey)
+                        : nothing}
                       ${params.modelOptions.length > 0 && params.selectedModelValue !== ""
                         ? html`<footer class="chat-controls__model-provenance">
                             <span>${t("chat.modelControls.sessionOverride")}</span>
-                            <openclaw-tooltip
-                              .content=${t("chat.modelControls.resetToDefault", {
-                                model: params.defaultModelLabel,
-                              })}
-                            >
-                              <button
-                                class="chat-controls__model-reset"
-                                data-chat-model-reset="true"
-                                type="button"
-                                ?disabled=${params.disabled}
-                                @click=${(event: MouseEvent) => {
-                                  event.stopPropagation();
-                                  if (params.disabled) {
-                                    event.preventDefault();
-                                    return;
-                                  }
-                                  commitModel("");
-                                  const details = (
-                                    event.currentTarget as HTMLElement
-                                  ).closest<HTMLDetailsElement>("details");
-                                  if (details) {
-                                    details.open = false;
-                                    details.querySelector<HTMLElement>("summary")?.focus();
-                                  }
-                                }}
-                              >
-                                ${t("chat.modelControls.useDefault")}
-                              </button>
-                            </openclaw-tooltip>
                           </footer>`
                         : nothing}
                     `

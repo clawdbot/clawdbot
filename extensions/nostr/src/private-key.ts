@@ -6,6 +6,10 @@ import {
 
 export const NOSTR_PRIVATE_KEY_ENV_VAR = "NOSTR_PRIVATE_KEY";
 
+export function hasConfiguredNostrPrivateKey(value: SecretInput | undefined): boolean {
+  return hasConfiguredSecretInput(value) || Boolean(process.env[NOSTR_PRIVATE_KEY_ENV_VAR]?.trim());
+}
+
 export function resolveNostrPrivateKey(value: SecretInput | undefined): string {
   const configured = normalizeSecretInputString(value);
   if (configured || hasConfiguredSecretInput(value)) {

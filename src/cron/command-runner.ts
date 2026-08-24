@@ -140,7 +140,15 @@ export async function runCronCommandJob(params: {
     return {
       status,
       ...(error ? { error } : {}),
-      ...(failureNotificationDetail ? { failureNotificationDetail } : {}),
+      ...(failureNotificationDetail
+        ? {
+            failureNotificationDetail,
+            errorClassification:
+              failureNotificationDetail.kind === "command-timeout"
+                ? ({ kind: "reason", reason: "timeout" } as const)
+                : ({ kind: "permanent" } as const),
+          }
+        : {}),
       ...(summary ? { summary } : {}),
       diagnostics: buildDiagnostics({
         command,
@@ -158,6 +166,9 @@ export async function runCronCommandJob(params: {
     return {
       status: "error",
       error,
+      ...(err instanceof Error && "code" in err && err.code === "ENOENT"
+        ? { errorClassification: { kind: "permanent" as const } }
+        : {}),
       diagnostics: {
         summary: error,
         entries: [

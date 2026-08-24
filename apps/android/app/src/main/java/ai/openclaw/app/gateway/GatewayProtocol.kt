@@ -175,6 +175,118 @@ data class ProjectsListResult(
   val observedProjects: List<ProjectsListResultObservedProjectsItem>? = null,
 )
 
+@Serializable
+data class GitHubIdentityFacts(
+  val source: String,
+  val credentialKind: String,
+  val credentialState: String,
+  val account: JsonElement,
+  val gitAuthor: GitHubIdentityFactsGitAuthor,
+  val evidence: String,
+  val accessExpiresAtMs: JsonElement,
+  val refreshState: String,
+  val oauthScopes: List<String>,
+  val repositoryGrants: String = "unknown",
+)
+
+@Serializable
+data class GitHubSelectedIdentity(
+  val scope: String,
+  val configured: Boolean,
+  val identity: JsonElement,
+)
+
+@Serializable
+data class ToolsGitHubStatusParams(
+  val agentId: String,
+  val selectedScope: String,
+)
+
+@Serializable
+data class ToolsGitHubStatusResult(
+  val agentId: String,
+  val selectedScope: String,
+  val selected: GitHubSelectedIdentity,
+  val effective: GitHubIdentityFacts,
+)
+
+@Serializable
+data class ToolsGitHubAuthorizeStartParams(
+  val scope: String,
+  val agentId: String,
+)
+
+@Serializable
+data class ToolsGitHubAuthorizeStartResult(
+  val requestId: String,
+  val userCode: String,
+  val verificationUri: String = "https://github.com/login/device",
+  val expiresInMs: Long,
+  val pollAfterMs: Long,
+)
+
+@Serializable
+data class ToolsGitHubAuthorizePollParams(
+  val requestId: String,
+)
+
+@SerialName("pending")
+@Serializable
+data class ToolsGitHubAuthorizePendingResult(
+  val retryAfterMs: Long,
+) : ToolsGitHubAuthorizePollResult
+
+@SerialName("slow_down")
+@Serializable
+data class ToolsGitHubAuthorizeSlowDownResult(
+  val retryAfterMs: Long,
+) : ToolsGitHubAuthorizePollResult
+
+@SerialName("access_denied")
+@Serializable
+data object ToolsGitHubAuthorizeAccessDeniedResult : ToolsGitHubAuthorizePollResult
+
+@SerialName("expired")
+@Serializable
+data object ToolsGitHubAuthorizeExpiredResult : ToolsGitHubAuthorizePollResult
+
+@SerialName("incorrect_device_code")
+@Serializable
+data object ToolsGitHubAuthorizeIncorrectDeviceCodeResult : ToolsGitHubAuthorizePollResult
+
+@SerialName("network_error")
+@Serializable
+data class ToolsGitHubAuthorizeNetworkErrorResult(
+  val retryAfterMs: Long,
+) : ToolsGitHubAuthorizePollResult
+
+@SerialName("failed")
+@Serializable
+data class ToolsGitHubAuthorizeFailedResult(
+  val reason: String,
+) : ToolsGitHubAuthorizePollResult
+
+@SerialName("success")
+@Serializable
+data class ToolsGitHubAuthorizeSuccessResult(
+  val githubStatus: ToolsGitHubStatusResult,
+) : ToolsGitHubAuthorizePollResult
+
+@OptIn(ExperimentalSerializationApi::class)
+@Serializable
+@JsonClassDiscriminator("status")
+sealed interface ToolsGitHubAuthorizePollResult
+
+@Serializable
+data class ToolsGitHubAuthorizeCancelParams(
+  val requestId: String,
+)
+
+@Serializable
+data class ToolsGitHubAuthorizeCancelResult(
+  val cancelled: Boolean,
+)
+
 @SerialName("requested")
 @Serializable
 data class SessionGitHubPublicationRequested(
@@ -214,6 +326,13 @@ data class SessionGitHubPublicationFailed(
 sealed interface SessionGitHubPublicationResult
 
 @Serializable
+data class TalkSessionCancelOutputResult(
+  val ok: Boolean,
+  val status: String? = null,
+  val turnId: String? = null,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -241,6 +360,12 @@ data class ProjectsListResultObservedProjectsItem(
   val originUrl: String? = null,
   val checkouts: List<ProjectsListResultObservedProjectsItemCheckoutsItem>,
   val lastUsedAt: Double,
+)
+
+@Serializable
+data class GitHubIdentityFactsGitAuthor(
+  val name: JsonElement,
+  val email: JsonElement,
 )
 
 @Serializable
@@ -631,6 +756,9 @@ enum class GatewayMethod(
   ProgressCardPut("progressCard.put"),
   ToolsGithubStatus("tools.github.status"),
   ToolsGithubConfigure("tools.github.configure"),
+  ToolsGithubAuthorizeStart("tools.github.authorize.start"),
+  ToolsGithubAuthorizePoll("tools.github.authorize.poll"),
+  ToolsGithubAuthorizeCancel("tools.github.authorize.cancel"),
   SessionsGithubPublish("sessions.github.publish"),
   DiagnosticsLanes("diagnostics.lanes"),
 }
