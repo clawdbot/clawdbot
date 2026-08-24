@@ -54,6 +54,209 @@ async function seedTrajectorySession(tempHome: string, sessionKey: string) {
 describe("cli json stdout contract", () => {
   it.each([
     {
+      name: "bindings with an invalid agent",
+      args: ["agents", "bindings", "--agent", "агент✨", "--json"],
+      message: 'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
+    },
+    {
+      name: "bindings with an unknown agent",
+      args: ["agents", "bindings", "--json", "--agent", "ghost"],
+      message: 'Agent "ghost" not found. Run openclaw agents list to see configured agents.',
+    },
+    {
+      name: "bind with an invalid agent",
+      args: ["agents", "bind", "--agent", "агент✨", "--bind", "telegram", "--json"],
+      message: 'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
+    },
+    {
+      name: "bind with an unknown agent before missing bindings",
+      args: ["agents", "bind", "--json", "--agent", "ghost"],
+      message: 'Agent "ghost" not found. Run openclaw agents list to see configured agents.',
+    },
+    {
+      name: "bind without bindings",
+      args: ["agents", "bind", "--json"],
+      message: "Provide at least one --bind <channel[:accountId]>.",
+    },
+    {
+      name: "bind with only a blank binding",
+      args: ["agents", "bind", "--bind", "  ", "--json"],
+      message: "Provide at least one --bind <channel[:accountId]>.",
+    },
+    {
+      name: "bind with multiple malformed bindings in input order",
+      args: ["agents", "bind", "--bind", "telegram:", "--bind", "telegram:work:extra", "--json"],
+      message: [
+        'Invalid binding "telegram:". Account id is empty. Use <channel>:<account>, for example telegram:default.',
+        'Invalid binding "telegram:work:extra". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.',
+      ].join("\n"),
+    },
+    {
+      name: "bind with an unknown channel",
+      args: ["agents", "bind", "--json", "--bind", "definitely-not-a-channel"],
+      message:
+        'Unknown channel "definitely-not-a-channel". Run `openclaw channels list --all` to see configured and installable channels.',
+    },
+    {
+      name: "unbind with an invalid agent",
+      args: ["agents", "unbind", "--agent", "агент✨", "--all", "--json"],
+      message: 'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
+    },
+    {
+      name: "unbind with an unknown agent before incompatible options",
+      args: ["agents", "unbind", "--agent", "ghost", "--all", "--bind", "telegram", "--json"],
+      message: 'Agent "ghost" not found. Run openclaw agents list to see configured agents.',
+    },
+    {
+      name: "unbind without bindings",
+      args: ["agents", "unbind", "--json"],
+      message: "Provide at least one --bind <channel[:accountId]> or use --all.",
+    },
+    {
+      name: "unbind with a malformed binding",
+      args: ["agents", "unbind", "--bind", "telegram:work:extra", "--json"],
+      message:
+        'Invalid binding "telegram:work:extra". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.',
+    },
+    {
+      name: "unbind with incompatible options in human mode",
+      args: ["agents", "unbind", "--all", "--bind", "telegram"],
+      message: "Use either --all or --bind, not both.",
+      human: true,
+    },
+    {
+      name: "unbind with incompatible options in JSON mode",
+      args: ["agents", "unbind", "--all", "--bind", "telegram", "--json"],
+      message: "Use either --all or --bind, not both.",
+    },
+    {
+      name: "bind without bindings through dual-TTY finalization",
+      args: ["agents", "bind", "--json"],
+      message: "Provide at least one --bind <channel[:accountId]>.",
+      tty: true,
+    },
+  ])("renders agent binding $name through the canonical failure owner", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "missing-openclaw.json");
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+        )}`;
+        const result = runBuiltCli(tempHome, testCase.args, {
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          OPENCLAW_CONFIG_PATH: configPath,
+          ...("tty" in testCase ? { NODE_OPTIONS: `--import=${preload}`, FORCE_COLOR: "1" } : {}),
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        if ("human" in testCase) {
+          expect(result.stdout).toBe("");
+        } else {
+          expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message: testCase.message },
+          });
+        }
+        expect(result.stderr).toContain(testCase.message);
+        expect(result.stderr.split(testCase.message)).toHaveLength(2);
+        if ("tty" in testCase) {
+          expect(result.stderr).toContain("\u001B[?25h");
+        }
+        await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      },
+      { prefix: "openclaw-agent-bindings-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "bindings list success",
+      args: ["agents", "bindings", "--json"],
+      payload: [],
+    },
+    {
+      name: "bind success",
+      args: ["agents", "bind", "--bind", "telegram:work", "--json"],
+      payload: {
+        agentId: "main",
+        added: ["telegram accountId=work"],
+        updated: [],
+        skipped: [],
+        conflicts: [],
+      },
+      writesConfig: true,
+    },
+    {
+      name: "unbind-all success",
+      args: ["agents", "unbind", "--all", "--json"],
+      payload: { agentId: "main", removed: [], missing: [], conflicts: [] },
+    },
+    {
+      name: "bind ownership conflict",
+      args: ["agents", "bind", "--agent", "main", "--bind", "telegram:work", "--json"],
+      payload: {
+        agentId: "main",
+        added: [],
+        updated: [],
+        skipped: [],
+        conflicts: ["telegram accountId=work (agent=ops)"],
+      },
+      conflict: true,
+    },
+    {
+      name: "unbind ownership conflict",
+      args: ["agents", "unbind", "--agent", "main", "--bind", "telegram:work", "--json"],
+      payload: {
+        agentId: "main",
+        removed: [],
+        missing: [],
+        conflicts: ["telegram accountId=work (agent=ops)"],
+      },
+      conflict: true,
+    },
+  ])("preserves agent binding $name as its existing domain payload", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "openclaw.json");
+        const existingConfig = `${JSON.stringify({
+          agents: {
+            ownership: "explicit",
+            list: [
+              { id: "main", workspace: path.join(tempHome, "main") },
+              { id: "ops", workspace: path.join(tempHome, "ops") },
+            ],
+          },
+          bindings: [
+            { type: "route", agentId: "ops", match: { channel: "telegram", accountId: "work" } },
+          ],
+        })}\n`;
+        if ("conflict" in testCase) {
+          await fs.writeFile(configPath, existingConfig, "utf8");
+        }
+
+        const result = runBuiltCli(tempHome, testCase.args, {
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          OPENCLAW_CONFIG_PATH: configPath,
+        });
+
+        expect(result.status, result.stderr).toBe("conflict" in testCase ? 1 : 0);
+        expect(result.stdout, result.stderr).not.toBe("");
+        expect(JSON.parse(result.stdout)).toEqual(testCase.payload);
+        if ("writesConfig" in testCase) {
+          await expect(fs.access(configPath)).resolves.toBeUndefined();
+        } else if ("conflict" in testCase) {
+          await expect(fs.readFile(configPath, "utf8")).resolves.toBe(existingConfig);
+        } else {
+          await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      },
+      { prefix: "openclaw-agent-bindings-domain-payload-e2e-" },
+    );
+  });
+
+  it.each([
+    {
       name: "routed config get",
       args: ["config", "get", "gateway.port", "--json"],
       overrides: {},
