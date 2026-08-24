@@ -472,8 +472,8 @@ importers:
   extensions/anthropic:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: 0.3.219
-        version: 0.3.219(@anthropic-ai/sdk@0.115.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(zod@4.4.3)
+        specifier: 0.3.232
+        version: 0.3.232(@anthropic-ai/sdk@0.117.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(zod@4.4.3)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
