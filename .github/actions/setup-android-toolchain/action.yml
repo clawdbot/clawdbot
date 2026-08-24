@@ -56,14 +56,14 @@ runs:
         set -euo pipefail
         ANDROID_SDK_ROOT="$HOME/.android-sdk"
         CMDLINE_TOOLS_VERSION="15859902"
-        CMDLINE_TOOLS_SHA1="040d3996a65543d22ec4bf73e4c37aa37a8d4af4"
+        CMDLINE_TOOLS_SHA256="4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583"
         ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
         URL="https://dl.google.com/android/repository/${ARCHIVE}"
 
         if [[ ! -x "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]]; then
           mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
           curl -fsSL --connect-timeout 10 --max-time 300 "${URL}" -o "${RUNNER_TEMP}/${ARCHIVE}"
-          printf '%s  %s\n' "${CMDLINE_TOOLS_SHA1}" "${RUNNER_TEMP}/${ARCHIVE}" | sha1sum --check -
+          printf '%s  %s\n' "${CMDLINE_TOOLS_SHA256}" "${RUNNER_TEMP}/${ARCHIVE}" | sha256sum --check -
           rm -rf "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
           unzip -q "${RUNNER_TEMP}/${ARCHIVE}" -d "${ANDROID_SDK_ROOT}/cmdline-tools"
           mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest"

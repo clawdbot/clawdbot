@@ -3146,10 +3146,10 @@ NODE
 
     expect(setupStep.run).toContain('CMDLINE_TOOLS_VERSION="15859902"');
     expect(setupStep.run).toContain(
-      'CMDLINE_TOOLS_SHA1="040d3996a65543d22ec4bf73e4c37aa37a8d4af4"',
+      'CMDLINE_TOOLS_SHA256="4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583"',
     );
     expect(setupStep.run).toContain("curl -fsSL --connect-timeout 10 --max-time 300");
-    expect(setupStep.run).toContain("sha1sum --check -");
+    expect(setupStep.run).toContain("sha256sum --check -");
   });
 
   it("covers Android app variants, lint, and benchmark compilation", () => {
