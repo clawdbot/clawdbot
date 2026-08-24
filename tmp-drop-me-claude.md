@@ -34,3 +34,14 @@
 - The first canonical `19d44d3f` Gate 2.7 run returned zero FROZEN-STALE but seven MIXED-CLOBBER rows, not the protected six-row surface. The unexpected row was `embedded-agent-subscribe.handlers.messages.update.ts`, where the initial conflict resolution had semantically recreated upstream native commentary but dropped five exact post-fork snapshot-selection lines.
 - Restored upstream's Responses-vs-native snapshot selection and commentary-data gate verbatim, then routed the selected snapshot through the candidate continuation filter and phase-pending transition owner. This preserves snapshot semantics, item identity, delivery-generation fencing, and continuation filtering without adding a disposition row.
 - The focused commentary and stream-item owners pass 22/22 after the correction. Canonical Gate 2.7 must be rerun at the new immutable checkpoint and is not declared green by this entry.
+
+The corrected checkpoint restored the canonical result: 945 files examined, 639 GENUINE, 300 SAFE-NEW, six MIXED-CLOBBER, and zero FROZEN-STALE. All six rows retain their prior reviewed dispositions; exact `a6a9f553..6fe4e11a` path checks confirm the latest drift touched none:
+
+- `subagent-announce-delivery.test.ts` (22): obsolete `runDescendantWake` call shape remains rehomed to the canonical descendant-wake owner, which carries the upstream system-role assertion.
+- `compact.hooks.test.ts` (14): exact reviewed primitive-core bytes remain protected by Gate 2; upstream permission behavior remains covered at the session-permission owner and Codex permission suites.
+- `code-mode.bridge.lifecycle.test.ts` (2): obsolete flat trust inputs remain rehomed into the reviewed closed `subscriptionToolTrust` object.
+- `embedded-agent-subscribe.ts` (1): nested lifecycle provenance remains rehomed with the reviewed extraction into `embedded-agent-subscribe.handlers.tools.ts`.
+- `message-tool.test.ts` (2): upstream's retired `withTempDir` name remains replaced by the canonical `withTestDir` helper at both import and call.
+- `telegram-emoji-list-gateway.e2e.test.ts` (2): the same canonical `withTestDir` helper replacement remains at the plugin-SDK import and call.
+
+No row contains frozen upstream-only content, so no restoration is warranted. Gate 2 reran at the same checkpoint with all 40 invariants passing and three tombstones.
