@@ -103,7 +103,7 @@ export type AgentTurnParams = {
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
-  toolProgressDetail?: "explain" | "raw";
+  toolProgressDetail?: "explain" | "raw" | "plain";
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
   isRestartRecoveryArmed?: () => boolean;

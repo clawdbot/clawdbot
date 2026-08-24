@@ -1161,3 +1161,99 @@ describe("coerceDisplayValue middle truncation", () => {
     expect(detail).toContain("AKIDAB…7890");
   });
 });
+
+describe("plain tool progress detail", () => {
+  it("renders non-technical sentences for known shell commands", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "git status", workdir: "/workspace/project" },
+        detailMode: "plain",
+      }),
+    );
+    expect(detail).toBe("I'm checking the current state of the project.");
+    expect(detail).not.toContain("git");
+    expect(detail).not.toContain("/workspace");
+  });
+
+  it.each([
+    ["git status", "I'm checking the current state of the project."],
+    ["git diff", "I'm reviewing the recent code changes."],
+    ["git log --oneline", "I'm looking through the project history."],
+    ["git commit -m 'msg'", "I'm saving a project checkpoint."],
+    ["npm install", "I'm installing the project dependencies."],
+    ["pnpm test", "I'm running the project tests."],
+    ["npm test", "I'm running the project tests."],
+  ] as const)("maps shell command %s to a plain sentence", (command, sentence) => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command },
+        detailMode: "plain",
+      }),
+    );
+    expect(detail).toBe(sentence);
+    // No raw shell tokens — English words in the sentence (installing/tests) are fine.
+    expect(detail).not.toMatch(/\bgit\b|\bnpm\b|\bpnpm\b|--oneline|-m /i);
+  });
+
+  it("classifies reading test files as file reads, not running tests", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        // Prefer a summary shape that includes both "print lines" and "test".
+        args: { command: "sed -n '1,80p' ./test-utils.ts" },
+        detailMode: "plain",
+      }),
+    );
+    // summarizeExecCommand may label this as print-lines; either way it must
+    // not claim we are running the project tests.
+    expect(detail).not.toBe("I'm running the project tests.");
+    expect(detail).not.toContain("test-utils");
+    expect(detail).not.toContain(".ts");
+  });
+
+  it("renders non-technical sentences for file tools without paths", () => {
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "read",
+          args: { path: "src/secret/config.ts" },
+          detailMode: "plain",
+        }),
+      ),
+    ).toBe("I'm reading a document for context.");
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "write",
+          args: { path: "/tmp/app.js", content: "console.log(1)" },
+          detailMode: "plain",
+        }),
+      ),
+    ).toBe("I'm updating a file.");
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "web_search",
+          args: { query: "openclaw progress drafts" },
+          detailMode: "plain",
+        }),
+      ),
+    ).toBe("I'm looking up information about that online.");
+  });
+
+  it("never includes raw argv for unknown binaries in plain mode", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "bash",
+        args: { command: "mycli deploy --prod --token supersecret" },
+        detailMode: "plain",
+      }),
+    );
+    expect(detail).toBe("I'm running a command to continue the work.");
+    expect(detail).not.toContain("mycli");
+    expect(detail).not.toContain("supersecret");
+    expect(detail).not.toContain("--prod");
+  });
+});

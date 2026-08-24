@@ -164,6 +164,145 @@ describe("buildChannelProgressDraftLine", () => {
       )?.text,
     ).toContain("echo private");
   });
+
+  it("renders plain sentences for command tools without argv or tool chrome", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        phase: "start",
+        args: { command: "git status", workdir: "/workspace/project" },
+      },
+      { detailMode: "plain", commandText: "status" },
+    );
+    expect(line?.text).toBe("I'm checking the current state of the project.");
+    expect(line?.text).not.toContain("git");
+    expect(line?.text).not.toContain("/workspace");
+    expect(line?.text).not.toContain("🛠️");
+    // Structured presentation carries the sentence alone: no tool-name label,
+    // no emoji icon, no duplicated detail, no toolName chrome for renderers
+    // that compose "icon label: detail" from the line fields.
+    expect(line?.label).toBe(line?.text);
+    expect(line?.icon).toBeUndefined();
+    expect(line?.detail).toBeUndefined();
+    expect(line?.toolName).toBeUndefined();
+  });
+
+  it("drops rich metadata from non-command tool lines in plain mode", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        toolCallId: "call-1",
+        name: "web_search",
+        phase: "start",
+        args: { query: "openclaw docs" },
+      },
+      { detailMode: "plain" },
+    );
+    expect(line?.text).toBe("I'm looking up information about that online.");
+    expect(line?.label).toBe(line?.text);
+    expect(line?.icon).toBeUndefined();
+    expect(line?.detail).toBeUndefined();
+    expect(line?.toolName).toBeUndefined();
+  });
+
+  it("keeps plain sentences when command start is replaced by command-output", () => {
+    const start = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        toolCallId: "call-1",
+        name: "exec",
+        phase: "start",
+        args: { command: "git status", workdir: "/workspace/project" },
+      },
+      { detailMode: "plain", commandText: "status" },
+    );
+    const plainTitle = "I'm checking the current state of the project.";
+    const done = buildChannelProgressDraftLine(
+      {
+        event: "command-output",
+        toolCallId: "call-1",
+        name: "exec",
+        phase: "end",
+        exitCode: 0,
+        title: plainTitle,
+      },
+      { detailMode: "plain", commandText: "status" },
+    );
+    const failed = buildChannelProgressDraftLine(
+      {
+        event: "command-output",
+        toolCallId: "call-1",
+        name: "exec",
+        phase: "end",
+        exitCode: 1,
+        title: plainTitle,
+      },
+      { detailMode: "plain", commandText: "status" },
+    );
+
+    expect(start?.text).toBe(plainTitle);
+    expect(done?.text).toBe(plainTitle);
+    expect(done?.text).not.toContain("🛠️");
+    expect(done?.text).not.toContain("git");
+    // Failures keep the plain activity sentence (never exit codes / tool chrome).
+    expect(failed?.text).toBe(plainTitle);
+    expect(failed?.text).not.toContain("🛠️");
+    expect(failed?.text).not.toContain("exit");
+    expect(failed?.text).not.toContain("git status");
+    expect(failed?.text).not.toContain("/workspace");
+    // Completion/failure replacements keep the sentence-only presentation:
+    // the label mirrors the sentence and no icon/detail/toolName/status
+    // chrome comes back to renderers.
+    for (const line of [start, done, failed]) {
+      expect(line?.label).toBe(line?.text);
+      expect(line?.icon).toBeUndefined();
+      expect(line?.detail).toBeUndefined();
+      expect(line?.toolName).toBeUndefined();
+    }
+  });
+
+  it("uses a plain-language failure when no safe sentence is available", () => {
+    const failed = buildChannelProgressDraftLine(
+      {
+        event: "command-output",
+        toolCallId: "call-2",
+        name: "exec",
+        phase: "end",
+        exitCode: 1,
+      },
+      { detailMode: "plain", commandText: "status" },
+    );
+    expect(failed?.text).toBe("That step didn't work.");
+    expect(failed?.text).not.toContain("exit");
+    expect(failed?.text).not.toContain("🛠️");
+  });
+
+  it("renders plain failures sentence-only through the renderer path", () => {
+    // ClawSweeper: the structured line kept status "exit 1", which generic,
+    // Telegram, and Slack renderers compose into the visible text even though
+    // line.text was already the plain sentence. Plain presentation must not
+    // carry renderer-visible lifecycle/exit-code fields.
+    const failed = buildChannelProgressDraftLine(
+      {
+        event: "command-output",
+        toolCallId: "call-3",
+        name: "exec",
+        phase: "end",
+        exitCode: 1,
+        title: "I'm checking the current state of the project.",
+      },
+      { detailMode: "plain", commandText: "status" },
+    );
+    expect(failed?.status).toBeUndefined();
+    const rendered = formatChannelProgressDraftText({
+      lines: failed ? [failed] : [],
+      entry: null,
+    });
+    expect(rendered).toContain("I'm checking the current state of the project.");
+    expect(rendered).not.toContain("exit");
+    expect(rendered).not.toContain(": exit 1");
+  });
 });
 
 // Claude CLI tool names arrive capitalized. Each tool call is described twice —

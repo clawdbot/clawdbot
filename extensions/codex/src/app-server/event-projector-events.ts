@@ -1,6 +1,6 @@
 import type {
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  ToolProgressDetailMode,
+  ToolProgressDetailModeInput,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   asFiniteNumber,
@@ -63,7 +63,7 @@ const GUARDIAN_TIMEOUT_WARNING =
 export function projectNormalizedToolItem(params: {
   phase: "start" | "result";
   item: CodexThreadItem | undefined;
-  detailMode?: ToolProgressDetailMode;
+  detailMode?: ToolProgressDetailModeInput;
 }): NormalizedToolItemProjection | undefined {
   const { item } = params;
   if (!item || !shouldSynthesizeToolProgressForItem(item)) {

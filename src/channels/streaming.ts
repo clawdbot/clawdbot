@@ -164,7 +164,7 @@ export type ChannelProgressLineOptions = {
   /** Whether generated tool details should use Markdown formatting. */
   markdown?: boolean;
   /** Detail shape for tool arguments shown in progress drafts. */
-  detailMode?: "explain" | "raw";
+  detailMode?: "explain" | "raw" | "plain";
   /** Whether command progress should show raw command text or status-only copy. */
   commandText?: ChannelStreamingCommandTextMode;
 };
@@ -302,7 +302,7 @@ function compactStrings(values: readonly (string | undefined | null)[]): string[
 function inferToolMeta(
   name: string | undefined,
   args: Record<string, unknown> | undefined,
-  detailMode: "explain" | "raw" = "explain",
+  detailMode: "explain" | "raw" | "plain" = "explain",
 ) {
   if (!name || !args) {
     return undefined;
@@ -328,18 +328,22 @@ function buildNamedProgressLine(
   const { text, detail } = formatToolAggregateParts(
     normalizedName,
     compactMetas.length ? compactMetas : undefined,
-    { markdown: options?.markdown },
+    { markdown: options?.markdown, detailMode: options?.detailMode },
   );
   const display = resolveToolDisplay({ name: normalizedName });
+  // Plain mode keeps the sentence as the label and drops the tool emoji,
+  // tool name, and detail: rich renderers that compose "icon label: detail"
+  // then surface only the sentence, so no tool chrome leaks next to it.
+  const plain = options?.detailMode === "plain";
   const line = {
     ...(fields?.id ? { id: fields.id } : {}),
     kind,
     text,
-    label: display.label,
-    icon: display.emoji,
-    ...(detail ? { detail } : {}),
+    label: plain ? text : display.label,
+    ...(plain ? {} : { icon: display.emoji }),
+    ...(detail && !plain ? { detail } : {}),
     ...(fields?.status ? { status: fields.status } : {}),
-    toolName: display.name,
+    ...(plain ? {} : { toolName: display.name }),
   };
   setProgressDraftLineCorrelationKey(line, fields?.correlationKey);
   return line;
@@ -436,7 +440,12 @@ function buildCommandOutputProgressLine(
 ): ChannelProgressDraftLine | undefined {
   const name = input.name ?? "exec";
   const correlationKey = resolveCommandProgressCorrelationKey(input);
-  const detail = options?.commandText === "raw" ? compactStrings([input.title]) : [];
+  // Raw keeps the command title; plain keeps the already-safe sentence title so
+  // completion/failure replacements do not reintroduce tool chrome or argv.
+  const detail =
+    options?.commandText === "raw" || options?.detailMode === "plain"
+      ? compactStrings([input.title])
+      : [];
   const line = buildNamedProgressLine(input.event, name, detail, options, {
     correlationKey,
     id: resolveProgressDraftLineId(input, { useToolCallIdFallback: true }),
@@ -448,18 +457,45 @@ function buildCommandOutputProgressLine(
   if (status === "completed") {
     return line;
   }
+  const aggregateOptions = {
+    markdown: options?.markdown,
+    ...(options?.detailMode ? { detailMode: options.detailMode } : {}),
+  };
+  // Plain mode must never surface exit codes / failure jargon — keep the
+  // caller-supplied safe sentence (title), or a plain failure fallback.
+  if (options?.detailMode === "plain") {
+    const safeTitle =
+      typeof input.title === "string" && input.title.trim() && input.title.trim() !== status
+        ? input.title.trim()
+        : undefined;
+    const plainText = formatToolAggregate(
+      name,
+      safeTitle ? [safeTitle] : ["That step didn't work."],
+      aggregateOptions,
+    );
+    const statusLine = {
+      ...line,
+      text: plainText,
+    };
+    // Plain presentation is sentence-only: drop the lifecycle/exit-code status
+    // so generic/Telegram/Slack renderers that compose from line fields cannot
+    // reintroduce "exit N" next to the plain sentence.
+    delete statusLine.status;
+    setProgressDraftLineCorrelationKey(statusLine, correlationKey);
+    return statusLine;
+  }
   if (!line.detail || line.detail === status) {
     const statusLine = {
       ...line,
       detail: status,
-      text: formatToolAggregate(name, [status], { markdown: options?.markdown }),
+      text: formatToolAggregate(name, [status], aggregateOptions),
     };
     setProgressDraftLineCorrelationKey(statusLine, correlationKey);
     return statusLine;
   }
   const statusLine = {
     ...line,
-    text: formatToolAggregate(name, [status, line.detail], { markdown: options?.markdown }),
+    text: formatToolAggregate(name, [status, line.detail], aggregateOptions),
   };
   setProgressDraftLineCorrelationKey(statusLine, correlationKey);
   return statusLine;
@@ -525,13 +561,15 @@ export function buildChannelProgressDraftLine(
     case "tool": {
       const itemId = input.itemId ?? (input.toolCallId ? `tool:${input.toolCallId}` : undefined);
       const commandBearing = isCommandBearingToolCall(input.name, input.args);
+      // Status-only command lines hide argv unless commandText is raw. Plain mode
+      // still needs the deterministic sentence (no paths/argv) for mixed audiences.
+      const hideCommandMeta =
+        options?.commandText !== "raw" && commandBearing && options?.detailMode !== "plain";
       return buildNamedProgressLine(
         input.event,
         input.name,
         [
-          options?.commandText !== "raw" && commandBearing
-            ? undefined
-            : inferToolMeta(input.name, input.args, options?.detailMode),
+          hideCommandMeta ? undefined : inferToolMeta(input.name, input.args, options?.detailMode),
           input.phase && !input.name ? input.phase : undefined,
         ],
         options,
@@ -543,10 +581,15 @@ export function buildChannelProgressDraftLine(
     }
     case "item": {
       const name = input.name ?? itemKindToToolName(input.itemKind);
-      const meta =
-        options?.commandText !== "raw" && isCommandProgressItem(input)
-          ? undefined
-          : (input.meta ?? input.summary ?? input.progressText);
+      // Status mode hides command argv for mixed audiences; plain keeps the
+      // non-technical progress sentence (same contract as tool events).
+      const hideCommandMeta =
+        options?.commandText !== "raw" &&
+        isCommandProgressItem(input) &&
+        options?.detailMode !== "plain";
+      const meta = hideCommandMeta
+        ? undefined
+        : (input.meta ?? input.summary ?? input.progressText);
       if (isEmptyReasoningProgressItem(input, meta)) {
         return undefined;
       }

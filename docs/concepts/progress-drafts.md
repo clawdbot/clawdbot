@@ -163,7 +163,9 @@ Progress lines come from real run events: tool starts, item updates, task
 plans, approvals, command output, patch summaries, and similar agent activity.
 They are enabled by default (`progress.toolProgress`, default `true`) and stay
 visible underneath the status headline. Set `progress.toolProgress: false` to
-keep the headline alone.
+keep the headline alone. With session `/verbose plain`, rolling lines use
+non-technical sentences instead of compact tool labels or command text — the
+same shape as plain `/verbose` tool bubbles.
 
 Tools can also emit typed progress while a single call is still running. That
 is how a slow fetch or search updates the visible draft before the tool
@@ -225,14 +227,18 @@ OpenClaw uses the same formatter for progress drafts and `/verbose`:
 ```
 
 `"explain"` is the default and keeps drafts stable with concise labels.
-`"raw"` appends underlying tool detail when available. Command text also
-requires the explicit `streaming.progress.commandText: "raw"` opt-in below.
-With that opt-in, a `node --check /tmp/app.js` call renders differently by mode:
+`"raw"` appends underlying tool detail when available. Session `/verbose plain`
+uses non-technical plain-language sentences (no tool emoji chrome, no paths, no
+command text) and forces plain detail for that turn.
+Command text also requires the explicit `streaming.progress.commandText: "raw"`
+opt-in below (plain mode never opts into command text). With that opt-in, a
+`node --check /tmp/app.js` call renders differently by mode:
 
 | Mode      | Progress line                                                   |
 | --------- | --------------------------------------------------------------- |
 | `explain` | `🛠️ check js syntax for /tmp/app.js`                            |
 | `raw`     | `🛠️ check js syntax for /tmp/app.js · node --check /tmp/app.js` |
+| `plain`   | `I'm running a command to continue the work.`                   |
 
 ### Command/exec text
 

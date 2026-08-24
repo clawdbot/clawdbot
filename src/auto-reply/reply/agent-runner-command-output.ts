@@ -41,6 +41,7 @@ function isCommandToolName(name: string | undefined): boolean {
 /** Projects a completed command-tool event into the channel command-output contract. */
 export function buildCommandOutputFromToolResultEvent(
   evt: EmbeddedAgentEvent,
+  options?: { detailMode?: "explain" | "raw" | "plain" },
 ): Parameters<NonNullable<GetReplyOptions["onCommandOutput"]>>[0] | undefined {
   if (evt.stream !== "tool" || evt.data.phase !== "result") {
     return undefined;
@@ -85,10 +86,12 @@ export function buildCommandOutputFromToolResultEvent(
   }
   // Keep the line describing the command, not its output: without a title the
   // terminal line would replace the request with whatever the tool printed.
+  // Plain mode must reuse the non-technical sentence so completion/failure
+  // replacements never reintroduce argv or tool chrome.
   const args = evt.data.args;
+  const detailMode = options?.detailMode ?? "explain";
   const title =
-    evt.data.title ??
-    (args ? inferToolMetaFromArgsCore(name, args, { detailMode: "explain" }) : undefined);
+    evt.data.title ?? (args ? inferToolMetaFromArgsCore(name, args, { detailMode }) : undefined);
   return {
     itemId: evt.data.itemId,
     phase: "end",
@@ -100,5 +103,8 @@ export function buildCommandOutputFromToolResultEvent(
     exitCode,
     durationMs,
     cwd,
+    // Only surface non-default modes so channel formatters can keep plain/raw
+    // through completion replacements without changing the explain baseline.
+    ...(detailMode !== "explain" ? { detailMode } : {}),
   };
 }

@@ -181,7 +181,7 @@ export async function prepareAgentCommandExecution(
 
   const verboseOverride = normalizeVerboseLevel(opts.verbose);
   if (opts.verbose && !verboseOverride) {
-    throw new Error('Invalid verbose level. Use "on", "full", or "off".');
+    throw new Error('Invalid verbose level. Use "on", "full", "off", or "plain".');
   }
 
   const laneRaw = normalizeOptionalString(opts.lane) ?? "";

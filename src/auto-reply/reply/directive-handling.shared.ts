@@ -23,6 +23,7 @@ export const DIRECTIVE_ACK_MESSAGES = {
     off: "Verbose logging disabled.",
     on: "Verbose logging enabled.",
     full: "Verbose logging set to full.",
+    plain: "Verbose logging set to plain (non-technical tool progress).",
   },
   trace: {
     off: "Trace disabled.",

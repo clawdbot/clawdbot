@@ -6,7 +6,7 @@ import {
 import { objectFieldEquals, readFixtureLog } from "./tui-pty-harness-fixture-test-support.js";
 
 const slashHelpMarkers =
-  "Slash commands:,/help,/verbose <on|off|full>,/reasoning <on|off|stream>,/goal,/goal start <objective>,/btw <side question>,/queue,/stop,/exit".split(
+  "Slash commands:,/help,/verbose <on|off|full|plain>,/reasoning <on|off|stream>,/goal,/goal start <objective>,/btw <side question>,/queue,/stop,/exit".split(
     ",",
   );
 const countHistoryLoads = async (logPath: string) =>

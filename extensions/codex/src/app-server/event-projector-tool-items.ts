@@ -1,6 +1,6 @@
 import {
   inferToolMetaFromArgs,
-  type ToolProgressDetailMode,
+  type ToolProgressDetailModeInput,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   itemName,
@@ -276,7 +276,7 @@ export function itemToolError(
 
 export function itemMeta(
   item: CodexThreadItem,
-  detailMode: ToolProgressDetailMode = "explain",
+  detailMode: ToolProgressDetailModeInput = "explain",
 ): string | undefined {
   if (item.type === "commandExecution" && typeof item.command === "string") {
     return inferToolMetaFromArgs(

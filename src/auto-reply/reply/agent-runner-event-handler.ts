@@ -121,7 +121,9 @@ export function createAgentRunEventHandler(params: {
         });
         await Promise.all([params.turn.typingSignals.signalToolStart(), toolStartProgressPromise]);
       }
-      const commandOutput = buildCommandOutputFromToolResultEvent(evt);
+      const commandOutput = buildCommandOutputFromToolResultEvent(evt, {
+        detailMode: params.turn.toolProgressDetail,
+      });
       if (commandOutput) {
         await params.turn.opts?.onCommandOutput?.(commandOutput);
       }
@@ -205,6 +207,9 @@ export function createAgentRunEventHandler(params: {
         ...(itemCommandBearing !== undefined ? { commandBearing: itemCommandBearing } : {}),
         ...(itemApprovalId !== undefined ? { approvalId: itemApprovalId } : {}),
         ...(itemApprovalSlug !== undefined ? { approvalSlug: itemApprovalSlug } : {}),
+        ...(params.turn.toolProgressDetail && params.turn.toolProgressDetail !== "explain"
+          ? { detailMode: params.turn.toolProgressDetail }
+          : {}),
       });
     }
     if (evt.stream === "plan" && !shouldSuppressProgressAfterMessageToolDelivery()) {
@@ -248,6 +253,9 @@ export function createAgentRunEventHandler(params: {
             : undefined,
         durationMs: typeof evt.data.durationMs === "number" ? evt.data.durationMs : undefined,
         cwd: readStringValue(evt.data.cwd),
+        ...(params.turn.toolProgressDetail && params.turn.toolProgressDetail !== "explain"
+          ? { detailMode: params.turn.toolProgressDetail }
+          : {}),
       });
     }
     if (evt.stream === "patch" && !shouldSuppressProgressAfterMessageToolDelivery()) {

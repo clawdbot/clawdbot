@@ -1592,6 +1592,7 @@ describe("sessions view", () => {
       "off",
       "on",
       "full",
+      "plain",
     ]);
     expect(reasoning?.value).toBe("custom-mode");
     expect(Array.from(reasoning?.options ?? []).map((option) => option.value)).toEqual([

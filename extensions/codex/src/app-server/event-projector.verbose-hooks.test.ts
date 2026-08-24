@@ -54,6 +54,42 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     });
   });
 
+  it("emits plain-language command summaries without tool chrome or argv", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "plain",
+      toolProgressDetail: "plain",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-plain-1",
+          command: "git status",
+          cwd: "/workspace/project",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    const text = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text ?? "";
+    expect(text).toMatch(/^I'm /);
+    expect(text).not.toContain("🛠️");
+    expect(text).not.toContain("Bash");
+    expect(text).not.toContain("git");
+    expect(text).not.toContain("/workspace");
+  });
+
   it("can emit raw verbose tool summaries through onToolResult", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({

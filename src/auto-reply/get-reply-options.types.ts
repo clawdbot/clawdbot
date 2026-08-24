@@ -218,7 +218,7 @@ export type GetReplyOptions = {
     name?: string;
     phase?: string;
     args?: Record<string, unknown>;
-    detailMode?: "explain" | "raw";
+    detailMode?: "explain" | "raw" | "plain";
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a concrete work item starts, updates, or completes. */
   onItemEvent?: (payload: {
@@ -236,6 +236,7 @@ export type GetReplyOptions = {
     approvalId?: string;
     approvalSlug?: string;
     suppressDurableProgress?: true;
+    detailMode?: "explain" | "raw" | "plain";
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /**
    * Called when the utility-model narration of the in-progress turn changes.
@@ -306,6 +307,7 @@ export type GetReplyOptions = {
     exitCode?: number | null;
     durationMs?: number;
     cwd?: string;
+    detailMode?: "explain" | "raw" | "plain";
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a patch completes with a file summary. */
   onPatchSummary?: (payload: {

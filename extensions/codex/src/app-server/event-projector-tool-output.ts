@@ -168,10 +168,15 @@ export function truncateToolTranscriptText(text: string, originalLength = text.l
   return `${truncateUtf16Safe(text, textBudget)}${notice}`;
 }
 
-export function formatToolSummary(toolName: string, meta?: string): string {
+export function formatToolSummary(
+  toolName: string,
+  meta?: string,
+  options?: { detailMode?: "explain" | "raw" | "plain" },
+): string {
   const trimmedMeta = meta?.trim();
   return formatToolAggregate(toolName, trimmedMeta ? [trimmedMeta] : undefined, {
     markdown: true,
+    ...(options?.detailMode ? { detailMode: options.detailMode } : {}),
   });
 }
 
@@ -179,13 +184,14 @@ export function formatToolOutput(
   toolName: string,
   meta: string | undefined,
   output: string,
+  options?: { detailMode?: "explain" | "raw" | "plain" },
 ): string {
   const formattedOutput = formatToolProgressOutput(output);
   if (!formattedOutput) {
-    return formatToolSummary(toolName, meta);
+    return formatToolSummary(toolName, meta, options);
   }
   const fence = markdownFenceForText(formattedOutput);
-  return `${formatToolSummary(toolName, meta)}\n${fence}txt\n${formattedOutput}\n${fence}`;
+  return `${formatToolSummary(toolName, meta, options)}\n${fence}txt\n${formattedOutput}\n${fence}`;
 }
 
 function markdownFenceForText(text: string): string {

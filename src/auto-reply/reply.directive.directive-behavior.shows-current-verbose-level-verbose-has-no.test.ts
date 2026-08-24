@@ -98,7 +98,11 @@ describe("directive behavior", () => {
       currentVerboseLevel: "on",
     });
     expect(verboseText).toContain("Current verbose level: on");
-    expect(verboseText).toContain("Options: on, full, off.");
+    expect(verboseText).toContain("Options: on, full, off, plain.");
+
+    const { text: plainAck, sessionEntry: plainEntry } = await runDirectiveStatus("/verbose plain");
+    expect(plainAck).toContain("Verbose logging set to plain");
+    expect(plainEntry.verboseLevel).toBe("plain");
 
     const { text: reasoningText } = await runDirectiveStatus("/reasoning");
     expect(reasoningText).toContain("Current reasoning level: off");

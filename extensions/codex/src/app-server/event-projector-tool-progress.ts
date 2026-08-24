@@ -2,7 +2,7 @@ import {
   inferToolMetaFromArgs,
   TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  type ToolProgressDetailMode,
+  type ToolProgressDetailModeInput,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -327,13 +327,15 @@ export class CodexToolProgressProjection {
       return;
     }
     this.resultSummaryItemIds.add(item.id);
+    const detailMode = this.toolProgressDetailMode();
+    // Plain mode needs the sentence meta even for command tools (no argv/chrome).
     const meta =
-      this.shouldEmitToolOutput() || !isCommandBearingToolItem(item, args)
-        ? itemMeta(item, this.toolProgressDetailMode())
+      this.shouldEmitToolOutput() || !isCommandBearingToolItem(item, args) || detailMode === "plain"
+        ? itemMeta(item, detailMode)
         : undefined;
     this.emitToolResultMessage({
       itemId: item.id,
-      text: formatToolSummary(toolName, meta),
+      text: formatToolSummary(toolName, meta, { detailMode }),
     });
   }
 
@@ -349,9 +351,10 @@ export class CodexToolProgressProjection {
     if (!toolName || !output || !shouldEmitTranscriptToolProgress(toolName, itemToolArgs(item))) {
       return;
     }
+    const detailMode = this.toolProgressDetailMode();
     this.emitToolResultMessage({
       itemId: item.id,
-      text: formatToolOutput(toolName, itemMeta(item, this.toolProgressDetailMode()), output),
+      text: formatToolOutput(toolName, itemMeta(item, detailMode), output, { detailMode }),
       finalOutput: true,
       isError: isNonSuccessItemStatus(itemStatus(item)),
     });
@@ -434,7 +437,7 @@ export class CodexToolProgressProjection {
     }
   }
 
-  toolProgressDetailMode(): ToolProgressDetailMode {
+  toolProgressDetailMode(): ToolProgressDetailModeInput {
     return resolveCodexToolProgressDetailMode(this.params.toolProgressDetail);
   }
 
@@ -468,7 +471,9 @@ export class CodexToolProgressProjection {
   private shouldEmitToolResult(): boolean {
     return typeof this.params.shouldEmitToolResult === "function"
       ? this.params.shouldEmitToolResult()
-      : this.params.verboseLevel === "on" || this.params.verboseLevel === "full";
+      : this.params.verboseLevel === "on" ||
+          this.params.verboseLevel === "full" ||
+          this.params.verboseLevel === "plain";
   }
 
   private shouldEmitToolOutput(): boolean {
@@ -483,10 +488,13 @@ export class CodexToolProgressProjection {
     }
     this.transcriptProgressCallIds.add(params.id);
     const args = normalizeToolTranscriptArguments(params.arguments);
+    const detailMode = this.toolProgressDetailMode();
     const meta =
-      this.shouldEmitToolOutput() || !isCodexCommandBearingToolCall(params.name, args)
+      this.shouldEmitToolOutput() ||
+      !isCodexCommandBearingToolCall(params.name, args) ||
+      detailMode === "plain"
         ? inferToolMetaFromArgs(params.name, args, {
-            detailMode: this.toolProgressDetailMode(),
+            detailMode,
           })
         : undefined;
     if (
@@ -500,7 +508,7 @@ export class CodexToolProgressProjection {
     this.resultSummaryItemIds.add(params.id);
     this.emitToolResultMessage({
       itemId: params.id,
-      text: formatToolSummary(params.name, meta),
+      text: formatToolSummary(params.name, meta, { detailMode }),
     });
   }
 

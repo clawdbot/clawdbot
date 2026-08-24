@@ -179,7 +179,7 @@ export function buildSessionPresentation(params: {
       description:
         "Controls how much tool progress and output detail OpenClaw keeps enabled for the session.",
       currentValue: normalizeOptionalString(row.verboseLevel) || "off",
-      values: ["off", "on", "full"],
+      values: ["off", "on", "full", "plain"],
     }),
     buildSelectConfigOption({
       id: ACP_TRACE_LEVEL_CONFIG_ID,

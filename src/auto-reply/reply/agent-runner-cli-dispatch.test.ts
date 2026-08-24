@@ -765,6 +765,28 @@ describe("createCliToolSummaryTracker", () => {
     },
   );
 
+  it("delivers plain-language shell sentences when detailMode is plain", async () => {
+    const deliver = vi.fn();
+    const tracker = createCliToolSummaryTracker({
+      detailMode: "plain",
+      commandDetailsVisible: false,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      deliver,
+    });
+    await tracker.noteToolEvent({
+      ...startEvent,
+      args: { command: "git status", workdir: "/workspace/project" },
+    });
+    await tracker.noteToolEvent(resultEvent);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const payload = deliver.mock.calls[0]?.[0] as { text: string };
+    expect(payload.text).toBe("I'm checking the current state of the project.");
+    expect(payload.text).not.toContain("git");
+    expect(payload.text).not.toContain("/workspace");
+    expect(payload.text).not.toContain("🛠️");
+  });
+
   it("appends the tool output block when full verbose output is enabled", async () => {
     const deliver = vi.fn();
     const tracker = createCliToolSummaryTracker({

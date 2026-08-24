@@ -758,7 +758,7 @@ describe("commands registry args", () => {
     const verbose = requireChatCommand("verbose");
 
     const modeArg = requireCommandArgAt(verbose, 0);
-    expect(modeArg.choices).toEqual(["on", "off", "full"]);
+    expect(modeArg.choices).toEqual(["on", "off", "full", "plain"]);
     expect(
       resolveCommandArgMenu({ command: verbose, args: undefined, cfg: {} as never }),
     ).toBeNull();

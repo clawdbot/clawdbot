@@ -46,4 +46,34 @@ describe("renderTelegramProgressDraftPreview", () => {
     expect(rendered).toContain("<b>📖 Read</b>");
     expect(rendered.match(/📖/gu) ?? []).toHaveLength(1);
   });
+
+  it("renders only the plain sentence for plain-mode tool lines", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        toolCallId: "call-1",
+        name: "web_search",
+        phase: "start",
+        args: { query: "openclaw docs" },
+      },
+      { detailMode: "plain" },
+    );
+    if (!line) {
+      throw new Error("expected a progress line for plain mode");
+    }
+
+    for (const richMessages of [false, true]) {
+      const rendered = renderTelegramProgressDraftPreview(
+        "Working",
+        [line],
+        richMessages,
+        true,
+      ).text;
+      expect(rendered).toContain(line.text);
+      // No tool emoji and no tool-name label ahead of the sentence.
+      expect(rendered).not.toContain("🔎");
+      expect(rendered).not.toContain("Web Search");
+      expect(rendered).not.toContain("<b>Web Search</b>");
+    }
+  });
 });

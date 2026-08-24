@@ -92,7 +92,7 @@ export async function executeFollowupTurn(params: {
           loadedEntry.updatedAt >= ownedEntry.updatedAt;
         if (loadedGenerationMatches) {
           const level = loadedEntry.verboseLevel;
-          if (level === "off" || level === "on" || level === "full") {
+          if (level === "off" || level === "on" || level === "full" || level === "plain") {
             return level;
           }
         }
@@ -101,13 +101,16 @@ export async function executeFollowupTurn(params: {
       }
     }
     const level = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
-    return level === "on" || level === "full" ? level : "off";
+    if (level === "on" || level === "full" || level === "plain" || level === "off") {
+      return level;
+    }
+    return "off";
   };
   const forceToolResultProgress = sourceOpts?.forceToolResultProgress === true;
   const channelToolResultProgress = forceToolResultProgress ? sourceOpts.onToolResult : undefined;
   const shouldEmitVerboseToolResult = () => {
     const level = currentVerboseLevel();
-    return level === "on" || level === "full";
+    return level === "on" || level === "full" || level === "plain";
   };
   const shouldEmitToolResult = () =>
     progressAllowed() && (forceToolResultProgress || shouldEmitVerboseToolResult());
@@ -367,7 +370,10 @@ export async function executeFollowupTurn(params: {
         activeSessionStore: turn.sessionStore,
         storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
         resolvedVerboseLevel: currentVerboseLevel() ?? "off",
-        toolProgressDetail: defaults.toolProgressDetail,
+        // Plain verbose is presentation-only: force plain tool detail for
+        // queued turns so session overrides are not lost to admitted defaults.
+        toolProgressDetail:
+          (currentVerboseLevel() ?? "off") === "plain" ? "plain" : defaults.toolProgressDetail,
         onCompactionNoticePayload: (payload) =>
           enqueueProgress(() =>
             progressAllowed()
