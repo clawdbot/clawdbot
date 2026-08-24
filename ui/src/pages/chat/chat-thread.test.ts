@@ -1829,6 +1829,7 @@ describe("buildCachedChatItems", () => {
       userMessage("before", 999),
       userMessage("[System] Continue the interrupted turn.", 1000, {
         provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+        __openclaw: { id: "restart-recovery", idempotencyKey: "run-recovered:user" },
       }),
       userMessage("[System] Gateway restarted during update 2026.8.2 -> 2026.8.3.", 1001, {
         provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
@@ -1853,6 +1854,7 @@ describe("buildCachedChatItems", () => {
       label: "System · restart recovery",
       text: "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
       timestamp: 1000,
+      boundaryId: "send:run-recovered",
     });
     // Summary-less kinds keep the producer's informative text under the label.
     expect(items[2]).toMatchObject({
