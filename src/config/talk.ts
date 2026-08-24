@@ -237,6 +237,10 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   if (silenceTimeoutMs !== undefined) {
     normalized.silenceTimeoutMs = silenceTimeoutMs;
   }
+  const idleTimeoutS = normalizePositiveInteger(source.idleTimeoutS);
+  if (idleTimeoutS !== undefined) {
+    normalized.idleTimeoutS = idleTimeoutS;
+  }
 
   const providers = normalizeTalkProviders(source.providers);
   const realtime = normalizeTalkRealtimeConfig(source.realtime);
@@ -308,6 +312,9 @@ export function buildTalkConfigResponse(
   }
   if (typeof normalized?.silenceTimeoutMs === "number") {
     payload.silenceTimeoutMs = normalized.silenceTimeoutMs;
+  }
+  if (typeof normalized?.idleTimeoutS === "number") {
+    payload.idleTimeoutS = normalized.idleTimeoutS;
   }
   if (typeof normalized?.consultThinkingLevel === "string") {
     payload.consultThinkingLevel = normalized.consultThinkingLevel;

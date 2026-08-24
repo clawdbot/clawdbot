@@ -50,4 +50,24 @@ struct TalkModeConfigParsingTests {
 
         #expect(TalkModeRuntime.resolvedSilenceTimeoutMs(talk) == TalkDefaults.silenceTimeoutMs)
     }
+
+    @Test func `reads configured idle timeout seconds`() {
+        let talk: [String: AnyCodable] = [
+            "idleTimeoutS": AnyCodable(30),
+        ]
+
+        #expect(TalkModeRuntime.resolvedIdleTimeoutS(talk) == 30)
+    }
+
+    @Test func `defaults idle timeout seconds to disabled`() {
+        #expect(TalkModeRuntime.resolvedIdleTimeoutS(nil) == nil)
+    }
+
+    @Test func `keeps idle timeout disabled when invalid`() {
+        let talk: [String: AnyCodable] = [
+            "idleTimeoutS": AnyCodable(0),
+        ]
+
+        #expect(TalkModeRuntime.resolvedIdleTimeoutS(talk) == nil)
+    }
 }

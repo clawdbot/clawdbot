@@ -21,6 +21,7 @@ describe("talk normalization", () => {
       speechLocale: " ru-RU ",
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
+      idleTimeoutS: 30,
     } as unknown as never);
 
     expect(normalized).toEqual({
@@ -29,6 +30,7 @@ describe("talk normalization", () => {
       consultFastMode: true,
       interruptOnSpeech: false,
       silenceTimeoutMs: 1500,
+      idleTimeoutS: 30,
     });
   });
 
@@ -142,6 +144,7 @@ describe("talk normalization", () => {
       },
       speechLocale: "ru-RU",
       interruptOnSpeech: true,
+      idleTimeoutS: 30,
     });
 
     expect(payload).toEqual({
@@ -161,6 +164,7 @@ describe("talk normalization", () => {
       },
       speechLocale: "ru-RU",
       interruptOnSpeech: true,
+      idleTimeoutS: 30,
     });
   });
 

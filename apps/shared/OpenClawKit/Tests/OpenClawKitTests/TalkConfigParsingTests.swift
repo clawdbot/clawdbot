@@ -133,4 +133,11 @@ struct TalkConfigParsingTests {
         #expect(locale == "fr-FR")
         #expect(fallback == "en-US")
     }
+
+    @Test func resolvesIdleTimeoutS() {
+        #expect(TalkConfigParsing.resolvedIdleTimeoutS(["idleTimeoutS": AnyCodable(30)]) == 30)
+        #expect(TalkConfigParsing.resolvedIdleTimeoutS(["idleTimeoutS": AnyCodable(0)]) == nil)
+        #expect(TalkConfigParsing.resolvedIdleTimeoutS(["idleTimeoutS": AnyCodable("30")]) == nil)
+        #expect(TalkConfigParsing.resolvedIdleTimeoutS(nil) == nil)
+    }
 }

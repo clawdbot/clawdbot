@@ -87,4 +87,12 @@ describe("talk.config contract fixtures", () => {
       expect(payload?.silenceTimeoutMs ?? fixture.fallback).toBe(fixture.expectedTimeoutMs);
     });
   }
+
+  for (const fixture of fixtures.idleTimeoutCases) {
+    it(`idleTimeout:${fixture.id}`, () => {
+      const normalizedTalk = normalizeTalkSection(fixture.talk as TalkConfig);
+      const payload = buildTalkConfigResponse(normalizedTalk);
+      expect(payload?.idleTimeoutS ?? null).toBe(fixture.expectedIdleTimeoutS);
+    });
+  }
 });

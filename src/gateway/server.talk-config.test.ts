@@ -39,6 +39,7 @@ type TalkConfigPayload = {
       };
       speechLocale?: string;
       silenceTimeoutMs?: number;
+      idleTimeoutS?: number;
     };
     session?: { mainKey?: string };
     ui?: { seamColor?: string };
@@ -105,6 +106,7 @@ async function writeTalkConfig(config: {
   apiKey?: string | { source: "env" | "file" | "exec"; provider: string; id: string };
   voiceId?: string;
   silenceTimeoutMs?: number;
+  idleTimeoutS?: number;
 }) {
   const { writeConfigFile } = await import("../config/config.js");
   const providerId = config.provider ?? GENERIC_TALK_PROVIDER_ID;
@@ -112,6 +114,7 @@ async function writeTalkConfig(config: {
     talk: {
       provider: providerId,
       silenceTimeoutMs: config.silenceTimeoutMs,
+      idleTimeoutS: config.idleTimeoutS,
       providers:
         config.apiKey !== undefined || config.voiceId !== undefined
           ? {
@@ -221,6 +224,7 @@ function expectTalkConfig(
     resolvedApiKey?: string | SecretRef;
     speechLocale?: string;
     silenceTimeoutMs?: number;
+    idleTimeoutS?: number;
   },
 ) {
   expect(talk?.provider).toBe(expected.provider);
@@ -244,6 +248,9 @@ function expectTalkConfig(
   if ("silenceTimeoutMs" in expected) {
     expect(talk?.silenceTimeoutMs).toBe(expected.silenceTimeoutMs);
   }
+  if ("idleTimeoutS" in expected) {
+    expect(talk?.idleTimeoutS).toBe(expected.idleTimeoutS);
+  }
 }
 
 describe("gateway talk.config", () => {
@@ -260,6 +267,7 @@ describe("gateway talk.config", () => {
         },
         speechLocale: "ru-RU",
         silenceTimeoutMs: 1500,
+        idleTimeoutS: 30,
       },
       session: {
         mainKey: "main-test",
@@ -277,6 +285,7 @@ describe("gateway talk.config", () => {
         apiKey: "__OPENCLAW_REDACTED__",
         speechLocale: "ru-RU",
         silenceTimeoutMs: 1500,
+        idleTimeoutS: 30,
       });
       expect(res.payload?.config?.session?.mainKey).toBe("main-test");
       expect(res.payload?.config?.ui?.seamColor).toBe("#112233");
