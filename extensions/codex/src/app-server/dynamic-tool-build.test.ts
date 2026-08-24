@@ -10,9 +10,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { saveExecApprovals } from "openclaw/plugin-sdk/infra-runtime";
 import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
@@ -640,13 +638,6 @@ describe("Codex app-server dynamic tool build", () => {
   ])("enforces the final $mode policy for an allowlisted Gateway command", async (testCase) => {
     const workspaceDir = path.join(tempDir, `${testCase.mode}-allowlisted-workspace`);
     await fs.mkdir(workspaceDir, { recursive: true });
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, `${testCase.mode}-state`));
-    closeOpenClawStateDatabaseForTest();
-    saveExecApprovals({
-      version: 1,
-      defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
-      agents: { main: { allowlist: [{ pattern: process.execPath }] } },
-    });
     const params = createParams(
       path.join(tempDir, `${testCase.mode}-allowlisted.jsonl`),
       workspaceDir,
@@ -655,6 +646,9 @@ describe("Codex app-server dynamic tool build", () => {
     params.permissionMode = testCase.mode;
     params.sessionRoot = workspaceDir;
     params.execOverrides = { host: "gateway", mode: testCase.execMode };
+    params.config = {
+      tools: { exec: { safeBins: ["echo"], safeBinProfiles: { echo: { maxPositional: 1 } } } },
+    };
     params.runtimePlan = createCodexRuntimePlanFixture();
     setOpenClawCodingToolsFactoryForTests((options) =>
       createOpenClawCodingTools({
@@ -664,28 +658,24 @@ describe("Codex app-server dynamic tool build", () => {
       }).filter((tool) => ["exec", "process"].includes(tool.name)),
     );
 
-    try {
-      const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-        sessionPermissionPolicy: {
-          mode: testCase.mode,
-          root: workspaceDir,
-          execMode: testCase.execMode,
-        },
-      });
-      const gatewayExec = expectDefined(
-        tools.find((tool) => tool.name === "gateway_exec"),
-        `${testCase.mode} Gateway shell alias`,
-      );
-      const result = await gatewayExec.execute(`${testCase.mode}-allowlisted`, {
-        command: `${JSON.stringify(process.execPath)} --version`,
-        ask: "off",
-        security: "full",
-      });
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sessionPermissionPolicy: {
+        mode: testCase.mode,
+        root: workspaceDir,
+        execMode: testCase.execMode,
+      },
+    });
+    const gatewayExec = expectDefined(
+      tools.find((tool) => tool.name === "gateway_exec"),
+      `${testCase.mode} Gateway shell alias`,
+    );
+    const result = await gatewayExec.execute(`${testCase.mode}-allowlisted`, {
+      command: `echo ${testCase.mode}`,
+      ask: "off",
+      security: "full",
+    });
 
-      expect(result.details).toMatchObject(testCase.expected);
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-    }
+    expect(result.details).toMatchObject(testCase.expected);
   });
 
   it("removes managed web_search when domain-restricted Codex hosted search is active", async () => {

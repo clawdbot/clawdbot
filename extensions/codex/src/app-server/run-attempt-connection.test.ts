@@ -459,6 +459,11 @@ describe("prepareCodexAttemptConnection", () => {
       root: workspaceDir,
       execMode: "auto",
     });
+    expect(params).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: workspaceDir,
+      execOverrides: { mode: "auto" },
+    });
   });
 
   it.each([
