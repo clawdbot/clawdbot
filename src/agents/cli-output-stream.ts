@@ -102,6 +102,48 @@ function frameBoundedCliJsonlChunk(
   return true;
 }
 
+type EchoedBinaryStrip = { normalized: boolean; omittedRawChars: number };
+
+/** Strips every echoed base64 payload a parsed record carries, in place. */
+function stripEchoedBinaryPayloads(node: unknown, out: EchoedBinaryStrip) {
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      stripEchoedBinaryPayloads(item, out);
+    }
+    return;
+  }
+  if (!isRecord(node)) {
+    return;
+  }
+  const source = node.source;
+  const data = isRecord(source) && source.type === "base64" ? source.data : undefined;
+  if (
+    typeof data === "string" &&
+    isRecord(source) &&
+    (node.type === "image" || (node.type === "document" && source.media_type === "application/pdf"))
+  ) {
+    const { data: _omitted, ...rest } = source;
+    node.source = rest;
+    node.omitted = true;
+    node.bytes = estimateBase64DecodedBytes(data);
+    out.omittedRawChars += data.length;
+    out.normalized = true;
+  }
+  // Claude echoes built-in image reads a second time as `tool_use_result.file.base64`.
+  const file = node.file;
+  if (isRecord(file) && typeof file.base64 === "string") {
+    const base64 = file.base64;
+    delete file.base64;
+    file.omitted = true;
+    file.bytes = estimateBase64DecodedBytes(base64);
+    out.omittedRawChars += base64.length;
+    out.normalized = true;
+  }
+  for (const value of Object.values(node)) {
+    stripEchoedBinaryPayloads(value, out);
+  }
+}
+
 /** Drops Claude's echoed binary bytes before they enter retained tool/transcript state. */
 function normalizeClaudeCliStreamJsonRecord(
   parsed: Record<string, unknown>,
@@ -109,35 +151,11 @@ function normalizeClaudeCliStreamJsonRecord(
   if (parsed.type !== "user" || !isRecord(parsed.message)) {
     return undefined;
   }
-  const content = Array.isArray(parsed.message.content) ? parsed.message.content : [];
-  let normalized = false;
-  let omittedRawChars = 0;
-  for (const result of content) {
-    if (!isRecord(result) || result.type !== "tool_result" || !Array.isArray(result.content)) {
-      continue;
-    }
-    for (const block of result.content) {
-      if (!isRecord(block) || !isRecord(block.source) || block.source.type !== "base64") {
-        continue;
-      }
-      if (
-        block.type !== "image" &&
-        !(block.type === "document" && block.source.media_type === "application/pdf")
-      ) {
-        continue;
-      }
-      const { data, ...source } = block.source;
-      if (typeof data !== "string") {
-        continue;
-      }
-      block.source = source;
-      block.omitted = true;
-      block.bytes = estimateBase64DecodedBytes(data);
-      omittedRawChars += data.length;
-      normalized = true;
-    }
-  }
-  return normalized ? { line: JSON.stringify(parsed), omittedRawChars } : undefined;
+  const stripped: EchoedBinaryStrip = { normalized: false, omittedRawChars: 0 };
+  stripEchoedBinaryPayloads(parsed, stripped);
+  return stripped.normalized
+    ? { line: JSON.stringify(parsed), omittedRawChars: stripped.omittedRawChars }
+    : undefined;
 }
 
 function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: number): string {
