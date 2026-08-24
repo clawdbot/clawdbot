@@ -449,6 +449,9 @@ describe("mantis before/after runtime", () => {
       if (execution.stage === "worktree-add") {
         return timedOutCommandResult();
       }
+      if (execution.stage === "worktree-cleanup" && args[1] === "remove") {
+        await fs.rm(String(args[4]), { force: true, recursive: true });
+      }
       return successfulCommandResult();
     });
 
@@ -770,6 +773,7 @@ describe("mantis before/after runtime", () => {
     await expect(fs.stat(path.join(outputDir, "worktrees", "candidate"))).rejects.toMatchObject({
       code: "ENOENT",
     });
+    await expect(fs.readdir(path.join(outputDir, "worktrees"))).resolves.toEqual([]);
   });
 
   it("fails closed when cleanup registration output is truncated", async () => {

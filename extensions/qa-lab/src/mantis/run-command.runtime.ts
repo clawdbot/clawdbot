@@ -276,7 +276,9 @@ async function removeMantisWorktreeDirectory(params: {
     path.posix.dirname(relativeWorktreeDir),
     `.mantis-cleanup-${process.pid}-${randomUUID()}`,
   );
-  await repoRootHandle.move(relativeWorktreeDir, quarantineRelativePath);
+  // fs-safe's Node fallback requires explicit overwrite for directory moves;
+  // the UUID quarantine path is fresh and keeps recursive cleanup root-bound.
+  await repoRootHandle.move(relativeWorktreeDir, quarantineRelativePath, { overwrite: true });
   const quarantinedStat = await repoRootHandle.stat(quarantineRelativePath);
   if (
     quarantinedStat.isSymbolicLink ||
@@ -335,7 +337,7 @@ async function removeMantisWorktreeDirectory(params: {
     await repoRootHandle.remove(relativePath);
   };
 
-  await removeRelative(relativeWorktreeDir);
+  await removeRelative(quarantineRelativePath);
 }
 
 async function normalizeWorktreePath(filePath: string, repoRoot: string): Promise<string> {
