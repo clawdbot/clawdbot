@@ -846,7 +846,7 @@ openclaw nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"
 
 ## System commands (node host / mac node)
 
-The macOS node exposes `system.run`, `system.which`, `system.notify`, and `system.execApprovals.get/set`. The headless node host exposes `system.run.prepare`, `system.run`, `system.which`, and `system.execApprovals.get/set`.
+The macOS node and headless node host both expose `system.run.prepare`, `system.run`, `system.which`, and `system.execApprovals.get/set`; the macOS node also exposes `system.notify`.
 
 Examples:
 
