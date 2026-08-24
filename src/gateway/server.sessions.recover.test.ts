@@ -170,10 +170,11 @@ test("sessions.recover settles its active placement before archiving a real sess
           });
           return placement as Extract<WorkerSessionPlacementRecord, { state: "draining" }>;
         },
-        reclaim: async (worktreePath) => {
+        reclaim: async (worktreePath, _placement, reauthorize) => {
           expect(worktreePath).toBe(worktree.path);
           reclaimStarted.resolve();
           await reclaimGate.promise;
+          reauthorize?.();
           await fs.appendFile(unsyncedPath, "final worker sync\n");
           placement = recoveryWorkerPlacement({
             sessionId: sourceSessionId,
