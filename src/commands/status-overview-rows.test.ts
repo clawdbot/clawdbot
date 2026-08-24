@@ -201,6 +201,27 @@ describe("status-overview-rows", () => {
             paths: ["tts.providers.elevenlabs.apiKey"],
             reason: "secret reference was not found",
           },
+          {
+            ownerKind: "plugin-capability",
+            ownerId: "alpha%3Abeta:gamma",
+            state: "unavailable",
+            paths: ["plugins.entries.alpha:beta.config.capabilityToken"],
+            reason: "secret reference was not found",
+          },
+          {
+            ownerKind: "plugin-provider",
+            ownerId: "alpha:beta%3Agamma",
+            state: "unavailable",
+            paths: ["plugins.entries.alpha.config.providerToken"],
+            reason: "secret provider failed",
+          },
+          {
+            ownerKind: "plugin-route",
+            ownerId: "webhooks:routes.a.secret",
+            state: "unavailable",
+            paths: ["plugins.entries.webhooks.config.routes.a.secret"],
+            reason: "secret reference was not found",
+          },
         ],
         degradedPlugins: [
           {
@@ -231,7 +252,9 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Config")).toBe("/tmp/openclaw.json");
     expect(findRowValue(rows, "Update restart")).toBe("restart pending health verification");
     expect(findRowValue(rows, "Security")).toBe("Run: openclaw security audit --deep");
-    expect(findRowValue(rows, "Degraded secrets")).toBe("1 degraded · capability:tts");
+    expect(findRowValue(rows, "Degraded secrets")).toBe(
+      "4 degraded · capability:tts, plugin-capability:alpha%3Abeta:gamma, plugin-provider:alpha:beta%3Agamma, plugin-route:webhooks:routes.a.secret",
+    );
     expect(findRowValue(rows, "Degraded plugins")).toBe("1 configured-unavailable · discord");
     expect(findRowValue(rows, "Secrets")).toBe("2 diagnostics");
   });

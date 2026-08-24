@@ -55,8 +55,8 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     expect(context.assignments).toMatchObject([
       {
         path: "plugins.entries.webhooks.config.routes.zapier.secret",
-        ownerKind: "route",
-        ownerId: "plugins.entries.webhooks.config.routes.zapier.secret",
+        ownerKind: "plugin-route",
+        ownerId: "webhooks:routes.zapier.secret",
         requiredForGateway: false,
         disposition: "isolate",
       },

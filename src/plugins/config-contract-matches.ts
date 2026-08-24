@@ -8,13 +8,13 @@ type PluginConfigContractMatch = {
   path: string;
   /** Config value stored at the matched path. */
   value: unknown;
-  /** Exact matched container and key; rendered paths cannot round-trip dotted wildcard keys. */
+  /** Exact matched container and key so assignments update the original location directly. */
   parent: Record<string, unknown> | unknown[];
   key: string;
 };
 
 type TraversalState = {
-  segments: string[];
+  segments: Array<string | number>;
   value: unknown;
   parent?: Record<string, unknown> | unknown[];
 };
@@ -23,11 +23,14 @@ function normalizePathPattern(pathPattern: string): string[] {
   return normalizeStringEntries(pathPattern.split("."));
 }
 
-function appendPathSegment(path: string, segment: string): string {
-  if (!path) {
-    return segment;
+function appendPathSegment(path: string, segment: string | number): string {
+  if (typeof segment === "number") {
+    return `${path}[${segment}]`;
   }
-  return /^\d+$/.test(segment) ? `${path}[${segment}]` : `${path}.${segment}`;
+  if (!/^[A-Za-z_$][A-Za-z0-9_$-]*$/.test(segment)) {
+    return `${path}[${JSON.stringify(segment)}]`;
+  }
+  return path ? `${path}.${segment}` : segment;
 }
 
 function parseCanonicalArrayIndex(segment: string, length: number): number | null {
@@ -54,7 +57,7 @@ export function collectPluginConfigContractMatches(params: {
         if (Array.isArray(state.value)) {
           for (const [index, value] of state.value.entries()) {
             nextStates.push({
-              segments: [...state.segments, String(index)],
+              segments: [...state.segments, index],
               value,
               parent: state.value,
             });
@@ -76,7 +79,7 @@ export function collectPluginConfigContractMatches(params: {
         const index = parseCanonicalArrayIndex(segment, state.value.length);
         if (index !== null) {
           nextStates.push({
-            segments: [...state.segments, segment],
+            segments: [...state.segments, index],
             value: state.value[index],
             parent: state.value,
           });
@@ -102,6 +105,6 @@ export function collectPluginConfigContractMatches(params: {
     path: state.segments.reduce(appendPathSegment, ""),
     value: state.value,
     parent: state.parent!,
-    key: state.segments.at(-1)!,
+    key: String(state.segments.at(-1)!),
   }));
 }

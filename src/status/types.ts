@@ -3,6 +3,7 @@
 
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { DegradedSecretOwner } from "../secrets/runtime-degraded-state.js";
 import type { SessionKind } from "../sessions/classify-session-kind.js";
 import type {
   RetainedLostTaskAuditSummary,
@@ -74,7 +75,7 @@ export type StatusSummary = {
   channelSummary: string[];
   queuedSystemEvents: string[];
   degradedSecretOwners?: Array<{
-    ownerKind: "account" | "capability" | "gateway" | "provider" | "route";
+    ownerKind: DegradedSecretOwner["ownerKind"];
     ownerId: string;
     state: "unavailable";
     degradationState?: "cold" | "stale";

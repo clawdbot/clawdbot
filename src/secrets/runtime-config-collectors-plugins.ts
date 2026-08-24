@@ -8,6 +8,7 @@ import {
 import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
 import type { PluginManifestSecretInputPath } from "../plugins/manifest-types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { runtimePluginManifestSecretOwnerId } from "./runtime-plugin-manifest-secret-owner.js";
 import {
   collectRuntimeSecretInputAssignment,
   type ResolverContext,
@@ -138,13 +139,17 @@ function collectConfiguredPluginSecretAssignments(params: {
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
 }): void {
+  const pluginConfigPath = /^[A-Za-z_$][A-Za-z0-9_$-]*$/.test(params.pluginId)
+    ? `plugins.entries.${params.pluginId}.config`
+    : `plugins.entries[${JSON.stringify(params.pluginId)}].config`;
   const seenPaths = new Set<string>();
   for (const secretPath of params.secretPaths) {
     for (const match of collectPluginConfigContractMatches({
       root: params.pluginConfig,
       pathPattern: secretPath.path,
     })) {
-      const fullPath = `plugins.entries.${params.pluginId}.config.${match.path}`;
+      const relativePath = match.path.startsWith("[") ? match.path : `.${match.path}`;
+      const fullPath = `${pluginConfigPath}${relativePath}`;
       if (seenPaths.has(fullPath)) {
         continue;
       }
@@ -165,8 +170,16 @@ function collectConfiguredPluginSecretAssignments(params: {
         ...(secretPath.ownerKind
           ? {
               owner: {
-                ownerKind: secretPath.ownerKind,
-                ownerId: secretPath.ownerKind === "route" ? fullPath : secretPath.ownerId,
+                ownerKind:
+                  secretPath.ownerKind === "route"
+                    ? "plugin-route"
+                    : secretPath.ownerKind === "capability"
+                      ? "plugin-capability"
+                      : "plugin-provider",
+                ownerId: runtimePluginManifestSecretOwnerId(
+                  params.pluginId,
+                  secretPath.ownerKind === "route" ? match.path : secretPath.ownerId,
+                ),
                 requiredForGateway: false,
                 disposition: "isolate" as const,
                 contract:

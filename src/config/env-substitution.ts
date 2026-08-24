@@ -26,6 +26,7 @@ import { isPlainObject } from "../utils.js";
 import { parseEnvTemplateSecretRef } from "./types.secrets.js";
 
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
+const SAFE_CONFIG_PATH_KEY_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$-]*$/;
 
 /** Error thrown when a config value references a missing or empty environment variable. */
 export class MissingEnvVarError extends Error {
@@ -189,7 +190,16 @@ function substituteAny(
   if (isPlainObject(value)) {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value)) {
-      const childPath = path ? `${path}.${key}` : key;
+      const isPluginConfigPath =
+        path === "plugins.entries" ||
+        path.startsWith("plugins.entries.") ||
+        path.startsWith("plugins.entries[");
+      const childPath =
+        isPluginConfigPath && !SAFE_CONFIG_PATH_KEY_PATTERN.test(key)
+          ? `${path}[${JSON.stringify(key)}]`
+          : path
+            ? `${path}.${key}`
+            : key;
       result[key] = substituteAny(val, env, childPath, opts);
     }
     return result;

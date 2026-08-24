@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
+import { runtimePluginManifestSecretOwnerId } from "./runtime-plugin-manifest-secret-owner.js";
 import { createResolverContext, type ResolverContext } from "./runtime-shared.js";
 
 const { loadPluginManifestRegistryForPluginRegistryMock } = vi.hoisted(() => ({
@@ -167,18 +168,18 @@ describe("collectPluginConfigAssignments", () => {
   it.each([
     {
       descriptor: { ownerKind: "route" },
-      ownerKind: "route",
-      ownerId: "plugins.entries.secret-owner.config.service.token",
+      ownerKind: "plugin-route",
+      ownerId: runtimePluginManifestSecretOwnerId("secret-owner", "service.token"),
     },
     {
       descriptor: { ownerKind: "capability", ownerId: "feature-owner" },
-      ownerKind: "capability",
-      ownerId: "feature-owner",
+      ownerKind: "plugin-capability",
+      ownerId: runtimePluginManifestSecretOwnerId("secret-owner", "feature-owner"),
     },
     {
       descriptor: { ownerKind: "provider", ownerId: "provider-owner" },
-      ownerKind: "provider",
-      ownerId: "provider-owner",
+      ownerKind: "plugin-provider",
+      ownerId: runtimePluginManifestSecretOwnerId("secret-owner", "provider-owner"),
     },
   ] as const)("isolates only the manifest-declared $ownerKind owner", (scenario) => {
     loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
@@ -213,6 +214,150 @@ describe("collectPluginConfigAssignments", () => {
         ownerContractDigest: expect.any(String),
       },
     ]);
+  });
+
+  it.each(["capability", "provider"] as const)(
+    "keeps the same manifest-local %s owner distinct across plugins",
+    (ownerKind) => {
+      const pluginIds = ["cold-plugin", "healthy-plugin"] as const;
+      loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+        plugins: pluginIds.map((id) => ({
+          id,
+          origin: "config",
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "service.token", ownerKind, ownerId: "shared-owner" }],
+            },
+          },
+        })),
+        diagnostics: [],
+      });
+
+      const config = asConfig({
+        plugins: {
+          entries: {
+            "cold-plugin": {
+              enabled: true,
+              config: { service: { token: envRef("COLD_PLUGIN_TOKEN") } },
+            },
+            "healthy-plugin": {
+              enabled: true,
+              config: { service: { token: envRef("HEALTHY_PLUGIN_TOKEN") } },
+            },
+          },
+        },
+      });
+      const context = collectAssignments(config, [
+        ["cold-plugin", "config"],
+        ["healthy-plugin", "config"],
+      ]);
+      const ownerIds = pluginIds.map((pluginId) =>
+        runtimePluginManifestSecretOwnerId(pluginId, "shared-owner"),
+      );
+
+      expect(ownerIds).toEqual(["cold-plugin:shared-owner", "healthy-plugin:shared-owner"]);
+      expect(context.assignments).toMatchObject(
+        ownerIds.map((ownerId) => ({ ownerKind: `plugin-${ownerKind}`, ownerId })),
+      );
+    },
+  );
+
+  it("keeps dotted plugin identities and plugin-local route paths distinct", () => {
+    const pluginIds = ["foo.config.bar", "foo"] as const;
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: pluginIds.map((id) => ({
+        id,
+        origin: "config",
+        configContracts: {
+          secretInputs: {
+            paths: [
+              {
+                path: id === "foo" ? "bar.config.token" : "token",
+                ownerKind: "route",
+              },
+            ],
+          },
+        },
+      })),
+      diagnostics: [],
+    });
+
+    const context = collectAssignments(
+      asConfig({
+        plugins: {
+          entries: {
+            "foo.config.bar": { enabled: true, config: { token: envRef("DOTTED_TOKEN") } },
+            foo: {
+              enabled: true,
+              config: { bar: { config: { token: envRef("NESTED_TOKEN") } } },
+            },
+          },
+        },
+      }),
+      pluginIds.map((id) => [id, "config"]),
+    );
+
+    expect(context.assignments).toMatchObject([
+      {
+        path: 'plugins.entries["foo.config.bar"].config.token',
+        ownerKind: "plugin-route",
+        ownerId: runtimePluginManifestSecretOwnerId("foo.config.bar", "token"),
+        ref: { id: "DOTTED_TOKEN" },
+      },
+      {
+        path: "plugins.entries.foo.config.bar.config.token",
+        ownerKind: "plugin-route",
+        ownerId: runtimePluginManifestSecretOwnerId("foo", "bar.config.token"),
+        ref: { id: "NESTED_TOKEN" },
+      },
+    ]);
+    expect(new Set(context.assignments.map(({ ownerId }) => ownerId)).size).toBe(2);
+  });
+
+  it("collects and applies dotted wildcard keys separately from nested record keys", () => {
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "distinct-keys",
+          origin: "config",
+          configContracts: {
+            secretInputs: {
+              paths: [
+                { path: "*.token", ownerKind: "capability", ownerId: "dotted-owner" },
+                { path: "*.*.token", ownerKind: "provider", ownerId: "nested-owner" },
+              ],
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = createPluginConfig("distinct-keys", {
+      "alpha.beta": { token: envRef("DOTTED_TOKEN") },
+      alpha: { beta: { token: envRef("NESTED_TOKEN") } },
+    });
+    const context = collectAssignments(config, [["distinct-keys", "config"]]);
+
+    expect(context.assignments).toMatchObject([
+      {
+        path: 'plugins.entries.distinct-keys.config["alpha.beta"].token',
+        ownerKind: "plugin-capability",
+        ownerId: runtimePluginManifestSecretOwnerId("distinct-keys", "dotted-owner"),
+        ref: { id: "DOTTED_TOKEN" },
+      },
+      {
+        path: "plugins.entries.distinct-keys.config.alpha.beta.token",
+        ownerKind: "plugin-provider",
+        ownerId: runtimePluginManifestSecretOwnerId("distinct-keys", "nested-owner"),
+        ref: { id: "NESTED_TOKEN" },
+      },
+    ]);
+    requireAssignment(context, 0).apply("resolved-dotted");
+    requireAssignment(context, 1).apply("resolved-nested");
+    expect(config.plugins?.entries?.["distinct-keys"]?.config).toMatchObject({
+      "alpha.beta": { token: "resolved-dotted" },
+      alpha: { beta: { token: "resolved-nested" } },
+    });
   });
 
   it("projects declared contract fields from the exact matched owner block", () => {
@@ -302,7 +447,7 @@ describe("collectPluginConfigAssignments", () => {
 
     expect(context.assignments).toMatchObject([
       {
-        path: "plugins.entries.custom-search.config.webSearch.headers.X.Trace",
+        path: 'plugins.entries.custom-search.config.webSearch.headers["X.Trace"]',
         ownerKind: "unknown",
       },
     ]);

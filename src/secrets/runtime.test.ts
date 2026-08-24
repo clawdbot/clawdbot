@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
+import { runtimePluginManifestSecretOwnerId } from "./runtime-plugin-manifest-secret-owner.js";
 import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshotState,
@@ -346,15 +347,15 @@ describe("secrets runtime snapshot", () => {
     });
     expect(snapshot.degradedOwners).toMatchObject([
       {
-        ownerKind: "route",
-        ownerId: "plugins.entries.webhooks.config.routes.cold.secret",
+        ownerKind: "plugin-route",
+        ownerId: runtimePluginManifestSecretOwnerId("webhooks", "routes.cold.secret"),
         state: "unavailable",
         paths: ["plugins.entries.webhooks.config.routes.cold.secret"],
         reason: "secret reference was not found",
       },
       {
-        ownerKind: "route",
-        ownerId: "plugins.entries.webhooks.config.routes.inlineCold.secret",
+        ownerKind: "plugin-route",
+        ownerId: runtimePluginManifestSecretOwnerId("webhooks", "routes.inlineCold.secret"),
         state: "unavailable",
         paths: ["plugins.entries.webhooks.config.routes.inlineCold.secret"],
         reason: "secret reference was not found",
@@ -417,10 +418,15 @@ describe("secrets runtime snapshot", () => {
     });
 
     const stale = await prepare("https://first.example.invalid", "changed", "changed");
+    const ownerId = runtimePluginManifestSecretOwnerId(
+      "owner-fixture",
+      'routes["sales.eu"].secret',
+    );
     expect(stale.degradedOwners).toMatchObject([
       {
-        ownerKind: "route",
-        ownerId: "plugins.entries.owner-fixture.config.routes.sales.eu.secret",
+        ownerKind: "plugin-route",
+        ownerId,
+        paths: ['plugins.entries.owner-fixture.config.routes["sales.eu"].secret'],
         degradationState: "stale",
       },
     ]);
@@ -431,8 +437,9 @@ describe("secrets runtime snapshot", () => {
     const cold = await prepare("https://second.example.invalid", "changed", "changed");
     expect(cold.degradedOwners).toMatchObject([
       {
-        ownerKind: "route",
-        ownerId: "plugins.entries.owner-fixture.config.routes.sales.eu.secret",
+        ownerKind: "plugin-route",
+        ownerId,
+        paths: ['plugins.entries.owner-fixture.config.routes["sales.eu"].secret'],
         degradationState: "cold",
       },
     ]);
