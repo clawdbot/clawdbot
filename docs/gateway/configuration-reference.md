@@ -1743,8 +1743,28 @@ never solicit or echo a credential in chat, never place one in a command, URL,
 log, or shell variable, and route credential entry to a host-owned masked or
 structured setup instead.
 
-- `security.allowCredentialsInTranscript`: opt out of that contract. Default
-  `false`, which keeps it applied.
+- `security.allowCredentialsInTranscript`: opt out of the handling rules.
+  Default `false`, which keeps the whole contract applied.
+
+The opt-out is partial. Setting it to `true` drops only the rules that govern a
+credential already present in the transcript:
+
+| Rule                                                                         | With the opt-out enabled |
+| ---------------------------------------------------------------------------- | ------------------------ |
+| Never solicit a credential from anyone                                       | **still applied**        |
+| Never echo or repeat a credential                                            | dropped                  |
+| Never place a credential in commands, arguments, URLs, logs, or visible text | dropped                  |
+| Use only a host-owned masked or structured credential-entry setup            | dropped                  |
+
+The no-solicitation rule is never removed by any configuration value. It
+prevents exposure that would not otherwise exist and protects every participant
+in a conversation, not only the operator, so it stays active in all sessions
+including the operator's own direct messages.
+
+Note that the setting applies to the whole agent, not to individual senders.
+The system prompt is built once per run attempt and installed as the session
+base prompt, so it cannot vary by who speaks next. In a shared conversation the
+handling rules are dropped for that session as a whole.
 
 Set it to `true` only when you accept that a credential sent in chat is
 persisted well beyond the message. Transcripts are indexed into memory search
