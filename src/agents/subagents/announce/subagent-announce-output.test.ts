@@ -123,6 +123,17 @@ describe("readSubagentOutput", () => {
   });
 
   it.each([
+    { phase: "commentary", expected: undefined },
+    { phase: "final_answer", expected: "Visible subagent answer" },
+  ])("respects the phase of scalar $phase output", async ({ phase, expected }) => {
+    installOutputDeps({
+      messages: [{ role: "assistant", phase, content: "Visible subagent answer" }],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(expected);
+  });
+
+  it.each([
     {
       shape: "OpenAI top-level snake_case function call",
       assistant: {

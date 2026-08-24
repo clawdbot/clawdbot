@@ -12,7 +12,7 @@ import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
-import { extractStoredAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
+import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
@@ -117,21 +117,6 @@ export function withSubagentOutcomeTiming(
   return { ...outcome, ...nextTiming };
 }
 
-function extractSubagentAssistantText(message: unknown): string {
-  if (!message || typeof message !== "object") {
-    return "";
-  }
-  const role = (message as { role?: unknown }).role;
-  if (role !== "assistant") {
-    return "";
-  }
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return sanitizeTextContent(content);
-  }
-  return extractStoredAssistantText(message) ?? "";
-}
-
 function countAssistantToolCalls(message: unknown): number {
   if (!message || typeof message !== "object") {
     return 0;
@@ -196,7 +181,7 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
         previousAssistantCalledYield = false;
         continue;
       }
-      const text = extractSubagentAssistantText(message).trim();
+      const text = extractStoredAssistantText(message)?.trim();
       if (!text) {
         snapshot.waitingForContinuation = false;
         previousAssistantCalledYield = false;

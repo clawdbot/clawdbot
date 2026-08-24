@@ -1457,12 +1457,11 @@ extensions/xai/realtime-voice-config.ts	2
 extensions/xai/runtime-model-compat.ts	1
 extensions/xai/speech-provider-metadata.ts	3
 extensions/xai/src/code-execution-config.ts	10
-extensions/xai/src/code-execution-shared.ts	1
 extensions/xai/src/tool-auth-shared.ts	2
 extensions/xai/src/web-search-provider.runtime.ts	2
-extensions/xai/src/web-search-shared.ts	2
+extensions/xai/src/web-search-shared.ts	1
 extensions/xai/src/x-search-config.ts	4
-extensions/xai/src/x-search-shared.ts	2
+extensions/xai/src/x-search-shared.ts	1
 extensions/xai/stream.ts	5
 extensions/xai/tts.ts	1
 extensions/xai/x-search.ts	7
@@ -2059,7 +2058,7 @@ src/agents/subagents/announce/subagent-announce-delivery-retry.ts	2
 src/agents/subagents/announce/subagent-announce-delivery.runtime.ts	2
 src/agents/subagents/announce/subagent-announce-delivery.ts	1
 src/agents/subagents/announce/subagent-announce-origin.ts	2
-src/agents/subagents/announce/subagent-announce-output.ts	10
+src/agents/subagents/announce/subagent-announce-output.ts	8
 src/agents/subagents/completion/subagent-completion-admission.store.ts	2
 src/agents/subagents/registry/subagent-control-messaging.ts	2
 src/agents/subagents/registry/subagent-control.ts	1
