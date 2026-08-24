@@ -15302,6 +15302,28 @@
       ]
     },
     {
+      "id": "native.android.a6c4338983260fec",
+      "source": "Show less",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "conditional-branch",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.a7fa3b928b568c87",
+      "source": "Show more",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "conditional-branch",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarContent.kt"
+        }
+      ]
+    },
+    {
       "id": "native.android.4a20c277e00ffdfb",
       "source": "Show new messages",
       "surface": "android",

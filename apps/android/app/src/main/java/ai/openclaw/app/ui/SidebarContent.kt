@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.outlined.AccessTime
@@ -40,6 +41,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -109,9 +111,15 @@ internal fun sidebarAgentRoster(
   )
 }
 
+private const val SIDEBAR_SESSION_LIMIT = 8
+
+internal data class SidebarSessionPresentation(
+  val sections: List<SessionSection>,
+  val canExpand: Boolean,
+)
+
 internal fun sidebarRecentSessions(
   sessions: List<ChatSessionEntry>,
-  limit: Int = 8,
 ): List<ChatSessionEntry> =
   sessions
     .asSequence()
@@ -120,8 +128,21 @@ internal fun sidebarRecentSessions(
       compareByDescending<ChatSessionEntry> { it.pinned == true }
         .thenByDescending { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
         .thenBy { it.key },
-    ).take(limit.coerceAtLeast(0))
-    .toList()
+    ).toList()
+
+internal fun sidebarSessionPresentation(
+  sessions: List<ChatSessionEntry>,
+  knownGroups: List<String>,
+  expanded: Boolean,
+): SidebarSessionPresentation {
+  val recentSessions = sidebarRecentSessions(sessions)
+  val visibleSessions =
+    if (expanded) recentSessions else recentSessions.take(SIDEBAR_SESSION_LIMIT)
+  return SidebarSessionPresentation(
+    sections = groupSessionEntries(visibleSessions, knownGroups).filter { it.entries.isNotEmpty() },
+    canExpand = recentSessions.size > SIDEBAR_SESSION_LIMIT,
+  )
+}
 
 internal fun sessionPresentationTitle(
   session: ChatSessionEntry,
@@ -193,9 +214,16 @@ internal fun OpenClawSidebar(
 ) {
   val palette = sidebarPalette()
   val roster = sidebarAgentRoster(agents, selectedAgentId)
+  val storedGroups by viewModel.sessionCustomGroups.collectAsState()
   var query by rememberSaveable { mutableStateOf("") }
   var agentsExpanded by remember { mutableStateOf(false) }
-  val recentSessions = sidebarRecentSessions(sessions)
+  var sessionsExpanded by rememberSaveable { mutableStateOf(false) }
+  val recentPresentation =
+    sidebarSessionPresentation(
+      sessions = sessions,
+      knownGroups = storedGroups,
+      expanded = sessionsExpanded,
+    )
   val connectionLabel = gatewayStatusLabel(connection)
   // Canonical debounced gateway search shared with the Sessions browser; the
   // controller falls back to filtering cached rows when the gateway is offline.
@@ -355,7 +383,7 @@ internal fun OpenClawSidebar(
         }
 
         SidebarSectionTitle(nativeString("Recent sessions"), palette, modifier = Modifier.padding(top = 12.dp))
-        if (recentSessions.isEmpty()) {
+        if (recentPresentation.sections.isEmpty()) {
           Text(
             text = nativeString("No recent sessions"),
             style = ClawTheme.type.caption,
@@ -363,15 +391,31 @@ internal fun OpenClawSidebar(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
           )
         } else {
-          Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            recentSessions.forEach { session ->
-              SidebarSessionRow(
-                session = session,
-                selected = session.key == activeSessionKey,
-                palette = palette,
-                onClick = { onSelectSession(session) },
-              )
+          recentPresentation.sections.forEach { section ->
+            section.title?.let { title -> SidebarSectionTitle(title, palette) }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+              section.entries.forEach { session ->
+                SidebarSessionRow(
+                  session = session,
+                  selected = session.key == activeSessionKey,
+                  palette = palette,
+                  onClick = { onSelectSession(session) },
+                )
+              }
             }
+          }
+          if (recentPresentation.canExpand) {
+            SidebarActionRow(
+              label = nativeString(if (sessionsExpanded) "Show less" else "Show more"),
+              icon =
+                if (sessionsExpanded) {
+                  Icons.Default.KeyboardArrowUp
+                } else {
+                  Icons.Default.KeyboardArrowDown
+                },
+              palette = palette,
+              onClick = { sessionsExpanded = !sessionsExpanded },
+            )
           }
         }
       }

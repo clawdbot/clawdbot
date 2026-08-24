@@ -6,6 +6,8 @@ import type {
  * Shared types for preparing and executing CLI-backed agent runs.
  */
 import type {
+  BlockReplyContext,
+  PartialReplyPayload,
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../../auto-reply/get-reply-options.types.js";
@@ -47,6 +49,7 @@ import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { CliSessionReuseResult } from "../cli-session.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
+import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
   CurrentInboundPromptContext,
@@ -257,6 +260,8 @@ export type RunCliAgentParams = {
   };
   disableTools?: boolean;
   abortSignal?: AbortSignal;
+  onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
+  onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
   onExecutionStarted?: () => void;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;

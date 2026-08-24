@@ -8,12 +8,17 @@ import type {
   CliBackendExecute,
   CliBackendToolPermissionRequest,
   CliBackendToolPermissionResult,
+  CliBackendUserInputRequest,
+  CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
 import { isSignalTimeoutReason, type FailoverError } from "../failover-error.js";
+import { runStructuredInput } from "../harness/structured-input-execution.js";
+import { compileStructuredInputQuestions } from "../harness/structured-input.js";
+import { callGatewayTool } from "../tools/gateway.js";
 import {
   closeCliLiveSession,
   createCliLiveSessionCapability,
@@ -118,6 +123,102 @@ function createPluginToolPermissionHandler(params: {
       currentGrants.add(toolName);
     }
     return { behavior: "allow", updatedInput: request.toolInput };
+  };
+}
+
+function cancelUserInput(message: string): CliBackendUserInputResult {
+  return { status: "cancelled", message };
+}
+
+function createPluginUserInputHandler(params: {
+  context: PreparedCliRunContext;
+  abortSignal: AbortSignal;
+  onPendingInput: (delta: 1 | -1) => void;
+}): (request: CliBackendUserInputRequest) => Promise<CliBackendUserInputResult> {
+  const run = params.context.params;
+  return async (request) => {
+    const signal = request.abortSignal
+      ? AbortSignal.any([params.abortSignal, request.abortSignal])
+      : params.abortSignal;
+    const assertActive = resolveAdmittedRunActiveAssertion(run.admittedRunContext, signal);
+    if (!assertActive) {
+      return cancelUserInput(
+        "OpenClaw cancelled operator input: the admitted run is no longer active.",
+      );
+    }
+    try {
+      assertActive();
+    } catch {
+      return cancelUserInput(
+        "OpenClaw cancelled operator input: the admitted run is no longer active.",
+      );
+    }
+
+    const toolName = request.toolName.trim();
+    if (
+      !toolName ||
+      (run.cliToolAvailability && !run.cliToolAvailability.native.includes(toolName))
+    ) {
+      return cancelUserInput(
+        toolName
+          ? `OpenClaw cancelled operator input from ${toolName}: it is unavailable to this run.`
+          : "OpenClaw cancelled an unnamed operator input request.",
+      );
+    }
+    if (request.questions.length === 0 || request.questions.length > 12) {
+      return cancelUserInput("OpenClaw cancelled an invalid operator input request.");
+    }
+
+    params.onPendingInput(1);
+    try {
+      const result = await runStructuredInput({
+        input: compileStructuredInputQuestions({
+          questions: request.questions.map((question) => ({
+            ...question,
+            isSecret: false,
+          })),
+          intro: request.intro?.trim() || "Agent needs input:",
+        }),
+        sessionKey: run.sessionKey ?? run.sessionId,
+        agentId: run.agentId,
+        runId: run.runId,
+        timeoutMs: run.timeoutMs,
+        gatewayCall: callGatewayTool,
+        delivery: {
+          onBlockReply: run.onBlockReply,
+          onPartialReply: run.onPartialReply,
+        },
+        signal,
+        isActive: () => {
+          try {
+            assertActive();
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        questionId: request.toolCallId ? (batch) => `${request.toolCallId}:${batch}` : undefined,
+      });
+      try {
+        assertActive();
+      } catch {
+        return cancelUserInput(
+          "OpenClaw cancelled operator input: the admitted run closed before the answer was committed.",
+        );
+      }
+      return result.status === "answered"
+        ? { status: "answered", answers: result.answers }
+        : cancelUserInput(
+            result.message ??
+              "OpenClaw cancelled operator input; continue with your best judgment.",
+          );
+    } catch {
+      return cancelUserInput(
+        "OpenClaw could not collect operator input; continue with your best judgment.",
+      );
+    } finally {
+      params.onPendingInput(-1);
+    }
   };
 }
 
@@ -326,6 +427,13 @@ export async function executePluginOwnedProcess(params: {
         context: params.context,
         abortSignal: signal,
         onPendingApproval: (delta) => {
+          outstanding.approvals = Math.max(0, outstanding.approvals + delta);
+        },
+      }),
+      requestUserInput: createPluginUserInputHandler({
+        context: params.context,
+        abortSignal: signal,
+        onPendingInput: (delta) => {
           outstanding.approvals = Math.max(0, outstanding.approvals + delta);
         },
       }),

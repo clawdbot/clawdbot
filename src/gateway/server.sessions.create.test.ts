@@ -4276,6 +4276,121 @@ test("sessions.create adopting an existing key does not restamp node provenance"
   }
 });
 
+test("sessions.create replays an identical creation once and rejects conflicting intent", async () => {
+  await createSessionStoreDir();
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  const { sessionCreateHandlers } = await import("./server-methods/sessions-create.js");
+  let sharedContext:
+    | Parameters<NonNullable<(typeof chatHandlers)["chat.send"]>>[0]["context"]
+    | undefined;
+  const chatSend = vi
+    .spyOn(chatHandlers, "chat.send")
+    .mockImplementation(async ({ context, respond }) => {
+      sharedContext ??= context;
+      respond(true, { runId: "create-once", status: "started" });
+    });
+  const dedupe = new Map();
+  const client = {
+    connect: {
+      role: "operator",
+      scopes: ["operator.write", "operator.admin"],
+      device: { id: "control-ui-device" },
+    },
+    authenticatedUserProfile: { profileId: "profile-owner" },
+  };
+  const params = {
+    agentId: "main",
+    idempotencyKey: "create-once",
+    message: "start this task exactly once",
+    permissionMode: "full",
+  };
+  const request = async (nextParams = params, nextClient = client) => {
+    if (!sharedContext) {
+      return await directSessionReq<{ key: string }>("sessions.create", nextParams, {
+        client: nextClient as never,
+        context: { dedupe },
+      });
+    }
+    let result:
+      | { ok: boolean; payload?: { key: string }; error?: { code?: string; message?: string } }
+      | undefined;
+    await sessionCreateHandlers["sessions.create"]?.({
+      req: {} as never,
+      params: nextParams,
+      client: nextClient as never,
+      context: sharedContext,
+      isWebchatConnect: () => false,
+      respond: (ok, payload, error) => {
+        result = { ok, payload: payload as { key: string } | undefined, error };
+      },
+    });
+    if (!result) {
+      throw new Error("sessions.create did not respond");
+    }
+    return result;
+  };
+
+  try {
+    const first = await request();
+    const replay = await request(
+      {
+        message: params.message,
+        permissionMode: params.permissionMode,
+        idempotencyKey: params.idempotencyKey,
+        agentId: params.agentId,
+      },
+      {
+        ...client,
+        connect: {
+          ...client.connect,
+          scopes: ["operator.admin", "operator.read", "operator.write"],
+        },
+      },
+    );
+
+    expect(first.ok).toBe(true);
+    expect(replay).toEqual(first);
+    expect(chatSend).toHaveBeenCalledOnce();
+    expect(chatSend.mock.calls[0]?.[0].params).toMatchObject({
+      idempotencyKey: expect.any(String),
+      message: "start this task exactly once",
+    });
+
+    const conflict = await request({ ...params, message: "start a different task" });
+    expect(conflict).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "session creation idempotency key was reused with different parameters",
+      },
+    });
+    expect(chatSend).toHaveBeenCalledOnce();
+
+    const downgraded = await request(params, {
+      ...client,
+      connect: { ...client.connect, scopes: ["operator.write"] },
+    });
+    expect(downgraded).toMatchObject({
+      ok: false,
+      error: { message: "missing scope: operator.admin" },
+    });
+    expect(chatSend).toHaveBeenCalledOnce();
+
+    const differentOwner = await request(params, {
+      ...client,
+      authenticatedUserProfile: { profileId: "profile-other" },
+    });
+    expect(differentOwner.ok).toBe(true);
+    expect(differentOwner.payload?.key).not.toBe(first.payload?.key);
+    expect(chatSend).toHaveBeenCalledTimes(2);
+    expect(chatSend.mock.calls[1]?.[0].params.idempotencyKey).not.toBe(
+      chatSend.mock.calls[0]?.[0].params.idempotencyKey,
+    );
+  } finally {
+    chatSend.mockRestore();
+  }
+});
+
 test("sessions.create scopes the main alias to the requested agent", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "longmemeval" }] };

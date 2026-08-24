@@ -596,7 +596,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await openModelSelector();
       } else {
         await applySessionSetting(
-          { model: args },
+          { model: /^default$/i.test(args) ? null : args },
           (result) => {
             const resolvedModel = result.resolved?.model;
             const resolvedProvider = result.resolved?.modelProvider;
@@ -623,10 +623,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             undefined,
             state.sessionInfo.agentRuntime?.id,
           );
-        chatLog.addSystem(`usage: /think <${levels}>`);
+        chatLog.addSystem(`usage: /think <${levels}|default>`);
         return;
       }
-      await applySessionSetting({ thinkingLevel: args }, `thinking set to ${args}`, "think failed");
+      const thinkingLevel = isSessionDefaultDirectiveValue(args) ? null : args;
+      await applySessionSetting({ thinkingLevel }, `thinking set to ${args}`, "think failed");
     },
     verbose: async (args) => {
       if (!args) {
@@ -659,15 +660,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         chatLog.addSystem(`fast mode: ${formatTuiFastMode(state.sessionInfo.fastMode)}`);
         return;
       }
-      if (args !== "auto" && args !== "on" && args !== "off") {
-        chatLog.addSystem("usage: /fast <status|auto|on|off>");
+      const reset = isSessionDefaultDirectiveValue(args);
+      if (!reset && !["auto", "on", "off"].includes(args)) {
+        chatLog.addSystem("usage: /fast <status|auto|on|off|default>");
         return;
       }
-      await applySessionSetting(
-        { fastMode: args === "auto" ? "auto" : args === "on" },
-        `fast mode set to ${args}`,
-        "fast failed",
-      );
+      const fastMode = reset ? null : args === "auto" ? args : args === "on";
+      await applySessionSetting({ fastMode }, `fast mode set to ${args}`, "fast failed");
     },
     reasoning: async (args) => {
       if (!args) {
@@ -730,10 +729,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       await applySessionSetting({ responseUsage: next }, `usage footer: ${next}`, "usage failed");
     },
     elevated: async (args) => {
-      if (!args) {
-        chatLog.addSystem("usage: /elevated <on|off|ask|full>");
-        return;
-      }
       if (!["on", "off", "ask", "full"].includes(args)) {
         chatLog.addSystem("usage: /elevated <on|off|ask|full>");
         return;

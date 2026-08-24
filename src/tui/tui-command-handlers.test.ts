@@ -2061,6 +2061,56 @@ describe("tui command handlers", () => {
     expect(harness.addSystem).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { mode: "gateway", local: false, command: "/think default", field: "thinkingLevel" },
+    { mode: "gateway", local: false, command: "/fast default", field: "fastMode" },
+    { mode: "gateway", local: false, command: "/model default", field: "model" },
+    { mode: "embedded", local: true, command: "/think default", field: "thinkingLevel" },
+    { mode: "embedded", local: true, command: "/fast default", field: "fastMode" },
+    { mode: "embedded", local: true, command: "/model default", field: "model" },
+    { mode: "gateway", local: false, command: "/think inherit", field: "thinkingLevel" },
+    { mode: "embedded", local: true, command: "/fast reset", field: "fastMode" },
+    { mode: "gateway", local: false, command: "/model DEFAULT", field: "model" },
+  ])(
+    "clears the $field session override for $command in $mode mode",
+    async ({ local, command, field }) => {
+      const { handleCommand, patchSession, refreshSessionInfo } = createHarness({
+        opts: { local },
+      });
+
+      await handleCommand(command);
+
+      expect(patchSession).toHaveBeenCalledWith({
+        key: "agent:main:main",
+        [field]: null,
+      });
+      expect(refreshSessionInfo).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not treat non-default model names as session reset aliases", async () => {
+    const { handleCommand, patchSession } = createHarness();
+
+    await handleCommand("/model reset");
+
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      model: "reset",
+    });
+  });
+
+  it.each(["", "invalid"])(
+    "rejects unsupported elevated mode %j without patching",
+    async (mode) => {
+      const { handleCommand, patchSession, addSystem } = createHarness();
+
+      await handleCommand(`/elevated ${mode}`);
+
+      expect(patchSession).not.toHaveBeenCalled();
+      expect(addSystem).toHaveBeenCalledWith("usage: /elevated <on|off|ask|full>");
+    },
+  );
+
   it("uses the effective runtime for the no-arg /think usage", async () => {
     const codex = createHarness({
       sessionInfo: {

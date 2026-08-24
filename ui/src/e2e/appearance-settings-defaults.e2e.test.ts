@@ -274,8 +274,7 @@ suite.define(() => {
       await resetSyncedPreference({
         click: () =>
           themeSection
-            .locator(":scope > .settings-section__header")
-            .getByRole("button", { name: "Reset to default" })
+            .locator(".settings-theme-card--claw")
             .click()
             .then(() => undefined),
         expectedKey: "theme",
@@ -289,7 +288,7 @@ suite.define(() => {
       await resetSyncedPreference({
         click: () =>
           colorModeRow
-            .getByRole("button", { name: "Reset to default" })
+            .locator('wa-radio[value="system"]')
             .click()
             .then(() => undefined),
         expectedKey: "themeMode",
@@ -298,10 +297,7 @@ suite.define(() => {
         remainingPrefs: withoutThemeMode,
       });
 
-      await textSizeSection
-        .locator(":scope > .settings-section__header")
-        .getByRole("button", { name: "Reset to default" })
-        .click();
+      await textSizeSection.locator(".settings-text-scale__btn", { hasText: "100%" }).click();
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
 
       await resetSyncedPreference({
@@ -480,14 +476,16 @@ suite.define(() => {
       }
       await captureViewport(page, "09-accent-mint-selected.png");
 
-      await gateway.setMethodResponse(
-        "config.get",
-        configResponse({ accent: mintAccent, theme: "claw" }, "appearance-accent-3"),
-      );
-      await page.locator("#settings-appearance-theme .settings-theme-card--claw").click();
-      await waitForRequestCount(gateway, "config.patch", 2);
-      expect(patchPrefs((await gateway.getRequests("config.patch"))[1]!)).toEqual({
-        theme: "claw",
+      await resetSyncedPreference({
+        click: () =>
+          page
+            .locator("#settings-appearance-theme .settings-theme-card--claw")
+            .click()
+            .then(() => undefined),
+        expectedKey: "theme",
+        gateway,
+        hash: "appearance-accent-3",
+        remainingPrefs: { accent: mintAccent },
       });
       await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dark");
       await expect.poll(() => readAccentPresentation(page)).toMatchObject({ accent: mintAccent });
@@ -495,7 +493,7 @@ suite.define(() => {
 
       await gateway.setMethodResponse(
         "config.get",
-        configResponse({ accent: customAccent, theme: "claw" }, "appearance-accent-4"),
+        configResponse({ accent: customAccent }, "appearance-accent-4"),
       );
       await accentSection.locator('input[type="color"][data-accent-custom]').fill(customAccent);
       await waitForRequestCount(gateway, "config.patch", 3);
@@ -514,14 +512,13 @@ suite.define(() => {
       await resetSyncedPreference({
         click: () =>
           accentSection
-            .locator(":scope > .settings-section__header")
-            .getByRole("button", { name: "Reset to default" })
+            .locator('[data-accent-preset="default"]')
             .click()
             .then(() => undefined),
         expectedKey: "accent",
         gateway,
         hash: "appearance-accent-5",
-        remainingPrefs: { theme: "claw" },
+        remainingPrefs: {},
       });
       await expect
         .poll(() =>
@@ -639,10 +636,7 @@ suite.define(() => {
           .poll(() => followUpRow.textContent())
           .toContain("Stocké uniquement dans ce navigateur");
 
-        await themeSection
-          .locator(":scope > .settings-section__header")
-          .locator("button.btn--icon")
-          .click();
+        await themeSection.locator(".settings-theme-card--claw").click();
         await languageRow.locator("button.btn--icon").click();
         await followUpRow.locator("button.btn--sm").click();
 
@@ -705,10 +699,7 @@ suite.define(() => {
       await expect.poll(() => readPersistedSettings(page)).toMatchObject({ theme: "claw" });
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
-      await themeSection
-        .locator(":scope > .settings-section__header")
-        .locator("button.btn--icon")
-        .click();
+      await themeSection.locator(".settings-theme-card--knot").click();
       await expect
         .poll(() => themeSection.locator(".settings-theme-card--knot").getAttribute("aria-pressed"))
         .toBe("true");

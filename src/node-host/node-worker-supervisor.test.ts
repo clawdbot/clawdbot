@@ -219,6 +219,21 @@ describe("node worker supervisor", () => {
     await recovered.close();
   });
 
+  it("rejects a mismatched launch and turn identity before durable admission", async () => {
+    const { env, supervisor, workspaceDir } = fixture();
+    const input = launchInput(workspaceDir, "launch-id");
+    input.descriptor.assignment.turnId = "other-turn-id";
+
+    try {
+      await expect(supervisor.launch(input, TEST_WORKER_ENDPOINT)).rejects.toThrow(
+        "launchId must match descriptor assignment turnId",
+      );
+      expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)).toBeUndefined();
+    } finally {
+      await supervisor.close();
+    }
+  });
+
   it("launches idempotently and persists only bounded non-secret facts", async () => {
     const { env, supervisor, workspaceDir } = fixture();
     const input = launchInput(workspaceDir, "success-launch");
@@ -243,7 +258,7 @@ describe("node worker supervisor", () => {
       supervisor.launch(
         {
           ...input,
-          descriptor: testWorkerDescriptor(workspaceDir, "different-plan"),
+          descriptor: testWorkerDescriptor(workspaceDir, "different-plan", input.launchId),
         },
         TEST_WORKER_ENDPOINT,
       ),
