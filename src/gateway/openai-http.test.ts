@@ -508,9 +508,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
 
       {
-        // Endpoint admission is the authority boundary for target headers,
-        // same contract as /tools/invoke and the WS `agent` method: a caller
-        // without chat-send admission is rejected before any dispatch or I/O.
+        // Same authority boundary as /tools/invoke and the WS `agent` method:
+        // no chat-send admission means rejection before any dispatch or I/O.
         agentCommandMock.mockClear();
         const res = await postChatCompletions(
           port,

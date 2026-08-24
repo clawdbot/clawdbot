@@ -269,7 +269,8 @@ describe("audit event writer", () => {
       const eventLoopDelay = await new Promise<number>((resolve) => {
         setTimeout(() => resolve(performance.now() - probeStartedAt), 25);
       });
-      expect(eventLoopDelay).toBeLessThan(250);
+      // Nonblocking is ~25ms; a blocked writer rides the 5s SQLite busy timeout.
+      expect(eventLoopDelay).toBeLessThan(1000);
       await writer.ready;
       expect(writer.record({ ...input(), sourceId: "cold-owner", runId: "cold-owner" })).toBe(true);
     } finally {
@@ -384,7 +385,7 @@ describe("audit event writer", () => {
       const eventLoopDelay = await new Promise<number>((resolve) => {
         setTimeout(() => resolve(performance.now() - eventLoopProbeStartedAt), 25);
       });
-      expect(eventLoopDelay).toBeLessThan(250);
+      expect(eventLoopDelay).toBeLessThan(1000);
       expect(readSqliteBusyTimeout(db)).toBe(5_000);
       expect(
         writer.recordExecutionIdentity({

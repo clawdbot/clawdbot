@@ -413,10 +413,8 @@ async function runResponsesAgentCommand(params: {
       runId: params.runId,
       deliver: false,
       messageChannel: params.messageChannel,
-      // Routing context only — same contract as the WS `agent` method's
-      // to/accountId/threadId params: later out-of-turn deliveries (subagent
-      // completion announces) resolve a route, while the turn's own reply
-      // stays HTTP-only (deliver stays false).
+      // Routing context only, same contract as the WS `agent` to/accountId/threadId
+      // params: out-of-turn deliveries resolve a route; the reply stays HTTP-only.
       to: params.to,
       accountId: params.accountId,
       threadId: params.threadId,
