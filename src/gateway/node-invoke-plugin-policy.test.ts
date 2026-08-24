@@ -55,6 +55,10 @@ function createNodeSession(): NodeSession {
   };
 }
 
+function nodeCommandsConfig(commands: { allow?: string[]; deny?: string[] }) {
+  return { gateway: { nodes: { commands } } };
+}
+
 function createContext(opts?: {
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   getApprovalClientConnIds?: GatewayRequestContext["getApprovalClientConnIds"];
@@ -84,8 +88,7 @@ function createContext(opts?: {
   return {
     context: {
       getRuntimeConfig:
-        opts?.getRuntimeConfig ??
-        (() => ({ gateway: { nodes: { commands: { allow: [DEMO_COMMAND] } } } })),
+        opts?.getRuntimeConfig ?? (() => nodeCommandsConfig({ allow: [DEMO_COMMAND] })),
       nodeRegistry: {
         get: () => nodeSession,
         getForPairingGeneration: () => nodeSession,
@@ -291,6 +294,9 @@ describe("applyPluginNodeInvokePolicy", () => {
       isDispatchAuthorized: expect.any(Function),
       onDispatchReady: expect.any(Function),
     });
+    expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(true);
+    context.getRuntimeConfig = () => nodeCommandsConfig({ deny: [DEMO_COMMAND] });
+    expect(invoke.mock.calls[0]?.[0]?.isDispatchAuthorized?.()).toBe(false);
   });
 
   it("preserves session identity through approved dangerous streaming transport", async () => {
@@ -534,13 +540,8 @@ describe("applyPluginNodeInvokePolicy", () => {
       }),
     ]);
     const { context, invoke } = createContext({
-      getRuntimeConfig: () => ({
-        gateway: {
-          nodes: {
-            commands: allowCommand ? { allow: [DEMO_COMMAND] } : { deny: [DEMO_COMMAND] },
-          },
-        },
-      }),
+      getRuntimeConfig: () =>
+        nodeCommandsConfig(allowCommand ? { allow: [DEMO_COMMAND] } : { deny: [DEMO_COMMAND] }),
     });
 
     const result = await invokeDemoPolicy(context);
