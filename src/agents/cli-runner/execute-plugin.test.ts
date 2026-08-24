@@ -10,7 +10,10 @@ import type {
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { callGatewayTool } from "../tools/gateway.js";
-import { createCliLiveSessionCapability } from "./cli-live-session-registry.js";
+import {
+  closeCliLiveSession,
+  createCliLiveSessionCapability,
+} from "./cli-live-session-registry.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
@@ -284,6 +287,61 @@ describe("plugin-owned CLI execution host boundary", () => {
       }),
     ).resolves.toMatchObject({ reason: "exit" });
     expect(replacement.close).toHaveBeenCalledWith("restart");
+  });
+
+  it("claims prepared resources only for the original process and cleans after its exit", async () => {
+    const first = await createExecution({ runId: "plugin-prepared-resource-owner" });
+    const cleanup = vi.fn(async () => {});
+    first.context.preparedBackend.claimLiveSessionResources = vi.fn(() => cleanup);
+    const exited = createDeferred<void>();
+    let handle: CliBackendLiveSessionHandle | undefined;
+
+    await runPlugin(
+      first.context,
+      async function* (execution) {
+        const capability = execution.liveSession;
+        if (!capability) {
+          throw new Error("Expected a reusable plugin execution capability.");
+        }
+        const session: CliBackendLiveSessionHandle = {
+          generation: "prepared-resource-process",
+          fingerprint: capability.fingerprint,
+          isIdle: () => true,
+          close: vi.fn(() => capability.remove(session)),
+          waitForExit: () => exited.promise,
+        };
+        handle = session;
+        capability.register(session);
+        activeSessions.add(session);
+        yield SUCCESS_RESULT;
+      },
+      { liveSession: true },
+    );
+
+    expect(first.context.preparedBackend.claimLiveSessionResources).toHaveBeenCalledOnce();
+    expect(cleanup).not.toHaveBeenCalled();
+
+    const resumed = await createExecution({ runId: "plugin-prepared-resource-reuse" });
+    const unusedResourceClaim = vi.fn(() => vi.fn(async () => {}));
+    resumed.context.preparedBackend.claimLiveSessionResources = unusedResourceClaim;
+
+    await runPlugin(
+      resumed.context,
+      async function* (execution) {
+        expect(execution.liveSession?.current()).toBe(handle);
+        yield SUCCESS_RESULT;
+      },
+      { liveSession: true },
+    );
+
+    expect(unusedResourceClaim).not.toHaveBeenCalled();
+    const closing = closeCliLiveSession(first.context, "restart");
+    await Promise.resolve();
+    expect(cleanup).not.toHaveBeenCalled();
+
+    exited.resolve();
+    await closing;
+    expect(cleanup).toHaveBeenCalledOnce();
   });
 
   it("applies restrictive session policy even when global policy permits execution", async () => {

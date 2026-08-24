@@ -92,8 +92,7 @@ export async function closeCliLiveSession(
   // close removes its registry record synchronously; retain the private record
   // until its original child exits and process-owned artifacts finish cleanup.
   record.handle.close(reason);
-  await record.handle.waitForExit();
-  await record.cleanupPromise;
+  await (record.cleanupPromise ?? record.handle.waitForExit());
 }
 
 function ensureCliLiveSessionCapacity(context: PreparedCliRunContext): void {

@@ -294,6 +294,8 @@ type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Transfer process-owned native skill artifacts without claiming turn-scoped MCP/auth state. */
+  claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
   /** Plugin-owned transport bound to this exact prepared local run. */
   execute?: CliBackendExecute;
   /** Private child-only credential transport; never serialized into env or public plugin state. */
@@ -353,7 +355,7 @@ export type PreparedCliRunContext = {
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
-  claudeSkillsPluginArgs?: string[] | undefined;
+  claudeSkillsPluginArgs: string[];
   bootstrapPromptWarningLines: string[];
   openClawHistoryPrompt?: string;
   heartbeatPrompt?: string;

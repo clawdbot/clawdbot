@@ -23,7 +23,6 @@ import {
 import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
-import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
   acceptsCliLiveSession,
   buildCliLiveOwnerKey,
@@ -64,7 +63,6 @@ import {
   LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV,
 } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
-import { buildCliBackendToolAvailability } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 function normalizeCliBackendThinkingLevel(
@@ -204,19 +202,10 @@ export async function executePreparedCliRun(
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
     : baseArgs;
-  const fallbackClaudeSkillsPlugin =
-    !nodePlacement && context.claudeSkillsPluginArgs === undefined
-      ? await prepareClaudeCliSkillsPlugin({
-          backendId: context.backendResolved.id,
-          skillsSnapshot: params.skillsSnapshot,
-        })
-      : undefined;
-  let fallbackClaudeSkillsPluginCleanupOwned = false;
-  const claudeSkillsPluginArgs = nodePlacement
-    ? []
-    : (context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? []);
   const baseArgsWithSkills =
-    claudeSkillsPluginArgs.length > 0 ? [...resolvedArgs, ...claudeSkillsPluginArgs] : resolvedArgs;
+    !nodePlacement && context.claudeSkillsPluginArgs.length > 0
+      ? [...resolvedArgs, ...context.claudeSkillsPluginArgs]
+      : resolvedArgs;
   const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
     config: params.config,
     workspaceDir: context.workspaceDir,
@@ -227,13 +216,10 @@ export async function executePreparedCliRun(
     executionMode: params.executionMode ?? "agent",
     // Node runs project the native subset only: gateway-loopback MCP tools do
     // not exist on the node, and auto-approval must not cross that boundary.
-    toolAvailability: params.cliToolAvailability
-      ? buildCliBackendToolAvailability(
-          nodePlacement
-            ? { native: params.cliToolAvailability.native, openClaw: [] }
-            : params.cliToolAvailability,
-        )
-      : undefined,
+    toolAvailability:
+      params.cliToolAvailability && nodePlacement
+        ? { native: params.cliToolAvailability.native, openClaw: [] }
+        : params.cliToolAvailability,
     useResume,
     baseArgs: baseArgsWithSkills,
   });
@@ -578,12 +564,6 @@ export async function executePreparedCliRun(
         outputMode,
         logOutputText,
         cliTurnStartedAt,
-        claimLiveSessionResources: fallbackClaudeSkillsPlugin?.cleanup
-          ? () => {
-              fallbackClaudeSkillsPluginCleanupOwned = true;
-              return fallbackClaudeSkillsPlugin.cleanup;
-            }
-          : undefined,
         observeForkSuccessor,
         options,
       });
@@ -667,9 +647,6 @@ export async function executePreparedCliRun(
     throw failure;
   } finally {
     try {
-      if (!fallbackClaudeSkillsPluginCleanupOwned) {
-        await cleanupOuterResource(fallbackClaudeSkillsPlugin?.cleanup);
-      }
       await cleanupOuterResource(systemPromptFile?.cleanup);
       await cleanupOuterResource(imagePayload.cleanupImages);
     } catch (error) {

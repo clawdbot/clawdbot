@@ -23,9 +23,7 @@ import {
   startDiagnosticRunActivityTracking,
 } from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
-import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
-  buildClaudeLiveRunContext,
   buildPreparedCliRunContext,
   captureModelCallDiagnostics,
   expectPathMissing,
@@ -235,7 +233,7 @@ describe("runCliAgent spawn path", () => {
       writeCliSystemPromptFile: writeSystemPrompt,
       invokeNodeClaudeCliRun: invokeNode,
     });
-    const context = buildClaudeLiveRunContext({
+    const context = buildPreparedCliRunContext({
       model: "claude-opus-4-8",
       runId: "run-node-claude",
       prompt: "current turn",
@@ -303,7 +301,7 @@ describe("runCliAgent spawn path", () => {
     expect(output).toMatchObject({ text: "node answer", sessionId: "forked-node-session" });
     // Node runs keep the gateway's native tool policy; loopback MCP tools do
     // not exist on the node so the OpenClaw list is projected empty.
-    expect(toolAvailability).toEqual({ native: [], openClaw: [], mcp: [] });
+    expect(toolAvailability).toEqual({ native: [], openClaw: [] });
     expect(writeSystemPrompt).not.toHaveBeenCalled();
     expect(supervisorSpawnMock).not.toHaveBeenCalled();
     expect(invokeNode).toHaveBeenCalledWith(
@@ -361,7 +359,7 @@ describe("runCliAgent spawn path", () => {
         };
       });
       setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
-      const context = buildClaudeLiveRunContext({
+      const context = buildPreparedCliRunContext({
         model: "claude-fable-5",
         runId: `run-node-context-${testCase.selection}`,
         sessionEntry: {
@@ -410,7 +408,7 @@ describe("runCliAgent spawn path", () => {
       };
     });
     setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
-    const context = buildClaudeLiveRunContext({
+    const context = buildPreparedCliRunContext({
       model: "claude-opus-4-8",
       runId: "run-node-synthetic-empty",
       prompt: "current turn",
@@ -443,7 +441,7 @@ describe("runCliAgent spawn path", () => {
       };
     });
     setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
-    const context = buildClaudeLiveRunContext({
+    const context = buildPreparedCliRunContext({
       model: "claude-opus-4-8",
       prompt: "current turn",
       sessionEntry: {
@@ -760,52 +758,15 @@ describe("runCliAgent spawn path", () => {
       }),
     );
 
-    const backendConfig = {
-      command: "claude",
-      args: ["-p", "--output-format", "stream-json"],
-      output: "jsonl" as const,
-      input: "stdin" as const,
-      modelArg: "--model",
-      sessionArgs: ["--session-id", "{sessionId}"],
-      systemPromptArg: "--append-system-prompt",
-      systemPromptWhen: "first" as const,
-      serialize: true,
-    };
-    const context: PreparedCliRunContext = {
-      params: {
-        admittedRunContext: createTestAdmittedRunContext("run-no-tools-disabled"),
-        sessionId: "s1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        prompt: "Run: node script.mjs",
-        provider: "claude-cli",
-        model: "sonnet",
-        timeoutMs: 1_000,
-        runId: "run-no-tools-disabled",
-        extraSystemPrompt: "You are a helpful assistant.",
+    const context = buildPreparedCliRunContext({
+      runId: "run-no-tools-disabled",
+      prompt: "Run: node script.mjs",
+      backend: {
+        systemPromptArg: "--append-system-prompt",
+        systemPromptFileArg: undefined,
       },
-      started: Date.now(),
-      workspaceDir: "/tmp",
-      backendResolved: {
-        id: "claude-cli",
-        config: backendConfig,
-        bundleMcp: true,
-        pluginId: "anthropic",
-      },
-      preparedBackend: {
-        backend: backendConfig,
-        env: {},
-      },
-      reusableCliSession: { mode: "none" },
-      hadSessionFile: false,
-      contextEngineConfig: {},
-      modelId: "sonnet",
-      normalizedModel: "sonnet",
-      systemPrompt: "You are a helpful assistant.",
-      systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-      bootstrapPromptWarningLines: [],
-      authEpochVersion: 2,
-    };
+    });
+    context.params.extraSystemPrompt = "You are a helpful assistant.";
     await executePreparedCliRun(context);
 
     const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
@@ -1294,10 +1255,7 @@ describe("runCliAgent spawn path", () => {
 
     expect(resolveExecutionArgs).toHaveBeenCalledWith(
       expect.objectContaining({
-        toolAvailability: {
-          ...toolAvailability,
-          mcp: ["mcp__openclaw__openclaw"],
-        },
+        toolAvailability,
       }),
     );
   });
@@ -1616,86 +1574,6 @@ describe("runCliAgent spawn path", () => {
       expect(input.argv?.[0]).toBe(await fs.realpath(executable));
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("passes OpenClaw skills to Claude as a session plugin", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-skills-"));
-    const skillDir = path.join(workspaceDir, "skills", "weather");
-    await fs.mkdir(skillDir, { recursive: true });
-    await fs.writeFile(
-      path.join(skillDir, "SKILL.md"),
-      [
-        "---",
-        "name: weather",
-        "description: Use weather tools for forecasts.",
-        "---",
-        "",
-        "Read forecast data before replying.",
-      ].join("\n"),
-      "utf-8",
-    );
-
-    let pluginDir = "";
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = (args[0] ?? {}) as { argv?: string[] };
-      pluginDir = requireArgAfter(input.argv, "--plugin-dir");
-      const manifest = JSON.parse(
-        await fs.readFile(path.join(pluginDir, ".claude-plugin", "plugin.json"), "utf-8"),
-      ) as { name?: string; skills?: string };
-      expect(manifest.name).toBe("openclaw-skills");
-      expect(manifest.skills).toBe("./skills");
-      await expect(
-        fs.readFile(path.join(pluginDir, "skills", "weather", "SKILL.md"), "utf-8"),
-      ).resolves.toContain("Read forecast data before replying.");
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: CLAUDE_OK_JSONL,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
-    });
-
-    try {
-      await executePreparedCliRun(
-        buildPreparedCliRunContext({
-          workspaceDir,
-          skillsSnapshot: {
-            prompt: "",
-            skills: [{ name: "weather" }],
-            resolvedSkills: [
-              {
-                name: "weather",
-                description: "Use weather tools for forecasts.",
-                filePath: path.join(skillDir, "SKILL.md"),
-                baseDir: skillDir,
-                source: "test",
-                sourceInfo: {
-                  path: skillDir,
-                  source: "test",
-                  scope: "project",
-                  origin: "top-level",
-                  baseDir: skillDir,
-                },
-                disableModelInvocation: false,
-              },
-            ],
-          },
-        }),
-      );
-      let accessError: unknown;
-      try {
-        await fs.access(pluginDir);
-      } catch (error) {
-        accessError = error;
-      }
-      expect((accessError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 

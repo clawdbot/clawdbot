@@ -22,13 +22,11 @@ OpenClaw detects the available Anthropic credential and selects the matching usa
 Admin API cost history comes from Anthropic's [Usage and Cost API](https://platform.claude.com/docs/en/manage-claude/usage-cost-api). It is actual provider billing, separate from OpenClaw's session-derived estimated cost.
 
 <Warning>
-For an existing local Claude Code login, OpenClaw's Claude CLI backend uses
-Anthropic's official Agent SDK to run the installed Claude Code executable.
-Claude Code keeps ownership of its existing login and subscription; OpenClaw
-does not extract that login or synthesize Anthropic API requests. SDK and
-`claude -p` usage currently draw from the signed-in subscription's limits.
-API-key auth uses separate pay-as-you-go billing and is preferable for shared
-automation or predictable production spend.
+Claude Code owns its existing login and subscription; OpenClaw does not extract
+that login or synthesize Anthropic API requests. Agent SDK and `claude -p`
+usage currently draw from the signed-in subscription's limits. API-key auth
+uses separate pay-as-you-go billing and is preferable for shared automation or
+predictable production spend.
 
 Anthropic's current support articles can change this behavior without an
 OpenClaw release:
@@ -176,11 +174,8 @@ OpenClaw release:
 
     ### Billing and `claude -p`
 
-    OpenClaw runs the authenticated Claude Code executable through Anthropic's
-    official Agent SDK when it can reuse the local login. Non-native API-key
-    and token credentials retain the compatible non-interactive CLI path.
-    Anthropic
-    currently treats both as Agent SDK/programmatic usage:
+    Anthropic currently treats Agent SDK and non-interactive CLI invocations as
+    programmatic usage:
 
     - Anthropic's June 15, 2026 support update paused the previously announced
       separate Agent SDK credit plan.

@@ -22,7 +22,6 @@ import {
 } from "./cli-live-session-registry.js";
 import { createCliAbortError } from "./execute-node-claude.js";
 import { resolveCliNoOutputTimeoutDecision } from "./no-output-timeout-policy.js";
-import { buildCliBackendToolAvailability } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS = 5_000;
@@ -184,7 +183,6 @@ export async function executePluginOwnedProcess(params: {
     captureKey?: string;
     beginCapture: (captureKey: string | undefined) => void;
     requiredGeneration?: string;
-    claimResources?: () => (() => Promise<void>) | undefined;
   };
 }): Promise<RunExit> {
   const run = params.context.params;
@@ -305,9 +303,7 @@ export async function executePluginOwnedProcess(params: {
         abortSignal: signal,
         timeoutMs: run.timeoutMs,
         ...(run.executionMode ? { executionMode: run.executionMode } : {}),
-        ...(run.cliToolAvailability
-          ? { toolAvailability: buildCliBackendToolAvailability(run.cliToolAvailability) }
-          : {}),
+        ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
         ...(params.liveSession
           ? {
               liveSession: createCliLiveSessionCapability({
@@ -318,7 +314,7 @@ export async function executePluginOwnedProcess(params: {
                 beginCapture: params.liveSession.beginCapture,
                 abortSignal: signal,
                 requiredGeneration: params.liveSession.requiredGeneration,
-                claimResources: params.liveSession.claimResources,
+                claimResources: params.context.preparedBackend.claimLiveSessionResources,
               }),
             }
           : {}),

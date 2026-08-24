@@ -67,6 +67,7 @@ import {
 } from "../media-generation-task-status.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
+import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -3578,7 +3579,7 @@ describe("prepareCliRunContext", () => {
       "did not enforce exact per-run tool availability during execution preparation",
     );
     expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ toolAvailability: { native: [], openClaw: [], mcp: [] } }),
+      expect.objectContaining({ toolAvailability: { native: [], openClaw: [] } }),
     );
     expect(cleanup).toHaveBeenCalledOnce();
   });
@@ -3736,7 +3737,7 @@ describe("prepareCliRunContext", () => {
 
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({
-        toolAvailability: { native: ["Read"], openClaw: [], mcp: [] },
+        toolAvailability: { native: ["Read"], openClaw: [] },
       }),
     );
     expect(context.params.cliToolAvailability).toEqual({ native: ["Read"], openClaw: [] });
@@ -3853,7 +3854,7 @@ describe("prepareCliRunContext", () => {
       });
       expect(prepareExecution).toHaveBeenCalledWith(
         expect.objectContaining({
-          toolAvailability: { native: [], openClaw: ["read"], mcp: ["mcp__openclaw__read"] },
+          toolAvailability: { native: [], openClaw: ["read"] },
         }),
       );
       expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.toolsAllow).toEqual(["read"]);
@@ -4751,6 +4752,40 @@ describe("prepareCliRunContext", () => {
         path.join(dir, "openclaw-skills"),
       ]);
     }
+  });
+
+  it("keeps materialized native skills until their claimed live process exits", async () => {
+    const { dir } = fixture.session;
+    const skill = createWeatherSkillFixture(dir, true);
+    setCliBackendForPrepareTest({ id: "claude-cli", pluginId: "anthropic" });
+    setCliRunnerPrepareTestDeps({ prepareClaudeCliSkillsPlugin });
+
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      model: "opus",
+      skillsSnapshot: skill.snapshot,
+    });
+    const pluginDir = context.claudeSkillsPluginArgs[1];
+    if (!pluginDir) {
+      throw new Error("Expected materialized skill plugin");
+    }
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(pluginDir, ".claude-plugin", "plugin.json"), "utf8"),
+    );
+    expect(manifest).toMatchObject({ name: "openclaw-skills", skills: "./skills" });
+    const skillPath = path.join(pluginDir, "skills", "weather", "SKILL.md");
+    expect(fs.readFileSync(skillPath, "utf8")).toContain("Read forecast data before replying.");
+
+    const releaseSkills = context.preparedBackend.claimLiveSessionResources?.();
+    expect(releaseSkills).toEqual(expect.any(Function));
+    expect(context.preparedBackend.claimLiveSessionResources?.()).toBeUndefined();
+    try {
+      await context.preparedBackend.cleanup?.();
+      expect(fs.existsSync(skillPath)).toBe(true);
+    } finally {
+      await releaseSkills?.();
+    }
+    expect(fs.existsSync(pluginDir)).toBe(false);
   });
 
   it("does not probe the transcript for non-claude-cli providers", async () => {

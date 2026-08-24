@@ -268,6 +268,7 @@ describe("generic plugin-owned live session registry", () => {
     await closing;
 
     expect(owner.session.close).toHaveBeenCalledWith("restart");
+    expect(owner.session.waitForExit).toHaveBeenCalledOnce();
     expect(cleanup).toHaveBeenCalledOnce();
   });
 

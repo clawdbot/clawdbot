@@ -243,6 +243,7 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
+    claudeSkillsPluginArgs: [],
     ...(params?.openClawHistoryPrompt
       ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
       : {}),

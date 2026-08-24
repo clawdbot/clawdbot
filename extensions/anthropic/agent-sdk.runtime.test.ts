@@ -201,7 +201,6 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       toolAvailability: {
         native: ["Bash"],
         openClaw: ["message"],
-        mcp: ["mcp__openclaw__message"],
       },
     });
     const gatewayToolsOnly = backend.prepareExecution?.({
@@ -209,7 +208,6 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       toolAvailability: {
         native: [],
         openClaw: ["message"],
-        mcp: ["mcp__openclaw__message"],
       },
     });
 
@@ -245,20 +243,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(sdkOptions().env).not.toHaveProperty("ANTHROPIC_OAUTH_TOKEN");
     expect(sdkOptions().env).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
 
-    const prompt = queryMock.mock.calls[0]?.[0]?.prompt as AsyncIterable<unknown>;
-    const messages: unknown[] = [];
-    for await (const message of prompt) {
-      messages.push(message);
-    }
-    expect(messages).toEqual([
-      {
-        type: "user",
-        message: { role: "user", content: "Remember the launch code." },
-        parent_tool_use_id: null,
-        uuid: expect.any(String),
-        session_id: SESSION_ID,
-      },
-    ]);
+    expect(queryMock.mock.calls[0]?.[0]?.prompt).toBe("Remember the launch code.");
   });
 
   it("preserves native session identity across fresh and resumed turns", async () => {
@@ -469,7 +454,6 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       toolAvailability: {
         native: [],
         openClaw: ["message"],
-        mcp: ["mcp__openclaw__message"],
       },
     });
 
@@ -503,7 +487,6 @@ describe("Anthropic Agent SDK runtime ownership", () => {
         toolAvailability: {
           native: [],
           openClaw: ["message", "memory_search"],
-          mcp: ["mcp__openclaw__message", "mcp__openclaw__memory_search"],
         },
       }),
     );

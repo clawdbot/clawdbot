@@ -94,6 +94,7 @@ function createRunContext(params: {
     normalizedModel: "test-model",
     systemPrompt: "system",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
+    claudeSkillsPluginArgs: [],
     bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
   };

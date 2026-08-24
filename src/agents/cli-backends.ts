@@ -120,27 +120,6 @@ function normalizeBundleMcpMode(
   return mode ?? "claude-config-file";
 }
 
-function resolveToolAvailabilityEnforcement(
-  backend: Pick<
-    CliBackendPlugin,
-    "nativeToolMode" | "resolveExecutionArgs" | "toolAvailabilityEnforcement"
-  > & { builtWithOpenClawVersion?: string },
-): CliBackendToolAvailabilityEnforcement | undefined {
-  if (backend.toolAvailabilityEnforcement) {
-    return backend.toolAvailabilityEnforcement;
-  }
-  // v2026.7.2-beta.1 through .3 made selectable + resolveExecutionArgs the
-  // public enforcement contract. Require matching package build provenance so
-  // a new no-op hook cannot be mistaken for that shipped SDK path.
-  const builtWith = backend.builtWithOpenClawVersion?.replace(/^v/u, "");
-  const isShippedBetaContract = /^2026\.7\.2-beta\.[123]$/u.test(builtWith ?? "");
-  return isShippedBetaContract &&
-    backend.nativeToolMode === "selectable" &&
-    backend.resolveExecutionArgs
-    ? "execution-args"
-    : undefined;
-}
-
 function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
   const entry = cliBackendsDeps.resolvePluginSetupCliBackend({
     backend: provider,
@@ -414,7 +393,7 @@ export function resolveCliBackendConfig(
       resolveExecutionArgs: registered.resolveExecutionArgs,
       resolveModelId: registered.resolveModelId,
       parseJsonlEvent: registered.parseJsonlEvent,
-      toolAvailabilityEnforcement: resolveToolAvailabilityEnforcement(registered),
+      toolAvailabilityEnforcement: registered.toolAvailabilityEnforcement,
       nativeToolMode: registered.nativeToolMode,
       sideQuestionToolMode: registered.sideQuestionToolMode,
       runtimeArtifact: registered.runtimeArtifact,

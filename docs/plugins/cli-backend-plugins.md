@@ -309,16 +309,6 @@ Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
 OpenClaw before this contract is built. Native tools are disabled, and a
 backend without a complete declared enforcement path fails before execution.
 
-Plugins built against `v2026.7.2-beta.1` through `v2026.7.2-beta.3` may still
-read the deprecated `ctx.toolAvailability.mcp` transport-name projection and
-may omit `toolAvailabilityEnforcement` when a selectable backend implements
-`resolveExecutionArgs`. OpenClaw recognizes that shipped beta path from the
-plugin package's required `openclaw.build.openclawVersion` metadata and
-preserves it through the `2026.8.x` line. New and updated plugins should use canonical
-`ctx.toolAvailability.openClaw` names and declare
-`toolAvailabilityEnforcement: "execution-args"` explicitly; the beta
-compatibility path is scheduled for removal after that window.
-
 ### `parseJsonlEvent`: provider-specific JSONL streams
 
 Set `parseJsonlEvent` when a backend emits line-delimited JSON that does not

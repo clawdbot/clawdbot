@@ -9,12 +9,7 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticEventPrivateData,
 } from "../infra/diagnostic-events.js";
-import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
-import { saveExecApprovals } from "../infra/exec-approvals-store.js";
-import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
@@ -111,7 +106,7 @@ export function buildDefaultTestCliBackend(
   };
 }
 
-export type PreparedCliRunContextOverrides = {
+type PreparedCliRunContextOverrides = {
   provider?: CliProvider;
   model?: string;
   runId?: string;
@@ -249,15 +244,9 @@ export function buildPreparedCliRunContext(
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
+    claudeSkillsPluginArgs: [],
     ...(overrides.mcpDeliveryCapture ? { mcpDeliveryCapture: true } : {}),
   };
-}
-
-export function buildClaudeLiveRunContext(overrides: PreparedCliRunContextOverrides = {}) {
-  return buildPreparedCliRunContext({
-    ...overrides,
-    backend: { ...overrides.backend, liveSession: "claude-stdio" },
-  });
 }
 
 export function requireArgAfter(argv: string[] | undefined, flag: string): string {
@@ -319,34 +308,6 @@ export async function expectPathMissing(targetPath: string) {
     return;
   }
   throw new Error(`expected ${targetPath} to be missing`);
-}
-
-export async function withTempExecApprovalsState(
-  file: Record<string, unknown>,
-  run: () => Promise<void>,
-) {
-  const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-exec-approvals-"));
-  const stateDir = path.join(home, ".openclaw");
-  try {
-    await withEnvAsync({ HOME: home, OPENCLAW_STATE_DIR: stateDir }, async () => {
-      execApprovalsStoreTesting.reset();
-      saveExecApprovals(file as ExecApprovalsFile);
-      await run();
-    });
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    execApprovalsStoreTesting.reset();
-    await fs.promises.rm(home, { recursive: true, force: true });
-  }
-}
-
-export async function withTempOpenClawHome(run: (home: string) => Promise<void>) {
-  const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-home-"));
-  try {
-    await withEnvAsync({ OPENCLAW_HOME: home }, async () => run(home));
-  } finally {
-    await fs.promises.rm(home, { recursive: true, force: true });
-  }
 }
 
 type PrepareCliRun = (params: RunCliAgentParams) => Promise<PreparedCliRunContext>;

@@ -146,7 +146,6 @@ import {
   loadCliSessionReseedMessages,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
-import { buildCliBackendToolAvailability } from "./tool-policy.js";
 import type {
   CliReusableSession,
   CliSecretInput,
@@ -1340,9 +1339,7 @@ export async function prepareCliRunContext(
       thinkingLevel: params.thinkLevel === "ultra" ? "max" : params.thinkLevel,
       authProfileId: effectiveAuthProfileId,
       executionMode,
-      toolAvailability: params.cliToolAvailability
-        ? buildCliBackendToolAvailability(params.cliToolAvailability)
-        : undefined,
+      toolAvailability: params.cliToolAvailability,
       env: preparedBackend.env,
     } satisfies Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
     const privatePrepareExecutionContext = params.isolatedCompletion
@@ -1451,11 +1448,24 @@ export async function prepareCliRunContext(
             backendId: backendResolved.id,
             skillsSnapshot: params.skillsSnapshot,
           });
+    let claudeSkillsPluginClaimed = false;
+    const claimLiveSessionResources =
+      claudeSkillsPlugin.args.length > 0
+        ? () => {
+            if (claudeSkillsPluginClaimed) {
+              return undefined;
+            }
+            claudeSkillsPluginClaimed = true;
+            return claudeSkillsPlugin.cleanup;
+          }
+        : undefined;
     const preparedCleanup =
       preparedBackendCleanup || claudeSkillsPlugin.args.length > 0
         ? async () => {
             try {
-              await claudeSkillsPlugin.cleanup();
+              if (!claudeSkillsPluginClaimed) {
+                await claudeSkillsPlugin.cleanup();
+              }
             } finally {
               await preparedBackendCleanup?.();
             }
@@ -1493,6 +1503,7 @@ export async function prepareCliRunContext(
       ...(preparedBackendBeforeExecution
         ? { beforeExecution: preparedBackendBeforeExecution }
         : {}),
+      ...(claimLiveSessionResources ? { claimLiveSessionResources } : {}),
       ...(preparedExecution?.execute ? { execute: preparedExecution.execute } : {}),
       ...(preparedExecution?.secretInput ? { secretInput: preparedExecution.secretInput } : {}),
       ...(mcpClientGrantCapture ? { mcpClientGrantCapture } : {}),

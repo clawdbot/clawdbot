@@ -91,7 +91,6 @@ export async function executeCliProcess(params: {
   outputMode: CliBackendConfig["output"];
   logOutputText: boolean;
   cliTurnStartedAt: number;
-  claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
   observeForkSuccessor: (sessionId: string) => void;
   options?: ExecuteCliProcessOptions;
 }): Promise<CliOutput> {
@@ -219,7 +218,6 @@ export async function executeCliProcess(params: {
               requiredGeneration: params.cliSessionIdToUse
                 ? context.requiredClaudeLiveSessionGeneration
                 : undefined,
-              claimResources: params.claimLiveSessionResources,
             },
           }
         : {}),

@@ -56,6 +56,9 @@ const RESULT_HOLDING_BACKGROUND_TASK_TYPES = new Set(["local_agent", "local_work
 type ClaudeAgentSdkTurn = {
   context: CliBackendExecuteContext;
   controller: AbortController;
+};
+
+type ClaudeAgentSdkLiveTurn = ClaudeAgentSdkTurn & {
   events: PassThrough;
   sawTerminalResult: boolean;
   error?: Error;
@@ -66,7 +69,7 @@ type ClaudeAgentSdkSession = {
   capability: CliBackendLiveSessionCapability;
   controller: AbortController;
   prompts: PassThrough;
-  currentTurn?: ClaudeAgentSdkTurn;
+  currentTurn?: ClaudeAgentSdkLiveTurn;
   query?: ClaudeAgentSdkQuery;
   idleTimer?: ReturnType<typeof setTimeout>;
   hasResultHoldingBackgroundTasks: boolean;
@@ -82,22 +85,6 @@ function splitClaudeToolNames(value: string): string[] {
     .split(",")
     .map((name) => name.trim())
     .filter(Boolean);
-}
-
-function consumeClaudeOptionValue(params: {
-  args: readonly string[];
-  index: number;
-  inlineValue: string | undefined;
-  name: string;
-}): { value: string; index: number } {
-  if (params.inlineValue !== undefined) {
-    return { value: params.inlineValue, index: params.index };
-  }
-  const value = params.args[params.index + 1];
-  if (value === undefined) {
-    throw new Error(`Claude Agent SDK cannot preserve ${params.name} without its value`);
-  }
-  return { value, index: params.index + 1 };
 }
 
 async function authorizeClaudeAgentSdkTool(params: {
@@ -221,21 +208,18 @@ function resolveClaudeAgentSdkOptions(
     if (CLAUDE_STREAM_PROTOCOL_FLAGS.has(argument)) {
       continue;
     }
-    const consumed = CLAUDE_VALUE_FLAGS.has(argument)
-      ? consumeClaudeOptionValue({
-          args: context.args,
-          index,
-          inlineValue,
-          name: argument,
-        })
-      : undefined;
-    if (consumed) {
-      index = consumed.index;
+    let value = inlineValue ?? "";
+    if (CLAUDE_VALUE_FLAGS.has(argument) && inlineValue === undefined) {
+      const next = context.args[index + 1];
+      if (next === undefined) {
+        throw new Error(`Claude Agent SDK cannot preserve ${argument} without its value`);
+      }
+      value = next;
+      index += 1;
     }
     if (CLAUDE_STREAM_PROTOCOL_VALUE_FLAGS.has(argument)) {
       continue;
     }
-    const value = consumed?.value ?? "";
 
     switch (argument) {
       case "--setting-sources": {
@@ -452,12 +436,12 @@ function acceptClaudeAgentSdkMessage(
   }
 }
 
-async function consumeClaudeAgentSdkSession(session: ClaudeAgentSdkSession): Promise<void> {
+async function consumeClaudeAgentSdkSession(
+  session: ClaudeAgentSdkSession,
+  query: ClaudeAgentSdkQuery,
+): Promise<void> {
   try {
-    if (!session.query) {
-      throw new Error("Claude Agent SDK live session started without a query.");
-    }
-    for await (const message of session.query) {
+    for await (const message of query) {
       acceptClaudeAgentSdkMessage(session, { ...message });
     }
     if (!session.closed) {
@@ -527,7 +511,7 @@ async function* executeClaudeAgentSdkLiveTurn(
   }
   clearTimeout(session.idleTimer);
 
-  const turn: ClaudeAgentSdkTurn = {
+  const turn: ClaudeAgentSdkLiveTurn = {
     context,
     controller: new AbortController(),
     events: new PassThrough({ objectMode: true }),
@@ -553,7 +537,7 @@ async function* executeClaudeAgentSdkLiveTurn(
         () => session.currentTurn,
       );
       session.query = query({ prompt: session.prompts, options });
-      void consumeClaudeAgentSdkSession(session);
+      void consumeClaudeAgentSdkSession(session, session.query);
     }
     if (session.closed || session.currentTurn !== turn) {
       throw new Error("Claude Agent SDK live session closed before its prompt was accepted.");
@@ -561,9 +545,6 @@ async function* executeClaudeAgentSdkLiveTurn(
     session.prompts.write(createClaudeAgentSdkUserMessage(context));
 
     for await (const record of turn.events) {
-      if (!isRecord(record)) {
-        throw new Error("Claude Agent SDK live session returned an invalid stream record.");
-      }
       yield record;
     }
     if (turn.error) {
@@ -592,13 +573,11 @@ export const executeClaudeAgentSdk: CliBackendExecute = async function* (context
 
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
   const controller = new AbortController();
-  const turn: ClaudeAgentSdkTurn = {
+  let activeTurn: ClaudeAgentSdkTurn | undefined = {
     context,
     controller,
-    events: new PassThrough({ objectMode: true }),
-    sawTerminalResult: false,
   };
-  let activeTurn: ClaudeAgentSdkTurn | undefined = turn;
+  let sawTerminalResult = false;
   const abort = () => controller.abort();
   context.abortSignal?.addEventListener("abort", abort, { once: true });
   if (context.abortSignal?.aborted) {
@@ -607,16 +586,13 @@ export const executeClaudeAgentSdk: CliBackendExecute = async function* (context
 
   try {
     const options = resolveClaudeAgentSdkOptions(context, controller, () => activeTurn);
-    const prompt = (async function* (): AsyncIterable<ClaudeAgentSdkUserMessage> {
-      yield createClaudeAgentSdkUserMessage(context);
-    })();
-    for await (const message of query({ prompt, options })) {
+    for await (const message of query({ prompt: context.prompt, options })) {
       if (message.type === "result") {
-        turn.sawTerminalResult = true;
+        sawTerminalResult = true;
       }
       yield { ...message };
     }
-    if (!turn.sawTerminalResult && !controller.signal.aborted) {
+    if (!sawTerminalResult && !controller.signal.aborted) {
       throw new Error("Claude Agent SDK exited without a terminal result.");
     }
   } finally {

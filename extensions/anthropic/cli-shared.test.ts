@@ -311,7 +311,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
         toolAvailability: {
           native: [],
           openClaw: ["openclaw"],
-          mcp: ["mcp__openclaw__openclaw"],
         },
       }),
     ).toEqual([
@@ -387,7 +386,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
         toolAvailability: {
           native: [],
           openClaw: ["message"],
-          mcp: ["mcp__openclaw__message"],
         },
       }),
     ).toEqual([
@@ -451,7 +449,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
           "--disallowedTools",
           "mcp__other__*",
         ],
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
       }),
     ).toEqual([
       "-p",
