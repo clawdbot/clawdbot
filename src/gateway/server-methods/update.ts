@@ -283,6 +283,8 @@ export const updateHandlers: GatewayRequestHandlers = {
         : gatewayUpdateCampaign.adopt(explicitDevTarget);
       if (adoption?.status === "mismatch") {
         targetFailureReason = "update-target-campaign-mismatch";
+      } else if (adoption?.status === "applying") {
+        targetFailureReason = "update-campaign-applying";
       }
       const adoptedCampaign = adoption?.status === "adopted" ? adoption : undefined;
       adoptedCampaignId = adoptedCampaign?.campaignId;

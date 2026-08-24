@@ -17,6 +17,7 @@ type UpdateCampaignTarget = NonNullable<UpdateScheduleState["target"]>;
 
 type UpdateCampaignAdoptionResult =
   | { status: "absent" }
+  | { status: "applying" }
   | { status: "mismatch" }
   | { status: "adopted"; campaignId: string; target: UpdateCampaignTarget };
 
@@ -106,8 +107,11 @@ export class UpdateCampaignController {
   adopt(expectedTarget?: TrackedDevUpdateTarget): UpdateCampaignAdoptionResult {
     const campaign = this.campaign;
     const target = this.target;
-    if (!campaign || !target || campaign.state === "applying") {
+    if (!campaign || !target) {
       return { status: "absent" };
+    }
+    if (campaign.state === "applying") {
+      return { status: "applying" };
     }
     if (
       expectedTarget &&

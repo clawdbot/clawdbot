@@ -514,6 +514,29 @@ describe("update.run campaign ownership", () => {
       adoptCampaignMock.mockReturnValue({ status: "absent" });
     });
 
+    it.each([
+      { name: "matching", campaignSha: requestTarget.upstreamSha },
+      { name: "conflicting", campaignSha: newerUpstreamSha },
+    ])(
+      "rejects a $name explicit target while its campaign is applying",
+      async ({ campaignSha }) => {
+        setDevCampaignSchedule(campaignSha);
+        mockGitInstallStatus(campaignSha);
+        detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+        adoptCampaignMock.mockReturnValueOnce({ status: "applying" });
+
+        const response = await captureUpdateRun({ target: requestTarget });
+
+        expect(response).toMatchObject({
+          ok: false,
+          result: { status: "error", reason: "update-campaign-applying" },
+        });
+        expect(adoptCampaignMock).toHaveBeenCalledWith(trackedTarget);
+        expectNoUpdateMutation();
+        expect(clearCampaignMock).not.toHaveBeenCalled();
+      },
+    );
+
     it("keeps the requested commit through managed preflight and handoff after upstream advances", async () => {
       detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
       mockGitInstallStatus(newerUpstreamSha);
@@ -634,7 +657,7 @@ describe("update.run campaign ownership", () => {
     });
   });
 
-  it("does not clear a campaign that update.run did not adopt", async () => {
+  it("continues without an explicit target when no campaign can be adopted", async () => {
     setDevCampaignSchedule();
     adoptCampaignMock.mockReturnValueOnce({ status: "absent" });
 
@@ -645,6 +668,21 @@ describe("update.run campaign ownership", () => {
     expect(runGatewayUpdateMock).toHaveBeenCalledWith(
       expect.not.objectContaining({ devTarget: expect.anything() }),
     );
+  });
+
+  it("rejects an untargeted update while a campaign is applying", async () => {
+    setDevCampaignSchedule();
+    adoptCampaignMock.mockReturnValueOnce({ status: "applying" });
+
+    const response = await captureUpdateRun({});
+
+    expect(response).toMatchObject({
+      ok: false,
+      result: { status: "error", reason: "update-campaign-applying" },
+    });
+    expectNoUpdateMutation();
+    expect(getCampaignStateMock).not.toHaveBeenCalled();
+    expect(clearCampaignMock).not.toHaveBeenCalled();
   });
 
   it("does not clear a replacement campaign when the adopted update fails", async () => {
