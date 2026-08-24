@@ -643,8 +643,7 @@ export class ChatPage extends OpenClawLightDomElement {
                     pane,
                     sessionKeys: retainedSessions.get(pane.id) ?? [],
                     showGatewayPicker: pane.id === rightmostPane?.id,
-                    splitOnboardingVisible:
-                      onboardingPaneId !== undefined && pane.id === onboardingPaneId,
+                    splitOnboardingVisible: pane.id === onboardingPaneId,
                     splitMode,
                     weight: splitWeight(
                       column.paneWeights,

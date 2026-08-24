@@ -85,7 +85,18 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       workspaceGit,
       sidebarLayout,
     );
-    const splitOnboarding = this.renderSplitOnboarding();
+    const splitOnboarding = this.splitOnboardingVisible
+      ? html`<div class="chat-split-onboarding">
+          <p class="chat-split-onboarding__copy">${t("chat.splitView.onboarding")}</p>
+          <button
+            class="btn btn--ghost chat-split-onboarding__dismiss"
+            type="button"
+            @click=${this.onDismissSplitOnboarding}
+          >
+            ${t("chat.splitView.dismissOnboarding")}
+          </button>
+        </div>`
+      : nothing;
     const chat = renderChat({
       ...chatProps,
       header: board.face === "dashboard" ? nothing : html`${header}${splitOnboarding}`,
@@ -175,21 +186,5 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       state.imageLightbox,
       state.handleCloseImage,
     )}${this.renderResetConfirmation()}`;
-  }
-
-  private renderSplitOnboarding() {
-    if (!this.splitOnboardingVisible) {
-      return nothing;
-    }
-    return html`<div class="chat-split-onboarding">
-      <p class="chat-split-onboarding__copy">${t("chat.splitView.onboarding")}</p>
-      <button
-        class="btn btn--ghost chat-split-onboarding__dismiss"
-        type="button"
-        @click=${this.onDismissSplitOnboarding}
-      >
-        ${t("chat.splitView.dismissOnboarding")}
-      </button>
-    </div>`;
   }
 }

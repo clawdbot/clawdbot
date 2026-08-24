@@ -161,7 +161,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Open split view" }).click();
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
-      const onboarding = panes.first().locator(".chat-split-onboarding");
+      const onboarding = panes.last().locator(".chat-split-onboarding");
       await expect.poll(() => onboarding.count()).toBe(1);
       const metrics = await onboarding.evaluate((hint) => ({
         clientWidth: hint.clientWidth,

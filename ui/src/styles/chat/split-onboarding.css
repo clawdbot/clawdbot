@@ -1,5 +1,4 @@
 .chat-split-onboarding {
-  box-sizing: border-box;
   display: grid;
   justify-items: center;
   gap: 2px;
@@ -17,8 +16,7 @@
 .chat-split-onboarding__copy {
   max-width: 100%;
   margin: 0;
-  color: var(--text);
-  font-size: var(--control-ui-text-sm, 12px);
+  font-size: var(--control-ui-text-sm);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -28,11 +26,6 @@
   max-width: 100%;
   line-height: 1.3;
   white-space: normal;
-}
-
-.chat-split-onboarding__dismiss:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 
 @media (max-width: 640px) {
