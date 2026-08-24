@@ -48,15 +48,15 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 
 ## Code Mode Loop
 
-When `tools.codeMode` is enabled, the Browser tool has no normal turn — it is cataloged behind `exec`/`wait`. Call it from exec cells as an async global, using the callable name the exec quick index advertises for the Browser tool (normally `browser`; colliding names get suffixed, and a client tool can win an identical name). If the quick index omits or renames it, discover it with `catalog.search("browser")` and call the returned handle:
+When `tools.codeMode` is enabled, the Browser tool has no normal turn — it is cataloged behind `exec`/`wait`. Call it from exec cells as an async global, using the callable name the exec quick index advertises for the Browser tool (normally `browser`; colliding names get suffixed, and a client tool can win an identical name). An exact `catalog.search("browser")` returns a handle already bound to the effective callable name, so resolve the handle in each cell and call it instead of hard-coding the literal global; an empty result means the Browser tool is not cataloged in this run.
+
+Keep the same labeled tab through the loop, and alternate reads with actions. Each `exec` cell starts a fresh VM — bindings from a completed cell are gone in the next, and only runs left `waiting` keep their state until `wait` resumes them — so carry comparison state across cells by returning it and re-embedding the returned values in the next cell:
 
 ```javascript
-let previous = { url: undefined, newElements: undefined };
-```
-
-Keep the same labeled tab through the loop, and alternate reads with actions:
-
-```javascript
+// previous = the url/newElements returned by the last completed cell (a fresh
+// VM runs this cell, so prior bindings do not exist here).
+const previous = { url: "https://example.com/inbox", newElements: 0 };
+const [browser] = await catalog.search("browser", { limit: 1 });
 const details = await browser({
   action: "snapshot",
   snapshotFormat: "ai",
@@ -68,7 +68,6 @@ const changed =
   details?.url !== previous.url ||
   (details?.newElements ?? 0) > 0 ||
   details?.blockedByDialog === true;
-previous = { url: details?.url, newElements: details?.newElements };
 return {
   targetId: details?.targetId,
   url: details?.url,
@@ -82,6 +81,7 @@ return {
 - To read text inside code mode, run a targeted `act` evaluate (requires the evaluate capability; `browser.evaluateEnabled` can disable it) and keep the returned value bounded, because page-script output is untrusted:
 
 ```javascript
+const [browser] = await catalog.search("browser", { limit: 1 });
 const read = await browser({
   action: "act",
   kind: "evaluate",
@@ -94,10 +94,10 @@ return { url: read?.url, text: read?.result };
 When evaluate is unavailable, keep the loop on structured state only.
 
 - Return only the fields the next step needs; never return the whole details object.
-- Keep `previous` between cells when a url change or new-element count helps explain a change.
+- Completed cells share no state: re-embed the previous cell's returned `url`/`newElements` in the next cell, or keep the comparison inside one cell. Only `waiting` runs persist, resumed by `wait`.
 - Interleave each act with a URL or tabs check before the next dependent act.
 - If a batch returns `aborted`, take a fresh snapshot before continuing.
-- If `newElements` is positive, inspect those elements first, then update the saved state.
+- If `newElements` is positive, inspect those elements first, then update the re-embedded state.
 - Use separate act calls when navigation is expected between steps.
 
 ## Tab Hygiene
