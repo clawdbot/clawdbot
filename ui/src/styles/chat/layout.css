@@ -5324,26 +5324,6 @@ button.chat-pr__diff {
   outline: none;
 }
 
-.chat-controls__model-reset {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 24px;
-  padding: 0 7px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.chat-controls__model-reset:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--border) 45%, transparent);
-  color: var(--text);
-}
-
 .chat-controls__reasoning-state {
   display: inline-flex;
   align-items: center;
@@ -5361,40 +5341,10 @@ button.chat-pr__diff {
   text-overflow: ellipsis;
 }
 
-/* Muted value = inherited model default; no reset shows because there is no
-   override to clear. */
+/* Muted value identifies the inherited model default. */
 .chat-controls__reasoning-value--inherit {
   color: var(--muted);
   font-weight: 500;
-}
-
-.chat-controls__reasoning-reset {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 3px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: lowercase;
-}
-
-.chat-controls__reasoning-reset:hover:not(:disabled),
-.chat-controls__reasoning-reset:focus-visible {
-  background: var(--bg-hover);
-  color: var(--text);
-  outline: none;
-}
-
-.chat-controls__reasoning-reset:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 .chat-controls__effort-heading {
