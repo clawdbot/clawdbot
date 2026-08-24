@@ -529,7 +529,7 @@ describe("shared Codex app-server client", () => {
       "codex app-server is newer than OpenClaw's managed runtime; continuing with normal startup validation",
       {
         detectedVersion: "0.150.0-alpha.23",
-        validatedVersion: "0.149.0",
+        validatedVersion: CODEX_APP_SERVER_VERSION,
       },
     );
 
