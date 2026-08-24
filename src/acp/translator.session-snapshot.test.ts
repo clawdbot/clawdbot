@@ -15,6 +15,75 @@ vi.mock("./commands.js", () => ({
 }));
 
 describe("acp session metadata and usage updates", () => {
+  it("retries a zero-token final snapshot before resolving the prompt", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionStore = createInMemorySessionStore();
+      const connection = createAcpConnection();
+      const sessionUpdate = connection["__sessionUpdateMock"];
+      let sessionsListCalls = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.list") {
+          sessionsListCalls += 1;
+          return {
+            ts: Date.now(),
+            path: "/tmp/sessions.json",
+            count: 1,
+            defaults: {
+              modelProvider: null,
+              model: null,
+              contextTokens: null,
+            },
+            sessions: [
+              {
+                key: "usage-session",
+                displayName: "Usage session",
+                kind: "direct",
+                updatedAt: 1_710_000_123_000,
+                modelProvider: "openai",
+                model: "gpt-5.4",
+                totalTokens: sessionsListCalls >= 3 ? 1200 : 0,
+                totalTokensFresh: true,
+                contextTokens: 4000,
+              },
+            ],
+          };
+        }
+        if (method === "chat.send") {
+          return new Promise(() => {});
+        }
+        return { ok: true };
+      }) as GatewayClient["request"];
+      const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+        sessionStore,
+      });
+
+      await agent.loadSession(createLoadSessionRequest("usage-session"));
+      sessionUpdate.mockClear();
+
+      const promptPromise = agent.prompt(createPromptRequest("usage-session", "hello"));
+      const finalPromise = agent.handleGatewayEvent(createChatFinalEvent("usage-session"));
+      await vi.advanceTimersByTimeAsync(1000);
+      await finalPromise;
+      await promptPromise;
+
+      expect(sessionUpdate).toHaveBeenCalledWith({
+        sessionId: "usage-session",
+        update: {
+          sessionUpdate: "usage_update",
+          used: 1200,
+          size: 4000,
+          _meta: {
+            source: "gateway-session-store",
+            approximate: true,
+          },
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("emits a fresh usage snapshot after prompt completion when gateway totals are available", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();

@@ -607,7 +607,13 @@ export class AcpTranslatorPromptStream {
     const promptKey = this.pendingPromptKey(sessionId, pending.idempotencyKey);
     this.settlingPromptKeys.add(promptKey);
     try {
-      const sessionSnapshot = await this.sessionState.getSnapshot(pending.sessionKey);
+      let sessionSnapshot = await this.sessionState.getSnapshot(pending.sessionKey);
+      if (!sessionSnapshot.usage || sessionSnapshot.usage.used === 0) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 1000);
+        });
+        sessionSnapshot = await this.sessionState.getSnapshot(pending.sessionKey);
+      }
       try {
         await this.sessionState.sendSnapshotUpdate(
           {
