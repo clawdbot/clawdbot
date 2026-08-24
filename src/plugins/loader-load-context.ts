@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { collectAutoEnableConfiguredChannelIds } from "../config/channel-activation-candidates.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import { getGatewayAmbientEnvTriggerPolicy } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
@@ -135,7 +137,11 @@ function resolveBundledPackageCacheIdentity(
 function buildActivationMetadataHash(params: {
   activationSource: PluginActivationConfigSource;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
+  configuredChannelIds: readonly string[];
 }): string {
+  const configuredChannels = [...new Set(params.configuredChannelIds)].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
   const enabledSourceChannels = Object.entries(
     (params.activationSource.rootConfig?.channels as Record<string, unknown>) ?? {},
   )
@@ -163,6 +169,7 @@ function buildActivationMetadataHash(params: {
         memorySlot: params.activationSource.plugins.slots.memory,
         entries: pluginEntryStates,
         enabledChannels: enabledSourceChannels,
+        configuredChannels,
         autoEnabledReasons: autoEnableReasonEntries,
       }),
     )
@@ -372,6 +379,19 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     activationMetadataKey: buildActivationMetadataHash({
       activationSource,
       autoEnabledReasons: options.autoEnabledReasons ?? {},
+      // The cede map baked into a cached registry reads channel ownership, and ownership reads
+      // which channels are meaningfully configured — a wider set than the `enabled: true` entries
+      // hashed above. Making a contested channel meaningfully configured can move the runtime
+      // owner without touching plugin entries, auto-enable reasons, or any `enabled` flag, so the
+      // key must carry the same configured-channel set the ownership policy resolves
+      // (`createConfiguredChannelOwnershipPolicy` reads the activation source config with the
+      // Gateway's recorded ambient-env-trigger policy), or a hit returns the stale cede map.
+      configuredChannelIds: collectAutoEnableConfiguredChannelIds(
+        activationSourceConfig,
+        env,
+        undefined,
+        getGatewayAmbientEnvTriggerPolicy(),
+      ),
     }),
     installs: installRecords,
     env,
