@@ -243,7 +243,7 @@ export async function startGatewayCoreRuntime(input: {
   );
   kernel.setEarlyRuntimeHandles(earlyRuntime);
 
-  const [{ startGatewayEventSubscriptions }, { startGatewayRuntimeServices }] =
+  const [{ startGatewayEventSubscriptions }, { startGatewayChannelHealthMonitor }] =
     await startupTrace.measure("runtime.post-early-imports", () =>
       Promise.all([
         import("./server-runtime-subscriptions.js"),
@@ -279,15 +279,9 @@ export async function startGatewayCoreRuntime(input: {
     await startupTrace.measure("runtime.subscriptions", () => eventSubscriptionsResident.start());
   Object.assign(runtimeState, runtimeSubscriptionUnsubs);
 
-  const runtimeServices = await startupTrace.measure("runtime.services", () =>
-    startGatewayRuntimeServices({
-      minimalTestGateway,
-      cfgAtStart,
-      channelManager,
-      log,
-    }),
+  await startupTrace.measure("runtime.services", () =>
+    kernel.setChannelHealthMonitor(startGatewayChannelHealthMonitor({ channelManager })),
   );
-  Object.assign(runtimeState, runtimeServices);
 
   const { createOperatorApprovalSessionEventRuntime } =
     await import("./operator-approval-session-events.js");

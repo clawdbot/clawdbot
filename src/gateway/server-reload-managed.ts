@@ -167,11 +167,8 @@ export function startManagedGatewayConfigReloader(
           assertOpenClawDatabasesReadyForRestart({ env: process.env }),
       ),
     restartRecoveryAvailable,
-    createHealthMonitor: (config) =>
-      startGatewayChannelHealthMonitor({
-        cfg: config,
-        channelManager: params.channelManager,
-      }),
+    createHealthMonitor: () =>
+      startGatewayChannelHealthMonitor({ channelManager: params.channelManager }),
   });
   const runManagedRestart = async (
     plan: GatewayReloadPlan,
