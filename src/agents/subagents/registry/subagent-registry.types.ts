@@ -224,7 +224,7 @@ export type SubagentAcceptedSteerDispatch = {
   expectedLifecycleRevision?: string;
 };
 
-export type SubagentAcceptedSpawnRollback = {
+type SubagentAcceptedSpawnRollback = {
   gatewayRunId: string;
   requestedAt: number;
   reason: string;
