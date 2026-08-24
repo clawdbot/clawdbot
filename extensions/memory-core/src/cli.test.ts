@@ -2061,6 +2061,76 @@ describe("memory cli", () => {
     });
   });
 
+  it("reports the promote-explain recall gate from recallCount", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await shortTermTesting.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-05-29T10:00:00.000Z",
+        entries: {
+          candidate: {
+            key: "candidate",
+            path: "memory/2026-05-29.md",
+            startLine: 1,
+            endLine: 1,
+            source: "memory",
+            snippet: "Router VLAN policy",
+            recallCount: 0,
+            dailyCount: 3,
+            groundedCount: 1,
+            totalScore: 3.6,
+            maxScore: 0.9,
+            firstRecalledAt: "2026-05-29T10:00:00.000Z",
+            lastRecalledAt: "2026-05-29T10:00:00.000Z",
+            queryHashes: ["router-query"],
+            recallDays: ["2026-05-29"],
+            conceptTags: ["router"],
+          },
+        },
+      });
+      getRuntimeConfig.mockReturnValue({
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    deep: {
+                      enabled: true,
+                      minScore: 0,
+                      minRecallCount: 1,
+                      minUniqueQueries: 0,
+                      maxAgeDays: 365,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["promote-explain", "router", "--json"]);
+
+      const payload = firstWrittenJsonArg<{
+        candidate?: { recallCount?: number; signalCount?: number };
+        passes?: { recallCount?: boolean };
+      }>(writeJson);
+      expect(payload).toMatchObject({
+        candidate: { recallCount: 0, signalCount: 4 },
+        passes: { recallCount: false },
+      });
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("previews rem harness output as json", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const nowMs = Date.now();
@@ -2710,7 +2780,7 @@ describe("memory cli", () => {
       const relativePath = "memory/2026-04-02.md";
       await writeDailyMemoryNote(workspaceDir, "2026-04-02", [
         "Untrusted router note must not become durable memory.",
-        "Rare trusted note remains below the apply signal threshold.",
+        "Rare trusted note remains below the apply recall threshold.",
         "Durable action note.",
       ]);
       await recordShortTermRecalls({
@@ -2735,7 +2805,7 @@ describe("memory cli", () => {
             startLine: 2,
             endLine: 2,
             score: 0.99,
-            snippet: "Rare trusted note remains below the apply signal threshold.",
+            snippet: "Rare trusted note remains below the apply recall threshold.",
             source: "memory",
           },
           {
@@ -2764,7 +2834,7 @@ describe("memory cli", () => {
       });
       await writeDailyMemoryNote(workspaceDir, "2026-04-02", [
         "Untrusted router note must not become durable memory.",
-        "Rare trusted note remains below the apply signal threshold.",
+        "Rare trusted note remains below the apply recall threshold.",
         "Candidate: Durable action note. confidence: 0.90 evidence: memory/.dreams/session-corpus/day.txt:1-1 recalls: 3 status: staged",
       ]);
       const manager = {
@@ -2786,7 +2856,7 @@ describe("memory cli", () => {
       ]);
 
       expectLogged(log, `Skipped ${relativePath}:1-1: origin filter (untrusted).`);
-      expectLogged(log, `Skipped ${relativePath}:2-2: signal threshold (1 < 2).`);
+      expectLogged(log, `Skipped ${relativePath}:2-2: recall threshold (1 < 2).`);
       expectLogged(log, `Skipped ${relativePath}:3-3: contamination filter after rehydration.`);
       expectNotLogged(log, "No candidates met apply criteria.");
 

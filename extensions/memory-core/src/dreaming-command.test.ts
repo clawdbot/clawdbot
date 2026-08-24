@@ -203,7 +203,7 @@ describe("memory-core /dreaming command", () => {
     // Dreaming is enabled by default; the fixture sets no explicit enabled flag.
     expect(result.text).toContain("- enabled: on (America/Los_Angeles)");
     expect(result.text).toContain("- sweep cadence: 15 */8 * * *");
-    expect(result.text).toContain("- promotion policy: score>=0.75, recalls>=3, uniqueQueries>=3");
+    expect(result.text).toContain("- promotion policy: score>=0.75, recalls>=0, uniqueQueries>=3");
     expect(harness.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
   });
 

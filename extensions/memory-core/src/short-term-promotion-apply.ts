@@ -284,7 +284,6 @@ export async function applyShortTermPromotions(
   const rejectionReasons = new Map<string, string>();
   const eligible = currentCandidates.filter((candidate) => {
     const latest = store.entries[candidate.key];
-    const queryCount = Math.max(candidate.uniqueQueries, candidate.recallDays.length);
     // Explicit untrusted/system origins never promote on ANY path (append or
     // consolidation): recall frequency must never launder externally-derived
     // content into MEMORY.md. Workspace memory files index as 'agent', so
@@ -299,10 +298,10 @@ export async function applyShortTermPromotions(
             ? "already promoted"
             : candidate.score < minScore
               ? `score threshold (${candidate.score.toFixed(3)} < ${minScore})`
-              : candidate.signalCount < minRecallCount
-                ? `signal threshold (${candidate.signalCount} < ${minRecallCount})`
-                : queryCount < minUniqueQueries
-                  ? `query threshold (${queryCount} < ${minUniqueQueries})`
+              : candidate.recallCount < minRecallCount
+                ? `recall threshold (${candidate.recallCount} < ${minRecallCount})`
+                : candidate.uniqueQueries < minUniqueQueries
+                  ? `query threshold (${candidate.uniqueQueries} < ${minUniqueQueries})`
                   : maxAgeDays >= 0 && candidate.ageDays > maxAgeDays
                     ? `age threshold (${candidate.ageDays.toFixed(1)}d > ${maxAgeDays}d)`
                     : undefined;

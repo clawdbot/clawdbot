@@ -87,7 +87,7 @@ describe("memory dreaming host helpers", () => {
 
     // Non-decimal forms fall back to shipped defaults / omit optional fields.
     expect(resolved.phases.deep.limit).toBe(10);
-    expect(resolved.phases.deep.minRecallCount).toBe(3);
+    expect(resolved.phases.deep.minRecallCount).toBe(0);
     expect(resolved.phases.deep.minUniqueQueries).toBe(3);
     expect(resolved.phases.deep.recencyHalfLifeDays).toBe(14);
     expect(resolved.phases.deep.maxAgeDays).toBe(30);
