@@ -153,13 +153,6 @@ openclaw-debug-overlay {
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
 }
 
-.debug-overlay__head {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
 .debug-vital__label {
   overflow: hidden;
   color: var(--muted);
