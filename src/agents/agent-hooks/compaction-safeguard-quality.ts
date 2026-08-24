@@ -148,16 +148,13 @@ function summaryIncludesIdentifier(summary: string, identifier: string): boolean
 export function extractOpaqueIdentifiers(text: string): string[] {
   // Path and host/port candidates start at token boundaries so prose such as
   // "typecheck/lint/format" is not mistaken for an absolute path.
-  // Hex/numeric candidates must span a whole token: they may not start mid-token
-  // (`(?<![A-Za-z0-9._-])`), may not stop mid-token (`(?![A-Za-z0-9_-])`), and may
-  // not be the integer part of a decimal (`(?!\.\d)`). Without those guards, numeric
-  // tool output such as `metric=0.123456789` contributes the fraction `123456789` as
-  // a supposedly opaque identifier, and strict mode then cancels compaction because
-  // that fragment is absent from the finalized artifact. A trailing `.` is still
-  // allowed so sentence-final identifiers ("ticket 123456.") keep matching.
+  // Hex/numeric candidates must span a whole token and never be part of a number:
+  // a fraction (`0.123456789`) or exponent (`1.5e+12345678`) is data, and requiring
+  // it verbatim makes strict compaction unsatisfiable. Trailing `.` stays allowed so
+  // sentence-final identifiers ("ticket 123456.") keep matching.
   const matches =
     text.match(
-      /(?<![A-Za-z0-9._-])(?:[A-Fa-f0-9]{8,}|\d{6,})(?![A-Za-z0-9_-])(?!\.\d)|https?:\/\/\S+|(?<![A-Za-z0-9._-])\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5}/g,
+      /(?<![A-Za-z0-9._-])(?<!\d[eE][+-])(?:[A-Fa-f0-9]{8,}|\d{6,})(?![A-Za-z0-9_-])(?!\.\d)|https?:\/\/\S+|(?<![A-Za-z0-9._-])\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5}/g,
     ) ?? [];
   return uniqueStrings(
     matches

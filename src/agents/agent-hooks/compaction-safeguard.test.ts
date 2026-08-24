@@ -1214,7 +1214,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
   it("keeps numeric tool-result noise out of the strict identifier candidate set", () => {
     const toolResult = [
       "latency_p50=0.123456789 latency_p99=3.1415926535",
-      "throughput=1.234567e+8 ratio=2.654321 cost_usd=12345678.90",
+      "throughput=1.234567e+12345678 ratio=2.654321 cost_usd=12345678.90",
       "run_id=987654321 commit=a1b2c3d4e5f6 endpoint=host.local:18789",
     ].join("\n");
 
@@ -1231,6 +1231,17 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(identifiers).toContain("987654321");
     expect(identifiers).toContain("A1B2C3D4E5F6"); // pragma: allowlist secret
     expect(identifiers).toContain("host.local:18789");
+  });
+
+  it("ignores scientific-notation exponents regardless of sign", () => {
+    // `+` is not a token character, so a positive exponent is the one sign that
+    // reaches the numeric branch without an explicit guard.
+    expect(extractOpaqueIdentifiers("throughput=1.234567e+12345678")).not.toContain("12345678");
+    expect(extractOpaqueIdentifiers("throughput=1.234567E+12345678")).not.toContain("12345678");
+    expect(extractOpaqueIdentifiers("decay=9.5e-12345678")).not.toContain("12345678");
+    expect(extractOpaqueIdentifiers("scaled=9.5e12345678")).not.toContain("12345678");
+    // A standalone id that merely follows a `+` is still an identifier.
+    expect(extractOpaqueIdentifiers("shard +12345678")).toContain("12345678");
   });
 
   it("does not extract numeric or hex fragments from inside larger tokens", () => {
@@ -2143,6 +2154,52 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const retry = requireRecord(mockCallArg(mockSummarizeInStages, 1));
     expect(retry.customInstructions).toContain("Quality check feedback");
     expect(retry.customInstructions).toContain("complete summary body within 16000 UTF-16");
+  });
+
+  it("accepts a finalized summary when the source carries only numeric tool-result noise", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "report the deployment status";
+    // Telemetry of the shape tool results emit: every digit run here is data.
+    const numericToolResult =
+      "latency_p50=0.123456789 throughput=1.234567e+12345678 cost_usd=12345678.90";
+    const acceptedSummary = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Preserve context.",
+      "## Pending user asks",
+      latestAsk,
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages.mockResolvedValue(summaryResult(acceptedSummary));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = createCompactionEvent({
+      messageText: `${latestAsk} ${numericToolResult}`,
+      tokensBefore: 1_500,
+    });
+    (
+      event.preparation as { settings?: { reserveTokens: number }; isSplitTurn?: boolean }
+    ).settings = { reserveTokens: 4_000 };
+    (event.preparation as { isSplitTurn?: boolean }).isSplitTurn = false;
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    // The summary legitimately omits the raw numbers. Before the extraction fix
+    // those digit runs became required identifiers and cancelled this compaction.
+    expect(requireRecord(mockCallArg(mockAuditSummaryQuality)).identifiers).toEqual([]);
+    expect(expectCompactionResult(result).summary).toBe(acceptedSummary);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
   });
 
   it("propagates caller abort during corrective generation", async () => {
