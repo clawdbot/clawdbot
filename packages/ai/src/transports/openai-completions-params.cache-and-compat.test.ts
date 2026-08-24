@@ -64,7 +64,13 @@ describe("openai completions params", () => {
     ["qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
     ["dashscope", "https://dashscope.aliyuncs.com/compatible-mode/v1"],
     ["modelstudio", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
-  ])("sends max_tokens on Model Studio provider %s", (provider, baseUrl) => {
+    // Token Plan regions are the other two documented /compatible-mode/v1 endpoints.
+    // Driven through provider "qwen" because the unit fixture's endpoint-class map
+    // only knows dashscope.aliyuncs.com; in production the plugin manifest lists all
+    // six URLs under modelstudio-native. Either way the path gate is what decides.
+    ["qwen", "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"],
+    ["qwen", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"],
+  ])("sends max_tokens on Model Studio compatible-mode provider %s", (provider, baseUrl) => {
     // Model Studio's OpenAI-compatibility reference documents `max_tokens` and
     // does not list `max_completion_tokens`.
     const params = buildOpenAICompletionsParams(
@@ -470,6 +476,24 @@ describe("openai completions params", () => {
     );
 
     expect(params.max_completion_tokens).toBe(65_536);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  // The `modelstudio-native` endpoint class also covers the two Coding Plan base
+  // URLs, which are plain `/v1` and are NOT in Alibaba's OpenAI-compatibility
+  // reference. They keep `max_completion_tokens` until a Coding Plan key can
+  // confirm otherwise — the citation behind this change does not reach them.
+  it.each([
+    ["qwen", "https://coding.dashscope.aliyuncs.com/v1"],
+    ["qwen", "https://coding-intl.dashscope.aliyuncs.com/v1"],
+  ])("leaves Coding Plan %s on max_completion_tokens (undocumented surface)", (provider, baseUrl) => {
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({ id: "qwen3.5-plus", name: "Qwen 3.5 Plus", provider, baseUrl }),
+      { systemPrompt: "system", messages: [], tools: [] } as never,
+      undefined,
+    );
+
+    expect(params.max_completion_tokens).toBeDefined();
     expect(params).not.toHaveProperty("max_tokens");
   });
 

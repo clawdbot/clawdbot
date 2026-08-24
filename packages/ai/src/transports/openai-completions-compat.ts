@@ -84,6 +84,16 @@ function resolveOpenAICompletionsCompatDefaults(
     knownProviderFamily === "modelstudio" ||
     endpointClass === "modelstudio-native" ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "dashscope", "modelstudio", "qwen"));
+  // The `modelstudio-native` endpoint class covers six base URLs, and they are not
+  // one surface. Alibaba's OpenAI-compatibility reference documents `max_tokens`
+  // for the four `/compatible-mode/v1` endpoints (dashscope, dashscope-intl, and
+  // both token-plan regions). The two Coding Plan endpoints
+  // (coding[-intl].dashscope.aliyuncs.com) are plain `/v1` and are not covered by
+  // that reference, so they keep the existing field until someone with a Coding
+  // Plan key can check. Matching the path segment rather than a URL list so a new
+  // Alibaba region does not silently fall out of the documented surface.
+  const isModelStudioCompatibleMode =
+    isModelStudioLike && input.baseUrl?.includes("/compatible-mode/") === true;
   const isZai =
     endpointClass === "zai-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "zai"));
@@ -120,8 +130,9 @@ function resolveOpenAICompletionsCompatDefaults(
     knownProviderFamily === "mistral" ||
     isMoonshot ||
     // Model Studio's OpenAI-compatible reference documents `max_tokens` and does
-    // not list `max_completion_tokens`.
-    isModelStudioLike ||
+    // not list `max_completion_tokens` — but only for the `/compatible-mode/v1`
+    // surface, hence the narrower predicate.
+    isModelStudioCompatibleMode ||
     isCloudflareAiGateway ||
     isZai ||
     isTogether ||
