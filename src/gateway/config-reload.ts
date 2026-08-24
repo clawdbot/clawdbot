@@ -243,10 +243,11 @@ function findChannelOwnershipChange(params: {
  * explicit plugin selection and the per-channel activation candidates, both of which live under
  * `plugins` or `channels` in the source config, so no other source edit can move an owner.
  *
- * This exists to keep the comparison off the ordinary no-op reload path: resolving a manifest
- * registry and walking ownership on both sides costs a few milliseconds warm and far more when no
- * process-current plugin metadata snapshot is published, while `diffConfigPaths` is the same walk
- * this file already runs on other source-only paths.
+ * Both ownership-comparison triggers gate on it — the zero-diff guard (`noDiffOwnershipChange`)
+ * and the hot-edit escalation gate below it — to keep the comparison off ordinary reload paths:
+ * resolving a manifest registry and walking ownership on both sides costs a few milliseconds warm
+ * and far more when no process-current plugin metadata snapshot is published, while
+ * `diffConfigPaths` is the same walk this file already runs on other source-only paths.
  */
 function sourceEditTouchesChannelOwnership(
   previousSourceConfig: OpenClawConfig,
@@ -874,9 +875,16 @@ export function startGatewayConfigReloader(opts: {
       plan.disposeMcpRuntimes = true;
     }
     if (
+      // Under reload-off the transaction commits the baseline without acting on the plan
+      // (`commitReloadBaseline({runtimeApplied:false})` below never reads it), so the comparison
+      // could only burn the registry resolution and log a plugin reload that never happens.
+      // The mode gate below owns the outcome either way; skipping here changes no behavior.
+      nextSettings.mode !== "off" &&
       !plan.restartGateway &&
       !plan.reloadPlugins &&
-      (plan.restartChannels.size > 0 || (plan.restartChannelAccounts?.size ?? 0) > 0)
+      (plan.restartChannels.size > 0 ||
+        (plan.restartChannelAccounts?.size ?? 0) > 0 ||
+        sourceEditTouchesChannelOwnership(currentRuntimeEnvSourceConfig, nextSourceConfig))
     ) {
       // A `channels.<id>` edit can move the channel's selected owner without touching any
       // `plugins.*` path: ownership reads the per-channel activation candidates from the source
@@ -886,6 +894,12 @@ export function startGatewayConfigReloader(opts: {
       // replacement while the Gateway restarts the displaced owner. Rebuild the plugin registry
       // first when an owner actually moved — an ownership-neutral channel edit keeps its cheap
       // plan — with the same MCP runtime pairing as the metadata escalation above.
+      //
+      // The trigger reads the source edit, not the plan: a channel plugin's reload metadata may
+      // classify a `channels.<id>` path as a no-op (WhatsApp's broad noop prefix), and such an
+      // edit can still make the channel meaningfully configured and move the owner while
+      // `plan.restartChannels` stays empty. The comparison below still decides the escalation,
+      // so a neutral edit pays only the diff walk this transaction already runs elsewhere.
       try {
         // The previous side must pair `currentConfig` with `currentRuntimeEnvSourceConfig`, not
         // `currentSourceConfig`: a source-only commit (reload mode off, writer intent "none")
@@ -900,10 +914,13 @@ export function startGatewayConfigReloader(opts: {
           next: { config: nextConfig, sourceConfig: nextSourceConfig },
         });
         if (ownershipChange) {
+          // No "before channel restart": on the widened trigger the plan may restart no channel
+          // at all — the reload result itself restarts owner-changed channels
+          // (`pluginReloadResult.restartChannels` in `server-reload-hot.ts`).
           opts.log.info(
             `channel ownership moved (${ownershipChange.channelId}: ${
               ownershipChange.previousOwner ?? "none"
-            } -> ${ownershipChange.nextOwner ?? "none"}); reloading plugins before channel restart`,
+            } -> ${ownershipChange.nextOwner ?? "none"}); reloading plugins`,
           );
           plan.reloadPlugins = true;
           plan.disposeMcpRuntimes = true;

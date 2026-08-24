@@ -135,7 +135,10 @@ function makeDescriptorlessClaimantRegistry(): PluginManifestRegistry {
   };
 }
 
-function makeChannelRuntimeRegistry(ownerPluginId: string): PluginRegistry {
+function makeChannelRuntimeRegistry(
+  ownerPluginId: string,
+  reload: ChannelPlugin["reload"] = { configPrefixes: [`channels.${CHANNEL_ID}`] },
+): PluginRegistry {
   return createTestRegistry([
     {
       pluginId: ownerPluginId,
@@ -150,12 +153,23 @@ function makeChannelRuntimeRegistry(ownerPluginId: string): PluginRegistry {
         },
         capabilities: { chatTypes: ["direct"] },
         config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
-        reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
+        reload,
       } satisfies ChannelPlugin,
       source: "test",
     },
   ]);
 }
+
+/**
+ * WhatsApp's shipped reload shape (`extensions/whatsapp/src/shared.ts`): a broad
+ * `channels.<id>` noop prefix with only named subtrees restarting the channel. An edit under
+ * the noop prefix never reaches `plan.restartChannels`, so the ownership escalation cannot key
+ * off the plan for it.
+ */
+const NOOP_CLASSIFIED_RELOAD: ChannelPlugin["reload"] = {
+  configPrefixes: [`channels.${CHANNEL_ID}.enabled`],
+  noopPrefixes: [`channels.${CHANNEL_ID}`],
+};
 
 type WatcherHandler = (value?: unknown) => void;
 
@@ -217,11 +231,16 @@ describe("gateway config reload channel ownership escalation", () => {
     initialConfig: OpenClawConfig;
     /** Materializes both authored configs onto one effective config, as auto-enable does. */
     materializedConfig?: OpenClawConfig;
+    /** Like `materializedConfig`, but derived from each authored source as auto-enable is. */
+    materializeConfig?: (sourceConfig: OpenClawConfig) => OpenClawConfig;
     nextConfig: OpenClawConfig;
     staleRegistryOwnerPluginId: string;
     reloadedRegistryOwnerPluginId: string;
+    channelReload?: ChannelPlugin["reload"];
   }) {
-    setActivePluginRegistry(makeChannelRuntimeRegistry(params.staleRegistryOwnerPluginId));
+    setActivePluginRegistry(
+      makeChannelRuntimeRegistry(params.staleRegistryOwnerPluginId, params.channelReload),
+    );
 
     const startedOwners: Array<string | undefined> = [];
     const startChannel = vi.fn(async (channel: ChannelKind) => {
@@ -235,7 +254,9 @@ describe("gateway config reload channel ownership escalation", () => {
     const reloadPlugins = vi.fn(async () => {
       // The real handler replaces the active registry with the generation activation builds from
       // the accepted config; here that generation registers the replacement owner.
-      setActivePluginRegistry(makeChannelRuntimeRegistry(params.reloadedRegistryOwnerPluginId));
+      setActivePluginRegistry(
+        makeChannelRuntimeRegistry(params.reloadedRegistryOwnerPluginId, params.channelReload),
+      );
     });
     const handlerParams = {
       startChannel,
@@ -272,6 +293,7 @@ describe("gateway config reload channel ownership escalation", () => {
     });
 
     let nextSnapshot = makeSnapshot(params.nextConfig, "next-hash");
+    const onNoopConfigCommit = vi.fn(async () => {});
     const watcher = createWatcherMock();
     vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -287,6 +309,14 @@ describe("gateway config reload channel ownership escalation", () => {
             }),
           }
         : {}),
+      ...(params.materializeConfig
+        ? {
+            prepareConfigCandidate: ({ sourceConfig }: { sourceConfig: OpenClawConfig }) => {
+              const prepared = params.materializeConfig!(sourceConfig);
+              return { runtimeConfig: prepared, compareConfig: prepared };
+            },
+          }
+        : {}),
       initialSnapshotRawHash: "initial-hash",
       initialAuthoredConfig: params.initialConfig,
       initialSnapshotValid: true,
@@ -294,7 +324,7 @@ describe("gateway config reload channel ownership escalation", () => {
       readSnapshot: vi.fn(async () => nextSnapshot),
       initialPluginInstallRecords: {},
       readPluginInstallRecords: async () => ({}),
-      onNoopConfigCommit: vi.fn(async () => {}),
+      onNoopConfigCommit,
       onHotReload,
       onRestart,
       log,
@@ -304,6 +334,7 @@ describe("gateway config reload channel ownership escalation", () => {
     return {
       log,
       onHotReload,
+      onNoopConfigCommit,
       onRestart,
       reloadPlugins,
       reloader,
@@ -341,7 +372,7 @@ describe("gateway config reload channel ownership escalation", () => {
       expect(plan?.reloadPlugins).toBe(true);
       expect(plan?.disposeMcpRuntimes).toBe(true);
       expect(harness.log.info).toHaveBeenCalledWith(
-        `channel ownership moved (${CHANNEL_ID}: ${LEGACY_PLUGIN_ID} -> ${REPLACEMENT_PLUGIN_ID}); reloading plugins before channel restart`,
+        `channel ownership moved (${CHANNEL_ID}: ${LEGACY_PLUGIN_ID} -> ${REPLACEMENT_PLUGIN_ID}); reloading plugins`,
       );
 
       // The regression this pins: the restarted channel must register from the replaced registry
@@ -382,7 +413,7 @@ describe("gateway config reload channel ownership escalation", () => {
       expect(plan?.reloadPlugins).toBe(true);
       expect(plan?.disposeMcpRuntimes).toBe(true);
       expect(harness.log.info).toHaveBeenCalledWith(
-        `channel ownership moved (${CHANNEL_ID}: ${LEGACY_PLUGIN_ID} -> ${REPLACEMENT_PLUGIN_ID}); reloading plugins before channel restart`,
+        `channel ownership moved (${CHANNEL_ID}: ${LEGACY_PLUGIN_ID} -> ${REPLACEMENT_PLUGIN_ID}); reloading plugins`,
       );
       expect(harness.reloadPlugins).toHaveBeenCalledTimes(1);
       expect(harness.startedOwners).toEqual([REPLACEMENT_PLUGIN_ID]);
@@ -419,6 +450,12 @@ describe("gateway config reload channel ownership escalation", () => {
       );
       expect(harness.onHotReload).not.toHaveBeenCalled();
       expect(harness.startChannel).not.toHaveBeenCalled();
+      // Reload-off discards the plan wholesale, so the escalation gate must not pay the
+      // ownership comparison for it — nor log a plugin reload that never happens. The move is
+      // still caught: transaction 2 compares against the runtime-applied baseline below.
+      expect(harness.log.info).not.toHaveBeenCalledWith(
+        expect.stringContaining("channel ownership moved"),
+      );
       harness.log.info.mockClear();
 
       harness.setNextSnapshot(
@@ -438,7 +475,7 @@ describe("gateway config reload channel ownership escalation", () => {
       expect(plan?.reloadPlugins).toBe(true);
       expect(plan?.disposeMcpRuntimes).toBe(true);
       expect(harness.log.info).toHaveBeenCalledWith(
-        `channel ownership moved (${CHANNEL_ID}: ${LEGACY_PLUGIN_ID} -> ${REPLACEMENT_PLUGIN_ID}); reloading plugins before channel restart`,
+        `channel ownership moved (${CHANNEL_ID}: ${LEGACY_PLUGIN_ID} -> ${REPLACEMENT_PLUGIN_ID}); reloading plugins`,
       );
       expect(harness.reloadPlugins).toHaveBeenCalledTimes(1);
       expect(harness.startedOwners).toEqual([REPLACEMENT_PLUGIN_ID]);
@@ -515,6 +552,120 @@ describe("gateway config reload channel ownership escalation", () => {
       expect(harness.log.info).not.toHaveBeenCalledWith(
         expect.stringContaining("channel ownership moved"),
       );
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  // Codex review P2: the escalation used to key off the plan, so it only ran when the plan
+  // already restarted the channel. Under WhatsApp's shipped reload shape a `channels.<id>` edit
+  // beneath the broad noop prefix is classified a reload no-op, yet it still makes the channel
+  // meaningfully configured and moves the owner — the schema snapshot switched owners while the
+  // active registry kept its old `cededChannelIds` and served the previous claimant.
+  it("escalates when a reload-noop-classified channels.<id> edit moves ownership", async () => {
+    const harness = startReloader({
+      initialConfig: {
+        gateway: { reload: {} },
+        channels: { [CHANNEL_ID]: { enabled: false } },
+      } as OpenClawConfig,
+      nextConfig: {
+        gateway: { reload: {} },
+        channels: { [CHANNEL_ID]: { enabled: false, token: "abc" } },
+      } as OpenClawConfig,
+      staleRegistryOwnerPluginId: LEGACY_PLUGIN_ID,
+      reloadedRegistryOwnerPluginId: REPLACEMENT_PLUGIN_ID,
+      channelReload: NOOP_CLASSIFIED_RELOAD,
+    });
+    try {
+      harness.watcher.emit("change");
+      await vi.runAllTimersAsync();
+
+      expect(harness.onRestart).not.toHaveBeenCalled();
+      expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+      const plan = harness.onHotReload.mock.calls[0]?.[0];
+      // The no-op classification keeps its channel-restart economy; only the registry reloads.
+      expect(plan?.restartChannels.size).toBe(0);
+      expect(plan?.reloadPlugins).toBe(true);
+      expect(plan?.disposeMcpRuntimes).toBe(true);
+      expect(harness.log.info).toHaveBeenCalledWith(
+        `channel ownership moved (${CHANNEL_ID}: ${LEGACY_PLUGIN_ID} -> ${REPLACEMENT_PLUGIN_ID}); reloading plugins`,
+      );
+      expect(harness.reloadPlugins).toHaveBeenCalledTimes(1);
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  // The property the widened trigger must not spend: an ownership-neutral edit under the noop
+  // prefix pays the comparison, finds no move, and keeps the fully-noop commit — no plugin
+  // reload, no hot reload, no channel restart.
+  it("keeps the noop commit for an ownership-neutral edit under a noop prefix", async () => {
+    const harness = startReloader({
+      initialConfig: {
+        gateway: { reload: {} },
+        channels: { [CHANNEL_ID]: { token: "a" } },
+      } as OpenClawConfig,
+      nextConfig: {
+        gateway: { reload: {} },
+        channels: { [CHANNEL_ID]: { token: "b" } },
+      } as OpenClawConfig,
+      staleRegistryOwnerPluginId: REPLACEMENT_PLUGIN_ID,
+      reloadedRegistryOwnerPluginId: REPLACEMENT_PLUGIN_ID,
+      channelReload: NOOP_CLASSIFIED_RELOAD,
+    });
+    try {
+      harness.watcher.emit("change");
+      await vi.runAllTimersAsync();
+
+      expect(harness.onRestart).not.toHaveBeenCalled();
+      expect(harness.onNoopConfigCommit).toHaveBeenCalledTimes(1);
+      expect(harness.onHotReload).not.toHaveBeenCalled();
+      expect(harness.reloadPlugins).not.toHaveBeenCalled();
+      expect(harness.startChannel).not.toHaveBeenCalled();
+      expect(harness.log.info).not.toHaveBeenCalledWith(
+        expect.stringContaining("channel ownership moved"),
+      );
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  // The trigger reads the authored edit, not the effective diff: here the operator writes
+  // explicitly what auto-enable had already materialized — a source-only ownership move — in the
+  // same write as an unrelated hot edit. The effective diff carries only the unrelated path, so
+  // a changed-paths trigger would miss the move exactly like the plan-keyed one did.
+  it("escalates a source-only ownership move landing beside an unrelated hot edit", async () => {
+    const materializedPlugins = {
+      entries: { [DISPLACED_PLUGIN_ID]: { enabled: true } },
+    } as OpenClawConfig["plugins"];
+    const harness = startReloader({
+      initialConfig: {
+        gateway: { reload: {} },
+        channels: { [CHANNEL_ID]: { token: "abc" } },
+      } as OpenClawConfig,
+      materializeConfig: (sourceConfig) =>
+        ({ ...sourceConfig, plugins: materializedPlugins }) as OpenClawConfig,
+      nextConfig: {
+        gateway: { reload: {} },
+        channels: { [CHANNEL_ID]: { token: "abc" } },
+        plugins: { entries: { [DISPLACED_PLUGIN_ID]: { enabled: true } } },
+        cron: { enabled: true },
+      } as unknown as OpenClawConfig,
+      staleRegistryOwnerPluginId: REPLACEMENT_PLUGIN_ID,
+      reloadedRegistryOwnerPluginId: DISPLACED_PLUGIN_ID,
+    });
+    try {
+      harness.watcher.emit("change");
+      await vi.runAllTimersAsync();
+
+      expect(harness.onRestart).not.toHaveBeenCalled();
+      expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+      const plan = harness.onHotReload.mock.calls[0]?.[0];
+      expect(plan?.changedPaths).toEqual(["cron"]);
+      expect(plan?.restartChannels.size).toBe(0);
+      expect(plan?.reloadPlugins).toBe(true);
+      expect(plan?.disposeMcpRuntimes).toBe(true);
+      expect(harness.reloadPlugins).toHaveBeenCalledTimes(1);
     } finally {
       await harness.reloader.stop();
     }
