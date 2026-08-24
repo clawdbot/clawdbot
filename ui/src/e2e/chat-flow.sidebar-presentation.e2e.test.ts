@@ -826,6 +826,112 @@ suite.define(() => {
     }
   });
 
+  it("remeasures an adopted marquee when live endcap state changes", async () => {
+    const context = await suite.newBrowserContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:adopted-live-marquee";
+    const label = "Trace every adopted session transition before releasing the sidebar";
+    const catalogResponse = {
+      catalogs: [
+        {
+          id: "codex",
+          label: "Codex",
+          capabilities: { continueSession: true, archive: true },
+          hosts: [
+            {
+              hostId: "gateway:local",
+              label: "Local Codex",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                {
+                  threadId: "thread-adopted-live-marquee",
+                  sessionKey,
+                  name: label,
+                  status: "idle",
+                  archived: false,
+                  canContinue: true,
+                  canArchive: true,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const sessionResponse = (state: Record<string, unknown> = {}) =>
+      chatSessionListResponse([
+        {
+          key: sessionKey,
+          kind: "direct",
+          label,
+          updatedAt: 1,
+          ...state,
+        },
+      ]);
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: {
+        "sessions.list": sessionResponse(),
+        "sessions.catalog.list": catalogResponse,
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const catalog = page.locator('[data-session-section="catalog:codex"]');
+      await catalog.waitFor({ state: "visible" });
+      const toggle = catalog.locator(".sidebar-session-group-toggle");
+      if ((await toggle.getAttribute("aria-expanded")) === "false") {
+        await toggle.click();
+      }
+      const row = catalog.locator(`[data-session-key="${sessionKey}"]`);
+      await row.hover();
+      const menu = row.locator("[data-session-menu]");
+      await expect
+        .poll(() => menu.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+      await menu.hover();
+      const marquee = row.locator(".hover-marquee");
+      await expect
+        .poll(() => marquee.evaluate((element) => element.classList.value), { timeout: 1_500 })
+        .toContain("hover-marquee--scrolling");
+      const idleShift = await marquee.evaluate((element) =>
+        Number.parseFloat(getComputedStyle(element).getPropertyValue("--hover-marquee-shift")),
+      );
+
+      const refreshSessions = async (state: Record<string, unknown>) => {
+        const requestCount = (await gateway.getRequests("sessions.list")).length;
+        await gateway.setMethodResponse("sessions.list", sessionResponse(state));
+        await gateway.emitGatewayEvent("sessions.changed", {
+          reason: "update",
+          sessionKey,
+        });
+        await expect
+          .poll(async () => (await gateway.getRequests("sessions.list")).length)
+          .toBeGreaterThan(requestCount);
+      };
+
+      await refreshSessions({
+        activeRunIds: ["run-adopted-live-marquee"],
+        hasActiveRun: true,
+        status: "running",
+        updatedAt: 2,
+      });
+      await row.locator(".session-run-spinner").waitFor();
+      expect(await row.evaluate((element) => element.matches(":hover"))).toBe(true);
+      await expect
+        .poll(() =>
+          marquee.evaluate((element) =>
+            Number.parseFloat(getComputedStyle(element).getPropertyValue("--hover-marquee-shift")),
+          ),
+        )
+        .toBeLessThan(idleShift);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("restarts a catalog marquee when its hovered label changes", async () => {
     const context = await suite.newBrowserContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { catalogPage, createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
+import {
+  catalogPage,
+  createGateway,
+  createSessions,
+  createSessionsHarness,
+  mountSidebar,
+} from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session catalog row identity", () => {
@@ -87,6 +93,38 @@ describe("AppSidebar session catalog row identity", () => {
       `[data-session-key="${adoptedKey}"] [data-session-menu]`,
     );
     expect(document.activeElement).toBe(adoptedMenu);
+  });
+
+  it("resets an adopted marquee when its live pull request appears", async () => {
+    const adoptedKey = "agent:main:adopted-pull-request";
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", ["agent:main:main", adoptedKey]);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.sessionData.sessionCatalogs = catalogPage([
+      {
+        threadId: "thread-adopted-pull-request",
+        name: "Adopted catalog session",
+        sessionKey: adoptedKey,
+      },
+    ]).catalogs;
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+
+    const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${adoptedKey}"]`);
+    const label = row?.querySelector<HTMLElement>(".hover-marquee");
+    label?.classList.add("hover-marquee--scrolling");
+    label?.style.setProperty("--hover-marquee-shift", "-80px");
+
+    sessions.sessions.setPullRequestSummary(adoptedKey, { numbers: [125820], state: "open" });
+    await sidebar.updateComplete;
+
+    const updatedRow = sidebar.querySelector<HTMLElement>(`[data-session-key="${adoptedKey}"]`);
+    const updatedLabel = updatedRow?.querySelector<HTMLElement>(".hover-marquee");
+    expect(updatedRow).toBe(row);
+    expect(updatedLabel).not.toBe(label);
+    expect(updatedLabel?.classList.contains("hover-marquee--scrolling")).toBe(false);
+    expect(updatedLabel?.style.getPropertyValue("--hover-marquee-shift")).toBe("");
+    expect(updatedRow?.querySelector(".session-row-badge--pull-request")).not.toBeNull();
   });
 
   it("restores menu focus when an adopted catalog thread loses its session", async () => {
