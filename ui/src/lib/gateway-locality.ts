@@ -18,3 +18,26 @@ export function isLoopbackGatewayUrl(gatewayUrl: string | null | undefined): boo
     return false;
   }
 }
+
+/**
+ * Absolute path only when an editor on this machine could actually open it.
+ * Null for a remote gateway or exec node even though the path itself is known,
+ * so callers must not reuse this for display or copy affordances. Lives here
+ * rather than beside either caller: the file view and the diff panel both need
+ * it, and importing across those two modules closes a dependency cycle.
+ */
+export function localEditorFilePath(
+  content: { path: string; root?: string | null },
+  gatewayUrl: string | null | undefined,
+  execNode: string | null | undefined,
+): string | null {
+  if (execNode || !isLoopbackGatewayUrl(gatewayUrl)) {
+    return null;
+  }
+  if (/^(?:\/|[a-z]:[\\/]|\\\\)/i.test(content.path)) {
+    return content.path;
+  }
+  return content.root
+    ? `${content.root.replace(/[\\/]+$/, "")}/${content.path.replace(/^[\\/]+/, "")}`
+    : null;
+}

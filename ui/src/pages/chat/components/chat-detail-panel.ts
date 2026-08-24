@@ -6,6 +6,7 @@ import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { localEditorFilePath } from "../../../lib/gateway-locality.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
@@ -15,7 +16,6 @@ import {
   renderSidebarPanel,
 } from "./chat-sidebar-content.ts";
 import {
-  localEditorFilePath,
   computeFileMatches,
   emptyCopyFeedback,
   readFileDraft,

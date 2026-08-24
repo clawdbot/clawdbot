@@ -24,10 +24,10 @@ import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { localEditorFilePath } from "../../../lib/gateway-locality.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
-import { localEditorFilePath } from "./chat-sidebar-file-view.ts";
 import type {
   SessionDiffMenuAction,
   SessionDiffMenuData,

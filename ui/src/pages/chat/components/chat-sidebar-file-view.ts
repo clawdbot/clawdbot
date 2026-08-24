@@ -4,7 +4,7 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
-import { isLoopbackGatewayUrl } from "../../../lib/gateway-locality.ts";
+import { localEditorFilePath } from "../../../lib/gateway-locality.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 
@@ -51,27 +51,6 @@ export function computeFileMatches(content: string, query: string): number[] {
     .flatMap((line, index) =>
       line.toLocaleLowerCase().includes(normalizedQuery) ? [index + 1] : [],
     );
-}
-
-/**
- * Absolute path only when an editor on this machine could actually open it.
- * Null for a remote gateway or exec node even though the path itself is known,
- * so callers must not reuse this for display or copy affordances.
- */
-export function localEditorFilePath(
-  content: Pick<FileSidebarContent, "path" | "root">,
-  gatewayUrl: string | null | undefined,
-  execNode: string | null | undefined,
-): string | null {
-  if (execNode || !isLoopbackGatewayUrl(gatewayUrl)) {
-    return null;
-  }
-  if (/^(?:\/|[a-z]:[\\/]|\\\\)/i.test(content.path)) {
-    return content.path;
-  }
-  return content.root
-    ? `${content.root.replace(/[\\/]+$/, "")}/${content.path.replace(/^[\\/]+/, "")}`
-    : null;
 }
 
 export type FileCopyAction = "path" | "contents";
