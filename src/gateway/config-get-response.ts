@@ -18,6 +18,7 @@ let configGetResponseCache:
       appliedConfigHash: string | null;
       pluginRegistryVersion: number;
       configSnapshotSourceFingerprint: string | null;
+      configSnapshotRevision: number | null;
       promise: Promise<ConfigGetResponse>;
     }
   | undefined;
@@ -67,18 +68,28 @@ export async function readConfigGetResponse(params: {
   // is runtime-applied, and the registry version holds still too. A hit must prove that
   // publication or config.get keeps serving the pre-edit authored snapshot.
   //
-  // The proof is the snapshot's source fingerprint, not its revision: the revision is a session
-  // counter that `resetConfigRuntimeState` zeroes (`clearSecretsRuntimeSnapshotState` reaches it
-  // on the managed-secrets failure paths without invalidating this cache), so a recycled count can
-  // alias two different snapshots, while the fingerprint hashes the canonical source content and
-  // cannot recycle — a rollback republish that restores identical content now keeps hitting
-  // instead of rebuilding. The source half alone is the right key: this response is built from the
-  // config file snapshot and hints derived from that snapshot's own source config, and the runtime
-  // config object appears nowhere in it (the applied hash and registry version already cover the
-  // runtime side), so keying on `metadata.fingerprint` too would only evict identical bytes. A
-  // snapshot without a source fingerprint proves nothing about the file, so it never hits.
-  const configSnapshotSourceFingerprint =
-    getRuntimeConfigSnapshotMetadata()?.sourceFingerprint ?? null;
+  // The proof takes both halves of the snapshot's identity, because each covers what the other
+  // cannot.
+  //
+  // The source fingerprint hashes the canonical source content, so it cannot recycle: the revision
+  // is a session counter that `resetConfigRuntimeState` zeroes (`clearSecretsRuntimeSnapshotState`
+  // reaches it on the managed-secrets failure paths without invalidating this cache), and a
+  // recycled count can alias two different snapshots.
+  //
+  // The revision covers what the fingerprint is blind to. This response carries the snapshot's raw
+  // file hash, which clients hand back as the compare-and-swap base for a write, but the
+  // fingerprint hashes the PARSED config through `stableConfigStringify`. An edit that changes only
+  // JSON5 comments, whitespace, or key order therefore moves the raw hash while leaving the
+  // fingerprint identical, and its effective diff is empty so the watcher does not invalidate
+  // either. Keyed on the fingerprint alone the cache kept serving the pre-edit raw hash, every CAS
+  // write rejected it, and the retry that rejection asks for returned the same stale hash forever.
+  // Every republish bumps the revision, source-only ones included, so requiring it too breaks that
+  // loop.
+  //
+  // A snapshot without a source fingerprint proves nothing about the file, so it never hits.
+  const configSnapshotMetadata = getRuntimeConfigSnapshotMetadata();
+  const configSnapshotSourceFingerprint = configSnapshotMetadata?.sourceFingerprint ?? null;
+  const configSnapshotRevision = configSnapshotMetadata?.revision ?? null;
   // With an active watcher, cache hits never re-read the file. External edits
   // become visible after its successful commit; the write path invalidates early.
   if (
@@ -87,7 +98,9 @@ export async function readConfigGetResponse(params: {
     configGetResponseCache.appliedConfigHash === appliedConfigHash &&
     configGetResponseCache.pluginRegistryVersion === pluginRegistryVersion &&
     configGetResponseCache.configSnapshotSourceFingerprint !== null &&
-    configGetResponseCache.configSnapshotSourceFingerprint === configSnapshotSourceFingerprint
+    configGetResponseCache.configSnapshotSourceFingerprint === configSnapshotSourceFingerprint &&
+    configGetResponseCache.configSnapshotRevision !== null &&
+    configGetResponseCache.configSnapshotRevision === configSnapshotRevision
   ) {
     return await configGetResponseCache.promise;
   }
@@ -107,6 +120,7 @@ export async function readConfigGetResponse(params: {
     // Metadata notification precedes registry activation; this version changes at handoff.
     pluginRegistryVersion,
     configSnapshotSourceFingerprint,
+    configSnapshotRevision,
     promise,
   };
   try {

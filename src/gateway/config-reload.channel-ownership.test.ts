@@ -210,6 +210,8 @@ describe("gateway config reload channel ownership escalation", () => {
 
   function startReloader(params: {
     initialConfig: OpenClawConfig;
+    /** Materializes both authored configs onto one effective config, as auto-enable does. */
+    materializedConfig?: OpenClawConfig;
     nextConfig: OpenClawConfig;
     staleRegistryOwnerPluginId: string;
     reloadedRegistryOwnerPluginId: string;
@@ -272,6 +274,14 @@ describe("gateway config reload channel ownership escalation", () => {
     const reloader = startGatewayConfigReloader({
       testDebounceMs: 0,
       initialConfig: params.initialConfig,
+      ...(params.materializedConfig
+        ? {
+            prepareConfigCandidate: () => ({
+              runtimeConfig: params.materializedConfig as OpenClawConfig,
+              compareConfig: params.materializedConfig as OpenClawConfig,
+            }),
+          }
+        : {}),
       initialSnapshotRawHash: "initial-hash",
       initialAuthoredConfig: params.initialConfig,
       initialSnapshotValid: true,
@@ -427,6 +437,46 @@ describe("gateway config reload channel ownership escalation", () => {
       );
       expect(harness.reloadPlugins).toHaveBeenCalledTimes(1);
       expect(harness.startedOwners).toEqual([REPLACEMENT_PLUGIN_ID]);
+    } finally {
+      await harness.reloader.stop();
+    }
+  });
+
+  // Codex review P1 on #123209: an authored edit can move the selected owner while auto-enable
+  // leaves the effective config identical. Here the operator writes explicitly what auto-enable had
+  // already materialized, so both authored configs prepare onto one effective config and the
+  // reload diff is empty, while the source gains an explicit selection that sets the replacement's
+  // declaration aside. The zero-changedPaths branch still publishes the source snapshot, so
+  // validation and the Control UI moved off the replacement while the active registry kept serving
+  // it.
+  it("escalates when an ownership move leaves the effective config unchanged", async () => {
+    const authoredConfig = {
+      gateway: { reload: {} },
+      channels: { [CHANNEL_ID]: { token: "abc" } },
+    } as unknown as OpenClawConfig;
+    const selectedConfig = {
+      gateway: { reload: {} },
+      channels: { [CHANNEL_ID]: { token: "abc" } },
+      plugins: { entries: { [DISPLACED_PLUGIN_ID]: { enabled: true } } },
+    } as unknown as OpenClawConfig;
+    const harness = startReloader({
+      initialConfig: authoredConfig,
+      materializedConfig: selectedConfig,
+      nextConfig: selectedConfig,
+      staleRegistryOwnerPluginId: REPLACEMENT_PLUGIN_ID,
+      reloadedRegistryOwnerPluginId: DISPLACED_PLUGIN_ID,
+    });
+    try {
+      harness.watcher.emit("change");
+      await vi.runAllTimersAsync();
+
+      expect(harness.onRestart).not.toHaveBeenCalled();
+      expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+      const plan = harness.onHotReload.mock.calls[0]?.[0];
+      expect(plan?.restartChannels.size).toBe(0);
+      expect(plan?.reloadPlugins).toBe(true);
+      expect(plan?.disposeMcpRuntimes).toBe(true);
+      expect(harness.reloadPlugins).toHaveBeenCalledTimes(1);
     } finally {
       await harness.reloader.stop();
     }

@@ -192,6 +192,34 @@ describe("config.get response cache", () => {
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
   });
 
+  // A JSON5 comment, whitespace, or key-order edit leaves the canonical source fingerprint
+  // identical, and its effective diff is empty so the watcher's changed-path invalidation does not
+  // fire either. The response still carries the snapshot's raw file hash, which clients hand back
+  // as the compare-and-swap base for a write, so serving the pre-edit hash makes every CAS write
+  // reject and the retry that rejection asks for return the same stale value. Every republish
+  // bumps the revision, source-only ones included, which is what breaks the loop.
+  it("rebuilds when a comment-only edit moves the raw hash under an unchanged fingerprint", async () => {
+    const loadUiHints = vi.fn(() => undefined);
+    const first = await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+    expect(first.hash).toBe("raw-token:raw-1");
+
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...configSnapshot({ gateway: { port: 19_001 } }),
+      raw: '// only a comment changed\n{"gateway":{"port":19001}}',
+      hash: "raw-2",
+    });
+    mocks.configSnapshotMetadata = {
+      revision: 2,
+      fingerprint: "runtime-1",
+      sourceFingerprint: "source-1",
+      updatedAtMs: 0,
+    };
+    const second = await readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints });
+
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
+    expect(second.hash).toBe("raw-token:raw-2");
+  });
+
   // While snapshot state is cleared there is no source fingerprint to prove, so nothing built in
   // that window may be served from cache — the cleared window is exactly when a stale channel
   // claimant answer would otherwise survive.
