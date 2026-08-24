@@ -41,6 +41,8 @@ import {
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
+import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
+import { materializeBundleMcpToolsForRun } from "../agents/agent-bundle-mcp-materialize.js";
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
@@ -358,6 +360,37 @@ export async function invokeGatewayTool(params: {
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
     ({ agentId, tools, workspaceDir } = resolveTools(false));
   }
+  // A per-run agent turn materializes the session's bundle MCP tools before it
+  // resolves a tool by name; a bare tools.invoke did not, so a bundle MCP tool
+  // (e.g. a workspace .mcp.json server) was reachable in a turn but 404 here.
+  // When the requested tool is not among the scoped tools, materialize the same
+  // session bundle MCP tools this session/workspace would get in a turn, using
+  // the same effective policy and lifecycle, and dispose the runtime once the
+  // invocation is done. senderId and requester scope stay unset, so
+  // requester-scoped MCP remains fail-closed on this path exactly as it does
+  // for cron/subagent runs.
+  let bundleMcpRuntimeDispose: (() => Promise<void>) | undefined;
+  if (!tools.some((candidate) => candidate.name === toolName) && workspaceDir) {
+    try {
+      const bundleMcpSessionRuntime = await getOrCreateSessionMcpRuntime({
+        sessionId: sessionKey,
+        sessionKey,
+        workspaceDir,
+        cfg: params.cfg,
+      });
+      const materialized = await materializeBundleMcpToolsForRun({
+        runtime: bundleMcpSessionRuntime,
+        agentId,
+        reservedToolNames: tools.map((tool) => tool.name),
+      });
+      if (materialized?.tools?.length) {
+        tools = [...tools, ...materialized.tools];
+      }
+      bundleMcpRuntimeDispose = materialized?.dispose;
+    } catch (bundleMcpError) {
+      logWarn(`tools-invoke: bundle MCP materialization failed: ${String(bundleMcpError)}`);
+    }
+  }
   const requestedAgentId = normalizeOptionalString(params.input.agentId);
   if (requestedAgentId && agentId && requestedAgentId !== agentId) {
     return {
@@ -455,5 +488,7 @@ export async function invokeGatewayTool(params: {
       toolName,
       error: { type: "tool_error", message: "tool execution failed" },
     };
+  } finally {
+    await bundleMcpRuntimeDispose?.();
   }
 }
