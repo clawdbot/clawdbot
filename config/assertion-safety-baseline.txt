@@ -2368,7 +2368,7 @@ src/claws/provenance-runtime-read.ts	1
 src/claws/provenance.ts	6
 src/claws/reader.ts	8
 src/claws/schema.ts	3
-src/claws/update-capability-changes.ts	11
+src/claws/update-capability-changes.ts	8
 src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
@@ -3386,7 +3386,7 @@ src/logging/diagnostic.ts	2
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
-src/logging/logger.ts	13
+src/logging/logger.ts	14
 src/logging/node-require.ts	2
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
