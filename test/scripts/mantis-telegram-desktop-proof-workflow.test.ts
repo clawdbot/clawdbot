@@ -77,6 +77,9 @@ describe("Mantis Telegram proof workflow", () => {
     expect(cleanup).toContain("${lane}.active.json");
     expect(cleanup).toContain("${lane}.starting.json");
     expect(cleanup).toContain('"/usr/local/bin/mantis-telegram-${lane}" abort');
+    expect(cleanup).toMatch(
+      /kill -KILL -- "-\$lane_pgid"[\s\S]+for _ in \{1\.\.10\}[\s\S]+kill -0 -- "-\$lane_pgid"[\s\S]+Mantis lane process group remained after SIGKILL\.[\s\S]+else[\s\S]+remove_lock=true/u,
+    );
     expect(snapshot).toBeGreaterThan(-1);
     expect(laneSnapshot).toBeGreaterThan(snapshot);
     expect(build).toBeGreaterThan(laneSnapshot);

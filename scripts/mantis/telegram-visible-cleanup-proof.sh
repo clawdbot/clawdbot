@@ -40,7 +40,16 @@ if [[ -n "$session_root" ]]; then
           sleep 1
         done
         sudo kill -KILL -- "-$lane_pgid" 2>/dev/null || true
-        remove_lock=true
+        for _ in {1..10}; do
+          sudo kill -0 -- "-$lane_pgid" 2>/dev/null || break
+          sleep 1
+        done
+        if sudo kill -0 -- "-$lane_pgid" 2>/dev/null; then
+          echo "Mantis lane process group remained after SIGKILL." >&2
+          result=1
+        else
+          remove_lock=true
+        fi
       else
         echo "Refusing to kill an unverified Mantis lock owner." >&2
         result=1
