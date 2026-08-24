@@ -244,6 +244,28 @@ describe("scripts/test-live-shard", () => {
     ).toBeNull();
   });
 
+  it("prepares gateway profile shards with observable source-runtime diagnostics", () => {
+    const preparation = resolveLiveShardPreparation(
+      selectLiveShardFiles("native-live-src-gateway-profiles", allFiles),
+    );
+
+    expect(preparation).toEqual({
+      env: {},
+      profile: "sourcePerformance",
+      requiredArtifact: "dist/.runtime-postbuildstamp",
+      runtimeEnv: {
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+        OPENCLAW_LIVE_TEST_QUIET: "0",
+        OPENCLAW_LOG_LEVEL: "info",
+        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+      },
+    });
+    expect(
+      resolveLiveShardPreparation(selectLiveShardFiles("native-live-src-gateway-core", allFiles)),
+    ).toBeNull();
+  });
+
   it("fails live shard reports with no passing tests", () => {
     expect(validateLiveShardReportPayload({ numPassedTests: 1, numTotalTests: 3 })).toEqual({
       ok: true,
@@ -556,6 +578,26 @@ describe("scripts/test-live-shard", () => {
     expect(buildLiveShardSpawnParams({ PATH: "/usr/bin" }, "win32")).toEqual({
       detached: false,
       env: { PATH: "/usr/bin" },
+      stdio: "inherit",
+    });
+    expect(
+      buildLiveShardSpawnParams({ OPENCLAW_LOG_LEVEL: "warn", PATH: "/usr/bin" }, "darwin", {
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+        OPENCLAW_LIVE_TEST_QUIET: "0",
+        OPENCLAW_LOG_LEVEL: "info",
+        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+      }),
+    ).toEqual({
+      detached: true,
+      env: {
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+        OPENCLAW_LIVE_TEST_QUIET: "0",
+        OPENCLAW_LOG_LEVEL: "info",
+        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+        PATH: "/usr/bin",
+      },
       stdio: "inherit",
     });
   });

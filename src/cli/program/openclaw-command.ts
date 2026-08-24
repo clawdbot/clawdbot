@@ -1,10 +1,11 @@
 // Commander subclass that preserves the exact failing command for parse-error guidance.
 import { Command, CommanderError, type ErrorOptions } from "commander";
-import { isJsonOutputModeActive } from "../json-output-mode.js";
+import { applyResolvedCommandOutputMode, isJsonOutputModeActive } from "../json-output-mode.js";
 import {
   getCommanderErrorCommandNames,
   getCommanderErrorCommandPath,
   getCommanderSubcommandFact,
+  hasCommanderOptionToken,
   setCommanderErrorCommand,
 } from "./commander-parse-facts.js";
 import { createCliParseError } from "./error-output.js";
@@ -33,6 +34,10 @@ export class OpenClawCommand extends Command {
         error.exitCode !== 0 &&
         isJsonOutputModeActive(process.argv)
       ) {
+        if (!hasCommanderOptionToken(this, process.argv, new Set(["--json"]), "flag")) {
+          applyResolvedCommandOutputMode(false);
+          throw error;
+        }
         throw createCliParseError(
           message,
           {

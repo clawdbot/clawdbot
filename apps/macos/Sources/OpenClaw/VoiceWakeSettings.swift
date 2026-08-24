@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Observation
+import OpenClawKit
 import Speech
 import SwabbleKit
 import SwiftUI
@@ -181,6 +182,21 @@ struct VoiceWakeSettings: View {
                             title: "Hold Right Option to talk",
                             subtitle: "Start listening while you hold the key and show the preview overlay.",
                             binding: self.$state.voicePushToTalkEnabled)
+
+                        self.realtimeRelayToggle
+
+                        SettingsCardRow(
+                            title: "Talk configuration",
+                            subtitle: "Choose the realtime provider, model, voice, and transport in the Control UI.")
+                        {
+                            Button("Open in Dashboard") {
+                                Task {
+                                    await DashboardManager.shared.show(
+                                        atPath: DashboardRouteMap.talkSettingsPath)
+                                }
+                            }
+                            .buttonStyle(.link)
+                        }
 
                         if self.state.voicePushToTalkEnabled, self.state.talkEnabled {
                             SettingsCardRow(
@@ -927,6 +943,18 @@ private struct TriggerPhraseHelpRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
+    }
+}
+
+extension VoiceWakeSettings {
+    private var realtimeRelayToggle: some View {
+        SettingsCardToggleRow(
+            title: "Use realtime Gateway relay",
+            subtitle: """
+            Use the Gateway's configured realtime voice session on this Mac. \
+            Requires realtime, gateway-relay, and agent-consult in Talk settings.
+            """,
+            binding: self.$state.talkRealtimeRelayEnabled)
     }
 }
 

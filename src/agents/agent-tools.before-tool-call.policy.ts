@@ -52,6 +52,7 @@ import {
 } from "./code-mode-control-tools.js";
 import { admitSingleToolCallLoop } from "./tool-loop-admission.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
@@ -316,6 +317,14 @@ export async function runBeforeToolCallHook(args: {
       return allowed;
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
+    const callerIdentity = getGatewayToolCallerIdentity();
+    const receipt =
+      callerIdentity?.executionIdentityToken && callerIdentity.receiptAuthority
+        ? {
+            token: callerIdentity.executionIdentityToken,
+            assertAuthority: callerIdentity.receiptAuthority,
+          }
+        : undefined;
     const hookResult = await hookRunner.runBeforeToolCall(
       {
         toolName,
@@ -328,6 +337,7 @@ export async function runBeforeToolCallHook(args: {
           : {}),
       },
       policyAdjustedToolContext,
+      receipt,
     );
 
     if (hookResult?.block) {

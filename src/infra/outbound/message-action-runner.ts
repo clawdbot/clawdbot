@@ -14,6 +14,7 @@ import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { hasPollCreationParams } from "../../poll-params.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
@@ -48,6 +49,10 @@ import {
   resolveEffectiveMessageToolsConfig,
 } from "./outbound-policy.js";
 import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
+
+const loadInternalSourceReplyPersistence = createLazyRuntimeModule(
+  () => import("../../gateway/internal-source-reply-persistence.js"),
+);
 
 export function getToolResult(result: MessageActionResult): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
@@ -294,12 +299,38 @@ async function handleInternalSourceReplySendAction(
   }
   const sourceReplyMediaUrls = resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls;
   const sourceReplyMessage = sourceReplyPayload.text ?? sourceReply.message;
+  const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
+  let persistedIdempotencyKey: string | undefined;
+  let persistedTranscriptOwner = false;
+  if (!dryRun && input.sessionId) {
+    const sessionKey = input.sourceReplySessionKey ?? input.sessionKey;
+    if (!sessionKey) {
+      throw new Error("Internal source reply requires a session key");
+    }
+    const { persistInternalSourceReply } = await loadInternalSourceReplyPersistence();
+    await persistInternalSourceReply({
+      cfg: input.cfg,
+      sessionKey,
+      expectedSessionId: input.sessionId,
+      agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
+      payload: sourceReplyPayload,
+      idempotencyKey,
+      runId: input.runId,
+      sourceReplyFinal: input.sourceReplyFinal,
+      toolCallId: input.sourceReplyToolCallId,
+      sourceTurnId: input.messageActionAuthorization?.toolContext?.currentSourceTurnId,
+    });
+    persistedIdempotencyKey = idempotencyKey;
+    persistedTranscriptOwner = true;
+  }
   const payload = {
     status: "ok",
     deliveryStatus: dryRun ? "dry_run" : "sent",
     channel: INTERNAL_MESSAGE_CHANNEL,
     target: "current-run",
     sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
+    ...(persistedIdempotencyKey ? { idempotencyKey: persistedIdempotencyKey } : {}),
+    ...(persistedTranscriptOwner ? { sourceReplyTranscriptOwner: true as const } : {}),
     ...(dryRun ? {} : { sourceReplySink: "internal-ui" as const }),
     sourceReply: sourceReplyPayload,
     ...(sourceReplyMessage ? { message: sourceReplyMessage } : {}),
@@ -328,6 +359,8 @@ function buildInternalSourceReplyToolResult(payload: {
   channel: ChannelId;
   target: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  idempotencyKey?: string;
+  sourceReplyTranscriptOwner?: true;
   sourceReplySink?: "internal-ui";
   sourceReply: ReplyPayload;
   message?: string;
@@ -340,6 +373,8 @@ function buildInternalSourceReplyToolResult(payload: {
   channel: ChannelId;
   target: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  idempotencyKey?: string;
+  sourceReplyTranscriptOwner?: true;
   sourceReplySink?: "internal-ui";
   sourceReply: ReplyPayload;
   message?: string;
@@ -364,6 +399,8 @@ function buildInternalSourceReplyToolResult(payload: {
       ...(payload.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: payload.sourceReplyDeliveryMode }
         : {}),
+      ...(payload.idempotencyKey ? { idempotencyKey: payload.idempotencyKey } : {}),
+      ...(payload.sourceReplyTranscriptOwner ? { sourceReplyTranscriptOwner: true as const } : {}),
       ...(payload.sourceReplySink ? { sourceReplySink: payload.sourceReplySink } : {}),
       sourceReply: payload.sourceReply,
       ...(payload.message ? { message: payload.message } : {}),

@@ -12,6 +12,7 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { discardPreparedInboundMedia, type OffloadedRef } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { createCronContinuationController } from "../server-methods/agent-cron-continuation.js";
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
@@ -351,14 +352,20 @@ export function createAgentTurnService({
         // Authorize the canonical session the run will actually target — covering
         // keyless requests whose default/effective session is resolved only here —
         // before any run side effects (admission, dispatch).
-        const sharingError = authorizeResolvedSessionMutation({
-          cfg: cfgLocal,
-          client: principal,
-          sessionKey: canonicalKey,
-          agentId: canonicalSessionAgentId,
-        });
-        if (sharingError) {
-          io.emitAcceptance([false, undefined, sharingError]);
+        const sessionAuthorizationError =
+          authorizeGatewaySessionCreation({
+            cfg: cfgLocal,
+            client: principal,
+            agentId: canonicalSessionAgentId,
+          }) ??
+          authorizeResolvedSessionMutation({
+            cfg: cfgLocal,
+            client: principal,
+            sessionKey: canonicalKey,
+            agentId: canonicalSessionAgentId,
+          });
+        if (sessionAuthorizationError) {
+          io.emitAcceptance([false, undefined, sessionAuthorizationError]);
           return;
         }
         effectiveBootstrapContextRunKind = preparedSession.effectiveBootstrapContextRunKind;
@@ -436,6 +443,12 @@ export function createAgentTurnService({
           sessionAgentId,
           mainSessionKey,
           creation: resolveAgentRunSessionCreation(principal),
+          ...(principal?.authenticatedUserProfile
+            ? { requestingOperatorProfileId: principal.authenticatedUserProfile.profileId }
+            : {}),
+          ...(principal?.internal?.operatorRoleActor
+            ? { operatorRoleActor: principal.internal.operatorRoleActor }
+            : {}),
           lifecycleGeneration,
           isRestartRecoveryResumeRun,
           runId,

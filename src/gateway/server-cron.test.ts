@@ -11,6 +11,10 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../infra/outbound/deliver-types.js";
 import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-ownership.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -50,7 +54,18 @@ const {
   >(async () => ({ status: "ran", durationMs: 1 })),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
-  sendCronAnnouncePayloadStrictMock: vi.fn(async () => {}),
+  sendCronAnnouncePayloadStrictMock: vi.fn<
+    typeof import("../cron/delivery.js").sendCronAnnouncePayloadStrict
+  >(async () => ({
+    status: "sent",
+    results: [{ channel: "telegram", messageId: "cron-message" }],
+    receipt: {
+      primaryPlatformMessageId: "cron-message",
+      platformMessageIds: ["cron-message"],
+      parts: [{ platformMessageId: "cron-message", kind: "text", index: 0 }],
+      sentAt: 0,
+    },
+  })),
   runCronIsolatedAgentTurnMock: vi.fn<RunCronIsolatedAgentTurnMock>(async () => ({
     status: "ok",
     summary: "ok",
@@ -215,6 +230,7 @@ vi.mock("../cron/trigger-script.js", () => ({
 
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import {
+  abortActiveCronTaskRuns,
   registerActiveCronTaskRun,
   trackActiveCronTaskRunSettlement,
 } from "../cron/service/active-run-cancellation.js";
@@ -1677,6 +1693,352 @@ describe("buildGatewayCronService", () => {
       expect(state.cron.getJob(job.id)?.state.lastDeliveryError).toBeUndefined();
     } finally {
       state.cron.stop();
+    }
+  });
+
+  it.each(["command", "script"] as const)(
+    "retries proven pre-dispatch failure before delivering one-shot %s cron output",
+    async (payloadKind) => {
+      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+      const cfg = createCronConfig(`server-cron-${payloadKind}-announce-retry`);
+      cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+      loadConfigMock.mockReturnValue(cfg);
+      cronScriptExecutorMock.mockResolvedValueOnce({
+        kind: "completed",
+        notify: "scheduled result",
+        stateChanged: false,
+      });
+      sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(
+        new PlatformMessageNotDispatchedError("platform unavailable before dispatch", {
+          cause: Object.assign(new Error("connect ECONNREFUSED"), {
+            code: "ECONNREFUSED",
+            syscall: "connect",
+          }),
+        }),
+      );
+
+      const state = buildGatewayCronService({
+        cfg,
+        deps: {} as CliDeps,
+        broadcast: () => {},
+      });
+      try {
+        const job = await state.cron.add({
+          name: `${payloadKind} announce retry`,
+          enabled: true,
+          deleteAfterRun: true,
+          schedule: { kind: "at", at: new Date(1).toISOString() },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload:
+            payloadKind === "command"
+              ? {
+                  kind: "command" as const,
+                  argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
+                }
+              : { kind: "script" as const, script: "return { notify: 'scheduled result' }" },
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
+        });
+
+        await state.cron.run(job.id, "force");
+
+        expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledTimes(2);
+        const firstAttempt = requireRecord(
+          callArg(sendCronAnnouncePayloadStrictMock, 0, 0, "first cron announce attempt"),
+          "first cron announce attempt",
+        );
+        const secondAttempt = requireRecord(
+          callArg(sendCronAnnouncePayloadStrictMock, 1, 0, "second cron announce attempt"),
+          "second cron announce attempt",
+        );
+        expect(secondAttempt.abortSignal).toBe(firstAttempt.abortSignal);
+        expect(state.cron.getJob(job.id)).toBeUndefined();
+        const finished = runCronChangedMock.mock.calls
+          .map(([event]) => requireRecord(event, "cron_changed event"))
+          .find((event) => event.action === "finished" && event.jobId === job.id);
+        expect(finished).toMatchObject({
+          status: "ok",
+          completionStatus: "succeeded",
+          deliveryStatus: "delivered",
+        });
+      } finally {
+        state.cron.stop();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it.each(
+    (
+      [
+        { reason: "no_visible_result", recipientReached: false },
+        { reason: "no_visible_payload", recipientReached: false },
+        { reason: "cancelled_by_message_sending_hook", recipientReached: false },
+        { reason: "adapter_returned_no_identity", recipientReached: true },
+      ] as const
+    ).flatMap((suppression) =>
+      (["command", "script"] as const).flatMap((payloadKind) =>
+        (["default", "optional", "required"] as const).map((policy) => ({
+          reason: suppression.reason,
+          recipientReached: suppression.recipientReached,
+          payloadKind,
+          policy,
+        })),
+      ),
+    ),
+  )(
+    "records $payloadKind $reason suppression without retry under $policy delivery",
+    async ({ reason, recipientReached, payloadKind, policy }) => {
+      const cfg = createCronConfig(`cron-${payloadKind}-${reason}-${policy}`);
+      cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+      loadConfigMock.mockReturnValue(cfg);
+      cronScriptExecutorMock.mockResolvedValueOnce({
+        kind: "completed",
+        notify: "scheduled result",
+        stateChanged: false,
+      });
+      sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const attempt = requireRecord(args[0], "suppressed cron announcement");
+        if (typeof attempt.onDeliveryAttempt === "function") {
+          attempt.onDeliveryAttempt(recipientReached);
+        }
+        return {
+          status: "suppressed",
+          reason,
+          results: [],
+          receipt: { platformMessageIds: [], parts: [], sentAt: 0 },
+        };
+      });
+
+      const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
+      try {
+        const job = await state.cron.add({
+          name: `${payloadKind} ${reason} ${policy}`,
+          enabled: true,
+          deleteAfterRun: true,
+          schedule: { kind: "at", at: new Date(1).toISOString() },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload:
+            payloadKind === "command"
+              ? {
+                  kind: "command" as const,
+                  argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
+                }
+              : { kind: "script" as const, script: "return { notify: 'scheduled result' }" },
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "123",
+            ...(policy === "default" ? {} : { bestEffort: policy === "optional" }),
+          },
+        });
+
+        await state.cron.run(job.id, "force");
+
+        expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce();
+        const expectedDeliveryStatus = recipientReached ? "unknown" : "not-delivered";
+        const required = policy === "required";
+        const updated = state.cron.getJob(job.id);
+        expect(Boolean(updated)).toBe(required);
+        if (updated) {
+          expect(updated.state.lastDeliveryStatus).toBe(expectedDeliveryStatus);
+          expect(updated.state.lastDeliveryError).toBeUndefined();
+        }
+        const finished = runCronChangedMock.mock.calls
+          .map(([event]) => requireRecord(event, "cron_changed event"))
+          .find((event) => event.action === "finished" && event.jobId === job.id);
+        expect(finished).toMatchObject({
+          status: "ok",
+          completionStatus: required ? (recipientReached ? "unknown" : "failed") : "succeeded",
+          deliveryStatus: expectedDeliveryStatus,
+        });
+        if (recipientReached) {
+          expect(finished).not.toHaveProperty("delivered");
+        } else {
+          expect(finished).toHaveProperty("delivered", false);
+        }
+      } finally {
+        state.cron.stop();
+      }
+    },
+  );
+
+  it.each([
+    { payloadKind: "command", errorKind: "raw" },
+    { payloadKind: "command", errorKind: "wrapped" },
+    { payloadKind: "script", errorKind: "raw" },
+    { payloadKind: "script", errorKind: "wrapped" },
+  ] as const)(
+    "never resends accepted $payloadKind output after a $errorKind partial-delivery failure",
+    async ({ payloadKind, errorKind }) => {
+      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+      const cfg = createCronConfig(`server-cron-${payloadKind}-${errorKind}-partial`);
+      cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+      loadConfigMock.mockReturnValue(cfg);
+      cronScriptExecutorMock.mockResolvedValueOnce({
+        kind: "completed",
+        notify: "scheduled result",
+        stateChanged: false,
+      });
+      const rejectedChunk = new PlatformMessageNotDispatchedError(
+        "second chunk was never dispatched",
+        {
+          cause: Object.assign(new Error("connect ECONNREFUSED"), {
+            code: "ECONNREFUSED",
+            syscall: "connect",
+          }),
+        },
+      );
+      const deliveryError =
+        errorKind === "raw"
+          ? rejectedChunk
+          : new OutboundDeliveryError("delivery failed after the first chunk", {
+              cause: rejectedChunk,
+              results: [{ channel: "telegram", messageId: "already-delivered" }],
+              stage: "platform_send",
+            });
+      sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const attempt = requireRecord(args[0], "partial cron announcement");
+        if (typeof attempt.onDeliveryAttempt === "function") {
+          attempt.onDeliveryAttempt(true);
+        }
+        throw deliveryError;
+      });
+
+      const state = buildGatewayCronService({
+        cfg,
+        deps: {} as CliDeps,
+        broadcast: () => {},
+      });
+      try {
+        const job = await state.cron.add({
+          name: `${payloadKind} partial announcement`,
+          enabled: true,
+          deleteAfterRun: false,
+          schedule: { kind: "at", at: new Date(1).toISOString() },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload:
+            payloadKind === "command"
+              ? {
+                  kind: "command" as const,
+                  argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
+                }
+              : { kind: "script" as const, script: "return { notify: 'scheduled result' }" },
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
+        });
+
+        await state.cron.run(job.id, "force");
+
+        expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce();
+        expect(state.cron.getJob(job.id)?.state.lastDeliveryStatus).toBe("not-delivered");
+      } finally {
+        state.cron.stop();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "permanent typed rejection",
+      error: new PlatformMessageNotDispatchedError("platform rejected this message", {
+        cause: new Error("invalid payload"),
+        retryable: false,
+      }),
+    },
+    {
+      name: "ambiguous transport failure",
+      error: Object.assign(new Error("read ECONNRESET after sending"), {
+        code: "ECONNRESET",
+      }),
+    },
+  ])("does not duplicate a command announcement after $name", async ({ error }) => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    const cfg = createCronConfig("server-cron-command-no-unsafe-retry");
+    loadConfigMock.mockReturnValue(cfg);
+    sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(error);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "command no unsafe retry",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
+        },
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce();
+      expect(state.cron.getJob(job.id)?.state).toMatchObject({
+        lastRunStatus: "ok",
+        lastDeliveryStatus: "not-delivered",
+        lastDeliveryError: expect.stringContaining(error.message),
+      });
+    } finally {
+      state.cron.stop();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not retry a command announcement after its cron run is cancelled", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    const cfg = createCronConfig("server-cron-command-cancelled-retry");
+    loadConfigMock.mockReturnValue(cfg);
+    let deliverySignal: AbortSignal | undefined;
+    sendCronAnnouncePayloadStrictMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const request = requireRecord(args[0], "cancelled cron announce attempt");
+      deliverySignal = request.abortSignal as AbortSignal;
+      expect(abortActiveCronTaskRuns("Cancelled by operator.")).toBe(1);
+      throw new PlatformMessageNotDispatchedError("platform unavailable before dispatch", {
+        cause: Object.assign(new Error("connect ECONNREFUSED"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      });
+    });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "cancelled command announcement",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", "process.stdout.write('scheduled result')"],
+        },
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce();
+      expect(deliverySignal?.aborted).toBe(true);
+      expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("error");
+    } finally {
+      state.cron.stop();
+      vi.unstubAllEnvs();
     }
   });
 

@@ -23,10 +23,16 @@ function frame(params: unknown): NodeInvokeRequestPayload {
   };
 }
 
-function client(calls: Array<{ method: string; params: unknown }>): NodeHostClient {
+function client(
+  calls: Array<{ method: string; params: unknown }>,
+  onProgress?: () => void,
+): NodeHostClient {
   return {
     async request<T>(method: string, params?: unknown): Promise<T> {
       calls.push({ method, params });
+      if (method === "node.invoke.progress") {
+        onProgress?.();
+      }
       return {} as T;
     },
   };
@@ -37,8 +43,8 @@ async function executableScript(source: string): Promise<string> {
   // plan canonicalizes argv[0]; raw mkdtemp paths pass on Linux but fail here.
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-")));
   tempDirs.push(dir);
-  const file = path.join(dir, "claude-test");
-  await fs.writeFile(file, `#!/usr/bin/env node\n${source}\n`, { mode: 0o700 });
+  const file = path.join(dir, "claude-test.cjs");
+  await fs.writeFile(file, `#!${process.execPath}\n${source}\n`, { mode: 0o700 });
   return file;
 }
 
@@ -102,8 +108,16 @@ describe("Claude CLI node command", () => {
           stdin: "hello",
           systemPrompt: "private prompt",
           cwd,
-          env: { NO_COLOR: "1", CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
-          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+          env: {
+            NO_COLOR: "1",
+            CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+            CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+          },
+          clearEnv: [
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+          ],
           idleTimeoutMs: 1_000,
           timeoutMs: 2_000,
         }),
@@ -112,8 +126,12 @@ describe("Claude CLI node command", () => {
       cwd,
       stdin: "hello",
       systemPrompt: "private prompt",
-      env: { NO_COLOR: "1", CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
-      clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+      env: {
+        NO_COLOR: "1",
+        CLAUDE_CODE_DISABLE_1M_CONTEXT: "1",
+        CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+      },
+      clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_DISABLE_1M_CONTEXT", "CLAUDE_CODE_OAUTH_TOKEN"],
     });
   });
 
@@ -600,14 +618,16 @@ process.stdout.write(Buffer.concat([
     const controller = new AbortController();
     const request = { argv: ["-p"], idleTimeoutMs: 5_000, timeoutMs: 10_000 };
     const calls: Array<{ method: string; params: unknown }> = [];
+    let resolveProgress!: () => void;
+    const progressObserved = new Promise<void>((resolve) => {
+      resolveProgress = resolve;
+    });
     const run = runCommand(executable, request, {
-      client: client(calls),
+      client: client(calls, resolveProgress),
       signal: controller.signal,
     });
 
-    await vi.waitFor(() =>
-      expect(calls).toContainEqual(expect.objectContaining({ method: "node.invoke.progress" })),
-    );
+    await progressObserved;
     controller.abort();
 
     await expect(run).resolves.toMatchObject({

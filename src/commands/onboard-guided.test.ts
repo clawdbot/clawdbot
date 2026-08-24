@@ -454,10 +454,29 @@ describe("runGuidedOnboarding", () => {
 
     expect(persistRiskAcknowledgement).toHaveBeenCalledWith({
       wizard: { securityAcknowledgedAt: expect.any(String) },
+      telemetry: { enabled: false, consentedAt: expect.any(String) },
     });
     expect(persistRiskAcknowledgement.mock.invocationCallOrder[0]).toBeLessThan(
       detect.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("persists explicit feature-stat consent with the guided onboarding acknowledgement", async () => {
+    const select = vi.fn(async ({ message }: { message: string }) =>
+      message === "Help make OpenClaw better?" ? true : "full",
+    ) as unknown as WizardPrompter["select"];
+    const prompter = createWizardPrompter({ select });
+
+    await runGuidedOnboarding(
+      { acceptRisk: true, workspace: "/tmp/work" },
+      makeRuntime(),
+      setupDeps({ prompter }),
+    );
+
+    expect(localOnboarding.persisted.config?.telemetry).toEqual({
+      enabled: true,
+      consentedAt: expect.any(String),
+    });
   });
 
   it("uses the configured workspace only as inference and OpenClaw context", async () => {
@@ -918,7 +937,7 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
-    expect(select).toHaveBeenCalledTimes(1);
+    expect(select).toHaveBeenCalledTimes(2);
     expect(deps.activate).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.launchHatchTui).not.toHaveBeenCalled();

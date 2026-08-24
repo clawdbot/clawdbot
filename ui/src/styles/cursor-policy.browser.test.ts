@@ -58,6 +58,7 @@ function readUiCss(): string {
     "ui/src/styles/base.css",
     "ui/src/styles/components.css",
     "ui/src/styles/layout.css",
+    "ui/src/styles/sidebar-update-card.css",
     "ui/src/styles/sessions.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",

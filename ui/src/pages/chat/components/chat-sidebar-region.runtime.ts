@@ -375,10 +375,16 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       const previousWidth = root.querySelector<HTMLElement>(".side-panel")?.style.width;
       renderTemplate(this.renderPanel(), root);
       const panel = root.querySelector<HTMLElement>(".side-panel");
-      // Wrapped row heights must update with their new width before the same paint.
-      if (panel && previousWidth !== undefined && panel.style.width !== previousWidth) {
-        panel.dispatchEvent(new Event(SIDEBAR_GEOMETRY_COMMIT_EVENT, { bubbles: true }));
-      }
+      // The manual panel render is the commit boundary for its transcript.
+      // Width changes additionally invalidate every transcript row measurement.
+      panel?.dispatchEvent(
+        new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
+          bubbles: true,
+          detail: {
+            widthChanged: previousWidth !== undefined && panel.style.width !== previousWidth,
+          },
+        }),
+      );
     }
   }
 

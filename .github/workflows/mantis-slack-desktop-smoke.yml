@@ -411,13 +411,14 @@ jobs:
             --argjson screenshot_required "$screenshot_required" \
             --argjson desktop_capture_inline "$desktop_capture_inline" \
             '{
-              schemaVersion: 1,
+              schemaVersion: 2,
               id: "slack-desktop-smoke",
               title: "Mantis Slack Desktop Smoke QA",
               summary: $summary,
               scenario: $scenario,
               comparison: {
-                candidate: { sha: $candidate_sha, expected: $expected, status: $status, fixed: ($status == "pass") },
+                candidate: { sha: $candidate_sha, expected: $expected, expectationMet: ($status == "pass"), status: $status, fixed: ($status == "pass") },
+                outcome: (if $status == "pass" then "pass" else "fail" end),
                 pass: ($status == "pass")
               },
               artifacts: ([

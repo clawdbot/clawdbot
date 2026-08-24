@@ -57,10 +57,12 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   child that owns a blocking failure.
 - After dispatch, one immutable execution-plan artifact records the original
   parent attempt, exact child tuples and titles, selected coverage, gates, and
-  reuse identity. Decision, Drain, manifest writing, evidence validation, and
-  final verification consume that plan. A collector retry restores it and
-  adopts the same children; missing plan state is an orchestration failure, not
-  permission to redispatch.
+  reuse identity. The same bytes are saved under an exact run-ID cache key.
+  Decision, Drain, manifest writing, evidence validation, and final verification
+  consume the artifact for their current attempt. A collector retry restores
+  the cached plan, validates it, re-uploads its artifact, and adopts the same
+  children; missing plan state is an orchestration failure, not permission to
+  reconstruct the plan or redispatch.
 - Reused evidence is not trusted merely because plan sealing found it. Release
   Decision repeats the sealed target SHA, evidence SHA, policy, changed paths,
   selected run, root run, source manifest, trusted tooling identity, and
@@ -321,7 +323,8 @@ The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
 failure and timing manifest. Use it after an early blocker instead of
 restarting `all` merely to discover what the still-running children found.
 The stable `full-release-execution-plan-<run-id>` artifact is the identity
-source for every collector attempt.
+source within each collector attempt; retry attempts restore its immutable
+run-ID-cached bytes first.
 
 ## Failure Triage
 

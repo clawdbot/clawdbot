@@ -438,7 +438,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (evt.reason !== "new" && evt.reason !== "reset") {
-      return;
+      return clearStaleStreamingIfNoTrackedRunRemains(evt);
     }
 
     const nextSessionId = typeof evt.sessionId === "string" ? evt.sessionId : null;

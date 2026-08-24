@@ -1118,6 +1118,26 @@ describe("talk.config handler", () => {
     },
   );
 
+  it("prefers the user accent over the operator seam color", async () => {
+    markTalkOwnerCold("tts");
+    const runtimeConfig = createTalkConfig("healthy-talk-key");
+    mocks.getSpeechProvider.mockReturnValue({ id: "acme" });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      config: { ...runtimeConfig, ui: { seamColor: "#123456", prefs: { accent: "#52c99a" } } },
+    });
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.config", {
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } },
+      respond,
+      context: { getRuntimeConfig: () => runtimeConfig },
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]?.config?.ui).toEqual({ seamColor: "#52c99a" });
+  });
+
   it("projects the runtime realtime transport when source config is invalid", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/openclaw.json",
@@ -1817,8 +1837,12 @@ describe("talk.session unified handlers", () => {
     });
 
     const cancelRespond = vi.fn();
+    mocks.cancelTalkRealtimeRelayTurn.mockResolvedValueOnce({
+      status: "applied",
+      turnId: "turn-7",
+    });
     await callTalkHandler("talk.session.cancelOutput", {
-      params: { sessionId: "relay-unified-1", reason: "barge-in" },
+      params: { sessionId: "relay-unified-1", reason: "barge-in", turnId: "turn-7" },
       id: "3",
       respond: cancelRespond,
       context: {},
@@ -1827,6 +1851,25 @@ describe("talk.session unified handlers", () => {
       relaySessionId: "relay-unified-1",
       connId: "conn-1",
       reason: "barge-in",
+      turnId: "turn-7",
+    });
+    expectRespondOk(cancelRespond, { ok: true, status: "applied", turnId: "turn-7" });
+    for (const status of ["stale", "idle"] as const) {
+      const nonAppliedRespond = vi.fn();
+      mocks.cancelTalkRealtimeRelayTurn.mockResolvedValueOnce({ status });
+      await callTalkHandler("talk.session.cancelOutput", {
+        params: { sessionId: "relay-unified-1", reason: "barge-in", turnId: "turn-old" },
+        id: `3-${status}`,
+        respond: nonAppliedRespond,
+        context: {},
+      });
+      expectRespondOk(nonAppliedRespond, { ok: true, status });
+    }
+    expect(mocks.cancelTalkRealtimeRelayTurn).toHaveBeenLastCalledWith({
+      relaySessionId: "relay-unified-1",
+      connId: "conn-1",
+      reason: "barge-in",
+      turnId: "turn-old",
     });
 
     const markRespond = vi.fn();

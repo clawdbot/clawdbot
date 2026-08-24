@@ -16,9 +16,11 @@ const sessionRow = vi.hoisted(() => ({
 const resolveEmbeddedAgentRunProgressStateMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionRowMock = vi.hoisted(() => vi.fn());
 const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
+const listAccessorSessionEntriesReadOnlyMock = vi.hoisted(() => vi.fn());
 const loadAccessorSessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
 const readSessionMessageCountAsyncMock = vi.hoisted(() => vi.fn());
+const resolveTranscriptSessionKeyBySessionIdMock = vi.hoisted(() => vi.fn());
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtimeConfigState.value }));
@@ -26,7 +28,9 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
   return {
     ...actual,
+    listSessionEntriesReadOnly: listAccessorSessionEntriesReadOnlyMock,
     loadSessionEntryReadOnly: loadAccessorSessionEntryReadOnlyMock,
+    resolveTranscriptSessionKeyBySessionId: resolveTranscriptSessionKeyBySessionIdMock,
   };
 });
 vi.mock("./chat-display-projection.js", () => ({
@@ -110,10 +114,12 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveEmbeddedAgentRunProgressStateMock.mockReturnValue(undefined);
+    listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
     loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
     loadGatewaySessionRowMock.mockReturnValue(sessionRow);
     readSessionMessageCountAsyncMock.mockResolvedValue(undefined);
+    resolveTranscriptSessionKeyBySessionIdMock.mockReturnValue(undefined);
     loadGatewaySessionRowMock.mockReturnValue(sessionRow);
     runtimeConfigState.value = {};
     sessionRow.key = "agent:main:main";
@@ -650,14 +656,30 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({ messageSeq: 7 });
   });
 
-  it("does not stall one session's broadcasts behind another session's pending seq read", async () => {
+  it.each([
+    {
+      name: "distinct session keys",
+      slowAgentId: "main",
+      slowSessionKey: "agent:main:slow",
+      fastAgentId: "main",
+      fastSessionKey: "agent:main:main",
+    },
+    {
+      name: "global sessions owned by different agents",
+      slowAgentId: "main",
+      slowSessionKey: "global",
+      fastAgentId: "research",
+      fastSessionKey: "global",
+    },
+  ])("does not stall $name behind another transcript's pending seq read", async (scenario) => {
     let releaseSlowCount: (value: number | undefined) => void = () => undefined;
-    readSessionMessageCountAsyncMock.mockImplementation((params: { sessionKey?: string }) =>
-      params.sessionKey === "agent:main:slow"
-        ? new Promise<number | undefined>((resolve) => {
-            releaseSlowCount = resolve;
-          })
-        : Promise.resolve(3),
+    readSessionMessageCountAsyncMock.mockImplementation(
+      (params: { agentId?: string; sessionKey?: string }) =>
+        params.agentId === scenario.slowAgentId && params.sessionKey === scenario.slowSessionKey
+          ? new Promise<number | undefined>((resolve) => {
+              releaseSlowCount = resolve;
+            })
+          : Promise.resolve(3),
     );
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue({ sessionId: "sess-main" });
     const { broadcastToConnIds, handler } = createHandler(false);
@@ -667,32 +689,81 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       message: { role: "assistant", content: [{ type: "text", text: "slow" }] },
       messageId: "slow-1",
       target: {
-        agentId: "main",
+        agentId: scenario.slowAgentId,
         sessionId: "sess-slow",
-        sessionKey: "agent:main:slow",
+        sessionKey: scenario.slowSessionKey,
         storePath: "/tmp/slow-sessions.json",
       },
     });
+    await vi.waitFor(() => expect(readSessionMessageCountAsyncMock).toHaveBeenCalledOnce());
 
-    await handler({
+    const fastTask = handler({
       sessionFile: "/tmp/sess-main.jsonl",
-      sessionKey: "agent:main:main",
+      agentId: scenario.fastAgentId,
+      sessionKey: scenario.fastSessionKey,
       message: { role: "assistant", content: [{ type: "text", text: "fast" }] },
       messageId: "fast-1",
       messageSeq: 1,
     });
 
-    // The independent lane broadcast completed while the slow lane is parked.
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({ messageId: "fast-1" });
+    try {
+      // The independent lane must publish while the other transcript remains parked.
+      await vi.waitFor(() => expect(broadcastToConnIds).toHaveBeenCalledOnce(), {
+        timeout: 100,
+        interval: 5,
+      });
+      expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({ messageId: "fast-1" });
+    } finally {
+      releaseSlowCount(5);
+      await Promise.allSettled([slowTask, fastTask]);
+    }
 
-    releaseSlowCount(5);
-    await slowTask;
     expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
     expect(broadcastToConnIds.mock.calls[1]?.[1]).toMatchObject({ messageId: "slow-1" });
   });
 
-  it("preserves message order within one session lane", async () => {
+  it.each([
+    {
+      name: "an agent-qualified session",
+      firstSessionKey: "agent:main:main",
+      secondSessionKey: "agent:main:main",
+      agentId: "main",
+    },
+    {
+      name: "an ownerless legacy global update",
+      firstSessionKey: "global",
+      secondSessionKey: "global",
+      agentId: "main",
+    },
+    {
+      name: "a global session and its agent-qualified alias",
+      firstSessionKey: "global",
+      secondSessionKey: "agent:main:global",
+      agentId: "main",
+    },
+    {
+      name: "a marker-only update and its canonical transcript key",
+      firstSessionKey: "agent:main:main",
+      secondSessionKey: "agent:main:main",
+      agentId: "main",
+      markerOnly: true,
+    },
+    {
+      name: "an ownerless global update in its configured fixed store",
+      firstSessionKey: "global",
+      secondSessionKey: "global",
+      agentId: "ops",
+      config: {
+        session: { store: "/tmp/owned-shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+    },
+  ])("preserves message order for $name", async (scenario) => {
+    runtimeConfigState.value = scenario.config ?? {};
     let releaseFirstCount: (value: number | undefined) => void = () => undefined;
     readSessionMessageCountAsyncMock.mockImplementationOnce(
       () =>
@@ -701,31 +772,45 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         }),
     );
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue({ sessionId: "sess-main" });
+    if (scenario.markerOnly) {
+      listAccessorSessionEntriesReadOnlyMock.mockReturnValue([
+        { key: scenario.firstSessionKey, entry: { sessionId: "sess-main" } },
+      ]);
+      resolveTranscriptSessionKeyBySessionIdMock.mockReturnValue(scenario.firstSessionKey);
+    }
     const { broadcastToConnIds, handler } = createHandler(false);
 
     const firstTask = handler({
       message: { role: "assistant", content: [{ type: "text", text: "first" }] },
       messageId: "ordered-1",
-      target: {
-        agentId: "main",
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/explicit-sessions.json",
-      },
+      ...(scenario.markerOnly
+        ? { sessionFile: `sqlite:${scenario.agentId}:sess-main:/tmp/explicit-sessions.json` }
+        : {
+            target: {
+              agentId: scenario.agentId,
+              sessionId: "sess-main",
+              sessionKey: scenario.firstSessionKey,
+              storePath: "/tmp/explicit-sessions.json",
+            },
+          }),
     });
+    await vi.waitFor(() => expect(readSessionMessageCountAsyncMock).toHaveBeenCalledOnce());
     const secondTask = handler({
       sessionFile: "/tmp/sess-main.jsonl",
-      sessionKey: "agent:main:main",
+      sessionKey: scenario.secondSessionKey,
       message: { role: "assistant", content: [{ type: "text", text: "second" }] },
       messageId: "ordered-2",
       messageSeq: 2,
     });
 
     await Promise.resolve();
-    expect(broadcastToConnIds).not.toHaveBeenCalled();
-
-    releaseFirstCount(1);
-    await Promise.all([firstTask, secondTask]);
+    await Promise.resolve();
+    try {
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    } finally {
+      releaseFirstCount(1);
+      await Promise.allSettled([firstTask, secondTask]);
+    }
     expect(broadcastToConnIds.mock.calls.map((call) => call[1]?.messageId)).toEqual([
       "ordered-1",
       "ordered-2",

@@ -74,7 +74,7 @@ export class LazyCustomElementRequestController {
     return this.current;
   }
 
-  preload(element: OptionalCustomElement): void {
+  preload(element: OptionalCustomElement, options?: { reportError?: boolean }): void {
     if (isOptionalElementDefined(element) || this.preloads.has(element.tagName)) {
       return;
     }
@@ -82,7 +82,17 @@ export class LazyCustomElementRequestController {
     void ensureCustomElementDefined(element.tagName, element.loadModule)
       .then(
         () => this.host.requestUpdate(),
-        () => undefined,
+        (error: unknown) => {
+          if (options?.reportError && !this.current) {
+            this.current = {
+              element,
+              error,
+              stale: isStaleChunkImportError(error),
+              status: "error",
+            };
+            this.host.requestUpdate();
+          }
+        },
       )
       .finally(() => this.preloads.delete(element.tagName));
   }
@@ -207,6 +217,14 @@ export const DEBUG_OVERLAY_ELEMENT = {
   tagName: DEBUG_OVERLAY_TAG,
   label: DEBUG_OVERLAY_TAG,
   loadModule: () => import("../pages/debug/debug-overlay.ts"),
+} satisfies OptionalCustomElement;
+
+const KEYBOARD_SHORTCUTS_TAG = "openclaw-keyboard-shortcuts-dialog";
+
+export const KEYBOARD_SHORTCUTS_ELEMENT = {
+  tagName: KEYBOARD_SHORTCUTS_TAG,
+  label: KEYBOARD_SHORTCUTS_TAG,
+  loadModule: () => import("../components/keyboard-shortcuts-dialog.ts"),
 } satisfies OptionalCustomElement;
 
 export const TERMINAL_PANEL_ELEMENT = {

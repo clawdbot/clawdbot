@@ -71,7 +71,9 @@ import {
 import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
+import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import {
   type GatewaySessionTitleModelSelection,
@@ -147,6 +149,7 @@ async function existingModelSelectionWouldChange(params: {
   existingEntry: SessionEntry;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   requestedModel?: string;
+  requestedContextWindow?: string;
   requestedThinkingLevel?: string;
   subagentModelHint?: string;
 }): Promise<boolean> {
@@ -157,6 +160,13 @@ async function existingModelSelectionWouldChange(params: {
     return true;
   }
   const requestedThinkingLevel = normalizeOptionalString(params.requestedThinkingLevel);
+  const requestedContextWindow = normalizeOptionalString(params.requestedContextWindow);
+  if (
+    requestedContextWindow &&
+    requestedContextWindow !== normalizeOptionalString(params.existingEntry.contextWindow)
+  ) {
+    return true;
+  }
   if (
     requestedThinkingLevel &&
     requestedThinkingLevel !== normalizeOptionalString(params.existingEntry.thinkingLevel)
@@ -279,6 +289,7 @@ export async function createGatewaySession(params: {
   label?: string;
   category?: string;
   model?: string;
+  contextWindow?: string;
   thinkingLevel?: string;
   /** Registry identity recorded only when this request creates a logical session node. */
   projectId?: string;
@@ -330,6 +341,10 @@ export async function createGatewaySession(params: {
   allowExistingModelSelection?: boolean;
   /** Admitted operator scopes; omitted only by trusted in-process callers. */
   requestingOperatorScopes?: readonly string[];
+  /** Authenticated durable operator identity; absent for trusted in-process callers. */
+  requestingOperatorProfileId?: string;
+  /** Trusted host actor; only system-owned callers may omit operator identity. */
+  operatorRoleActor?: GatewayOperatorRoleActor;
   /** Trusted in-process creation provenance; never populated from public Gateway params. */
   creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
   /** Exact harness namespace authorized by the scoped plugin runtime. */
@@ -690,6 +705,10 @@ export async function createGatewaySession(params: {
       const resetResult = await performGatewaySessionReset({
         key: canonicalParentSessionKey,
         ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
+        ...(params.requestingOperatorProfileId
+          ? { requestingOperatorProfileId: params.requestingOperatorProfileId }
+          : {}),
+        ...(params.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
         reason: "new",
         commandSource: params.commandSource,
         ...(params.creation ? { creation: params.creation } : {}),
@@ -844,6 +863,18 @@ export async function createGatewaySession(params: {
     const currentTargetEntry = loadGatewaySessionEntryReadOnly(target.canonicalKey, {
       agentId: target.agentId,
     }).entry;
+    if (!currentTargetEntry) {
+      const creationError = authorizeGatewaySessionCreation({
+        cfg: params.cfg,
+        agentId: target.agentId,
+        ...(params.operatorRoleActor
+          ? { actor: params.operatorRoleActor }
+          : { profileId: params.requestingOperatorProfileId }),
+      });
+      if (creationError) {
+        return { ok: false, error: creationError };
+      }
+    }
     const titleModelSelection = resolveSessionCreateModelSelection(
       params.cfg,
       target.agentId,
@@ -878,6 +909,18 @@ export async function createGatewaySession(params: {
       async ({ existingEntry, sessionEntries }) => {
         // This callback owns generated and explicit keys alike; no existing row
         // is the canonical signal that this request will actually create one.
+        if (!existingEntry) {
+          const creationError = authorizeGatewaySessionCreation({
+            cfg: params.cfg,
+            agentId: target.agentId,
+            ...(params.operatorRoleActor
+              ? { actor: params.operatorRoleActor }
+              : { profileId: params.requestingOperatorProfileId }),
+          });
+          if (creationError) {
+            return { ok: false, error: creationError };
+          }
+        }
         const existingOwnershipError = resolvePluginSessionOwnershipError({
           action: "adopt",
           entry: existingEntry,
@@ -967,6 +1010,7 @@ export async function createGatewaySession(params: {
         // `created` event; only a genuinely new row is a node creation.
         createdNewEntry = existingEntry === undefined;
         const requestedModel = normalizeOptionalString(params.model);
+        const requestedContextWindow = normalizeOptionalString(params.contextWindow);
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
         if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
           const gateDefaultModel = resolveDefaultModelForAgent({
@@ -982,6 +1026,7 @@ export async function createGatewaySession(params: {
             existingEntry,
             loadGatewayModelCatalog: params.loadGatewayModelCatalog,
             requestedModel,
+            requestedContextWindow,
             requestedThinkingLevel,
             subagentModelHint: isSubagentSessionKey(target.canonicalKey)
               ? resolveSubagentConfiguredModelSelection({
@@ -1009,12 +1054,18 @@ export async function createGatewaySession(params: {
             ),
           storeKey: target.canonicalKey,
           agentId: target.agentId,
+          // Patch appliers read key presence as caller intent (present = change,
+          // null = clear), so omitted create fields must stay absent: a present
+          // undefined model trips the selection lock and drops modelFallback,
+          // and present undefined contextWindow/thinkingLevel take the
+          // reject-invalid branch instead of the model-change clearing branch.
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(params.label),
             category: normalizeOptionalString(params.category),
-            model: catalogModel ?? requestedModel,
-            thinkingLevel: requestedThinkingLevel,
+            ...((catalogModel ?? requestedModel) ? { model: catalogModel ?? requestedModel } : {}),
+            ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
+            ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
           authorizedAgentHarnessId: params.authorizedAgentHarnessId,

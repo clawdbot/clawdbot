@@ -789,7 +789,7 @@ describe("sessions view", () => {
     ]);
   });
 
-  it("keeps active and limit together and renders streamlined source toggles", async () => {
+  it("keeps session state visible and moves advanced controls into the filter popover", async () => {
     const container = document.createElement("div");
     render(
       renderSessions({
@@ -802,15 +802,21 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const primaryRow = container.querySelector(".session-filter-primary-row");
-    expect(primaryRow?.querySelector(".session-filter-input--minutes")?.closest("label")).toBe(
-      primaryRow?.firstElementChild?.querySelector("label"),
-    );
-    expect(primaryRow?.querySelector(".session-filter-input--limit")?.closest("label")).toBe(
-      primaryRow?.lastElementChild?.querySelector("label"),
-    );
+    const toolbar = container.querySelector(".sessions-filter-bar");
+    const trigger = toolbar?.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger");
+    const popover = toolbar?.querySelector("wa-popover");
+    const panel = popover?.querySelector(".sessions-filter-popover__panel");
+    expect(toolbar?.querySelector(".sessions-view-segment")).not.toBeNull();
+    expect(trigger?.textContent?.trim()).toBe("");
+    expect(trigger?.getAttribute("aria-label")).toBe("Filters");
+    expect(trigger?.getAttribute("title")).toBe("Filters");
+    expect(trigger?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(panel?.querySelector(".session-filter-input--minutes")?.closest("label")).not.toBeNull();
+    expect(panel?.querySelector(".session-filter-input--limit")?.closest("label")).not.toBeNull();
+    expect(panel?.querySelector(".session-groupby__select")).not.toBeNull();
 
-    const toggleGroup = container.querySelector(".session-filter-toggle-group");
+    const toggleGroup = panel?.querySelector(".session-filter-toggle-group");
     expect(toggleGroup?.getAttribute("role")).toBe("group");
     expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
     expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(2);
@@ -827,6 +833,11 @@ describe("sessions view", () => {
       ["includeUnknown", ["session-filter-check", "session-filter-toggle"]],
     ]);
     expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
+
+    popover?.dispatchEvent(new Event("wa-show"));
+    expect(trigger?.getAttribute("aria-expanded")).toBe("true");
+    popover?.dispatchEvent(new Event("wa-hide"));
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("renders and patches provider-owned thinking ids", async () => {
@@ -1709,7 +1720,7 @@ describe("sessions view", () => {
     expect(emptyState?.querySelector("button") !== null).toBe(testCase.filtered);
   });
 
-  it("summarizes loaded sessions in the overview tiles", async () => {
+  it("summarizes loaded sessions beside the roster heading", async () => {
     const container = document.createElement("div");
     render(
       renderSessions(
@@ -1737,19 +1748,18 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const tiles = Array.from(container.querySelectorAll(".sessions-overview__tile"));
-    const readTile = (tile: Element) => [
-      tile.querySelector(".sessions-overview__label")?.textContent?.trim(),
-      tile.querySelector(".sessions-overview__value")?.textContent?.trim(),
-    ];
-    expect(tiles.map(readTile)).toEqual([
-      ["Sessions", "2"],
-      ["Live", "1"],
-      ["Unread", "1"],
-      ["Tokens", "1.5k"],
+    const facts = Array.from(container.querySelectorAll(".sessions-heading-fact"));
+    const readFact = (fact: Element) => {
+      const value = fact.querySelector("strong")?.textContent?.trim() ?? "";
+      return [value, fact.textContent?.replace(value, "").trim()];
+    };
+    expect(container.querySelector(".settings-count")?.textContent?.trim()).toBe("2");
+    expect(facts.map(readFact)).toEqual([
+      ["1", "Live"],
+      ["1", "Unread"],
     ]);
-    expect(tiles[1]?.classList.contains("sessions-overview__tile--active")).toBe(true);
-    expect(tiles[2]?.classList.contains("sessions-overview__tile--active")).toBe(true);
+    expect(facts[0]?.classList.contains("sessions-heading-fact--active")).toBe(true);
+    expect(facts[1]?.classList.contains("sessions-heading-fact--active")).toBe(true);
   });
 
   it("renders a context meter with usage tone on the tokens cell", async () => {
@@ -1809,41 +1819,6 @@ describe("sessions view", () => {
     expect(container.querySelector(".session-token-cell")?.textContent?.trim()).toBe(
       "~180k / 200k",
     );
-  });
-
-  it("reports the overview token sum as unavailable or partial when snapshots are missing", async () => {
-    const container = document.createElement("div");
-    render(
-      renderSessions(
-        buildProps(
-          buildMultiResult([
-            { key: "agent:main:a", kind: "direct", updatedAt: 2, totalTokens: 1200 },
-            { key: "agent:main:b", kind: "direct", updatedAt: 1 },
-          ]),
-        ),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    const tokensTile = container.querySelector(".sessions-overview__tile--tokens");
-    expect(tokensTile?.querySelector(".sessions-overview__value")?.textContent?.trim()).toBe(
-      "~1.2k",
-    );
-
-    render(
-      renderSessions(
-        buildProps(buildMultiResult([{ key: "agent:main:b", kind: "direct", updatedAt: 1 }])),
-      ),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(
-      container
-        .querySelector(".sessions-overview__tile--tokens .sessions-overview__value")
-        ?.textContent?.trim(),
-    ).toBe("n/a");
   });
 
   it("omits the context meter when a session reports no context window", async () => {
@@ -1908,7 +1883,7 @@ describe("sessions view", () => {
 
     expect(container.querySelectorAll(".session-skeleton-row").length).toBeGreaterThan(0);
     expect(container.querySelector(".data-table-empty-cell")).toBeNull();
-    expect(container.querySelector(".sessions-overview")).toBeNull();
+    expect(container.querySelector(".sessions-heading-facts")).toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

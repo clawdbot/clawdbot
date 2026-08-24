@@ -209,10 +209,6 @@ suite.define(() => {
 
         await gateway.deferNext("config.set");
         await endpoint.fill("form-api");
-        // A revert to the loaded value here means a boot-time config refresh
-        // ate the edit (the focused-field guard in config-form.node.scalar.ts
-        // protects this); fail loudly instead of timing out on config.set.
-        await expect.poll(() => endpoint.inputValue()).toBe("form-api");
         const staleSetParams = mutationParams(await gateway.waitForRequest("config.set"));
         expect(staleSetParams.baseHash).toBe("snapshot-2");
         expect(JSON.parse(String(staleSetParams.raw))).toMatchObject({

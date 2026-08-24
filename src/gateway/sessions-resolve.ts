@@ -19,6 +19,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
+import { hasOperatorBoundary } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
@@ -171,7 +172,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
   p: SessionsResolveParams;
 }): Promise<SessionsResolveResult> {
   const { cfg, client, p } = params;
-  const entryFilter = createSessionListEntryFilter({ client });
+  const entryFilter = createSessionListEntryFilter({ client, cfg });
 
   const key = normalizeOptionalString(p.key) ?? "";
   const hasKey = key.length > 0;
@@ -221,8 +222,10 @@ export async function resolveSessionKeyFromResolveParams(params: {
       ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
     });
     const store = target.store;
-    if (store[target.canonicalKey]) {
+    const entry = store[target.canonicalKey];
+    if (entry) {
       if (
+        (hasOperatorBoundary(client, cfg) && entryFilter?.(target.canonicalKey, entry) === false) ||
         !isResolvedSessionKeyVisible({
           cfg,
           p,
@@ -232,12 +235,9 @@ export async function resolveSessionKeyFromResolveParams(params: {
       ) {
         return noSessionFoundResult({ p, message: `No session found: ${key}` });
       }
-      const agentCheck = validateSessionAgentExists(
-        cfg,
-        target.canonicalKey,
-        store[target.canonicalKey],
-        { acpMetadataSessionKey: target.canonicalKey },
-      );
+      const agentCheck = validateSessionAgentExists(cfg, target.canonicalKey, entry, {
+        acpMetadataSessionKey: target.canonicalKey,
+      });
       if (agentCheck) {
         return agentCheck;
       }

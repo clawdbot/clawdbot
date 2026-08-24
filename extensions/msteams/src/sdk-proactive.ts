@@ -64,21 +64,21 @@ type MSTeamsProactiveOptions = {
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
 };
 
-const loadMSTeamsApiClient = createLazyRuntimeModule(() =>
-  import("@microsoft/teams.api").then((api) => ({ Client: api.Client })),
-);
-
-const loadMSTeamsQuoteModule = createLazyRuntimeModule(() =>
-  import("@microsoft/teams.api/dist/activities/message/message.js").then((message) => ({
-    MessageActivityInput: message.MessageActivityInput,
-  })),
+const loadMSTeamsApiModule = createLazyRuntimeModule(
+  () =>
+    // SAFETY: the 2.0.14 CJS root exports MessageActivityInput, while its declarations omit it.
+    import("@microsoft/teams.api") as unknown as Promise<
+      typeof import("@microsoft/teams.api") & {
+        MessageActivityInput: typeof import("@microsoft/teams.api/dist/activities/message/message.js").MessageActivityInput;
+      }
+    >,
 );
 
 async function quoteMSTeamsActivity(
   activity: MSTeamsActivityLike,
   messageId: string,
 ): Promise<unknown> {
-  const { MessageActivityInput } = await loadMSTeamsQuoteModule();
+  const { MessageActivityInput } = await loadMSTeamsApiModule();
   if (typeof activity === "string") {
     return new MessageActivityInput(activity).prependQuote(messageId);
   }
@@ -203,7 +203,7 @@ async function getApiClientForReference(
     return api;
   }
 
-  const { Client } = await loadMSTeamsApiClient();
+  const { Client } = await loadMSTeamsApiModule();
   return new Client(ref.serviceUrl, httpClient) as unknown as MSTeamsApiClient;
 }
 

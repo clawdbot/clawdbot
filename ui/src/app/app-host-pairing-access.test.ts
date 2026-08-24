@@ -54,7 +54,6 @@ function createPairingShell(params: {
   const overlaySnapshot = {
     approvalQueue: [],
     approvalErrors: new Map(),
-    approvalNowMs: 0,
     approvalBusy: false,
     devicePairSetupOpen: Boolean(params.setupCode),
     devicePairSetupLifecycle: params.setupCode

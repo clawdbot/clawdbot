@@ -1108,22 +1108,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ...store.stops.keys(),
       ...store.tasks.keys(),
     ]);
+    // Preserve no-enumeration channel-wide idle stops. An explicit account stop
+    // must still commit manual intent before health monitoring can restart it.
     if (!accountId && lifecycleIds.size === 0) {
       return;
     }
-    // Fast path: nothing running and no explicit plugin shutdown hook to run.
-    if (!plugin?.gateway?.stopAccount && lifecycleIds.size === 0) {
-      return;
-    }
     const cfg = getRuntimeConfig();
-    const knownIds = new Set<string>([
-      ...lifecycleIds,
-      ...(plugin ? plugin.config.listAccountIds(cfg) : []),
-    ]);
-    if (accountId) {
-      knownIds.clear();
-      knownIds.add(accountId);
-    }
+    const knownIds = new Set<string>(
+      accountId
+        ? [accountId]
+        : [...lifecycleIds, ...(plugin ? plugin.config.listAccountIds(cfg) : [])],
+    );
 
     // Gate replacement starts before teardown begins. Failures still reject only
     // after every sibling account has finished its independent lifecycle cleanup.

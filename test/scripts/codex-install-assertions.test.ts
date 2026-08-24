@@ -50,12 +50,13 @@ function writeJson(filePath: string, value: unknown) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function writeAuthProfileStoreSqlite(agentDir: string) {
-  mkdirSync(agentDir, { recursive: true });
-  const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+function writeAuthProfileStoreSqlite(stateDir: string) {
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  mkdirSync(path.dirname(databasePath), { recursive: true });
+  const db = new DatabaseSync(databasePath);
   try {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS auth_profile_store (
+      CREATE TABLE IF NOT EXISTS auth_profile_stores (
         store_key TEXT NOT NULL PRIMARY KEY,
         store_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
@@ -63,11 +64,11 @@ function writeAuthProfileStoreSqlite(agentDir: string) {
     `);
     db.prepare(
       `
-        INSERT INTO auth_profile_store (store_key, store_json, updated_at)
+        INSERT INTO auth_profile_stores (store_key, store_json, updated_at)
         VALUES (?, ?, ?)
       `,
     ).run(
-      "primary",
+      "shared",
       JSON.stringify({
         version: 1,
         profiles: {
@@ -574,7 +575,7 @@ function createCodexInstallFixture(root: string) {
   writeJson("/tmp/openclaw-plugins-list.json", {
     plugins: [{ id: "codex", enabled: true, status: "loaded" }],
   });
-  writeAuthProfileStoreSqlite(path.join(stateDir, "agents", "main", "agent"));
+  writeAuthProfileStoreSqlite(stateDir);
 }
 
 describe("Codex install helpers", () => {
@@ -687,6 +688,21 @@ describe("Codex install helpers", () => {
   it("accepts a complete on-demand Codex npm install fixture", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-on-demand-");
     createCodexInstallFixture(root);
+    const agentDatabasePath = path.join(
+      root,
+      "state",
+      "agents",
+      "main",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    mkdirSync(path.dirname(agentDatabasePath), { recursive: true });
+    const agentDatabase = new DatabaseSync(agentDatabasePath);
+    try {
+      agentDatabase.exec("CREATE TABLE unrelated_state (key TEXT PRIMARY KEY)");
+    } finally {
+      agentDatabase.close();
+    }
 
     const result = runCodexOnDemandAssertions(root);
 

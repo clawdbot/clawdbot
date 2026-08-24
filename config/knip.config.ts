@@ -75,6 +75,8 @@ const repositoryScriptEntries = [
   "scripts/live-docker-normalize-config.ts!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
   "scripts/memory-index-manager.sync-repro.ts!",
+  // Mantis invokes the trusted proof collector through its workflow shell step.
+  "scripts/mantis/telegram-visible-proof.mjs!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
@@ -157,6 +159,8 @@ const rootEntries = [
   // Loaded by URL from the SQLite lifecycle archive owner.
   "src/config/sessions/session-accessor.sqlite-archive.worker.ts!",
   "src/state/openclaw-database-verify.worker.ts!",
+  // Spawned by path from sqlite-readonly-location.ts to isolate raw-fd snapshot preparation.
+  "src/infra/sqlite-readonly-location.worker.ts!",
   // Loaded by URL from tailscale.ts to outlive abrupt Gateway process exit.
   "src/infra/tailscale-route-owner.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",

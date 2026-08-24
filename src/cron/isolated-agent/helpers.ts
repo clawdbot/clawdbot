@@ -293,9 +293,9 @@ export function resolveCronPayloadOutcome(params: {
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
     ?.text?.trim();
   const errorPayloads = params.payloads.filter((payload) => payload?.isError === true);
-  const normalizedFinalAssistantVisibleText = normalizeOptionalString(
-    params.finalAssistantVisibleText,
-  );
+  const finalText = normalizeOptionalString(params.finalAssistantVisibleText);
+  const normalizedFinalAssistantVisibleText =
+    finalText && !isSilentReplyPayloadText(finalText) ? finalText : undefined;
   const hasSuccessfulPayloadAfterLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&
@@ -310,8 +310,8 @@ export function resolveCronPayloadOutcome(params: {
     normalizedFinalAssistantVisibleText !== undefined ||
     hasSuccessfulPayloadAfterLastError ||
     hasSuccessfulPayloadBeforeLastError;
-  // Some tools emit warning/error payloads before a final answer. Treat those
-  // as non-terminal only when later visible output proves the run recovered.
+  // Only genuinely visible terminal text can recover preceding tool warnings;
+  // silent control replies must leave the error fatal for scheduler alerting.
   const hasNonTerminalToolErrorWarning =
     !params.runLevelError &&
     params.failureSignal?.fatalForCron !== true &&
@@ -333,7 +333,7 @@ export function resolveCronPayloadOutcome(params: {
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
-  // Structured error payloads are fatal unless later successful output or a
+  // Structured error payloads stay fatal unless later successful output or a
   // known non-terminal warning proves the agent recovered.
   const hasFatalStructuredErrorPayload =
     hasErrorPayload &&

@@ -34,7 +34,7 @@ Hooks (4/5 ready)
 Ready:
   🚀 boot-md ✓ - Run BOOT.md on gateway startup
   📎 bootstrap-extra-files ✓ - Inject additional workspace bootstrap files during agent bootstrap
-  📝 command-logger ✓ - Log all command events to a centralized audit file
+  📝 command-logger ✓ - Log emitted command events to a centralized audit file
   💾 session-memory ✓ - Save session context to memory when /new or /reset command is issued
 ```
 
@@ -108,7 +108,7 @@ Hook packs install through the unified plugins installer/updater; `openclaw hook
 | --------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | boot-md               | `gateway:startup`                                 | Runs `BOOT.md` at gateway startup for each configured agent scope                       |
 | bootstrap-extra-files | `agent:bootstrap`                                 | Injects extra bootstrap files (for example monorepo `AGENTS.md`) during agent bootstrap |
-| command-logger        | `command`                                         | Logs command events to `~/.openclaw/logs/commands.log`                                  |
+| command-logger        | `command`                                         | Logs emitted command events to `~/.openclaw/logs/commands.log`                          |
 | compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts and finishes                  |
 | session-memory        | `command:new`, `command:reset`                    | Saves session context to memory on `/new` or `/reset`                                   |
 

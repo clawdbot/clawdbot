@@ -1096,12 +1096,14 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      - name: Restore immutable release execution plan
-        if: ${{ github.run_attempt != 1 }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      # Parent reruns hide prior-attempt artifacts. This exact-key cache is immutable;
+      # a miss fails closed instead of reconstructing or redispatching child identities.
+      - name: Cache immutable release execution plan
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
-          name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-execution-plan
+          key: full-release-execution-plan-v1-${{ github.run_id }}
+          fail-on-cache-miss: ${{ github.run_attempt != 1 }}
 
       - name: Seal immutable release execution plan
         id: plan
@@ -1226,7 +1228,7 @@ jobs:
           node scripts/full-release-validation-state.mjs plan
 
       - name: Upload immutable release execution plan
-        if: ${{ always() && github.run_attempt == 1 }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: full-release-execution-plan-${{ github.run_id }}

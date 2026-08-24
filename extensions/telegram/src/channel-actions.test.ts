@@ -29,7 +29,7 @@ describe("telegramMessageActions", () => {
     for (const action of ["sendMessage", "editMessage", "deleteMessage", "react", "topic-edit"]) {
       expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(true);
     }
-    for (const action of ["searchSticker", "stickerCacheStats"]) {
+    for (const action of ["searchSticker", "stickerCacheStats", "emoji-list"]) {
       expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(false);
     }
   });
@@ -64,6 +64,7 @@ describe("telegramMessageActions", () => {
       mediaLocalRoots: ["/tmp/conflicting-root"],
       requesterAccountId: "work",
       conversationReadOrigin: "delegated",
+      deliveryRetryOwner: "caller",
       reply: { replyToId: "9001", source: "implicit", mode: "first" },
       toolContext: {
         currentChannelProvider: "telegram",
@@ -77,6 +78,7 @@ describe("telegramMessageActions", () => {
       expect.anything(),
       expect.objectContaining({
         conversationReadOrigin: "delegated",
+        deliveryRetryOwner: "caller",
         mediaAccess,
         reply: { replyToId: "9001", source: "implicit", mode: "first" },
         requesterAccountId: "work",
@@ -336,8 +338,10 @@ describe("telegramMessageActions", () => {
     expect(defaultActions).toContain("send");
     expect(defaultActions).toContain("poll");
     expect(defaultActions).not.toContain("react");
+    expect(defaultActions).not.toContain("emoji-list");
     expect(workActions).not.toContain("send");
     expect(workActions).toContain("react");
+    expect(workActions).toContain("emoji-list");
     expect(workActions).not.toContain("poll");
   });
 

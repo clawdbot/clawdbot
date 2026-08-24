@@ -713,7 +713,7 @@ suite.define(() => {
         state: "delta",
       });
 
-      await page.getByText(response).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-thread-inner").getByText(response).waitFor({ timeout: 10_000 });
       await indicator.waitFor({ timeout: 10_000 });
       const streamingLayout = await pendingRow.evaluate(
         (row, visibleResponse) => ({
@@ -935,10 +935,11 @@ suite.define(() => {
       const params = requireRecord(sendRequest.params);
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
+      const initialStream = `I will inspect the file. ${"Prior streamed output. ".repeat(20)}`;
       await gateway.emitGatewayEvent("chat", {
-        deltaText: "I will inspect the file.",
+        deltaText: initialStream,
         message: {
-          content: [{ text: "I will inspect the file.", type: "text" }],
+          content: [{ text: initialStream, type: "text" }],
           role: "assistant",
           timestamp: Date.now(),
         },
@@ -946,7 +947,8 @@ suite.define(() => {
         sessionKey: "main",
         state: "delta",
       });
-      await page.getByText("I will inspect the file.").waitFor({ timeout: 10_000 });
+      const transcript = page.locator(".chat-thread-inner");
+      await transcript.getByText("I will inspect the file.").waitFor({ timeout: 10_000 });
 
       await gateway.emitGatewayEvent("agent", {
         data: {
@@ -964,20 +966,42 @@ suite.define(() => {
       const toolBubble = page.locator('[data-message-id^="tool:assistant:call-read"]');
       await toolBubble.waitFor({ timeout: 10_000 });
 
-      const visibleOrder = await page.locator(".chat-thread").evaluate((thread: Element) => {
-        return Array.from(thread.querySelectorAll(".chat-group")).flatMap((group: Element) => {
-          const text = group.textContent ?? "";
-          if (text.includes("I will inspect the file.")) {
+      const nextStream = "```ts\nconst answer = 42;";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: nextStream,
+        message: {
+          content: [{ text: nextStream, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await expect
+        .poll(() => page.locator(".chat-bubble.streaming code.language-ts").textContent())
+        .toContain("const answer = 42;");
+
+      const composedGroup = transcript
+        .locator(".chat-group.assistant")
+        .filter({ hasText: "I will inspect the file." });
+      expect(await composedGroup.count()).toBe(1);
+      const visibleOrder = await composedGroup.evaluate((group: Element) =>
+        Array.from(group.querySelectorAll(".chat-bubble")).flatMap((bubble: Element) => {
+          if ((bubble.textContent ?? "").includes("I will inspect the file.")) {
             return ["assistant stream"];
           }
-          if (group.querySelector('[data-message-id^="tool:assistant:call-read"]')) {
+          if (bubble.matches('[data-message-id^="tool:assistant:call-read"]')) {
             return ["tool card"];
           }
+          if ((bubble.textContent ?? "").includes("const answer = 42;")) {
+            return ["assistant continuation"];
+          }
           return [];
-        });
-      });
+        }),
+      );
 
-      expect(visibleOrder).toEqual(["assistant stream", "tool card"]);
+      expect(visibleOrder).toEqual(["assistant stream", "tool card", "assistant continuation"]);
     } finally {
       await suite.closeBrowserContext(context);
     }

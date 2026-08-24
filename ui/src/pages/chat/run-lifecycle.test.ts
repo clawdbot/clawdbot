@@ -13,7 +13,7 @@ import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileChatRunLifecycle,
-  reconcileStaleChatRunAfterSessionStatePublication,
+  reconcileChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
@@ -25,6 +25,7 @@ type TestRow = {
   hasActiveSubagentRun?: boolean;
   activeRunIds?: string[];
   status?: string;
+  lastRunId?: string;
   startedAt?: number;
 };
 
@@ -850,9 +851,40 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       lastLocalTerminalReconcile: makeLocalTerminalReconcile(),
     });
 
-    expect(reconcileStaleChatRunAfterSessionStatePublication(host)).toBe(true);
+    expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
     expect(rowActive(host)).toBe(false);
   });
+
+  it("recovers a missed terminal event from the exact settled session row", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      chatStream: "complete reply",
+      sessionsResult: makeSessionsResult([
+        { key: "s1", hasActiveRun: false, lastRunId: "r1", status: "done" },
+      ]),
+    });
+
+    expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+  });
+
+  it.each([undefined, "older-run"])(
+    "does not settle a live run from a %s terminal row identity",
+    (lastRunId) => {
+      const host = makeHost({
+        chatRunId: "r1",
+        chatStream: "still running",
+        sessionsResult: makeSessionsResult([
+          { key: "s1", hasActiveRun: false, lastRunId, status: "done" },
+        ]),
+      });
+
+      expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(false);
+      expect(host.chatRunId).toBe("r1");
+      expect(host.chatStream).toBe("still running");
+    },
+  );
 
   it("keeps suppressing repeated stale active refreshes for the completed run", () => {
     const host = makeHost({

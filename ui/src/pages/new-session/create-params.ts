@@ -29,6 +29,7 @@ export function buildDraftSessionCreateParams(draft: {
   agentId: string;
   message: string;
   model?: string;
+  contextWindow?: string;
   thinkingLevel?: string;
   visibility?: NewSessionVisibility;
   attachments?: unknown[];
@@ -46,6 +47,7 @@ export function buildDraftSessionCreateParams(draft: {
   const catalogId = normalizeOptionalString(draft.catalogId);
   const category = normalizeOptionalString(draft.category);
   const model = normalizeOptionalString(draft.model);
+  const contextWindow = normalizeOptionalString(draft.contextWindow);
   const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
   const projectId = normalizeOptionalString(draft.projectId);
   const customFolder = !projectId && cwd && cwd !== workspace ? cwd : undefined;
@@ -59,6 +61,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(catalogId ? { catalogId } : {}),
     ...(category ? { category } : {}),
     ...(!catalogId && model ? { model } : {}),
+    ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
     ...(projectId ? { projectId } : {}),
     ...(customFolder ? { cwd: customFolder } : {}),

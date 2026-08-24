@@ -9,6 +9,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
+import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -31,6 +32,7 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import {
   formatSidebarTimestamp,
+  normalizeCatalogTimestamp,
   type CatalogBackingSessionDisplay,
   type CatalogSessionMenuRequest,
   visibleCatalogHosts,
@@ -84,6 +86,7 @@ type SessionCatalogGroupsParams = {
     trigger?: HTMLElement,
   ) => void;
   onCatalogMenuTriggerRendered: (key: CatalogSessionKey, element: Element | undefined) => void;
+  isMenuOpen: (key: CatalogSessionKey) => boolean;
 };
 
 function renderSessionRunSpinner(showTitle = true) {
@@ -449,11 +452,9 @@ function renderCatalogSessionRow(
   params: SessionCatalogGroupsParams,
   projectChild = false,
 ) {
-  const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
-  const timestamp =
-    typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
-      ? rawTimestamp * 1000
-      : rawTimestamp;
+  const timestamp = normalizeCatalogTimestamp(
+    session.recencyAt ?? session.updatedAt ?? session.createdAt,
+  );
   const catalogKey = {
     catalogId: catalog.id,
     hostId: host.hostId,
@@ -558,7 +559,7 @@ function renderCatalogSessionRow(
     >
       <a
         ${focusedControlKind === "link" && focusRef ? ref(focusRef) : nothing}
-        href=${href}
+        href=${withSidebarNavCollapseIntent(href)}
         class="sidebar-recent-session__link"
         aria-current=${active ? "page" : nothing}
         aria-describedby=${stateId ?? nothing}
@@ -609,6 +610,7 @@ function renderCatalogSessionRow(
             title=${t("chat.sidebar.openSessionMenu")}
             aria-label=${t("chat.sidebar.openSessionMenu")}
             aria-haspopup="menu"
+            aria-expanded=${String(params.isMenuOpen(catalogKey))}
             @click=${(event: MouseEvent) => {
               event.stopPropagation();
               const trigger = event.currentTarget as HTMLElement;

@@ -26,6 +26,15 @@ export class SidebarCatalogMenuController {
     return this.state !== null;
   }
 
+  isOpenFor(key: CatalogSessionKey): boolean {
+    const openKey = this.state?.key;
+    return (
+      openKey?.catalogId === key.catalogId &&
+      openKey.hostId === key.hostId &&
+      openKey.threadId === key.threadId
+    );
+  }
+
   open(
     request: CatalogSessionMenuRequest,
     x: number,

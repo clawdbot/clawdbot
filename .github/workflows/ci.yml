@@ -860,6 +860,7 @@ jobs:
                 configs: shard.configs,
                 env: shard.env,
                 includePatterns: shard.includePatterns,
+                pretest_build_mode: shard.pretestBuildMode,
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
@@ -2463,6 +2464,17 @@ jobs:
             scripts/lib/local-check-runtime.mts
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      # A few real-CLI E2E tests need a current dist tree. Build it before
+      # Vitest starts so the shard's worker processes cannot consume the
+      # cgroup memory that the build admission check must reserve.
+      - name: Build Node test runtime
+        if: matrix.pretest_build_mode != null
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_BUILD_PRIVATE_QA: ${{ matrix.pretest_build_mode == 'private-qa' && '1' || '0' }}
+          VITEST: "1"
+        run: pnpm build
 
       - name: Run Node test shard
         env:
