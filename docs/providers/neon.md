@@ -15,12 +15,12 @@ for other proxy providers.
 Each Neon branch has its own gateway host, so requests are scoped to the branch you point at, the
 same isolation your Neon database already has.
 
-| Property    | Value                                                                      |
-| ----------- | -------------------------------------------------------------------------- |
-| Provider id | `neon` (custom; configure under `models.providers.neon`)                   |
-| Plugin      | none; not a bundled OpenClaw provider plugin                               |
-| Auth        | Neon credential with the `ai_gateway:invoke` scope, sent as a bearer token |
-| API         | `openai-completions`, plus `openai-responses` and `anthropic-messages` for specific models |
+| Property    | Value                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------- |
+| Provider id | `neon` (custom; configure under `models.providers.neon`)                                          |
+| Plugin      | none; not a bundled OpenClaw provider plugin                                                      |
+| Auth        | Neon credential with the `ai_gateway:invoke` scope, sent as a bearer token                        |
+| API         | `openai-completions`, plus `openai-responses` and `anthropic-messages` for specific models        |
 | Base URL    | `$NEON_AI_GATEWAY_BASE_URL/v1`, `/openai/v1` for Responses or `/anthropic` for Anthropic Messages |
 
 <Note>
@@ -349,6 +349,7 @@ Google roll out gradually, so a catalog model may not be enabled for your projec
       `/openai/v1`. Use the provider entry that matches the model.
     - AI Gateway is in beta, paid-plan only and currently limited to AWS US East (Ohio)
       (`aws-us-east-2`), so a project created elsewhere or on a free plan cannot reach it.
+
   </Accordion>
 </AccordionGroup>
 
