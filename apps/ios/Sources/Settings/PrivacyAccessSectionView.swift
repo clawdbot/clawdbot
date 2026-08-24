@@ -166,7 +166,7 @@ struct PrivacyAccessSectionView: View {
     {
         switch grant {
         case .notRequested:
-            LocalizedStringResource("Allow")
+            LocalizedStringResource("Continue")
         case .denied:
             LocalizedStringResource("Open Settings")
         case .limited:

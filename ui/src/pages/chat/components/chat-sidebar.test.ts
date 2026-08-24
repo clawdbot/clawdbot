@@ -2,6 +2,10 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openEditor } from "../../../lib/editor-links.ts";
+import {
+  clearNativeGatewayTestState,
+  setNativeGatewayTestState,
+} from "../../../test-helpers/native-gateways.ts";
 import { hasUniformLineEndings } from "./chat-sidebar.ts";
 
 describe("hasUniformLineEndings", () => {
@@ -58,6 +62,80 @@ describe("openEditor", () => {
   });
 });
 
+describe("file sidebar editor locality", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.replaceChildren();
+    clearNativeGatewayTestState();
+  });
+
+  it.each([
+    { name: "plain browser", nativeGateway: null, offered: false },
+    { name: "native local gateway", nativeGateway: "local", offered: true },
+    // Covers the documented `ssh -N -L 18789:127.0.0.1:18789` tunnel: the URL
+    // is loopback, the workspace is not. Only the native kind catches this.
+    { name: "native remote gateway", nativeGateway: "remote", offered: false },
+    {
+      name: "remote execution node",
+      nativeGateway: "local",
+      execNode: "build-mac",
+      offered: false,
+    },
+  ] as const)("offers editors only for native-local files: $name", async (testCase) => {
+    setNativeGatewayTestState(testCase.nativeGateway);
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      execNode: string | null;
+      ensureFileEditor: () => Promise<void>;
+      updateComplete: Promise<unknown>;
+    };
+    panel.execNode = "execNode" in testCase ? (testCase.execNode ?? null) : null;
+    panel.content = {
+      kind: "file",
+      path: "src/example.ts",
+      name: "example.ts",
+      root: "/workspace",
+      content: "const answer = 42;",
+    };
+    vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    expect(panel.querySelector('[aria-label="Open in editor"]') !== null).toBe(testCase.offered);
+    expect(panel.querySelectorAll(".sidebar-file-view__editor-item")).toHaveLength(
+      testCase.offered ? 4 : 0,
+    );
+    // Absent, not merely disabled: a dead control cannot explain why it is dead.
+    expect(panel.querySelector(".sidebar-file-view__editor") !== null).toBe(testCase.offered);
+  });
+
+  it("removes editor controls when the native gateway switches to remote", async () => {
+    setNativeGatewayTestState("local");
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      ensureFileEditor: () => Promise<void>;
+      updateComplete: Promise<unknown>;
+    };
+    panel.content = {
+      kind: "file",
+      path: "src/example.ts",
+      name: "example.ts",
+      root: "/workspace",
+      content: "const answer = 42;",
+    };
+    vi.spyOn(panel, "ensureFileEditor").mockResolvedValue();
+    document.body.append(panel);
+    await panel.updateComplete;
+    expect(panel.querySelector('[aria-label="Open in editor"]')).not.toBeNull();
+
+    setNativeGatewayTestState("remote");
+    await panel.updateComplete;
+
+    expect(panel.querySelector('[aria-label="Open in editor"]')).toBeNull();
+    expect(panel.querySelector(".sidebar-file-view__editor")).toBeNull();
+  });
+});
+
 describe("markdown sidebar", () => {
   it("opens workspace files from markdown preview clicks", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
@@ -109,6 +187,88 @@ describe("markdown sidebar", () => {
     });
     panel.remove();
   });
+
+  it.each(["click", "Ctrl+click", "Enter", " "])(
+    "handles markdown preview session links with %j",
+    async (action) => {
+      const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+        content: unknown;
+        onOpenSessionLink?: (target: { sessionKey: string; agentId: string }) => void;
+        updateComplete?: Promise<unknown>;
+      };
+      const onOpenSessionLink = vi.fn();
+      const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
+      panel.content = { kind: "markdown", content: `Open \`${sessionKey}\`` };
+      panel.onOpenSessionLink = onOpenSessionLink;
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      const link = panel.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      if (action === "click" || action === "Ctrl+click") {
+        link?.setAttribute("href", "/chat/roboclaw/2139bddb");
+        const modified = action === "Ctrl+click";
+        const event = new MouseEvent("click", {
+          bubbles: true,
+          button: 0,
+          cancelable: true,
+          ctrlKey: modified,
+        });
+        link?.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(!modified);
+        if (modified) {
+          expect(onOpenSessionLink).not.toHaveBeenCalled();
+          panel.remove();
+          return;
+        }
+      } else {
+        link?.focus();
+        const event = new KeyboardEvent("keydown", {
+          key: action,
+          bubbles: true,
+          cancelable: true,
+        });
+        link?.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+      }
+
+      expect(onOpenSessionLink).toHaveBeenCalledWith({ sessionKey, agentId: "roboclaw" });
+      panel.remove();
+    },
+  );
+
+  it.each(["click", "Enter"])(
+    "SPA-routes markdown preview session hrefs with %s",
+    async (action) => {
+      const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+        basePath?: string;
+        content: unknown;
+        onOpenSessionLink?: (target: unknown) => void;
+        updateComplete?: Promise<unknown>;
+      };
+      const onOpenSessionLink = vi.fn();
+      const literalUuid = "12345678-90ab-cdef-1234-567890abcdef";
+      const href = `${window.location.origin}/control/dashboard/main/~key/${literalUuid}`;
+      panel.basePath = "/control";
+      panel.content = { kind: "markdown", content: `[Open session](${href})` };
+      panel.onOpenSessionLink = onOpenSessionLink;
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      const link = panel.querySelector<HTMLAnchorElement>(`a[href^="${window.location.origin}"]`);
+      const event =
+        action === "click"
+          ? new MouseEvent("click", { bubbles: true, button: 0, cancelable: true })
+          : new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      link?.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(onOpenSessionLink).toHaveBeenCalledWith({
+        namespace: "dashboard",
+        pathname: `/control/dashboard/main/~key/${literalUuid}`,
+      });
+      panel.remove();
+    },
+  );
 
   it("activates Markdown images only when a chat owner opts in", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {

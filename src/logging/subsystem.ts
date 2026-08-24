@@ -352,10 +352,7 @@ function logToFile(
   if (level === "silent") {
     return;
   }
-  const safeLevel = level;
-  const method = (fileLogger as unknown as Record<string, unknown>)[safeLevel] as
-    | ((...args: unknown[]) => void)
-    | undefined;
+  const method = fileLogger[level];
   if (typeof method !== "function") {
     return;
   }
@@ -368,6 +365,17 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   const resolvedSubsystem = normalizeSubsystemLabel(subsystem);
+  let fileChild: { generation: number; logger: TsLogger<LogObj> } | undefined;
+
+  const getFileLogger = () => {
+    if (fileChild?.generation !== loggingState.generation) {
+      fileChild = {
+        generation: loggingState.generation,
+        logger: getChildLogger({ subsystem: resolvedSubsystem }),
+      };
+    }
+    return fileChild.logger;
+  };
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
@@ -390,7 +398,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      logToFile(getChildLogger({ subsystem: resolvedSubsystem }), level, message, fileMeta);
+      logToFile(getFileLogger(), level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -454,7 +462,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        logToFile(getChildLogger({ subsystem: resolvedSubsystem }), "info", message, { raw: true });
+        logToFile(getFileLogger(), "info", message, { raw: true });
       }
       const consoleSettings = getConsoleSettings();
       if (

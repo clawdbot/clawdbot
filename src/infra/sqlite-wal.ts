@@ -1,9 +1,13 @@
 // Configures SQLite WAL and related pragmas for local stores.
-import fs from "node:fs";
+import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { hasErrnoCode } from "./errno.js";
+import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
@@ -27,6 +31,9 @@ const MOUNT_COMMAND_TIMEOUT_MS = 1_000;
 const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+const PROC_SELF_FD_PATH = "/proc/self/fd";
+
+const log = createSubsystemLogger("infra/sqlite-wal");
 
 type IntervalHandle = ReturnType<typeof setInterval> & {
   unref?: () => void;
@@ -35,6 +42,16 @@ type IntervalHandle = ReturnType<typeof setInterval> & {
 type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
 type SqliteFilesystemJournalPolicy = "rollback" | "unsupported" | "wal";
 type MountEntry = { mountPoint: string; fsType: string; source?: string };
+
+type SqliteWalSplitBrainEvent = {
+  event: "sqlite_wal_sidecar_identity_mismatch";
+  databasePath: string;
+  descriptorDevice: string;
+  descriptorInode: string;
+  sidecarPath: string;
+  targetDevice?: string;
+  targetInode?: string;
+};
 
 export type SqliteWalMaintenance = {
   checkpoint: () => boolean;
@@ -50,6 +67,7 @@ export type SqliteWalMaintenanceOptions = {
   databaseLabel?: string;
   databasePath?: string;
   onCheckpointError?: (error: unknown) => void;
+  onWalSplitBrain?: (event: SqliteWalSplitBrainEvent) => void;
 };
 
 export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
@@ -58,7 +76,7 @@ export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
 };
 
 function configureSqliteBusyTimeout(db: DatabaseSync, busyTimeoutMs: number): number {
-  const normalizedTimeoutMs = normalizeNonNegativeInteger(busyTimeoutMs, "busyTimeoutMs");
+  const normalizedTimeoutMs = normalizeSqliteNonNegativeInteger(busyTimeoutMs, "busyTimeoutMs");
   db.exec(`PRAGMA busy_timeout = ${normalizedTimeoutMs};`);
   return normalizedTimeoutMs;
 }
@@ -86,13 +104,6 @@ export function configureSqlitePreSchemaPragmas(
   enableIncrementalAutoVacuumForFreshDatabase(db);
 }
 
-function normalizeNonNegativeInteger(value: number, label: string): number {
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return value;
-}
-
 function findExistingVolumePaths(
   targetPath: string,
 ): { canonicalPath: string; originalPath: string } | null {
@@ -117,12 +128,6 @@ function findExistingVolumePaths(
   }
 }
 
-function decodeMountPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_match, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
-}
-
 function parseProcMountInfoEntries(contents: string): MountEntry[] {
   const entries: MountEntry[] = [];
   for (const line of contents.split("\n")) {
@@ -136,9 +141,9 @@ function parseProcMountInfoEntries(contents: string): MountEntry[] {
     const fsType = suffixFields[0];
     if (mountPoint && fsType) {
       entries.push({
-        mountPoint: decodeMountPath(mountPoint),
+        mountPoint: decodeMountInfoPath(mountPoint),
         fsType,
-        ...(suffixFields[1] ? { source: decodeMountPath(suffixFields[1]) } : {}),
+        ...(suffixFields[1] ? { source: decodeMountInfoPath(suffixFields[1]) } : {}),
       });
     }
   }
@@ -347,6 +352,97 @@ function readCheckpointBusyResult(row: unknown): boolean {
   return value === 1 || value === 1n;
 }
 
+function statSqliteSidecarTarget(pathname: string): BigIntStats | undefined {
+  try {
+    return fs.statSync(pathname, { bigint: true });
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function isSqliteWalSidecarSplitBrain(
+  descriptor: BigIntStats,
+  target: BigIntStats | undefined,
+): boolean {
+  return (
+    descriptor.nlink === 0n ||
+    !target ||
+    descriptor.dev !== target.dev ||
+    descriptor.ino !== target.ino
+  );
+}
+
+function detectSqliteWalSplitBrain(databasePath: string): SqliteWalSplitBrainEvent | undefined {
+  let descriptors: string[];
+  try {
+    descriptors = fs.readdirSync(PROC_SELF_FD_PATH);
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
+  const sidecarPaths = [`${databasePath}-wal`, `${databasePath}-shm`];
+  for (const descriptorName of descriptors) {
+    const descriptorPath = path.join(PROC_SELF_FD_PATH, descriptorName);
+    let linkedPath: string;
+    try {
+      linkedPath = fs.readlinkSync(descriptorPath);
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        continue;
+      }
+      throw error;
+    }
+    const sidecarPath = sidecarPaths.find(
+      (candidate) => linkedPath === candidate || linkedPath === `${candidate} (deleted)`,
+    );
+    if (!sidecarPath) {
+      continue;
+    }
+    let descriptor: BigIntStats;
+    try {
+      descriptor = fs.fstatSync(Number(descriptorName), { bigint: true });
+    } catch (error) {
+      if (hasErrnoCode(error, "EBADF") || hasErrnoCode(error, "ENOENT")) {
+        continue;
+      }
+      throw error;
+    }
+    try {
+      if (fs.readlinkSync(descriptorPath) !== linkedPath) {
+        continue;
+      }
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        continue;
+      }
+      throw error;
+    }
+    const target = statSqliteSidecarTarget(sidecarPath);
+    if (!isSqliteWalSidecarSplitBrain(descriptor, target)) {
+      continue;
+    }
+    return {
+      event: "sqlite_wal_sidecar_identity_mismatch",
+      databasePath,
+      descriptorDevice: descriptor.dev.toString(),
+      descriptorInode: descriptor.ino.toString(),
+      sidecarPath,
+      ...(target
+        ? {
+            targetDevice: target.dev.toString(),
+            targetInode: target.ino.toString(),
+          }
+        : {}),
+    };
+  }
+  return undefined;
+}
+
 function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintenanceOptions): void {
   const row = db.prepare("PRAGMA journal_mode = DELETE;").get();
   const journalMode = readJournalModeResult(row);
@@ -439,11 +535,11 @@ export function configureSqliteWalMaintenance(
 ): SqliteWalMaintenance {
   const busyTimeoutMs =
     options.busyTimeoutMs === undefined ? 0 : configureSqliteBusyTimeout(db, options.busyTimeoutMs);
-  const autoCheckpointPages = normalizeNonNegativeInteger(
+  const autoCheckpointPages = normalizeSqliteNonNegativeInteger(
     options.autoCheckpointPages ?? DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
     "autoCheckpointPages",
   );
-  const checkpointIntervalMs = normalizeNonNegativeInteger(
+  const checkpointIntervalMs = normalizeSqliteNonNegativeInteger(
     options.checkpointIntervalMs ?? DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS,
     "checkpointIntervalMs",
   );
@@ -472,6 +568,13 @@ export function configureSqliteWalMaintenance(
   enableMacosCheckpointFullfsync(db);
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
   db.exec(`PRAGMA journal_size_limit = ${DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES};`);
+  const tripwireDatabasePath =
+    process.platform === "linux" && options.databasePath && fs.existsSync(options.databasePath)
+      ? fs.realpathSync.native(options.databasePath)
+      : undefined;
+  let invalidated = false;
+  let splitBrainDetectionEnabled = Boolean(tripwireDatabasePath);
+  let splitBrainDetectionWarningLogged = false;
 
   const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
     try {
@@ -500,11 +603,58 @@ export function configureSqliteWalMaintenance(
     }
   };
 
-  const checkpoint = (): boolean => runCheckpoint(checkpointMode);
+  const checkpoint = (): boolean => !invalidated && runCheckpoint(checkpointMode);
 
   let timer: IntervalHandle | null = null;
   if (timerIntervalMs > 0) {
     timer = setInterval(() => {
+      if (tripwireDatabasePath && splitBrainDetectionEnabled) {
+        try {
+          const splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
+          if (splitBrain) {
+            invalidated = true;
+            if (timer) {
+              clearInterval(timer);
+              timer = null;
+            }
+            log.error("SQLite WAL sidecar identity mismatch", {
+              ...splitBrain,
+              databaseLabel: options.databaseLabel,
+            });
+            try {
+              options.onWalSplitBrain?.(splitBrain);
+            } catch (error) {
+              log.error("SQLite WAL split-brain hook failed", {
+                databaseLabel: options.databaseLabel,
+                databasePath: tripwireDatabasePath,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+            try {
+              if (db.isOpen) {
+                db.close();
+              }
+            } catch (error) {
+              log.error("SQLite WAL split-brain close failed", {
+                databaseLabel: options.databaseLabel,
+                databasePath: tripwireDatabasePath,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+            return;
+          }
+        } catch (error) {
+          splitBrainDetectionEnabled = false;
+          if (!splitBrainDetectionWarningLogged) {
+            splitBrainDetectionWarningLogged = true;
+            log.warn("SQLite WAL split-brain detection disabled", {
+              databaseLabel: options.databaseLabel,
+              databasePath: tripwireDatabasePath,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
       runCheckpoint(periodicCheckpointMode);
       runIncrementalVacuum();
     }, timerIntervalMs) as IntervalHandle;
@@ -517,6 +667,9 @@ export function configureSqliteWalMaintenance(
       if (timer) {
         clearInterval(timer);
         timer = null;
+      }
+      if (invalidated) {
+        return false;
       }
       // Cache eviction passes PASSIVE: a TRUNCATE close-checkpoint waits on
       // readers and has starved the event loop for seconds under fleet churn.

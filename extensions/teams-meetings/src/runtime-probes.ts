@@ -1,5 +1,6 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import type { TeamsMeetingsConfig, TeamsMeetingsMode, TeamsMeetingsTransport } from "./config.js";
+import { teamsMeetingsInvalidRequest } from "./errors.js";
 import type {
   TeamsMeetingsChromeHealth,
   TeamsMeetingsJoinRequest,
@@ -15,8 +16,9 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
   TeamsMeetingsJoinRequest
 >({
   defaultSpeechMessage: "Say exactly: Microsoft Teams speech test complete.",
-  invalidRequest: (message) => new Error(message),
-  resolveTimeoutMs: MeetingPlatformAdapter.resolveProbeTimeoutMs,
+  invalidRequest: teamsMeetingsInvalidRequest,
+  resolveTimeoutMs: (input, fallback) =>
+    MeetingPlatformAdapter.resolveProbeTimeoutMs(input, fallback, teamsMeetingsInvalidRequest),
   shouldWaitForListening: (session) => Boolean(session.chrome?.launched),
   talkBackMode: MeetingPlatformAdapter.isTalkBackMode,
 });

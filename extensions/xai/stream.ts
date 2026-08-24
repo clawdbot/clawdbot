@@ -8,6 +8,7 @@ import {
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_GROK_OAUTH_BASE_URL } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
 
@@ -83,9 +84,7 @@ function ensureXaiResponsesEncryptedReasoningInclude(
     return;
   }
   const existing = payloadObj.include;
-  const include = Array.isArray(existing)
-    ? existing.filter((entry): entry is string => typeof entry === "string")
-    : [];
+  const include = filterStringEntries(existing);
   if (!include.includes(XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE)) {
     include.push(XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE);
   }

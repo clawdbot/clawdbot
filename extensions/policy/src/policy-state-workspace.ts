@@ -1,5 +1,6 @@
 // Policy plugin agent workspace evidence.
 import {
+  asNonArrayRecord,
   isRecord,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -10,10 +11,10 @@ import { toolListCoversTool } from "./tool-policy-conformance.js";
 export function scanPolicyAgentWorkspace(
   cfg: Record<string, unknown>,
 ): readonly PolicyAgentWorkspaceEvidence[] {
-  const agents = isRecord(cfg.agents) ? cfg.agents : {};
-  const defaults = isRecord(agents.defaults) ? agents.defaults : {};
-  const defaultSandbox = isRecord(defaults.sandbox) ? defaults.sandbox : {};
-  const defaultTools = isRecord(cfg.tools) ? cfg.tools : {};
+  const agents = asNonArrayRecord(cfg.agents);
+  const defaults = asNonArrayRecord(agents.defaults);
+  const defaultSandbox = asNonArrayRecord(defaults.sandbox);
+  const defaultTools = asNonArrayRecord(cfg.tools);
   const entries: PolicyAgentWorkspaceEvidence[] = [];
   pushAgentWorkspaceEvidence(entries, {
     id: "agents-defaults",
@@ -35,8 +36,8 @@ export function scanPolicyAgentWorkspace(
     }
     const agentId =
       typeof agent.id === "string" && agent.id.trim() !== "" ? agent.id.trim() : undefined;
-    const sandbox = isRecord(agent.sandbox) ? agent.sandbox : {};
-    const tools = isRecord(agent.tools) ? agent.tools : {};
+    const sandbox = asNonArrayRecord(agent.sandbox);
+    const tools = asNonArrayRecord(agent.tools);
     pushAgentWorkspaceEvidence(entries, {
       id: agentId ?? `agent-${index}`,
       scope: "agent",
@@ -160,7 +161,7 @@ function agentWorkspaceToolDenyEvidence(
 function configuredSandboxToolDenyEntries(
   tools: Record<string, unknown>,
 ): readonly string[] | undefined {
-  const sandbox = isRecord(tools.sandbox) ? tools.sandbox : {};
-  const sandboxTools = isRecord(sandbox.tools) ? sandbox.tools : {};
+  const sandbox = asNonArrayRecord(tools.sandbox);
+  const sandboxTools = asNonArrayRecord(sandbox.tools);
   return Array.isArray(sandboxTools.deny) ? readStringArray(sandboxTools.deny) : undefined;
 }

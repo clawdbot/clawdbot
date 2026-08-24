@@ -34,7 +34,9 @@ export function createMeetingStatusCallSource(options: MeetingStatusCallSourceOp
     if (media.length > 0) {
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
-        const output = devices.find((device) => device.kind === "audiooutput" && isBlackHole(device.label));
+        const output = devices.find(
+          (device) => device.kind === "audiooutput" && isVirtualAudioDevice(device.label)
+        );
         if (output?.deviceId) {
           const routeErrors = [];
           const liveStream = (element) =>
@@ -68,7 +70,7 @@ export function createMeetingStatusCallSource(options: MeetingStatusCallSourceOp
                 originalMuteBySource.set(element, Boolean(element.muted));
               }
               // Sink changes are asynchronous. Silence the physical output until either
-              // the source or its fallback bridge is confirmed on BlackHole.
+              // the source or its fallback bridge is confirmed on the virtual device.
               element.muted = true;
             }
           }
@@ -237,9 +239,13 @@ export function createMeetingStatusCallSource(options: MeetingStatusCallSourceOp
           audioOutputRouted = routed.length > 0 && routed.every(Boolean);
           if (canMutateSession && !audioOutputRouted) suspendOwnedAudioBridges();
           if (audioOutputRouted && bridgeEntries.length > 0) {
-            notes.push("Routed ${options.platform.displayName} remote audio to BlackHole 2ch through MediaStream bridges.");
+            notes.push(
+              "Routed ${options.platform.displayName} remote audio to " +
+              (output.label || "the virtual audio device") +
+              " through MediaStream bridges."
+            );
           }
-          audioOutputDeviceLabel = output.label || "BlackHole 2ch";
+          audioOutputDeviceLabel = output.label || "Virtual audio device";
           // An unloaded Teams media element can reject setSinkId before its stream
           // arrives. Keep that state retryable; loaded-source failures are terminal.
           if (!audioOutputRouted && routed.length > 0 && routeErrors.length > 0) {
@@ -249,7 +255,7 @@ export function createMeetingStatusCallSource(options: MeetingStatusCallSourceOp
         } else {
           audioOutputRouted = false;
           if (canMutateSession) suspendOwnedAudioBridges();
-          notes.push("BlackHole 2ch speaker output was not visible to ${options.platform.displayName}.");
+          notes.push("The OpenClaw virtual audio speaker output was not visible to ${options.platform.displayName}.");
         }
       } catch (error) {
         audioOutputRouted = false;
@@ -257,22 +263,22 @@ export function createMeetingStatusCallSource(options: MeetingStatusCallSourceOp
         if (canMutateSession) suspendOwnedAudioBridges();
       }
       if (!audioOutputRouted && audioOutputRouteError) {
-        notes.push("Could not route ${options.platform.displayName} speaker output to BlackHole 2ch: " + audioOutputRouteError);
+        notes.push("Could not route ${options.platform.displayName} speaker output to the OpenClaw virtual audio device: " + audioOutputRouteError);
       }
     } else {
       audioOutputRouted = false;
       try {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const output = devices.find(
-          (device) => device.kind === "audiooutput" && isBlackHole(device.label)
+          (device) => device.kind === "audiooutput" && isVirtualAudioDevice(device.label)
         );
         if (output?.deviceId) {
           // Teams can briefly remove every media element during an in-call rerender.
           // Retry only after proving the required output still exists.
           audioOutputRouteRetryable = true;
-          audioOutputDeviceLabel = output.label || "BlackHole 2ch";
+          audioOutputDeviceLabel = output.label || "Virtual audio device";
         } else {
-          notes.push("BlackHole 2ch speaker output was not visible to ${options.platform.displayName}.");
+          notes.push("The OpenClaw virtual audio speaker output was not visible to ${options.platform.displayName}.");
         }
       } catch (error) {
         audioOutputRouteError = error?.message || String(error);
@@ -611,7 +617,7 @@ export function createMeetingStatusCallSource(options: MeetingStatusCallSourceOp
   }
   if (inCall && allowMicrophone && !manualAction) {
     if (audioInputRouted !== true || audioOutputRouted !== true) {
-      manualAction = manualActionFor("${options.platform.manualActionReasonPrefix}-audio-choice-required", "Verify BlackHole 2ch is selected as both the ${options.platform.displayName} microphone and speaker before starting talk-back.");
+      manualAction = manualActionFor("${options.platform.manualActionReasonPrefix}-audio-choice-required", "Verify the OpenClaw virtual audio device is selected as both the ${options.platform.displayName} microphone and speaker before starting talk-back.");
     } else if (micMuted !== false) {
       manualAction = manualActionFor("${options.platform.manualActionReasonPrefix}-microphone-required", "Unmute the ${options.platform.displayName} microphone and verify the microphone control shows it is on before starting talk-back.");
     }

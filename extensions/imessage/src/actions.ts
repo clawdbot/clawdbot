@@ -34,6 +34,7 @@ import {
 } from "./monitor-reply-cache.js";
 import { imessageRpcSupportsMethod } from "./private-api-status.js";
 import { getCachedIMessagePrivateApiStatus, probeIMessagePrivateApi } from "./probe.js";
+import { resolveIMessageRemoteHost } from "./remote-host.js";
 import { parseIMessageTarget, type IMessageService, type IMessageTarget } from "./targets.js";
 
 const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
@@ -180,6 +181,7 @@ async function resolveChatGuid(params: {
   options: {
     cliPath: string;
     dbPath?: string;
+    remoteHost?: string;
     timeoutMs?: number;
   };
 }): Promise<string> {
@@ -460,6 +462,10 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     });
     assertActionEnabled(action, account.config.actions);
     const cliPathForProbe = account.config.cliPath?.trim() || "imsg";
+    const remoteHost = await resolveIMessageRemoteHost({
+      cliPath: cliPathForProbe,
+      remoteHost: account.config.remoteHost,
+    });
     let privateApiStatus = getCachedIMessagePrivateApiStatus(cliPathForProbe);
     const probePrivateApiStatus = async (forceRefresh = false) => {
       privateApiStatus = await probeIMessagePrivateApi(
@@ -500,7 +506,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     const opts = {
       cliPath: account.config.cliPath?.trim() || "imsg",
       dbPath: account.config.dbPath?.trim() || undefined,
-      remoteHost: account.config.remoteHost?.trim() || undefined,
+      remoteHost,
       timeoutMs: account.config.probeTimeoutMs,
       chatGuid: "",
     };
@@ -538,6 +544,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
             account,
             cliPath: opts.cliPath,
             dbPath: opts.dbPath,
+            remoteHost: opts.remoteHost,
           }),
           remoteHost: opts.remoteHost,
           conversationReadOrigin: attestedConversationReadOrigin,
@@ -636,7 +643,10 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         // refuse loudly here rather than letting send-rich ship the text
         // alone and silently drop the attachment — the original symptom
         // of openclaw/openclaw#79822.
-        if (privateApiStatus?.cliCapabilities?.sendRichSupportsAttachment !== true) {
+        if (
+          !opts.remoteHost &&
+          privateApiStatus?.cliCapabilities?.sendRichSupportsAttachment !== true
+        ) {
           throw new Error(
             "iMessage reply with an attachment needs an imsg build that exposes `send-rich --file` " +
               "(openclaw/imsg#114). Upgrade imsg, or use action 'upload-file' (with filePath/filename) " +

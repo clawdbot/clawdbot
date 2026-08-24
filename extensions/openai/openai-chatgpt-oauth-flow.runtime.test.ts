@@ -356,6 +356,30 @@ describe("OpenAI Codex OAuth flow", () => {
     });
   });
 
+  it.each([
+    {
+      operation: "exchange" as const,
+      run: () =>
+        exchangeOpenAIAuthorizationCode("code", "verifier", resolveOpenAIRedirectUri("localhost")),
+    },
+    {
+      operation: "refresh" as const,
+      run: () => refreshOpenAIAccessToken("old-refresh-token"),
+    },
+  ])(
+    "returns a failed result when the token $operation response is malformed JSON",
+    async ({ operation, run }) => {
+      mockTokenResponseText('{"access_token":"access-token","refresh_to');
+
+      const result = await run();
+
+      expect(result).toEqual({
+        type: "failed",
+        message: `OpenAI Codex token ${operation} failed: response is not valid JSON`,
+      });
+    },
+  );
+
   it("times out token refresh requests", async () => {
     ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(timeoutError());
 
@@ -411,6 +435,50 @@ async function closeServer(server: Server): Promise<void> {
 }
 
 describe("OpenAI Codex OAuth bounded token response reads", () => {
+  it.each([
+    { operation: "exchange", envelope: "null", value: null },
+    { operation: "exchange", envelope: "array", value: [] },
+    { operation: "refresh", envelope: "null", value: null },
+    { operation: "refresh", envelope: "array", value: [] },
+  ] as const)(
+    "rejects $envelope $operation token responses from a real loopback HTTP server",
+    async ({ operation, value }) => {
+      const server = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(value));
+      });
+      const port = await listenLoopbackServer(server);
+      const release = vi.fn(async () => undefined);
+
+      try {
+        ssrfMocks.fetchWithSsrFGuard.mockImplementation(async ({ init, signal }) => {
+          const response = await globalThis.fetch(`http://127.0.0.1:${port}`, {
+            ...init,
+            signal,
+          });
+          return { response, release };
+        });
+
+        const result =
+          operation === "exchange"
+            ? await exchangeOpenAIAuthorizationCode(
+                "code-loopback",
+                "verifier-loopback",
+                "http://localhost:1455/auth/callback",
+              )
+            : await refreshOpenAIAccessToken("refresh-token-loopback");
+
+        expect(result).toEqual({
+          type: "failed",
+          message: `OpenAI Codex token ${operation} failed: expected JSON object response`,
+        });
+        expect(release).toHaveBeenCalledOnce();
+      } finally {
+        await closeServer(server);
+      }
+    },
+  );
+
   it("reads under-cap token exchange responses from a real loopback HTTP server", async () => {
     const validPayload = {
       access_token: "access-token-loopback",

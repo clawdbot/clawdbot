@@ -13,12 +13,13 @@ import {
 import {
   addSessionMember,
   listSessionMembers,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayCore,
   removeSessionMember,
 } from "../../config/sessions.js";
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
-import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   allowedSessionVisibilities,
   canManageSessionSharing,
@@ -29,22 +30,20 @@ import {
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { appendSessionAudit } from "./session-audit.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-const sharingMutationQueues = new Map<string, StoreWriterQueue>();
 
 function runExclusiveSharingMutation<T>(
   target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
   run: () => Promise<T>,
 ): Promise<T> {
-  return runQueuedStoreWrite({
-    queues: sharingMutationQueues,
-    storePath: `${target.storePath}\0${target.canonicalKey}`,
-    label: "session-sharing-mutation",
-    fn: run,
+  // Sharing and lifecycle mutations share one exact-row fence so authorization
+  // cannot change between archive's stop and commit boundaries.
+  return runExclusiveSessionLifecycleMutation({
+    scope: target.storePath,
+    identities: [target.canonicalKey, target.storeKey, ...target.storeKeys, target.entry.sessionId],
+    run,
   });
 }
 
@@ -64,10 +63,19 @@ function requireManageableTarget(params: {
   agentId?: string;
   respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"];
 }) {
+  const requestedAgent = resolveRequestedSessionAgentId(
+    params.cfg,
+    params.sessionKey,
+    params.agentId,
+  );
+  if (!requestedAgent.ok) {
+    params.respond(false, undefined, requestedAgent.error);
+    return null;
+  }
   const target = resolveSessionSharingTarget({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
-    agentId: params.agentId,
+    agentId: requestedAgent.agentId,
   });
   if (!target) {
     params.respond(
@@ -91,9 +99,9 @@ function requireManageableTarget(params: {
   return { target, role };
 }
 
-// Manager authorization runs before the exclusive queue, so a session can be
+// Manager authorization runs before the lifecycle fence, so a session can be
 // reset or recreated under the same key while a mutation waits. Requiring the
-// same session instance and a still-valid manager role inside the queue keeps
+// same session instance and a still-valid manager role inside the fence keeps
 // a stale owner from mutating the replacement session's sharing state.
 function requireCurrentManagedTarget(params: {
   cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
@@ -132,7 +140,7 @@ function knownSessionIdentities(params: {
     });
   };
   remember(params.actor);
-  for (const entry of Object.values(loadCombinedSessionStoreForGateway(params.cfg).store)) {
+  for (const entry of Object.values(loadCombinedSessionStoreForGatewayCore(params.cfg).store)) {
     remember(entry.createdActor ?? null);
   }
   for (const profile of listProfiles()) {
@@ -213,12 +221,11 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         sessionKey: current.canonicalKey,
         storePath: current.storePath,
       };
-      // The entry-store write queue is separate from the sharing queue, so a
-      // reset/recreate can replace the row between the check above and this
-      // write. Re-check the instance inside the atomic patch and no-op if it
-      // changed, so a stale owner cannot stamp the replacement's visibility.
+      // The lifecycle fence excludes canonical reset/recreate. Keep the exact
+      // session-id check at the storage boundary so an out-of-band row
+      // replacement still cannot inherit this visibility change.
       let sessionChanged = false;
-      await patchSessionEntry(scope, (entry) => {
+      await patchSessionEntryCore(scope, (entry) => {
         if (entry.sessionId !== current.entry.sessionId) {
           sessionChanged = true;
           return null;
@@ -228,29 +235,8 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       if (sessionChanged) {
         throw new Error("session changed before sharing mutation");
       }
-      invalidateSessionSharingSnapshot(current.canonicalKey);
       const now = Date.now();
       const actor = actorIdentity(client);
-      try {
-        await appendSessionAudit({
-          cfg,
-          target: { ...current, sessionKey: current.storeKey },
-          text: `${actor.label ?? actor.id} changed session visibility from ${previous} to ${visibility}.`,
-          now,
-        });
-      } catch (error) {
-        // Roll back only if this is still the same instance we patched; a
-        // concurrent reset could otherwise stamp the old restricted value onto
-        // a fresh (shared-default) replacement.
-        await patchSessionEntry(scope, (entry) =>
-          entry.sessionId === current.entry.sessionId &&
-          resolveSessionVisibility(entry) === visibility
-            ? { visibility: previous }
-            : null,
-        );
-        invalidateSessionSharingSnapshot(current.canonicalKey);
-        throw error;
-      }
       publishSharingChange({
         context,
         agentId: current.agentId,
@@ -363,17 +349,6 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       if (!added.inserted) {
         return;
       }
-      try {
-        await appendSessionAudit({
-          cfg,
-          target: { ...current, sessionKey: current.storeKey },
-          text: `${actor.label ?? actor.id} added ${params.identityId} as a session member.`,
-          now,
-        });
-      } catch (error) {
-        removeSessionMember(scope, params.identityId, added.member, current.entry.sessionId);
-        throw error;
-      }
       publishSharingChange({
         context,
         agentId: current.agentId,
@@ -434,22 +409,6 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       }
       const now = Date.now();
       const actor = actorIdentity(client);
-      try {
-        await appendSessionAudit({
-          cfg,
-          target: { ...current, sessionKey: current.storeKey },
-          text: `${actor.label ?? actor.id} removed ${params.identityId} from session members.`,
-          now,
-        });
-      } catch (error) {
-        addSessionMember(scope, {
-          identityId: removed.identityId,
-          addedBy: removed.addedBy,
-          addedAt: removed.addedAt,
-          expectedSessionId: current.entry.sessionId,
-        });
-        throw error;
-      }
       publishSharingChange({
         context,
         agentId: current.agentId,

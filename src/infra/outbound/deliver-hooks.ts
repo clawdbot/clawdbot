@@ -25,7 +25,7 @@ import {
   type OutboundPayloadDeliveryOutcome,
   type OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
-import type { QueuedReplyPayloadSendingHook } from "./delivery-queue.js";
+import type { QueuedReplyPayloadSendingHook } from "./delivery-queue-storage.js";
 import {
   summarizeOutboundPayloadForTransport,
   type NormalizedOutboundPayload,

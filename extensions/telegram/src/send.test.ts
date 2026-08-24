@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import type { Bot } from "grammy";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -30,7 +31,12 @@ import {
 } from "./poll-answer-context.js";
 import { recordTelegramPollRegistryEntry } from "./poll-registry.js";
 import { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
-import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
+import {
+  countInputRichBlockMedia,
+  countInputRichBlocks,
+  inputRichBlocksToPlainText,
+  type InputRichBlock,
+} from "./rich-block-model.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
@@ -43,15 +49,81 @@ import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
   installTelegramSendTestHooks,
+  makeTelegramInvalidApiResultMock,
+  makeTelegramApiTestMock,
 } from "./send.test-harness.js";
+import { recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
 import {
   TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
   TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
-  recordSentMessage,
-  wasSentByBot,
-} from "./sent-message-cache.js";
+} from "./sent-message-cache.legacy-state.js";
 
 installTelegramSendTestHooks();
+
+type TelegramPollMessage = Awaited<ReturnType<Bot["api"]["sendPoll"]>>;
+type TelegramChatFullInfo = Awaited<ReturnType<Bot["api"]["getChat"]>>;
+
+function makeTelegramPollMessage(
+  overrides: {
+    messageId?: number;
+    chat?: {
+      id?: number | string;
+      type?: "private" | "supergroup";
+      firstName?: string;
+      title?: string;
+    };
+    poll?: Partial<TelegramPollMessage["poll"]>;
+  } = {},
+): TelegramPollMessage {
+  const chatId = Number(overrides.chat?.id ?? 555);
+  const chat =
+    overrides.chat?.type === "supergroup"
+      ? {
+          id: chatId,
+          type: "supergroup" as const,
+          title: overrides.chat.title ?? "Test group",
+        }
+      : {
+          id: chatId,
+          type: "private" as const,
+          first_name: overrides.chat?.firstName ?? "Ada",
+        };
+  return {
+    message_id: overrides.messageId ?? 123,
+    date: 0,
+    chat,
+    poll: {
+      id: "test-poll",
+      question: "Ready?",
+      options: [],
+      total_voter_count: 0,
+      is_closed: false,
+      is_anonymous: true,
+      type: "regular",
+      allows_multiple_answers: false,
+      allows_revoting: false,
+      members_only: false,
+      ...overrides.poll,
+    },
+  };
+}
+
+function makeTelegramChatFullInfo(id: number): TelegramChatFullInfo {
+  return {
+    id,
+    type: "private",
+    first_name: "Test chat",
+    accent_color_id: 0,
+    max_reaction_count: 0,
+    accepted_gift_types: {
+      unlimited_gifts: false,
+      limited_gifts: false,
+      unique_gifts: false,
+      premium_subscription: false,
+      gifts_from_channels: false,
+    },
+  };
+}
 
 const {
   botApi,
@@ -65,6 +137,8 @@ const {
   probeVideoDimensions,
 } = getTelegramSendTestMocks();
 const telegramSendModule = await importTelegramSendModule();
+const { PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime");
+const { TelegramRequestNotStartedError } = await import("./network-errors.js");
 const { getChildLogger, resetLogger, setLoggerOverride } =
   await import("openclaw/plugin-sdk/runtime-env");
 const {
@@ -106,11 +180,11 @@ type RichRawTextTestApi = Omit<TelegramApiOverride, "raw" | "sendMessage"> & {
   ) => Promise<unknown>;
 };
 
-function richTextForTest(richMessage: {
-  blocks?: InputRichBlock[];
-  markdown?: string;
-  html?: string;
-}): string {
+type RichMessageTestPayload = Parameters<
+  NonNullable<NonNullable<RichRawTextTestApi["raw"]>["sendRichMessage"]>
+>[0]["rich_message"];
+
+function richTextForTest(richMessage: RichMessageTestPayload): string {
   if (richMessage.blocks) {
     return inputRichBlocksToPlainText(richMessage.blocks);
   }
@@ -183,7 +257,7 @@ function markdownTable(columns: number): string {
 }
 
 function countTelegramRichBlocks(blocks: readonly InputRichBlock[] | undefined): number {
-  return blocks?.length ?? 0;
+  return countInputRichBlocks(blocks ?? []);
 }
 
 beforeEach(() => {
@@ -581,6 +655,38 @@ describe("sent-message-cache", () => {
       fs.rmSync(customStorePath, { force: true });
       fs.rmSync(`${customStorePath}.telegram-sent-messages.json`, { force: true });
     }
+  });
+
+  it("keeps sent-message ownership isolated across differently routed accounts", () => {
+    const multiAgentCfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: {} },
+      },
+      channels: {
+        telegram: {
+          accounts: {
+            primary: { botToken: "123456:primary" },
+            alerts: { botToken: "123456:alerts" },
+          },
+        },
+      },
+      bindings: [
+        { agentId: "main", match: { channel: "telegram", accountId: "primary" } },
+        { agentId: "ops", match: { channel: "telegram", accountId: "alerts" } },
+      ],
+      session: {
+        store: "/tmp/openclaw-telegram-sent-owner/{agentId}/sessions.json",
+      },
+    } as OpenClawConfig;
+
+    recordSentMessage(123, 1, multiAgentCfg, { accountId: "primary" });
+
+    expect(wasSentByBot(123, 1, multiAgentCfg, { accountId: "primary" })).toBe(true);
+    expect(wasSentByBot(123, 1, multiAgentCfg, { accountId: "alerts" })).toBe(false);
+
+    recordSentMessage(123, 1, multiAgentCfg, { accountId: "alerts" });
+    expect(wasSentByBot(123, 1, multiAgentCfg, { accountId: "alerts" })).toBe(true);
   });
 
   it("shares sent-message state across distinct module instances", async () => {
@@ -1108,6 +1214,34 @@ describe("sendMessageTelegram", () => {
     expect(cursor.nextPartIndex).toBe(1);
   });
 
+  it("invalidates the projection cursor when a later chunk fails terminally", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-terminal-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-final",
+    });
+    const invalidate = vi.spyOn(cursor, "invalidate");
+    botApi.sendMessage
+      .mockResolvedValueOnce({
+        message_id: 1601,
+        date: 1_779_394_745,
+        chat: { id: "123", type: "private" },
+        from: { id: 42, is_bot: true, first_name: "Kelaw" },
+        text: "page one",
+      })
+      .mockRejectedValueOnce(new Error("400: Bad Request: chat not found"));
+
+    await expect(
+      sendMessageTelegram("123", "A".repeat(4200), {
+        cfg,
+        token: "tok",
+        promptContextProjectionPlan: { cursor, finalPart: true },
+      }),
+    ).rejects.toThrow();
+
+    expect(invalidate).toHaveBeenCalled();
+  });
+
   it("records transcript projection metadata for native locations", async () => {
     const storePath = `/tmp/openclaw-telegram-location-context-${process.pid}-${Date.now()}.json`;
     const cfg = { session: { store: storePath } };
@@ -1128,7 +1262,7 @@ describe("sendMessageTelegram", () => {
       {
         cfg,
         token: "tok",
-        api: { sendLocation } as unknown as TelegramApiOverride,
+        api: makeTelegramApiTestMock({ sendLocation }),
         promptContextProjectionPlan: { cursor, finalPart: true },
       },
     );
@@ -1159,9 +1293,7 @@ describe("sendMessageTelegram", () => {
       "</code>",
     ].join("\n");
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 44, chat: { id: chatId } });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     const res = await sendMessageTelegram(chatId, text, {
       cfg: TELEGRAM_TEST_CFG,
@@ -1194,9 +1326,7 @@ describe("sendMessageTelegram", () => {
         channels: { telegram: { linkPreview: false } },
       };
       loadConfig.mockReturnValue(cfg);
-      const api = { sendMessage: testCase.sendMessage } as unknown as {
-        sendMessage: typeof testCase.sendMessage;
-      };
+      const api = makeTelegramApiTestMock({ sendMessage: testCase.sendMessage });
       await sendMessageTelegram("123", testCase.text, {
         cfg,
         token: "tok",
@@ -1416,6 +1546,53 @@ describe("sendMessageTelegram", () => {
       .map((call) => inputRichBlocksToPlainText(call[0]?.rich_message.blocks ?? []))
       .join("\n");
     expect(plain).toContain("paragraph 500");
+  });
+
+  it("keeps recursive list and album payloads within Telegram transport limits", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+    const list = Array.from({ length: 250 }, (_, index) => `${index + 1}. item ${index + 1}`).join(
+      "\n",
+    );
+    const photos = Array.from(
+      { length: 51 },
+      (_, index) => `<img src="https://example.com/${index}.jpg"/>`,
+    ).join("");
+
+    await sendMessageTelegram(
+      "123",
+      `${list}\n\n<tg-collage>${photos}<figcaption>Album</figcaption></tg-collage>`,
+      {
+        cfg: { channels: { telegram: { richMessages: true } } },
+        token: "tok",
+      },
+    );
+
+    const requests: Array<RichMessageTestPayload | undefined> =
+      botRawApi.sendRichMessage.mock.calls.map((call) => call[0]?.rich_message);
+    const blocks = requests.flatMap((request) => request?.blocks ?? []);
+    const items = blocks.flatMap((block) => (block.type === "list" ? block.items : []));
+    const albums = blocks.filter((block) => block.type === "collage");
+
+    expect(requests.length).toBeGreaterThan(1);
+    expect(requests.every((request) => countInputRichBlocks(request?.blocks ?? []) <= 500)).toBe(
+      true,
+    );
+    expect(
+      requests.every(
+        (request) =>
+          (request?.blocks ?? []).reduce(
+            (total, block) => total + countInputRichBlockMedia(block),
+            0,
+          ) <= 50,
+      ),
+    ).toBe(true);
+    expect(items.map((item) => item.value)).toEqual(
+      Array.from({ length: 250 }, (_, index) => index + 1),
+    );
+    expect(albums.flatMap((album) => album.blocks)).toHaveLength(51);
+    expect(albums.flatMap((album) => (album.caption ? [album.caption.text] : []))).toEqual([
+      "Album",
+    ]);
   });
 
   it("applies rich entity detection skip to every chunk of the document", async () => {
@@ -2161,9 +2338,7 @@ describe("sendMessageTelegram", () => {
     const sendMessage = vi.fn().mockResolvedValue({
       chat: { id: "123" },
     });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     await expect(
       sendMessageTelegram("123", "hi", {
@@ -2179,9 +2354,7 @@ describe("sendMessageTelegram", () => {
     const sendPhoto = vi.fn().mockResolvedValue({
       chat: { id: "123" },
     });
-    const api = { sendPhoto } as unknown as {
-      sendPhoto: typeof sendPhoto;
-    };
+    const api = makeTelegramApiTestMock({ sendPhoto });
 
     await expect(
       sendMessageTelegram("123", "caption", {
@@ -2196,7 +2369,7 @@ describe("sendMessageTelegram", () => {
   it("uses native fetch for BAN compatibility when api is omitted", async () => {
     const originalFetch = globalThis.fetch;
     const originalBun = (globalThis as { Bun?: unknown }).Bun;
-    const fetchSpy = vi.fn() as unknown as typeof fetch;
+    const fetchSpy = vi.fn<typeof fetch>();
     globalThis.fetch = fetchSpy;
     (globalThis as { Bun?: unknown }).Bun = {};
     botApi.sendMessage.mockResolvedValue({
@@ -2227,9 +2400,7 @@ describe("sendMessageTelegram", () => {
       message_id: 1,
       chat: { id: "123" },
     });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     await sendMessageTelegram("telegram:123", "hi", {
       cfg: TELEGRAM_TEST_CFG,
@@ -2248,10 +2419,7 @@ describe("sendMessageTelegram", () => {
       chat: { id: "-100123" },
     });
     const getChat = vi.fn().mockResolvedValue({ id: -100123 });
-    const api = { sendMessage, getChat } as unknown as {
-      sendMessage: typeof sendMessage;
-      getChat: typeof getChat;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage, getChat });
 
     await sendMessageTelegram("https://t.me/mychannel", "hi", {
       cfg: TELEGRAM_TEST_CFG,
@@ -2277,10 +2445,7 @@ describe("sendMessageTelegram", () => {
       chat: { id: "-100123" },
     });
     const getChat = vi.fn().mockResolvedValue({ id: -100123 });
-    const api = { sendMessage, getChat } as unknown as {
-      sendMessage: typeof sendMessage;
-      getChat: typeof getChat;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage, getChat });
 
     await sendMessageTelegram("https://t.me/mychannel", "hi", {
       cfg: TELEGRAM_TEST_CFG,
@@ -2299,9 +2464,7 @@ describe("sendMessageTelegram", () => {
 
   it("fails clearly when a legacy target cannot be resolved", async () => {
     const getChat = vi.fn().mockRejectedValue(new Error("400: Bad Request: chat not found"));
-    const api = { getChat } as unknown as {
-      getChat: typeof getChat;
-    };
+    const api = makeTelegramApiTestMock({ getChat });
 
     await expect(
       sendMessageTelegram("@missingchannel", "hi", {
@@ -2319,9 +2482,7 @@ describe("sendMessageTelegram", () => {
       message_thread_id: 99,
       chat: { id: chatId },
     });
-    const api = { sendPhoto } as unknown as {
-      sendPhoto: typeof sendPhoto;
-    };
+    const api = makeTelegramApiTestMock({ sendPhoto });
 
     mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
@@ -2358,10 +2519,7 @@ describe("sendMessageTelegram", () => {
       message_thread_id: 271,
       chat: { id: chatId },
     });
-    const api = { sendPhoto, sendMessage } as unknown as {
-      sendPhoto: typeof sendPhoto;
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendPhoto, sendMessage });
 
     mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
@@ -2407,7 +2565,7 @@ describe("sendMessageTelegram", () => {
     });
     const sendMessage = vi.fn();
     const onDeliveryResult = vi.fn();
-    const api = { sendPhoto, sendMessage } as unknown as TelegramApiOverride;
+    const api = makeTelegramApiTestMock({ sendPhoto, sendMessage });
     mockLoadedMedia({ contentType: "image/jpeg", fileName: "photo.jpg" });
 
     let observed: unknown;
@@ -2568,10 +2726,7 @@ describe("sendMessageTelegram", () => {
       message_thread_id: 271,
       chat: { id: chatId },
     });
-    const api = { sendPhoto, sendMessage } as unknown as {
-      sendPhoto: typeof sendPhoto;
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendPhoto, sendMessage });
 
     mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
@@ -2633,10 +2788,7 @@ describe("sendMessageTelegram", () => {
       .mockResolvedValueOnce({ message_id: 73, chat: { id: chatId } })
       .mockResolvedValueOnce({ message_id: 74, chat: { id: chatId } })
       .mockResolvedValueOnce({ message_id: 75, chat: { id: chatId } });
-    const api = { sendPhoto, sendMessage } as unknown as {
-      sendPhoto: typeof sendPhoto;
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendPhoto, sendMessage });
 
     mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
@@ -2700,10 +2852,7 @@ describe("sendMessageTelegram", () => {
       chat: { id: chatId },
     });
     const sendMessage = vi.fn();
-    const api = { sendPhoto, sendMessage } as unknown as {
-      sendPhoto: typeof sendPhoto;
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendPhoto, sendMessage });
 
     mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
@@ -2732,10 +2881,7 @@ describe("sendMessageTelegram", () => {
     const formattedCaption = `**${visibleCaption}**`;
     const sendPhoto = vi.fn().mockResolvedValue({ message_id: 72, chat: { id: chatId } });
     const sendMessage = vi.fn();
-    const api = { sendPhoto, sendMessage } as unknown as {
-      sendPhoto: typeof sendPhoto;
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendPhoto, sendMessage });
 
     mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
@@ -2765,9 +2911,7 @@ describe("sendMessageTelegram", () => {
       message_id: 90,
       chat: { id: chatId },
     });
-    const api = { sendPhoto } as unknown as {
-      sendPhoto: typeof sendPhoto;
-    };
+    const api = makeTelegramApiTestMock({ sendPhoto });
 
     mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
@@ -2812,9 +2956,7 @@ describe("sendMessageTelegram", () => {
           message_id: 91,
           chat: { id: chatId },
         });
-      const api = { sendPhoto } as unknown as {
-        sendPhoto: typeof sendPhoto;
-      };
+      const api = makeTelegramApiTestMock({ sendPhoto });
 
       mockLoadedMedia({
         buffer: Buffer.from("fake-image"),
@@ -2863,10 +3005,7 @@ describe("sendMessageTelegram", () => {
         message_id: 102,
         chat: { id: chatId },
       });
-      const api = { sendVideoNote, sendMessage } as unknown as {
-        sendVideoNote: typeof sendVideoNote;
-        sendMessage: typeof sendMessage;
-      };
+      const api = makeTelegramApiTestMock({ sendVideoNote, sendMessage });
 
       mockLoadedMedia({
         buffer: Buffer.from("fake-video"),
@@ -2900,9 +3039,7 @@ describe("sendMessageTelegram", () => {
         message_id: 201,
         chat: { id: chatId },
       });
-      const api = { sendVideo } as unknown as {
-        sendVideo: typeof sendVideo;
-      };
+      const api = makeTelegramApiTestMock({ sendVideo });
 
       mockLoadedMedia({
         buffer: Buffer.from("fake-video"),
@@ -2967,7 +3104,7 @@ describe("sendMessageTelegram", () => {
     const chatId = "123";
     const sendLocation = vi.fn().mockResolvedValue({ message_id: 301, chat: { id: chatId } });
     const sendVenue = vi.fn().mockResolvedValue({ message_id: 302, chat: { id: chatId } });
-    const api = { sendLocation, sendVenue } as unknown as TelegramApiOverride;
+    const api = makeTelegramApiTestMock({ sendLocation, sendVenue });
 
     await sendLocationTelegram(
       chatId,
@@ -3044,7 +3181,7 @@ describe("sendMessageTelegram", () => {
       await sendLocationTelegram(`${chatId}:topic:99`, location, {
         cfg: TELEGRAM_TEST_CFG,
         token: "tok",
-        api: { sendLocation, sendVenue } as unknown as TelegramApiOverride,
+        api: makeTelegramApiTestMock({ sendLocation, sendVenue }),
       });
     } catch (error) {
       observed = error;
@@ -3076,9 +3213,7 @@ describe("sendMessageTelegram", () => {
       message_id: 201,
       chat: { id: chatId },
     });
-    const api = { sendVideo } as unknown as {
-      sendVideo: typeof sendVideo;
-    };
+    const api = makeTelegramApiTestMock({ sendVideo });
     probeVideoDimensions.mockResolvedValueOnce({ width: 720, height: 1280 });
 
     mockLoadedMedia({
@@ -3113,10 +3248,7 @@ describe("sendMessageTelegram", () => {
       message_id: 102,
       chat: { id: chatId },
     });
-    const api = { sendVideoNote, sendMessage } as unknown as {
-      sendVideoNote: typeof sendVideoNote;
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendVideoNote, sendMessage });
 
     mockLoadedMedia({
       buffer: Buffer.from("fake-video"),
@@ -3187,10 +3319,7 @@ describe("sendMessageTelegram", () => {
         message_id: 302,
         chat: { id: chatId },
       });
-      const api = { sendVideoNote, sendMessage } as unknown as {
-        sendVideoNote: typeof sendVideoNote;
-        sendMessage: typeof sendMessage;
-      };
+      const api = makeTelegramApiTestMock({ sendVideoNote, sendMessage });
 
       mockLoadedMedia({
         buffer: Buffer.from("fake-video"),
@@ -3249,9 +3378,7 @@ describe("sendMessageTelegram", () => {
         message_id: 1,
         chat: { id: chatId },
       });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
     const setTimeoutSpy = vi.spyOn(global, "setTimeout");
 
     const promise = sendMessageTelegram(chatId, "hi", {
@@ -3281,9 +3408,7 @@ describe("sendMessageTelegram", () => {
         message_id: 2,
         chat: { id: chatId },
       });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
     const setTimeoutSpy = vi.spyOn(global, "setTimeout");
 
     const promise = sendMessageTelegram(chatId, "hi", {
@@ -3323,9 +3448,7 @@ describe("sendMessageTelegram", () => {
         message_id: 1,
         chat: { id: chatId },
       });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     const promise = sendMessageTelegram(chatId, "hi", {
       cfg: TELEGRAM_TEST_CFG,
@@ -3340,12 +3463,53 @@ describe("sendMessageTelegram", () => {
     vi.useRealTimers();
   });
 
+  it("maps an exhausted request-not-started marker to durable no-dispatch custody", async () => {
+    const chatId = "123";
+    const terminal = Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+      name: "HttpError",
+      error: new TelegramRequestNotStartedError(),
+    });
+    const sendMessage = vi.fn().mockRejectedValue(terminal);
+    const api = makeTelegramApiTestMock({ sendMessage });
+
+    let observed: unknown;
+    try {
+      await sendMessageTelegram(chatId, "hi", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(observed).toHaveProperty("cause", terminal);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps broad 421-shaped durable send errors ambiguous", async () => {
+    const chatId = "123";
+    const edgeError = Object.assign(new Error("421 Misdirected Request"), { status: 421 });
+    const sendMessage = vi.fn().mockRejectedValue(edgeError);
+    const api = makeTelegramApiTestMock({ sendMessage });
+
+    await expect(
+      sendMessageTelegram(chatId, "hi", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).rejects.toBe(edgeError);
+    expect(sendMessage).toHaveBeenCalledOnce();
+  });
+
   it("does not retry on non-transient errors", async () => {
     const chatId = "123";
     const sendMessage = vi.fn().mockRejectedValue(new Error("400: Bad Request"));
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     await expect(
       sendMessageTelegram(chatId, "hi", {
@@ -3365,9 +3529,7 @@ describe("sendMessageTelegram", () => {
       .mockRejectedValueOnce(
         new Error("Network request for 'sendMessage' failed after 1 attempts."),
       );
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     await expect(
       sendMessageTelegram(chatId, "hi", {
@@ -3386,9 +3548,7 @@ describe("sendMessageTelegram", () => {
       message_id: 9,
       chat: { id: chatId },
     });
-    const api = { sendAnimation } as unknown as {
-      sendAnimation: typeof sendAnimation;
-    };
+    const api = makeTelegramApiTestMock({ sendAnimation });
 
     mockLoadedMedia({
       buffer: Buffer.from("GIF89a"),
@@ -3639,12 +3799,7 @@ describe("sendMessageTelegram", () => {
     });
     const sendPhoto = vi.fn();
     const sendVideo = vi.fn();
-    const api = { sendAnimation, sendDocument, sendPhoto, sendVideo } as unknown as {
-      sendAnimation: typeof sendAnimation;
-      sendDocument: typeof sendDocument;
-      sendPhoto: typeof sendPhoto;
-      sendVideo: typeof sendVideo;
-    };
+    const api = makeTelegramApiTestMock({ sendAnimation, sendDocument, sendPhoto, sendVideo });
 
     mockLoadedMedia({
       buffer: testCase.buffer,
@@ -3687,10 +3842,7 @@ describe("sendMessageTelegram", () => {
       chat: { id: chatId },
     });
     const sendPhoto = vi.fn();
-    const api = { sendDocument, sendPhoto } as unknown as {
-      sendDocument: typeof sendDocument;
-      sendPhoto: typeof sendPhoto;
-    };
+    const api = makeTelegramApiTestMock({ sendDocument, sendPhoto });
 
     imageMetadata.width = width;
     imageMetadata.height = height;
@@ -3727,10 +3879,7 @@ describe("sendMessageTelegram", () => {
       chat: { id: chatId },
     });
     const sendPhoto = vi.fn();
-    const api = { sendDocument, sendPhoto } as unknown as {
-      sendDocument: typeof sendDocument;
-      sendPhoto: typeof sendPhoto;
-    };
+    const api = makeTelegramApiTestMock({ sendDocument, sendPhoto });
 
     imageMetadata.width = undefined;
     imageMetadata.height = undefined;
@@ -3766,9 +3915,7 @@ describe("sendMessageTelegram", () => {
       message_id: 11,
       chat: { id: chatId },
     });
-    const api = { sendDocument } as unknown as {
-      sendDocument: typeof sendDocument;
-    };
+    const api = makeTelegramApiTestMock({ sendDocument });
 
     mockLoadedMedia({
       buffer: Buffer.from("%PDF-1.7"),
@@ -3887,10 +4034,7 @@ describe("sendMessageTelegram", () => {
           : {}),
         chat: { id: testCase.chatId },
       });
-      const api = { sendAudio, sendVoice } as unknown as {
-        sendAudio: typeof sendAudio;
-        sendVoice: typeof sendVoice;
-      };
+      const api = makeTelegramApiTestMock({ sendAudio, sendVoice });
 
       mockLoadedMedia({
         buffer: Buffer.from("audio"),
@@ -3953,9 +4097,7 @@ describe("sendMessageTelegram", () => {
         message_thread_id: 271,
         chat: { id: testCase.chatId },
       });
-      const api = { sendMessage } as unknown as {
-        sendMessage: typeof sendMessage;
-      };
+      const api = makeTelegramApiTestMock({ sendMessage });
 
       const result = await sendMessageTelegram(testCase.chatId, testCase.text, {
         cfg: TELEGRAM_TEST_CFG,
@@ -3986,7 +4128,7 @@ describe("sendMessageTelegram", () => {
       await sendMessageTelegram(chatId, "hello forum", {
         cfg: TELEGRAM_TEST_CFG,
         token: "tok",
-        api: { sendMessage } as unknown as TelegramApiOverride,
+        api: makeTelegramApiTestMock({ sendMessage }),
         messageThreadId: 271,
         onDeliveryResult,
       });
@@ -4022,7 +4164,7 @@ describe("sendMessageTelegram", () => {
       await sendMessageTelegram(chatId, "A".repeat(9000), {
         cfg: TELEGRAM_TEST_CFG,
         token: "tok",
-        api: { sendMessage } as unknown as TelegramApiOverride,
+        api: makeTelegramApiTestMock({ sendMessage }),
         textMode: "html",
         messageThreadId: 271,
         buttons: [[{ text: "OK", callback_data: "ok" }]],
@@ -4052,7 +4194,7 @@ describe("sendMessageTelegram", () => {
       sendMessageTelegram("123456789", "hello private topic", {
         cfg: TELEGRAM_TEST_CFG,
         token: "tok",
-        api: { sendMessage } as unknown as TelegramApiOverride,
+        api: makeTelegramApiTestMock({ sendMessage }),
         messageThreadId: 1,
       }),
     ).rejects.toThrow("topic unknown; expected topic 1");
@@ -4076,9 +4218,7 @@ describe("sendMessageTelegram", () => {
         message_thread_id: 271,
         chat: { id: "-1001234567890" },
       });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     const result = await sendMessageTelegram("-1001234567890", `BEGIN ${"A".repeat(4100)} END`, {
       cfg: TELEGRAM_TEST_CFG,
@@ -4137,9 +4277,7 @@ describe("sendMessageTelegram", () => {
       .mockResolvedValueOnce({ message_id: 101, chat: { id: "-1001234567890" } })
       .mockResolvedValueOnce({ message_id: 102, chat: { id: "-1001234567890" } })
       .mockResolvedValueOnce({ message_id: 103, chat: { id: "-1001234567890" } });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     await sendMessageTelegram("-1001234567890", `BEGIN ${"A".repeat(4100)} END`, {
       cfg: TELEGRAM_TEST_CFG,
@@ -4165,9 +4303,7 @@ describe("sendMessageTelegram", () => {
 
     for (const testCase of cases) {
       const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
-      const api = { sendMessage } as unknown as {
-        sendMessage: typeof sendMessage;
-      };
+      const api = makeTelegramApiTestMock({ sendMessage });
 
       await expect(
         sendMessageTelegram(testCase.chatId, testCase.text, {
@@ -4189,9 +4325,7 @@ describe("sendMessageTelegram", () => {
   it("does not retry private DM topic sends without the topic id", async () => {
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     await expect(
       sendMessageTelegram("123456789", "hello private", {
@@ -4241,9 +4375,7 @@ describe("sendMessageTelegram", () => {
 
     for (const testCase of cases) {
       const sendMessage = vi.fn().mockRejectedValueOnce(testCase.error);
-      const api = { sendMessage } as unknown as {
-        sendMessage: typeof sendMessage;
-      };
+      const api = makeTelegramApiTestMock({ sendMessage });
 
       await expect(
         sendMessageTelegram(testCase.chatId, testCase.text, {
@@ -4265,9 +4397,7 @@ describe("sendMessageTelegram", () => {
       message_id: 1,
       chat: { id: chatId },
     });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     await sendMessageTelegram(chatId, "hi", {
       cfg: TELEGRAM_TEST_CFG,
@@ -4289,9 +4419,7 @@ describe("sendMessageTelegram", () => {
       message_thread_id: 271,
       chat: { id: chatId },
     });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     await sendMessageTelegram(`telegram:group:${chatId}:topic:271`, "hello forum", {
       cfg: TELEGRAM_TEST_CFG,
@@ -4314,9 +4442,7 @@ describe("sendMessageTelegram", () => {
       message_thread_id: 271,
       chat: { id: chatId },
     });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     await sendMessageTelegram(`telegram:group:${chatId}:topic:271`, body, {
       cfg: TELEGRAM_TEST_CFG,
@@ -4346,9 +4472,7 @@ describe("sendMessageTelegram", () => {
     const body = "topic reply body should stay private";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     await expect(
       sendMessageTelegram(`telegram:group:${chatId}:topic:271`, body, {
@@ -4380,9 +4504,7 @@ describe("sendMessageTelegram", () => {
       message_thread_id: 45,
       chat: { id: chatId },
     });
-    const api = { sendPhoto } as unknown as {
-      sendPhoto: typeof sendPhoto;
-    };
+    const api = makeTelegramApiTestMock({ sendPhoto });
 
     mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
@@ -4417,9 +4539,7 @@ describe("sendMessageTelegram", () => {
     const chatId = "-100123";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendPhoto = vi.fn().mockRejectedValueOnce(threadErr);
-    const api = { sendPhoto } as unknown as {
-      sendPhoto: typeof sendPhoto;
-    };
+    const api = makeTelegramApiTestMock({ sendPhoto });
 
     mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
@@ -4462,9 +4582,7 @@ describe("sendMessageTelegram", () => {
       message_id: 60,
       chat: { id: chatId },
     });
-    const api = { sendPhoto } as unknown as {
-      sendPhoto: typeof sendPhoto;
-    };
+    const api = makeTelegramApiTestMock({ sendPhoto });
 
     mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
@@ -4497,9 +4615,7 @@ describe("sendMessageTelegram", () => {
       message_id: 61,
       chat: { id: chatId },
     });
-    const api = { sendPhoto } as unknown as {
-      sendPhoto: typeof sendPhoto;
-    };
+    const api = makeTelegramApiTestMock({ sendPhoto });
     const cfg = {
       channels: {
         telegram: {
@@ -4535,7 +4651,7 @@ describe("sendMessageTelegram", () => {
     const htmlText = `<b>${"A".repeat(5000)}</b>`;
 
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 91, chat: { id: chatId } });
-    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     const res = await sendMessageTelegram(chatId, htmlText, {
       cfg: TELEGRAM_TEST_CFG,
@@ -4559,7 +4675,7 @@ describe("sendMessageTelegram", () => {
     const markdownText = `**${"A".repeat(5000)}**`;
 
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 91, chat: { id: chatId } });
-    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     const res = await sendMessageTelegram(chatId, markdownText, {
       cfg: TELEGRAM_TEST_CFG,
@@ -4611,9 +4727,7 @@ describe("reactMessageTelegram", () => {
     },
   ] as const)("$testName", async (testCase) => {
     const setMessageReaction = vi.fn().mockResolvedValue(undefined);
-    const api = { setMessageReaction } as unknown as {
-      setMessageReaction: typeof setMessageReaction;
-    };
+    const api = makeTelegramApiTestMock({ setMessageReaction });
 
     await reactMessageTelegram(testCase.target, testCase.messageId, testCase.emoji, {
       cfg: TELEGRAM_TEST_CFG,
@@ -4628,10 +4742,7 @@ describe("reactMessageTelegram", () => {
   it("resolves legacy telegram targets before reacting", async () => {
     const setMessageReaction = vi.fn().mockResolvedValue(undefined);
     const getChat = vi.fn().mockResolvedValue({ id: -100123 });
-    const api = { setMessageReaction, getChat } as unknown as {
-      setMessageReaction: typeof setMessageReaction;
-      getChat: typeof getChat;
-    };
+    const api = makeTelegramApiTestMock({ setMessageReaction, getChat });
 
     await reactMessageTelegram("@mychannel", 456, "✅", {
       cfg: TELEGRAM_TEST_CFG,
@@ -4658,7 +4769,7 @@ describe("deleteMessageTelegram", () => {
     "MESSAGE_DELETE_FORBIDDEN",
   ] as const)("returns a warning for benign delete no-op error: %s", async (message) => {
     const deleteMessage = vi.fn().mockRejectedValue(new Error(message));
-    const api = { deleteMessage } as unknown as { deleteMessage: typeof deleteMessage };
+    const api = makeTelegramApiTestMock({ deleteMessage });
 
     const result = await deleteMessageTelegram("123", 456, {
       cfg: TELEGRAM_TEST_CFG,
@@ -4676,7 +4787,7 @@ describe("deleteMessageTelegram", () => {
 
   it("throws non-benign delete errors", async () => {
     const deleteMessage = vi.fn().mockRejectedValue(new Error("500: Internal Server Error"));
-    const api = { deleteMessage } as unknown as { deleteMessage: typeof deleteMessage };
+    const api = makeTelegramApiTestMock({ deleteMessage });
 
     await expect(
       deleteMessageTelegram("123", 456, {
@@ -4689,7 +4800,7 @@ describe("deleteMessageTelegram", () => {
 
   it("rejects partial message id strings", async () => {
     const deleteMessage = vi.fn();
-    const api = { deleteMessage } as unknown as { deleteMessage: typeof deleteMessage };
+    const api = makeTelegramApiTestMock({ deleteMessage });
 
     await expect(
       deleteMessageTelegram("123", "456abc", {
@@ -4725,9 +4836,7 @@ describe("sendStickerTelegram", () => {
         message_id: testCase.expectedMessageId,
         chat: { id: chatId },
       });
-      const api = { sendSticker } as unknown as {
-        sendSticker: typeof sendSticker;
-      };
+      const api = makeTelegramApiTestMock({ sendSticker });
 
       const res = await sendStickerTelegram(chatId, testCase.fileId, {
         cfg: TELEGRAM_TEST_CFG,
@@ -4751,7 +4860,7 @@ describe("sendStickerTelegram", () => {
       message_thread_id: 77,
       sticker: { file_id: "fileId123", file_unique_id: "unique", type: "regular" },
     });
-    const api = { sendSticker } as unknown as { sendSticker: typeof sendSticker };
+    const api = makeTelegramApiTestMock({ sendSticker });
 
     await sendStickerTelegram(`${chatId}:topic:77`, "fileId123", {
       cfg: { session: { store: storePath } },
@@ -4784,9 +4893,7 @@ describe("sendStickerTelegram", () => {
     const chatId = "-100123";
     const threadErr = new Error("400: Bad Request: message thread not found");
     const sendSticker = vi.fn().mockRejectedValueOnce(threadErr);
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
+    const api = makeTelegramApiTestMock({ sendSticker });
 
     await expect(
       sendStickerTelegram(chatId, "fileId123", {
@@ -4808,9 +4915,7 @@ describe("sendStickerTelegram", () => {
     const sendSticker = vi.fn().mockResolvedValue({
       chat: { id: chatId },
     });
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
+    const api = makeTelegramApiTestMock({ sendSticker });
 
     await expect(
       sendStickerTelegram(chatId, "fileId123", {
@@ -4826,9 +4931,7 @@ describe("sendStickerTelegram", () => {
     const sendSticker = vi
       .fn()
       .mockRejectedValueOnce(new Error("Network request for 'sendSticker' failed!"));
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
+    const api = makeTelegramApiTestMock({ sendSticker });
 
     await expect(
       sendStickerTelegram(chatId, "fileId123", {
@@ -4854,9 +4957,7 @@ describe("sendStickerTelegram", () => {
         message_id: 109,
         chat: { id: chatId },
       });
-    const api = { sendSticker } as unknown as {
-      sendSticker: typeof sendSticker;
-    };
+    const api = makeTelegramApiTestMock({ sendSticker });
     const setTimeoutSpy = vi.spyOn(global, "setTimeout");
 
     const promise = sendStickerTelegram(chatId, "fileId123", {
@@ -4886,9 +4987,7 @@ describe("shared send behaviors", () => {
             message_id: 56,
             chat: { id: chatId },
           });
-          const api = { sendMessage } as unknown as {
-            sendMessage: typeof sendMessage;
-          };
+          const api = makeTelegramApiTestMock({ sendMessage });
           await sendMessageTelegram(chatId, "reply text", {
             cfg: TELEGRAM_TEST_CFG,
             token: "tok",
@@ -4911,9 +5010,7 @@ describe("shared send behaviors", () => {
             message_id: 102,
             chat: { id: chatId },
           });
-          const api = { sendSticker } as unknown as {
-            sendSticker: typeof sendSticker;
-          };
+          const api = makeTelegramApiTestMock({ sendSticker });
           await sendStickerTelegram(chatId, fileId, {
             cfg: TELEGRAM_TEST_CFG,
             token: "tok",
@@ -4939,9 +5036,7 @@ describe("shared send behaviors", () => {
       message_id: 56,
       chat: { id: chatId },
     });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     await sendMessageTelegram(chatId, "reply text", {
       cfg: TELEGRAM_TEST_CFG,
@@ -4970,9 +5065,7 @@ describe("shared send behaviors", () => {
         message_id: 57,
         chat: { id: chatId },
       });
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
+    const api = makeTelegramApiTestMock({ sendMessage });
 
     await sendMessageTelegram(chatId, "reply text", {
       cfg: TELEGRAM_TEST_CFG,
@@ -5013,7 +5106,7 @@ describe("shared send behaviors", () => {
         chat: { id: chatId, type: "private" },
         photo: [{ file_id: "photo-file", file_unique_id: "photo-unique", width: 10, height: 10 }],
       });
-    const api = { sendPhoto } as unknown as { sendPhoto: typeof sendPhoto };
+    const api = makeTelegramApiTestMock({ sendPhoto });
     mockLoadedMedia({
       buffer: Buffer.from("fake-image"),
       contentType: "image/jpeg",
@@ -5072,10 +5165,7 @@ describe("shared send behaviors", () => {
         message_id: 102,
         chat: { id: chatId },
       });
-      const api = { sendMessage, sendSticker } as unknown as {
-        sendMessage: typeof sendMessage;
-        sendSticker: typeof sendSticker;
-      };
+      const api = makeTelegramApiTestMock({ sendMessage, sendSticker });
 
       await sendMessageTelegram(chatId, "reply text", {
         cfg: TELEGRAM_TEST_CFG,
@@ -5113,9 +5203,7 @@ describe("shared send behaviors", () => {
           const chatId = "123";
           const err = new Error("400: Bad Request: chat not found");
           const sendMessage = vi.fn().mockRejectedValue(err);
-          const api = { sendMessage } as unknown as {
-            sendMessage: typeof sendMessage;
-          };
+          const api = makeTelegramApiTestMock({ sendMessage });
           await expectChatNotFoundWithChatId(
             sendMessageTelegram(chatId, "hi", { cfg: TELEGRAM_TEST_CFG, token: "tok", api }),
             chatId,
@@ -5128,9 +5216,7 @@ describe("shared send behaviors", () => {
           const chatId = "123";
           const err = new Error("400: Bad Request: chat not found");
           const sendSticker = vi.fn().mockRejectedValue(err);
-          const api = { sendSticker } as unknown as {
-            sendSticker: typeof sendSticker;
-          };
+          const api = makeTelegramApiTestMock({ sendSticker });
           await expectChatNotFoundWithChatId(
             sendStickerTelegram(chatId, "fileId123", { cfg: TELEGRAM_TEST_CFG, token: "tok", api }),
             chatId,
@@ -5151,9 +5237,7 @@ describe("shared send behaviors", () => {
         errorText: "403: Forbidden: bot is not a member of the channel chat",
         run: async (chatId: string, err: Error) => {
           const sendMessage = vi.fn().mockRejectedValue(err);
-          const api = { sendMessage } as unknown as {
-            sendMessage: typeof sendMessage;
-          };
+          const api = makeTelegramApiTestMock({ sendMessage });
           await expectTelegramMembershipErrorWithChatId(
             sendMessageTelegram(chatId, "hi", { cfg: TELEGRAM_TEST_CFG, token: "tok", api }),
             chatId,
@@ -5166,9 +5250,7 @@ describe("shared send behaviors", () => {
         errorText: "403: Forbidden: bot was kicked from the group chat",
         run: async (chatId: string, err: Error) => {
           const sendSticker = vi.fn().mockRejectedValue(err);
-          const api = { sendSticker } as unknown as {
-            sendSticker: typeof sendSticker;
-          };
+          const api = makeTelegramApiTestMock({ sendSticker });
           await expectTelegramMembershipErrorWithChatId(
             sendStickerTelegram(chatId, "fileId123", { cfg: TELEGRAM_TEST_CFG, token: "tok", api }),
             chatId,
@@ -5264,6 +5346,23 @@ describe("editMessageTelegram", () => {
       }),
     ).resolves.toEqual({ ok: true, messageId: "1", chatId: "123" });
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to plain text when an HTML edit renders empty", async () => {
+    botApi.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: message text is empty"))
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, "<b>visible</b>", {
+      token: "tok",
+      cfg: {},
+      textMode: "html",
+    });
+
+    expect(botApi.editMessageText).toHaveBeenNthCalledWith(1, "123", 1, "<b>visible</b>", {
+      parse_mode: "HTML",
+    });
+    expect(botApi.editMessageText).toHaveBeenNthCalledWith(2, "123", 1, "visible");
   });
 
   it("uses editMessageCaption when requested for media captions", async () => {
@@ -5466,7 +5565,12 @@ describe("editMessageTelegram", () => {
   ])("refreshes cached $name from Telegram's authoritative edit response", async (testCase) => {
     const storePath = `/tmp/openclaw-telegram-edited-context-${process.pid}-${Date.now()}-${testCase.name}.json`;
     const cfg = { session: { store: storePath } };
-    const chat = { id: -100123, type: "supergroup" as const, title: "Ops" };
+    const chat = {
+      id: -100123,
+      type: "supergroup" as const,
+      title: "Ops",
+      is_forum: true as const,
+    };
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
     });
@@ -5604,15 +5708,17 @@ describe("sendPollTelegram", () => {
   }
 
   it("sends polls with 12 options", async () => {
-    const api = {
-      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
-    };
+    const api = makeTelegramApiTestMock({
+      sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
+        makeTelegramPollMessage({ poll: { id: "p1" } }),
+      ),
+    });
     const options = Array.from({ length: 12 }, (_, index) => `Option ${index + 1}`);
 
     await sendPollTelegram(
       "123",
       { question: "Q", options },
-      { cfg: TELEGRAM_TEST_CFG, token: "t", api: api as unknown as Bot["api"] },
+      { cfg: TELEGRAM_TEST_CFG, token: "t", api },
     );
 
     expect(firstMockCall(api.sendPoll, "send poll call")[2]).toEqual(options);
@@ -5621,12 +5727,14 @@ describe("sendPollTelegram", () => {
   it("records a successful General-topic poll for later message mutations", async () => {
     const storePath = `/tmp/openclaw-telegram-poll-context-${process.pid}-${Date.now()}.json`;
     const chatId = "-100123";
-    const sendPoll = vi.fn().mockResolvedValue({
-      message_id: 124,
-      chat: { id: chatId, type: "supergroup" },
-      poll: { id: "p2", question: "Q", options: [] },
-    });
-    const api = { sendPoll } as unknown as Bot["api"];
+    const sendPoll = vi.fn<Bot["api"]["sendPoll"]>().mockResolvedValue(
+      makeTelegramPollMessage({
+        messageId: 124,
+        chat: { id: chatId, type: "supergroup" },
+        poll: { id: "p2", question: "Q", options: [] },
+      }),
+    );
+    const api = makeTelegramApiTestMock({ sendPoll });
 
     await sendPollTelegram(
       `${chatId}:topic:1`,
@@ -5645,10 +5753,12 @@ describe("sendPollTelegram", () => {
   });
 
   it("propagates gateway client scopes when resolving legacy poll targets", async () => {
-    const api = {
-      getChat: vi.fn(async () => ({ id: -100321 })),
-      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
-    };
+    const api = makeTelegramApiTestMock({
+      getChat: vi.fn<Bot["api"]["getChat"]>(async () => makeTelegramChatFullInfo(-100321)),
+      sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
+        makeTelegramPollMessage({ poll: { id: "p1" } }),
+      ),
+    });
 
     await sendPollTelegram(
       "https://t.me/mychannel",
@@ -5656,7 +5766,7 @@ describe("sendPollTelegram", () => {
       {
         cfg: TELEGRAM_TEST_CFG,
         token: "t",
-        api: api as unknown as Bot["api"],
+        api,
         gatewayClientScopes: ["operator.admin"],
       },
     );
@@ -5670,14 +5780,16 @@ describe("sendPollTelegram", () => {
   });
 
   it("maps durationSeconds to open_period", async () => {
-    const api = {
-      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
-    };
+    const api = makeTelegramApiTestMock({
+      sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
+        makeTelegramPollMessage({ poll: { id: "p1" } }),
+      ),
+    });
 
     const res = await sendPollTelegram(
       "123",
       { question: " Q ", options: [" A ", "B "], durationSeconds: 60 },
-      { cfg: TELEGRAM_TEST_CFG, token: "t", api: api as unknown as Bot["api"] },
+      { cfg: TELEGRAM_TEST_CFG, token: "t", api },
     );
 
     expect(res).toMatchObject({
@@ -5734,10 +5846,79 @@ describe("sendPollTelegram", () => {
             is_forum: true,
           },
           messageId: 123,
-          messageThreadId: 99,
+          threadSpec: { scope: "forum", id: 99 },
           question: "Ready?",
           options: ["Yes", "No"],
         }),
+      }),
+    ]);
+  });
+
+  it.each([
+    {
+      name: "base private chat",
+      to: "555",
+      chat: { id: 555, type: "private" as const, first_name: "Ada" },
+      expected: { scope: "dm" as const },
+    },
+    {
+      name: "bot-private topic",
+      to: "555:topic:42",
+      chat: { id: 555, type: "private" as const, first_name: "Ada" },
+      messageThreadId: 42,
+      expected: { scope: "dm" as const, id: 42 },
+    },
+    {
+      name: "regular group",
+      to: "-100555",
+      chat: { id: -100555, type: "supergroup" as const, title: "Reviewers" },
+      expected: { scope: "none" as const },
+    },
+  ])("records the canonical $name poll scope", async (testCase) => {
+    const store = await installPollRegistryStore();
+    botApi.getChatMember.mockResolvedValue({ status: "administrator" });
+    botApi.sendPoll.mockResolvedValue({
+      message_id: 126,
+      ...(testCase.messageThreadId === undefined
+        ? {}
+        : { message_thread_id: testCase.messageThreadId }),
+      chat: testCase.chat,
+      poll: { id: `poll-${testCase.expected.scope}` },
+    });
+
+    await expect(
+      sendPollTelegram(
+        testCase.to,
+        { question: "Ready?", options: ["Yes", "No"] },
+        { cfg: TELEGRAM_TEST_CFG, token: "999:token", isAnonymous: false },
+      ),
+    ).resolves.toMatchObject({ pollAnswerRouting: "enabled" });
+    expect(await store.entries()).toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({ threadSpec: testCase.expected }),
+      }),
+    ]);
+  });
+
+  it("preserves the accepted General forum scope when Telegram omits its thread id", async () => {
+    const store = await installPollRegistryStore();
+    botApi.getChatMember.mockResolvedValue({ status: "administrator" });
+    botApi.sendPoll.mockResolvedValue({
+      message_id: 127,
+      chat: { id: -100556, type: "supergroup", title: "Forum", is_forum: true },
+      poll: { id: "poll-general" },
+    });
+
+    await expect(
+      sendPollTelegram(
+        "-100556:topic:1",
+        { question: "Ready?", options: ["Yes", "No"] },
+        { cfg: TELEGRAM_TEST_CFG, token: "999:token", isAnonymous: false },
+      ),
+    ).resolves.toMatchObject({ pollAnswerRouting: "enabled" });
+    expect(await store.entries()).toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({ threadSpec: { scope: "forum", id: 1 } }),
       }),
     ]);
   });
@@ -5902,6 +6083,7 @@ describe("sendPollTelegram", () => {
       pollId: "poll-fast-answer",
       chat: { id: -1001234567890, type: "supergroup" as const, title: "Reviewers" },
       messageId: 125,
+      threadSpec: { scope: "none" as const },
       question: "Ready?",
       options: ["Yes", "No"],
     };
@@ -5965,13 +6147,11 @@ describe("sendPollTelegram", () => {
 
   it("reports default anonymous polls as unavailable without registering them", async () => {
     const store = await installPollRegistryStore();
-    const api = {
-      sendPoll: vi.fn(async () => ({
-        message_id: 123,
-        chat: { id: 555, type: "private" },
-        poll: { id: "poll-anonymous" },
-      })),
-    };
+    const api = makeTelegramApiTestMock({
+      sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
+        makeTelegramPollMessage({ poll: { id: "poll-anonymous" } }),
+      ),
+    });
 
     await expect(
       sendPollTelegram(
@@ -5980,7 +6160,7 @@ describe("sendPollTelegram", () => {
         {
           cfg: TELEGRAM_TEST_CFG,
           token: "t",
-          api: api as unknown as Bot["api"],
+          api,
         },
       ),
     ).resolves.toMatchObject({
@@ -5993,28 +6173,32 @@ describe("sendPollTelegram", () => {
 
   it("does not retry an already-sent poll when origin storage fails", async () => {
     const pollRegistryKey = "default:poll-write-error";
-    const register = vi.fn(async (key: string) => {
+    const pollRegistryStore = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>(
+      "telegram",
+      {
+        namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+        maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      },
+    );
+    const register = vi.spyOn(pollRegistryStore, "register").mockImplementation(async (key) => {
       if (key === pollRegistryKey) {
         throw new Error("registry db unavailable");
       }
     });
     setTelegramRuntime({
       state: {
-        openKeyedStore: (() => ({
-          register,
-        })) as unknown as TelegramRuntime["state"]["openKeyedStore"],
+        openKeyedStore: (() => pollRegistryStore) as TelegramRuntime["state"]["openKeyedStore"],
         openSyncKeyedStore: (() =>
           sentMessageStore) as TelegramRuntime["state"]["openSyncKeyedStore"],
       },
       channel: {},
     } as TelegramRuntime);
-    const api = {
-      sendPoll: vi.fn(async () => ({
-        message_id: 123,
-        chat: { id: 555, type: "private" },
-        poll: { id: "poll-write-error" },
-      })),
-    };
+    const api = makeTelegramApiTestMock({
+      sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
+        makeTelegramPollMessage({ poll: { id: "poll-write-error" } }),
+      ),
+    });
 
     await expect(
       sendPollTelegram(
@@ -6023,7 +6207,7 @@ describe("sendPollTelegram", () => {
         {
           cfg: TELEGRAM_TEST_CFG,
           token: "t",
-          api: api as unknown as Bot["api"],
+          api,
           isAnonymous: false,
         },
       ),
@@ -6040,11 +6224,11 @@ describe("sendPollTelegram", () => {
   });
 
   it("fails poll sends instead of retrying without message_thread_id", async () => {
-    const api = {
+    const api = makeTelegramApiTestMock({
       sendPoll: vi
-        .fn()
+        .fn<Bot["api"]["sendPoll"]>()
         .mockRejectedValueOnce(new Error("400: Bad Request: message thread not found")),
-    };
+    });
 
     await expect(
       sendPollTelegram(
@@ -6053,7 +6237,7 @@ describe("sendPollTelegram", () => {
         {
           cfg: TELEGRAM_TEST_CFG,
           token: "t",
-          api: api as unknown as Bot["api"],
+          api,
           messageThreadId: 99,
         },
       ),
@@ -6067,13 +6251,13 @@ describe("sendPollTelegram", () => {
   });
 
   it("rejects durationHours for Telegram polls", async () => {
-    const api = { sendPoll: vi.fn() };
+    const api = makeTelegramApiTestMock({ sendPoll: vi.fn<Bot["api"]["sendPoll"]>() });
 
     await expect(
       sendPollTelegram(
         "123",
         { question: "Q", options: ["A", "B"], durationHours: 1 },
-        { cfg: TELEGRAM_TEST_CFG, token: "t", api: api as unknown as Bot["api"] },
+        { cfg: TELEGRAM_TEST_CFG, token: "t", api },
       ),
     ).rejects.toThrow(/durationHours is not supported/i);
 
@@ -6081,15 +6265,18 @@ describe("sendPollTelegram", () => {
   });
 
   it("fails when poll send returns no message_id", async () => {
-    const api = {
-      sendPoll: vi.fn(async () => ({ chat: { id: 555 }, poll: { id: "p1" } })),
-    };
+    const api = makeTelegramApiTestMock({
+      sendPoll: makeTelegramInvalidApiResultMock("sendPoll", async () => ({
+        chat: { id: 555 },
+        poll: { id: "p1" },
+      })),
+    });
 
     await expect(
       sendPollTelegram(
         "123",
         { question: "Q", options: ["A", "B"] },
-        { cfg: TELEGRAM_TEST_CFG, token: "t", api: api as unknown as Bot["api"] },
+        { cfg: TELEGRAM_TEST_CFG, token: "t", api },
       ),
     ).rejects.toThrow(/returned no message_id/i);
   });
@@ -6134,7 +6321,7 @@ describe("createForumTopicTelegram", () => {
   for (const testCase of cases) {
     it(testCase.name, async () => {
       const createForumTopic = vi.fn().mockResolvedValue(testCase.response);
-      const api = { createForumTopic } as unknown as Bot["api"];
+      const api = makeTelegramApiTestMock({ createForumTopic });
 
       const result = await createForumTopicTelegram(testCase.target, testCase.title, {
         cfg: TELEGRAM_TEST_CFG,
@@ -6155,7 +6342,7 @@ describe("createForumTopicTelegram", () => {
     ["128 CJK characters", "界".repeat(128)],
   ])("accepts %s forum topic names by Unicode code points", async (_label, name) => {
     const createForumTopic = vi.fn().mockResolvedValue({ message_thread_id: 400, name });
-    const api = { createForumTopic } as unknown as Bot["api"];
+    const api = makeTelegramApiTestMock({ createForumTopic });
 
     await createForumTopicTelegram("-1001234567890", name, {
       cfg: TELEGRAM_TEST_CFG,
@@ -6185,7 +6372,7 @@ describe("createForumTopicTelegram", () => {
   ])("rejects %s exceeding 128 Unicode code points on create and edit", async (_label, name) => {
     const createForumTopic = vi.fn();
     const editForumTopic = vi.fn();
-    const api = { createForumTopic, editForumTopic } as unknown as Bot["api"];
+    const api = makeTelegramApiTestMock({ createForumTopic, editForumTopic });
 
     await expect(
       createForumTopicTelegram("-1001234567890", name, {

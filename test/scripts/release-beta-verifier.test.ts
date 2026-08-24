@@ -13,8 +13,25 @@ import {
   readBoundedJsonResponse,
   resolveOpenClawNpmPostpublishVerifier,
   runNpmViewWithRetry,
+  runReleaseVerifierCommand,
   validateClawHubBootstrapEvidence,
 } from "../../scripts/lib/release-beta-verifier.ts";
+type CommandError = Error & {
+  code?: string;
+  signal?: NodeJS.Signals;
+  status?: number;
+  stderr?: string;
+  stdout?: string;
+};
+
+function captureCommandError(run: () => unknown): CommandError {
+  try {
+    run();
+  } catch (error) {
+    return error as CommandError;
+  }
+  throw new Error("expected command to fail");
+}
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -623,7 +640,9 @@ describe("runNpmViewWithRetry", () => {
         run: (args) => {
           calls.push(args);
           if (calls.length < 3) {
-            throw new Error("npm registry has not propagated the release yet");
+            throw Object.assign(new Error("npm registry has not propagated the release yet"), {
+              code: "E404",
+            });
           }
           return '"2026.5.10-beta.3"';
         },
@@ -633,6 +652,71 @@ describe("runNpmViewWithRetry", () => {
     expect(calls).toHaveLength(3);
     expect(calls.every((args) => args.at(-1) === "--prefer-online")).toBe(true);
     expect(delays).toEqual([1000, 2000]);
+  });
+
+  it("fails a timed-out npm read after one attempt and reaps the child", async () => {
+    const delay = vi.fn(async () => {});
+    let calls = 0;
+    let timeoutError: CommandError | undefined;
+    const result = runNpmViewWithRetry(["view", "openclaw", "version"], {
+      attempts: 3,
+      delay,
+      run: () => {
+        calls += 1;
+        try {
+          return runReleaseVerifierCommand(
+            process.execPath,
+            ["-e", "process.stdout.write(String(process.pid)); setInterval(() => {}, 1000)"],
+            { timeoutMs: 5_000 },
+          );
+        } catch (error) {
+          timeoutError = error as CommandError;
+          throw error;
+        }
+      },
+    });
+    await expect(result).rejects.toMatchObject({ code: "ETIMEDOUT", signal: "SIGKILL" });
+    expect(calls).toBe(1);
+    expect(delay).not.toHaveBeenCalled();
+    const observedTimeoutError = expectDefined(timeoutError, "timeout command error");
+    const childPid = Number(observedTimeoutError.stdout?.trim());
+    expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
+    expect(() => process.kill(childPid, 0)).toThrow();
+  });
+});
+
+describe("runReleaseVerifierCommand", () => {
+  it("trims successful captured output", () => {
+    expect(
+      runReleaseVerifierCommand(process.execPath, [
+        "-e",
+        'process.stdout.write("  release ready  \\n")',
+      ]),
+    ).toBe("release ready");
+  });
+
+  it("preserves stdout and stderr when a command exits nonzero", () => {
+    const error = captureCommandError(() =>
+      runReleaseVerifierCommand(process.execPath, [
+        "-e",
+        'process.stdout.write("partial output"); process.stderr.write("failure detail"); process.exit(7)',
+      ]),
+    );
+    expect(error).toMatchObject({ status: 7 });
+    expect(error.stdout).toContain("partial output");
+    expect(error.stderr).toContain("failure detail");
+  });
+
+  it("fails when captured output exceeds the command buffer", () => {
+    const error = captureCommandError(() =>
+      runReleaseVerifierCommand(
+        process.execPath,
+        ["-e", 'process.stdout.write("x".repeat(4096))'],
+        { maxBufferBytes: 64 },
+      ),
+    );
+    expect(error.code).toBe("ENOBUFS");
+    expect(error.stdout).toContain("x");
   });
 });
 

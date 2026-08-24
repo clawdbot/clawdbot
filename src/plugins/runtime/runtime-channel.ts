@@ -29,7 +29,7 @@ import {
   matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
+import { dispatchReplyWithBufferedBlockDispatcherCore } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   createAckReactionHandle,
@@ -49,21 +49,21 @@ import {
 } from "../../channels/plugins/conversation-bindings.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
+import { runPreparedChannelTurn } from "../../channels/turn/execution.js";
 import {
-  dispatchChannelInboundTurn,
-  dispatchChannelInboundReply,
-  runChannelInboundEvent,
-  runPreparedInboundReply,
-} from "../../channels/turn/kernel.js";
+  dispatchAssembledChannelTurn,
+  dispatchRoutedChannelTurn,
+} from "../../channels/turn/lifecycle.js";
+import { runChannelTurn } from "../../channels/turn/run-channel-turn.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
-import { resolveStorePath } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import {
-  readSessionUpdatedAt,
+  readSessionUpdatedAtCore,
   recordInboundSessionMeta,
   updateSessionLastRoute,
 } from "../../config/sessions/session-accessor.js";
@@ -80,10 +80,19 @@ import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-r
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
 import type { PluginRuntime } from "./types.js";
 
-export function createRuntimeChannel(): PluginRuntime["channel"] {
+export function createRuntimeChannel(options?: {
+  dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
+}): PluginRuntime["channel"] {
+  const dispatchInbound: typeof dispatchRoutedChannelTurn = (params) =>
+    dispatchRoutedChannelTurn({
+      ...params,
+      ...(options?.dispatchReplyFromConfig
+        ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
+        : {}),
+    });
   const sessionRuntime = {
-    resolveStorePath,
-    readSessionUpdatedAt,
+    resolveStorePath: resolveSessionStorePathCore,
+    readSessionUpdatedAt: readSessionUpdatedAtCore,
     // Plugin runtime property names are a shipped contract; the implementations
     // route through the session accessor boundary.
     recordSessionMetaFromInbound: recordInboundSessionMeta,
@@ -105,11 +114,11 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       convertMarkdownTables,
     },
     reply: {
-      dispatchReplyWithBufferedBlockDispatcher,
+      dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
-      dispatchReplyFromConfig,
+      dispatchReplyFromConfig: options?.dispatchReplyFromConfig ?? dispatchReplyFromConfig,
       withReplyDispatcher,
       settleReplyDispatcher,
       finalizeInboundContext,
@@ -186,10 +195,10 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     inbound: {
       buildContext: buildChannelInboundEventContext,
-      run: runChannelInboundEvent,
-      runPreparedReply: runPreparedInboundReply,
-      dispatch: dispatchChannelInboundTurn,
-      dispatchReply: dispatchChannelInboundReply,
+      run: runChannelTurn,
+      runPreparedReply: runPreparedChannelTurn,
+      dispatch: dispatchInbound,
+      dispatchReply: dispatchAssembledChannelTurn,
     },
     threadBindings: {
       setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>

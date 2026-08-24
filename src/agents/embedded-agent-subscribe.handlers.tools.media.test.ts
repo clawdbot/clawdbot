@@ -29,6 +29,7 @@ function createMockContext(overrides?: {
       toolMetaById: new Map(),
       toolMetas: [],
       toolSummaryById: new Set(),
+      liveEditDiffStateById: new Map(),
       itemActiveIds: new Set(),
       itemStartedCount: 0,
       itemCompletedCount: 0,

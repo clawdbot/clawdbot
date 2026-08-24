@@ -5,6 +5,7 @@ import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { consumeCachedModelSetupDetection } from "./detect-cache.ts";
 import type { ModelSetupRouteData } from "./model-setup-page.ts";
@@ -18,7 +19,8 @@ async function loadModelSetupRouteData(
   const firstRun = new URLSearchParams(location.search).get("firstRun") === "1";
   const snapshot = context.gateway.snapshot;
   const client = snapshot.phase === "connected" ? snapshot.client : null;
-  const connection = { client, hello: snapshot.hello };
+  const agentId = context.agentSelection.state.selectedId;
+  const connection = { client, hello: snapshot.hello, agentId };
   if (
     !client ||
     !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||
@@ -32,20 +34,23 @@ async function loadModelSetupRouteData(
   }
   let state: ModelSetupRouteData["state"];
   try {
-    state = { phase: "ready", result: await detectModelSetup(client) };
+    state = {
+      phase: "ready",
+      result: await detectModelSetup(client, agentId ?? undefined),
+    };
   } catch (error) {
-    const message =
-      error instanceof Error && error.message.trim()
-        ? error.message
-        : t("modelSetup.errors.requestFailed");
-    state = { phase: "detect-error", message };
+    state = {
+      phase: "detect-error",
+      message: formatUiError(error, t("modelSetup.errors.requestFailed")),
+    };
   }
 
   const current = context.gateway.snapshot;
   if (
     current.phase === "connected" &&
     current.client === connection.client &&
-    current.hello === connection.hello
+    current.hello === connection.hello &&
+    context.agentSelection.state.selectedId === connection.agentId
   ) {
     return { state, connection, firstRun };
   }

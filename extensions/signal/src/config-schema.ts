@@ -16,8 +16,7 @@ import {
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { signalChannelConfigUiHints } from "./config-ui-hints.js";
 

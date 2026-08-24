@@ -3,7 +3,10 @@
  */
 import { randomBytes } from "node:crypto";
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
-import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
+import {
+  generatePkceVerifierChallenge,
+  type OAuthCredential,
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   parseOAuthCallbackInput,
   waitForLocalOAuthCallback,
@@ -115,6 +118,40 @@ function resolveChutesExpiresAt(value: unknown, now: number): number | undefined
   });
 }
 
+async function requestChutesTokenGrant(params: {
+  body: URLSearchParams;
+  responseLabel: "Chutes token exchange" | "Chutes token refresh";
+  fetchFn?: typeof fetch;
+  now?: number;
+  signal?: AbortSignal;
+}): Promise<{ access: string; refresh: string | undefined; expires: number }> {
+  const response = await (params.fetchFn ?? fetch)(CHUTES_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.body,
+    signal: buildOAuthRequestSignal({
+      timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
+    }),
+  });
+  await assertOkOrThrowProviderError(response, `${params.responseLabel} failed`);
+
+  const data = await readProviderJsonResponse<{
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  }>(response, params.responseLabel);
+  const access = normalizeOptionalString(data.access_token);
+  const expires = resolveChutesExpiresAt(data.expires_in, params.now ?? Date.now());
+  if (!access) {
+    throw new Error(`${params.responseLabel} returned no access_token`);
+  }
+  if (expires === undefined) {
+    throw new Error(`${params.responseLabel} returned invalid expires_in`);
+  }
+  return { access, refresh: normalizeOptionalString(data.refresh_token), expires };
+}
+
 async function fetchChutesUserInfo(params: {
   accessToken: string;
   fetchFn?: typeof fetch;
@@ -147,52 +184,32 @@ async function exchangeChutesCodeForTokens(params: {
 }): Promise<ChutesStoredOAuth> {
   const fetchFn = params.fetchFn ?? fetch;
   const now = params.now ?? Date.now();
-  const body = new URLSearchParams(
-    toFormUrlEncoded({
-      grant_type: "authorization_code",
-      client_id: params.app.clientId,
-      code: params.code,
-      redirect_uri: params.app.redirectUri,
-      code_verifier: params.codeVerifier,
-    }),
-  );
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    client_id: params.app.clientId,
+    code: params.code,
+    redirect_uri: params.app.redirectUri,
+    code_verifier: params.codeVerifier,
+  });
   if (params.app.clientSecret) {
     body.set("client_secret", params.app.clientSecret);
   }
 
-  const response = await fetchFn(CHUTES_TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  const token = await requestChutesTokenGrant({
     body,
-    signal: buildOAuthRequestSignal({
-      timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS,
-      ...(params.signal ? { signal: params.signal } : {}),
-    }),
+    responseLabel: "Chutes token exchange",
+    fetchFn,
+    now,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
-  await assertOkOrThrowProviderError(response, "Chutes token exchange failed");
-
-  const data = await readProviderJsonResponse<{
-    access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
-  }>(response, "Chutes token exchange");
-  const access = normalizeOptionalString(data.access_token);
-  const refresh = normalizeOptionalString(data.refresh_token);
-  const expires = resolveChutesExpiresAt(data.expires_in, now);
-  if (!access) {
-    throw new Error("Chutes token exchange returned no access_token");
-  }
-  if (!refresh) {
+  if (!token.refresh) {
     throw new Error("Chutes token exchange returned no refresh_token");
-  }
-  if (expires === undefined) {
-    throw new Error("Chutes token exchange returned invalid expires_in");
   }
 
   let info: ChutesUserInfo | null = null;
   try {
     info = await fetchChutesUserInfo({
-      accessToken: access,
+      accessToken: token.access,
       fetchFn,
       ...(params.signal ? { signal: params.signal } : {}),
     });
@@ -204,13 +221,54 @@ async function exchangeChutesCodeForTokens(params: {
     // not discard issued credentials when userinfo is unavailable or times out.
   }
   return {
-    access,
-    refresh,
-    expires,
+    access: token.access,
+    refresh: token.refresh,
+    expires: token.expires,
     email: info?.username,
     accountId: info?.sub,
     clientId: params.app.clientId,
   } as ChutesStoredOAuth;
+}
+
+/** Refreshes a stored Chutes OAuth credential through the provider token endpoint. */
+export async function refreshChutesOAuthCredential(
+  credential: OAuthCredential,
+  options: { fetchFn?: typeof fetch; now?: number } = {},
+): Promise<OAuthCredential> {
+  const refreshToken = normalizeOptionalString(credential.refresh);
+  if (!refreshToken) {
+    throw new Error("Chutes OAuth credential is missing refresh token");
+  }
+
+  const clientId = normalizeOptionalString(credential.clientId ?? process.env.CHUTES_CLIENT_ID);
+  if (!clientId) {
+    throw new Error("Missing CHUTES_CLIENT_ID for Chutes OAuth refresh (set env var or re-auth).");
+  }
+  const clientSecret = normalizeOptionalString(process.env.CHUTES_CLIENT_SECRET);
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: clientId,
+    refresh_token: refreshToken,
+  });
+  if (clientSecret) {
+    body.set("client_secret", clientSecret);
+  }
+
+  const token = await requestChutesTokenGrant({
+    body,
+    responseLabel: "Chutes token refresh",
+    fetchFn: options.fetchFn,
+    now: options.now,
+  });
+
+  return {
+    ...credential,
+    access: token.access,
+    // RFC 6749 section 6 makes replacement refresh tokens optional.
+    refresh: token.refresh ?? refreshToken,
+    expires: token.expires,
+    clientId,
+  };
 }
 
 /** Runs Chutes OAuth and returns refreshable stored credentials. */

@@ -1,5 +1,8 @@
 {
   "id": "signal",
+  "doctorContract": {
+    "configRepair": true
+  },
   "icon": "https://cdn.simpleicons.org/signal",
   "activation": {
     "onStartup": false

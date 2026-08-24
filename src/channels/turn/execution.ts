@@ -1,3 +1,7 @@
+import {
+  withDispatchProcessedOutcomeSink,
+  type DispatchProcessedNote,
+} from "../../auto-reply/reply/dispatch-processed-outcome.js";
 import { clearChannelHistoryIfEnabled } from "../../auto-reply/reply/history.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import {
@@ -13,6 +17,7 @@ import {
   type ChannelTurnDispatchResultLike,
   type ChannelTurnVisibleDeliverySignals,
 } from "./dispatch-result.js";
+import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 import type {
   ChannelTurnAdmission,
   ChannelTurnHistoryFinalizeOptions,
@@ -87,6 +92,7 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
     "admission" | "channel" | "ctxPayload" | "messageId" | "routeSessionKey"
   > & {
     dispatchResult: TDispatchResult;
+    processedOutcome?: DispatchProcessedNote;
     log?: (event: ChannelTurnLogEvent) => void;
   },
 ): void {
@@ -94,15 +100,26 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
     return;
   }
   const dispatchResult = params.dispatchResult as ChannelTurnDispatchResultLike;
+  if (dispatchResult?.deferredToActiveRun) {
+    return;
+  }
   // The canonical visible signal includes observed delivery paths with zero queued counts.
   if (hasVisibleChannelTurnDispatch(dispatchResult, NO_ADDITIONAL_DELIVERY_SIGNALS)) {
     return;
   }
+  // The processed outcome names the dispatch branch that produced the silence,
+  // so operators can tell a benign duplicate or busy skip from a lost message.
+  // It stays in this core-owned log line; the channel log event is a plugin
+  // contract and must not widen.
+  const processed = params.processedOutcome;
+  const cause = processed
+    ? `${processed.outcome}${processed.reason ? `:${processed.reason}` : ""}`
+    : undefined;
   log.warn(
     `visible channel turn dispatched with no queued reply payloads: channel=${params.channel} ` +
       `messageId=${params.messageId ?? "unknown"} sessionKey=${
         params.ctxPayload.SessionKey ?? params.routeSessionKey
-      }`,
+      } cause=${cause ?? "unknown"}`,
   );
   emit({
     ...params,
@@ -279,6 +296,7 @@ async function runPreparedChannelTurnCoreInTrace<
       },
     });
     await params.afterRecord?.();
+    await deliverPendingDeliveryNotice(recordSessionKey, params.storePath);
   } catch (err) {
     emit({
       ...params,
@@ -316,14 +334,21 @@ async function runPreparedChannelTurnCoreInTrace<
     } else if (admission.kind === "observeOnly") {
       await params.runDispatchLifecycle?.onDispatchSkipped("observeOnly");
     }
-    dispatchResult =
-      admission.kind === "observeOnly"
-        ? resolveObserveOnlyDispatchResult(params)
-        : await params.runDispatch();
+    let processedOutcome: DispatchProcessedNote | undefined;
+    if (admission.kind === "observeOnly") {
+      dispatchResult = resolveObserveOnlyDispatchResult(params);
+    } else {
+      // The sink carries the dispatch's terminal outcome to the warning below
+      // without widening the plugin-visible dispatch result contract.
+      ({ result: dispatchResult, processedOutcome } = await withDispatchProcessedOutcomeSink(() =>
+        params.runDispatch(),
+      ));
+    }
     maybeWarnZeroCountVisibleDispatch({
       ...params,
       admission,
       dispatchResult,
+      processedOutcome,
     });
   } catch (err) {
     emit({
@@ -360,10 +385,8 @@ async function runPreparedChannelTurnCoreInTrace<
   };
 }
 
-async function runPreparedChannelTurn<
+export async function runPreparedChannelTurn<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(params: PreparedChannelTurn<TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>> {
   return await runPreparedChannelTurnCore(params, { suppressObserveOnlyDispatch: true });
 }
-
-export const runPreparedInboundReply = runPreparedChannelTurn;

@@ -94,6 +94,7 @@ function changeWorkboardSelect(select: Element | null | undefined, value: string
   }
   Object.defineProperty(control, "value", { configurable: true, value, writable: true });
   control.dispatchEvent(new Event("change", { bubbles: true }));
+  Reflect.deleteProperty(control, "value");
 }
 
 function selectWorkboardAgent(select: Element | null | undefined, value: string) {
@@ -369,7 +370,7 @@ describe("renderWorkboard", () => {
     expect(detailActions).not.toBeNull();
     expect(buttonByLabel(detailActions!, "Edit card")?.disabled).toBe(true);
     expect(buttonByLabel(detailActions!, "Archive card")?.disabled).toBe(true);
-    expect(buttonByLabel(detailActions!, "Stop thread")?.disabled).toBe(true);
+    expect(buttonByLabel(detailActions!, "Stop session")?.disabled).toBe(true);
     expect(buttonByLabel(detailActions!, "Delete card")?.disabled).toBe(true);
     expect(
       detailActions!.querySelector<HTMLSelectElement>(".workboard-card__move-select")?.disabled,
@@ -454,8 +455,8 @@ describe("renderWorkboard", () => {
       "workboard-dispatcher",
     );
     const runningCard = cards.find((card) => card.textContent?.includes("Running card"));
-    expect(runningCard?.querySelector('button[aria-label="Open thread"]')).not.toBeNull();
-    expect(runningCard?.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
+    expect(runningCard?.querySelector('button[aria-label="Open session"]')).not.toBeNull();
+    expect(runningCard?.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
   });
 
   it("renders date and time in detail drawer timestamps", () => {
@@ -877,7 +878,7 @@ describe("renderWorkboard", () => {
       agentsList: {
         defaultId: "main",
         mainKey: "agent:main:main",
-        scope: "test",
+        scope: "per-sender",
         agents: [{ id: "main", name: "Main" }],
       },
     });
@@ -907,7 +908,7 @@ describe("renderWorkboard", () => {
       agentsList: {
         defaultId: "main",
         mainKey: "agent:main:main",
-        scope: "test",
+        scope: "per-sender",
         agents: [{ id: "main" }, { id: "writer" }, { id: "ops" }],
       },
       scopeAgentId: "writer",
@@ -950,11 +951,13 @@ describe("renderWorkboard", () => {
       ),
     ];
     expect(selects).toHaveLength(2);
-    expect(selects.map((select) => select.getAttribute("label"))).toEqual([
+    expect(selects.map((select) => select.querySelector('[slot="label"]')?.textContent)).toEqual([
       "Workboard view",
       "All priorities",
     ]);
-    expect(selects.map((select) => select.getAttribute("value"))).toEqual(["all", "all"]);
+    expect(
+      selects.map((select) => select.querySelector("wa-option[selected]")?.getAttribute("value")),
+    ).toEqual(["all", "all"]);
     const agentSelect = container.querySelector<
       HTMLElement & { accessibleLabel: string; value: string }
     >(".workboard-agent-select--toolbar");
@@ -1084,8 +1087,8 @@ describe("renderWorkboard", () => {
     expect(actions).not.toBeNull();
     expect(buttonByLabel(actions!, "Edit card")).not.toBeNull();
     expect(buttonByLabel(actions!, "Archive card")).not.toBeNull();
-    expect(buttonByLabel(actions!, "Stop thread")).not.toBeNull();
-    expect(buttonByLabel(actions!, "Open thread")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Stop session")).not.toBeNull();
+    expect(buttonByLabel(actions!, "Open session")).not.toBeNull();
     expect(buttonByLabel(actions!, "Delete card")).not.toBeNull();
 
     const moveSelect = actions!.querySelector<HTMLSelectElement>(".workboard-card__move-select");
@@ -1201,7 +1204,7 @@ describe("renderWorkboard", () => {
         "Card details: Inspect drawer focus",
       );
       expect(container.querySelector("#workboard-card-detail-description")?.textContent).toContain(
-        "Start or link a thread",
+        "Start or link a session",
       );
       dialog.dispatchEvent(new Event("cancel", { bubbles: true, cancelable: true }));
       await nextFrame();
@@ -1431,6 +1434,32 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Ready for operator review.");
   });
 
+  it("renders a queued linked session without running copy", () => {
+    const { state, container, renderView } = createWorkboardView({
+      sessions: [
+        {
+          key: "agent:main:queued",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: true,
+          status: "queued",
+        },
+      ],
+    });
+    state.cards = [
+      createWorkboardCard({
+        status: "todo",
+        sessionKey: "agent:main:queued",
+      }),
+    ];
+    renderView();
+
+    expect(container.querySelector(".workboard-lifecycle")?.textContent?.trim()).toBe("Queued");
+    expect(container.querySelector(".workboard-card__lifecycle-detail")?.textContent?.trim()).toBe(
+      "Waiting for a concurrency slot",
+    );
+  });
+
   it("uses terminal session lifecycle when cached task status is stale", () => {
     const { state, container, renderView } = createWorkboardView({
       sessions: [
@@ -1502,7 +1531,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     expect(container.textContent).toContain("Task running");
-    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
     expect(container.querySelector(".workboard-card")?.getAttribute("role")).toBe("button");
 
@@ -1528,7 +1557,7 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -1544,7 +1573,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     expect(container.querySelector(".workboard-live")).toBeNull();
-    expect(container.querySelector('button[aria-label="Stop thread"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -1560,7 +1589,7 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
   });
 
@@ -1576,7 +1605,7 @@ describe("renderWorkboard", () => {
     state.missingTaskIds = new Set(["task-pruned-from-ledger"]);
     renderView();
 
-    expect(container.querySelector('button[aria-label="Stop thread"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
   });
 
@@ -1740,7 +1769,7 @@ describe("renderWorkboard", () => {
     ];
     renderView();
 
-    expect(container.textContent).toContain("Thread missing");
+    expect(container.textContent).toContain("Session missing");
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(1);
   });
 
@@ -1808,7 +1837,7 @@ describe("renderWorkboard", () => {
       agentsList: {
         defaultId: "main",
         mainKey: "agent:main:main",
-        scope: "test",
+        scope: "per-sender",
         agents: [
           { id: "main", name: "Main" },
           { id: "writer", name: "Writer" },
@@ -2141,10 +2170,10 @@ describe("renderWorkboard", () => {
   });
 
   it("filters cards by linked agent", () => {
-    const agentsList = {
+    const agentsList: NonNullable<WorkboardRenderProps["agentsList"]> = {
       defaultId: "main",
       mainKey: "agent:main:main",
-      scope: "test",
+      scope: "per-sender",
       agents: [
         { id: "main", name: "Main" },
         { id: "ops", name: "Ops" },
@@ -2228,7 +2257,7 @@ describe("renderWorkboard", () => {
       agentsList: {
         defaultId: "main",
         mainKey: "agent:main:main",
-        scope: "test",
+        scope: "per-sender",
         agents: [
           { id: "main", name: "Main" },
           { id: "main", name: "Main duplicate" },
@@ -2298,7 +2327,7 @@ describe("renderWorkboard", () => {
       agentsList: {
         defaultId: "main",
         mainKey: "agent:main:main",
-        scope: "test",
+        scope: "per-sender",
         agents: [{ id: "main", name: "Main", agentRuntime: { id: "codex", source: "agent" } }],
       },
     });
@@ -2422,10 +2451,10 @@ describe("renderWorkboard", () => {
       renderView();
 
       expect(container.textContent).toContain("Stale");
-      expect(container.textContent).toContain("No recent thread activity");
+      expect(container.textContent).toContain("No recent session activity");
       expect(container.textContent).not.toContain("codex autonomous");
       expect(container.querySelector(".workboard-live")).toBeNull();
-      expect(container.querySelector('button[aria-label="Stop thread"]')).toBeNull();
+      expect(container.querySelector('button[aria-label="Stop session"]')).toBeNull();
     } finally {
       nowSpy.mockRestore();
     }
@@ -2453,7 +2482,7 @@ describe("renderWorkboard", () => {
     renderView();
 
     expect(container.querySelector(".workboard-live")?.textContent).toContain("live");
-    expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Stop session"]')).not.toBeNull();
   });
 
   it.each([
@@ -2503,7 +2532,9 @@ describe("renderWorkboard", () => {
     expect(state.draftSessionKey).toBe(testCase.sessionKey);
     expect(
       [...container.querySelectorAll(".workboard-draft wa-select")].some(
-        (select) => select.getAttribute("value") === testCase.sessionKey,
+        (select) =>
+          select.querySelector("wa-option[selected]")?.getAttribute("value") ===
+          testCase.sessionKey,
       ),
     ).toBe(true);
 
@@ -2519,10 +2550,8 @@ describe("renderWorkboard", () => {
 
     expect(request).toHaveBeenCalledWith("workboard.cards.update", {
       id: card.id,
-      patch: expect.objectContaining({
-        title: "Renamed without unlinking",
-        sessionKey: testCase.sessionKey,
-      }),
+      expectedUpdatedAt: card.updatedAt,
+      patch: { title: "Renamed without unlinking" },
     });
     expect(state.cards[0]?.execution?.sessionKey).toBe("agent:main:execution-linked-session");
     renderView();
@@ -2552,6 +2581,7 @@ describe("renderWorkboard", () => {
         ? {
             card: {
               ...state.cards[0],
+              updatedAt: 2,
               metadata: {
                 comments: [
                   ...(state.cards[0]?.metadata?.comments ?? []),
@@ -2565,7 +2595,7 @@ describe("renderWorkboard", () => {
               ...state.cards[0],
               title: "Renamed",
               priority: "high",
-              updatedAt: 2,
+              updatedAt: 3,
             },
           },
     );
@@ -2591,6 +2621,10 @@ describe("renderWorkboard", () => {
     expect(container.querySelector("openclaw-modal-dialog")?.textContent).toContain(
       "Needs owner check",
     );
+    const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
+    expect(title?.value).toBe("Rename me");
+    title!.value = "Renamed";
+    title!.dispatchEvent(new InputEvent("input", { bubbles: true }));
     const commentInput = container.querySelector<HTMLTextAreaElement>(".workboard-comments__input");
     commentInput!.value = "Ship after CI";
     commentInput!.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -2608,10 +2642,10 @@ describe("renderWorkboard", () => {
     expect(state.cards[0]?.metadata?.comments?.at(-1)?.body).toBe("Ship after CI");
     render(renderWorkboard(props), container);
 
-    const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
-    expect(title?.value).toBe("Rename me");
-    title!.value = "Renamed";
-    title!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
+      "Renamed",
+    );
+    expect(state.editingCardBase?.updatedAt).toBe(2);
     const priority = [
       ...(container
         .querySelector(".workboard-draft")
@@ -2626,12 +2660,13 @@ describe("renderWorkboard", () => {
 
     expect(request).toHaveBeenCalledWith("workboard.cards.update", {
       id: "card-1",
-      patch: expect.objectContaining({
-        title: "Renamed",
-        priority: "high",
-      }),
+      expectedUpdatedAt: 2,
+      patch: { title: "Renamed", priority: "high" },
     });
-    expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 2 });
+    expect(
+      request.mock.calls.filter(([method]) => method === "workboard.cards.update"),
+    ).toHaveLength(1);
+    expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 3 });
 
     render(renderWorkboard(props), container);
     expect(container.querySelector("openclaw-modal-dialog")).toBeNull();
@@ -2646,6 +2681,7 @@ describe("renderWorkboard", () => {
     expect(
       [...(container.querySelector(".workboard-draft")?.querySelectorAll("wa-select") ?? [])]
         .at(1)
+        ?.querySelector("wa-option[selected]")
         ?.getAttribute("value"),
     ).toBe("high");
   });
@@ -2779,7 +2815,7 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    expect(container.textContent).toContain("No linked thread");
+    expect(container.textContent).toContain("No linked session");
     expect(container.textContent).toContain("Existing session");
   });
 
@@ -2796,7 +2832,9 @@ describe("renderWorkboard", () => {
         .querySelector(".workboard-draft")
         ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
     ].at(2);
-    expect(sessionSelect?.getAttribute("value")).toBe("agent:main:archived-session");
+    expect(sessionSelect?.querySelector("wa-option[selected]")?.getAttribute("value")).toBe(
+      "agent:main:archived-session",
+    );
     expect(
       sessionSelect?.querySelector('wa-option[value="agent:main:archived-session"]'),
     ).not.toBeNull();
@@ -2834,8 +2872,8 @@ describe("renderWorkboard", () => {
         .querySelector(".workboard-draft")
         ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
     ].at(2);
-    const labels = [...(sessionOptions?.querySelectorAll(".workboard-select__option") ?? [])].map(
-      (option) => option.textContent?.trim(),
+    const labels = [...(sessionOptions?.querySelectorAll("wa-option") ?? [])].map((option) =>
+      option.textContent?.trim(),
     );
     expect(labels).toContain("Dashboard session");
     expect(labels).not.toContain("heartbeat");

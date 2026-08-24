@@ -22,6 +22,7 @@ import type {
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import { normalizeControlUiBasePath } from "../control-ui-shared.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import {
@@ -357,6 +358,13 @@ export function createApprovalHandlers(
     },
 
     "approval.resolve": async ({ params: rawParams, respond, client, context }) => {
+      const validParams = validateApprovalResolveParams(rawParams);
+      const resolveParams = validParams ? (rawParams as ApprovalResolveParams) : null;
+      const hasReviewer = isRecord(rawParams) && "reviewer" in rawParams;
+      if (hasReviewer && !resolveParams?.reviewer) {
+        respondApprovalNotFound(respond);
+        return;
+      }
       const id = readExactApprovalId(rawParams);
       let record: OperatorApprovalRecord | null;
       try {
@@ -380,6 +388,23 @@ export function createApprovalHandlers(
         respondApprovalNotFound(respond);
         return;
       }
+      const custody = resolveParams?.reviewer
+        ? prepareApprovalChannelCustody({
+            cfg: context.getRuntimeConfig(),
+            approvalKind: record.kind === "plugin" ? "plugin" : "exec",
+            reviewer: resolveParams.reviewer,
+          })
+        : null;
+      const liveRecord =
+        record.kind === "exec"
+          ? params.execApprovalManager.getLiveSnapshot(record.id)
+          : record.kind === "plugin"
+            ? params.pluginApprovalManager.getLiveSnapshot(record.id)
+            : undefined;
+      if (resolveParams?.reviewer && (!custody || !liveRecord || !custody.authorizes(liveRecord))) {
+        respondApprovalNotFound(respond);
+        return;
+      }
       if (record.status !== "pending") {
         // Durable terminal state outlives the process-local waiter. Every later
         // surface receives the same winner without re-opening execution rights.
@@ -394,10 +419,10 @@ export function createApprovalHandlers(
         respond(true, { applied: false, approval }, undefined);
         return;
       }
-      const resolver = resolveApprovalResolver(client);
+      const resolver = custody
+        ? ({ kind: "channel", id: custody.resolverId } as const)
+        : resolveApprovalResolver(client);
       const localResolvedBy = resolveLegacyApprovalLabel(client);
-      const validParams = validateApprovalResolveParams(rawParams);
-      const resolveParams = validParams ? (rawParams as ApprovalResolveParams) : null;
       const requestedDecision = resolveParams?.decision ?? null;
       const decisionAllowed =
         requestedDecision === "deny" ||

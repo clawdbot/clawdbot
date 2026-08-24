@@ -17,7 +17,8 @@ export function requestChatPageUpdate(
   state: ChatPageHost,
   mode: ChatPageUpdateMode = "immediate",
 ): void {
-  if (mode === "immediate" || typeof globalThis.requestAnimationFrame !== "function") {
+  const hidden = globalThis.document?.visibilityState === "hidden";
+  if (hidden || mode === "immediate" || typeof globalThis.requestAnimationFrame !== "function") {
     cancelChatStreamRenderFrame(state);
     state.requestUpdate?.();
     return;
@@ -25,8 +26,6 @@ export function requestChatPageUpdate(
   if (state.chatStreamRenderFrame != null) {
     return;
   }
-  // Deltas still mutate the canonical stream immediately. One frame owns the
-  // paint; terminal/non-stream events cancel it so stale partial UI cannot win.
   let frame = 0;
   frame = globalThis.requestAnimationFrame(() => {
     if (state.chatStreamRenderFrame !== frame) {

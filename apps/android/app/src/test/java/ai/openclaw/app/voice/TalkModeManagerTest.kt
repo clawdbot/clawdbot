@@ -37,9 +37,6 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -103,18 +100,42 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun stopTtsCancelsTrackedPlaybackJob() {
-    val manager = createManager()
-    val playbackJob = Job()
+  fun stopTtsWithoutOutputIdentityCancelsPlaybackWithoutReplacingCancellationWaiter() =
+    runTest {
+      val manager = createManager(scope = this)
+      val playbackJob = Job()
+      val pendingClear = CompletableDeferred<String?>()
 
-    setPrivateField(manager, "ttsJob", playbackJob)
-    playbackGeneration(manager).set(7L)
+      setPrivateField(manager, "ttsJob", playbackJob)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "realtimeOutputTurnId", " ")
+      setPrivateField(manager, "pendingRealtimeOutputClear", pendingClear)
+      playbackGeneration(manager).set(7L)
 
-    manager.stopTts()
+      manager.stopTts()
+      runCurrent()
 
-    assertTrue(playbackJob.isCancelled)
-    assertEquals(8L, playbackGeneration(manager).get())
-  }
+      assertTrue(playbackJob.isCancelled)
+      assertEquals(8L, playbackGeneration(manager).get())
+      assertTrue(readPrivateField(manager, "pendingRealtimeOutputClear") === pendingClear)
+    }
+
+  @Test
+  fun stopTtsCancelsTheOutputOwnedWhenTheActionStarted() =
+    runTest {
+      val manager = createManager(scope = this)
+      val priorClear = CompletableDeferred<String?>()
+      setPrivateField(manager, "realtimeSessionId", "relay-a")
+      setPrivateField(manager, "realtimeOutputTurnId", "turn-a")
+      setPrivateField(manager, "pendingRealtimeOutputClear", priorClear)
+
+      manager.stopTts()
+      setPrivateField(manager, "realtimeSessionId", null)
+      setPrivateField(manager, "realtimeOutputTurnId", "turn-b")
+      runCurrent()
+
+      assertNull(readPrivateField(manager, "pendingRealtimeOutputClear"))
+    }
 
   @Test
   fun disablingPlaybackCancelsTrackedJobOnce() {
@@ -224,47 +245,6 @@ class TalkModeManagerTest {
       assertEquals("capture-active", payload.captureId)
       assertEquals("capture-active", readPrivateField(manager, "activePttCaptureId"))
       assertFalse(completion.isCompleted)
-    }
-
-  @Test
-  fun pushToTalkChatSendUsesCaptureOwnedSessionEnvelope() =
-    runTest {
-      val cases =
-        listOf(
-          TalkSessionKeyEnvelope.Authoritative("agent:main:admitted") to "agent:main:admitted",
-          TalkSessionKeyEnvelope.Authoritative(null) to "main",
-          TalkSessionKeyEnvelope.Legacy to "device-selected",
-        )
-
-      for ((envelope, expectedSessionKey) in cases) {
-        val sentParams = CompletableDeferred<String>()
-        val manager =
-          createManager(
-            scope = this,
-            requestGateway = { method, paramsJson, _ ->
-              if (method == "chat.send") {
-                sentParams.complete(requireNotNull(paramsJson))
-                throw IllegalStateException("captured chat.send")
-              }
-              error("unexpected gateway request: $method")
-            },
-          )
-        manager.setMainSessionKey("device-selected")
-        setPrivateField(manager, "configLoaded", true)
-        setPrivateField(manager, "activePttCaptureId", "capture-$expectedSessionKey")
-        setPrivateField(manager, "pttSessionKeyEnvelope", envelope)
-        @Suppress("UNCHECKED_CAST")
-        (readPrivateField(manager, "pttFinalSegments") as MutableList<String>) += "send this"
-
-        withMain(dispatcher = Dispatchers.Unconfined, cleanup = manager::stopAllCapture) {
-          val result = manager.endPushToTalk("capture-$expectedSessionKey")
-          assertEquals("queued", result.status)
-          advanceUntilIdle()
-        }
-
-        val params = Json.parseToJsonElement(sentParams.await()).jsonObject
-        assertEquals(expectedSessionKey, params.getValue("sessionKey").jsonPrimitive.content)
-      }
     }
 
   @Test
@@ -833,7 +813,7 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun realtimeAudioFramesStreamUntilPlaybackStarts() {
+  fun realtimeAudioFramesStreamUntilPlaybackOrCancellationStarts() {
     val manager = createManager()
 
     assertFalse(shouldAppendRealtimeCapturedFrame(manager, 0))
@@ -846,6 +826,10 @@ class TalkModeManagerTest {
 
     setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() - 1)
 
+    assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+    setPrivateField(manager, "pendingRealtimeOutputClear", CompletableDeferred<String?>())
+    assertFalse(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+    setPrivateField(manager, "pendingRealtimeOutputClear", null)
     assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
   }
 
@@ -869,7 +853,7 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun unconfirmedOutputCancellationClosesRealtimeRelay() =
+  fun pushToTalkWithoutOutputIdentityClosesRealtimeRelayWithoutWaitingForClear() =
     runTest {
       var stoppedByRelay = false
       val manager =
@@ -883,12 +867,50 @@ class TalkModeManagerTest {
       manager.pauseRealtimeCaptureForPushToTalk("capture-1")
 
       assertNull(readPrivateField(manager, "realtimeSessionId"))
+      assertNull(readPrivateField(manager, "pendingRealtimeOutputClear"))
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
       assertEquals("capture-1", readPrivateField(pause, "pttCaptureId"))
       assertTrue(readPrivateField(pause, "restartRelay") as Boolean)
       assertTrue(manager.isEnabled.value)
       assertFalse(stoppedByRelay)
     }
+
+  @Test
+  fun outputCancellationResultPreservesLegacyAndRecognizedRaceOutcomes() {
+    val accepted =
+      listOf(
+        """{"ok":true}""" to null,
+        """{"ok":true,"status":"applied"}""" to "applied",
+        """{"ok":true,"turnId":"turn-1"}""" to null,
+        """{"ok":true,"status":"applied","turnId":"turn-1"}""" to "applied",
+        """{"ok":true,"status":"stale"}""" to "stale",
+        """{"ok":true,"status":"idle"}""" to "idle",
+      )
+
+    accepted.forEach { (response, status) ->
+      assertEquals(status, requireAcceptedRealtimeOutputCancellation(response, "turn-1").status)
+    }
+    assertEquals(
+      "turn-from-server",
+      requireAcceptedRealtimeOutputCancellation(
+        """{"ok":true,"status":"applied","turnId":"turn-from-server"}""",
+        null,
+      ).turnId,
+    )
+  }
+
+  @Test
+  fun malformedOutputCancellationResultFailsClosed() {
+    listOf(
+      """{"ok":true,"status":"applied","turnId":"turn-2"}""",
+      """{"status":"stale"}""",
+      """{"ok":false}""",
+      """{"ok":true,"status":"unknown"}""",
+      """{"ok":true,"extra":1}""",
+    ).forEach { response ->
+      assertTrue(runCatching { requireAcceptedRealtimeOutputCancellation(response, "turn-1") }.isFailure)
+    }
+  }
 
   @Test
   fun stalePushToTalkCompletionCannotResumeNewerPause() =
@@ -1121,7 +1143,6 @@ class TalkModeManagerTest {
     realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimeMarkAcknowledger: (suspend (String, String) -> Unit)? = null,
-    requestGateway: (suspend (String, String?, Long) -> String)? = null,
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val session =
@@ -1144,7 +1165,6 @@ class TalkModeManagerTest {
       realtimeCaptureDispatcher = realtimeCaptureDispatcher,
       realtimePlaybackDispatcher = realtimePlaybackDispatcher,
       realtimeMarkAcknowledger = realtimeMarkAcknowledger,
-      requestGatewayOverride = requestGateway,
     )
   }
 

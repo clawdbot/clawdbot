@@ -79,6 +79,45 @@ import {
 } from "./runtime.ts";
 import { formatError, trimForSummary } from "./shared.ts";
 
+async function installLaneCompanions(
+  params: LaneBaseParams & {
+    lane: LaneState;
+    env: NodeJS.ProcessEnv;
+    cliPath?: string;
+  },
+) {
+  if (params.companions.length === 0) {
+    return;
+  }
+  await runTimedLanePhase(params.lane, "install-companions", async () => {
+    for (const companion of params.companions) {
+      const logPath = join(
+        params.logsDir,
+        `companion-${companion.name.replace(/[^a-z0-9]+/giu, "-")}.log`,
+      );
+      const args = ["plugins", "install", `npm-pack:${companion.tarballPath}`, "--force"];
+      if (params.cliPath) {
+        await runInstalledCli({
+          cliPath: params.cliPath,
+          args,
+          env: params.env,
+          cwd: params.lane.homeDir,
+          logPath,
+          timeoutMs: 10 * 60 * 1000,
+        });
+        continue;
+      }
+      await runOpenClaw({
+        lane: params.lane,
+        args,
+        env: params.env,
+        logPath,
+        timeoutMs: 10 * 60 * 1000,
+      });
+    }
+  });
+}
+
 export async function runFreshLane(params: LaneBaseParams & { build: CandidateBuild }) {
   const lane = createLaneState("fresh");
   const cleanup: Cleanup[] = [];
@@ -118,6 +157,8 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
           }),
       );
     }
+
+    await installLaneCompanions({ ...params, lane, env });
 
     await runTimedLanePhase(lane, "onboard", async () => {
       await runOnboard({
@@ -328,6 +369,8 @@ export async function runUpgradeLane(
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
 
+    await installLaneCompanions({ ...params, lane, env });
+
     await runTimedLanePhase(lane, "onboard", async () => {
       await runOnboard({
         lane,
@@ -484,6 +527,8 @@ export async function runInstallerFreshSuite(
       managedHostEnv = env;
       managedHostCliPath = freshShell.cliPath;
     }
+
+    await installLaneCompanions({ ...params, lane, env, cliPath: freshShell.cliPath });
 
     // Hold the configured port through onboarding and model setup so another runner process
     // cannot claim it before the manual gateway starts. Release immediately before spawn.
@@ -765,6 +810,8 @@ export async function runDevUpdateSuite(
         logPath: join(params.logsDir, "dev-update-windows-toolchain.log"),
       });
     }
+
+    await installLaneCompanions({ ...params, lane, env, cliPath: verifiedShell.cliPath });
 
     logLanePhase(lane, "onboard");
     await runOnboardWithInstalledCli({

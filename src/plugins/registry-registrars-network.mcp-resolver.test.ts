@@ -5,7 +5,7 @@ import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
-function createRegistryHarness() {
+function createRegistryHarness(allowProcessHomeSessionCatalogs = true) {
   const pluginRegistry = createPluginRegistry({
     logger: {
       info() {},
@@ -14,6 +14,7 @@ function createRegistryHarness() {
       debug() {},
     },
     runtime: {} as PluginRuntime,
+    allowProcessHomeSessionCatalogs,
     activateGlobalSideEffects: false,
   });
   const config = {} as OpenClawConfig;
@@ -72,5 +73,46 @@ describe("registerMcpServerConnectionResolver ownership", () => {
     expect(
       pluginRegistry.registry.diagnostics.filter((diagnostic) => diagnostic.level === "error"),
     ).toEqual([]);
+  });
+});
+
+describe("registerSessionCatalog ownership", () => {
+  it("keeps isolation-aware providers when process-HOME catalogs are disabled", () => {
+    const { pluginRegistry, apiFor } = createRegistryHarness(false);
+    apiFor("catalog").registerSessionCatalog({
+      id: "catalog",
+      label: "Catalog",
+      supportsProcessHomeIsolation: true,
+      list: async () => [],
+      read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+    });
+
+    expect(pluginRegistry.registry.sessionCatalogs).toHaveLength(1);
+  });
+
+  it("suppresses legacy providers only when process-HOME catalogs are disabled", () => {
+    const legacyProvider = {
+      id: "legacy",
+      label: "Legacy",
+      list: async () => [],
+      read: async ({ hostId, threadId }: { hostId: string; threadId: string }) => ({
+        hostId,
+        threadId,
+        items: [],
+      }),
+    };
+    const isolated = createRegistryHarness(false);
+    isolated.apiFor("legacy").registerSessionCatalog(legacyProvider);
+    expect(isolated.pluginRegistry.registry.sessionCatalogs).toEqual([]);
+    expect(isolated.pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining("supportsProcessHomeIsolation"),
+      }),
+    );
+
+    const defaultIdentity = createRegistryHarness();
+    defaultIdentity.apiFor("legacy").registerSessionCatalog(legacyProvider);
+    expect(defaultIdentity.pluginRegistry.registry.sessionCatalogs).toHaveLength(1);
   });
 });

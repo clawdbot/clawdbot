@@ -225,6 +225,45 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
     expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
   });
 
+  it("records command sensitivity on namespaced MCP item events", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          id: "mcp-command-1",
+          type: "mcpToolCall",
+          server: "server",
+          tool: "exec",
+          status: "completed",
+          arguments: { command: "echo private-sentinel" },
+          result: { content: [{ type: "text", text: "done" }] },
+        },
+      }),
+    );
+
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "item",
+        phase: "end",
+        itemId: "mcp-command-1",
+      }).data,
+    ).toMatchObject({
+      name: "server.exec",
+      commandBearing: true,
+      meta: expect.stringContaining("private-sentinel"),
+    });
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "tool",
+        phase: "result",
+        itemId: "mcp-command-1",
+        name: "server.exec",
+      }).data,
+    ).toMatchObject({ commandBearing: true, isError: false });
+  });
+
   it("treats native collaboration calls as side-effect evidence", async () => {
     const projector = await createProjector();
 
@@ -288,7 +327,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
-      verboseLevel: "on",
+      verboseLevel: "full",
       onAgentEvent,
       onToolResult,
     });

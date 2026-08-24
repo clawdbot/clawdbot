@@ -1,6 +1,8 @@
 // Config-facts module for the curated Talk settings page. No lit imports: like
 // memory-schema.ts, settings search evaluates these facts from the startup
 // chunk and must not pull settings UI code in with them.
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as readTrimmedString } from "@openclaw/normalization-core/string-coerce";
 
 /** Normalized model/voice pair from one `talk.realtime.providers.<id>` entry. */
 type TalkProviderEntryValues = {
@@ -17,23 +19,11 @@ export type TalkRealtimeSelection = {
   speakerVoice: string | null;
   /** Raw configured `talk.realtime.transport`. */
   transport: string | null;
+  /** Normalized configured `talk.realtime.consultRouting`. */
+  consultRouting: string | null;
   /** Per-provider fallback values keyed by the raw config map key. */
   providerEntries: Record<string, TalkProviderEntryValues>;
 };
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readTrimmedString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
 
 /**
  * Raw talk.realtime picks plus each provider entry's fallback values. Which
@@ -64,15 +54,26 @@ export function resolveTalkRealtimeSelection(
     speakerVoice:
       readTrimmedString(realtime?.speakerVoice) ?? readTrimmedString(realtime?.speakerVoiceId),
     transport: readTrimmedString(realtime?.transport),
+    consultRouting: readTrimmedString(realtime?.consultRouting)?.toLowerCase() ?? null,
     providerEntries,
   };
 }
 
 /**
- * Mirrors the server-side gpt-live prefix contract
- * (extensions/openai/realtime-quicksilver.ts); the UI only uses it to decide
- * whether to show the ChatGPT sign-in hint, never to gate a session.
+ * Mirrors the server-side gpt-live family contract
+ * (extensions/openai/realtime-quicksilver.ts); the UI uses it for the ChatGPT
+ * sign-in hint and to avoid retaining a transport the selected provider
+ * positively rejects. It never gates a session.
  */
 export function isTalkGptLiveModel(model: string | null): boolean {
-  return model !== null && model.toLowerCase().startsWith("gpt-live");
+  const normalized = model?.trim().toLowerCase();
+  return normalized === "gpt-live" || normalized?.startsWith("gpt-live-") === true;
+}
+
+/** An empty or unavailable transport catalog is not evidence of incompatibility. */
+export function talkProviderRejectsTransport(
+  transports: readonly string[] | undefined,
+  transport: string,
+): boolean {
+  return transports !== undefined && transports.length > 0 && !transports.includes(transport);
 }

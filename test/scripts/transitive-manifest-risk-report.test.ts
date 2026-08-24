@@ -7,13 +7,17 @@ import {
   fetchNpmManifest,
   readBoundedNpmRegistryText,
   renderTransitiveManifestRiskMarkdownReport,
-} from "../../scripts/transitive-manifest-risk-report.mjs";
+} from "../../scripts/transitive-manifest-risk-report.mts";
 
 function runCli(...args: string[]) {
-  return spawnSync(process.execPath, ["scripts/transitive-manifest-risk-report.mjs", ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/transitive-manifest-risk-report.mts", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
 }
 
 function expectNoNodeStack(stderr: string) {

@@ -4,6 +4,7 @@ import {
   normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "@openclaw/model-catalog-core/provider-id";
+import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,8 +17,13 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
-import { resolveExternalCliAuthProfiles } from "./auth-profiles/external-cli-sync.js";
+import { normalizeExternalCliProfileMetadata } from "./auth-profiles/external-cli-profile-metadata.js";
+import {
+  listExternalCliSyncProviderIds,
+  resolveExternalCliAuthProfiles,
+} from "./auth-profiles/external-cli-sync.js";
 import {
   type AuthProfileOrderResolution,
   isConfiguredAwsSdkAuthProfileForProvider,
@@ -29,7 +35,9 @@ import {
   resolveSecretRefReadOnlyAvailability,
   resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
-import { getRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/runtime-snapshots.js";
+import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
+import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
+import { getRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import {
   isAuthCooldownBypassedForProvider,
@@ -69,9 +77,13 @@ import {
   selectProviderModelAuthSources,
   type ProviderModelAuthSourceSelection,
 } from "./provider-model-route-auth.js";
+import { modelMatchesProviderModelRoute } from "./provider-model-route.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
+const EXTERNAL_CLI_REFRESH_PROVIDER_IDS = new Set(
+  listExternalCliSyncProviderIds().map(normalizeProviderIdForAuth),
+);
 
 export type ModelAuthAvailability = boolean | undefined;
 type ModelAuthAvailabilityEvidence = Exclude<ProviderModelAuthEvidence, "none">;
@@ -118,6 +130,9 @@ type CreateModelAuthAvailabilityResolverParams = {
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   allowPreparedRuntimeAuth?: boolean;
+  preparedRuntimeAuthStore?: AuthProfileStore;
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
+  preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
 };
 
 type AuthTarget = ModelAuthAvailabilityRef & {
@@ -127,10 +142,6 @@ type AuthSourceEvaluation = Pick<
   ModelAuthAvailabilityEvaluation,
   "availability" | "selectedAuthMode" | "evidence" | "selectedProfileId"
 >;
-
-function hasSecret(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 function modeAllowed(provider: string, target: AuthTarget, mode: string | undefined): boolean {
   const requirement = resolveProviderModelRouteAuthRequirement(mode);
@@ -162,10 +173,15 @@ export function createModelAuthAvailabilityResolver(
 ): ModelAuthAvailabilityResolver {
   const env = params.env ?? process.env;
   const now = Date.now();
-  const external = params.externalCliProviderIds?.length
+  const isExternalCliProvider = (provider: string) =>
+    EXTERNAL_CLI_REFRESH_PROVIDER_IDS.has(normalizeProviderIdForAuth(provider));
+  const externalCliProviderIds = (params.externalCliProviderIds ?? []).filter(
+    isExternalCliProvider,
+  );
+  const external = externalCliProviderIds.length
     ? resolveExternalCliAuthProfiles(params.authStore, {
         allowKeychainPrompt: false,
-        providerIds: [...params.externalCliProviderIds],
+        providerIds: externalCliProviderIds,
       })
     : [];
   const store: AuthProfileStore = external.length
@@ -178,9 +194,10 @@ export function createModelAuthAvailabilityResolver(
       }
     : params.authStore;
   const runtimeStore =
-    params.allowPreparedRuntimeAuth !== false
-      ? getRuntimeAuthProfileStoreSnapshot(params.agentDir)
-      : undefined;
+    params.preparedRuntimeAuthStore ??
+    (params.allowPreparedRuntimeAuth !== false
+      ? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)
+      : undefined);
   const hydratedProfileIds = new Set<string>();
   const sameSecretRef = (
     left: ReturnType<typeof coerceSecretRef>,
@@ -279,6 +296,40 @@ export function createModelAuthAvailabilityResolver(
     const normalized = normalizeProviderIdForAuth(provider);
     return aliasMap[normalized] ?? normalized;
   };
+  // Refresh authority follows exact profiles marked by the external-auth
+  // lifecycle. Provider-wide authority could bless an unrelated stale profile.
+  const externalCliRefreshProfileIds = new Set([
+    ...external.map((profile) => profile.profileId),
+    ...getRuntimeExternalCliProfileIds(runtimeStore ?? store),
+  ]);
+  // Runtime-owned CLI credentials are authoritative over legacy config metadata
+  // that described their canonical profile slots before OAuth was imported.
+  // Normalize only those exact marked profiles for read-only selection.
+  let readOnlyAuthProfiles:
+    | NonNullable<NonNullable<OpenClawConfig["auth"]>["profiles"]>
+    | undefined;
+  for (const profileId of externalCliRefreshProfileIds) {
+    const credential = (runtimeStore ?? store).profiles[profileId];
+    const configured = params.cfg.auth?.profiles?.[profileId];
+    const canonicalMetadata = normalizeExternalCliProfileMetadata(profileId, configured);
+    if (
+      credential?.type !== "oauth" ||
+      !configured ||
+      !canonicalMetadata ||
+      (configured.provider === canonicalMetadata.provider &&
+        configured.mode === canonicalMetadata.mode)
+    ) {
+      continue;
+    }
+    readOnlyAuthProfiles ??= { ...params.cfg.auth?.profiles };
+    readOnlyAuthProfiles[profileId] = {
+      ...configured,
+      ...canonicalMetadata,
+    };
+  }
+  const readOnlyAuthConfig = readOnlyAuthProfiles
+    ? { ...params.cfg, auth: { ...params.cfg.auth, profiles: readOnlyAuthProfiles } }
+    : params.cfg;
   const providerConfig = (provider: string) =>
     resolveMergedModelProviderConfig(params.cfg, provider);
   const prepareAuthTarget = (provider: string, ref: ModelAuthAvailabilityRef): AuthTarget => {
@@ -332,7 +383,7 @@ export function createModelAuthAvailabilityResolver(
       return cached;
     }
     const resolution = resolveAuthProfileOrderWithMetadata({
-      cfg: params.cfg,
+      cfg: readOnlyAuthConfig,
       store: orderStore,
       provider: normalized,
       preferredProfile: preferredProfileId,
@@ -360,7 +411,7 @@ export function createModelAuthAvailabilityResolver(
         ? store
         : { ...store, profiles: { ...store.profiles, [profileId]: credential } };
     const eligibility = resolveAuthProfileEligibility({
-      cfg: params.cfg,
+      cfg: readOnlyAuthConfig,
       store: effectiveStore,
       provider: normalizeProvider(provider),
       profileId,
@@ -372,6 +423,7 @@ export function createModelAuthAvailabilityResolver(
   };
   const credentialAvailability = (
     provider: string,
+    profileId: string,
     credential: AuthProfileCredential,
     target: AuthTarget,
   ): ModelAuthAvailability => {
@@ -383,7 +435,8 @@ export function createModelAuthAvailabilityResolver(
       cfg: params.cfg,
       env,
       now,
-      canRefreshOAuth: provider === OPENAI_PROVIDER_ID,
+      canRefreshOAuth:
+        provider === OPENAI_PROVIDER_ID || externalCliRefreshProfileIds.has(profileId),
     });
   };
   const resolvedProfileAvailability = (
@@ -393,7 +446,7 @@ export function createModelAuthAvailabilityResolver(
     target: AuthTarget,
   ) => {
     if (!hydratedProfileIds.has(profileId)) {
-      return credentialAvailability(provider, credential, target);
+      return credentialAvailability(provider, profileId, credential, target);
     }
     if (!modeAllowed(provider, target, credential.type)) {
       return false;
@@ -595,6 +648,14 @@ export function createModelAuthAvailabilityResolver(
         availability: modeAllowed(provider, target, "aws-sdk"),
         selectedAuthMode: "aws-sdk",
         evidence: "aws-sdk",
+      };
+    }
+    const preparedRuntimeAuthMode = params.preparedRuntimeAuthModes?.[normalizeProvider(provider)];
+    if (preparedRuntimeAuthMode) {
+      return {
+        availability: modeAllowed(provider, target, preparedRuntimeAuthMode),
+        selectedAuthMode: preparedRuntimeAuthMode,
+        evidence: "runtime",
       };
     }
     const environment = envAuth(provider);
@@ -879,6 +940,81 @@ export function createModelAuthAvailabilityResolver(
       !modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile"
         ? basePolicy.binding.profileId
         : undefined;
+    const explicitProfileOrder = profileOrder(
+      provider,
+      ref.modelId,
+      ref.preferredProfileId,
+      ref.lockedProfileId,
+    ).hasExplicitOrder;
+    const materializedModelId = ref.modelId
+      ? normalizeModelIdForProvider(provider, ref.modelId)?.toLowerCase()
+      : undefined;
+    const materialized =
+      !modelLock &&
+      !bindingProfileId &&
+      !basePolicy.required &&
+      !explicitProfileOrder &&
+      materializedModelId
+        ? params.preparedRuntimeAuthMaterializations?.find(
+            (fact) =>
+              normalizeProvider(fact.provider) === provider &&
+              fact.modelId === materializedModelId &&
+              routeResolution.routes.some((route) => {
+                const configuredRequirement =
+                  resolveProviderModelRouteAuthRequirement(configuredAuthMode);
+                return (
+                  (!configuredRequirement || configuredRequirement === route.authRequirement) &&
+                  route.runtimePolicy?.compatibleIds.some(
+                    (runtimeId) => runtimeId.trim().toLowerCase() === fact.runtimeOwnerId,
+                  ) === true &&
+                  route.api.toLowerCase() === fact.modelApi &&
+                  route.requestTransportOverrides === fact.requestTransportOverrides &&
+                  modelMatchesProviderModelRoute({
+                    provider,
+                    api: fact.modelApi,
+                    baseUrl: fact.modelBaseUrl,
+                    route,
+                  }) &&
+                  modeAllowed(
+                    provider,
+                    {
+                      ...ref,
+                      api: route.api,
+                      baseUrl: route.baseUrl,
+                      authRequirement: route.authRequirement,
+                    },
+                    fact.authMode,
+                  )
+                );
+              }),
+          )
+        : undefined;
+    if (materialized) {
+      const selectedRoute = routeResolution.routes.find(
+        (route) =>
+          route.runtimePolicy?.compatibleIds.some(
+            (runtimeId) => runtimeId.trim().toLowerCase() === materialized.runtimeOwnerId,
+          ) === true &&
+          route.api.toLowerCase() === materialized.modelApi &&
+          route.requestTransportOverrides === materialized.requestTransportOverrides &&
+          modelMatchesProviderModelRoute({
+            provider,
+            api: materialized.modelApi,
+            baseUrl: materialized.modelBaseUrl,
+            route,
+          }),
+      );
+      if (selectedRoute) {
+        return {
+          availability: true,
+          routeResolution,
+          selectedRoute,
+          selectedAuthMode: materialized.authMode,
+          ...(materialized.authProfileId ? { selectedProfileId: materialized.authProfileId } : {}),
+          evidence: "runtime",
+        };
+      }
+    }
     const selectedConfiguredMode = awsSdkTerminal
       ? "aws-sdk"
       : bindingProfileId
@@ -970,6 +1106,10 @@ export function createModelAuthAvailabilityResolver(
       sourcePlan,
       configuredAuthMode: automaticRouteAuthMode,
       ...(syntheticCodexOwnsAuth ? { runtimeAuthOwner: { id: "codex" } } : {}),
+      ...(syntheticCodexOwnsAuth &&
+      resolveMergedModelProviderConfig(params.cfg, provider) === undefined
+        ? { allowNativeAuthOnSingleRoute: true }
+        : {}),
     });
     if (routeAuthDecision.kind === "deferred" && syntheticCodexOwnsAuth) {
       return { availability: undefined, routeResolution, evidence: "synthetic" };

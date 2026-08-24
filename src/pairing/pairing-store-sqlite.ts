@@ -1,4 +1,5 @@
 // Internal SQLite persistence for channel pairing requests and allow entries.
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -31,11 +32,7 @@ type ChannelPairingState = {
 };
 
 function parseTimestamp(value: string | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  return parseDateStringTimestampMs(value) ?? null;
 }
 
 function normalizePersistedPairingMeta(value: unknown): Record<string, string> | undefined {

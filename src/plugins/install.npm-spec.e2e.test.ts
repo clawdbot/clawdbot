@@ -3,10 +3,10 @@ import { execFile, execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
@@ -43,7 +43,7 @@ type RegistryPackage = {
   versions: PackedVersion[];
 };
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 const servers: http.Server[] = [];
 const envKeys = ["NPM_CONFIG_REGISTRY", "npm_config_registry"] as const;
 const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
@@ -63,17 +63,11 @@ afterEach(async () => {
       process.env[key] = original;
     }
   }
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  tempDirs.cleanup();
 });
 
-async function makeTempDir(label: string): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
-  tempDirs.push(dir);
-  return dir;
-}
-
 async function makeInstallFixture(label: string) {
-  const rootDir = await makeTempDir(label);
+  const rootDir = tempDirs.make(`openclaw-${label}-`);
   return { rootDir, npmRoot: path.join(rootDir, "managed-npm") };
 }
 
@@ -756,7 +750,8 @@ describe("installPluginFromNpmSpec e2e", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain("blocked by install policy: blocked installed package tree");
+      expect(result.error).toContain("Install blocked by policy");
+      expect(result.error).toContain("Reason: blocked installed package tree");
     }
     const projectRoot = pluginNpmProjectRoot(npmRoot, blockedPlugin);
     try {
@@ -845,7 +840,8 @@ describe("installPluginFromNpmSpec e2e", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain("blocked by install policy: blocked installed package tree");
+      expect(result.error).toContain("Install blocked by policy");
+      expect(result.error).toContain("Reason: blocked installed package tree");
     }
     const rootManifest = await readJson<{
       dependencies?: Record<string, string>;

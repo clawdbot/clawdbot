@@ -1,14 +1,28 @@
-// Safe loader for package-local OpenClaw profiles referenced by Claw metadata.
+// Safe loader for the conventional package-local OpenClaw profile.
+import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import { isScalar, parseDocument, visit } from "yaml";
+import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isSafeClawRelativePath } from "./schema-portability.js";
 import { parseClawOpenClawProfile } from "./schema.js";
-import type { ClawDiagnostic, ClawManifest, ClawOpenClawProfile } from "./types.js";
+import {
+  materializeClawToolProfile,
+  resolveClawToolProfileSnapshot,
+} from "./tool-profile-consent.js";
+import type { ClawDiagnostic, ClawOpenClawProfile } from "./types.js";
 
 const MAX_PROFILE_BYTES = 256 * 1024;
+const CLAW_PROFILE_PATH = "profiles/openclaw.yml";
+const LEGACY_PROFILE_POINTER_KEY = "openclaw.config";
+const LEGACY_PROFILE_POINTER_PATH = "$.metadata.openclaw.config";
+const CONVENTIONAL_PROFILE_PATH = "$.profiles.openclaw";
 
 function diagnostic(code: string, message: string, path = "$"): ClawDiagnostic {
   return { level: "error", code, phase: "parse", path, message };
+}
+
+function warning(code: string, message: string, path: string): ClawDiagnostic {
+  return { level: "warning", code, phase: "parse", path, message };
 }
 
 function parseProfileYaml(
@@ -71,6 +85,75 @@ function parseProfileYaml(
   }
 }
 
+function isToolProfileId(value: string): value is ToolProfileId {
+  return resolveClawToolProfileSnapshot({ profile: value }) !== undefined;
+}
+
+function migrateLegacyDynamicToolProfile(value: unknown): {
+  value: unknown;
+  legacyProfile?: ClawOpenClawProfile;
+} {
+  const profile = record(value);
+  const agent = record(profile?.agent);
+  const tools = record(agent?.tools);
+  const toolProfile = tools?.profile;
+  if (
+    !profile ||
+    !agent ||
+    !tools ||
+    typeof toolProfile !== "string" ||
+    !isToolProfileId(toolProfile) ||
+    tools.allow !== undefined
+  ) {
+    return { value };
+  }
+  if (toolProfile === "full") {
+    return { value };
+  }
+  const validationProbe = parseClawOpenClawProfile({
+    ...profile,
+    agent: {
+      ...agent,
+      tools: {
+        ...tools,
+        profile: "minimal",
+      },
+    },
+  });
+  if (!validationProbe.ok) {
+    return { value };
+  }
+  const validatedTools = validationProbe.profile.agent.tools;
+  if (!validatedTools) {
+    return { value };
+  }
+  const selection = {
+    ...validatedTools,
+    profile: toolProfile,
+  };
+  const legacyProfile: ClawOpenClawProfile = {
+    ...validationProbe.profile,
+    agent: {
+      ...validationProbe.profile.agent,
+      tools: selection,
+    },
+  };
+  const migrated = materializeClawToolProfile(
+    { tools: selection },
+    { allowLegacyDynamicProfile: true },
+  );
+  return {
+    value: {
+      ...profile,
+      agent: {
+        ...agent,
+        tools: migrated.tools,
+      },
+    },
+    legacyProfile,
+  };
+}
+
 async function readProfileFile(packageRoot: string, path: string): Promise<Buffer> {
   const packageFiles = await fsSafeRoot(packageRoot);
   const read = await packageFiles.read(path, {
@@ -82,32 +165,77 @@ async function readProfileFile(packageRoot: string, path: string): Promise<Buffe
   return read.buffer;
 }
 
+/**
+ * Resolves the OpenClaw profile for a package.
+ *
+ * `profiles/openclaw.yml` is the conventional location. The retired
+ * `metadata.openclaw.config` pointer is still read for compatibility with
+ * packages published against the released contract; it reports a deprecation
+ * warning instead of failing, and only errors when it is malformed or conflicts
+ * with a conventional profile.
+ */
 export async function readClawOpenClawProfile(params: {
   packageRoot: string;
-  manifest: ClawManifest;
+  metadata?: Record<string, string>;
+  allowLegacyDynamicToolProfile?: boolean;
 }): Promise<
-  | { ok: true; profile?: ClawOpenClawProfile; raw?: Buffer; path?: string }
+  | {
+      ok: true;
+      profile?: ClawOpenClawProfile;
+      legacyProfile?: ClawOpenClawProfile;
+      raw?: Buffer;
+      path?: string;
+      diagnostics?: ClawDiagnostic[];
+    }
   | { ok: false; diagnostics: ClawDiagnostic[] }
 > {
-  const declaredPath = params.manifest.metadata?.["openclaw.config"];
-  if (declaredPath === undefined) {
+  const packageFiles = await fsSafeRoot(params.packageRoot);
+  const conventionalExists = await packageFiles.exists(CLAW_PROFILE_PATH);
+  const legacyPointer = params.metadata?.[LEGACY_PROFILE_POINTER_KEY];
+  const diagnostics: ClawDiagnostic[] = [];
+  let declaredPath = CLAW_PROFILE_PATH;
+  let diagnosticPath = CONVENTIONAL_PROFILE_PATH;
+
+  if (legacyPointer !== undefined) {
+    if (
+      legacyPointer.includes("\\") ||
+      !isSafeClawRelativePath(legacyPointer) ||
+      !/\.ya?ml$/i.test(legacyPointer)
+    ) {
+      return {
+        ok: false,
+        diagnostics: [
+          diagnostic(
+            "invalid_openclaw_profile_path",
+            `metadata.${LEGACY_PROFILE_POINTER_KEY} must reference a forward-slash package-relative .yml or .yaml file.`,
+            LEGACY_PROFILE_POINTER_PATH,
+          ),
+        ],
+      };
+    }
+    if (conventionalExists && legacyPointer !== CLAW_PROFILE_PATH) {
+      return {
+        ok: false,
+        diagnostics: [
+          diagnostic(
+            "conflicting_openclaw_profile_pointer",
+            `metadata.${LEGACY_PROFILE_POINTER_KEY} references ${legacyPointer} while ${CLAW_PROFILE_PATH} also exists; keep only ${CLAW_PROFILE_PATH}.`,
+            LEGACY_PROFILE_POINTER_PATH,
+          ),
+        ],
+      };
+    }
+    declaredPath = legacyPointer;
+    diagnosticPath = LEGACY_PROFILE_POINTER_PATH;
+    diagnostics.push(
+      warning(
+        "deprecated_openclaw_profile_pointer",
+        `metadata.${LEGACY_PROFILE_POINTER_KEY} is deprecated; move the profile to ${CLAW_PROFILE_PATH} and remove the metadata entry.`,
+        LEGACY_PROFILE_POINTER_PATH,
+      ),
+    );
+  } else if (!conventionalExists) {
     return { ok: true };
-  }
-  if (
-    declaredPath.includes("\\") ||
-    !isSafeClawRelativePath(declaredPath) ||
-    !/\.ya?ml$/i.test(declaredPath)
-  ) {
-    return {
-      ok: false,
-      diagnostics: [
-        diagnostic(
-          "invalid_openclaw_profile_path",
-          "metadata.openclaw.config must reference a forward-slash package-relative .yml or .yaml file.",
-          "$.metadata.openclaw.config",
-        ),
-      ],
-    };
   }
 
   let raw: Buffer;
@@ -132,7 +260,7 @@ export async function readClawOpenClawProfile(params: {
             : tooLarge
               ? `The OpenClaw profile exceeds ${MAX_PROFILE_BYTES} bytes.`
               : `Could not read ${declaredPath}: ${(error as Error).message}`,
-          "$.metadata.openclaw.config",
+          diagnosticPath,
         ),
       ],
     };
@@ -142,15 +270,25 @@ export async function readClawOpenClawProfile(params: {
   if (!yaml.ok) {
     return yaml;
   }
-  const parsed = parseClawOpenClawProfile(yaml.value);
+  const migration = params.allowLegacyDynamicToolProfile
+    ? migrateLegacyDynamicToolProfile(yaml.value)
+    : { value: yaml.value };
+  const parsed = parseClawOpenClawProfile(migration.value);
   if (!parsed.ok) {
     return {
       ok: false,
       diagnostics: parsed.diagnostics.map((entry) => ({
         ...entry,
-        path: `$.metadata.openclaw.config${entry.path.slice(1)}`,
+        path: `${diagnosticPath}${entry.path.slice(1)}`,
       })),
     };
   }
-  return { ok: true, profile: parsed.profile, raw, path: declaredPath };
+  return {
+    ok: true,
+    profile: parsed.profile,
+    ...(migration.legacyProfile ? { legacyProfile: migration.legacyProfile } : {}),
+    raw,
+    path: declaredPath,
+    ...(diagnostics.length > 0 ? { diagnostics } : {}),
+  };
 }

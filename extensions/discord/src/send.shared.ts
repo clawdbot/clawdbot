@@ -4,9 +4,9 @@ import type { APIChannel } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Discord plugin module implements send.shared behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import {
+  buildOutboundMediaLoadOptions,
+  extensionForMime,
   normalizePollDurationHours,
   normalizePollInput,
   type OutboundMediaAccess,
@@ -28,6 +28,14 @@ import {
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import { resolveDiscordReplyMessageId, type DiscordReplyReference } from "./reply-reference.js";
 import type { DiscordRetryRunner } from "./retry.js";
+import {
+  buildDiscordMessageRequest,
+  resolveDiscordMessageFlags,
+  resolveDiscordSendComponents,
+  resolveDiscordSendEmbeds,
+  type DiscordAllowedMentions,
+  type DiscordSendEmbeds,
+} from "./send.message-request.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
 
@@ -53,15 +61,6 @@ export {
   resolveDiscordSendEmbeds,
   stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
-  type DiscordAllowedMentions,
-  type DiscordSendComponents,
-  type DiscordSendEmbeds,
-} from "./send.message-request.js";
-import {
-  buildDiscordMessageRequest,
-  resolveDiscordMessageFlags,
-  resolveDiscordSendComponents,
-  resolveDiscordSendEmbeds,
   type DiscordAllowedMentions,
   type DiscordSendComponents,
   type DiscordSendEmbeds,
@@ -306,7 +305,7 @@ export function buildDiscordTextChunks(
 
 export type DiscordSendProgress = (
   result: { id: string; channel_id: string },
-  kind: "text" | "media",
+  kind: "text" | "media" | "card",
   replyToId?: string,
 ) => Promise<void> | void;
 
@@ -317,7 +316,7 @@ type DiscordTextSendParams = {
   request: DiscordRequest;
   reply?: DiscordReplyReference;
   maxLinesPerMessage?: number;
-  components?: DiscordSendComponents;
+  components?: Parameters<typeof resolveDiscordSendComponents>[0]["components"];
   embeds?: DiscordSendEmbeds;
   allowedMentions?: DiscordAllowedMentions;
   chunkMode?: ChunkMode;
@@ -325,6 +324,7 @@ type DiscordTextSendParams = {
   suppressEmbeds?: boolean;
   maxChars?: number;
   onResult?: DiscordSendProgress;
+  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 async function sendDiscordText(params: DiscordTextSendParams) {
@@ -343,19 +343,24 @@ async function sendDiscordText(params: DiscordTextSendParams) {
     suppressEmbeds,
     maxChars,
     onResult,
+    onPlatformSendDispatch,
   } = params;
-  if (!text.trim()) {
-    throw new Error("Message must be non-empty for Discord sends");
-  }
   const chunks = buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars });
+  if (!chunks.length) {
+    chunks.push("");
+  }
   const sendChunk = async (chunk: string, isFirst: boolean) => {
-    const chunkReplyTo = resolveDiscordReplyMessageId(reply, isFirst);
     const chunkComponents = resolveDiscordSendComponents({
       components,
       text: chunk,
       isFirst,
     });
     const chunkEmbeds = resolveDiscordSendEmbeds({ embeds, isFirst });
+    if (!chunk.trim() && !chunkComponents?.length && !chunkEmbeds?.length) {
+      throw new Error("Message must be non-empty for Discord sends");
+    }
+    const chunkReplyTo = resolveDiscordReplyMessageId(reply, isFirst);
+    const kind: "card" | "text" = chunkComponents?.length || chunkEmbeds?.length ? "card" : "text";
     const flags = resolveDiscordMessageFlags({
       silent,
       suppressEmbeds: suppressEmbeds && !chunkEmbeds?.length,
@@ -370,16 +375,19 @@ async function sendDiscordText(params: DiscordTextSendParams) {
       replyTo: chunkReplyTo,
     });
     const result = (await request(
-      () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+      async () => {
+        await onPlatformSendDispatch?.();
+        return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body });
+      },
       "text",
       { safety: "nonce-protected-create" },
     )) as { id: string; channel_id: string };
-    return { result, replyToId: chunkReplyTo };
+    return { result, replyToId: chunkReplyTo, kind };
   };
   if (chunks.length === 1) {
     const chunk = expectDefined(chunks.at(0), "single Discord text chunk");
-    const { result, replyToId } = await sendChunk(chunk, true);
-    await onResult?.(result, "text", replyToId);
+    const { result, replyToId, kind } = await sendChunk(chunk, true);
+    await onResult?.(result, kind, replyToId);
     return { ...result, platformMessageIds: result.id ? [result.id] : [] };
   }
   const platformMessageIds: string[] = [];
@@ -387,7 +395,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
   for (const [index, chunk] of chunks.entries()) {
     const sent = await sendChunk(chunk, index === 0);
     last = sent.result;
-    await onResult?.(last, "text", sent.replyToId);
+    await onResult?.(last, sent.kind, sent.replyToId);
     if (last.id) {
       platformMessageIds.push(last.id);
     }
@@ -429,6 +437,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     suppressEmbeds,
     maxChars,
     onResult,
+    onPlatformSendDispatch,
   } = params;
   const media = await loadWebMedia(
     mediaUrl,
@@ -466,13 +475,17 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       {
         data: media.buffer,
         name: resolvedFileName,
+        contentType: media.contentType,
       },
     ],
   });
   let res: { id: string; channel_id: string };
   try {
     res = (await request(
-      () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+      async () => {
+        await onPlatformSendDispatch?.();
+        return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body });
+      },
       "media",
       { safety: "nonce-protected-create" },
     )) as { id: string; channel_id: string };
@@ -495,6 +508,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       allowedMentions,
       maxChars,
       onResult,
+      onPlatformSendDispatch,
     });
   }
   await onResult?.(res, "media", reply?.messageId);
@@ -517,6 +531,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       allowedMentions,
       maxChars,
       onResult,
+      onPlatformSendDispatch,
     });
     for (const id of followup.platformMessageIds) {
       if (id) {

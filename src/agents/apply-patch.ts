@@ -115,12 +115,14 @@ const ApplyPatchToolOutputSchema = Type.Object(
 export function createApplyPatchTool(
   options: {
     cwd?: string;
+    root?: string;
     sandbox?: SandboxApplyPatchConfig;
     workspaceOnly?: boolean;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
+  const root = options.root ?? cwd;
   const sandbox = options.sandbox;
   const workspaceOnly = options.workspaceOnly !== false;
 
@@ -142,6 +144,7 @@ export function createApplyPatchTool(
 
       const result = await applyPatch(input, {
         cwd,
+        root,
         sandbox,
         workspaceOnly,
         memoryWriteProvenance: options.memoryWriteProvenance,
@@ -317,11 +320,11 @@ async function assertPatchParentPath(filePath: string, options: ApplyPatchOption
   await assertSandboxPath({
     filePath: parent,
     cwd: options.cwd,
-    root: options.cwd,
+    root: options.root ?? options.cwd,
   });
   await assertNoExistingParentAliases({
     parentPath: resolvePathFromInput(parent, options.cwd),
-    rootPath: options.cwd,
+    rootPath: options.root ?? options.cwd,
   });
 }
 
@@ -368,7 +371,7 @@ async function resolvePatchPath(
       await assertSandboxPath({
         filePath: resolved.hostPath,
         cwd: options.cwd,
-        root: options.cwd,
+        root: options.root ?? options.cwd,
         allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
         allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
       });
@@ -385,7 +388,7 @@ async function resolvePatchPath(
         await assertSandboxPath({
           filePath,
           cwd: options.cwd,
-          root: options.cwd,
+          root: options.root ?? options.cwd,
           allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
           allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })

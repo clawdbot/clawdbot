@@ -1,4 +1,4 @@
-import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-config-ui-hints";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const telegramChannelConfigUiHints = {
@@ -41,13 +41,13 @@ export const telegramChannelConfigUiHints = {
       "preview.toolProgress":
         "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
       "preview.commandText":
-        'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+        'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
     },
     progress: { includeCommentary: true, commentaryOrder: "after-command" },
   }),
   richMessages: {
     label: "Telegram Rich Messages",
-    help: "Opt into Bot API 10.1 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
+    help: "Opt into Bot API 10.2 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
   "network.autoSelectFamily": {
     label: "Telegram autoSelectFamily",

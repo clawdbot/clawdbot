@@ -8,8 +8,8 @@ import { parseViewerPayloadJson } from "./viewer-payload.js";
 // oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled builds replace this compile-time define identifier.
 declare const __OPENCLAW_DIFFS_LANGUAGE_PACK__: boolean | undefined;
 
-// Build-time esbuild define; typeof guard keeps the module loadable where the
-// define is absent (vitest/node), matching the __OPENCLAW_VERSION__ pattern.
+// Build-time esbuild define; the typeof guard keeps the module loadable when
+// the define is absent under Vitest or direct Node execution.
 function readInjectedLanguagePackFlag(): boolean | undefined {
   return typeof __OPENCLAW_DIFFS_LANGUAGE_PACK__ === "boolean"
     ? __OPENCLAW_DIFFS_LANGUAGE_PACK__

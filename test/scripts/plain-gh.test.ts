@@ -1,7 +1,6 @@
 // Plain GitHub CLI helper tests cover wrapper-safe gh execution for maintainer scripts.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -13,18 +12,12 @@ import {
   PLAIN_GH_SYSTEM_CANDIDATES,
   resolvePlainGhBin,
 } from "../../scripts/lib/plain-gh.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeFakeGh(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "plain-gh-"));
-  tempDirs.push(dir);
+  const dir = tempDirs.make("plain-gh-");
   const binDir = path.join(dir, "bin");
   mkdirSync(binDir);
   const ghPath = path.join(binDir, "gh");
@@ -39,6 +32,7 @@ printf 'CLICOLOR=%s\\n' "\${CLICOLOR-}"
 printf 'CLICOLOR_FORCE=%s\\n' "\${CLICOLOR_FORCE-}"
 printf 'COLORTERM_SET=%s\\n' "\${COLORTERM+x}"
 printf 'OPENCLAW_GH_BIN_SET=%s\\n' "\${OPENCLAW_GH_BIN+x}"
+printf 'GH_TOKEN_SET=%s\\n' "\${GH_TOKEN:+1}"
 `,
   );
   chmodSync(ghPath, 0o755);
@@ -46,8 +40,7 @@ printf 'OPENCLAW_GH_BIN_SET=%s\\n' "\${OPENCLAW_GH_BIN+x}"
 }
 
 function makeLargeFakeGh(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "plain-gh-large-"));
-  tempDirs.push(dir);
+  const dir = tempDirs.make("plain-gh-large-");
   const ghPath = path.join(dir, "gh");
   writeFileSync(
     ghPath,
@@ -58,6 +51,44 @@ process.stdout.write("x".repeat(bytes));
   );
   chmodSync(ghPath, 0o755);
   return ghPath;
+}
+
+function makeCredentialForwardingGh() {
+  const dir = tempDirs.make("plain-gh-auth-forward-");
+  const binDir = path.join(dir, "bin");
+  const calls = path.join(dir, "calls.log");
+  const realGh = path.join(dir, "real-gh");
+  mkdirSync(binDir);
+  writeFileSync(
+    path.join(binDir, "gh"),
+    `#!/bin/sh
+printf 'path:%s\\n' "$*" >> "$PLAIN_GH_FAKE_CALLS"
+if [ "$1 $2" = "auth token" ]; then
+  printf 'forwarded-test-token\\n'
+  exit 0
+fi
+exit 9
+`,
+  );
+  writeFileSync(
+    realGh,
+    `#!/bin/sh
+printf 'plain:%s\\n' "$*" >> "$PLAIN_GH_FAKE_CALLS"
+case "$PLAIN_GH_EXPECTED_TOKEN_ENV" in
+  GH_TOKEN) token="\${GH_TOKEN-}"; other_token="\${GH_ENTERPRISE_TOKEN-}" ;;
+  GH_ENTERPRISE_TOKEN) token="\${GH_ENTERPRISE_TOKEN-}"; other_token="\${GH_TOKEN-}" ;;
+  *) echo 'unexpected token environment' >&2; exit 7 ;;
+esac
+if [ "$token" != "forwarded-test-token" ] || [ -n "$other_token" ]; then
+  echo 'missing forwarded credentials' >&2
+  exit 8
+fi
+printf 'authenticated plain gh\\n'
+`,
+  );
+  chmodSync(path.join(binDir, "gh"), 0o755);
+  chmodSync(realGh, 0o755);
+  return { binDir, calls, realGh };
 }
 
 describe("plain gh helpers", () => {
@@ -188,6 +219,7 @@ describe("plain gh helpers", () => {
         CLICOLOR_FORCE: "1",
         COLORTERM: "truecolor",
         FORCE_COLOR: "3",
+        GH_TOKEN: "existing-test-token",
       },
     });
 
@@ -201,6 +233,61 @@ describe("plain gh helpers", () => {
     expect(readFileSync(outputPath, "utf8")).toContain("COLORTERM_SET=");
   });
 
+  it.each([
+    {
+      host: undefined,
+      name: "github.com",
+      tokenArgs: "auth token",
+      tokenEnv: "GH_TOKEN",
+    },
+    {
+      host: "github.example.com",
+      name: "an Enterprise host",
+      tokenArgs: "auth token --hostname github.example.com",
+      tokenEnv: "GH_ENTERPRISE_TOKEN",
+    },
+  ])("forwards $name credentials from a PATH wrapper to the plain CLI", (testCase) => {
+    const fixture = makeCredentialForwardingGh();
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      OPENCLAW_GH_BIN: fixture.realGh,
+      PATH: `${fixture.binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      PLAIN_GH_EXPECTED_TOKEN_ENV: testCase.tokenEnv,
+      PLAIN_GH_FAKE_CALLS: fixture.calls,
+    };
+    if (testCase.host) {
+      env.GH_HOST = testCase.host;
+    } else {
+      delete env.GH_HOST;
+    }
+    for (const name of [
+      "GH_TOKEN",
+      "GITHUB_TOKEN",
+      "GH_ENTERPRISE_TOKEN",
+      "GITHUB_ENTERPRISE_TOKEN",
+    ]) {
+      delete env[name];
+    }
+
+    expect(execPlainGh(["api", "user"], { encoding: "utf8", env })).toBe(
+      "authenticated plain gh\n",
+    );
+    const shell = spawnSync("bash", ["-c", "source scripts/lib/plain-gh.sh; gh_plain api user"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+    });
+
+    expect(shell.status, shell.stderr).toBe(0);
+    expect(shell.stdout).toBe("authenticated plain gh\n");
+    expect(readFileSync(fixture.calls, "utf8").trim().split("\n")).toEqual([
+      `path:${testCase.tokenArgs}`,
+      "plain:api user",
+      `path:${testCase.tokenArgs}`,
+      "plain:api user",
+    ]);
+  });
+
   it("captures large gh payloads by default", () => {
     const ghPath = makeLargeFakeGh();
     const bytes = 2 * 1024 * 1024;
@@ -209,6 +296,7 @@ describe("plain gh helpers", () => {
       encoding: "utf8",
       env: {
         ...process.env,
+        GH_TOKEN: "large-payload-test-token",
         OPENCLAW_GH_BIN: ghPath,
         PLAIN_GH_FAKE_BYTES: String(bytes),
       },

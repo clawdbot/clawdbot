@@ -126,7 +126,15 @@ function resolveSlackIngressLane(body: unknown, eventId: string): string {
       .find((value) => typeof value === "string" && value.trim())
       ?.toString()
       .trim() || "workspace";
-  const channelId = [event?.channel, event?.channel_id, item?.channel, assistantThread?.channel_id]
+  // New-channel traffic must stay behind channel_id_changed migration work.
+  // The new ID owns the post-change conversation lane, not the retired old ID.
+  const channelId = [
+    event?.channel,
+    event?.channel_id,
+    event?.new_channel_id,
+    item?.channel,
+    assistantThread?.channel_id,
+  ]
     .find((value) => typeof value === "string" && value.trim())
     ?.toString()
     .trim();

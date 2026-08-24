@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -38,14 +39,6 @@ class ReadinessTestTerminalPanel extends OpenClawTerminalPanel {
 
 const TERMINAL_PANEL_ELEMENT_NAME = `test-terminal-panel-readiness-${crypto.randomUUID()}`;
 customElements.define(TERMINAL_PANEL_ELEMENT_NAME, ReadinessTestTerminalPanel);
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 function terminalOpenResult(sessionId: string) {
   return {
@@ -121,7 +114,7 @@ describe("terminal panel readiness", () => {
   });
 
   it("shows a connecting animation while a terminal open is in flight", async () => {
-    const open = deferred<{
+    const open = createDeferred<{
       sessionId: string;
       agentId: string;
       shell: string;
@@ -212,8 +205,8 @@ describe("terminal panel readiness", () => {
   });
 
   it("marks a catalog terminal ready when its first visible output is a replay", async () => {
-    const controller = createTerminalController();
-    createTerminal.mockResolvedValue(controller);
+    const controllers = [createTerminalController(), createTerminalController()] as const;
+    createTerminal.mockResolvedValueOnce(controllers[0]).mockResolvedValueOnce(controllers[1]);
     const requests: Array<{ method: string; params: unknown }> = [];
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
     const client: TerminalGatewayClient = {
@@ -263,8 +256,10 @@ describe("terminal panel readiness", () => {
       method: "terminal.attach",
       params: { sessionId: "catalog-terminal-1" },
     });
-    expect(controller.terminal.reset).toHaveBeenCalledOnce();
-    expect(new TextDecoder().decode(controller.write.mock.calls[0]?.[0])).toBe("recovered output");
+    expect(controllers[0].dispose).toHaveBeenCalledOnce();
+    expect(new TextDecoder().decode(controllers[1].write.mock.calls[0]?.[0])).toBe(
+      "recovered output",
+    );
   });
 
   it("closes a catalog terminal and shows an error when no output arrives", async () => {
@@ -286,10 +281,11 @@ describe("terminal panel readiness", () => {
     panel.available = true;
     (panel as unknown as { catalogReadyTimeoutMs: number }).catalogReadyTimeoutMs = 5;
     document.body.append(panel);
+    const catalog = { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" };
 
     panel.handleToggleRequest(
       new CustomEvent("openclaw:terminal-toggle", {
-        detail: { catalog: { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" } },
+        detail: { catalog },
       }),
     );
 
@@ -303,5 +299,15 @@ describe("terminal panel readiness", () => {
       params: { sessionId: "catalog-terminal-1" },
     });
     expect(panel.renderRoot.querySelector(".tabstrip-tab")).toBeNull();
+    const retry = panel.renderRoot.querySelector<HTMLButtonElement>(".tp-error button");
+    expect(retry?.textContent?.trim()).toBe("Retry");
+
+    retry?.click();
+    await waitForFast(() => {
+      expect(requests.filter((request) => request.method === "terminal.open")).toHaveLength(2);
+    });
+    expect(requests.findLast((request) => request.method === "terminal.open")?.params).toEqual(
+      expect.objectContaining({ catalog }),
+    );
   });
 });

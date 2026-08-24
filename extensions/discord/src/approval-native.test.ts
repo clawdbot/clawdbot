@@ -109,6 +109,33 @@ describe("createDiscordNativeApprovalAdapter", () => {
     ).toBe(true);
   });
 
+  it("reports each configured account as a raw candidate for coordinator selection", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:123"] },
+      channels: {
+        discord: {
+          accounts: {
+            default: { token: "token-default", execApprovals: { enabled: true } },
+            ops: { token: "token-ops", execApprovals: { enabled: true } },
+          },
+        },
+      },
+    } as const;
+    const request = {
+      id: "approval-unbound",
+      request: { command: "pwd", turnSourceChannel: "discord" },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    } as const;
+
+    expect(
+      shouldHandleDiscordApprovalRequest({ cfg: cfg as never, accountId: "default", request }),
+    ).toBe(true);
+    expect(
+      shouldHandleDiscordApprovalRequest({ cfg: cfg as never, accountId: "ops", request }),
+    ).toBe(true);
+  });
+
   it("describes the correct Discord exec-approval setup path", () => {
     const text = getDiscordApprovalCapability().describeExecApprovalSetup?.({
       channel: "discord",
@@ -299,7 +326,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
 
     const target = await adapter.native?.resolveOriginTarget?.({
       cfg: NATIVE_DELIVERY_CFG as never,
-      accountId: "main",
+      accountId: "default",
       approvalKind: "plugin",
       request: {
         id: "abc",
@@ -347,7 +374,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
 
     const target = await adapter.native?.resolveOriginTarget?.({
       cfg: NATIVE_DELIVERY_CFG as never,
-      accountId: "main",
+      accountId: "default",
       approvalKind: "plugin",
       request: {
         id: "abc",

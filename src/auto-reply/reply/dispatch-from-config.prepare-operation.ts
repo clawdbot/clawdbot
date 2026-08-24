@@ -11,6 +11,7 @@ import {
   markPluginBindingFallbackNoticeShown,
 } from "../../plugins/conversation-binding.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
+import type { PluginCommandExecutionReplyOptions } from "../../plugins/plugin-command-runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { DispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
@@ -20,6 +21,7 @@ import {
   loadAbortRuntime,
   loadFastApproveRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
+import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { extractShortModelName } from "./response-prefix-template.js";
 
 export async function prepareDispatchOperation(state: PrepareDispatchOperationContextReadyState) {
@@ -46,6 +48,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     sessionKey,
     sessionStoreEntry,
     suppressDelivery,
+    turnLedger,
   } = state;
   const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
   const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -145,7 +148,14 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   }
   // Own the session before plugin-bound handlers or message hooks can perform
   // work. Fast abort, fast approval, and inbound dedupe remain ahead of this gate.
-  const preDispatchAcquisition = await state.ensureDispatchReplyOperation("pre_dispatch");
+  const admissionTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
+  if (admissionTicket && !(await admissionTicket.wait(params.replyOptions?.abortSignal))) {
+    return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
+  }
+  const preDispatchAcquisition = await state.ensureDispatchReplyOperation(
+    "pre_dispatch",
+    Boolean(pluginOwnedBinding),
+  );
   if (preDispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
   }
@@ -156,12 +166,30 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     };
   }
 
+  const settlePluginBindingDeliveryVisibility = async () => {
+    const settlement = await turnLedger.settleQueued(state.getPreDispatchAbortSignal());
+    if (settlement === "aborted" || isPreDispatchOperationAborted()) {
+      return { status: "aborted" as const };
+    }
+    return {
+      status: "ready" as const,
+      observedReplyDelivery: turnLedger.hasVisibleDelivery(),
+    };
+  };
+
   if (pluginOwnedBinding) {
     if (isPreDispatchOperationAborted()) {
       return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
     }
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
-    if (shouldBypassPluginOwnedBindingForCommand(ctx, cfg)) {
+    params.replyOptions ??= {};
+    if (
+      shouldBypassPluginOwnedBindingForCommand(
+        ctx,
+        cfg,
+        params.replyOptions as PluginCommandExecutionReplyOptions,
+      )
+    ) {
       logVerbose(
         `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
       );
@@ -234,15 +262,24 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               transcriptOwner,
             );
           }
+          const deliveryVisibility = await settlePluginBindingDeliveryVisibility();
+          if (deliveryVisibility.status === "aborted") {
+            return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
+          }
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
           commitInboundDedupeIfClaimed();
           completeDispatchReplyOperation();
           return {
             status: "complete" as const,
+            // Routed binding deliveries bypass the dispatcher counters, so the
+            // ledger's settled visibility keeps a delivered reply from reading as
+            // a silent zero-count turn. A hook-suppressed or failed route never
+            // reached the recipient, so it must keep the warning eligible.
             result: attachSourceReplyDeliveryMode({
               queuedFinal: false,
               counts: dispatcher.getQueuedCounts(),
+              ...(deliveryVisibility.observedReplyDelivery ? { observedReplyDelivery: true } : {}),
             }),
           };
         }
@@ -289,6 +326,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             "terminal",
             transcriptOwner,
           );
+          const deliveryVisibility = await settlePluginBindingDeliveryVisibility();
+          if (deliveryVisibility.status === "aborted") {
+            return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
+          }
           markIdle("plugin_binding_declined");
           recordProcessed("completed", { reason: "plugin-bound-declined" });
           commitInboundDedupeIfClaimed();
@@ -298,6 +339,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             result: attachSourceReplyDeliveryMode({
               queuedFinal: false,
               counts: dispatcher.getQueuedCounts(),
+              ...(deliveryVisibility.observedReplyDelivery ? { observedReplyDelivery: true } : {}),
             }),
           };
         }
@@ -311,6 +353,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             "terminal",
             transcriptOwner,
           );
+          const deliveryVisibility = await settlePluginBindingDeliveryVisibility();
+          if (deliveryVisibility.status === "aborted") {
+            return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
+          }
           markIdle("plugin_binding_error");
           recordProcessed("completed", { reason: "plugin-bound-error" });
           commitInboundDedupeIfClaimed();
@@ -320,6 +366,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             result: attachSourceReplyDeliveryMode({
               queuedFinal: false,
               counts: dispatcher.getQueuedCounts(),
+              ...(deliveryVisibility.observedReplyDelivery ? { observedReplyDelivery: true } : {}),
             }),
           };
         }

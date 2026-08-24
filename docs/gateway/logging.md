@@ -58,6 +58,15 @@ Tune console verbosity independently:
 
 OpenClaw masks sensitive tokens before log or transcript output leaves the process. This redaction policy applies at console, file-log, OTLP log-record, and session transcript text sinks, so matching secret values are masked before JSONL lines or messages are written to disk.
 
+Model-visible tool-result text preserves ambiguous source assignments such as
+`token = timeObserverToken`. Registered secrets and explicit credential forms,
+including structured fields, authorization headers, URL credentials, and known
+token formats, remain masked. Direct reads of `.env`
+files apply broader assignment masking before their content becomes a tool
+result. Other config and source reads preserve opaque values; register actual
+secrets instead of relying on key-name matching. Other transcript fields and
+diagnostic sinks retain broad assignment matching.
+
 - Sensitive-value redaction is always enabled.
 - `logging.redactPatterns`: array of regex strings (overrides defaults)
   - Use raw regex strings (auto `gi`), or `/pattern/flags` for custom flags.
@@ -100,7 +109,7 @@ The console formatter is **TTY-aware** and prints consistent, prefixed lines. Su
 - **Subsystem prefixes** on every line (e.g. `[gateway]`, `[canvas]`, `[tailscale]`).
 - **Subsystem colors** (stable per subsystem, hashed from the name) plus level coloring.
 - **Color when output is a TTY** or the environment looks like a rich terminal (`TERM`/`COLORTERM`/`TERM_PROGRAM`); respects `NO_COLOR` and `FORCE_COLOR`.
-- **Shortened subsystem prefixes**: drops a leading `gateway/`, `channels/`, or `providers/` segment, then keeps at most the last 2 remaining segments (e.g. `channels/turn/kernel` displays as `turn/kernel`). Known channel subsystems (`telegram`, `whatsapp`, `slack`, etc.) always collapse to just the channel name.
+- **Shortened subsystem prefixes**: drops a leading `gateway/`, `channels/`, or `providers/` segment, then keeps at most the last 2 remaining segments (e.g. `channels/turn/execution` displays as `turn/execution`). Known channel subsystems (`telegram`, `whatsapp`, `slack`, etc.) always collapse to just the channel name.
 - **Sub-loggers by subsystem** (auto prefix + structured field `{ subsystem }`).
 - **`logRaw()`** for QR/UX output (no prefix, no formatting).
 - **Console styles**: `pretty` | `compact` | `json`.

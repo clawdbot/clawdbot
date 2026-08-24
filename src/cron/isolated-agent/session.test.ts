@@ -1,16 +1,15 @@
 // Isolated agent session tests cover session creation and metadata for cron runs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { SessionOrigin } from "../../config/sessions/types.js";
+import type { SessionEntry, SessionOrigin } from "../../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { projectSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({ sessionsDir: "/tmp" }),
-  resolveSessionFilePath: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
+  resolveSessionFilePathCore: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
 }));
 
 vi.mock("../../config/sessions/reset-policy.js", () => ({
@@ -165,6 +164,60 @@ describe("resolveCronSession", () => {
       }),
     ).toThrow('Session "agent:main:main" is archived. Restore it before starting new work.');
     expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("rolls an archived isolated heartbeat session into a fresh run", () => {
+    const result = resolveWithStoredEntry({
+      sessionKey: "agent:main:main:heartbeat",
+      entry: {
+        sessionId: "archived-heartbeat-session-id",
+        updatedAt: NOW_MS - 1000,
+        archivedAt: NOW_MS,
+        heartbeatIsolatedBaseSessionKey: "agent:main:main",
+      },
+      forceNew: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.previousSessionId).toBe("archived-heartbeat-session-id");
+    expect(result.sessionEntry.sessionId).not.toBe("archived-heartbeat-session-id");
+    expect(result.sessionEntry.archivedAt).toBeUndefined();
+    expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
+  });
+
+  it("keeps an initializing isolated heartbeat blocked during forced rollover", () => {
+    expect(() =>
+      resolveWithStoredEntry({
+        sessionKey: "agent:main:main:heartbeat",
+        entry: {
+          sessionId: "initializing-heartbeat-session-id",
+          updatedAt: NOW_MS - 1000,
+          archivedAt: NOW_MS,
+          initializationPending: true,
+          heartbeatIsolatedBaseSessionKey: "agent:main:main",
+        },
+        forceNew: true,
+      }),
+    ).toThrow(
+      'Session "agent:main:main:heartbeat" is still initializing. Retry after initialization completes.',
+    );
+    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps an archived isolated heartbeat read-only without forceNew", () => {
+    expect(() =>
+      resolveWithStoredEntry({
+        sessionKey: "agent:main:main:heartbeat",
+        entry: {
+          sessionId: "archived-heartbeat-session-id",
+          updatedAt: NOW_MS - 1000,
+          archivedAt: NOW_MS,
+          heartbeatIsolatedBaseSessionKey: "agent:main:main",
+        },
+      }),
+    ).toThrow(
+      'Session "agent:main:main:heartbeat" is archived. Restore it before starting new work.',
+    );
   });
 
   // New tests for session reuse behavior (#18027)
@@ -370,6 +423,7 @@ describe("resolveCronSession", () => {
           cacheRead: 4,
           cacheWrite: 5,
           contextTokens: 200_000,
+          contextTokensSource: "runtime",
           compactionCount: 9,
           memoryFlush: { kind: "succeeded", compactionCount: 9 },
           abortCutoffMessageSid: "old-message",
@@ -455,6 +509,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.cacheRead).toBeUndefined();
       expect(result.sessionEntry.cacheWrite).toBeUndefined();
       expect(result.sessionEntry.contextTokens).toBeUndefined();
+      expect(result.sessionEntry.contextTokensSource).toBeUndefined();
       expect(result.sessionEntry.compactionCount).toBeUndefined();
       expect(result.sessionEntry.memoryFlush).toBeUndefined();
       expect(result.sessionEntry.abortCutoffMessageSid).toBeUndefined();

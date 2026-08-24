@@ -19,8 +19,8 @@ import {
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import { abortable } from "../embedded-agent-runner/run/abortable.js";
 import { applySecretRefHeaderSentinels } from "../model-auth.js";
 import {
@@ -37,8 +37,7 @@ import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
-  resolveModelFromRegistry,
-  resolveMediaToolLocalRoots,
+  resolveMediaToolReferenceAccess,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
   resolveRemoteMediaSsrfPolicy,
@@ -56,7 +55,6 @@ import {
 import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 import {
   createSandboxBridgeReadFile,
-  resolveSandboxedBridgeMediaPath,
   runWithImageModelFallback,
   type AnyAgentTool,
   type SandboxedBridgeMediaPathConfig,
@@ -176,7 +174,6 @@ async function runPdfPrompt(params: {
       agentDir: params.agentDir,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       config: requestedCfg ?? {},
-      inheritedAuthDir: resolveDefaultAgentDir(requestedCfg ?? {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     });
     try {
@@ -199,8 +196,7 @@ async function runPdfPrompt(params: {
     const preparedRuntime = preparedRuntimeLease.snapshot;
     const runtimeAgentDir = preparedRuntime.agentDir;
     const runtimeWorkspaceDir = preparedRuntime.workspaceDir ?? params.workspaceDir;
-    const { authStorage, modelRegistry } = preparedRuntime.createStores();
-    const modelRuntime = getModelRegistryRuntime(modelRegistry);
+    const preparedStores = preparedRuntime.createStores();
     const committedPdfModelConfig = resolvePdfModelConfigForTool({
       cfg: preparedRuntime.config,
       agentDir: runtimeAgentDir,
@@ -226,18 +222,27 @@ async function runPdfPrompt(params: {
       modelOverride: params.modelOverride,
       abortSignal: params.signal,
       run: async (provider, modelId) => {
+        // Static snapshots serve configured models through prepared facts; a fresh registry can be empty.
+        const resolved = await resolveModelAsync(provider, modelId, runtimeAgentDir, effectiveCfg, {
+          allowBundledStaticCatalogFallback: true,
+          ...preparedStores,
+          preparedModelRuntime: preparedRuntime,
+          skipAgentDiscovery: true,
+          ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
+        });
+        if (resolved.error || !resolved.model) {
+          throw new Error(resolved.error ?? `Unknown model: ${provider}/${modelId}`);
+        }
+        const modelRuntime = getModelRegistryRuntime(resolved.modelRegistry);
         const model = bindModelLlmRuntime(
-          applySecretRefHeaderSentinels(
-            resolveModelFromRegistry({ modelRegistry, provider, modelId }),
-            effectiveCfg,
-          ),
+          applySecretRefHeaderSentinels(resolved.model, effectiveCfg),
           modelRuntime.llmRuntime,
         );
         const apiKey = await resolveModelRuntimeApiKey({
           model,
           cfg: effectiveCfg,
           agentDir: runtimeAgentDir,
-          authStorage,
+          authStorage: resolved.authStorage,
         });
 
         if (providerSupportsNativePdf(provider)) {
@@ -530,32 +535,26 @@ export function createPdfTool(options?: {
           return trimmed;
         })();
 
-        const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = sandboxConfig
-          ? await resolveSandboxedBridgeMediaPath({
-              sandbox: sandboxConfig,
-              mediaPath: resolvedPdf,
-              inboundFallbackDir: "media/inbound",
-            })
-          : {
-              resolved: resolvedPdf.startsWith("file://")
-                ? resolvedPdf.slice("file://".length)
-                : resolvedPdf,
-            };
-        const localRoots = resolveMediaToolLocalRoots(
-          options?.workspaceDir,
-          {
+        const { resolvedPath, localRoots, rewrittenFrom } = await resolveMediaToolReferenceAccess({
+          input: resolvedPdf,
+          isDataUrl: false,
+          workspaceDir: options?.workspaceDir,
+          sandbox: sandboxConfig,
+          rootOptions: {
             workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
           },
-          [resolvedPathInfo.resolved],
-        );
+        });
+        if (resolvedPath === null) {
+          throw new Error("PDF reference resolved without a path.");
+        }
 
         const media = sandboxConfig
-          ? await loadWebMediaRaw(resolvedPathInfo.resolved, {
+          ? await loadWebMediaRaw(resolvedPath, {
               maxBytes,
               sandboxValidated: true,
               readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
             })
-          : await loadWebMediaRaw(resolvedPathInfo.resolved, {
+          : await loadWebMediaRaw(resolvedPath, {
               maxBytes,
               localRoots,
               ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
@@ -584,10 +583,8 @@ export function createPdfTool(options?: {
           base64,
           buffer: media.buffer,
           filename,
-          resolvedPath: resolvedPathInfo.resolved,
-          ...(resolvedPathInfo.rewrittenFrom
-            ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom }
-            : {}),
+          resolvedPath,
+          ...(rewrittenFrom ? { rewrittenFrom } : {}),
         });
       }
 

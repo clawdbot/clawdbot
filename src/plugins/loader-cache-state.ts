@@ -22,14 +22,6 @@ export class PluginLoaderCacheState<T> {
     this.#registryCache = new PluginLruCache<T>(defaultMaxEntries);
   }
 
-  get maxEntries(): number {
-    return this.#registryCache.maxEntries;
-  }
-
-  setMaxEntriesForTest(value?: number): void {
-    this.#registryCache.setMaxEntriesForTest(value);
-  }
-
   clear(): void {
     this.#registryCache.clear();
     this.#inFlightLoads.clear();

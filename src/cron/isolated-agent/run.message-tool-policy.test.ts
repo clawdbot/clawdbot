@@ -1,6 +1,6 @@
 // Message tool policy tests cover message tool availability during cron runs.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { applyJobPatch } from "../service/jobs.js";
@@ -8,15 +8,15 @@ import type { CronDeliveryMode } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import {
   buildSafeExternalPromptMock,
+  callGatewayMock,
   clearFastTestEnv,
-  cleanupDirectCronSessionMock,
   dispatchCronDeliveryMock,
   getChannelPluginMock,
   isCliProviderMock,
-  isHeartbeatOnlyResponseMock,
   loadRunCronIsolatedAgentTurn,
   loadSessionEntryMock,
   makeCronSession,
+  makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
   preflightCronModelProviderMock,
   queueCronMessageToolDeliveryAwarenessMock,
@@ -113,6 +113,7 @@ function mockPendingMessagePresentationWarningOutcome() {
     synthesizedText: "Final cron report",
     deliveryPayload: { text: "Final cron report" },
     deliveryPayloads: [{ text: "Final cron report" }],
+    deliveryDisposition: { kind: "visible" },
     deliveryPayloadHasStructuredContent: false,
     hasFatalErrorPayload: false,
     embeddedRunError: undefined,
@@ -460,6 +461,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       synthesizedText: "Final cron report from the agent.",
       deliveryPayload: { text: "Final cron report from the agent." },
       deliveryPayloads: [{ text: "Final cron report from the agent." }],
+      deliveryDisposition: { kind: "visible" },
       deliveryPayloadHasStructuredContent: false,
       hasFatalErrorPayload: false,
       hasFatalStructuredErrorPayload: false,
@@ -792,6 +794,89 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       expectRecordFields(getMockCallArg(runCliAgentMock, 0, 0, "CLI run"), {}, "CLI run params")
         .transcriptPrompt,
     ).toBeUndefined();
+  });
+
+  it("binds the resolved delivery account to account-implicit CLI message sends", async () => {
+    mockCliAnnounceRun();
+    resolveCronDeliveryPlanMock.mockReturnValue(
+      makeAnnounceDeliveryPlan({ channel: "telegram", accountId: "bot-a" }),
+    );
+    resolveDeliveryTargetMock.mockResolvedValue(
+      makeResolvedAnnounceTarget({ channel: "telegram", accountId: "bot-a" }),
+    );
+    let messageActionInput: Record<string, unknown> | undefined;
+    runCliAgentMock.mockImplementation(async (runParams: unknown) => {
+      const [{ buildCliMcpGrantContext }, { createMessageTool }] = await Promise.all([
+        import("../../agents/cli-runner/mcp-grant-context.js"),
+        import("../../agents/tools/message-tool-execution.js"),
+      ]);
+      const grant = buildCliMcpGrantContext({
+        run: runParams as never,
+        config: {},
+        requireExplicitMessageTarget: true,
+        agentId: "default",
+        modelProvider: "openai",
+        modelId: "gpt-5.4",
+      });
+      const tool = createMessageTool({
+        agentAccountId: grant.accountId,
+        currentChannelProvider: grant.messageProvider,
+        requireExplicitTarget: grant.requireExplicitMessageTarget,
+        preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
+        getRuntimeConfig: () => ({}),
+        runMessageAction: async (input) => {
+          messageActionInput = input as unknown as Record<string, unknown>;
+          return {
+            kind: "send",
+            action: "send",
+            channel: "telegram",
+            to: "123",
+            handledBy: "plugin",
+            payload: {},
+            dryRun: false,
+          };
+        },
+      });
+      const messageArgs = {
+        action: "send",
+        channel: "telegram",
+        target: "123",
+        message: "done",
+      };
+      await tool.execute("call-1", messageArgs);
+      return makeMessageToolRunResult([
+        { tool: "message", provider: messageArgs.channel, to: messageArgs.target },
+      ]);
+    });
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob({
+        delivery: { channel: "telegram", accountId: "bot-a" },
+      }),
+    });
+
+    expectRecordFields(messageActionInput, { defaultAccountId: "bot-a" }, "message action input");
+    const actionParams = expectRecordFields(
+      messageActionInput?.params,
+      { channel: "telegram", target: "123" },
+      "message action params",
+    );
+    expect(actionParams.accountId).toBeUndefined();
+    expect(result.status).toBe("ok");
+    expectDeliveryFields(result.delivery, {
+      intended: { channel: "telegram", to: "123", accountId: "bot-a", source: "explicit" },
+      resolved: {
+        ok: true,
+        channel: "telegram",
+        to: "123",
+        accountId: "bot-a",
+        source: "explicit",
+      },
+      messageToolSentTo: [{ channel: "telegram", to: "123" }],
+      fallbackUsed: false,
+      delivered: true,
+    });
   });
 
   it("propagates restricted toolsAllow to CLI-backed announce runs without target metadata", async () => {
@@ -1172,7 +1257,18 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   it("skips cron delivery when output is heartbeat-only", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
-    isHeartbeatOnlyResponseMock.mockReturnValue(true);
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: "HEARTBEAT_OK",
+      outputText: "HEARTBEAT_OK",
+      synthesizedText: "HEARTBEAT_OK",
+      deliveryPayload: { text: "HEARTBEAT_OK" },
+      deliveryPayloads: [{ text: "HEARTBEAT_OK" }],
+      deliveryDisposition: { kind: "heartbeat", controlOnly: true },
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
 
     await runCronIsolatedAgentTurn({
       ...makeParams(),
@@ -1212,15 +1308,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(result.delivered).toBe(false);
     expect(result.deliveryAttempted).toBe(false);
     expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
-    expect(cleanupDirectCronSessionMock).toHaveBeenCalledWith({
-      job: expect.objectContaining({ id: "fatal-error-payload" }),
-      agentSessionKey: "agent:default:cron:message-tool-policy",
-      sessionId: "test-session-id",
-      lifecycleRevision: "test-lifecycle-revision",
-      sessionUpdatedAt: expect.any(Number),
-      beforeSessionDelete: expect.any(Function),
-      retireReason: "cron-delete-after-run-fatal-error",
-    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
     expectDeliveryFields(result.delivery, {
       intended: { channel: "messagechat", to: "123", source: "explicit" },
       resolved: { ok: true, channel: "messagechat", to: "123", source: "explicit" },
@@ -1248,18 +1336,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
 
     expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
-    expect(cleanupDirectCronSessionMock).toHaveBeenCalledWith({
-      job: expect.objectContaining({
-        id: "fatal-delete-after-run",
-        deleteAfterRun: true,
-      }),
-      agentSessionKey: "agent:default:cron:message-tool-policy",
-      sessionId: "test-session-id",
-      lifecycleRevision: "test-lifecycle-revision",
-      sessionUpdatedAt: expect.any(Number),
-      beforeSessionDelete: expect.any(Function),
-      retireReason: "cron-delete-after-run-fatal-error",
-    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips cron fallback delivery when the message tool already sent to the same target", async () => {
@@ -1277,6 +1354,45 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
         verifiedMessageToolDelivery: true,
         satisfiesSourceDelivery: true,
       },
+    });
+  });
+
+  it("passes deferred same-source awareness to current-session dispatch", async () => {
+    const sourceSessionKey = "agent:default:messagechat:direct:123";
+    const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        store: { [sourceSessionKey]: makeCronSessionEntry({ sessionId: "source-session" }) },
+      }),
+    );
+    runEmbeddedAgentMock.mockResolvedValue(
+      makeMessageToolRunResult([
+        {
+          tool: "message",
+          provider: "messagechat",
+          to: "123",
+          text: "Current-session completion.",
+        },
+      ]),
+    );
+    queueCronMessageToolDeliveryAwarenessMock.mockResolvedValueOnce(queueSourceAwareness);
+    const job = makeAnnounceMessageToolJob() as unknown as Record<string, unknown>;
+    job.sessionTarget = "current";
+    job.sessionKey = sourceSessionKey;
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: job as never,
+    });
+
+    expect(queueCronMessageToolDeliveryAwarenessMock).toHaveBeenCalledWith(
+      expect.objectContaining({ deferredTargetSessionKey: sourceSessionKey }),
+    );
+    expectDispatchFields({
+      sourceSessionKey,
+      queueSourceSessionMessageToolAwareness: queueSourceAwareness,
     });
   });
 
@@ -1769,6 +1885,10 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
         expectEmbeddedRunFields(expectedFields);
       }
       const prompt = expectEmbeddedRunPrompt(messageToolAvailable);
+      expect(prompt).toMatch(/write only the exact user-facing message to send/i);
+      expect(prompt).toMatch(
+        /do not narrate the automatic delivery itself or say things like "Sent the user\.\.\."/i,
+      );
       if (messageToolAvailable) {
         expect(prompt).toContain("Use the message tool");
         expect(prompt).toContain("will be delivered automatically");
@@ -1838,6 +1958,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       synthesizedText: "Interim cron report",
       deliveryPayload: { text: "Interim cron report" },
       deliveryPayloads: [{ text: "Interim cron report" }],
+      deliveryDisposition: { kind: "visible" },
       deliveryPayloadHasStructuredContent: false,
       hasFatalErrorPayload: false,
       hasFatalStructuredErrorPayload: false,
@@ -1920,6 +2041,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       synthesizedText: "Cron report",
       deliveryPayload: { text: "Cron report" },
       deliveryPayloads: [{ text: "Cron report" }],
+      deliveryDisposition: { kind: "visible" },
       deliveryPayloadHasStructuredContent: false,
       hasFatalErrorPayload: false,
       hasFatalStructuredErrorPayload: false,

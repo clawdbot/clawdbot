@@ -154,6 +154,32 @@ function writeWorkspacePackageEntry(params: {
   return { srcFile, distFile };
 }
 
+function writeWorkspacePackageExports(
+  root: string,
+  packageDir: string,
+  subpaths: readonly string[],
+) {
+  mkdirSafeDir(path.join(root, "packages", packageDir));
+  fs.writeFileSync(
+    path.join(root, "packages", packageDir, "package.json"),
+    JSON.stringify(
+      {
+        name: `@openclaw/${packageDir}`,
+        exports: Object.fromEntries(
+          subpaths.map((subpath) => {
+            const exportKey = subpath ? `./${subpath}` : ".";
+            const distFile = `./dist/${subpath || "index"}.mjs`;
+            return [exportKey, { import: distFile, default: distFile }];
+          }),
+        ),
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+}
+
 type WorkspaceAliasFixture = readonly [
   alias: `@openclaw/${string}`,
   packageDir: string,
@@ -413,7 +439,6 @@ function listPluginSdkExportedSubpaths(params: {
   moduleUrl?: string;
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
-  trustedInstalledPrivateSdkOwner?: string;
 }): string[] {
   return Object.keys(
     buildPluginLoaderAliasMap(
@@ -422,7 +447,6 @@ function listPluginSdkExportedSubpaths(params: {
       params.moduleUrl,
       params.pluginSdkResolution,
       params.devSourceRoot,
-      params.trustedInstalledPrivateSdkOwner,
     ),
   )
     .filter((key) => key.startsWith("openclaw/plugin-sdk/"))
@@ -582,6 +606,11 @@ describe("plugin sdk alias helpers", () => {
       "utf-8",
     );
     fs.writeFileSync(
+      path.join(fixture.root, "src", "plugin-sdk", "native-hook-relay-runtime.ts"),
+      "export const nativeHookRelayRuntime = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
       path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts"),
       "export const qaRuntime = true;\n",
       "utf-8",
@@ -632,15 +661,6 @@ describe("plugin sdk alias helpers", () => {
         }),
       ),
     );
-    const trustedInstalledCodexSubpaths = withCwd(installedCodexRoot, () =>
-      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
-        listPluginSdkExportedSubpaths({
-          modulePath: installedCodexEntry,
-          argv1: path.join(fixture.root, "openclaw.mjs"),
-          trustedInstalledPrivateSdkOwner: "codex",
-        }),
-      ),
-    );
     const installedOtherSubpaths = withCwd(installedOtherRoot, () =>
       withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
         listPluginSdkExportedSubpaths({
@@ -658,149 +678,15 @@ describe("plugin sdk alias helpers", () => {
       ),
     );
 
-    expect(codexSubpaths).toEqual(["codex-mcp-projection", "core"]);
-    expect(installedCodexSubpaths).toEqual(["core"]);
-    expect(trustedInstalledCodexSubpaths).toEqual(["codex-mcp-projection", "core"]);
+    expect(codexSubpaths).toEqual(["codex-mcp-projection", "core", "native-hook-relay-runtime"]);
+    expect(installedCodexSubpaths).toEqual([
+      "codex-mcp-projection",
+      "core",
+      "native-hook-relay-runtime",
+    ]);
     expect(otherSubpaths).toEqual(["core"]);
     expect(installedOtherSubpaths).toEqual(["core"]);
     expect(shadowCodexSubpaths).toEqual(["core"]);
-  });
-
-  it("aliases harness tool authority only for host-verified official harness plugins", () => {
-    const fixture = createPluginSdkAliasFixture({
-      packageExports: {
-        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
-      },
-    });
-    const authoritySubpath = "agent-harness-tool-authority-runtime";
-    const sourceAuthorityPath = path.join(
-      fixture.root,
-      "src",
-      "plugin-sdk",
-      `${authoritySubpath}.ts`,
-    );
-    const distAuthorityPath = path.join(
-      fixture.root,
-      "dist",
-      "plugin-sdk",
-      `${authoritySubpath}.js`,
-    );
-    fs.writeFileSync(
-      path.join(fixture.root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
-      JSON.stringify([authoritySubpath], null, 2),
-      "utf-8",
-    );
-    fs.writeFileSync(sourceAuthorityPath, "export const authority = true;\n", "utf-8");
-    fs.writeFileSync(distAuthorityPath, "export const authority = true;\n", "utf-8");
-
-    const sourceCodexEntry = writePluginEntry(
-      fixture.root,
-      bundledPluginFile("codex", "src/index.ts"),
-    );
-    const sourceCopilotEntry = writePluginEntry(
-      fixture.root,
-      bundledPluginFile("copilot", "src/index.ts"),
-    );
-    const sourceOtherEntry = writePluginEntry(
-      fixture.root,
-      bundledPluginFile("demo", "src/index.ts"),
-    );
-    const { packageRoot: installedCodexRoot, pluginEntry: installedCodexEntry } =
-      writeInstalledPluginEntry({
-        installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
-        packageName: "@openclaw/codex",
-      });
-    const { packageRoot: installedCopilotRoot, pluginEntry: installedCopilotEntry } =
-      writeInstalledPluginEntry({
-        installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
-        packageName: "@openclaw/copilot",
-      });
-    const { packageRoot: installedOtherRoot, pluginEntry: installedOtherEntry } =
-      writeInstalledPluginEntry({
-        installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
-        packageName: "@openclaw/demo",
-      });
-
-    const sourceCodexAliases = buildPluginLoaderAliasMap(sourceCodexEntry);
-    const sourceCopilotAliases = buildPluginLoaderAliasMap(sourceCopilotEntry);
-    const sourceOtherAliases = buildPluginLoaderAliasMap(sourceOtherEntry);
-    const sourceOtherPrivateQaAliases = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }, () =>
-      buildPluginLoaderAliasMap(sourceOtherEntry),
-    );
-    const spoofedCodexAliases = withCwd(installedCodexRoot, () =>
-      buildPluginLoaderAliasMap(
-        installedCodexEntry,
-        path.join(fixture.root, "openclaw.mjs"),
-        undefined,
-        "dist",
-      ),
-    );
-    const spoofedCopilotAliases = withCwd(installedCopilotRoot, () =>
-      buildPluginLoaderAliasMap(
-        installedCopilotEntry,
-        path.join(fixture.root, "openclaw.mjs"),
-        undefined,
-        "dist",
-      ),
-    );
-    const installedCodexAliases = withCwd(installedCodexRoot, () =>
-      buildPluginLoaderAliasMap(
-        installedCodexEntry,
-        path.join(fixture.root, "openclaw.mjs"),
-        undefined,
-        "dist",
-        undefined,
-        "codex",
-      ),
-    );
-    const installedCopilotAliases = withCwd(installedCopilotRoot, () =>
-      buildPluginLoaderAliasMap(
-        installedCopilotEntry,
-        path.join(fixture.root, "openclaw.mjs"),
-        undefined,
-        "dist",
-        undefined,
-        "copilot",
-      ),
-    );
-    const installedOtherAliases = withCwd(installedOtherRoot, () =>
-      buildPluginLoaderAliasMap(
-        installedOtherEntry,
-        path.join(fixture.root, "openclaw.mjs"),
-        undefined,
-        "dist",
-      ),
-    );
-    const installedOtherPrivateQaAliases = withCwd(installedOtherRoot, () =>
-      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }, () =>
-        buildPluginLoaderAliasMap(
-          installedOtherEntry,
-          path.join(fixture.root, "openclaw.mjs"),
-          undefined,
-          "dist",
-        ),
-      ),
-    );
-    const specifier = `openclaw/plugin-sdk/${authoritySubpath}`;
-
-    expect(fs.realpathSync(sourceCodexAliases[specifier] ?? "")).toBe(
-      fs.realpathSync(sourceAuthorityPath),
-    );
-    expect(fs.realpathSync(sourceCopilotAliases[specifier] ?? "")).toBe(
-      fs.realpathSync(sourceAuthorityPath),
-    );
-    expect(fs.realpathSync(installedCodexAliases[specifier] ?? "")).toBe(
-      fs.realpathSync(distAuthorityPath),
-    );
-    expect(fs.realpathSync(installedCopilotAliases[specifier] ?? "")).toBe(
-      fs.realpathSync(distAuthorityPath),
-    );
-    expect(spoofedCodexAliases[specifier]).toBeUndefined();
-    expect(spoofedCopilotAliases[specifier]).toBeUndefined();
-    expect(sourceOtherAliases[specifier]).toBeUndefined();
-    expect(sourceOtherPrivateQaAliases[specifier]).toBeUndefined();
-    expect(installedOtherAliases[specifier]).toBeUndefined();
-    expect(installedOtherPrivateQaAliases[specifier]).toBeUndefined();
   });
 
   it("does not reuse a non-private cached subpath list after private qa gets enabled", () => {
@@ -983,6 +869,18 @@ describe("plugin sdk alias helpers", () => {
       "plugin-sdk",
       "codex-mcp-projection.js",
     );
+    const sourceNativeHookRelayRuntimePath = path.join(
+      fixture.root,
+      "src",
+      "plugin-sdk",
+      "native-hook-relay-runtime.ts",
+    );
+    const distNativeHookRelayRuntimePath = path.join(
+      fixture.root,
+      "dist",
+      "plugin-sdk",
+      "native-hook-relay-runtime.js",
+    );
     const sourceQaRuntimePath = path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts");
     fs.rmSync(
       path.join(fixture.root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
@@ -996,6 +894,16 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(
       distCodexMcpProjectionPath,
       "export const codexMcpProjection = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      sourceNativeHookRelayRuntimePath,
+      "export const nativeHookRelayRuntime = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      distNativeHookRelayRuntimePath,
+      "export const nativeHookRelayRuntime = true;\n",
       "utf-8",
     );
     fs.writeFileSync(sourceQaRuntimePath, "export const qaRuntime = true;\n", "utf-8");
@@ -1022,10 +930,21 @@ describe("plugin sdk alias helpers", () => {
       "plugin-sdk",
       "codex-mcp-projection.js",
     );
+    const devNativeHookRelayRuntimePath = path.join(
+      devFixture.root,
+      "dist",
+      "plugin-sdk",
+      "native-hook-relay-runtime.js",
+    );
     mkdirSafeDir(path.join(devFixture.root, "extensions"));
     fs.writeFileSync(
       devCodexMcpProjectionPath,
       "export const devCodexMcpProjection = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      devNativeHookRelayRuntimePath,
+      "export const devNativeHookRelayRuntime = true;\n",
       "utf-8",
     );
     const { packageRoot: installedCodexRoot, pluginEntry: installedCodexEntry } =
@@ -1067,16 +986,6 @@ describe("plugin sdk alias helpers", () => {
           devFixture.root,
         ),
     );
-    const spoofedInstalledAliases = withCwd(installedCodexRoot, () =>
-      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
-        buildPluginLoaderAliasMap(
-          installedCodexEntry,
-          path.join(fixture.root, "openclaw.mjs"),
-          undefined,
-          "dist",
-        ),
-      ),
-    );
     const installedAliases = withCwd(installedCodexRoot, () =>
       withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
         buildPluginLoaderAliasMap(
@@ -1084,8 +993,6 @@ describe("plugin sdk alias helpers", () => {
           path.join(fixture.root, "openclaw.mjs"),
           undefined,
           "dist",
-          undefined,
-          "codex",
         ),
       ),
     );
@@ -1116,14 +1023,25 @@ describe("plugin sdk alias helpers", () => {
     expect(
       fs.realpathSync(installedAliases["openclaw/plugin-sdk/codex-mcp-projection"] ?? ""),
     ).toBe(fs.realpathSync(distCodexMcpProjectionPath));
-    expect(spoofedInstalledAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
     expect(fs.realpathSync(devRootAliases["openclaw/plugin-sdk/codex-mcp-projection"] ?? "")).toBe(
       fs.realpathSync(devCodexMcpProjectionPath),
     );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/native-hook-relay-runtime"] ?? "")).toBe(
+      fs.realpathSync(sourceNativeHookRelayRuntimePath),
+    );
+    expect(
+      fs.realpathSync(installedAliases["openclaw/plugin-sdk/native-hook-relay-runtime"] ?? ""),
+    ).toBe(fs.realpathSync(distNativeHookRelayRuntimePath));
+    expect(
+      fs.realpathSync(devRootAliases["openclaw/plugin-sdk/native-hook-relay-runtime"] ?? ""),
+    ).toBe(fs.realpathSync(devNativeHookRelayRuntimePath));
     expect(aliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
     expect(otherAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
+    expect(otherAliases["openclaw/plugin-sdk/native-hook-relay-runtime"]).toBeUndefined();
     expect(installedOtherAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
+    expect(installedOtherAliases["openclaw/plugin-sdk/native-hook-relay-runtime"]).toBeUndefined();
     expect(shadowCodexAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
+    expect(shadowCodexAliases["openclaw/plugin-sdk/native-hook-relay-runtime"]).toBeUndefined();
   });
 
   it("aliases the SSRF internal helper only for bundled local IPC owner plugins", async () => {
@@ -1213,6 +1131,11 @@ describe("plugin sdk alias helpers", () => {
         installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
         packageName: "@openclaw/ollama",
       });
+    const { packageRoot: installedLlamaRoot, pluginEntry: installedLlamaEntry } =
+      writeInstalledPluginEntry({
+        installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
+        packageName: "@openclaw/llama-cpp-provider",
+      });
 
     for (const owner of owners.filter(({ resolution }) => resolution === undefined)) {
       const sourceSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
@@ -1254,6 +1177,16 @@ describe("plugin sdk alias helpers", () => {
         ),
       ),
     );
+    const installedLlamaAliases = withCwd(installedLlamaRoot, () =>
+      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(
+          installedLlamaEntry,
+          path.join(fixture.root, "openclaw.mjs"),
+          undefined,
+          "dist",
+        ),
+      ),
+    );
 
     expect(privateQaOtherSubpaths).toEqual(["core"]);
     for (const owner of ownersWithAliases) {
@@ -1264,6 +1197,9 @@ describe("plugin sdk alias helpers", () => {
     expect(otherAliases[ssrfInternalSpecifier]).toBeUndefined();
     expect(privateQaOtherAliases[ssrfInternalSpecifier]).toBeUndefined();
     expect(installedAliases[ssrfInternalSpecifier]).toBeUndefined();
+    expect(fs.realpathSync(installedLlamaAliases[ssrfInternalSpecifier] ?? "")).toBe(
+      fs.realpathSync(distSsrFInternalPath),
+    );
 
     const createJiti = await getCreateJiti();
     const sourceLoaderBaseUrl = pathToFileURL(
@@ -1310,9 +1246,19 @@ describe("plugin sdk alias helpers", () => {
 
   it("aliases workspace packages to source when dist artifacts are missing", () => {
     const fixture = createPluginSdkAliasFixture();
+    writeWorkspacePackageExports(fixture.root, "media-core", ["", "attachment-classify", "mime"]);
+    writeWorkspacePackageExports(fixture.root, "acp-core", ["", "runtime/types"]);
+    writeWorkspacePackageExports(fixture.root, "normalization-core", [
+      "",
+      "agent-id",
+      "boolean-coercion",
+      "result",
+      "string-coerce",
+    ]);
     const workspaceAliases = writeWorkspaceAliasFixtures(fixture.root, [
       ["@openclaw/gateway-client", "gateway-client", "index"],
       ["@openclaw/gateway-client/timeouts", "gateway-client", "timeouts"],
+      ["@openclaw/gateway-client/websocket-data", "gateway-client", "websocket-data"],
       ["@openclaw/gateway-protocol", "gateway-protocol", "index"],
       ["@openclaw/gateway-protocol/schema", "gateway-protocol", "schema"],
       ["@openclaw/gateway-protocol/frame-guards", "gateway-protocol", "frame-guards"],
@@ -1321,6 +1267,7 @@ describe("plugin sdk alias helpers", () => {
       ["@openclaw/media-generation-core", "media-generation-core", "index"],
       ["@openclaw/media-generation-core/model-ref", "media-generation-core", "model-ref"],
       ["@openclaw/media-core", "media-core", "index"],
+      ["@openclaw/media-core/attachment-classify", "media-core", "attachment-classify"],
       ["@openclaw/media-core/mime", "media-core", "mime"],
       ["@openclaw/acp-core", "acp-core", "index"],
       ["@openclaw/acp-core/runtime/types", "acp-core", "runtime/types"],
@@ -1354,6 +1301,9 @@ describe("plugin sdk alias helpers", () => {
 
   it("aliases workspace package subpaths to dist when available", () => {
     const fixture = createPluginSdkAliasFixture();
+    writeWorkspacePackageExports(fixture.root, "media-core", ["attachment-classify"]);
+    writeWorkspacePackageExports(fixture.root, "acp-core", ["normalize-text"]);
+    writeWorkspacePackageExports(fixture.root, "normalization-core", ["record-coerce"]);
     const workspaceAliases = writeWorkspaceAliasFixtures(fixture.root, [
       ["@openclaw/gateway-client/readiness", "gateway-client", "readiness"],
       [
@@ -1364,6 +1314,7 @@ describe("plugin sdk alias helpers", () => {
       ["@openclaw/gateway-protocol/frame-guards", "gateway-protocol", "frame-guards"],
       ["@openclaw/markdown-core/render", "markdown-core", "render"],
       ["@openclaw/media-generation-core/catalog", "media-generation-core", "catalog"],
+      ["@openclaw/media-core/attachment-classify", "media-core", "attachment-classify"],
       [
         "@openclaw/acp-core/normalize-text",
         "acp-core",
@@ -1415,9 +1366,18 @@ describe("plugin sdk alias helpers", () => {
     );
     mkdirSafeDir(path.dirname(normalizationAgentId));
     fs.writeFileSync(normalizationAgentId, "export {};\n", "utf-8");
-    const cwdWithoutOpenClawPackage = makeTempDir();
+    const mediaAttachmentClassify = path.join(
+      fixture.root,
+      "dist",
+      "media-core",
+      "attachment-classify.js",
+    );
+    mkdirSafeDir(path.dirname(mediaAttachmentClassify));
+    fs.writeFileSync(mediaAttachmentClassify, "export {};\n", "utf-8");
+    const staleCheckout = createPluginSdkAliasFixture();
+    writeWorkspacePackageExports(staleCheckout.root, "media-core", ["mime"]);
 
-    const aliases = withCwd(cwdWithoutOpenClawPackage, () =>
+    const aliases = withCwd(staleCheckout.root, () =>
       withEnv({ NODE_ENV: undefined }, () =>
         buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
       ),
@@ -1428,6 +1388,9 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/agent-id"] ?? "")).toBe(
       fs.realpathSync(normalizationAgentId),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/media-core/attachment-classify"] ?? "")).toBe(
+      fs.realpathSync(mediaAttachmentClassify),
     );
   });
 

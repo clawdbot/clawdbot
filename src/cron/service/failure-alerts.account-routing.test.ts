@@ -9,25 +9,70 @@ import { resolveFailureAlert } from "./failure-alerts.js";
 import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
 import { applyJobResult } from "./timer.js";
 
+function stripTestTargetPrefix(raw: string, prefixes: readonly string[]): string | undefined {
+  const target = raw
+    .trim()
+    .replace(new RegExp(`^(?:${prefixes.join("|")}):`, "i"), "")
+    .trim();
+  return target || undefined;
+}
+
+function normalizeDiscordTestTarget(raw: string): string | undefined {
+  const target = raw.trim().toLowerCase();
+  if (!target) {
+    return undefined;
+  }
+  if (target.startsWith("discord:channel:")) {
+    return target.slice("discord:".length);
+  }
+  if (target.startsWith("discord:")) {
+    return `user:${target.slice("discord:".length)}`;
+  }
+  return /^(channel|user):/.test(target) ? target : `channel:${target}`;
+}
+
 describe("cron failure alert account routing", () => {
   beforeEach(() => {
+    const pluginSpecs = [
+      {
+        id: "telegram",
+        aliases: [],
+        targetPrefixes: ["telegram", "tg"],
+        normalizeTarget: (raw: string) => {
+          const target = stripTestTargetPrefix(raw, ["telegram", "tg"]);
+          return target ? `telegram:${target}` : undefined;
+        },
+      },
+      {
+        id: "googlechat",
+        aliases: ["gchat", "google-chat"],
+        targetPrefixes: ["googlechat", "google-chat", "gchat"],
+        normalizeTarget: (raw: string) =>
+          stripTestTargetPrefix(raw, ["googlechat", "google-chat", "gchat"]),
+      },
+      {
+        id: "msteams",
+        aliases: ["teams"],
+        targetPrefixes: ["msteams", "teams"],
+        normalizeTarget: (raw: string) => stripTestTargetPrefix(raw, ["msteams", "teams"]),
+      },
+      {
+        id: "discord",
+        aliases: [],
+        targetPrefixes: ["discord"],
+        normalizeTarget: normalizeDiscordTestTarget,
+      },
+    ];
     setActivePluginRegistry(
       createTestRegistry(
-        [
-          { id: "telegram", aliases: [], targetPrefixes: ["telegram", "tg"] },
-          {
-            id: "googlechat",
-            aliases: ["gchat", "google-chat"],
-            targetPrefixes: ["googlechat", "google-chat", "gchat"],
-          },
-        ].map(({ id, aliases, targetPrefixes }) => {
+        pluginSpecs.map(({ id, aliases, targetPrefixes, normalizeTarget }) => {
           const plugin = createChannelTestPluginBase({ id });
           return {
             pluginId: id,
             plugin: {
               ...plugin,
               meta: { ...plugin.meta, aliases },
-              messaging: { targetPrefixes },
+              messaging: { targetPrefixes, normalizeTarget },
             },
             source: `test:${id}`,
           };
@@ -200,6 +245,19 @@ describe("cron failure alert account routing", () => {
       expected: { channel: "slack", to: undefined, accountId: undefined },
     },
     {
+      name: "does not equate Discord user and channel targets with the same id",
+      globalAlert: { enabled: true, after: 1 },
+      deliveryChannel: "discord",
+      deliveryTo: "1234567890",
+      jobAlert: { channel: "discord", to: "discord:1234567890" },
+      expected: {
+        channel: "discord",
+        to: "discord:1234567890",
+        accountId: undefined,
+        threadId: undefined,
+      },
+    },
+    {
       name: "does not inherit the primary account for a webhook",
       globalAlert: {
         enabled: true,
@@ -248,6 +306,107 @@ describe("cron failure alert account routing", () => {
     };
 
     expect(resolveFailureAlert(state, job)).toMatchObject(expected);
+  });
+
+  it.each([
+    {
+      name: "failure destination channel alias",
+      channel: "googlechat",
+      globalChannel: "googlechat",
+      failureDestination: { channel: "gchat" },
+      failureAlert: undefined,
+    },
+    {
+      name: "job alert channel alias",
+      channel: "googlechat",
+      globalChannel: "googlechat",
+      failureDestination: undefined,
+      failureAlert: { channel: "google-chat" },
+    },
+    {
+      name: "both independently aliased overrides",
+      channel: "googlechat",
+      globalChannel: "googlechat",
+      failureDestination: { channel: "gchat" },
+      failureAlert: { channel: "google-chat" },
+    },
+    {
+      name: "prefixed target with an inherited last channel",
+      channel: "googlechat",
+      globalChannel: "last",
+      targetPrefix: "gchat",
+      failureDestination: { channel: "gchat" },
+      failureAlert: undefined,
+    },
+    {
+      name: "Teams channel alias",
+      channel: "msteams",
+      globalChannel: "msteams",
+      failureDestination: undefined,
+      failureAlert: { channel: "teams" },
+    },
+  ])("delivers the inherited failure route through $name", (testCase) => {
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const recipient = `${"targetPrefix" in testCase ? testCase.targetPrefix : testCase.channel}:alerts`;
+    const state = createCronServiceState({
+      storePath: "/tmp/openclaw-cron-failure-alert-aliased-routing.json",
+      cronEnabled: true,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+          mode: "announce",
+          channel: testCase.globalChannel,
+          to: recipient,
+          accountId: `${testCase.channel}-bot`,
+        },
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      nowMs: () => 2_000,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      sendCronFailureAlert,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const job: CronJob = {
+      id: "aliased-failure-route",
+      name: "Aliased failure route",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "report" },
+      delivery: {
+        mode: "none",
+        ...(testCase.failureDestination ? { failureDestination: testCase.failureDestination } : {}),
+      },
+      ...(testCase.failureAlert ? { failureAlert: testCase.failureAlert } : {}),
+      state: {},
+    };
+    const deferredNotifications: DeferredCronNotifications = [];
+
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: "provider unavailable",
+        startedAt: 1_000,
+        endedAt: 2_000,
+      },
+      { deferredNotifications },
+    );
+    deferredNotifications[0]?.();
+
+    expect(sendCronFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: testCase.channel,
+        to: recipient,
+        accountId: `${testCase.channel}-bot`,
+      }),
+    );
   });
 
   it("carries run start time without using it for alert cooldown", () => {
@@ -308,6 +467,13 @@ describe("cron failure alert account routing", () => {
       deliveryTo: "gchat:RoomA",
       failureAlert: { channel: "googlechat", to: "googlechat:RoomA" },
       expectedChannel: "googlechat",
+    },
+    {
+      name: "plugin-normalized equivalent",
+      deliveryChannel: "discord",
+      deliveryTo: "1234567890",
+      failureAlert: { channel: "discord", to: "discord:channel:1234567890" },
+      expectedChannel: "discord",
     },
   ])("keeps the primary account and topic on $name failure alerts", (testCase) => {
     const { failureAlert } = testCase;

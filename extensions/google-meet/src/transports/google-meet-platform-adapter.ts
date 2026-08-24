@@ -139,6 +139,10 @@ export const GOOGLE_MEET_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
         guestName: params.guestName,
         readOnly: params.readOnly,
       }),
+    shouldRetryJoinStatus: (health) =>
+      health.inCall === true &&
+      health.manualAction?.reason === "meet-audio-choice-required" &&
+      (health.audioInputRouted !== true || health.audioOutputRouted !== true),
     browserControlUnavailable: () => ({
       category: "browser-control-unavailable",
       reason: "browser-control-unavailable",

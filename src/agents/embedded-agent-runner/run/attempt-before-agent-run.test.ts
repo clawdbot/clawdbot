@@ -40,7 +40,7 @@ function createInput(hooks: PluginHookRegistration[] = []) {
     agent: { state },
   };
   const lock = { acquisitions: 0 };
-  const withOwnedSessionWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+  const withOwnedTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
     lock.acquisitions += 1;
     return await operation();
   };
@@ -59,7 +59,7 @@ function createInput(hooks: PluginHookRegistration[] = []) {
       modelPrompt: "model prompt",
       sessionManager,
       systemPrompt: "system prompt",
-      withOwnedSessionWriteLock,
+      withOwnedTranscriptWrite,
     },
     lock,
     sessionManager,

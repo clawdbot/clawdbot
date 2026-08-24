@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { normalizeLowercaseStringOrEmpty as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { ensureRecord, getRecord } from "../../../config/legacy.shared.js";
 import { normalizeAgentModelRefForConfig } from "../../../config/model-input.js";
@@ -12,10 +13,6 @@ import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 
 export function hasOwnDefinedProperty(record: Record<string, unknown>, key: string): boolean {
   return Object.hasOwn(record, key) && record[key] !== undefined;
-}
-
-function normalizeString(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function preferredClaudeSeparator(provider: string | undefined): "." | "-" {
@@ -77,15 +74,14 @@ const RETIRED_CODEX_MODEL_OVERRIDES = modelTable({
 });
 
 function applyRetiredModelTable(
-  model: string,
+  normalizedModel: string,
   table: Readonly<Record<string, string>>,
   overrides?: Readonly<Record<string, string>>,
 ): string | null {
-  const normalized = normalizeString(model);
-  if (overrides && Object.hasOwn(overrides, normalized)) {
-    return overrides[normalized] ?? null;
+  if (overrides && Object.hasOwn(overrides, normalizedModel)) {
+    return overrides[normalizedModel] ?? null;
   }
-  return Object.hasOwn(table, normalized) ? (table[normalized] ?? null) : null;
+  return Object.hasOwn(table, normalizedModel) ? (table[normalizedModel] ?? null) : null;
 }
 
 function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
@@ -218,7 +214,7 @@ function upgradeOldClaudeModelPart(model: string, provider: string | undefined):
   return upgradeOldClaudeToken(model, separator, provider);
 }
 
-function upgradeRetiredModelRef(value: string): string | null {
+function canonicalizeKnownModelRef(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
     return null;
@@ -230,16 +226,19 @@ function upgradeRetiredModelRef(value: string): string | null {
   const model = slash > 0 ? modelRef.slice(slash + 1).trim() : modelRef;
   const normalizedProvider = normalizeString(provider);
   const normalizedModel = normalizeString(model);
+  if (normalizedProvider === "openai" && normalizedModel === "gpt-5.6") {
+    return `${provider}/gpt-5.6-sol${split.profile ? `@${split.profile}` : ""}`;
+  }
   const retiredOwnerModel =
     normalizedProvider === "groq"
-      ? applyRetiredModelTable(model, RETIRED_GROQ_MODELS)
+      ? applyRetiredModelTable(normalizedModel, RETIRED_GROQ_MODELS)
       : normalizedProvider === "xai"
-        ? applyRetiredModelTable(model, RETIRED_XAI_MODELS)
+        ? applyRetiredModelTable(normalizedModel, RETIRED_XAI_MODELS)
         : normalizedProvider === "openai" ||
             normalizedProvider === "openai-codex" ||
             normalizedProvider === "github-copilot"
           ? applyRetiredModelTable(
-              model,
+              normalizedModel,
               RETIRED_OPENAI_MODELS,
               normalizedProvider === "openai-codex" ? RETIRED_CODEX_MODEL_OVERRIDES : undefined,
             )
@@ -282,7 +281,7 @@ function normalizeKnownModelRef(value: string): string | null {
       ? normalizeAgentModelRefForConfig(split.model)
       : split.model;
   const normalized = `${normalizedModel}${split.profile ? `@${split.profile}` : ""}`;
-  return upgradeRetiredModelRef(normalized) ?? (normalized === value ? null : normalized);
+  return canonicalizeKnownModelRef(normalized) ?? (normalized === value ? null : normalized);
 }
 
 const MODEL_REF_STRING_KEYS = new Set([
@@ -336,7 +335,7 @@ function normalizeProviderCatalogModelId(provider: string, modelId: string): str
     normalizeString(trimmed).startsWith("google/")
       ? normalizeConfiguredProviderCatalogModelId(provider, trimmed)
       : trimmed;
-  const upgradedRef = upgradeRetiredModelRef(`${provider}/${normalized}`);
+  const upgradedRef = canonicalizeKnownModelRef(`${provider}/${normalized}`);
   if (!upgradedRef) {
     return normalized;
   }
@@ -737,5 +736,5 @@ export function rewriteKnownModelRefs(
   return { value: changed ? next : value, changed };
 }
 
-export const RETIRED_MODEL_REF_MESSAGE =
-  'Configured retired model refs are no longer in the bundled catalogs; run "openclaw doctor --fix" to upgrade them.';
+export const MODEL_REF_CANONICALIZATION_MESSAGE =
+  'Configured retired or noncanonical model refs are no longer in the bundled catalogs; run "openclaw doctor --fix" to upgrade them.';

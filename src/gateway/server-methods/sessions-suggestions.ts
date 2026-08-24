@@ -6,9 +6,7 @@ import {
   validateSessionSuggestionsResolveParams,
   validateSessionTypingParams,
   type SessionSuggestion,
-  type SessionSuggestionEvent,
   type SessionSuggestionResolution,
-  type SessionSharingIdentity,
   type SessionTypingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -22,22 +20,30 @@ import {
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
   type StoredSessionSuggestion,
 } from "../../config/sessions.js";
+import { sessionObserverScopeKey } from "../session-observer-model.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
   authorizeIncognitoSessionTarget,
-  authorizeSessionSharingTarget,
   canManageSessionSharing,
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
   resolveSessionVisibility,
 } from "../session-sharing.js";
+import { resolveSessionSubscriptionKeys as subscriptionKeys } from "../session-subscription-keys.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { appendSessionAudit } from "./session-audit.js";
 import {
   broadcastTypingThrottled,
   liveViewerIdentities,
+  TYPING_PREVIEW_THROTTLE_MS,
+  TYPING_THROTTLE_MS,
   updateTypingConnections,
 } from "./session-typing-state.js";
+import {
+  publishSuggestion,
+  requireSuggestionTarget,
+  requireVisibleSuggestionRole,
+} from "./sessions-suggestions-access.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -47,11 +53,7 @@ import type {
 import { assertValidParams } from "./validation.js";
 
 function suggestionScope(target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>) {
-  return {
-    agentId: target.agentId,
-    sessionKey: target.storeKey,
-    storePath: target.storePath,
-  };
+  return { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath };
 }
 
 function protocolSuggestion(
@@ -71,69 +73,6 @@ function protocolSuggestion(
     createdAt: suggestion.createdAt,
     state: suggestion.state,
   };
-}
-
-function requireSuggestionTarget(params: {
-  context: GatewayRequestContext;
-  sessionKey: string;
-  agentId?: string;
-  respond: RespondFn;
-}) {
-  const target = resolveSessionSharingTarget({
-    cfg: params.context.getRuntimeConfig(),
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  if (!target) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.sessionKey}`),
-    );
-    return null;
-  }
-  return target;
-}
-
-function requireVisibleSuggestionRole(params: {
-  client: GatewayClient | null;
-  sessionKey: string;
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>;
-  respond: RespondFn;
-}) {
-  const role = resolveSessionSharingRole({ client: params.client, target: params.target });
-  const incognitoError = authorizeIncognitoSessionTarget({
-    client: params.client,
-    sessionKey: params.sessionKey,
-    target: params.target,
-  });
-  if (incognitoError) {
-    params.respond(false, undefined, incognitoError);
-    return null;
-  }
-  if (resolveSessionVisibility(params.target.entry) !== "draft") {
-    return role;
-  }
-  const error = authorizeSessionSharingTarget({ client: params.client, target: params.target });
-  if (!error) {
-    return role;
-  }
-  params.respond(false, undefined, error);
-  return null;
-}
-
-function publishSuggestion(
-  context: GatewayRequestContext,
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
-  requestedSessionKey: string,
-  event: SessionSuggestionEvent,
-): void {
-  context.broadcast("session.suggestion", event, {
-    sessionKeys: [
-      ...new Set([requestedSessionKey, target.canonicalKey, target.storeKey]),
-    ].toSorted(),
-    agentId: event.suggestion.agentId,
-  });
 }
 
 function resolutionState(resolution: SessionSuggestionResolution): "accepted" | "dismissed" {
@@ -174,30 +113,6 @@ function runSessionSuggestionMutation<T>(params: {
   }
 }
 
-function resolutionAuditAction(resolution: SessionSuggestionResolution): string {
-  switch (resolution) {
-    case "send":
-      return "sent a suggestion immediately";
-    case "queue":
-      return "queued a suggestion";
-    case "edit":
-      return "moved a suggestion into the composer";
-    case "dismiss":
-      return "dismissed a suggestion";
-  }
-  throw new Error(`unsupported suggestion resolution: ${String(resolution)}`);
-}
-
-function actorIdentity(client: GatewayClient | null): SessionSharingIdentity {
-  return (
-    gatewayClientSessionCreator(client) ?? {
-      type: "system",
-      id: "operator.admin",
-      label: "Administrator",
-    }
-  );
-}
-
 function attributedSuggestionClient(
   client: GatewayClient,
   suggestion: StoredSessionSuggestion,
@@ -231,7 +146,9 @@ async function dispatchSuggestion(params: {
     agentId: params.target.agentId,
     sessionId: params.target.entry.sessionId,
     message: params.suggestion.text,
-    queueMode: params.resolution === "send" ? "steer" : "followup",
+    ...(params.resolution === "queue"
+      ? { queueMode: "followup" as const }
+      : { queueMode: "steer" as const }),
     idempotencyKey: `session-suggestion:${params.suggestion.id}`,
   };
   await handleChatSend({
@@ -536,7 +453,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     const currentTarget = resolveSessionSharingTarget({
       cfg: context.getRuntimeConfig(),
       sessionKey: params.sessionKey,
-      agentId: params.agentId,
+      agentId: target.agentId,
     });
     if (!currentTarget || currentTarget.entry.sessionId !== target.entry.sessionId) {
       // Session replacement clears session_suggestions in the same entry-store
@@ -575,21 +492,17 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       action: "resolved",
       suggestion: projected,
     });
-    const actor = actorIdentity(client);
-    try {
-      await appendSessionAudit({
-        cfg: context.getRuntimeConfig(),
-        target: { ...target, sessionKey: target.canonicalKey },
-        text: `${actor.label ?? actor.id} ${resolutionAuditAction(resolution)}.`,
-        now: Date.now(),
-      });
-    } catch (error) {
-      context.logGateway.warn(`failed to append suggestion resolution audit: ${String(error)}`);
-    }
     respond(true, { suggestion: projected });
   },
 
-  "session.typing": ({ params, respond, client, context }) => {
+  "session.typing": ({ params: requestParams, respond, client, context }) => {
+    const params =
+      typeof requestParams.preview === "string"
+        ? {
+            ...requestParams,
+            preview: Array.from(requestParams.preview.trim()).slice(0, 400).join(""),
+          }
+        : requestParams;
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
       return;
     }
@@ -625,13 +538,19 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       respond(true, { ok: true, broadcast: false });
       return;
     }
-    const sessionKeys = new Set([params.sessionKey, target.canonicalKey, target.storeKey]);
+    const sessionKeys = new Set([
+      params.sessionKey,
+      target.canonicalKey,
+      target.storeKey,
+      sessionObserverScopeKey(target.canonicalKey, target.agentId),
+    ]);
     const now = Date.now();
     const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}\0${target.entry.sessionId}`;
-    const effectiveTyping = updateTypingConnections({
+    const { typing: effectiveTyping, preview } = updateTypingConnections({
       key: typingKey,
       connectionId: client?.connId ?? actor.id,
       typing: params.typing,
+      ...(params.typing && params.preview ? { preview: params.preview } : {}),
       now,
     });
     if (!params.typing && effectiveTyping) {
@@ -641,12 +560,14 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     const broadcast = broadcastTypingThrottled({
       key: typingKey,
       typing: effectiveTyping,
+      signature: `${effectiveTyping}\0${preview ?? ""}`,
+      intervalMs: preview ? TYPING_PREVIEW_THROTTLE_MS : TYPING_THROTTLE_MS,
       now,
       emit: () => {
         const current = resolveSessionSharingTarget({
           cfg: context.getRuntimeConfig(),
           sessionKey: params.sessionKey,
-          agentId: params.agentId,
+          agentId: target.agentId,
         });
         if (!current || current.entry.sessionId !== target.entry.sessionId) {
           return false;
@@ -673,10 +594,20 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           agentId: target.agentId,
           actor,
           typing: effectiveTyping,
+          ...(preview ? { preview } : {}),
           ts: Date.now(),
         };
         context.broadcast("session.typing", event, {
-          sessionKeys: [...sessionKeys].toSorted(),
+          sessionKeys: subscriptionKeys(
+            current.canonicalKey,
+            current.agentId,
+            current.canonicalKey === "global"
+              ? tryResolveSessionCompatibilityOwnerAgentId(
+                  context.getRuntimeConfig(),
+                  current.canonicalKey,
+                )
+              : undefined,
+          ),
           agentId: target.agentId,
           dropIfSlow: true,
         });

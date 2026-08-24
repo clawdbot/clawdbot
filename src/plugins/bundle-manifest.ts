@@ -9,6 +9,7 @@ import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalizatio
 import JSON5 from "json5";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { readRootStructuredFileSync } from "../infra/json-files.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isRecord } from "../utils.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import type { PluginManifestActivation } from "./manifest.js";
@@ -24,8 +25,10 @@ export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
 export const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
 export const AGENT_BUNDLE_MANIFEST_RELATIVE_PATH = "plugin.json";
+const AGENT_BUNDLE_EXTENSION_NAMESPACE = "ai.openclaw";
 const AGENT_BUNDLE_MANIFEST_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 const MAX_AGENT_BUNDLE_MANIFEST_BYTES = 256 * 1024;
+const log = createSubsystemLogger("plugins/bundle-manifest");
 
 /** Normalized bundle manifest shape consumed by plugin discovery. */
 type BundlePluginManifest = {
@@ -359,6 +362,30 @@ function buildAgentCapabilities(rootDir: string): string[] {
   return capabilities;
 }
 
+function resolveAgentActivation(
+  raw: Record<string, unknown>,
+  manifestPath: string,
+): PluginManifestActivation | undefined {
+  if (raw.extensions === undefined) {
+    return undefined;
+  }
+  if (!isRecord(raw.extensions)) {
+    log.warn(`ignoring Agent Plugins extensions in ${manifestPath}: expected an object`);
+    return undefined;
+  }
+  const openclawExtension = raw.extensions[AGENT_BUNDLE_EXTENSION_NAMESPACE];
+  if (openclawExtension === undefined) {
+    return undefined;
+  }
+  if (!isRecord(openclawExtension)) {
+    log.warn(
+      `ignoring Agent Plugins ${AGENT_BUNDLE_EXTENSION_NAMESPACE} extension in ${manifestPath}: expected an object`,
+    );
+    return undefined;
+  }
+  return normalizeManifestActivation(openclawExtension.activation);
+}
+
 export function loadBundleManifest(params: {
   rootDir: string;
   rootRealPath?: string;
@@ -422,6 +449,7 @@ export function loadBundleManifest(params: {
         settingsFiles: [],
         hooks: [],
         bundleFormat: "agent",
+        activation: resolveAgentActivation(raw, loaded.manifestPath),
         capabilities: buildAgentCapabilities(params.rootDir),
       },
       manifestPath: loaded.manifestPath,

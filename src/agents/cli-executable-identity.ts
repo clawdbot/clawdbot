@@ -3,6 +3,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
@@ -143,7 +144,7 @@ function isDurableRootedCommand(value: string): boolean {
 }
 
 function pathEntriesAreAbsolute(env: NodeJS.ProcessEnv): boolean {
-  const pathValue = env.PATH ?? env.Path ?? "";
+  const pathValue = resolveEnvironmentValue(env, "PATH") ?? "";
   const delimiter = process.platform === "win32" ? ";" : path.delimiter;
   return pathValue
     .split(delimiter)

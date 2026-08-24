@@ -17,19 +17,43 @@ describe("telegram actions contract", () => {
             },
           },
         } as OpenClawConfig,
-        expectedActions: ["send", "poll", "react", "delete", "edit", "topic-create", "topic-edit"],
+        expectedActions: [
+          "send",
+          "poll",
+          "react",
+          "emoji-list",
+          "delete",
+          "edit",
+          "topic-create",
+          "topic-edit",
+        ],
         expectedCapabilities: ["delivery-pin", "presentation"],
       },
     ],
   });
 
-  it("exposes message resource aliases through the registered adapter", () => {
+  it("exposes provider-owned read gates and message resource aliases through the registered adapter", () => {
+    expect(telegramPlugin.actions?.providerOwnedReadGates).toEqual([
+      "react",
+      "edit",
+      "delete",
+      "emoji-list",
+    ]);
     for (const action of ["react", "edit", "delete"] as const) {
       expect(telegramPlugin.actions?.messageActionTargetAliases?.[action]).toEqual({
         aliases: ["messageId"],
         deliveryTargetAliases: [],
       });
     }
+  });
+
+  it("routes registered message actions through the gateway", () => {
+    expect(telegramPlugin.actions?.resolveExecutionMode?.({ action: "send" as never })).toBe(
+      "gateway",
+    );
+    expect(telegramPlugin.actions?.resolveExecutionMode?.({ action: "read" as never })).toBe(
+      "gateway",
+    );
   });
 
   it.each([

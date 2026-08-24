@@ -4,7 +4,7 @@
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RuntimeConfigCapability } from "../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import {
   extractServerUiPrefs,
   prefValuesEqual,

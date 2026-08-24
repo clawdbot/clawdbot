@@ -37,6 +37,7 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
 }));
 
 let prewarmConfiguredPrimaryModel: typeof import("./server-startup-post-attach.js").testing.prewarmConfiguredPrimaryModel;
+let hydrateConfiguredExternalCliAuth: typeof import("./server-startup-post-attach.js").testing.hydrateConfiguredExternalCliAuth;
 let publishStartupModelRuntime: typeof import("./server-startup-post-attach.js").testing.publishStartupModelRuntime;
 let shouldSkipStartupModelPrewarm: typeof import("./server-startup-post-attach.js").testing.shouldSkipStartupModelPrewarm;
 
@@ -45,6 +46,7 @@ describe("gateway startup primary model warmup", () => {
     ({
       testing: {
         prewarmConfiguredPrimaryModel,
+        hydrateConfiguredExternalCliAuth,
         publishStartupModelRuntime,
         shouldSkipStartupModelPrewarm,
       },
@@ -77,6 +79,29 @@ describe("gateway startup primary model warmup", () => {
       gatewayLifecycle: true,
       catalogMode: "static",
     });
+  });
+
+  it("hydrates configured external CLI auth before prepared owner publication", async () => {
+    const cfg = {} as OpenClawConfig;
+    const hydrate = vi.fn();
+
+    await hydrateConfiguredExternalCliAuth({
+      cfg,
+      log: { warn: vi.fn() },
+      deps: {
+        listAgentIds: () => ["main", "secondary"],
+        resolveAgentDir: (_config, agentId) => `/tmp/${agentId}`,
+        collectConfiguredRefs: (_config, agentId) => [
+          { value: agentId === "main" ? "openai/gpt-5.4" : "anthropic/sonnet-4.6" },
+        ],
+        hydrate,
+      },
+    });
+
+    expect(hydrate).toHaveBeenCalledTimes(2);
+    expect(hydrate).toHaveBeenCalledWith("/tmp/main", ["openai"]);
+    expect(hydrate).toHaveBeenCalledWith("/tmp/secondary", ["anthropic"]);
+    expect(refreshPreparedModelRuntimeSnapshotsMock).not.toHaveBeenCalled();
   });
 
   it("prewarms the default catalog when no explicit primary model is configured", async () => {

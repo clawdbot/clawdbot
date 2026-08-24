@@ -32,12 +32,16 @@ import {
   TINY_PNG_BASE64,
   QA_REASONING_ONLY_RECOVERY_PROMPT_RE,
   QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE,
+  QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT_RE,
   QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE,
   QA_THINKING_VISIBILITY_OFF_PROMPT_RE,
   QA_THINKING_VISIBILITY_MAX_PROMPT_RE,
   QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE,
   QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE,
   QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE,
+  QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE,
+  QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE,
+  QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
   QA_STREAMING_PROMPT_RE,
   QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE,
   QA_BLOCK_STREAMING_PROMPT_RE,
@@ -46,6 +50,7 @@ import {
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
   QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
+  QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
   QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE,
@@ -57,6 +62,8 @@ import {
   QA_TELEGRAM_LONG_FINAL_PROMPT_RE,
   QA_WHATSAPP_LONG_FINAL_PROMPT_RE,
   QA_SLACK_CHART_PRESENTATION_PROMPT_RE,
+  QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE,
+  QA_MESSAGE_DECISION_SEND_PROMPT_RE,
   QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
   QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
   buildSlackMpimHistoryBotReply,
@@ -64,12 +71,15 @@ import {
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
+  QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE,
+  QA_SUBAGENT_SELF_YIELD_WORKER_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE,
   buildStrandedFinalRecoveryText,
   buildStrandedFinalRetryFailureText,
   isStrandedFinalRetryFailureRequest,
   QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
+  QA_SUBAGENT_SELF_YIELD_MARKER,
   QA_SUBAGENT_TERMINAL_MARKERS,
   QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
   QA_NATIVE_STOP_DELAY_PROMPT_RE,
@@ -127,7 +137,6 @@ import {
   isHeartbeatPrompt,
 } from "./mock-openai-directives.js";
 import {
-  buildToolCallEvents,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
   extractPlannedToolName,
@@ -137,8 +146,10 @@ import {
   buildQaLongFinalText,
   buildAssistantThenToolCallEvents,
   buildAssistantEvents,
+  buildPartialFailureEvents,
   buildReasoningOnlyEvents,
   buildReasoningAndAssistantEvents,
+  buildFailedResponseEvents,
 } from "./mock-openai-events.js";
 import {
   extractLastUserText,
@@ -279,7 +290,15 @@ const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
 const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
   /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
 const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
+const QA_RESTART_CHECKPOINT_COUNT = 3;
+const QA_RESTART_FINAL_TEXT = "unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
+const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
+const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
+const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
+// Keep each real provider request active long enough for retries to span the
+// unchanged five-minute recovery bound while remaining below first-byte timeout.
+const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 110_000;
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -552,6 +571,27 @@ function isGeneratedCodeModeWaitCall(input: ResponsesInputItem[], toolCall: Resp
   });
 }
 
+function readRestartCheckpointProgress(input: ResponsesInputItem[]) {
+  const checkpoints = new Set<number>();
+  for (const item of input) {
+    if (item.name !== "exec") {
+      continue;
+    }
+    const source = readGeneratedCodeModeExecSource(item);
+    if (!source?.includes("qa_restart_wait")) {
+      continue;
+    }
+    for (const match of source.matchAll(/\bCHECKPOINT-([1-3])\b/gu)) {
+      checkpoints.add(Number(match[1]));
+    }
+  }
+  const waitCount = input.filter((item) => isGeneratedCodeModeWaitCall(input, item)).length;
+  return {
+    checkpoints: [...checkpoints].toSorted((left, right) => left - right),
+    waitCount,
+  };
+}
+
 function isCodeModeControlToolOutput(body: Record<string, unknown>, input: ResponsesInputItem[]) {
   if (!hasCodeModeExecSurface(body)) {
     return false;
@@ -623,9 +663,9 @@ function buildScenarioToolCallEvents(
       `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
       `const targetName = ${JSON.stringify(name)};`,
       `const targetArgs = ${JSON.stringify(args)};`,
-      "const target = ALL_TOOLS.find((entry) => entry.name === targetName);",
+      "const target = (await catalog.search(targetName)).find((entry) => entry.toolName === targetName);",
       "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
-      "const value = await tools.callValue(target.id, targetArgs);",
+      "const value = await target(targetArgs);",
       'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
       "  return { ...value, content: value.content.slice(0, 2048) };",
       "}",
@@ -779,9 +819,8 @@ async function buildResponsesPayload(
     compactionSummaryFaultMode?: MockCompactionSummaryFaultMode;
   } = {},
 ) {
-  const providerVariant = resolveProviderVariant(
-    typeof body.model === "string" ? body.model : undefined,
-  );
+  const model = typeof body.model === "string" ? body.model : "";
+  const providerVariant = resolveProviderVariant(model);
   const input = normalizeResponsesInput(body.input);
   const toolDeclarationBody = resolveCurrentToolDeclarationSurface(body, input);
   const prompt = extractLastUserText(input);
@@ -853,7 +892,91 @@ async function buildResponsesPayload(
     )
       ? extractLatestToolOutput(input)
       : "");
+  // The queued followup carries the stalled prompt in transcript history, so
+  // current-turn dispatch must win before the persistent recovery fixture.
+  if (QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)) {
+    return buildAssistantEvents(QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER);
+  }
+  if (QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE.test(prompt)) {
+    return buildPartialFailureEvents(QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER);
+  }
+  if (QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE.test(prompt)) {
+    return buildFailedResponseEvents();
+  }
+  if (QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText)) {
+    return buildFailedResponseEvents();
+  }
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
+    const progress = readRestartCheckpointProgress(input);
+    const currentControlCallId = extractToolOutputCallId(input);
+    const latestControlCall = input.findLast(
+      (item) => item.name === "exec" || item.name === "wait",
+    );
+    const currentControlOutputIsLatest =
+      currentControlCallId.length > 0 && latestControlCall?.call_id === currentControlCallId;
+    const nextCheckpoint = Array.from(
+      { length: QA_RESTART_CHECKPOINT_COUNT },
+      (_, index) => index + 1,
+    ).find((checkpoint) => !progress.checkpoints.includes(checkpoint));
+    if (toolOutput.includes("unsafe-probe-executed")) {
+      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+    }
+    if (currentControlOutputIsLatest) {
+      if (
+        codeModeControlJson?.status === "waiting" &&
+        "cellId" in codeModeControlJson &&
+        typeof codeModeControlJson.cellId === "string"
+      ) {
+        return buildRawToolCallEventsWithArgs("wait", { cell_id: codeModeControlJson.cellId });
+      }
+      if (
+        codeModeControlJson?.status === "waiting" &&
+        "runId" in codeModeControlJson &&
+        typeof codeModeControlJson.runId === "string" &&
+        hasDeclaredTool(body, "wait")
+      ) {
+        return buildToolCallEventsWithArgs("wait", { runId: codeModeControlJson.runId });
+      }
+      if (
+        toolJson?.status === "waiting" &&
+        typeof toolJson.runId === "string" &&
+        hasDeclaredTool(body, "wait")
+      ) {
+        return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
+      }
+    }
+    if (progress.waitCount < progress.checkpoints.length) {
+      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+    }
+    if (nextCheckpoint !== undefined) {
+      if (nextCheckpoint > 1 && !QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+        return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+      }
+      if (hasDeclaredTool(body, "exec")) {
+        const encodedTarget = encodeCodeModeTarget("qa_restart_wait", {});
+        return buildToolCallEventsWithArgs("exec", {
+          language: "javascript",
+          restartSafe: true,
+          code: [
+            `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
+            'const target = (await catalog.search("qa_restart_wait")).find((tool) => tool.toolName === "qa_restart_wait");',
+            'if (!target) throw new Error("qa_restart_wait unavailable");',
+            "await target({});",
+            `return "CHECKPOINT-${nextCheckpoint}";`,
+          ].join("\n"),
+        });
+      }
+      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+    }
+    if (!QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+    }
+    if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
+      return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
+    }
+    return buildAssistantEvents(QA_RESTART_FINAL_TEXT);
+  }
   if (codeModeControlJson?.status === "waiting" && hasToolDefinition(toolDeclarationBody, "wait")) {
     if ("cellId" in codeModeControlJson && typeof codeModeControlJson.cellId === "string") {
       return buildRawToolCallEventsWithArgs("wait", { cell_id: codeModeControlJson.cellId });
@@ -1022,39 +1145,6 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
   }
-  if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
-    if (QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
-      if (toolOutput.includes("unsafe-probe-executed")) {
-        return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
-      }
-      if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
-        return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
-      }
-      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
-    }
-    if (toolJson?.status === "completed" && toolJson.value === "RESTART-CODE-MODE-WAIT-OK") {
-      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
-    }
-    if (
-      toolJson?.status === "waiting" &&
-      typeof toolJson.runId === "string" &&
-      hasDeclaredTool(body, "wait")
-    ) {
-      return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
-    }
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "exec")) {
-      return buildToolCallEventsWithArgs("exec", {
-        language: "javascript",
-        restartSafe: true,
-        code: [
-          'const matches = await tools.search("qa_restart_wait");',
-          "await tools.call(matches[0].id, {});",
-          'return "RESTART-CODE-MODE-WAIT-OK";',
-        ].join("\n"),
-      });
-    }
-    return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
-  }
   if (
     QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||
     QA_MCP_CODE_MODE_PROMPT_RE.test(allInputText)
@@ -1065,17 +1155,24 @@ async function buildResponsesPayload(
         language: "javascript",
         code: useApiFiles
           ? [
-              'const files = await API.list("mcp");',
-              'const root = await API.read("mcp/index.d.ts");',
-              'const api = await API.read("mcp/fixture.d.ts");',
-              'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
+              "const [files, root, api, result, failure, resources, resource, prompts, prompt] = await Promise.all([",
+              '  API.list("mcp"), API.read("mcp/index.d.ts"), API.read("mcp/fixture.d.ts"),',
+              '  MCP.fixture.lookupNote({ id: "alpha" }), MCP.fixture.lookupNote({ id: "missing" }),',
+              '  MCP.fixture.resources.list(), MCP.fixture.resources.read({ uri: "memo://fixture/alpha" }),',
+              '  MCP.fixture.prompts.list(), MCP.fixture.prompts.get({ name: "fixture_brief", arguments: { id: "alpha" } }),',
+              "]);",
+              'if (result.structuredContent?.note !== "fixture-note-alpha" || result.isError !== false) throw new Error("MCP success lost its top-level result shape");',
+              'if (failure.structuredContent?.note !== "missing-note" || failure.isError !== true) throw new Error("MCP resolved failure lost its top-level result shape");',
+              'if (result._meta !== undefined || result.content?.[0]?._meta?.proof !== "fixture-content-metadata") throw new Error("MCP result metadata crossed the wrong boundary");',
+              'if (!resources.resources?.some((entry) => entry.uri === "memo://fixture/alpha") || resource.contents?.[0]?.text !== "fixture-note-alpha") throw new Error("MCP resources lost their native result shape");',
+              'if (!prompts.prompts?.some((entry) => entry.name === "fixture_brief") || prompt.messages?.[0]?.content?.text !== "fixture-note-alpha") throw new Error("MCP prompts lost their native result shape");',
               "return {",
               '  marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",',
               "  files: files.files.map((file) => file.path),",
               "  rootHasFixture: root.content.includes('fixture'),",
               "  headerHasLookup: api.content.includes('function lookupNote'),",
               "  resultText: result.content?.[0]?.text,",
-              "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+              "  allHasMcp: catalog.all().some((tool) => tool.source === 'mcp'),",
               "};",
             ].join("\n")
           : [
@@ -1088,7 +1185,7 @@ async function buildResponsesPayload(
               "  headerHasLookup: api.header.includes('function lookupNote'),",
               "  schemaKeys: Object.keys(api.schemas),",
               "  resultText: result.content?.[0]?.text,",
-              "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+              "  allHasMcp: catalog.all().some((tool) => tool.source === 'mcp'),",
               "};",
             ].join("\n"),
       });
@@ -1122,6 +1219,18 @@ async function buildResponsesPayload(
   if (QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE.test(prompt)) {
     return buildAssistantEvents(QA_SUBAGENT_DIRECT_FALLBACK_MARKER);
   }
+  // A child that pauses itself and finishes only when a later follow-up arrives
+  // on the same session. Both turns are matched on the current prompt so the
+  // yielded kickoff, still present in the shared transcript, cannot make the
+  // follow-up turn yield a second time.
+  if (QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE.test(prompt)) {
+    return buildAssistantEvents(QA_SUBAGENT_SELF_YIELD_MARKER);
+  }
+  if (QA_SUBAGENT_SELF_YIELD_WORKER_RE.test(prompt) && canCallSessionsYield) {
+    return buildToolCallEventsWithArgs("sessions_yield", {
+      message: "Waiting for the remote job to report back.",
+    });
+  }
   const terminalCompletionCase = extractLastMatchingUserTurn(
     input,
     QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
@@ -1129,7 +1238,13 @@ async function buildResponsesPayload(
     ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
     ?.toLowerCase();
   if (terminalCompletionCase && /Internal task completion event/i.test(allInputText)) {
-    if (terminalCompletionCase === "empty") {
+    const visibleRepresentation =
+      terminalCompletionCase === "silent"
+        ? QA_SUBAGENT_TERMINAL_MARKERS.silent
+        : terminalCompletionCase === "empty"
+          ? QA_SUBAGENT_TERMINAL_MARKERS.empty
+          : undefined;
+    if (visibleRepresentation) {
       if (completedToolName === "message") {
         return buildAssistantEvents("");
       }
@@ -1144,15 +1259,15 @@ async function buildResponsesPayload(
           );
         return buildToolCallEventsWithArgs("message", {
           action: "send",
-          message: QA_SUBAGENT_TERMINAL_MARKERS.empty,
+          message: visibleRepresentation,
           ...(requiresFinal ? { final: true } : {}),
         });
       }
-      return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS.empty);
+      return buildAssistantEvents(visibleRepresentation);
     }
-    // The direct delivery fallback owns visible, silent, restart, and sanitized
-    // fallback results. Use explicit silence so generic empty-response recovery
-    // cannot replay the historical spawn before that fallback runs.
+    // The direct delivery fallback owns visible, restart, and sanitized fallback
+    // results. Use explicit silence so generic empty-response recovery cannot
+    // replay the historical spawn before that fallback runs.
     return buildAssistantEvents("NO_REPLY");
   }
   const terminalWorkerCase = Array.from(
@@ -1259,7 +1374,7 @@ async function buildResponsesPayload(
   }
   if (isActiveFailedToolTerminalRecovery) {
     if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      if (!allInputText.includes("state that failure plainly and do not claim it succeeded")) {
+      if (!allInputText.includes("If a tool failed, say so; never claim completion or success.")) {
         return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
       }
       const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";
@@ -1321,6 +1436,17 @@ async function buildResponsesPayload(
       );
     }
     return buildAssistantEvents("BUG-SHOULD-NOT-AUTO-RETRY");
+  }
+  if (QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT_RE.test(allInputText)) {
+    // The catalog's default mock alternate and the explicit proof model both
+    // recover, so the scenario exercises the same fallback path with or without flags.
+    if (model === "gpt-5.6-luna-alt" || model === "mock-visible-fallback") {
+      return buildAssistantEvents("MODEL-FALLBACK-VISIBLE-OK");
+    }
+    return buildReasoningAndAssistantEvents({
+      reasoningId: `rs_mock_mixed_blank_${model.replaceAll(/[^a-z0-9]+/gi, "_")}`,
+      answerText: " ",
+    });
   }
   if (QA_THINKING_VISIBILITY_MAX_PROMPT_RE.test(prompt)) {
     return buildReasoningAndAssistantEvents({
@@ -1427,6 +1553,31 @@ async function buildResponsesPayload(
     }
     if (hasCompletedToolOutput) {
       return buildAssistantEvents(slackChartMatch[2]);
+    }
+  }
+  if (QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE.test(allInputText)) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message:
+          "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+      });
+    }
+    if (hasCompletedToolOutput) {
+      return buildAssistantEvents("NO_REPLY");
+    }
+  }
+  if (QA_MESSAGE_DECISION_SEND_PROMPT_RE.test(allInputText)) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: "QA-MESSAGE-DELIVERY-OK",
+        final: true,
+        presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+      });
+    }
+    if (hasCompletedToolOutput) {
+      return buildAssistantEvents("NO_REPLY");
     }
   }
   if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
@@ -1596,6 +1747,15 @@ async function buildResponsesPayload(
       });
     }
     return buildAssistantEvents("");
+  }
+  if (QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE.test(allInputText)) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: exactMarkerDirective ?? "QA-MSTEAMS-AMBIGUOUS-504",
+      });
+    }
+    return buildAssistantEvents("QA-MSTEAMS-AMBIGUOUS-FINAL");
   }
   if (QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-MSTEAMS-THREAD-DEDUPE-OK";
@@ -2294,7 +2454,7 @@ async function buildResponsesPayload(
     return buildToolCallEventsWithArgs("sessions_spawn", {
       task: subagentHandoffTaskForProvider(providerVariant),
       label: "qa-sidecar",
-      thread: false,
+      ...(!/nested worker lineage handoff/i.test(allInputText) ? { thread: false } : {}),
     });
   }
   if (
@@ -2306,7 +2466,7 @@ async function buildResponsesPayload(
     });
   }
   if (!hasCompletedToolOutput && /\b(read|inspect|repo|docs|scenario|kickoff)\b/i.test(prompt)) {
-    return buildToolCallEvents(prompt);
+    return buildToolCallEventsWithArgs("read", { path: readTargetFromPrompt(prompt) });
   }
   if (/visible skill marker/i.test(prompt) && !hasCompletedToolOutput) {
     return buildAssistantEvents("VISIBLE-SKILL-OK");
@@ -2520,7 +2680,11 @@ export async function startQaMockOpenAiServer(params?: {
         : undefined);
     recordRequest({
       ...requestSnapshotBase,
-      outcome: failure ? "error" : "success",
+      outcome:
+        failure || events.some((event) => event.type === "response.failed") ? "error" : "success",
+      ...(events.some((event) => event.type === "response.failed")
+        ? { errorCode: "response_failed_no_details" }
+        : {}),
       plannedToolCallId: plannedToolIdentity.callId,
       ...(request.route === "responses" && plannedToolIdentity.itemId
         ? { plannedToolItemId: plannedToolIdentity.itemId }
@@ -2548,6 +2712,10 @@ export async function startQaMockOpenAiServer(params?: {
       ...(failure ? { failure } : {}),
       ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
         ? { previewPauseMs: finalOnlyMarkerPauseMs }
+        : {}),
+      ...(QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText) &&
+      !QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)
+        ? { responsePauseMs: QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS }
         : {}),
     };
   };
@@ -2696,6 +2864,9 @@ export async function startQaMockOpenAiServer(params?: {
           return;
         }
         const { events } = dispatched;
+        if (dispatched.responsePauseMs !== undefined) {
+          await sleep(dispatched.responsePauseMs);
+        }
         if (body.stream === false) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {

@@ -1,5 +1,6 @@
 // Memory Wiki plugin module implements prompt section behavior.
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-host-core";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   loadMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
@@ -10,6 +11,9 @@ import type { MemoryWikiConfigResolver, ResolvedMemoryWikiConfig } from "./confi
 
 const DIGEST_MAX_PAGES = 4;
 const DIGEST_MAX_CLAIMS_PER_PAGE = 2;
+const DIGEST_MAX_PAGE_TITLE_CHARS = 160;
+const DIGEST_MAX_CLAIM_CHARS = 700;
+const DIGEST_MAX_PROMPT_CHARS = 2_800;
 
 function rankPromptDigestPage(page: MemoryWikiCompiledDigestPage): number {
   return (
@@ -105,16 +109,18 @@ function buildDigestPromptSection(
         ? `${page.contradictions?.length} contradiction notes`
         : null,
     ].filter(Boolean);
-    lines.push(`- ${page.title}: ${details.join(", ")}`);
+    lines.push(
+      `- ${truncateUtf16Safe(page.title, DIGEST_MAX_PAGE_TITLE_CHARS)}: ${details.join(", ")}`,
+    );
     for (const claim of sortPromptClaims(page.topClaims ?? []).slice(
       0,
       DIGEST_MAX_CLAIMS_PER_PAGE,
     )) {
-      lines.push(`  - ${formatPromptClaim(claim)}`);
+      lines.push(`  - ${truncateUtf16Safe(formatPromptClaim(claim), DIGEST_MAX_CLAIM_CHARS)}`);
     }
   }
   lines.push("");
-  return lines;
+  return truncateUtf16Safe(lines.join("\n"), DIGEST_MAX_PROMPT_CHARS).split("\n");
 }
 
 function buildWikiToolGuidance(availableTools: Set<string>): string[] {

@@ -1,3 +1,5 @@
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+
 export type TelegramTestContext = Record<string, unknown>;
 export type TelegramTestMiddleware = (
   ctx: TelegramTestContext,
@@ -12,6 +14,24 @@ type ChannelInboundModule = typeof import("openclaw/plugin-sdk/channel-inbound")
 type ChannelInboundRunParams = Parameters<ChannelInboundModule["runChannelInboundEvent"]>[0];
 type BufferedReplyDispatcher =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
+
+export function makeTelegramKeyedStoreTestMock<Value>(
+  overrides: Partial<PluginStateKeyedStore<Value>> = {},
+): PluginStateKeyedStore<Value> {
+  const unexpectedCall = async (operation: string): Promise<never> => {
+    throw new Error(`unexpected Telegram keyed-store ${operation} call`);
+  };
+  return {
+    register: () => unexpectedCall("register"),
+    registerIfAbsent: () => unexpectedCall("registerIfAbsent"),
+    lookup: () => unexpectedCall("lookup"),
+    consume: () => unexpectedCall("consume"),
+    delete: () => unexpectedCall("delete"),
+    entries: () => unexpectedCall("entries"),
+    clear: () => unexpectedCall("clear"),
+    ...overrides,
+  };
+}
 
 export async function runTelegramChannelInboundEventWithHarness(
   actual: ChannelInboundModule,
@@ -38,7 +58,11 @@ export async function runTelegramChannelInboundEventWithHarness(
               cfg: plan.cfg,
               dispatcherOptions: {
                 ...plan.dispatcherOptions,
-                deliver: plan.delivery.deliverWithProviderMessageSending,
+                deliver: (payload, info) =>
+                  plan.delivery.deliverWithProviderMessageSending(payload, {
+                    ...info,
+                    onPlatformSendDispatch: info.onPlatformSendDispatch ?? (async () => undefined),
+                  }),
                 onError: plan.delivery.onError,
               },
               toolsAllow: plan.toolsAllow,

@@ -3,6 +3,7 @@ import {
   readResponseTextPrefix,
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 
 const PROVIDER_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 const PROVIDER_ERROR_RESPONSE_MAX_BYTES = 8 * 1024;
@@ -37,5 +38,9 @@ export async function readVoiceCallProviderJsonResponse<T>(
 
 export async function readProviderErrorResponseSnippet(response: Response): Promise<string> {
   const prefix = await readResponseTextPrefix(response, PROVIDER_ERROR_RESPONSE_MAX_BYTES);
-  return prefix.truncated ? appendTruncatedSuffix(prefix.text) : prefix.text;
+  // Provider error bodies can echo credential-bearing request details (Authorization
+  // headers, account identifiers, signed URLs), so redact before the snippet reaches
+  // error messages and logs. Tools mode keeps redaction on regardless of log config.
+  const text = redactSensitiveText(prefix.text, { mode: "tools" });
+  return prefix.truncated ? appendTruncatedSuffix(text) : text;
 }

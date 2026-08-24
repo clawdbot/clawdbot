@@ -19,6 +19,7 @@ afterEach(() => {
 describe("Workboard card chip", () => {
   it("loads the matching card and releases its shared lookup lease", async () => {
     const removeListener = vi.fn();
+    let gatewayListener: ((event: { event: string }) => void) | undefined;
     const request = vi.fn(async () => ({
       cards: [
         {
@@ -35,7 +36,10 @@ describe("Workboard card chip", () => {
         },
       ],
     }));
-    const addEventListener = vi.fn(() => removeListener);
+    const addEventListener = vi.fn((listener: (event: { event: string }) => void) => {
+      gatewayListener = listener;
+      return removeListener;
+    });
     const client = {
       request,
       addEventListener,
@@ -56,12 +60,25 @@ describe("Workboard card chip", () => {
     expect(link?.textContent).toContain("Review");
     expect(request).toHaveBeenCalledWith("workboard.cards.list", {});
 
+    element.active = false;
+    element.sessionKey = "agent:main:workboard-next";
+    await element.updateComplete;
+    expect(element.querySelector(".board-session-surface__workboard-chip")).toBeNull();
+    expect(removeListener).toHaveBeenCalledOnce();
+    const requestCount = request.mock.calls.length;
+    gatewayListener?.({ event: "workboard.changed" });
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(requestCount);
+
+    element.active = true;
+    await vi.waitFor(() => expect(addEventListener).toHaveBeenCalledTimes(2));
+    expect(element.textContent).not.toContain("Ship dashboard stitch");
+
     element.remove();
     await element.updateComplete;
-    expect(removeListener).toHaveBeenCalledOnce();
-    expect(addEventListener).toHaveBeenCalledOnce();
+    expect(removeListener).toHaveBeenCalledTimes(2);
 
     document.body.append(element);
-    await vi.waitFor(() => expect(addEventListener).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(addEventListener).toHaveBeenCalledTimes(3));
   });
 });

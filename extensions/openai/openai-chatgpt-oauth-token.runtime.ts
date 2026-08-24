@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
@@ -111,7 +112,21 @@ async function readOpenAITokenResponse(
       message: `OpenAI Codex token ${operation} failed (${response.status}): ${text || response.statusText}`,
     };
   }
-  const json = (await response.json()) as TokenResponseJson;
+  let json: TokenResponseJson;
+  try {
+    json = (await response.json()) as TokenResponseJson;
+  } catch {
+    return {
+      type: "failed",
+      message: `OpenAI Codex token ${operation} failed: response is not valid JSON`,
+    };
+  }
+  if (!isRecord(json)) {
+    return {
+      type: "failed",
+      message: `OpenAI Codex token ${operation} failed: expected JSON object response`,
+    };
+  }
   const expires = resolveOAuthTokenExpiresAt(json.expires_in);
   if (!json.access_token || !json.refresh_token || expires === undefined) {
     return {

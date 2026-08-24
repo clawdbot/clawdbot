@@ -68,11 +68,15 @@ function resolveCaptionOrFilename(params: { body?: string; filename?: string }):
   return { caption: body };
 }
 
-export function resolveMatrixMessageAttachment(params: {
+type MatrixMessageContentInput = {
   body?: string;
   filename?: string;
   msgtype?: string;
-}): MatrixMessageAttachmentSummary | undefined {
+};
+
+export function resolveMatrixMessageAttachment(
+  params: MatrixMessageContentInput,
+): MatrixMessageAttachmentSummary | undefined {
   const kind = resolveMatrixMediaKind(params.msgtype);
   if (!kind) {
     return undefined;
@@ -83,19 +87,6 @@ export function resolveMatrixMessageAttachment(params: {
     caption: resolved.caption,
     filename: resolved.filename,
   };
-}
-
-export function resolveMatrixMessageBody(params: {
-  body?: string;
-  filename?: string;
-  msgtype?: string;
-}): string | undefined {
-  const attachment = resolveMatrixMessageAttachment(params);
-  if (!attachment) {
-    const body = params.body?.trim() ?? "";
-    return body || undefined;
-  }
-  return attachment.caption;
 }
 
 function formatMatrixAttachmentText(params: {
@@ -115,13 +106,15 @@ function formatMatrixAttachmentText(params: {
 
 export function formatMatrixMessageText(params: {
   body?: string;
-  attachment?: MatrixMessageAttachmentSummary;
+  filename?: string;
+  msgtype?: string;
   tooLarge?: boolean;
   unavailable?: boolean;
 }): string | undefined {
-  const body = params.body?.trim() ?? "";
+  const attachment = resolveMatrixMessageAttachment(params);
+  const body = attachment ? (attachment.caption ?? "") : (params.body?.trim() ?? "");
   const marker = formatMatrixAttachmentText({
-    attachment: params.attachment,
+    attachment,
     tooLarge: params.tooLarge,
     unavailable: params.unavailable,
   });
@@ -139,13 +132,7 @@ export function formatMatrixMediaUnavailableText(params: {
   filename?: string;
   msgtype?: string;
 }): string {
-  return (
-    formatMatrixMessageText({
-      body: resolveMatrixMessageBody(params),
-      attachment: resolveMatrixMessageAttachment(params),
-      unavailable: true,
-    }) ?? ""
-  );
+  return formatMatrixMessageText({ ...params, unavailable: true }) ?? "";
 }
 
 export function formatMatrixMediaTooLargeText(params: {
@@ -153,11 +140,5 @@ export function formatMatrixMediaTooLargeText(params: {
   filename?: string;
   msgtype?: string;
 }): string {
-  return (
-    formatMatrixMessageText({
-      body: resolveMatrixMessageBody(params),
-      attachment: resolveMatrixMessageAttachment(params),
-      tooLarge: true,
-    }) ?? ""
-  );
+  return formatMatrixMessageText({ ...params, tooLarge: true }) ?? "";
 }

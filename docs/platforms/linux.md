@@ -26,8 +26,15 @@ The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
   offers to import detected Claude Code, Codex, or Hermes memories into the
   agent workspace (the same import stays available later under
   Settings → Import Memory)
-- renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
 - remains available from the system tray when its window is closed
+
+### Host sleep
+
+On systems with systemd-logind, the companion prepares a suspension lease for
+its local Gateway before the host sleeps. After wake, it reconnects and resumes
+the Gateway; remote Gateway routes are left untouched. If logind or the system
+bus is unavailable, the sleep hook disables itself and the app continues
+normally.
 
 Realtime voice Talk inside the companion's embedded WebView is not validated:
 the shell does not grant microphone capture to the WebKitGTK WebView, so
@@ -109,20 +116,12 @@ After an accepted send, Quick Chat stays open and streams the selected agent's
 plain-text reply below the composer. Press `Esc` to dismiss the bar and its reply;
 `Ctrl+Enter` still opens the dashboard.
 
-### Canvas
-
-Linux Canvas uses two cooperating processes. `openclaw node run` remains the single Gateway node connection; the bundled `linux-canvas` plugin forwards `canvas.*` calls to the running desktop app over a user-only Unix socket. The app owns one on-demand WebView window, including the bundled A2UI renderer and action bridge back to the agent.
-
-The plugin is enabled by default. It advertises Canvas only when the desktop socket exists at `$XDG_RUNTIME_DIR/openclaw-canvas.sock`, or `/tmp/openclaw-canvas-$UID.sock` when `XDG_RUNTIME_DIR` is unavailable. Disable it with `plugins.entries.linux-canvas.enabled: false`. On a headless Linux server without the desktop app, Canvas is not advertised.
-
-Linux v1 uses one Canvas window. HTTP and HTTPS pages are renderable, but A2UI actions are accepted only from the bundled renderer.
-
 ## CLI and SSH alternative
 
 The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
 
 1. Install Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+.
-2. `npm i -g openclaw@latest`
+2. On npm 12 or npm 11.16+, run `npm i -g openclaw@latest --allow-scripts=openclaw`. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
 5. Open `http://127.0.0.1:18789/` and authenticate with the configured shared
@@ -205,7 +204,7 @@ Write a unit by hand only for a custom setup. Minimal user-unit example
 
 ```ini
 [Unit]
-Description=OpenClaw Gateway (profile: <profile>, v<version>)
+Description=OpenClaw Gateway (profile: <profile>)
 After=network-online.target
 Wants=network-online.target
 StartLimitBurst=5
@@ -242,9 +241,9 @@ sessions and channel connections, so OpenClaw biases transient child
 processes to be killed first when possible.
 
 For eligible Linux child spawns, OpenClaw wraps the command in a short
-`/bin/sh` shim that raises the child's own `oom_score_adj` to `1000`, then
-`exec`s the real command. This is unprivileged: a process may always raise
-its own OOM score.
+`/bin/sh` shim that attempts to raise the child's own `oom_score_adj` to
+`1000`, then `exec`s the real command. This is unprivileged: a process may
+always raise its own OOM score.
 
 Covered child process surfaces:
 
@@ -256,6 +255,9 @@ Covered child process surfaces:
 The wrapper is Linux-only and skipped when `/bin/sh` is unavailable, or when
 the child env sets `OPENCLAW_CHILD_OOM_SCORE_ADJ` to `0`, `false`, `no`, or
 `off`.
+Use this opt-out only for controlled diagnosis: it removes child-first OOM
+protection and makes the Gateway more likely to be selected as the victim under
+real memory pressure.
 
 Verify a child process:
 
@@ -263,8 +265,9 @@ Verify a child process:
 cat /proc/<child-pid>/oom_score_adj
 ```
 
-Expected value for covered children is `1000`; the Gateway process itself
-keeps its normal score (usually `0`).
+When the write succeeds, the expected value for covered children is `1000`.
+If `/proc` is unavailable or unwritable, the child still runs without the OOM
+bias. The Gateway process itself keeps its normal score (usually `0`).
 
 The systemd unit's `OOMPolicy=continue` keeps the Gateway service alive when
 a transient child is selected by the OOM killer instead of marking the whole

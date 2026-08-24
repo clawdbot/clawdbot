@@ -61,7 +61,7 @@ const status = {
 };
 
 function createProgram(): Command {
-  const program = new Command();
+  const program = new Command().enablePositionalOptions();
   program.exitOverride();
   registerSkillsCli(program);
   return program;
@@ -79,6 +79,20 @@ describe("skills curator cli", () => {
     });
     mocks.defaultRuntime.writeJson.mockClear();
     mocks.defaultRuntime.writeStdout.mockClear();
+  });
+
+  it("uses a parent --json when the leaf has its default false value", async () => {
+    await createProgram().parseAsync(["skills", "curator", "--json", "status"], {
+      from: "user",
+    });
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(status);
+  });
+
+  it("uses --json for the default curator action", async () => {
+    await createProgram().parseAsync(["skills", "curator", "--json"], { from: "user" });
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(status);
   });
 
   it("supports status, pin, unpin, and restore JSON paths", async () => {
@@ -110,7 +124,7 @@ describe("skills curator cli", () => {
         from: "user",
       }),
     ).rejects.toThrow("__exit__:1");
-    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith("Error: remote unavailable");
+    expect(mocks.defaultRuntime.error).toHaveBeenCalledWith("remote unavailable");
   });
 
   it("disambiguates duplicate skill keys in text status", async () => {

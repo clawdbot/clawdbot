@@ -21,9 +21,9 @@ When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate in
 ## Default location
 
 - Default: `~/.openclaw/workspace`
-- If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes `~/.openclaw/workspace-<profile>`.
+- If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes `~/.openclaw-<profile>/workspace`.
 - `OPENCLAW_WORKSPACE_DIR` overrides both of the above when set.
-- `openclaw onboard --non-interactive` uses `<state-dir>/workspace` when `OPENCLAW_STATE_DIR` is non-default, including for the initial `main` agent entry.
+- A non-default `OPENCLAW_STATE_DIR` keeps the default workspace at `<state-dir>/workspace`, including scheduled maintenance and the initial `main` agent entry.
 - Non-default agents (`agents.entries.*`) without an explicit workspace resolve to `<state-dir>/workspace-<agentId>`, not the shared default workspace.
 
 Override in `~/.openclaw/openclaw.json`:
@@ -94,9 +94,6 @@ Standard files OpenClaw expects inside the workspace:
   </Accordion>
   <Accordion title="skills/ - workspace skills (optional)">
     Workspace-specific skills. Highest-precedence skill location for that workspace, ahead of project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
-  </Accordion>
-  <Accordion title="canvas/ - Canvas UI files (optional)">
-    Canvas UI files for node displays (for example `canvas/index.html`).
   </Accordion>
 </AccordionGroup>
 

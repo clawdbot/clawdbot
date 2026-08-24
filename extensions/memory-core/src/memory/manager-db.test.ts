@@ -10,6 +10,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupAgedMemoryReindexTempFiles,
+  closeMemoryDatabase,
+  openMemoryDatabaseAtPath,
   publishMemoryDatabaseTables,
   readMemoryDatabaseRevision,
 } from "./manager-db.js";
@@ -36,6 +38,18 @@ describe("memory manager database publication", () => {
 
   afterEach(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  it("sets busy_timeout on memory sqlite connections", () => {
+    const db = openMemoryDatabaseAtPath(path.join(fixtureRoot, "index.sqlite"), false);
+    try {
+      const row = db.prepare("PRAGMA busy_timeout").get() as
+        | { busy_timeout?: number; timeout?: number }
+        | undefined;
+      expect(row?.busy_timeout ?? row?.timeout).toBe(5000);
+    } finally {
+      closeMemoryDatabase(db);
+    }
   });
 
   it("lazily adds recall metadata storage before publishing to an existing database", async () => {

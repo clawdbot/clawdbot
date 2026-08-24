@@ -583,11 +583,14 @@ describe("anthropic cli migration", () => {
 
   it("registered non-interactive cli auth keeps anthropic fallbacks and selects claude-cli runtime", async () => {
     readClaudeCliCredentialsForSetupNonInteractive.mockReturnValue({
-      type: "oauth",
-      provider: "anthropic",
-      access: "access-token",
-      refresh: "refresh-token",
-      expires: Date.now() + 60_000,
+      status: "available",
+      credential: {
+        type: "oauth",
+        provider: "anthropic",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
+      },
     });
     const method = await resolveAnthropicCliAuthMethod();
     const config = {
@@ -635,7 +638,7 @@ describe("anthropic cli migration", () => {
   });
 
   it("registered non-interactive cli auth reports missing local auth and exits cleanly", async () => {
-    readClaudeCliCredentialsForSetupNonInteractive.mockReturnValue(null);
+    readClaudeCliCredentialsForSetupNonInteractive.mockReturnValue({ status: "missing" });
     const method = await resolveAnthropicCliAuthMethod();
     const ctx = createProviderAuthMethodNonInteractiveContext();
 
@@ -644,6 +647,21 @@ describe("anthropic cli migration", () => {
       [
         'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
         "Run claude auth login first.",
+      ].join("\n"),
+    );
+    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("registered non-interactive cli auth reports stored credentials that need interaction", async () => {
+    readClaudeCliCredentialsForSetupNonInteractive.mockReturnValue({ status: "unreadable" });
+    const method = await resolveAnthropicCliAuthMethod();
+    const ctx = createProviderAuthMethodNonInteractiveContext();
+
+    await expect(method.runNonInteractive?.(ctx)).resolves.toBeNull();
+    expect(ctx.runtime.error).toHaveBeenCalledWith(
+      [
+        'Auth choice "anthropic-cli" found Claude CLI credentials on this host, but they could not be read non-interactively.',
+        "Re-run this command without --non-interactive, or use --auth-choice setup-token / --anthropic-api-key <key>.",
       ].join("\n"),
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);

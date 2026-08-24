@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { trimLogTail } from "./restart-sentinel.js";
-import { DEV_BRANCH } from "./update-channels.js";
+import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
+import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import {
   managerInstallArgs,
   managerInstallIgnoreScriptsArgs,
@@ -209,9 +210,7 @@ async function resolveUpstreamCandidates(params: {
       );
     }
   }
-  const upstreamRefs = params.needsCheckoutMain
-    ? [`${DEV_BRANCH}@{upstream}`, ...remoteBranchRefs]
-    : ["@{upstream}"];
+  const upstreamRefs = resolveDevUpstreamRefs(params.needsCheckoutMain, remoteBranchRefs);
   let upstreamSha: string | null = null;
   let selectedDevUpstream: string | null = null;
   let sawResolvableUpstreamRef = false;
@@ -376,31 +375,26 @@ async function testPreflightCandidates(params: {
         sawOtherFailure = true;
         continue;
       }
-      const buildStep = await runStep(
-        params.step(
-          `preflight build (${shortSha})`,
-          managerScriptArgs(manager.manager, "build"),
-          params.worktreeDir,
-          resolveBuildEnv(manager.env, path.join(params.gitRoot, ".artifacts", "build-all-cache")),
-        ),
+      const runCandidateCheck = async (name: string, argv: string[], env?: NodeJS.ProcessEnv) => {
+        const check = params.step(`preflight ${name} (${shortSha})`, argv, params.worktreeDir, env);
+        return (await runStep(check)).exitCode === 0;
+      };
+      const buildArgs = managerScriptArgs(manager.manager, "build");
+      const buildEnv = resolveBuildEnv(
+        manager.env,
+        path.join(params.gitRoot, ".artifacts", "build-all-cache"),
       );
-      if (buildStep.exitCode !== 0) {
+      const configCommand = ["config", "validate", "--json"];
+      const configArgs = managerScriptArgs(manager.manager, "openclaw", configCommand);
+      const lintArgs = managerScriptArgs(manager.manager, "lint");
+      if (
+        !(await runCandidateCheck("build", buildArgs, buildEnv)) ||
+        !(await runCandidateCheck("config validate", configArgs, manager.env)) ||
+        (shouldRunDevPreflightLint() &&
+          !(await runCandidateCheck("lint", lintArgs, resolveDevPreflightLintEnv(manager.env))))
+      ) {
         sawOtherFailure = true;
         continue;
-      }
-      if (shouldRunDevPreflightLint()) {
-        const lintStep = await runStep(
-          params.step(
-            `preflight lint (${shortSha})`,
-            managerScriptArgs(manager.manager, "lint"),
-            params.worktreeDir,
-            resolveDevPreflightLintEnv(manager.env),
-          ),
-        );
-        if (lintStep.exitCode !== 0) {
-          sawOtherFailure = true;
-          continue;
-        }
       }
       selectedSha = sha;
       break;
@@ -413,7 +407,7 @@ async function testPreflightCandidates(params: {
 
 export async function runGitDevPreflight(params: {
   gitRoot: string;
-  devTargetRef?: string;
+  devTarget?: DevUpdateTarget;
   needsCheckoutMain: boolean;
   runCommand: CommandRunner;
   timeoutMs: number;
@@ -421,7 +415,9 @@ export async function runGitDevPreflight(params: {
   steps: UpdateStepResult[];
   step: StepFactory;
 }): Promise<GitDevPreflightResult> {
-  const devTargetRef = normalizeDevTargetRef(params.devTargetRef);
+  const devTargetRef = params.devTarget
+    ? normalizeDevTargetRef(resolveDevUpdateTargetRevision(params.devTarget))
+    : null;
   let preflightBaseSha: string;
   let candidates: string[];
   let selectedDevUpstream: string | null = null;
@@ -433,6 +429,26 @@ export async function runGitDevPreflight(params: {
     }
     preflightBaseSha = targetSha;
     candidates = [targetSha];
+    if (params.devTarget?.mode === "tracked") {
+      const ancestryStep = await runStep(
+        params.step(
+          "tracked target ancestry",
+          [
+            "git",
+            "-C",
+            params.gitRoot,
+            "merge-base",
+            "--is-ancestor",
+            targetSha,
+            `${params.devTarget.upstreamRef}^{commit}`,
+          ],
+          params.gitRoot,
+        ),
+      );
+      if (ancestryStep.exitCode !== 0) {
+        return { status: "error", reason: "tracked-upstream-invalid" };
+      }
+    }
   } else {
     const upstream = await resolveUpstreamCandidates(params);
     if (upstream.status !== "ok") {

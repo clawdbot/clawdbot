@@ -274,11 +274,14 @@ describe("command-analysis risks", () => {
         raw: "sudo python3 -c 'print(1)'",
         argv: ["sudo", "python3", "-c", "print(1)"],
         resolution: {
+          kind: "command",
           execution: {
+            kind: "executable",
             rawExecutable: "sudo",
             executableName: "sudo",
           },
           policy: {
+            kind: "executable",
             rawExecutable: "sudo",
             executableName: "sudo",
           },

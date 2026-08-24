@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
@@ -174,12 +175,7 @@ function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unkno
 
 function readChatHistoryRecordTimestampMs(message: unknown): number | undefined {
   const meta = readRecord(readRecord(message)?.["__openclaw"]);
-  const value = meta?.recordTimestampMs;
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  const timestamp = readRecord(message)?.timestamp;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : undefined;
+  return asFiniteNumber(meta?.recordTimestampMs) ?? asFiniteNumber(readRecord(message)?.timestamp);
 }
 
 function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown): boolean {

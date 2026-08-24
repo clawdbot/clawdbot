@@ -132,13 +132,23 @@ function narrowIncludePatterns(
     return null;
   }
 
-  return [
-    ...new Set(
-      candidatePatterns.filter((value) =>
-        includePatterns.some((pattern) => patternsCouldOverlap(value, pattern)),
-      ),
-    ),
-  ];
+  // Narrowing must intersect the CLI selection with the lane's own scope. When the lane is
+  // rooted deeper than the CLI selection, keep the lane: returning the caller's broader
+  // directory pattern re-admits files the lane never owns — `unit-fast` picks up the stateful
+  // files it excludes, and `contracts-*` picks up every sibling test outside `contracts/`.
+  // Both run `isolate: false`, so those extra files share a worker and pollute unrelated ones.
+  const narrowed = new Set<string>();
+  for (const candidate of candidatePatterns) {
+    const candidatePrefix = literalPrefixForGlobPattern(candidate);
+    for (const laneScope of includePatterns) {
+      if (!patternsCouldOverlap(candidate, laneScope)) {
+        continue;
+      }
+      const laneScopePrefix = literalPrefixForGlobPattern(laneScope);
+      narrowed.add(laneScopePrefix.length > candidatePrefix.length ? laneScope : candidate);
+    }
+  }
+  return [...narrowed];
 }
 
 function isPlainRepoRelativePath(value: string): boolean {
@@ -209,6 +219,9 @@ export function intersectIncludePatterns(
     return null;
   }
 
+  const literalIncludes = includePatterns.every(isPlainRepoRelativePath)
+    ? new Set(includePatterns)
+    : null;
   const result: string[] = [];
   for (const candidate of candidatePatterns) {
     if (!isPlainRepoRelativePath(candidate)) {
@@ -221,7 +234,11 @@ export function intersectIncludePatterns(
       result.push(...intersection);
       continue;
     }
-    if (includePatterns.some((include) => path.matchesGlob(candidate, include))) {
+    if (
+      literalIncludes
+        ? literalIncludes.has(candidate)
+        : includePatterns.some((include) => path.matchesGlob(candidate, include))
+    ) {
       result.push(candidate);
     }
   }

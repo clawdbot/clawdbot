@@ -1,8 +1,8 @@
 /** Verifies public-surface runtime artifact loading for bundled plugins. */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   normalizeBundledPluginArtifactSubpath,
@@ -10,24 +10,12 @@ import {
   resolveBundledPluginSourcePublicSurfacePath,
 } from "./public-surface-runtime.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const noBundledPluginOverrideEnv = {
   ...process.env,
   OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
 } satisfies NodeJS.ProcessEnv;
-
-afterEach(() => {
-  for (const tempDir of tempDirs.splice(0)) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-function createTempDir(): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-public-surface-runtime-"));
-  tempDirs.push(tempDir);
-  return tempDir;
-}
 
 describe("bundled plugin public surface runtime", () => {
   it("exports the canonical public surface source extension list", () => {
@@ -44,7 +32,7 @@ describe("bundled plugin public surface runtime", () => {
   it.each(["my-ngc:nvidia", "../outside", "..\\outside", ".", ".."])(
     "continues rejecting %s as an actual bundled plugin directory",
     (dirName) => {
-      const rootDir = createTempDir();
+      const rootDir = tempDirs.make("openclaw-public-surface-runtime-");
 
       expect(() =>
         resolveBundledPluginSourcePublicSurfacePath({
@@ -64,7 +52,7 @@ describe("bundled plugin public surface runtime", () => {
   );
 
   it("resolves source public surfaces from the shared extension list", () => {
-    const sourceRoot = createTempDir();
+    const sourceRoot = tempDirs.make("openclaw-public-surface-runtime-");
     const modulePath = path.join(sourceRoot, "demo", "api.mts");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
     fs.writeFileSync(modulePath, "export {};\n", "utf8");
@@ -79,7 +67,7 @@ describe("bundled plugin public surface runtime", () => {
   });
 
   it("falls back from package dist overrides to the source extension tree", () => {
-    const packageRoot = createTempDir();
+    const packageRoot = tempDirs.make("openclaw-public-surface-runtime-");
     const sourceModulePath = path.join(packageRoot, "extensions", "demo", "api.ts");
     fs.mkdirSync(path.dirname(sourceModulePath), { recursive: true });
     fs.writeFileSync(sourceModulePath, "export const marker = 'source';\n", "utf8");
@@ -98,7 +86,7 @@ describe("bundled plugin public surface runtime", () => {
   });
 
   it("prefers package-local dist artifacts before source artifacts in source plugin trees", () => {
-    const packageRoot = createTempDir();
+    const packageRoot = tempDirs.make("openclaw-public-surface-runtime-");
     const sourceModulePath = path.join(packageRoot, "extensions", "demo", "api.ts");
     const packageLocalDistModulePath = path.join(
       packageRoot,
@@ -123,7 +111,7 @@ describe("bundled plugin public surface runtime", () => {
   });
 
   it("prefers source public surfaces over stale auto-resolved dist artifacts in source checkouts", () => {
-    const packageRoot = createTempDir();
+    const packageRoot = tempDirs.make("openclaw-public-surface-runtime-");
     const sourceModulePath = path.join(packageRoot, "extensions", "demo", "api.ts");
     const staleDistModulePath = path.join(packageRoot, "dist", "extensions", "demo", "api.js");
     fs.mkdirSync(path.dirname(sourceModulePath), { recursive: true });
@@ -144,7 +132,7 @@ describe("bundled plugin public surface runtime", () => {
   });
 
   it("keeps explicit bundled dist roots ahead of source public surfaces", () => {
-    const packageRoot = createTempDir();
+    const packageRoot = tempDirs.make("openclaw-public-surface-runtime-");
     const sourceModulePath = path.join(packageRoot, "extensions", "demo", "api.ts");
     const distModulePath = path.join(packageRoot, "dist", "extensions", "demo", "api.js");
     fs.mkdirSync(path.dirname(sourceModulePath), { recursive: true });
@@ -163,7 +151,7 @@ describe("bundled plugin public surface runtime", () => {
   });
 
   it("falls back from an incomplete package dist-runtime override to packaged dist", () => {
-    const packageRoot = createTempDir();
+    const packageRoot = tempDirs.make("openclaw-public-surface-runtime-");
     const distModulePath = path.join(packageRoot, "dist", "extensions", "demo", "api.js");
     fs.mkdirSync(path.dirname(distModulePath), { recursive: true });
     fs.writeFileSync(distModulePath, "export const marker = 'dist';\n", "utf8");

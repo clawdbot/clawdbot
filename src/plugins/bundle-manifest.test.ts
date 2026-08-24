@@ -183,7 +183,6 @@ describe("bundle manifest parsing", () => {
             name: "Portable.Bundle",
             description: "Agent Plugins fixture",
             version: "1.2.3",
-            extensions: "ignored",
             unknown: true,
           },
         });
@@ -532,6 +531,72 @@ describe("bundle manifest parsing", () => {
     });
 
     expect(expectLoadedManifest(rootDir, "agent").skills).toStrictEqual([]);
+  });
+
+  it("loads ai.openclaw activation like an equivalent Claude bundle", () => {
+    const activation = {
+      onStartup: true,
+      onCommands: [" summarize ", ""],
+      onCapabilities: ["tool", "unknown"],
+    };
+    const agentRoot = makeTempDir();
+    writeBundleManifest(agentRoot, AGENT_BUNDLE_MANIFEST_RELATIVE_PATH, {
+      $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
+      name: "portable",
+      extensions: {
+        "ai.openclaw": { activation },
+      },
+    });
+    const claudeRoot = makeTempDir();
+    writeBundleManifest(claudeRoot, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH, {
+      name: "claude",
+      activation,
+    });
+
+    const agentActivation = expectLoadedManifest(agentRoot, "agent").activation;
+    expect(agentActivation).toEqual({
+      onStartup: true,
+      onCommands: ["summarize"],
+      onCapabilities: ["tool"],
+    });
+    expect(agentActivation).toEqual(expectLoadedManifest(claudeRoot, "claude").activation);
+  });
+
+  it.each([
+    { name: "non-object extensions", extensions: "invalid" },
+    {
+      name: "non-object ai.openclaw extension",
+      extensions: { "ai.openclaw": "invalid" },
+    },
+    {
+      name: "unknown extension namespace",
+      extensions: { "com.example": { activation: { onStartup: true } } },
+    },
+  ])("ignores $name", ({ extensions }) => {
+    const rootDir = makeTempDir();
+    writeBundleManifest(rootDir, AGENT_BUNDLE_MANIFEST_RELATIVE_PATH, {
+      $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
+      name: "portable",
+      extensions,
+    });
+
+    expect(expectLoadedManifest(rootDir, "agent").activation).toBeUndefined();
+  });
+
+  it("ignores unknown fields inside the ai.openclaw extension", () => {
+    const rootDir = makeTempDir();
+    writeBundleManifest(rootDir, AGENT_BUNDLE_MANIFEST_RELATIVE_PATH, {
+      $schema: AGENT_BUNDLE_MANIFEST_SCHEMA,
+      name: "portable",
+      extensions: {
+        "ai.openclaw": {
+          activation: { onStartup: true },
+          futureField: { enabled: true },
+        },
+      },
+    });
+
+    expect(expectLoadedManifest(rootDir, "agent").activation).toEqual({ onStartup: true });
   });
 
   it.each([

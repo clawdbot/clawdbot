@@ -2,363 +2,97 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>OpenClaw</title>
     <style>
       :root {
-        color-scheme: dark;
-        font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
-        --ink: #f4efe8;
-        --muted: #9f978d;
-        --line: #34302c;
-        --panel: #1d1b19;
-        --panel-raised: #25221f;
-        --orange: #ff6437;
-        --orange-soft: #3a2119;
-        --green: #54d18b;
-        --red: #ff6b64;
-        --mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+        color-scheme: light dark;
+        font:
+          13px/1.4 system-ui,
+          sans-serif;
       }
-
-      * {
-        box-sizing: border-box;
-      }
-
       body {
-        width: 336px;
+        width: 280px;
         margin: 0;
-        background: #141312;
-        color: var(--ink);
+        padding: 16px;
+        background: #17191d;
+        color: #f5f7fa;
       }
-
-      button,
-      textarea {
-        font: inherit;
-      }
-
-      .topbar {
+      header {
         display: flex;
         align-items: center;
-        gap: 11px;
-        padding: 12px 14px;
-        border-bottom: 1px solid var(--line);
-        background: #181614;
-      }
-
-      .mark {
-        width: 35px;
-        height: 35px;
-        display: grid;
-        place-items: center;
-        flex: 0 0 auto;
-        border: 1px solid #75402f;
-        border-radius: 10px 4px 10px 4px;
-        background: var(--orange-soft);
-        color: #ffad8f;
-        font-family: var(--mono);
-        font-size: 11px;
-        font-weight: 800;
-        letter-spacing: -0.05em;
-      }
-
-      .identity {
-        min-width: 0;
-        flex: 1;
-      }
-
-      .eyebrow {
-        color: var(--orange);
-        font-family: var(--mono);
-        font-size: 9px;
-        font-weight: 700;
-        letter-spacing: 0.15em;
-      }
-
-      #statusLine {
-        overflow: hidden;
-        margin-top: 3px;
-        color: var(--ink);
-        font-size: 12px;
-        font-weight: 600;
-        line-height: 1.35;
-      }
-
-      .status-dot {
-        width: 8px;
-        height: 8px;
-        flex: 0 0 auto;
-        border-radius: 50%;
-        background: #706960;
-        box-shadow: 0 0 0 3px #27231f;
-      }
-
-      .status-dot.on {
-        background: var(--green);
-        box-shadow: 0 0 0 3px #183226;
-      }
-
-      .status-dot.connecting {
-        background: #f5b942;
-        box-shadow: 0 0 0 3px #38301b;
-      }
-
-      .status-dot.error {
-        background: var(--red);
-        box-shadow: 0 0 0 3px #381d1b;
-      }
-
-      .gear {
-        width: 29px;
-        height: 29px;
-        display: grid;
-        place-items: center;
-        flex: 0 0 auto;
-        padding: 0;
-        border: 1px solid transparent;
-        border-radius: 8px;
-        background: transparent;
-        color: var(--muted);
-        cursor: pointer;
-      }
-
-      .gear:hover {
-        border-color: var(--line);
-        background: var(--panel-raised);
-        color: var(--ink);
-      }
-
-      .gear.active {
-        border-color: #75402f;
-        background: var(--orange-soft);
-        color: #ffad8f;
-      }
-
-      main {
-        padding: 14px;
-      }
-
-      .rule::before {
-        content: "";
-        display: block;
-        width: 44px;
-        height: 3px;
+        gap: 9px;
         margin-bottom: 14px;
-        background: var(--orange);
       }
-
-      .lede {
-        margin: 0 0 12px;
-        color: var(--muted);
-        font-size: 12px;
-        line-height: 1.55;
+      img {
+        width: 24px;
+        height: 24px;
       }
-
-      .lede code {
-        padding: 1px 5px;
-        border-radius: 4px;
-        background: #0f0e0d;
-        color: #c8c0b7;
-        font-family: var(--mono);
-        font-size: 0.9em;
+      h1 {
+        margin: 0;
+        font-size: 15px;
       }
-
-      textarea {
-        width: 100%;
-        min-height: 56px;
-        padding: 8px 10px;
-        resize: vertical;
-        border: 1px solid #3b3631;
-        border-radius: 5px 13px 13px 13px;
-        background: var(--panel-raised);
-        color: var(--ink);
-        font-size: 12px;
-        line-height: 1.45;
+      .card {
+        border: 1px solid #343941;
+        border-radius: 10px;
+        padding: 12px;
+        background: #202329;
       }
-
-      textarea:focus {
-        outline: 0;
-        border-color: #86503b;
-        box-shadow: 0 0 0 2px var(--orange-soft);
+      .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 8px;
       }
-
-      textarea::placeholder {
-        color: #797168;
+      .muted {
+        color: #aeb5c0;
       }
-
-      #pairingString {
-        font-family: var(--mono);
-        font-size: 11px;
-      }
-
-      .action {
-        width: 100%;
-        margin-top: 9px;
-        padding: 9px 13px;
-        border: 1px solid var(--line);
-        border-radius: 7px;
-        background: var(--panel-raised);
-        color: var(--ink);
-        font-size: 12px;
+      #status {
+        margin: 0;
         font-weight: 600;
+      }
+      button {
+        width: 100%;
+        margin-top: 12px;
+        padding: 8px 10px;
+        border: 0;
+        border-radius: 8px;
+        font: inherit;
         cursor: pointer;
       }
-
-      .action.primary {
-        border-color: #ff835f;
-        background: var(--orange);
-        color: #1a0d09;
-        font-weight: 750;
+      #tabAction {
+        background: #ff5a36;
+        color: white;
+        font-weight: 600;
       }
-
-      .action.danger {
-        border-color: #5c2a26;
-        background: #2a1715;
-        color: var(--red);
+      #settings {
+        background: transparent;
+        color: #cbd2dc;
+        border: 1px solid #40464f;
       }
-
-      .action:not(:disabled):hover {
-        filter: brightness(1.12);
-      }
-
-      .action:disabled {
-        cursor: default;
-        opacity: 0.4;
-      }
-
-      .send-page {
-        margin-top: 14px;
-        padding-top: 12px;
-        border-top: 1px solid var(--line);
-      }
-
-      .send-page .eyebrow {
-        margin-bottom: 8px;
-      }
-
-      .status-note {
-        margin: 8px 2px 0;
-        color: var(--muted);
-        font-family: var(--mono);
-        font-size: 10px;
-      }
-
-      .status-note.error,
-      #error {
-        color: var(--red);
-      }
-
-      #error {
-        margin: 8px 2px 0;
-        font-size: 11px;
-        line-height: 1.45;
-      }
-
-      .settings-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        padding: 9px 2px;
-        border-bottom: 1px solid #292622;
-        font-size: 12px;
-      }
-
-      .settings-row dt {
-        margin: 0;
-        color: var(--muted);
-      }
-
-      .settings-row dd {
-        margin: 0;
-        color: var(--ink);
-        font-family: var(--mono);
-        font-size: 11px;
-      }
-
-      dl {
-        margin: 0 0 4px;
-      }
-
       .hidden {
-        display: none !important;
+        display: none;
+      }
+      #error {
+        margin: 9px 0 0;
+        color: #ff9f8b;
       }
     </style>
   </head>
   <body>
-    <header class="topbar">
-      <div class="mark" aria-hidden="true">OC</div>
-      <div class="identity">
-        <div class="eyebrow">OPENCLAW</div>
-        <div id="statusLine">Checking status…</div>
-      </div>
-      <span id="statusDot" class="status-dot"></span>
-      <button id="settingsButton" class="gear" type="button" aria-label="Settings" title="Settings">
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <circle cx="12" cy="12" r="3" />
-          <path
-            d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
-          />
-        </svg>
-      </button>
+    <header>
+      <img src="icons/icon32.png" alt="" />
+      <h1>OpenClaw Browser</h1>
     </header>
-    <main>
-      <section id="pairSection" class="rule hidden">
-        <p class="lede">
-          Run <code>openclaw browser extension pair</code> on this machine, then paste the pairing
-          string:
-        </p>
-        <textarea id="pairingString" placeholder="ws://127.0.0.1:18797/extension#…"></textarea>
-        <p id="error" class="hidden"></p>
-        <button id="pairButton" class="action primary" type="button">Pair</button>
-      </section>
-      <section id="connectedSection" class="hidden">
-        <p id="statusHint" class="lede hidden" style="margin: 0 2px 4px">
-          Relay unreachable — is the OpenClaw gateway running?
-        </p>
-        <button id="copilotButton" class="action primary" type="button" disabled>
-          Open tab copilot
-        </button>
-        <button id="shareButton" class="action" type="button"></button>
-        <div class="send-page">
-          <div class="eyebrow">SEND THIS PAGE</div>
-          <textarea
-            id="pageNote"
-            rows="2"
-            maxlength="2000"
-            placeholder="Optional note for the agent…"
-          ></textarea>
-          <button id="sendPageButton" class="action" type="button" disabled>
-            Send page to OpenClaw
-          </button>
-          <p id="pageShareStatus" class="status-note hidden"></p>
-        </div>
-      </section>
-      <section id="settingsSection" class="rule hidden">
-        <dl>
-          <div class="settings-row">
-            <dt>Version</dt>
-            <dd id="versionValue"></dd>
-          </div>
-          <div class="settings-row">
-            <dt>Relay</dt>
-            <dd id="relayValue">—</dd>
-          </div>
-        </dl>
-        <button id="unpairButton" class="action danger" type="button">Unpair this browser</button>
-        <p id="unpairNote" class="lede" style="margin: 10px 2px 0">
-          Unpairing disconnects the gateway and forgets the relay token.
-        </p>
-      </section>
+    <main class="card">
+      <p id="status">Checking connection…</p>
+      <div id="pairedDetails" class="hidden">
+        <div class="row"><span class="muted">Access</span><span id="accessMode">—</span></div>
+        <button id="tabAction" type="button" class="hidden"></button>
+      </div>
+      <p id="error" class="hidden"></p>
+      <button id="settings" type="button">Settings</button>
     </main>
-    <script src="popup.js" type="module"></script>
+    <script type="module" src="popup.js"></script>
   </body>
 </html>

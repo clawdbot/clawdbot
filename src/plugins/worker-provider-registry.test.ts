@@ -4,7 +4,7 @@ import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { WorkerProvider } from "./types.js";
-import { resolveDurableWorkerProviderAutoEnabledReasons } from "./worker-provider-registry.js";
+import { resolveDurableWorkerProviderAutoEnabledReasons } from "./worker-provider-manifest.js";
 
 function createTestRegistry() {
   return createPluginRegistry({
@@ -84,6 +84,62 @@ describe("worker provider registry", () => {
     expect(pluginRegistry.registry.diagnostics).toContainEqual(
       expect.objectContaining({
         message: "worker provider registration renew must be a function",
+      }),
+    );
+  });
+
+  it("rejects a non-function optional machine-options hook", () => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      listMachineOptions: ["standard"],
+    } as unknown as WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        message: "worker provider registration listMachineOptions must be a function",
+      }),
+    );
+  });
+
+  it("rejects a non-boolean provision-before-installation declaration", () => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      provisionBeforeInstallation: "sometimes",
+    } as unknown as WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        message: "worker provider registration provisionBeforeInstallation must be a boolean",
+      }),
+    );
+  });
+
+  it.each([
+    { modes: [], label: "no modes" },
+    { modes: ["worker-turn", "remote-exec"], label: "multiple modes" },
+    { modes: ["unsupported"], label: "an unknown mode" },
+  ])("rejects $label in a placement declaration", ({ modes }) => {
+    const pluginRegistry = createTestRegistry();
+    const provider = {
+      ...createWorkerProvider("static-ssh"),
+      supportedExecutionModes: modes,
+    } as unknown as WorkerProvider;
+
+    pluginRegistry.registerWorkerProvider(createOwner("owner", ["static-ssh"]), provider);
+
+    expect(pluginRegistry.registry.workerProviders.size).toBe(0);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        message:
+          "worker provider registration supportedExecutionModes must contain exactly one current mode",
       }),
     );
   });

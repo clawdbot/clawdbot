@@ -6,7 +6,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { sha256HexPrefix } from "./crypto-digest.js";
+import { sha256HexPrefixCore } from "./crypto-digest.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -55,7 +55,7 @@ function webPushStateDatabaseOptions(stateDir?: string): OpenClawStateDatabaseOp
 }
 
 export function hashWebPushEndpoint(endpoint: string): string {
-  return sha256HexPrefix(endpoint, 32);
+  return sha256HexPrefixCore(endpoint, 32);
 }
 
 export function isValidWebPushEndpoint(endpoint: string): boolean {

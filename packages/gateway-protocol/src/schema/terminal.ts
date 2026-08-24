@@ -22,6 +22,9 @@ export const TerminalOpenParamsSchema = closedObject({
   // Optional agent selector; defaults to the gateway's default agent. The
   // session starts in that agent's workspace and inherits its isolation.
   agentId: Type.Optional(NonEmptyString),
+  // Binds a Control UI shell opened inside a conversation to that exact
+  // session, so the session's agent and the initiating operator share it.
+  sessionKey: Type.Optional(NonEmptyString),
   catalog: Type.Optional(SessionCatalogLocatorSchema),
   cols: TerminalDimension,
   rows: TerminalDimension,
@@ -72,7 +75,7 @@ export const TerminalResizeParamsSchema = closedObject({
 });
 export type TerminalResizeParams = Static<typeof TerminalResizeParamsSchema>;
 
-/** Closes a session and kills its process tree. */
+/** Closes a connection-owned session or detaches from an agent-owned session. */
 export const TerminalCloseParamsSchema = closedObject({ sessionId: NonEmptyString });
 export type TerminalCloseParams = Static<typeof TerminalCloseParamsSchema>;
 
@@ -125,14 +128,6 @@ export const TerminalListResultSchema = closedObject({
   sessions: Type.Array(TerminalSessionInfoSchema),
 });
 export type TerminalListResult = Static<typeof TerminalListResultSchema>;
-
-/** Reads the current output buffer as plain text without attaching. */
-export const TerminalTextParamsSchema = closedObject({ sessionId: NonEmptyString });
-export type TerminalTextParams = Static<typeof TerminalTextParamsSchema>;
-
-/** Plain-text buffer contents (ANSI stripped); an agent/LLM affordance. */
-export const TerminalTextResultSchema = closedObject({ text: Type.String() });
-export type TerminalTextResult = Static<typeof TerminalTextResultSchema>;
 
 /** Shared ok/void result for input, resize, and close. */
 export const TerminalAckResultSchema = closedObject({ ok: Type.Boolean() });

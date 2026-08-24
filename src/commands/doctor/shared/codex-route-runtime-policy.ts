@@ -11,7 +11,7 @@ import {
   isBlockedLegacyCodexModelRef,
   isOpenAICodexModelRef,
   normalizeRuntimeString,
-  parseModelRef,
+  parseCodexRouteModelRef,
   toCanonicalOpenAIModelRef,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
@@ -48,7 +48,7 @@ function resolveCurrentRuntimeIdForCanonicalModel(params: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
 }): string {
-  const parsed = parseModelRef(params.modelRef);
+  const parsed = parseCodexRouteModelRef(params.modelRef);
   if (!parsed) {
     return "auto";
   }
@@ -227,7 +227,7 @@ function agentModelMapExactRuntimeIdForLegacyRef(params: {
   legacyModelRef: string;
   agentId?: string;
 }): string | undefined {
-  const parsed = parseModelRef(params.legacyModelRef);
+  const parsed = parseCodexRouteModelRef(params.legacyModelRef);
   if (!parsed) {
     return undefined;
   }
@@ -270,7 +270,7 @@ function preRepairLegacyModelPolicyExplicitNonDefaultRuntimePin(params: {
   if (!params.legacyModelRef || !isOpenAICodexModelRef(params.legacyModelRef)) {
     return undefined;
   }
-  const parsed = parseModelRef(params.legacyModelRef);
+  const parsed = parseCodexRouteModelRef(params.legacyModelRef);
   if (!parsed) {
     return undefined;
   }

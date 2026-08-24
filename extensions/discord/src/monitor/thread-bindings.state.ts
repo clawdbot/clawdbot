@@ -1,5 +1,5 @@
 // Discord plugin module implements thread bindings.state behavior.
-import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
+import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/outbound-echo-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -386,7 +386,7 @@ function toPersistedBindingRecord(record: ThreadBindingRecord): PersistedThreadB
   if (!serialized) {
     return { ...record };
   }
-  return JSON.parse(serialized) as unknown as PersistedThreadBindingRecord;
+  return normalizePersistedBinding(record.threadId, JSON.parse(serialized)) ?? { ...record };
 }
 
 export function saveBindingsToDisk(params: { force?: boolean; minIntervalMs?: number } = {}) {
@@ -488,20 +488,4 @@ export function resolveBindingIdsForSession(params: {
     out.push(bindingKey);
   }
   return out;
-}
-
-export function resetThreadBindingsForTests() {
-  for (const manager of MANAGERS_BY_ACCOUNT_ID.values()) {
-    manager.stop();
-  }
-  MANAGERS_BY_ACCOUNT_ID.clear();
-  BINDINGS_BY_THREAD_ID.clear();
-  BINDINGS_BY_SESSION_KEY.clear();
-  REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
-  TOKENS_BY_ACCOUNT_ID.clear();
-  PERSIST_BY_ACCOUNT_ID.clear();
-  THREAD_BINDINGS_STATE.loadedBindings = false;
-  THREAD_BINDINGS_STATE.loadedPersistentBindings = false;
-  THREAD_BINDINGS_STATE.persistenceAvailable = true;
-  THREAD_BINDINGS_STATE.lastPersistedAtMs = 0;
 }

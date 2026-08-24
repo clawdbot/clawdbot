@@ -12,6 +12,7 @@ import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CloudWorkersConfig } from "./types.cloud-workers.js";
 import type { CronConfig } from "./types.cron.js";
+import type { DesktopConfig } from "./types.desktop.js";
 import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
 import type { McpConfig } from "./types.mcp.js";
@@ -22,6 +23,7 @@ import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
+import type { TelemetryConfig } from "./types.telemetry.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
@@ -95,7 +97,7 @@ export type OpenClawConfig = {
   /** ACP integration settings. */
   acp?: AcpConfig;
   env?: {
-    /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
+    /** Opt-in: import missing secrets from a login shell environment (interactive for Bash). */
     shellEnv?: {
       enabled?: boolean;
       /** Timeout for the login shell exec (ms). Default: 15000. */
@@ -132,7 +134,7 @@ export type OpenClawConfig = {
   update?: {
     /** Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). */
     channel?: "stable" | "extended-stable" | "beta" | "dev";
-    /** Check for updates on gateway start (npm installs only). */
+    /** Check for updates on gateway start; disabling also prevents anonymous update pings. */
     checkOnStart?: boolean;
     /** Core auto-update policy for package installs. */
     auto?: {
@@ -140,6 +142,8 @@ export type OpenClawConfig = {
       enabled?: boolean;
     };
   };
+  /** Explicit operator consent for anonymous feature statistics in the daily update check. */
+  telemetry?: TelemetryConfig;
   /** Browser automation and browser plugin integration settings. */
   browser?: BrowserConfig;
   ui?: {
@@ -161,6 +165,8 @@ export type OpenClawConfig = {
       theme?: "claw" | "knot" | "dash" | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
+      /** User-selected Control UI accent color (#RRGGBB). */
+      accent?: string;
       /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
       locale?: string;
       /** Show model thinking output in chat. */
@@ -227,6 +233,8 @@ export type OpenClawConfig = {
   gateway?: GatewayConfig;
   /** Opt-in cloud-worker provider profiles. */
   cloudWorkers?: CloudWorkersConfig;
+  /** Experimental desktop sources owned by the gateway host. */
+  desktop?: DesktopConfig;
   /** Memory indexing/search configuration. */
   memory?: MemoryConfig;
   /** MCP client/server and Codex MCP approval configuration. */
@@ -282,6 +290,7 @@ export type ConfigFileSnapshot = {
   includeProvenance?: readonly ConfigIncludeOwnership[];
   /** Temporary roster-only projection retained until write preparation uses generic ownership. */
   agentRosterIncludeOwned?: boolean;
+  bindingsIncludeOwned?: boolean;
   /** Whether the config file exists on disk. */
   exists: boolean;
   /** Raw file contents before parsing; null when missing. */

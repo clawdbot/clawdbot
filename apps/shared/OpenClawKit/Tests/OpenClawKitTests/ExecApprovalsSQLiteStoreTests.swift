@@ -73,13 +73,14 @@ struct ExecApprovalsSQLiteStoreTests {
     }
 
     @Test
-    func `active deletion lease fences writes until expiry`() throws {
+    func `deletion journal fences only the affected agent`() throws {
         try self.withStateDirectory { stateDirectoryURL in
-            let original = Self.document(token: "original", agentCount: 1)
+            var original = Self.document(token: "original", agentCount: 1)
+            let originalAgent = original.agents?.removeValue(forKey: "agent-0")
+            original.agents?["Agent A"] = originalAgent
             try ExecApprovalsSQLiteStore.write(original, stateDirectoryURL: stateDirectoryURL)
             let databaseURL = ExecApprovalsSQLiteStore.databaseURL(
                 stateDirectoryURL: stateDirectoryURL)
-            let expiresAt = Int64(Date().timeIntervalSince1970 * 1000) + 120_000
             try Self.execute(databaseURL, """
             CREATE TABLE schema_meta (
               meta_key TEXT NOT NULL PRIMARY KEY,
@@ -94,41 +95,46 @@ struct ExecApprovalsSQLiteStoreTests {
               meta_key, role, schema_version, agent_id,
               app_version, created_at, updated_at
             ) VALUES ('primary', 'global', 6, NULL, NULL, 1, 1);
-            CREATE TABLE state_leases (
-              scope TEXT NOT NULL,
-              lease_key TEXT NOT NULL,
-              owner TEXT NOT NULL,
-              expires_at INTEGER,
-              heartbeat_at INTEGER,
-              payload_json TEXT,
+            CREATE TABLE agent_deletion_journal (
+              agent_id TEXT PRIMARY KEY,
+              operation_id TEXT NOT NULL DEFAULT '',
+              agent_dir TEXT NOT NULL,
+              workspace_dir TEXT NOT NULL,
+              sessions_dir TEXT NOT NULL,
+              database_paths_json TEXT NOT NULL DEFAULT '[]',
+              cleanup_paths_json TEXT NOT NULL DEFAULT '[]',
               created_at INTEGER NOT NULL,
-              updated_at INTEGER NOT NULL,
-              PRIMARY KEY (scope, lease_key)
+              cleanup_completed INTEGER NOT NULL DEFAULT 0,
+              delete_files INTEGER NOT NULL DEFAULT 1
             ) STRICT;
-            INSERT INTO state_leases (
-              scope, lease_key, owner, expires_at, heartbeat_at,
-              payload_json, created_at, updated_at
-            ) VALUES (
-              '\(ExecApprovalsSQLiteStore.mutationLeaseScope)',
-              '\(ExecApprovalsSQLiteStore.mutationLeaseKey)',
-              'typescript-deletion', \(expiresAt), 1, NULL, 1, 1
-            );
+            INSERT INTO agent_deletion_journal (
+              agent_id, operation_id, agent_dir, workspace_dir, sessions_dir, created_at
+            ) VALUES ('agent-a', 'typescript-deletion', '/agent', '/workspace', '/sessions', 1);
             PRAGMA user_version = 6;
             """)
 
-            let replacement = Self.document(token: "replacement", agentCount: 2)
+            var replacement = Self.document(token: "replacement", agentCount: 2)
+            let replacementAgent = replacement.agents?.removeValue(forKey: "agent-0")
+            replacement.agents?["Agent A"] = replacementAgent
+            replacement.agents?["Agent A"]?.security = .deny
             do {
                 try ExecApprovalsSQLiteStore.write(
                     replacement,
                     stateDirectoryURL: stateDirectoryURL)
-                Issue.record("Expected active agent deletion lease to fence the write")
+                Issue.record("Expected active agent deletion journal to fence the write")
             } catch {
                 #expect(error.localizedDescription.contains("agent deletion is in progress; retry"))
             }
             #expect(try ExecApprovalsSQLiteStore.read(
                 stateDirectoryURL: stateDirectoryURL)?.document == original)
 
-            try Self.execute(databaseURL, "UPDATE state_leases SET expires_at = 0")
+            var unrelated = original
+            unrelated.socket?.token = "unrelated"
+            try ExecApprovalsSQLiteStore.write(unrelated, stateDirectoryURL: stateDirectoryURL)
+            #expect(try ExecApprovalsSQLiteStore.read(
+                stateDirectoryURL: stateDirectoryURL)?.document == unrelated)
+
+            try Self.execute(databaseURL, "DELETE FROM agent_deletion_journal")
             try ExecApprovalsSQLiteStore.write(
                 replacement,
                 stateDirectoryURL: stateDirectoryURL)

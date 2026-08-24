@@ -71,6 +71,7 @@ import {
   parseArgs,
   parseManagedGatewayServiceInstalled,
   packageHasScript,
+  prepareCandidate,
   readInstalledVersion,
   readBoundedCrossOsResponseText,
   readRunnerOverrideEnv,
@@ -114,7 +115,7 @@ import {
   waitForGatewayWithStartupMigrationRestart,
   writePackageDistInventoryForCandidate,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
-import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -966,6 +967,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       })?.model,
     ).toBe("openai/gpt-5.4-nano");
     expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.6-luna");
+    expect(resolveProviderConfig("openai", {})?.requiredCompanionPackages).toEqual([
+      "@openclaw/codex",
+    ]);
+    expect(resolveProviderConfig("anthropic", {})?.requiredCompanionPackages).toEqual([]);
+    expect(resolveProviderConfig("minimax", {})?.requiredCompanionPackages).toEqual([]);
   });
 
   it("keeps release cross-OS OpenAI smoke on GPT-5.6 Luna", () => {
@@ -1325,6 +1331,49 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(installSource).toMatch(
       /function assertNoLegacyPluginDependencyStagingDebris\(packageRoot: string\)/u,
     );
+  });
+
+  it("preflights standalone source candidates before cross-OS dependency installation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-cross-os-source-preflight-"));
+    const sourceDir = join(root, "source");
+    const logsDir = join(root, "logs");
+    const outputDir = join(root, "output");
+    mkdirSync(join(sourceDir, "packages", "ai"), { recursive: true });
+    mkdirSync(logsDir, { recursive: true });
+    writeFileSync(
+      join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.8.1",
+        dependencies: {
+          "@openclaw/ai": "workspace:*",
+          "partial-json": "0.1.8",
+        },
+      }),
+    );
+    writeFileSync(
+      join(sourceDir, "packages", "ai", "package.json"),
+      JSON.stringify({
+        name: "@openclaw/ai",
+        version: "2026.8.1",
+        dependencies: {
+          "partial-json": "0.1.7",
+        },
+      }),
+    );
+    writeFileSync(
+      join(sourceDir, "CHANGELOG.md"),
+      "# Changelog\n\n## Unreleased\n\n- Validate source metadata before installing dependencies.\n",
+    );
+
+    try {
+      await expect(prepareCandidate({ logsDir, outputDir, sourceDir })).rejects.toThrow(
+        "package.json must declare partial-json@0.1.7",
+      );
+      expect(existsSync(join(logsDir, "pnpm-install.log"))).toBe(false);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
   });
 
   it("filters the cross-OS runner matrix to a focused OS suite", () => {

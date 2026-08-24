@@ -1,4 +1,5 @@
 // Feishu tests cover comment handler plugin behavior.
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
@@ -147,6 +148,7 @@ function createTestRuntime(overrides?: {
         recordInboundSession,
       },
       inbound: {
+        buildContext: buildChannelInboundEventContext,
         run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
           const input = await params.adapter.ingest(params.raw);
           if (!input) {

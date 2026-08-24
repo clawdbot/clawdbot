@@ -13,10 +13,7 @@ export function createDeliveryResultRecorder(params: {
     JSON.stringify([
       delivery.channel,
       delivery.messageId,
-      delivery.chatId,
-      delivery.channelId,
-      delivery.roomId,
-      delivery.conversationId,
+      delivery.target,
       delivery.timestamp,
       delivery.toJid,
       delivery.pollId,

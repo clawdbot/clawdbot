@@ -239,8 +239,11 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
       skills keep loading; invalid individual server entries are skipped
     - `.mcp.json` (dot-prefixed) and inline manifest `mcpServers` are **not**
       read for this format; the standard's closed schema wins
-    - Reverse-domain client directories and manifest `extensions` namespaces
-      are ignored, as the standard allows for incremental adoption
+    - OpenClaw reads `extensions["ai.openclaw"]`; it currently supports
+      `activation` with the same semantics as other bundle manifests
+    - Other manifest extension namespaces are ignored and reserved for their
+      clients
+    - Reverse-domain client directories are ignored and reserved
 
   </Accordion>
 

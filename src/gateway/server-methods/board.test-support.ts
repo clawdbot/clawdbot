@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import type { BoardStore } from "../../boards/board-store.js";
 import { createTestBoardStore } from "../../boards/board-store.test-support.js";
 import { createBoardHandlers } from "./board.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 type BoardHandlerDependencies = NonNullable<Parameters<typeof createBoardHandlers>[3]>;
 type BoardMcpAppDependencies = {
@@ -46,6 +46,7 @@ export function createBoardHarness(
   dependencies: BoardHandlerDependencies = {},
   store: BoardStore = createTestBoardStore(),
   contextOverrides: Partial<GatewayRequestContext> = {},
+  client: GatewayClient | null = null,
 ) {
   const defaults = createMcpAppDependencies();
   const mcpApp: BoardHandlerDependencies & BoardMcpAppDependencies = {
@@ -62,13 +63,16 @@ export function createBoardHarness(
     await handlers[method]!({
       req: { type: "req", id: "test", method, params },
       params,
-      client: null,
+      client,
       isWebchatConnect: () => false,
       respond,
       context: {
         broadcast,
         getMcpAppSandboxPort: () => 18790,
-        getRuntimeConfig: () => ({ mcp: { apps: { enabled: true } } }),
+        getRuntimeConfig: () => ({
+          agents: { list: [{ id: "main" }] },
+          mcp: { apps: { enabled: true } },
+        }),
         ...contextOverrides,
       } as unknown as GatewayRequestContext,
     });

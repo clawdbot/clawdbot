@@ -1,5 +1,10 @@
 // N-1 (legacy protocol) node feature filtering, kept out of the oversized
 // node-command-policy.ts file.
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
@@ -17,6 +22,41 @@ const BUILT_IN_NODE_COMMANDS = new Set<string>([
   ...TALK_PTT_COMMANDS,
   ...IOS_WATCH_RELAY_COMMANDS,
 ]);
+
+const LEGACY_NODE_HOST_DESKTOP_METADATA: Readonly<
+  Record<string, { platform: string; deviceFamily: string }>
+> = {
+  darwin: { platform: "macos", deviceFamily: "Mac" },
+  linux: { platform: "linux", deviceFamily: "Linux" },
+  macos: { platform: "macos", deviceFamily: "Mac" },
+  win32: { platform: "windows", deviceFamily: "Windows" },
+  windows: { platform: "windows", deviceFamily: "Windows" },
+};
+
+/** Normalizes desktop aliases used by protocol-v3-compatible node hosts. */
+export function normalizeNodeHostCompatibilityMetadata(
+  client: ConnectParams["client"],
+): ConnectParams["client"] {
+  if (client.id !== GATEWAY_CLIENT_IDS.NODE_HOST || client.mode !== GATEWAY_CLIENT_MODES.NODE) {
+    return client;
+  }
+  if (!Object.hasOwn(LEGACY_NODE_HOST_DESKTOP_METADATA, client.platform)) {
+    return client;
+  }
+  const metadata = LEGACY_NODE_HOST_DESKTOP_METADATA[client.platform]!;
+  const deviceFamily = client.deviceFamily?.trim();
+  if (deviceFamily && deviceFamily.toLowerCase() !== metadata.deviceFamily.toLowerCase()) {
+    return client;
+  }
+  if (client.platform === metadata.platform && deviceFamily) {
+    return client;
+  }
+  return {
+    ...client,
+    platform: metadata.platform,
+    deviceFamily: deviceFamily || metadata.deviceFamily,
+  };
+}
 
 export function filterLegacyNodeProtocolFeatures(params: {
   caps: readonly string[];

@@ -1,4 +1,5 @@
 // Creates temporary OpenClaw directories for runtime scratch work.
+import { getWorkerDeploySecureTempRoot } from "../worker/worker-deploy-runtime-registry.js";
 
 /** Preferred shared OpenClaw temp root on POSIX systems when ownership and permissions are safe. */
 export const DEFAULT_POSIX_TMP_ROOT = "/tmp/openclaw";
@@ -25,10 +26,19 @@ export type ResolvePreferredOpenClawTmpDirOptions = {
 type ResolveSecureTempRoot = typeof import("@openclaw/fs-safe/temp").resolveSecureTempRoot;
 
 let resolveSecureTempRootRuntime: ResolveSecureTempRoot | undefined;
+declare const WORKER_DEPLOY_BUILD: boolean;
 
 function loadResolveSecureTempRoot(): ResolveSecureTempRoot {
   if (resolveSecureTempRootRuntime) {
     return resolveSecureTempRootRuntime;
+  }
+  const injected = getWorkerDeploySecureTempRoot();
+  if (injected) {
+    resolveSecureTempRootRuntime = injected;
+    return injected;
+  }
+  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
+    throw new Error("worker temp-root runtime was not registered before use");
   }
   // Keep this module browser-import safe: fs-safe's temp barrel owns Node-only
   // workspaces, so load it only when the Node runtime actually resolves a temp root.

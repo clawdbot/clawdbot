@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
+import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import {
   buildAgentRunTerminalReplySnapshot,
   normalizeAgentRunTerminalReplySnapshot,
@@ -27,7 +28,7 @@ import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./result-fallback-classifier.js";
-import type { EmbeddedAgentRunResult } from "./types.js";
+import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 
 type RunEntryCandidateOptions = {
   allowTransientCooldownProbe?: boolean;
@@ -185,10 +186,85 @@ function canAdvanceContextEngineTurn(params: {
   );
 }
 
+function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(params: {
+  result: T;
+  outcome: "completed" | "exhausted";
+  provider: string;
+  model: string;
+  requestedProvider: string;
+  requestedModel: string;
+  fallbackAttempts: FallbackAttempt[];
+}): T {
+  const currentTrace = params.result.meta.executionTrace;
+  const winnerProvider =
+    params.outcome === "completed" ? (currentTrace?.winnerProvider ?? params.provider) : undefined;
+  const winnerModel =
+    params.outcome === "completed" ? (currentTrace?.winnerModel ?? params.model) : undefined;
+  const outerAttempts: TraceAttempt[] = params.fallbackAttempts.map((attempt) => ({
+    provider: attempt.provider,
+    model: attempt.model,
+    result: attempt.reason === "timeout" ? "timeout" : "candidate_failed",
+    ...(attempt.reason ? { reason: attempt.reason } : {}),
+    ...(typeof attempt.status === "number" ? { status: attempt.status } : {}),
+  }));
+  const innerAttempts = (currentTrace?.attempts ?? []).filter(
+    (attempt) => attempt.result !== "success",
+  );
+  const winnerAttempt = currentTrace?.attempts?.findLast(
+    (attempt) =>
+      attempt.result === "success" &&
+      attempt.provider === winnerProvider &&
+      attempt.model === winnerModel,
+  );
+  const attempts = [
+    ...outerAttempts,
+    ...innerAttempts,
+    ...(winnerProvider && winnerModel
+      ? [
+          winnerAttempt ?? {
+            provider: winnerProvider,
+            model: winnerModel,
+            result: "success" as const,
+          },
+        ]
+      : []),
+  ];
+  const terminalReceipt = params.result.meta.agentMeta?.terminalReceipt;
+  const requested = { provider: params.requestedProvider, model: params.requestedModel };
+  const agentMeta = terminalReceipt
+    ? {
+        ...params.result.meta.agentMeta,
+        terminalReceipt: {
+          ...terminalReceipt,
+          requested,
+          rerouted:
+            terminalReceipt.rerouted ||
+            terminalReceipt.effective.provider !== requested.provider ||
+            terminalReceipt.effective.model !== requested.model,
+        },
+      }
+    : params.result.meta.agentMeta;
+  return {
+    ...params.result,
+    meta: {
+      ...params.result.meta,
+      agentMeta,
+      executionTrace: {
+        ...currentTrace,
+        winnerProvider,
+        winnerModel,
+        attempts: attempts.length > 0 ? attempts : undefined,
+        fallbackUsed: currentTrace?.fallbackUsed === true || outerAttempts.length > 0,
+      },
+    },
+  };
+}
+
 function buildTerminal(params: {
   result: EmbeddedAgentRunResult;
   fallbackExhausted: boolean;
   behavior: RunEntryBehavior;
+  runId: string;
 }): EmbeddedAgentRunEntryTerminal {
   const meta = params.result.meta;
   const outcome = buildAgentRunTerminalOutcome({
@@ -199,14 +275,21 @@ function buildTerminal(params: {
     timeoutPhase: meta.timeoutPhase,
     providerStarted: meta.providerStarted,
   });
-  const metadata: Record<string, unknown> = {};
-  metadata.terminalReply =
+  const terminalReply =
     normalizeAgentRunTerminalReplySnapshot(meta.terminalReply) ??
     buildAgentRunTerminalReplySnapshot({
       visibleText: meta.finalAssistantVisibleText,
       rawText: meta.finalAssistantRawText,
       terminalReplyKind: meta.terminalReplyKind,
     });
+  const metadata: Record<string, unknown> = { terminalReply };
+  const terminalReceipt = normalizeAgentRunTerminalReceipt(meta.agentMeta?.terminalReceipt);
+  if (terminalReceipt?.runId === params.runId) {
+    metadata.terminalReceipt = {
+      ...terminalReceipt,
+      terminalDisposition: terminalReply.disposition === "visible" ? "visible" : "not-visible",
+    };
+  }
   if (params.behavior.kind === "channel-delivery" || params.behavior.kind === "followup-delivery") {
     for (const key of [
       "stopReason",
@@ -345,7 +428,6 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
               host,
               operation: "agent-run",
               requiresDurableCommit: false,
-              hasAdmissionFence: false,
             });
           } catch {
             contextEngineLogicalTurnLease.degradeBeforeStart(
@@ -427,7 +509,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       params.behavior.kind === "command-rpc"
         ? resolveAgentRunAbortLifecycleFields(params.abortSignal)
         : {};
-    const result =
+    const candidateResult =
       abortFields.aborted === true
         ? ({
             ...fallbackResult.result.result,
@@ -437,16 +519,27 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             },
           } as T)
         : fallbackResult.result.result;
+    const outcome =
+      fallbackResult.outcome === "exhausted" ? ("exhausted" as const) : ("completed" as const);
+    const result = mergeRunEntryExecutionTrace({
+      result: candidateResult,
+      outcome,
+      provider: fallbackResult.provider,
+      model: fallbackResult.model,
+      requestedProvider: params.selection.provider,
+      requestedModel: params.selection.model,
+      fallbackAttempts: fallbackResult.attempts,
+    });
     const settledResult = {
       ...fallbackResult,
-      outcome:
-        fallbackResult.outcome === "exhausted" ? ("exhausted" as const) : ("completed" as const),
+      outcome,
       result,
     };
     const terminal = buildTerminal({
       result,
       fallbackExhausted: settledResult.outcome === "exhausted",
       behavior: params.behavior,
+      runId: params.identity.runId,
     });
     if (fallbackResult.result.turnAttempt) {
       if (

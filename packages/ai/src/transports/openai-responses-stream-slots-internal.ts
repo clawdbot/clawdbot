@@ -27,6 +27,36 @@ type DeferredTextSlot = {
   collapseCandidate: { block: { text: string } } | null;
 };
 
+type ResponsesOutputIdentityItem = {
+  type: string;
+  id?: string | null;
+  call_id?: string | null;
+};
+
+export function createResponsesOutputContentIndex() {
+  const indexes = new Map<string, number>();
+  const identity = (item: ResponsesOutputIdentityItem): string | undefined => {
+    if ((item.type === "reasoning" || item.type === "message") && item.id) {
+      return `${item.type}:${item.id}`;
+    }
+    return item.type === "function_call"
+      ? `function_call:${item.call_id ?? item.id ?? ""}`
+      : undefined;
+  };
+  return {
+    get(item: ResponsesOutputIdentityItem): number | undefined {
+      const key = identity(item);
+      return key === undefined ? undefined : indexes.get(key);
+    },
+    set(item: ResponsesOutputIdentityItem, contentIndex: number): void {
+      const key = identity(item);
+      if (key !== undefined) {
+        indexes.set(key, contentIndex);
+      }
+    },
+  };
+}
+
 export function appendResponsesPendingTextDelta<TSlot extends DeferredTextSlot>(
   slot: TSlot,
   delta: string,

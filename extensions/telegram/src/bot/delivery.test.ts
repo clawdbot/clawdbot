@@ -67,6 +67,7 @@ vi.mock("../sent-message-cache.js", async (importOriginal) => {
 vi.resetModules();
 const { deliverReplies } = await import("./delivery.js");
 const { sendTelegramText } = await import("./delivery.send.js");
+const { PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime");
 
 vi.mock("grammy", () => ({
   API_CONSTANTS: {
@@ -83,6 +84,8 @@ vi.mock("grammy", () => ({
     description = "";
   },
 }));
+
+const { TelegramRequestNotStartedError } = await import("../network-errors.js");
 
 function createRuntime(withLog = true): RuntimeStub {
   return {
@@ -285,10 +288,13 @@ function createWrappedConnectTimeoutHttpError(operation = "sendMessage") {
   });
 }
 
-function createPlainHttpError(operation = "sendMessage") {
+function createPlainHttpError(
+  operation = "sendMessage",
+  error: unknown = new TypeError("fetch failed"),
+) {
   return Object.assign(new Error(`Network request for '${operation}' failed!`), {
     name: "HttpError",
-    error: new TypeError("fetch failed"),
+    error,
   });
 }
 
@@ -1134,6 +1140,202 @@ describe("deliverReplies", () => {
     expect(recordSentMessage).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    {
+      kind: "photo",
+      method: "sendPhoto",
+      fileName: "photo.jpg",
+      contentType: "image/jpeg",
+      audioAsVoice: false,
+    },
+    {
+      kind: "document",
+      method: "sendDocument",
+      fileName: "report.pdf",
+      contentType: "application/pdf",
+      audioAsVoice: false,
+    },
+    {
+      kind: "voice",
+      method: "sendVoice",
+      fileName: "voice.ogg",
+      contentType: "audio/ogg",
+      audioAsVoice: true,
+    },
+  ])("preserves accepted $kind ids when a later media send fails", async (testCase) => {
+    const rejection = new Error(`${testCase.kind} send failed`);
+    const sendMedia = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 71, chat: { id: "123" } })
+      .mockRejectedValueOnce(rejection);
+    mockMediaLoad(testCase.fileName, testCase.contentType, "first");
+    mockMediaLoad(testCase.fileName, testCase.contentType, "second");
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [
+          {
+            mediaUrls: ["https://example.com/first", "https://example.com/second"],
+            ...(testCase.audioAsVoice ? { audioAsVoice: true } : {}),
+          },
+        ],
+        runtime: createRuntime(),
+        bot: createBot({ [testCase.method]: sendMedia }),
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["71"]);
+    expect(sendMedia).toHaveBeenCalledTimes(2);
+    expect(recordSentMessage).toHaveBeenCalledOnce();
+  });
+
+  it("preserves accepted media ids when a later media download fails", async () => {
+    const downloadError = new Error("later media download failed");
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 72, chat: { id: "123" } });
+    mockMediaLoad("photo.jpg", "image/jpeg", "first");
+    loadWebMedia.mockRejectedValueOnce(downloadError);
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ mediaUrls: ["https://example.com/first", "https://example.com/second"] }],
+        runtime: createRuntime(),
+        bot: createBot({ sendPhoto }),
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["72"]);
+    expect(sendPhoto).toHaveBeenCalledOnce();
+  });
+
+  it("preserves accepted media ids when accepted-message bookkeeping fails", async () => {
+    const bookkeepingError = new Error("accepted media bookkeeping failed");
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 73, chat: { id: "123" } });
+    mockMediaLoad("photo.jpg", "image/jpeg", "first");
+    recordSentMessage.mockImplementationOnce(() => {
+      throw bookkeepingError;
+    });
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [{ mediaUrl: "https://example.com/photo.jpg" }],
+        runtime: createRuntime(),
+        bot: createBot({ sendPhoto }),
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["73"]);
+    expect(sendPhoto).toHaveBeenCalledOnce();
+  });
+
+  it.each(["send", "download"])(
+    "preserves accepted voice fallback text when a later media %s fails",
+    async (failureMode) => {
+      const laterFailure = new Error(`later voice ${failureMode} failed`);
+      const sendVoice = vi.fn().mockRejectedValueOnce(createVoiceMessagesForbiddenError());
+      const sendMessage = vi.fn().mockResolvedValueOnce({ message_id: 74, chat: { id: "123" } });
+      mockMediaLoad("voice.ogg", "audio/ogg", "first");
+      if (failureMode === "download") {
+        loadWebMedia.mockRejectedValueOnce(laterFailure);
+      } else {
+        mockMediaLoad("voice.ogg", "audio/ogg", "second");
+        sendVoice.mockRejectedValueOnce(laterFailure);
+      }
+
+      let observed: unknown;
+      try {
+        await deliverWith({
+          replies: [
+            {
+              text: "Voice fallback",
+              audioAsVoice: true,
+              mediaUrls: ["https://example.com/first", "https://example.com/second"],
+            },
+          ],
+          runtime: createRuntime(),
+          bot: createBot({ sendVoice, sendMessage }),
+        });
+      } catch (error) {
+        observed = error;
+      }
+
+      expect(isChannelPartialDeliveryError(observed)).toBe(true);
+      if (!isChannelPartialDeliveryError(observed)) {
+        throw observed;
+      }
+      expect(observed.deliveryResult.messageIds).toEqual(["74"]);
+      expect(sendMessage).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("preserves media and accepted caption-follow-up ids when later media fails", async () => {
+    const sendPhoto = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 75, chat: { id: "123" } })
+      .mockRejectedValueOnce(new Error("later photo failed"));
+    const sendMessage = vi.fn().mockResolvedValueOnce({ message_id: 76, chat: { id: "123" } });
+    mockMediaLoad("photo.jpg", "image/jpeg", "first");
+    mockMediaLoad("photo.jpg", "image/jpeg", "second");
+
+    let observed: unknown;
+    try {
+      await deliverWith({
+        replies: [
+          {
+            text: "x".repeat(1025),
+            mediaUrls: ["https://example.com/first", "https://example.com/second"],
+          },
+        ],
+        runtime: createRuntime(),
+        bot: createBot({ sendPhoto, sendMessage }),
+      });
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(isChannelPartialDeliveryError(observed)).toBe(true);
+    if (!isChannelPartialDeliveryError(observed)) {
+      throw observed;
+    }
+    expect(observed.deliveryResult.messageIds).toEqual(["75", "76"]);
+  });
+
+  it("keeps an initial media send failure unwrapped when nothing was delivered", async () => {
+    const rejection = new Error("initial photo send failed");
+    const sendPhoto = vi.fn().mockRejectedValue(rejection);
+    mockMediaLoad("photo.jpg", "image/jpeg", "first");
+
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl: "https://example.com/photo.jpg" }],
+        runtime: createRuntime(),
+        bot: createBot({ sendPhoto }),
+      }),
+    ).rejects.toBe(rejection);
+
+    expect(recordSentMessage).not.toHaveBeenCalled();
+  });
+
   it("does not mirror media follow-up text that Telegram rejects as empty", async () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
     const invisibleText = "\u200B".repeat(1025);
@@ -1651,6 +1853,33 @@ describe("deliverReplies", () => {
     expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 
+  it("maps an exhausted request-not-started marker to streaming no-dispatch custody", async () => {
+    const runtime = createRuntime();
+    const terminal = createPlainHttpError("sendMessage", new TelegramRequestNotStartedError());
+    const sendMessage = vi.fn().mockRejectedValue(terminal);
+
+    let observed: unknown;
+    try {
+      await sendTelegramText(createBot({ sendMessage }), "123", "hello", runtime);
+    } catch (error) {
+      observed = error;
+    }
+
+    expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(observed).toHaveProperty("cause", terminal);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps broad 421-shaped streaming send errors ambiguous", async () => {
+    const edgeError = Object.assign(new Error("421 Misdirected Request"), { status: 421 });
+    const sendMessage = vi.fn().mockRejectedValue(edgeError);
+
+    await expect(
+      sendTelegramText(createBot({ sendMessage }), "123", "hello", createRuntime()),
+    ).rejects.toBe(edgeError);
+    expect(sendMessage).toHaveBeenCalledOnce();
+  });
+
   it("does not retry DM topic media sends without the topic id", async () => {
     const runtime = createRuntime();
     const sendPhoto = vi.fn().mockRejectedValueOnce(createThreadNotFoundError("sendPhoto"));
@@ -1885,6 +2114,120 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendRichMessage, 1, 0)).not.toHaveProperty("reply_to_message_id");
   });
 
+  it("delivers presentation table blocks as native rich tables on rich accounts", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 11,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "plain fallback body",
+          presentationTextMode: "fallback",
+          presentation: {
+            title: "🦞 OpenClaw 2026.7.2",
+            blocks: [
+              {
+                type: "table",
+                caption: "Session status",
+                headers: ["Item", "Value"],
+                rows: [["🧠 Model", "anthropic/claude-haiku-4-5"]],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    const raw = bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> };
+    expect(raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richMessage = firstMockCallArg(raw.sendRichMessage, 0).rich_message as {
+      blocks: Array<{ type: string; cells?: unknown[][] }>;
+    };
+    const tableBlock = richMessage.blocks.find((block) => block.type === "table");
+    expect(tableBlock).toBeDefined();
+    expect(tableBlock?.cells?.length).toBe(2);
+    const flattened = JSON.stringify(richMessage.blocks);
+    expect(flattened).toContain("OpenClaw 2026.7.2");
+    expect(flattened).not.toContain("plain fallback body");
+  });
+
+  it("keeps the authored fallback text for HTML sends on rich accounts", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 13, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "plain fallback body",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Session status",
+                headers: ["Item", "Value"],
+                rows: [["🧠 Model", "anthropic/claude-haiku-4-5"]],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+      richMessages: true,
+      textMode: "html",
+    });
+
+    // HTML deliberately bypasses rich blocks, so a rich account must still ship
+    // the authored fallback body rather than a generated legacy table.
+    const raw = bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> };
+    expect(raw.sendRichMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(String(mockCallArg(sendMessage, 0, 1))).toContain("plain fallback body");
+    expect(String(mockCallArg(sendMessage, 0, 1))).not.toContain("<table");
+  });
+
+  it("keeps the authored fallback text for presentation tables on plain accounts", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 12,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "plain fallback body",
+          presentationTextMode: "fallback",
+          presentation: {
+            blocks: [
+              {
+                type: "table",
+                caption: "Session status",
+                headers: ["Item", "Value"],
+                rows: [["🧠 Model", "anthropic/claude-haiku-4-5"]],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(sendMessage, 0, 1)).toBe("plain fallback body");
+  });
+
   it("skips rich entity detection for reply text with provider-prefixed email addresses", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
@@ -2033,7 +2376,7 @@ describe("deliverReplies", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 1)).toBe("Rank | Model | Score\n4 | Claude Opus | 78.16%");
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("rich-degrade=plain-fallback:rich-entity-invalid"),
+      "telegram sendRichMessage degrade=plain-fallback:rich-entity-invalid: GrammyError: Call to 'sendRichMessage' failed! (400: Bad Request: RICH_MESSAGE_URL_INVALID)",
     );
   });
 

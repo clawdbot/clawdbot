@@ -21,6 +21,11 @@ function writeExternalPolicyFixture(): string {
       '    ? { levels: [{ id: "off" }, { id: "high" }, { id: "max" }], defaultLevel: "off" }',
       '    : { levels: [{ id: "off" }, { id: "low", label: "on" }], defaultLevel: "off" };',
       "}",
+      "export function inspectEmbeddingProviderSetup({ provider }) {",
+      '  return provider === "fixture-embedding"',
+      '    ? { provider, reason: "setup missing", requirement: "fixture-setup" }',
+      "    : null;",
+      "}",
       "export function projectConfiguredModelRow() { return null; }",
       "",
     ].join("\n"),
@@ -177,15 +182,7 @@ describe("provider public artifacts", () => {
         modelId: "deepseek-v4-pro",
       }),
     ).toEqual({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "xhigh" },
-        { id: "max" },
-      ],
+      levels: [{ id: "off" }, { id: "high" }, { id: "max" }],
       defaultLevel: "high",
     });
     expect(
@@ -209,6 +206,7 @@ describe("provider public artifacts", () => {
         rootDir: pluginRoot,
         providers: ["fixture-provider"],
         cliBackends: [],
+        contracts: { embeddingProviders: ["fixture-embedding"] },
       } as const;
       const surface = resolveProviderPolicySurface("fixture-provider", {
         manifestRegistry: { plugins: [fixturePlugin as never] },
@@ -225,6 +223,20 @@ describe("provider public artifacts", () => {
           ?.levels.map((level) => level.label),
       ).toEqual([undefined, "on"]);
       expect(surface).not.toHaveProperty("projectConfiguredModelRow");
+      expect(
+        resolveProviderPolicySurface("fixture-embedding", {
+          manifestRegistry: { plugins: [fixturePlugin as never] },
+        })?.inspectEmbeddingProviderSetup?.({
+          config: {},
+          env: {},
+          agentId: "main",
+          provider: "fixture-embedding",
+        }),
+      ).toEqual({
+        provider: "fixture-embedding",
+        reason: "setup missing",
+        requirement: "fixture-setup",
+      });
     } finally {
       restoreBundledPluginEnv();
       fs.rmSync(pluginRoot, { recursive: true, force: true });
@@ -426,7 +438,7 @@ describe("provider public artifacts", () => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
       return {
         ...actual,
-        loadPluginManifestRegistry,
+        loadPluginManifestRegistryCore: loadPluginManifestRegistry,
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
@@ -487,7 +499,7 @@ describe("provider public artifacts", () => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
       return {
         ...actual,
-        loadPluginManifestRegistry,
+        loadPluginManifestRegistryCore: loadPluginManifestRegistry,
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({
@@ -612,7 +624,7 @@ describe("provider public artifacts", () => {
       const actual = await importOriginal<typeof import("./manifest-registry.js")>();
       return {
         ...actual,
-        loadPluginManifestRegistry,
+        loadPluginManifestRegistryCore: loadPluginManifestRegistry,
       };
     });
     vi.doMock("./public-surface-loader.js", () => ({

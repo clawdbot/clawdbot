@@ -2,45 +2,29 @@ import { describe, expect, it } from "vitest";
 import { coerceNodeInvokeInputPayload, coerceNodeInvokePayload } from "./invoke-payload.js";
 
 describe("coerceNodeInvokePayload", () => {
-  it("preserves normalized gateway-owned session attribution", () => {
+  it.each([
+    ["preserves the exact owning session", "agent:main:managed", "agent:main:managed"],
+    ["normalizes the owning session", "  agent:main:managed  ", "agent:main:managed"],
+    ["omits an absent owning session", undefined, undefined],
+    ["omits a blank owning session", "  ", undefined],
+    ["omits a non-string owning session", 42, undefined],
+  ])("%s", (_name, sessionKey, expectedSessionKey) => {
     expect(
       coerceNodeInvokePayload({
         id: "invoke-1",
         nodeId: "node-1",
-        command: "system.run",
-        sessionKey: "  agent:main:main  ",
+        command: "plugin.workspace",
+        sessionKey,
       }),
     ).toEqual({
       id: "invoke-1",
       nodeId: "node-1",
-      command: "system.run",
+      command: "plugin.workspace",
       paramsJSON: null,
       timeoutMs: null,
       idempotencyKey: null,
-      sessionKey: "agent:main:main",
+      ...(expectedSessionKey ? { sessionKey: expectedSessionKey } : {}),
     });
-  });
-
-  it("distinguishes a missing legacy envelope from an explicit clear", () => {
-    expect(
-      coerceNodeInvokePayload({ id: "i", nodeId: "n", command: "system.run" }),
-    ).not.toHaveProperty("sessionKey");
-    expect(
-      coerceNodeInvokePayload({
-        id: "i",
-        nodeId: "n",
-        command: "system.run",
-        sessionKey: null,
-      }),
-    ).toMatchObject({ sessionKey: null });
-    expect(
-      coerceNodeInvokePayload({
-        id: "i",
-        nodeId: "n",
-        command: "system.run",
-        sessionKey: " ",
-      }),
-    ).toMatchObject({ sessionKey: null });
   });
 });
 

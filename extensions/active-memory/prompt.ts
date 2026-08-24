@@ -1,5 +1,5 @@
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -179,7 +179,7 @@ function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | 
 }
 
 function readStructuredMemoryFailure(source: unknown): boolean | undefined {
-  const record = asRecord(source);
+  const record = asOptionalRecord(source);
   if (!record) {
     return undefined;
   }
@@ -206,7 +206,7 @@ function readStructuredMemoryEvidence(source: unknown): boolean | undefined {
   if (Array.isArray(source)) {
     return source.length > 0;
   }
-  const record = asRecord(source);
+  const record = asOptionalRecord(source);
   return record ? readExplicitMemoryEvidence(record) : undefined;
 }
 

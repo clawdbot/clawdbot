@@ -3,14 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { approveDevicePairing, getPairedDevice, requestDevicePairing } from "./device-pairing.js";
-import { migrateLegacyNodePairingStore } from "./node-pairing-migration.js";
+import { approveDevicePairing } from "./device-pairing-approval.js";
 import {
   approveNodePairing,
   listNodePairing,
   recordPairedNodeConnection,
   requestNodePairing,
-} from "./node-pairing.js";
+} from "./device-pairing-node.js";
+import { getPairedDevice, requestDevicePairing } from "./device-pairing.js";
+import { migrateLegacyNodePairingStore } from "./node-pairing-migration.js";
 import { resolvePairingPaths } from "./pairing-files.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-migration-" });

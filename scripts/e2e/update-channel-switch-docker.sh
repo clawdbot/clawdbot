@@ -18,7 +18,7 @@ PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz update-channel-switch "${OPENCLAW_
 # Bare lanes mount the package artifact instead of baking app sources into the image.
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(
-  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell \
+  node --import tsx "$ROOT_DIR/scripts/lib/openclaw-test-state.mts" shell \
     --label update-channel-switch \
     --scenario update-stable |
     base64 |
@@ -61,7 +61,8 @@ node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
 (
   cd "$git_root"
-  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
+  # Git-style fixtures still need optional native prebuilds; omit only development dependencies.
+  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=dev --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
     openclaw_e2e_print_log /tmp/openclaw-git-install.log >&2
     exit 1
   fi

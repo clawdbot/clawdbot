@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   getLoadedRuntimePluginRegistry,
   listLoadedRuntimePluginIds,
+  listRuntimePluginIdsFromRegistry,
+  registryMatchesManifestPluginIds,
 } from "./active-runtime-registry.js";
 import { clearPluginLoaderCache } from "./loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -18,6 +20,18 @@ function createRegistryWithPlugin(pluginId: string): PluginRegistry {
   const registry = createEmptyPluginRegistry();
   registry.plugins.push({
     id: pluginId,
+    status: "loaded",
+  } as never);
+  return registry;
+}
+
+function createOwnedRegistryWithPlugin(pluginId: string, rootDir: string): PluginRegistry {
+  const registry = createEmptyPluginRegistry();
+  registry.plugins.push({
+    id: pluginId,
+    origin: "bundled",
+    rootDir,
+    source: `${rootDir}/index.js`,
     status: "loaded",
   } as never);
   return registry;
@@ -118,6 +132,7 @@ describe("getLoadedRuntimePluginRegistry", () => {
       }),
     ).toBeUndefined();
     expect(listLoadedRuntimePluginIds()).not.toContain("deferred");
+    expect(listRuntimePluginIdsFromRegistry(deferredRegistry)).not.toContain("deferred");
   });
 
   it("accepts metadata-only bundle plugins as loaded runtimes", () => {
@@ -137,6 +152,7 @@ describe("getLoadedRuntimePluginRegistry", () => {
       }),
     ).toBe(bundleRegistry);
     expect(listLoadedRuntimePluginIds()).toContain("bundle");
+    expect(listRuntimePluginIdsFromRegistry(bundleRegistry)).toContain("bundle");
   });
 
   it("does not reuse workspace-agnostic registries for workspace-specific requests", () => {
@@ -148,5 +164,43 @@ describe("getLoadedRuntimePluginRegistry", () => {
         requiredPluginIds: ["demo"],
       }),
     ).toBeUndefined();
+  });
+
+  it("reuses built bundled runtimes for the matching source manifest owner", () => {
+    const registry = createOwnedRegistryWithPlugin("demo", "/dist/extensions/demo");
+
+    expect(
+      registryMatchesManifestPluginIds(
+        registry,
+        [
+          {
+            id: "demo",
+            origin: "bundled",
+            rootDir: "/extensions/demo",
+            source: "/extensions/demo/index.ts",
+          } as never,
+        ],
+        ["demo"],
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a request registry when a workspace selects another physical owner", () => {
+    const registry = createOwnedRegistryWithPlugin("demo", "/plugins/demo");
+
+    expect(
+      registryMatchesManifestPluginIds(
+        registry,
+        [
+          {
+            id: "demo",
+            origin: "workspace",
+            rootDir: "/tmp/session-workspace/.openclaw/extensions/demo",
+            source: "/tmp/session-workspace/.openclaw/extensions/demo/index.js",
+          } as never,
+        ],
+        ["demo"],
+      ),
+    ).toBe(false);
   });
 });

@@ -11,6 +11,7 @@ export const CONNECTION_SETTINGS_TARGET_IDS = {
 export const APPEARANCE_SETTINGS_TARGET_IDS = {
   language: "settings-language",
   theme: "settings-appearance-theme",
+  accent: "settings-appearance-accent",
   textSize: "settings-appearance-text-size",
   sidebar: "settings-appearance-sidebar",
   chat: "settings-appearance-chat",
@@ -54,10 +55,16 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "quickSettings.security.gatewayAuth",
       "quickSettings.security.execPolicy",
-      "quickSettings.security.deviceAuth",
       "quickSettings.security.browserEnabled",
       "quickSettings.security.toolProfile",
     ],
+  },
+  secrets: {
+    routeId: "secrets",
+    labelKey: "tabs.secrets",
+    hash: "",
+    searchKeys: [],
+    aliases: "env team store",
   },
   system: {
     routeId: "connection",
@@ -124,6 +131,27 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.appearance.browseTweakcn",
     ],
     aliases: "tweakcn light dark system",
+  },
+  appearanceAccent: {
+    routeId: "appearance",
+    labelKey: "configView.appearance.accent",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.accent}`,
+    searchKeys: [
+      "configView.appearance.accentHint",
+      "configView.appearance.customAccent",
+      "configView.appearance.accents.default",
+      "configView.appearance.accents.claw",
+      "configView.appearance.accents.coral",
+      "configView.appearance.accents.amber",
+      "configView.appearance.accents.mint",
+      "configView.appearance.accents.teal",
+      "configView.appearance.accents.blue",
+      "configView.appearance.accents.violet",
+      "configView.appearance.accents.pink",
+      "configView.appearance.accents.slate",
+    ],
+    aliases: "colour swatch palette highlight green purple neutral",
   },
   appearanceTextSize: {
     routeId: "appearance",

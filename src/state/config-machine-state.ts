@@ -1,18 +1,16 @@
 // Machine-owned values retired from openclaw.json live in the shared state database.
-import { existsSync } from "node:fs";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 type ConfigMachineStateDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
@@ -37,11 +35,7 @@ export function readConfigMachineState<T>(
   key: string,
   options: OpenClawStateDatabaseOptions = {},
 ): T | undefined {
-  const pathname = options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env);
-  if (!existsSync(pathname)) {
-    return undefined;
-  }
-  return withOpenClawStateDatabaseReadOnly(({ db: database }) => {
+  return withExistingOpenClawStateDatabaseReadOnly(({ db: database }) => {
     if (!tableExists(database, "config_machine_state")) {
       return undefined;
     }

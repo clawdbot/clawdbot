@@ -42,22 +42,16 @@ export type RoleSnapshotOptions = {
   compact?: boolean;
 };
 
-/** Compute snapshot line/char/ref statistics. */
-function getRoleSnapshotStats<T extends { role: string }>(
-  snapshot: string,
-  refs: Record<string, T>,
-): RoleSnapshotStats {
-  const interactive = Object.values(refs).filter((r) => INTERACTIVE_ROLES.has(r.role)).length;
-  return {
-    lines: snapshot ? snapshot.split("\n").length : 0,
-    chars: snapshot.length,
-    refs: Object.keys(refs).length,
-    interactive,
-  };
-}
-
 function findSnapshotLineRef(line: string): string | undefined {
   return ROLE_SNAPSHOT_LINE_REF_RE.exec(line)?.[1];
+}
+
+function getRoleSnapshotIdentityKey(
+  ref: string,
+  value: RoleRef,
+  mode: RoleSnapshotIdentityMode,
+): string {
+  return mode === "aria" ? ref : `${value.role}\0${value.name ?? ""}\0${value.nth ?? 0}`;
 }
 
 /** Build the stable identity set used for per-tab snapshot deltas. */
@@ -68,51 +62,43 @@ export function getRoleSnapshotIdentityKeys<T extends RoleRef>(
   // Duplicate role+name elements are identified positionally by nth, so insertion can mark a
   // sibling duplicate. This is acceptable: they are actor-indistinguishable without DOM backing.
   return new Set(
-    Object.entries(refs).map(([ref, value]) =>
-      mode === "aria" ? ref : `${value.role}\0${value.name ?? ""}\0${value.nth ?? 0}`,
-    ),
+    Object.entries(refs).map(([ref, value]) => getRoleSnapshotIdentityKey(ref, value, mode)),
   );
 }
 
 /** Mark ref-bearing lines that were absent from the previous compatible snapshot. */
 function annotateRoleSnapshotDelta<T extends RoleRef>(params: {
-  snapshot: string;
+  lines: string[];
   refs: Record<string, T>;
   mode: RoleSnapshotIdentityMode;
-  previousKeys?: ReadonlySet<string>;
-}): { snapshot: string; keys: Set<string>; newElements?: number } {
-  const keys = getRoleSnapshotIdentityKeys(params.refs, params.mode);
-  if (params.previousKeys === undefined) {
-    return { snapshot: params.snapshot, keys };
-  }
-  const keyByRef = new Map(
-    Object.entries(params.refs).map(([ref, value]) => [
-      ref,
-      params.mode === "aria" ? ref : `${value.role}\0${value.name ?? ""}\0${value.nth ?? 0}`,
-    ]),
-  );
+  previousKeys: ReadonlySet<string>;
+}): boolean {
   const markedKeys = new Set<string>();
-  const lines = params.snapshot.split("\n").map((line) => {
+  for (const [index, line] of params.lines.entries()) {
     const ref = findSnapshotLineRef(line);
-    const key = ref ? keyByRef.get(ref) : undefined;
-    if (!key || params.previousKeys?.has(key)) {
-      return line;
+    const value = ref && Object.hasOwn(params.refs, ref) ? params.refs[ref] : undefined;
+    if (!ref || !value) {
+      continue;
     }
+    const key = getRoleSnapshotIdentityKey(ref, value, params.mode);
+    if (params.previousKeys.has(key)) {
+      continue;
+    }
+    params.lines[index] = `${line} [new]`;
     markedKeys.add(key);
-    return `${line} [new]`;
-  });
-  const newElements = markedKeys.size;
-  if (newElements > 0) {
-    lines.push(`${newElements} new element(s) since last snapshot`);
   }
-  return { snapshot: lines.join("\n"), keys, newElements };
+  if (markedKeys.size === 0) {
+    return false;
+  }
+  params.lines.push(`${markedKeys.size} new element(s) since last snapshot`);
+  return true;
 }
 
-function truncateRoleSnapshot(snapshot: string, maxChars: number): string {
+function truncateRoleSnapshot(lines: readonly string[], maxChars: number): string {
   const marker =
     maxChars >= ROLE_SNAPSHOT_TRUNCATION_MARKER.length ? ROLE_SNAPSHOT_TRUNCATION_MARKER : "…";
   let prefix = "";
-  for (const line of snapshot.split("\n")) {
+  for (const line of lines) {
     const candidate = prefix ? `${prefix}\n${line}` : line;
     if (candidate.length + 2 + marker.length > maxChars) {
       break;
@@ -143,36 +129,59 @@ export function finalizeRoleSnapshot<T extends RoleRef>(params: {
       ? Math.floor(params.maxChars)
       : undefined;
   const maxChars = normalizedMaxChars && normalizedMaxChars > 0 ? normalizedMaxChars : undefined;
-  const annotated = params.delta
-    ? annotateRoleSnapshotDelta({
-        snapshot: params.snapshot,
-        refs: params.refs,
-        mode: params.delta.mode,
-        previousKeys: params.delta.previousKeys,
-      })
-    : undefined;
-  const sourceSnapshot = annotated?.snapshot ?? params.snapshot;
+  const delta = params.delta;
+  const previousKeys = delta?.previousKeys;
+  const sourceLines = params.snapshot.split("\n");
+  const annotated =
+    delta && previousKeys !== undefined
+      ? annotateRoleSnapshotDelta({
+          lines: sourceLines,
+          refs: params.refs,
+          mode: delta.mode,
+          previousKeys,
+        })
+      : false;
+  const sourceSnapshot = annotated ? sourceLines.join("\n") : params.snapshot;
   const truncated = maxChars !== undefined && sourceSnapshot.length > maxChars;
-  const snapshot = truncated ? truncateRoleSnapshot(sourceSnapshot, maxChars) : sourceSnapshot;
-  const visibleRefs = new Set(
-    snapshot
-      .split("\n")
-      .map(findSnapshotLineRef)
-      .filter((ref): ref is string => Boolean(ref)),
-  );
-  const refs = Object.fromEntries(
-    Object.entries(params.refs).filter(([ref]) => visibleRefs.has(ref)),
-  ) as Record<string, T>;
-  const newElements =
-    params.delta?.previousKeys === undefined
-      ? undefined
-      : [...getRoleSnapshotIdentityKeys(refs, params.delta.mode)].filter(
-          (key) => !params.delta?.previousKeys?.has(key),
-        ).length;
+  const snapshot = truncated ? truncateRoleSnapshot(sourceLines, maxChars) : sourceSnapshot;
+  const outputLines = truncated ? snapshot.split("\n") : sourceLines;
+  const visibleRefs = new Set<string>();
+  for (const line of outputLines) {
+    const ref = findSnapshotLineRef(line);
+    if (ref) {
+      visibleRefs.add(ref);
+    }
+  }
+  const visibleEntries: Array<[string, T]> = [];
+  const newKeys = previousKeys !== undefined ? new Set<string>() : undefined;
+  let interactive = 0;
+  for (const [ref, value] of Object.entries(params.refs)) {
+    if (!visibleRefs.has(ref)) {
+      continue;
+    }
+    visibleEntries.push([ref, value]);
+    if (INTERACTIVE_ROLES.has(value.role)) {
+      interactive += 1;
+    }
+    if (newKeys && delta && previousKeys !== undefined) {
+      const key = getRoleSnapshotIdentityKey(ref, value, delta.mode);
+      if (!previousKeys.has(key)) {
+        newKeys.add(key);
+      }
+    }
+  }
+  const refs = Object.fromEntries(visibleEntries) as Record<string, T>;
+  const newElements = newKeys?.size;
+  const stats: RoleSnapshotStats = {
+    lines: snapshot ? outputLines.length : 0,
+    chars: snapshot.length,
+    refs: visibleEntries.length,
+    interactive,
+  };
   const result = {
     snapshot,
     refs,
-    stats: getRoleSnapshotStats(snapshot, refs),
+    stats,
     ...(newElements !== undefined ? { newElements } : {}),
   };
   return truncated ? { ...result, truncated: true } : result;

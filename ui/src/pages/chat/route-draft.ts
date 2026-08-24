@@ -12,11 +12,20 @@ function focusComposerFromLocation(location: RouteLocation): boolean {
   return new URLSearchParams(location.search).get(SESSION_COMPOSER_FOCUS_PARAM) === "1";
 }
 
+export function locationWithoutDraft(location: RouteLocation): RouteLocation {
+  const params = new URLSearchParams(location.search);
+  params.delete("draft");
+  params.delete(SESSION_COMPOSER_FOCUS_PARAM);
+  const search = params.toString();
+  return { ...location, search: search ? `?${search}` : "" };
+}
+
 export function draftRouteDataFromLocation(location: RouteLocation): RouteDraftHint {
   const draft = draftFromLocation(location);
+  const focusComposer = focusComposerFromLocation(location);
   return {
     draft,
-    ...(draft && focusComposerFromLocation(location) ? { focusComposer: true } : {}),
+    ...(focusComposer ? { focusComposer: true } : {}),
   };
 }
 
@@ -26,7 +35,7 @@ export function draftSearchFromLocation(location: RouteLocation): string {
   if (draft) {
     search.set("draft", draft);
   }
-  if (draft && focusComposerFromLocation(location)) {
+  if (focusComposerFromLocation(location)) {
     search.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
   return search.size > 0 ? "?" + search.toString() : "";

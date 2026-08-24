@@ -1,3 +1,4 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Usage } from "../types.js";
 
 type AnthropicUsagePayload = {
@@ -30,8 +31,16 @@ export type AnthropicIterationUsageResult =
   | { state: "invalid" }
   | { state: "valid"; usage: AnthropicIterationUsageSnapshot };
 
+type AnthropicBilledUsage = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cacheWrite1h: number;
+};
+
 export function readAnthropicUsageTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return asNonNegativeFiniteNumber(value);
 }
 
 export function readAnthropicCacheWriteUsage(
@@ -105,6 +114,45 @@ export function readLastAnthropicIterationUsage(
   };
 }
 
+function readAnthropicCompactionBilledUsage(iterations: unknown): AnthropicBilledUsage | undefined {
+  if (!Array.isArray(iterations) || iterations.length === 0) {
+    return undefined;
+  }
+  let sawCompaction = false;
+  const billed: AnthropicBilledUsage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cacheWrite1h: 0,
+  };
+  for (const iteration of iterations) {
+    if (!iteration || typeof iteration !== "object" || Array.isArray(iteration)) {
+      return undefined;
+    }
+    const record = iteration as AnthropicUsagePayload & { type?: unknown };
+    const input = readAnthropicUsageTokenCount(record.input_tokens);
+    const output = readAnthropicUsageTokenCount(record.output_tokens);
+    const cacheRead = readAnthropicUsageTokenCount(record.cache_read_input_tokens);
+    const cacheWrite = readAnthropicUsageTokenCount(record.cache_creation_input_tokens);
+    if (
+      input === undefined ||
+      output === undefined ||
+      cacheRead === undefined ||
+      cacheWrite === undefined
+    ) {
+      return undefined;
+    }
+    sawCompaction ||= record.type === "compaction";
+    billed.input += input;
+    billed.output += output;
+    billed.cacheRead += cacheRead;
+    billed.cacheWrite += cacheWrite;
+    billed.cacheWrite1h += readAnthropicCacheWriteUsage(record).cacheWrite1h ?? 0;
+  }
+  return sawCompaction ? billed : undefined;
+}
+
 /** Record independent billing buckets without treating zero placeholders as context proof. */
 export function applyAnthropicMessageStartUsage(
   target: Usage,
@@ -158,26 +206,33 @@ export function applyAnthropicMessageDeltaUsage(
   messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined,
 ): void {
   const usage = payload ?? {};
+  const billedIterations = readAnthropicCompactionBilledUsage(usage.iterations);
   const inputTokens = readAnthropicUsageTokenCount(usage.input_tokens);
-  if (inputTokens !== undefined) {
-    target.input = inputTokens;
-  }
   const outputTokens = readAnthropicUsageTokenCount(usage.output_tokens);
-  if (outputTokens !== undefined) {
-    target.output = outputTokens;
+  const cacheReadTokens = readAnthropicUsageTokenCount(usage.cache_read_input_tokens);
+  const cacheWriteTokens = readAnthropicUsageTokenCount(usage.cache_creation_input_tokens);
+  const resolved: Partial<AnthropicBilledUsage> = billedIterations ?? {
+    input: inputTokens,
+    output: outputTokens,
+    cacheRead: cacheReadTokens,
+    cacheWrite: cacheWriteTokens,
+    cacheWrite1h: readAnthropicCacheWriteUsage(usage).cacheWrite1h,
+  };
+  if (resolved.input !== undefined) {
+    target.input = resolved.input;
+  }
+  if (resolved.output !== undefined) {
+    target.output = resolved.output;
   }
   // Match the SDK accumulator: absent or null cache counters preserve prior values.
-  const cacheReadTokens = readAnthropicUsageTokenCount(usage.cache_read_input_tokens);
-  if (cacheReadTokens !== undefined) {
-    target.cacheRead = cacheReadTokens;
+  if (resolved.cacheRead !== undefined) {
+    target.cacheRead = resolved.cacheRead;
   }
-  const cacheWriteTokens = readAnthropicUsageTokenCount(usage.cache_creation_input_tokens);
-  if (cacheWriteTokens !== undefined) {
-    target.cacheWrite = cacheWriteTokens;
+  if (resolved.cacheWrite !== undefined) {
+    target.cacheWrite = resolved.cacheWrite;
   }
-  const { cacheWrite1h } = readAnthropicCacheWriteUsage(usage);
-  if (cacheWrite1h !== undefined) {
-    target.cacheWrite1h = cacheWrite1h;
+  if (resolved.cacheWrite1h !== undefined) {
+    target.cacheWrite1h = resolved.cacheWrite1h;
   }
   target.totalTokens = target.input + target.output + target.cacheRead + target.cacheWrite;
   const iterationUsage = readLastAnthropicIterationUsage(usage);

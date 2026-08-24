@@ -10,7 +10,7 @@ import {
   releaseNotesVersionForTag,
   renderGithubReleaseNotes,
   verifyGithubReleaseNotes,
-} from "../../scripts/render-github-release-notes.mjs";
+} from "../../scripts/render-github-release-notes.mts";
 
 const repository = "openclaw/openclaw";
 const tag = "v2026.7.1-beta.3";

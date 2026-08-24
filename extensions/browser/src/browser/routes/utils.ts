@@ -4,6 +4,7 @@
  * Profile lookup, JSON errors, and route value coercion shared across browser
  * control endpoints.
  */
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BrowserProfileUnavailableError, type BrowserErrorResponse } from "../errors.js";
 import {
   type BrowserRouteContext,
@@ -12,10 +13,6 @@ import {
 } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
-
-function normalizeOptionalString(value: string): string | undefined {
-  return value.trim() || undefined;
-}
 
 /**
  * Extract profile name from query string or body and get profile context.

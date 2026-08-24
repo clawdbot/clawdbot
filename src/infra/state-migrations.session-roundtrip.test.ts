@@ -11,8 +11,10 @@
  */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
-import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveMainSessionKey,
+} from "../config/sessions/main-session.js";
 import { resolveSessionKey } from "../config/sessions/session-key.js";
 import { resolveCronAgentSessionKey } from "../cron/isolated-agent/session-key.js";
 import { resolveSessionStoreKey } from "../gateway/session-store-key.js";

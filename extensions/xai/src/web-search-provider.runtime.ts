@@ -153,6 +153,7 @@ function runXaiWebSearch(params: {
       inlineCitations: params.inlineCitations,
       ...(params.signal ? { signal: params.signal } : {}),
     });
+    params.signal?.throwIfAborted();
     const payload = buildXaiWebSearchPayload({
       query: params.query,
       provider: "grok",
@@ -424,12 +425,8 @@ export const testing = {
   buildXaiWebSearchPayload,
   extractXaiWebSearchContent,
   resolveXaiToolSearchConfig,
-  resolveXaiWebSearchAuth,
   resolveXaiInlineCitations,
   resolveXaiWebSearchCredential,
-  resolveXaiWebSearchEndpoint,
   resolveXaiWebSearchModel,
   resolveXaiWebSearchTimeoutSeconds,
-  requestXaiWebSearch,
 };
-export { testing as __testing };

@@ -1,4 +1,5 @@
 // Markdown Core module implements frontmatter behavior.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isMap, isNode, isScalar, parseDocument } from "yaml";
 
 type ParsedFrontmatter = Record<string, string>;
@@ -124,7 +125,7 @@ function parseYamlFrontmatterOnce(
     }
 
     const parsed = doc.toJS() as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (!isRecord(parsed)) {
       return {
         frontmatter: fallback,
         issues: [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],

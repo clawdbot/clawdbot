@@ -14,7 +14,6 @@ import {
 import type { JsonObject } from "./protocol.js";
 import type {
   CodexAppServerBindingIdentity,
-  CodexAppServerContextEngineBinding,
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
@@ -37,14 +36,14 @@ type CodexWarmThreadReuseParams = {
   binding: CodexAppServerThreadBinding;
   bindingIdentity: CodexAppServerBindingIdentity;
   clientId?: string;
-  contextEngineBinding?: CodexAppServerContextEngineBinding;
   dynamicToolsFingerprint: string;
+  environmentSelectionFingerprint?: string;
   hostSystemAgentActive: boolean;
   lifecycleTiming: CodexThreadLifecycleTimingTracker;
   nativeSkillIsolation?: Parameters<typeof applyCodexNativeSkillIsolation>[1];
   releaseConsumedThread: (threadId: string, cause?: unknown) => Promise<void>;
   ringZeroActive: boolean;
-  ringZeroInheritedMcpServerNames: string[];
+  restrictedToolSurfaceInheritedMcpServerNames: string[];
   startModelProvider?: string;
   startModelSelection: ReturnType<typeof resolveCodexAppServerThreadModelSelection>;
   throwIfAborted: () => void;
@@ -121,14 +120,14 @@ export async function tryReuseCodexLiveThread(
     binding,
     bindingIdentity,
     clientId,
-    contextEngineBinding,
     dynamicToolsFingerprint,
+    environmentSelectionFingerprint,
     hostSystemAgentActive,
     lifecycleTiming,
     nativeSkillIsolation,
     releaseConsumedThread,
     ringZeroActive,
-    ringZeroInheritedMcpServerNames,
+    restrictedToolSurfaceInheritedMcpServerNames,
     startModelProvider,
     startModelSelection,
     throwIfAborted,
@@ -140,11 +139,13 @@ export async function tryReuseCodexLiveThread(
     binding.clientId !== clientId ||
     binding.preserveNativeModel === true ||
     binding.connectionScope === "supervision" ||
-    ringZeroActive ||
-    contextEngineBinding
+    ringZeroActive
   ) {
     return {};
   }
+
+  // Engine identity, projection epoch, and policy were checked by the owner
+  // before this call; compatible bootstrap threads must keep their session.
 
   const prebuiltFinalConfigPatch = params.buildFinalConfigPatch?.({
     action: "resume",
@@ -167,6 +168,7 @@ export async function tryReuseCodexLiveThread(
   const resumeParams = lifecycleTiming.measureSync("warm-thread-resume-params", () =>
     buildThreadResumeParams(params.params, {
       threadId: binding.threadId,
+      cwd: params.cwd,
       authProfileId: resumeAuthProfileId,
       model: startModelSelection.model,
       modelProvider: startModelProvider,
@@ -180,7 +182,9 @@ export async function tryReuseCodexLiveThread(
       nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
       webSearchAllowed: params.webSearchAllowed,
       hostSystemAgentActive,
-      ringZeroInheritedMcpServerNames,
+      restrictedToolSurfaceInheritedMcpServerNames,
+      shellEnvironment: params.shellEnvironment,
+      disableLoginShell: params.disableLoginShell,
     }),
   );
   const liveThreadConfigFingerprint = fingerprintCodexThreadConfig(
@@ -196,26 +200,43 @@ export async function tryReuseCodexLiveThread(
     resumeAuthProfileId,
     dynamicToolsFingerprint,
   );
-  if (
-    !(await consumeCodexAppServerLiveThread(
+  const retainedThread = await consumeCodexAppServerLiveThread(
+    params.client,
+    binding.threadId,
+    liveThreadConfigFingerprint,
+  );
+  if (!retainedThread) {
+    const incompatibleOwnership = await consumeCodexAppServerLiveThread(
       params.client,
       binding.threadId,
-      liveThreadConfigFingerprint,
-    ))
-  ) {
+    );
+    if (incompatibleOwnership) {
+      // Codex ignores resume overrides while any subscription remains. Manual
+      // external adoption has no verified fingerprint, so release before resume.
+      await incompatibleOwnership.release(binding.threadId);
+    }
     return { prebuiltFinalConfigPatch };
   }
 
   try {
     const nativeHookRelayGeneration =
       prebuiltFinalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration;
+    const model = startModelSelection.model;
     // Validate ownership even when relay generation is unchanged; reset may
-    // have replaced the persisted binding since it was first read.
+    // have replaced the persisted binding since it was first read. Model and
+    // cwd are sticky turn settings, so future turns and /btw need current facts.
     const committed = await lifecycleTiming.measure("warm-thread-write-binding", () =>
       params.bindingStore.mutate(bindingIdentity, {
         kind: "patch",
         threadId: binding.threadId,
-        patch: { nativeHookRelayGeneration },
+        // Environment selection is sticky turn/start state, like cwd/model;
+        // recording its new value must not recreate the approval-bearing thread.
+        patch: {
+          cwd: params.cwd,
+          model,
+          nativeHookRelayGeneration,
+          environmentSelectionFingerprint,
+        },
       }),
     );
     if (!committed) {
@@ -233,8 +254,15 @@ export async function tryReuseCodexLiveThread(
     return {
       binding: {
         ...binding,
+        cwd: params.cwd,
+        model,
         nativeHookRelayGeneration,
+        environmentSelectionFingerprint,
         liveThreadConfigFingerprint,
+        liveThreadOwnership: retainedThread,
+        ...(retainedThread.serviceTier && resumeParams.serviceTier === undefined
+          ? { clearInheritedServiceTier: true }
+          : {}),
         lifecycle: { action: "resumed" },
       },
       prebuiltFinalConfigPatch,

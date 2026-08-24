@@ -114,12 +114,14 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 | ----------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `baseUrl`               | none (required)     | Public ClickClack URL used for browser-facing links.                                                                  |
 | `apiBaseUrl`            | `baseUrl`           | Optional server-to-server endpoint for REST and realtime WebSocket traffic.                                           |
-| `token`                 | none                | Bot token as a plain string or secret ref (`source: "env" \| "file" \| "exec"`).                                      |
+| `token`                 | none                | Bot token as a plain string or secret ref (`source: "env" \| "file" \| "exec" \| "store"`).                           |
 | `tokenFile`             | none                | Path to a bot-token file; takes precedence over `token`.                                                              |
 | `workspace`             | none (required)     | Workspace id, slug, or name.                                                                                          |
 | `replyMode`             | `"agent"`           | `"agent"` runs the full agent pipeline; `"model"` sends short direct model completions.                               |
 | `defaultTo`             | `"channel:general"` | Target used when an outbound path gives no target.                                                                    |
 | `allowFrom`             | `["*"]`             | User-id allowlist for inbound DMs and channel messages.                                                               |
+| `allowBots`             | `false`             | Admit messages authored by other ClickClack bots: `true` for all allowed bot messages or `"mentions"` in groups only. |
+| `botLoopProtection`     | built-in defaults   | Sliding-window bot-pair loop guard applied to admitted bot messages.                                                  |
 | `botUserId`             | auto-detected       | Resolved from the bot token identity at startup.                                                                      |
 | `agentId`               | route default       | Pin this account's inbound messages to one agent.                                                                     |
 | `toolsAllow`            | none                | Tool allowlist for agent replies from this account.                                                                   |
@@ -452,6 +454,35 @@ ClickClack mentions are detected when:
 
 Plain display names (e.g. `Blackbird`) are **not** treated as mentions unless they are explicitly configured as a pattern.
 
+### Bot-to-bot messages
+
+ClickClack ignores bot-authored messages by default. To opt in, set
+`allowBots: true` on the account. Set `allowBots: "mentions"` to admit bot
+messages in group channels only when they mention this bot; direct messages
+remain eligible without a mention. Bot messages still pass through
+`allowFrom`, but bot authors must be explicitly listed by ID; the wildcard
+`allowFrom: ["*"]` default does not authorize bot-authored messages. The
+wildcard remains available for human traffic. Self-authored messages are
+always ignored.
+
+Accepted bot messages also pass through OpenClaw's shared bot-pair loop guard.
+Use `botLoopProtection` on the account or `channels.defaults.botLoopProtection`
+to tune its window, budget, cooldown, or enabled state. Group-level `allowBots`
+and `botLoopProtection` values follow the same exact-channel, wildcard, then
+account-level precedence as the other group policies. Top-level channel
+messages share a channel budget, while replies in different ClickClack threads
+use independent thread-root budgets.
+
+ClickClack `agent_commentary` and `agent_tool` activity rows never trigger
+OpenClaw inbound turns, even when their author bot is explicitly allowed.
+
+Older ClickClack responses may omit `author.kind`. Those messages intentionally
+remain on the legacy `allowFrom` path: `allowFrom: ["*"]` can admit them, and
+the bot-specific `allowBots` and bot-pair loop-protection checks do not apply
+because the server did not classify the author. Bot-specific restrictions
+therefore require a ClickClack server response that includes author
+classification.
+
 ### Configuration example
 
 ```json5
@@ -463,8 +494,11 @@ Plain display names (e.g. `Blackbird`) are **not** treated as mentions unless th
       workspace: "default",
       requireMention: true,
       mentionPatterns: ["\\bBlackbird\\b"],
+      allowBots: "mentions",
+      allowFrom: ["usr_trusted_bot"],
+      botLoopProtection: { maxEventsPerWindow: 12, windowSeconds: 60 },
       groups: {
-        "*": { requireMention: true },
+        "*": { requireMention: true, allowBots: "mentions" },
         chn_command_and_control: { requireMention: false },
       },
     },
@@ -520,6 +554,6 @@ OpenClaw only needs current `bot:write` for normal agent chat and command-menu s
 
 - `ClickClack is not configured for account "<id>"`: set `baseUrl`, `token` (for example via `CLICKCLACK_BOT_TOKEN`), and `workspace` for that account.
 - `ClickClack workspace not found: <value>`: set `workspace` to the workspace id, slug, or name returned by ClickClack.
-- No inbound replies: confirm the token has realtime read access and note that the bot ignores its own messages and messages from other bots.
+- No inbound replies: confirm the token has realtime read access. The bot always ignores its own messages; other bot messages are denied by default, and when `allowBots` is enabled the sender bot ID must also be listed explicitly in `allowFrom`.
 - Channel sends fail: verify the bot is a member of the workspace and has `bot:write`.
 - No command menu: confirm `commandMenu` is not `false`, the ClickClack server supports `PUT /api/bots/self/commands`, and the token has `commands:write`.

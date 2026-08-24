@@ -1,9 +1,9 @@
 /** Tests node-host timeout handling, abort reasons, and cleanup behavior. */
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTimeout } from "./with-timeout.js";
+import { runAbortableTimeout } from "./with-timeout.js";
 
-describe("node-host withTimeout", () => {
+describe("runAbortableTimeout", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -12,7 +12,7 @@ describe("node-host withTimeout", () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
     await expect(
-      withTimeout(async (signal) => {
+      runAbortableTimeout(async (signal) => {
         expect(signal?.aborted).toBe(false);
         return "ok";
       }, Number.MAX_SAFE_INTEGER),

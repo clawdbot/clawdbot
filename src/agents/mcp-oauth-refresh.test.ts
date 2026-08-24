@@ -1,19 +1,20 @@
 // Covers MCP OAuth token refresh, lease cancellation, and concurrency.
 import path from "node:path";
 import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { createMcpOAuthClientProvider, withMcpOAuthLeaseSignal } from "./mcp-oauth-provider.js";
-import { readMcpOAuthStore, resolveMcpOAuthStoreKey } from "./mcp-oauth-store.js";
+import { readMcpOAuthStore } from "./mcp-oauth-store.js";
 import { clearMcpOAuthCredentials, resolveMcpOAuthAccessToken } from "./mcp-oauth.js";
 
 const authMock = vi.hoisted(() => vi.fn());
 const FRESH_ACCESS = "test-token-placeholder";
 const ROTATED_ACCESS = "gateway-token";
+const IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.example.com/mcp");
 
 vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
   auth: authMock,
@@ -77,8 +78,7 @@ describe("MCP OAuth provider", () => {
     await withTempHome(
       async () => {
         const provider = createMcpOAuthClientProvider({
-          serverName: "Remote Docs",
-          serverUrl: "https://mcp.example.com/mcp",
+          identity: IDENTITY,
         });
         await provider.saveTokens({
           access_token: "test-token-placeholder",
@@ -89,8 +89,7 @@ describe("MCP OAuth provider", () => {
 
         await expect(
           resolveMcpOAuthAccessToken({
-            serverName: "Remote Docs",
-            serverUrl: "https://mcp.example.com/mcp",
+            identity: IDENTITY,
           }),
         ).resolves.toBe(FRESH_ACCESS);
         expect(authMock).not.toHaveBeenCalled();
@@ -109,9 +108,7 @@ describe("MCP OAuth provider", () => {
   it("aborts an in-flight refresh, preserves tokens, and releases its lease", async () => {
     await withTempHome(
       async () => {
-        const serverName = "Remote Docs";
-        const serverUrl = "https://mcp.example.com/mcp";
-        const provider = createMcpOAuthClientProvider({ serverName, serverUrl });
+        const provider = createMcpOAuthClientProvider({ identity: IDENTITY });
         await provider.saveTokens({
           access_token: "decoy-token",
           refresh_token: "test-auth-token",
@@ -146,8 +143,7 @@ describe("MCP OAuth provider", () => {
         const controller = new AbortController();
 
         const refresh = resolveMcpOAuthAccessToken({
-          serverName,
-          serverUrl,
+          identity: IDENTITY,
           fetchFn,
           signal: controller.signal,
         });
@@ -177,8 +173,7 @@ describe("MCP OAuth provider", () => {
     await withTempHome(
       async () => {
         const provider = createMcpOAuthClientProvider({
-          serverName: "Remote Docs",
-          serverUrl: "https://mcp.example.com/mcp",
+          identity: IDENTITY,
         });
         await provider.saveTokens({
           access_token: "decoy-token",
@@ -198,8 +193,7 @@ describe("MCP OAuth provider", () => {
 
         await expect(
           resolveMcpOAuthAccessToken({
-            serverName: "Remote Docs",
-            serverUrl: "https://mcp.example.com/mcp",
+            identity: IDENTITY,
             config: { scope: "docs.read" },
           }),
         ).resolves.toBe(ROTATED_ACCESS);
@@ -224,8 +218,7 @@ describe("MCP OAuth provider", () => {
     await withTempHome(
       async () => {
         const provider = createMcpOAuthClientProvider({
-          serverName: "Remote Docs",
-          serverUrl: "https://mcp.example.com/mcp",
+          identity: IDENTITY,
         });
         await provider.saveTokens({
           access_token: "decoy-token",
@@ -255,13 +248,11 @@ describe("MCP OAuth provider", () => {
         });
 
         const first = resolveMcpOAuthAccessToken({
-          serverName: "Remote Docs",
-          serverUrl: "https://mcp.example.com/mcp",
+          identity: IDENTITY,
         });
         await refreshStarted;
         const second = resolveMcpOAuthAccessToken({
-          serverName: "Remote Docs",
-          serverUrl: "https://mcp.example.com/mcp",
+          identity: IDENTITY,
         });
         releaseRefresh?.();
 
@@ -286,8 +277,7 @@ describe("MCP OAuth provider", () => {
     await withTempHome(
       async () => {
         const provider = createMcpOAuthClientProvider({
-          serverName: "Remote Docs",
-          serverUrl: "https://mcp.example.com/mcp",
+          identity: IDENTITY,
         });
         await provider.saveTokens({
           access_token: "decoy-token",
@@ -317,16 +307,14 @@ describe("MCP OAuth provider", () => {
         });
 
         const first = resolveMcpOAuthAccessToken({
-          serverName: "Remote Docs",
-          serverUrl: "https://mcp.example.com/mcp",
+          identity: IDENTITY,
           authorizationChallenge: true,
           rejectedAccessToken: "decoy-token",
           scope: "docs.read",
         });
         await refreshStarted;
         const second = resolveMcpOAuthAccessToken({
-          serverName: "Remote Docs",
-          serverUrl: "https://mcp.example.com/mcp",
+          identity: IDENTITY,
           authorizationChallenge: true,
           rejectedAccessToken: "decoy-token",
           scope: "stale.scope",
@@ -338,10 +326,7 @@ describe("MCP OAuth provider", () => {
           ROTATED_ACCESS,
         ]);
         expect(authMock).toHaveBeenCalledOnce();
-        expect(
-          readMcpOAuthStore(resolveMcpOAuthStoreKey("Remote Docs", "https://mcp.example.com/mcp"))
-            .pendingAuthorizationChallenge,
-        ).toBeUndefined();
+        expect(readMcpOAuthStore(IDENTITY.storeKey).pendingAuthorizationChallenge).toBeUndefined();
       },
       {
         prefix: "openclaw-mcp-oauth-concurrent-challenge-",
@@ -355,8 +340,7 @@ describe("MCP OAuth provider", () => {
     await withTempHome(
       async () => {
         const provider = createMcpOAuthClientProvider({
-          serverName: "Remote Docs",
-          serverUrl: "https://mcp.example.com/mcp",
+          identity: IDENTITY,
         });
         await provider.saveTokens({
           access_token: "decoy-token",
@@ -385,14 +369,10 @@ describe("MCP OAuth provider", () => {
         });
 
         const refresh = resolveMcpOAuthAccessToken({
-          serverName: "Remote Docs",
-          serverUrl: "https://mcp.example.com/mcp",
+          identity: IDENTITY,
         });
         await started;
-        const logout = clearMcpOAuthCredentials({
-          serverName: "Remote Docs",
-          serverUrl: "https://mcp.example.com/mcp",
-        });
+        const logout = clearMcpOAuthCredentials(IDENTITY);
         releaseRefresh?.();
 
         await expect(refresh).resolves.toBe(ROTATED_ACCESS);
@@ -411,8 +391,7 @@ describe("MCP OAuth provider", () => {
     await withTempHome(
       async () => {
         const provider = createMcpOAuthClientProvider({
-          serverName: "Remote Docs",
-          serverUrl: "https://mcp.example.com/mcp",
+          identity: IDENTITY,
         });
         await provider.saveTokens({
           access_token: "decoy-token",
@@ -432,8 +411,7 @@ describe("MCP OAuth provider", () => {
 
         await expect(
           resolveMcpOAuthAccessToken({
-            serverName: "Remote Docs",
-            serverUrl: "https://mcp.example.com/mcp",
+            identity: IDENTITY,
             authorizationChallenge: true,
             rejectedAccessToken: "decoy-token",
             resourceMetadataUrl: new URL(
@@ -443,10 +421,7 @@ describe("MCP OAuth provider", () => {
           }),
         ).resolves.toBe(ROTATED_ACCESS);
         expect(authMock).toHaveBeenCalledOnce();
-        expect(
-          readMcpOAuthStore(resolveMcpOAuthStoreKey("Remote Docs", "https://mcp.example.com/mcp"))
-            .pendingAuthorizationChallenge,
-        ).toBeUndefined();
+        expect(readMcpOAuthStore(IDENTITY.storeKey).pendingAuthorizationChallenge).toBeUndefined();
       },
       {
         prefix: "openclaw-mcp-oauth-rejected-token-",

@@ -58,7 +58,7 @@ Exec approvals are enforced locally on the execution host:
 | `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals document in one step. |
 
 <Note>
-Per-session `/exec` overrides are not included. Run `/exec` in the relevant session to inspect its current defaults. See [session overrides](/tools/exec#session-overrides-exec).
+Per-session `/exec` overrides are not included. Run `/exec` in the relevant session to inspect its current defaults. See [session overrides](/tools/exec#session-overrides-%2Fexec).
 </Note>
 
 Full CLI reference (flags, JSON output, allowlist add/remove): [Approvals CLI](/cli/approvals).
@@ -253,7 +253,7 @@ explicitly when a no-UI approval prompt should fall back to allow.
 - `tools.exec.host=auto` chooses **where** exec runs: sandbox when available, otherwise gateway.
 - YOLO chooses **how** host exec is approved: `security=full` plus `ask=off`.
 - YOLO does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy.
-- `auto` does not make gateway routing a free override from a sandboxed session. A per-call `host=node` request is allowed from `auto`; `host=gateway` is only allowed from `auto` when no sandbox runtime is active. For a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
+- `auto` does not make node or gateway routing a free override from a sandboxed session. Per-call `host=node` and `host=gateway` requests are allowed from `auto` only when no sandbox runtime is active. For a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 
 </Warning>
 
@@ -305,18 +305,15 @@ openclaw exec-policy preset yolo
 Updates both local `tools.exec.host/security/ask` and the local approvals
 file defaults (including `askFallback: "full"`). It is intentionally
 local-only. To change gateway-host or node-host approvals remotely, use
-`openclaw approvals set --gateway` or `openclaw approvals set --node
-<id|name|ip>`.
+`openclaw approvals set --gateway` or
+`openclaw approvals set --node <id|name|ip>`.
 
 Other built-in presets: `cautious` (`host=gateway`, `security=allowlist`,
 `ask=on-miss`, `askFallback=deny`) and `deny-all` (`host=gateway`,
 `security=deny`, `ask=off`, `askFallback=deny`). Apply the same way:
 `openclaw exec-policy preset cautious`.
 
-To set individual fields instead of a full preset, use
-`openclaw exec-policy set --host <auto|sandbox|gateway|node> --security
-<deny|allowlist|full> --ask <off|on-miss|always> --ask-fallback
-<deny|allowlist|full>` with any subset of those flags.
+To set individual fields instead of a full preset, use `openclaw exec-policy set --host <auto|sandbox|gateway|node> --security <deny|allowlist|full> --ask <off|on-miss|always> --ask-fallback <deny|allowlist|full>` with any subset of those flags.
 
 ### Node host
 

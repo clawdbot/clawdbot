@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
   resolveInstallableChannelPlugin: vi.fn(),
-  getChannelPlugin: vi.fn(),
 }));
 
 vi.mock("../cli/command-secret-gateway.js", () => ({
@@ -51,10 +50,6 @@ vi.mock("./channel-setup/channel-plugin-resolution.js", () => ({
   resolveInstallableChannelPlugin: mocks.resolveInstallableChannelPlugin,
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: mocks.getChannelPlugin,
-}));
-
 const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireFirstMockArg(
@@ -88,12 +83,17 @@ describe("channelsResolveCommand", () => {
     });
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "telegram",
+      plugin: { id: "telegram" },
       configured: ["telegram"],
       source: "explicit",
     });
   });
 
   it("uses installed channel plugins for explicit target resolution without installing", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "ops" }] },
+      channels: {},
+    });
     const resolveTargets = vi.fn().mockResolvedValue([
       {
         input: "friends",
@@ -115,6 +115,7 @@ describe("channelsResolveCommand", () => {
 
     await channelsResolveCommand(
       {
+        agent: "ops",
         channel: "whatsapp",
         entries: ["friends"],
       },
@@ -126,6 +127,12 @@ describe("channelsResolveCommand", () => {
       mocks.resolveInstallableChannelPlugin,
       "installable channel resolution",
     );
+    const commandSecretRequest = requireFirstMockArg(
+      mocks.resolveCommandSecretRefsViaGateway,
+      "command secret resolution",
+    );
+    expect(commandSecretRequest.agentId).toBe("ops");
+    expect(pluginResolutionRequest.agentId).toBe("ops");
     expect(pluginResolutionRequest.rawChannel).toBe("whatsapp");
     expect(pluginResolutionRequest.allowInstall).toBe(false);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
@@ -136,6 +143,30 @@ describe("channelsResolveCommand", () => {
     expect(resolveRequest.inputs).toStrictEqual(["friends"]);
     expect(resolveRequest.kind).toBe("group");
     expect(runtime.log).toHaveBeenCalledWith("friends -> 120363000000@g.us (Friends)");
+  });
+
+  it.each([
+    [
+      "unknown",
+      "nope-agent",
+      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+    ],
+    ["empty", "", "--agent must not be blank"],
+    ["whitespace-only", "   ", "--agent must not be blank"],
+  ])("rejects an %s explicit agent before channel resolution", async (_label, agent, message) => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { list: [{ id: "main" }] },
+      channels: {},
+    });
+
+    await expect(
+      channelsResolveCommand({ agent, channel: "telegram", entries: ["friends"] }, runtime),
+    ).rejects.toThrow(message);
+
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.resolveMessageChannelSelection).not.toHaveBeenCalled();
   });
 
   it("tells users to add an explicit catalog channel before resolving", async () => {
@@ -180,12 +211,12 @@ describe("channelsResolveCommand", () => {
     mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "whatsapp",
+      plugin: {
+        id: "whatsapp",
+        resolver: { resolveTargets },
+      },
       configured: ["whatsapp"],
       source: "single-configured",
-    });
-    mocks.getChannelPlugin.mockReturnValue({
-      id: "whatsapp",
-      resolver: { resolveTargets },
     });
 
     await channelsResolveCommand(

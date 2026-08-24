@@ -3,6 +3,7 @@ import { TELEGRAM_GENERAL_TOPIC_ID, type TelegramThreadSpec } from "./bot/helper
 type TelegramThreadMessage = {
   message_id?: number;
   message_thread_id?: number;
+  direct_messages_topic?: { topic_id?: number };
   chat?: { type?: string };
 };
 
@@ -10,6 +11,9 @@ export function resolveTelegramProviderObservedThreadId(params: {
   message: TelegramThreadMessage;
   successfulSendThread?: TelegramThreadSpec;
 }): number | undefined {
+  if (params.successfulSendThread?.scope === "direct-messages") {
+    return params.message.direct_messages_topic?.topic_id;
+  }
   if (typeof params.message.message_thread_id === "number") {
     return params.message.message_thread_id;
   }
@@ -18,6 +22,22 @@ export function resolveTelegramProviderObservedThreadId(params: {
     params.successfulSendThread.id === TELEGRAM_GENERAL_TOPIC_ID
     ? TELEGRAM_GENERAL_TOPIC_ID
     : undefined;
+}
+
+export function resolveTelegramProviderObservedThreadSpec(params: {
+  message: TelegramThreadMessage;
+  successfulSendThread?: TelegramThreadSpec;
+}): TelegramThreadSpec | undefined {
+  const providerThreadId = resolveTelegramProviderObservedThreadId(params);
+  const successfulSendThread = params.successfulSendThread;
+  if (
+    providerThreadId === undefined ||
+    successfulSendThread?.id !== providerThreadId ||
+    successfulSendThread.scope === "none"
+  ) {
+    return undefined;
+  }
+  return { scope: successfulSendThread.scope, id: providerThreadId };
 }
 
 export function assertTelegramProviderThread(params: {
