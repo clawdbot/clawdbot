@@ -121,7 +121,10 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
   pollIntervalMs: number;
   retention: "standard" | Partial<ChannelIngressMonitorRetention>;
   appendRetryDelaysMs?: readonly number[];
-  /** Runs after every durable enqueue; isNew distinguishes inserts from duplicates. */
+  /**
+   * Runs after every durable enqueue. `isNew` means this admission inserted the queue
+   * row; a pruned event can become new again. It does not imply claim or delivery.
+   */
   onDurableAdmission?: (
     raw: TRaw,
     context: { facts: ChannelIngressMonitorFacts; receivedAt: number; isNew: boolean },
