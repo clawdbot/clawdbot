@@ -48,7 +48,7 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 
 ## Code Mode Loop
 
-When `tools.codeMode` is enabled, call the Browser tool from exec cells as the async global `browser(...)`:
+When `tools.codeMode` is enabled, the Browser tool has no normal turn — it is cataloged behind `exec`/`wait`. Call it from exec cells as an async global, using the callable name the exec quick index advertises for the Browser tool (normally `browser`; colliding names get suffixed, and a client tool can win an identical name). If the quick index omits or renames it, discover it with `catalog.search("browser")` and call the returned handle:
 
 ```javascript
 let previous = { url: undefined, newElements: undefined };
@@ -78,7 +78,21 @@ return {
 };
 ```
 
-- Code-mode calls return the tool's structured `details` directly (`targetId`, `url`, `newElements`, `stats`, `blockedByDialog`); rendered page text is not available to code cells, so take a normal snapshot turn when you must read the page.
+- Code-mode calls return the tool's structured `details` directly (`targetId`, `url`, `newElements`, `stats`, `blockedByDialog`); rendered page text is not returned to code cells.
+- To read text inside code mode, run a targeted `act` evaluate (requires the evaluate capability; `browser.evaluateEnabled` can disable it) and keep the returned value bounded, because page-script output is untrusted:
+
+```javascript
+const read = await browser({
+  action: "act",
+  kind: "evaluate",
+  fn: "() => document.body.innerText.slice(0, 2000)",
+  targetId: "task",
+});
+return { url: read?.url, text: read?.result };
+```
+
+When evaluate is unavailable, keep the loop on structured state only.
+
 - Return only the fields the next step needs; never return the whole details object.
 - Keep `previous` between cells when a url change or new-element count helps explain a change.
 - Interleave each act with a URL or tabs check before the next dependent act.
