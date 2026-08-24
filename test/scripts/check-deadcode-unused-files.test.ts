@@ -12,7 +12,8 @@ import {
   KNIP_MAX_BUFFER_BYTES,
   parseKnipCompactUnusedFiles,
   runKnipUnusedFiles,
-} from "../../scripts/check-deadcode-unused-files.mjs";
+} from "../../scripts/check-deadcode-unused-files.mts";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -36,10 +37,25 @@ function finishFakeProcess(
   child.emit("close", status, signal);
 }
 
+function waitForPidFileSync(filePath: string, timeoutMs: number): number {
+  const deadlineAt = Date.now() + timeoutMs;
+  const waitSignal = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < deadlineAt) {
+    if (existsSync(filePath)) {
+      const pid = Number.parseInt(readFileSync(filePath, "utf8"), 10);
+      if (Number.isInteger(pid) && pid > 0) {
+        return pid;
+      }
+    }
+    Atomics.wait(waitSignal, 0, 0, 5);
+  }
+  throw new Error(`timeout waiting for pid in ${filePath}`);
+}
+
 describe("check-deadcode-unused-files", () => {
   it("has no checked-in unused-file allowlist", () => {
     expect(existsSync(path.resolve("scripts/deadcode-unused-files.allowlist.mjs"))).toBe(false);
-    const script = readFileSync(path.resolve("scripts/check-deadcode-unused-files.mjs"), "utf8");
+    const script = readFileSync(path.resolve("scripts/check-deadcode-unused-files.mts"), "utf8");
     expect(script).not.toContain("allowlist");
     expect(script).toContain("production and full-tree unused-file checks passed with 0 entries");
     expect(script).toContain('"config/knip.all-exports.config.ts"');
@@ -75,9 +91,9 @@ left-pad: package.json
   it("keeps dot-directory and root entry files", () => {
     expect(
       parseKnipCompactUnusedFiles(
-        ".agents/skills/example/scripts/check.mjs: .agents/skills/example/scripts/check.mjs\ntsdown.ai.config.ts: tsdown.ai.config.ts\n",
+        ".agents/skills/example/scripts/check.mts: .agents/skills/example/scripts/check.mts\ntsdown.ai.config.ts: tsdown.ai.config.ts\n",
       ),
-    ).toEqual([".agents/skills/example/scripts/check.mjs", "tsdown.ai.config.ts"]);
+    ).toEqual([".agents/skills/example/scripts/check.mts", "tsdown.ai.config.ts"]);
   });
 
   it("ignores pnpm dlx progress lines in files-only compact output", () => {
@@ -159,7 +175,7 @@ Delete the files or model their real entrypoints in Knip.`,
           "--config.minimum-release-age=0",
           "dlx",
           "--package",
-          "knip@6.8.0",
+          "knip@6.32.2",
           "knip",
           "--config",
           "config/knip.config.ts",
@@ -214,7 +230,7 @@ Delete the files or model their real entrypoints in Knip.`,
         "--config.minimum-release-age=0",
         "dlx",
         "--package",
-        "knip@6.8.0",
+        "knip@6.32.2",
         "knip",
         "--config",
         "config/knip.config.ts",
@@ -299,16 +315,17 @@ Delete the files or model their real entrypoints in Knip.`,
           env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
           killGraceMs: 50,
           spawnCommand(_command: string, _args: string[], options: unknown) {
-            return spawn(process.execPath, ["-e", parentScript], {
+            const parent = spawn(process.execPath, ["-e", parentScript], {
               ...(options as Parameters<typeof spawn>[2]),
               env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
             });
+            childPid = waitForPidFileSync(childPidPath, 2_000);
+            return parent;
           },
           timeoutMs: 100,
           writeStatus: () => {},
         });
 
-        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
         await expect(resultPromise).resolves.toMatchObject({
@@ -316,9 +333,7 @@ Delete the files or model their real entrypoints in Knip.`,
         });
         await waitForDead(childPid, 2_000);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        killPidIfAlive(childPid || undefined);
         rmSync(root, { recursive: true, force: true });
       }
     },
@@ -330,7 +345,7 @@ Delete the files or model their real entrypoints in Knip.`,
       const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-parent-signal-"));
       const childPidPath = path.join(root, "child.pid");
       const readyPath = path.join(root, "child.ready");
-      const scriptUrl = pathToFileURL(path.resolve("scripts/check-deadcode-unused-files.mjs")).href;
+      const scriptUrl = pathToFileURL(path.resolve("scripts/check-deadcode-unused-files.mts")).href;
       let childPid = 0;
       let runner: ReturnType<typeof spawn> | undefined;
 
@@ -380,9 +395,7 @@ Delete the files or model their real entrypoints in Knip.`,
         if (runner?.pid && isProcessAlive(runner.pid)) {
           runner.kill("SIGKILL");
         }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        killPidIfAlive(childPid || undefined);
         rmSync(root, { recursive: true, force: true });
       }
     },

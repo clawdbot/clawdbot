@@ -29,9 +29,11 @@ function createProps(overrides: Partial<UpdatesViewProps> = {}): UpdatesViewProp
       channel: "stable",
     },
     statusBanner: null,
+    recordedAttempt: null,
     configBusy: false,
     canAdmin: true,
     canUpdate: true,
+    canCheckStatus: true,
     canHoldUpdate: true,
     updateBusy: false,
     nowMs: 1_000,
@@ -39,6 +41,7 @@ function createProps(overrides: Partial<UpdatesViewProps> = {}): UpdatesViewProp
     onAutomaticUpdatesChange: vi.fn(),
     onUpdateNow: vi.fn(),
     onHoldUpdate: vi.fn(async () => true),
+    onCheckStatus: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -451,6 +454,46 @@ describe("renderUpdates", () => {
       "Update error: build-failed. Fix the build error and retry.",
     );
     expect(row("Status").querySelector(".settings-status--danger")).not.toBeNull();
+  });
+
+  it("renders the recorded failure details and typed recovery actions", () => {
+    const onUpdateNow = vi.fn();
+    const onCheckStatus = vi.fn(async () => undefined);
+    render(
+      renderUpdates(
+        createProps({
+          recordedAttempt: {
+            timestampMs: 500,
+            status: "error",
+            reason: "build-failed",
+            installKind: "git",
+            installedVersion: null,
+            installedSha: "0123456789abcdef",
+            targetVersion: null,
+            targetSha: null,
+            failure: { step: "build", detail: "Type check failed" },
+          },
+          onUpdateNow,
+          onCheckStatus,
+        }),
+      ),
+      container,
+    );
+
+    expect(row("Reason code").textContent).toContain("build-failed");
+    expect(row("Target").textContent).toContain("v2026.8.2");
+    expect(row("Installed").textContent).toContain("0123456789ab");
+    expect(row("Attempt install type").textContent).toContain("git");
+    expect(row("Failure details").textContent).toContain("Type check failed");
+    const recovery = row("Recovery");
+    recovery.querySelector<HTMLButtonElement>("button")?.click();
+    recovery.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
+    expect(onCheckStatus).toHaveBeenCalledOnce();
+    expect(onUpdateNow).toHaveBeenCalledOnce();
+    expect(
+      container.querySelector<HTMLAnchorElement>("a[href*='update-troubleshooting']"),
+    ).not.toBeNull();
+    expect(row("CLI fallback").textContent).toContain("openclaw update status --json");
   });
 
   it("keeps read-only facts visible while locking controls for non-admins", () => {

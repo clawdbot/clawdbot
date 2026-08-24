@@ -3,7 +3,6 @@ import Foundation
 import OpenClawDiscovery
 import OpenClawIPC
 import OpenClawKit
-import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -41,13 +40,31 @@ struct OnboardingViewSmokeTests {
                 "2 gateways found on your network — click to choose one.")
     }
 
-    @Test func `onboarding view builds body`() {
-        let state = AppState(preview: true)
-        let view = OnboardingView(
-            state: state,
-            permissionMonitor: PermissionMonitor.shared,
-            discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
-        _ = view.body
+    @Test func `foreign local listener is not advertised as attachable`() {
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "p2380"])
+        let foreign = OnboardingView.LocalGatewayProbe(
+            port: profile.defaultGatewayPort,
+            pid: 1402,
+            command: "node",
+            profile: profile,
+            managedServicePID: 2380)
+        let managed = OnboardingView.LocalGatewayProbe(
+            port: profile.defaultGatewayPort,
+            pid: 2380,
+            command: "node",
+            profile: profile,
+            managedServicePID: 2380)
+        let inactiveUnexpected = OnboardingView.LocalGatewayProbe(
+            port: 18789,
+            pid: 3301,
+            command: "python",
+            profile: AppProfile(environment: [:]),
+            managedServicePID: nil)
+
+        #expect(foreign.subtitle ==
+            "Port 55636 already in use (node pid 1402). Choose a different Gateway port for profile p2380.")
+        #expect(managed.subtitle == "Existing gateway detected (node pid 2380). Will attach.")
+        #expect(inactiveUnexpected.subtitle == "Port 18789 already in use (python pid 3301). Will attach.")
     }
 
     @Test func `onboarding window resizes vertically and gives the page the extra height`() {
@@ -80,25 +97,6 @@ struct OnboardingViewSmokeTests {
 
         #expect(short == 409)
         #expect(short < preferred)
-    }
-
-    @Test func `permissions page scrolls when the onboarding window is short`() throws {
-        let state = AppState(preview: true)
-        let view = OnboardingView(state: state)
-        let hosting = NSHostingView(rootView: view.permissionsPage())
-        let contentHeight = OnboardingView.contentHeight(
-            for: OnboardingView.minimumWindowHeight,
-            usesCompactHero: false)
-        hosting.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: OnboardingView.windowWidth,
-            height: contentHeight)
-        hosting.layoutSubtreeIfNeeded()
-
-        let scrollView = try #require(Self.firstDescendant(of: NSScrollView.self, in: hosting))
-        #expect(contentHeight == 303)
-        #expect(scrollView.documentView != nil)
     }
 
     @Test func `configured flows end at AI setup and hand off to the dashboard`() {
@@ -141,12 +139,7 @@ struct OnboardingViewSmokeTests {
         #expect(!order.contains(2))
     }
 
-    @Test func `fresh remote setup installs CLI for the Mac node worker`() {
-        let order = OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: true)
-
-        #expect(order.contains(2))
+    @Test func `CLI install activates only a local gateway`() {
         #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
         #expect(OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .local))
     }
@@ -187,7 +180,6 @@ struct OnboardingViewSmokeTests {
     @Test func `automatic CLI setup waits for the initial status probe`() {
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: true,
             statusKnown: false,
             executableReady: false,
@@ -195,7 +187,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: true,
             statusKnown: true,
             executableReady: false,
@@ -203,7 +194,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: false,
             statusKnown: true,
             executableReady: false,
@@ -211,7 +201,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: true,
             statusKnown: true,
             executableReady: true,
@@ -219,19 +208,96 @@ struct OnboardingViewSmokeTests {
             installing: false))
     }
 
-    @Test func `detected CLI starts its gateway after this Mac is selected`() {
-        #expect(!OnboardingView.shouldStartExistingCLIActivation(
+    @Test func `detected CLI follows the selected onboarding connection mode`() {
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .remote,
+            executableReady: true,
+            installing: false) == .remote)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .local,
+            executableReady: true,
+            installing: false) == .local)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .unconfigured,
+            executableReady: true,
+            installing: false) == nil)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .local,
+            executableReady: true,
+            installing: true) == nil)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .remote,
+            executableReady: false,
+            installing: false) == nil)
+        #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
+    }
+
+    @Test func `later gateway readiness revises a pinned CLI activation failure`() {
+        #expect(OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .running(details: "pid 4242"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .attachedExisting(details: "pid 4242"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(!OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .failed("still unavailable"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(!OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .running(details: nil),
             isLocal: false,
             executableReady: true,
-            installing: false))
-        #expect(OnboardingView.shouldStartExistingCLIActivation(
-            isLocal: true,
-            executableReady: true,
-            installing: false))
-        #expect(!OnboardingView.shouldStartExistingCLIActivation(
-            isLocal: true,
-            executableReady: true,
-            installing: true))
+            installed: false))
+    }
+
+    @Test func `running local gateway resolves only its pending CLI install prompt`() {
+        for status in [GatewayProcessManager.Status.running(details: nil), .attachedExisting(details: "pid 4242")] {
+            #expect(OnboardingView.shouldResolveInstallPromptForRunningGateway(
+                gatewayStatus: status,
+                isLocal: true,
+                phase: .choosingTarget))
+        }
+        for status in [GatewayProcessManager.Status.starting, .stopped, .failed("unavailable")] {
+            #expect(!OnboardingView.shouldResolveInstallPromptForRunningGateway(
+                gatewayStatus: status,
+                isLocal: true,
+                phase: .choosingTarget))
+        }
+        for mode in [AppState.ConnectionMode.remote, .unconfigured] {
+            #expect(!OnboardingView.shouldResolveInstallPromptForRunningGateway(
+                gatewayStatus: .running(details: nil),
+                isLocal: mode == .local,
+                phase: .choosingTarget))
+        }
+        for phase in [OnboardingView.CLIInstallPhase.idle, .installing, .startingService] {
+            #expect(!OnboardingView.shouldResolveInstallPromptForRunningGateway(
+                gatewayStatus: .running(details: nil),
+                isLocal: true,
+                phase: phase))
+        }
+    }
+
+    @Test func `gateway start failure message retains the concrete reason`() {
+        #expect(
+            OnboardingView.gatewayStartFailureMessage(
+                prefix: "OpenClaw was installed, but the Gateway did not start. Retry setup.",
+                reason: "launchd disabled") ==
+                "OpenClaw was installed, but the Gateway did not start. Retry setup. (launchd disabled)")
+        #expect(
+            OnboardingView.gatewayStartFailureMessage(
+                prefix: "OpenClaw was installed, but the Gateway did not start. Retry setup.",
+                reason: nil) ==
+                "OpenClaw was installed, but the Gateway did not start. Retry setup.")
+        #expect(
+            OnboardingView.gatewayStartFailureMessage(
+                prefix: "OpenClaw was installed, but the Gateway did not start. Retry setup.",
+                reason: "") ==
+                "OpenClaw was installed, but the Gateway did not start. Retry setup.")
     }
 
     @Test func `connection mode change restarts full page monitoring`() {
@@ -279,7 +345,6 @@ struct OnboardingViewSmokeTests {
             state.remoteTarget = "user@old-host:2222"
             let view = OnboardingView(
                 state: state,
-                permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
             let gateway = GatewayDiscoveryModel.DiscoveredGateway(
                 displayName: "Unresolved",
@@ -320,7 +385,6 @@ struct OnboardingViewSmokeTests {
             state.connectionMode = .remote
             let view = OnboardingView(
                 state: state,
-                permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
                 systemAgentDefaults: defaults)
             view.aiSetup.manualKey = "route-a-secret"
@@ -427,7 +491,6 @@ struct OnboardingViewSmokeTests {
             state.connectionMode = .remote
             let view = OnboardingView(
                 state: state,
-                permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
                 systemAgentDefaults: defaults)
             view.aiSetup.manualKey = "pending-secret"
@@ -519,13 +582,5 @@ struct OnboardingViewSmokeTests {
         #expect(Array(Capability.importanceOrdered.prefix(3))
             == [.appleScript, .accessibility, .screenRecording])
         #expect(Capability.importanceOrdered.last == Capability.location)
-    }
-
-    private static func firstDescendant<T: NSView>(of type: T.Type, in view: NSView) -> T? {
-        if let match = view as? T { return match }
-        for child in view.subviews {
-            if let match = self.firstDescendant(of: type, in: child) { return match }
-        }
-        return nil
     }
 }

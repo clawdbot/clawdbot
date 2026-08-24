@@ -1,11 +1,53 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { consumeReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  buildReplyUsageState,
+  consumeReplyUsageState,
+  recordReplyUsageState,
+} from "./reply-usage-state.js";
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("reply usage state handoff", () => {
+  it("prices the selected agent in an explicit fleet", () => {
+    const snapshot = buildReplyUsageState({
+      config: {
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, other: {} },
+        },
+        models: {
+          providers: {
+            fixture: {
+              baseUrl: "https://fixture.invalid",
+              models: [
+                {
+                  id: "priced",
+                  name: "Priced",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1,
+                  maxTokens: 1,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      agentDir: "/tmp/openclaw-main-agent",
+      provider: "fixture",
+      model: "priced",
+      agentId: "main",
+      sessionId: "session-priced",
+      usage: { input: 1_000_000, output: 0 },
+    });
+
+    expect(snapshot.turnUsd).toBe(1);
+  });
+
   it("requires exact run correlation", () => {
     const snapshot = { provider: "openai", model: "gpt-5.5" };
 

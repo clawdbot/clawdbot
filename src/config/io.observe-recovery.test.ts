@@ -16,8 +16,8 @@ import { createConfigIO } from "./io.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
-  promoteConfigSnapshotToLastKnownGood,
-  recoverConfigFromLastKnownGood,
+  promoteConfigSnapshotToLastKnownGoodCore,
+  recoverConfigFromLastKnownGoodCore,
 } from "./io.observe-recovery.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
@@ -866,7 +866,7 @@ describe("config observe recovery", () => {
       await withSuiteHome(async (home) => {
         const { deps, configPath, auditPath } = makeDeps(home);
         const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
-        await promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger });
+        await promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot, logger: deps.logger });
         await fsp.writeFile(
           `${configPath}.bak`,
           `${JSON.stringify({ meta: { lastTouchedVersion: "2026.4.22" } })}\n`,
@@ -1174,7 +1174,7 @@ describe("config observe recovery", () => {
       const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
 
       await expect(
-        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
+        promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot, logger: deps.logger }),
       ).resolves.toBe(true);
 
       await expectPathMissing(path.join(home, ".openclaw", "logs", "config-health.json"));
@@ -1216,7 +1216,7 @@ describe("config observe recovery", () => {
       });
 
       await expect(
-        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
+        promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot, logger: deps.logger }),
       ).resolves.toBe(true);
       await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
         snapshot.raw,
@@ -1224,7 +1224,7 @@ describe("config observe recovery", () => {
 
       const brokenRaw = "{ gateway: { mode: 123 } }\n";
       await fsp.writeFile(configPath, brokenRaw, "utf-8");
-      const restored = await recoverConfigFromLastKnownGood({
+      const restored = await recoverConfigFromLastKnownGoodCore({
         deps,
         snapshot: {
           ...snapshot,
@@ -1254,12 +1254,12 @@ describe("config observe recovery", () => {
         gateway: { mode: "local" },
       });
       await expect(
-        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
+        promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot, logger: deps.logger }),
       ).resolves.toBe(true);
 
       const brokenRaw = "{ gateway: { mode: 123 } }\n";
       await fsp.writeFile(configPath, brokenRaw, "utf-8");
-      const restored = await recoverConfigFromLastKnownGood({
+      const restored = await recoverConfigFromLastKnownGoodCore({
         deps,
         snapshot: {
           ...snapshot,
@@ -1289,7 +1289,7 @@ describe("config observe recovery", () => {
       const lastGoodPath = resolveLastKnownGoodConfigPath(configPath);
 
       await expect(
-        promoteConfigSnapshotToLastKnownGood({
+        promoteConfigSnapshotToLastKnownGoodCore({
           deps: withAsyncChmodFailure(deps, lastGoodPath),
           snapshot,
           logger: deps.logger,
@@ -1311,13 +1311,13 @@ describe("config observe recovery", () => {
         channels: { discord: { enabled: true, dmPolicy: "pairing" } },
       });
       await expect(
-        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
+        promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot, logger: deps.logger }),
       ).resolves.toBe(true);
 
       const brokenRaw = "{ gateway: { mode: 123 } }\n";
       await fsp.writeFile(configPath, brokenRaw, "utf-8");
       await expect(
-        recoverConfigFromLastKnownGood({
+        recoverConfigFromLastKnownGoodCore({
           deps: withAsyncChmodFailure(deps, configPath),
           snapshot: {
             ...snapshot,
@@ -1395,14 +1395,14 @@ describe("config observe recovery", () => {
       const { deps, configPath, warn } = makeDeps(home);
       const staleSnapshot = await makeSnapshot(configPath, staleConfig);
       await expect(
-        promoteConfigSnapshotToLastKnownGood({
+        promoteConfigSnapshotToLastKnownGoodCore({
           deps,
           snapshot: staleSnapshot,
           logger: deps.logger,
         }),
       ).resolves.toBe(true);
       const active = await writeConfigRaw(configPath, activeConfig);
-      const restored = await recoverConfigFromLastKnownGood({
+      const restored = await recoverConfigFromLastKnownGoodCore({
         deps,
         snapshot: { ...staleSnapshot, ...active, valid: false, issues: [issue] },
         reason: "reload-invalid-config",
@@ -1427,7 +1427,7 @@ describe("config observe recovery", () => {
       });
 
       await expect(
-        promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
+        promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot, logger: deps.logger }),
       ).resolves.toBe(false);
       await expectPathMissing(resolveLastKnownGoodConfigPath(configPath));
       expectWarnContaining(warn, "Config last-known-good promotion skipped");

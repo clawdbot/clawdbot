@@ -7,7 +7,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import {
-  projectDefaultInferenceRoute,
+  projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
 } from "./inference-route.js";
@@ -15,11 +15,10 @@ import type {
   SystemAgentConfiguredRoute,
   SystemAgentConfiguredRouteDeps,
 } from "./inference-route.js";
-import { createSystemAgentModelSelectionUpdater } from "./setup-apply.js";
 import {
   SetupInferenceActivationIndeterminateError,
   SetupInferenceActivationUnavailableError,
-  log,
+  setupInferenceLog,
   throwIfSetupInferenceCancelled,
   type ActivateSetupInferenceDeps,
   type ActivateSetupInferenceParams,
@@ -40,14 +39,16 @@ import {
   resolveSetupAgentRuntimeId,
   type SetupInferenceTestPlan,
 } from "./setup-inference-plan-helpers.js";
+import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
 import type { SystemAgentOwnerPluginArtifactSnapshot } from "./verified-inference.js";
 
-type ProjectedInferenceRoute = Awaited<ReturnType<typeof projectDefaultInferenceRoute>>;
+type ProjectedInferenceRoute = Awaited<ReturnType<typeof projectInferenceRoute>>;
 
 export type SetupInferenceActivationPersistenceState = {
   committedConfig: OpenClawConfig | undefined;
   autoLocalModelLeanApplied: boolean;
   codexInstallOwnership: "unknown" | "owned" | "unowned";
+  gatewayRestartRequired: boolean;
 };
 
 export async function persistActivatedSetupInference(input: {
@@ -101,15 +102,18 @@ export async function persistActivatedSetupInference(input: {
   } = input;
   let committedConfig: OpenClawConfig | undefined;
   let { codexInstallOwnership } = state;
-  const projectRoute = (config: OpenClawConfig) => projectDefaultInferenceRoute(config, routeDeps);
+  const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
+  const projectRoute = (config: OpenClawConfig) =>
+    projectInferenceRoute(config, requestedAgentId, routeDeps);
   const resolveRoute = (config: OpenClawConfig) =>
-    resolveSystemAgentConfiguredRouteFromConfig(config, undefined, routeDeps);
+    resolveSystemAgentConfiguredRouteFromConfig(config, requestedAgentId, routeDeps);
 
   const { stripPendingPluginInstallRecords } = await import("../plugins/install-record-commit.js");
   const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
   const selectModel = plan.persistModelRef
     ? await createSystemAgentModelSelectionUpdater({
         model: plan.persistModelRef,
+        ...(params.agentId ? { targetAgentId: testPlan.routeAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
         ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
       })
@@ -225,9 +229,8 @@ export async function persistActivatedSetupInference(input: {
       base: "source",
       // The transform stays side-effect free so a config conflict can retry
       // without replaying credential writes in another agent directory.
-      // Setup changes only hot-reloadable model, agent, and plugin-entry surfaces.
-      // Publish the verified route now so the next turn cannot reuse the old harness.
-      afterWrite: { mode: "auto" },
+      // The install-record owner adds a restart follow-up when this commit adopts
+      // a new plugin source. Preserve that intent for structured setup clients.
       transform: async (current, context) => {
         const latestRuntime = context.snapshot.runtimeConfig ?? context.snapshot.config;
         // Validate that the candidate is still admissible before reporting
@@ -241,7 +244,11 @@ export async function persistActivatedSetupInference(input: {
         }
         if (
           !isDeepStrictEqual(
-            projectSetupTargetModelMetadata(latestRuntime, stagedRoute.modelLabel),
+            projectSetupTargetModelMetadata(
+              latestRuntime,
+              stagedRoute.modelLabel,
+              requestedAgentId,
+            ),
             baselineTargetModelMetadata,
           )
         ) {
@@ -267,7 +274,7 @@ export async function persistActivatedSetupInference(input: {
         }
         if (
           !isDeepStrictEqual(
-            projectSetupTargetModelMetadata(current, stagedRoute.modelLabel),
+            projectSetupTargetModelMetadata(current, stagedRoute.modelLabel, requestedAgentId),
             sourceTargetModelMetadata,
           )
         ) {
@@ -309,6 +316,7 @@ export async function persistActivatedSetupInference(input: {
       },
     });
     committedConfig = committed.nextConfig;
+    state.gatewayRestartRequired = committed.followUp.requiresRestart;
     if (pendingCodexInstall) {
       codexInstallOwnership = "owned";
     }
@@ -361,7 +369,10 @@ export async function persistActivatedSetupInference(input: {
       throw error;
     }
     committedConfig = reconciledSnapshot?.sourceConfig ?? reconciledRuntime;
-    log.warn("Inference activation committed successfully despite a post-write cleanup error.");
+    state.gatewayRestartRequired = pendingCodexInstall !== undefined;
+    setupInferenceLog.warn(
+      "Inference activation committed successfully despite a post-write cleanup error.",
+    );
   }
 
   state.committedConfig = committedConfig;

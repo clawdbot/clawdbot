@@ -179,7 +179,9 @@ function compareCopilotStarterCandidates(
   if (categoryDelta !== 0) {
     return categoryDelta;
   }
-  const contextDelta = right.contextWindow - left.contextWindow;
+  const contextDelta =
+    (right.contextWindow ?? DEFAULT_CONTEXT_WINDOW) -
+    (left.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
   if (contextDelta !== 0) {
     return contextDelta;
   }

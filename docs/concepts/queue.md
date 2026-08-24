@@ -26,7 +26,7 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 When unset, all inbound channel surfaces use:
 
 - `mode: "steer"`
-- `debounceMs: 500`
+- a built-in 500ms debounce for steer, followup, and collect batching
 - `cap: 20`
 - `drop: "summarize"`
 
@@ -50,10 +50,10 @@ Configure globally or per channel via `messages.queue`:
   messages: {
     queue: {
       mode: "steer",
-      debounceMs: 500,
       cap: 20,
       drop: "summarize",
       byChannel: { discord: "collect" },
+      debounceMsByChannel: { discord: 1000 },
     },
   },
 }
@@ -61,15 +61,15 @@ Configure globally or per channel via `messages.queue`:
 
 ## Queue options
 
-Options apply to queued delivery. `debounceMs` also sets the Codex steering quiet window in `steer` mode:
+Per-session `/queue` options apply to queued delivery. The `debounce` option also sets the Codex steering quiet window in `steer` mode:
 
-- `debounceMs`: quiet window before draining queued followups or collect batches; in Codex `steer` mode, quiet window before sending batched `turn/steer`. Bare numbers are milliseconds; units `ms`, `s`, `m`, `h`, and `d` are accepted by `/queue` options.
+- `debounce`: quiet window before draining queued followups or collect batches; in Codex `steer` mode, quiet window before sending batched `turn/steer`. Bare numbers are milliseconds; units `ms`, `s`, `m`, `h`, and `d` are accepted.
 - `cap`: max queued messages per session. Values below `1` are ignored.
 - `drop: "summarize"` (default): drop the oldest queued entries as needed, keep compact summaries, and inject them as a synthetic followup prompt.
 - `drop: "old"`: drop the oldest queued entries as needed, without preserving summaries.
 - `drop: "new"`: reject the newest message when the queue is already full.
 
-Defaults: `debounceMs: 500`, `cap: 20`, `drop: summarize`.
+The queue uses a built-in 500ms debounce. `cap` defaults to `20`, and `drop` defaults to `summarize`.
 
 ## Steer and streaming
 
@@ -90,7 +90,7 @@ For mode selection, OpenClaw resolves:
 3. `messages.queue.mode`.
 4. Default `steer`.
 
-For options, inline or stored `/queue` options win over config. Then channel-specific debounce (`messages.queue.debounceMsByChannel`), plugin debounce defaults, global `messages.queue` options, and built-in defaults are applied, in that order. `cap` and `drop` are global/session options, not per-channel config keys.
+For options, inline or stored `/queue` options win over config. Then channel-specific debounce (`messages.queue.debounceMsByChannel`), plugin debounce defaults, and built-in defaults are applied, in that order. `cap` and `drop` are global/session options, not per-channel config keys.
 
 ## Per-session overrides
 
@@ -130,7 +130,8 @@ not a local-mode command.
 ## Scope and guarantees
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
-- Default lane (`main`) is process-wide for inbound + main heartbeats; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
+- Default lane (`main`) is process-wide for inbound turns; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
+- Heartbeat embedded runs use the bounded `cron-nested` lane for global admission so slow background work does not block inbound replies, while their configured heartbeat session lane still serializes work for that session.
 - Additional lanes may exist (e.g. `cron`, `cron-nested`, `nested`, `subagent`) so background jobs can run in parallel without blocking inbound replies. Isolated cron agent turns hold a `cron` slot while their inner agent execution uses `cron-nested`. Shared non-cron `nested` flows keep their own lane behavior. These detached runs are tracked as [background tasks](/automation/tasks).
 - Per-session lanes guarantee that only one agent run touches a given session at a time.
 - No external dependencies or background worker threads; pure TypeScript + promises.

@@ -23,7 +23,6 @@ describe("bundled channel configured-state metadata", () => {
       "msteams",
       "nextcloud-talk",
       "nostr",
-      "qqbot",
       "raft",
       "slack",
       "sms",

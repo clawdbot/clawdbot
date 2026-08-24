@@ -1,3 +1,4 @@
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Discord plugin module implements runtime.messaging.messages behavior.
 import {
   jsonResult,
@@ -208,9 +209,8 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
               inferChannelId,
               ctx.withOpts(),
             );
-            if (channelInfo && typeof channelInfo === "object") {
-              const record = channelInfo as unknown as Record<string, unknown>;
-              const resolved = record.guild_id ?? record.guildId;
+            if (isRecord(channelInfo)) {
+              const resolved = channelInfo.guild_id ?? channelInfo.guildId;
               if (typeof resolved === "string" && resolved.trim()) {
                 guildId = resolved.trim();
               }

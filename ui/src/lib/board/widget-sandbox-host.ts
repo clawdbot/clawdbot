@@ -1,4 +1,6 @@
-import type { BoardViewWidget, BoardWidgetFrameUrl } from "./view-types.ts";
+import { formatUiError } from "../format-error.ts";
+import type { BoardWidget } from "./types.ts";
+import type { BoardWidgetFrameUrl } from "./view-types.ts";
 import {
   BoardWidgetBridgeController,
   type BoardWidgetBridgeGatewayClient,
@@ -9,16 +11,17 @@ const SANDBOX_READY_TIMEOUT_MS = 10_000;
 
 type BoardWidgetSandboxHostOptions = {
   frame: HTMLIFrameElement;
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   sandboxOrigin: string;
   sandboxUrl: string;
   sourceOrigin: string;
+  controlUiBaseUrl?: string;
   client?: BoardWidgetBridgeGatewayClient;
   resolveFrameUrl: BoardWidgetFrameUrl;
   confirmPrompt: (text: string) => boolean;
   onFrameUrl: (url: string) => void;
-  onLoadFailed: (widget: BoardViewWidget) => void;
-  onUnauthorized: (widget: BoardViewWidget) => void;
+  onLoadFailed: (widget: BoardWidget) => void;
+  onUnauthorized: (widget: BoardWidget) => void;
   onReadyTimeout: () => void;
   onLoaded: () => void;
   onError: (error: unknown) => void;
@@ -255,13 +258,7 @@ export class BoardWidgetSandboxHost {
         this.completeRequest(data.id, generation, true, result);
       })
       .catch((error: unknown) => {
-        this.completeRequest(
-          data.id,
-          generation,
-          false,
-          undefined,
-          error instanceof Error ? error.message : String(error),
-        );
+        this.completeRequest(data.id, generation, false, undefined, formatUiError(error));
       });
   }
 
@@ -350,7 +347,15 @@ export class BoardWidgetSandboxHost {
       return;
     }
     this.offeredTicket = ticket;
-    this.bridgePort.postMessage({ type: "openclaw:widget-host-init", ticket }, []);
+    const controlUiBaseUrl = this.options.controlUiBaseUrl?.trim();
+    this.bridgePort.postMessage(
+      {
+        type: "openclaw:widget-host-init",
+        ticket,
+        ...(controlUiBaseUrl ? { controlUiBaseUrl } : {}),
+      },
+      [],
+    );
   }
 
   private async loadDocument(): Promise<void> {

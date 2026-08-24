@@ -42,7 +42,11 @@ export async function cleanupCodexAttempt(
   } = lifecycle;
   const { codexModelCallDiagnostics } = requestRuntime;
   const { activeTurnId, abortListener, handle, freezeRunTerminalOutcome } = activeTurn;
+  // Exact-thread cron authority exists only while this creator turn owns the
+  // live client/thread. Retained model callbacks must fail after cleanup begins.
+  prompt.context.attemptTools.scheduledAppAuthoritySourceRef.current = undefined;
   try {
+    steeringQueueRef.current?.cancel();
     if (params.isFinalFallbackAttempt !== false) {
       await maybeEmitFastModeAutoResetBestEffort();
     }
@@ -70,9 +74,6 @@ export async function cleanupCodexAttempt(
       });
     }
     await runCleanupStep("codex-trajectory-flush", () => trajectoryRecorder?.flush());
-    if (!state.timedOut && !runAbortController.signal.aborted) {
-      await steeringQueueRef.current?.flushPending();
-    }
     const retainLiveIncognitoThread =
       terminalState.turnSucceeded && isIncognitoSessionKey(params.sessionKey);
     // Native-preserved and supervision threads have separate ownership and can

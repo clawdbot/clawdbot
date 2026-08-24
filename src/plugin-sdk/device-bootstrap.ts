@@ -1,6 +1,7 @@
 // Shared bootstrap/pairing helpers for plugins that provision remote devices.
 
-export { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
+export { approveDevicePairing } from "../infra/device-pairing-approval.js";
+export { listDevicePairing } from "../infra/device-pairing.js";
 export {
   clearDeviceBootstrapTokens,
   issueDeviceBootstrapToken,

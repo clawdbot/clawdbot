@@ -8,8 +8,8 @@ import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import {
   Client,
   ReadyListener,
-  type BaseCommand,
   type BaseMessageInteractiveComponent,
+  type DiscordCommand,
   type Modal,
   type Plugin,
 } from "../internal/discord.js";
@@ -93,7 +93,7 @@ export async function createDiscordMonitorClient(params: {
   applicationId: string;
   token: string;
   restFetch?: typeof fetch;
-  commands: BaseCommand[];
+  commands: DiscordCommand[];
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
   voiceEnabled: boolean;

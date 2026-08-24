@@ -1,3 +1,4 @@
+import type { CodexAppServerRuntimeOptions } from "./app-server/config.js";
 import type {
   CodexThread,
   CodexThreadForkParams,
@@ -8,9 +9,22 @@ import type {
   CodexThreadTurnsListResponse,
 } from "./app-server/protocol.js";
 
+export type CodexCatalogHome = {
+  sourceHomeId: string;
+  hostId: string;
+  label: string;
+  agentDir: string;
+  appServer: CodexAppServerRuntimeOptions;
+  /** Trusted local root for rollout provenance reads; absent for remote app-server connections. */
+  localSessionsRoot?: string;
+  usesProcessHomeFallback: boolean;
+};
+
 /** Read-only metadata for one Codex app-server thread. */
 export type CodexSessionCatalogSession = {
   threadId: string;
+  /** Opaque connection identity; never exposes the underlying Codex home path. */
+  sourceHomeId?: string;
   sessionId?: string;
   name?: string | null;
   /** Display-only fallback kept separate so title search never scans prompt previews. */
@@ -32,6 +46,8 @@ export type CodexSessionCatalogSession = {
 
 export type CodexSessionCatalogPage = {
   sessions: CodexSessionCatalogSession[];
+  /** Internal provenance filtered before this page reaches the provider catalog. */
+  managedThreads?: Array<{ threadId: string; rolloutPath?: string }>;
   nextCursor?: string;
   backwardsCursor?: string;
 };
@@ -55,6 +71,15 @@ export type CodexSessionCatalogControl = {
   forkThread(params: CodexThreadForkParams): Promise<CodexThreadForkResponse>;
   readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
   archiveThread(threadId: string): Promise<void>;
+};
+
+export type CodexSessionCatalogControlFactory = {
+  forRequest(agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl;
+  homesForAgent(agentId: string): readonly CodexCatalogHome[];
+  forUpstream(
+    agentId: string,
+    connectionFingerprint: string,
+  ): CodexSessionCatalogControl | undefined;
 };
 
 export type CodexSessionCatalogError = {
@@ -90,6 +115,7 @@ export type CodexSessionTranscriptPage = {
 };
 
 export type CodexSessionCatalogParams = {
+  agentId?: string;
   search?: string;
   limitPerHost?: number;
   hostIds?: string[];

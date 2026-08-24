@@ -15,7 +15,7 @@ export {
   asToolParamsRecord,
   jsonResult,
   readNumberParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
 } from "../../../../src/agents/tools/common.js";
 export type { AnyAgentTool } from "../../../../src/agents/tools/common.js";
 export {
@@ -120,7 +120,6 @@ export {
   getMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviderAdapters,
-  listRegisteredMemoryEmbeddingProviders,
 } from "../../../../src/plugins/memory-embedding-provider-runtime.js";
 export type {
   MemoryEmbeddingBatchChunk,
@@ -154,7 +153,10 @@ export { parseAgentSessionKey } from "../../../../src/routing/session-key.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
-export { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../../src/utils/cjk-chars.js";
+export {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+} from "@openclaw/normalization-core/cjk-chars";
 export { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
 export { splitShellArgs } from "../../../../src/utils/shell-argv.js";
 export {

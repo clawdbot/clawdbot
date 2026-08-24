@@ -42,13 +42,18 @@ const routingMocks = vi.hoisted(() => ({
 const inboundMocks = vi.hoisted(() => ({
   buildEnvelope: vi.fn(({ body }: { body: string }) => body),
   resolveChannelInboundRouteEnvelope: vi.fn(),
+  toInboundMediaFactsWithMetadata: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  inboundMocks.toInboundMediaFactsWithMetadata.mockImplementation(
+    actual.toInboundMediaFactsWithMetadata,
+  );
   return {
     ...actual,
     resolveChannelInboundRouteEnvelope: inboundMocks.resolveChannelInboundRouteEnvelope,
+    toInboundMediaFactsWithMetadata: inboundMocks.toInboundMediaFactsWithMetadata,
   };
 });
 
@@ -81,8 +86,8 @@ vi.mock("./monitor-routing.js", () => ({
 beforeEach(() => {
   apiMocks.deleteGoogleChatMessage.mockReset();
   apiMocks.downloadGoogleChatMedia.mockReset();
-  apiMocks.sendGoogleChatMessage.mockReset();
-  apiMocks.updateGoogleChatMessage.mockReset();
+  apiMocks.sendGoogleChatMessage.mockReset().mockResolvedValue(null);
+  apiMocks.updateGoogleChatMessage.mockReset().mockResolvedValue({});
   accessMocks.applyGoogleChatInboundAccessPolicy.mockReset();
   inboundMocks.buildEnvelope.mockReset().mockImplementation(({ body }: { body: string }) => body);
   inboundMocks.resolveChannelInboundRouteEnvelope
@@ -95,6 +100,7 @@ beforeEach(() => {
       },
       buildEnvelope: inboundMocks.buildEnvelope,
     }));
+  inboundMocks.toInboundMediaFactsWithMetadata.mockClear();
 });
 
 function createInboundClassificationHarness() {
@@ -313,6 +319,7 @@ describe("googlechat monitor inbound space classification", () => {
         extra: expect.objectContaining({ ChatType: isGroup ? "channel" : "direct" }),
       }),
     );
+    expect(inboundMocks.toInboundMediaFactsWithMetadata).not.toHaveBeenCalled();
     expect(runTurn).toHaveBeenCalledOnce();
   });
 

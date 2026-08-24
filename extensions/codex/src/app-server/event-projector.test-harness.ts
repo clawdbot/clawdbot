@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
   formatToolAggregate,
@@ -283,11 +283,12 @@ export function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNot
 export function appServerError(params: {
   message: string;
   willRetry: boolean;
+  codexErrorInfo?: string;
 }): ProjectorNotification {
   return forCurrentTurn("error", {
     error: {
       message: params.message,
-      codexErrorInfo: null,
+      codexErrorInfo: params.codexErrorInfo ?? null,
       additionalDetails: null,
     },
     willRetry: params.willRetry,

@@ -33,16 +33,6 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 import { setupSkills } from "./onboard-skills.js";
-import { testing } from "./onboard-skills.test-support.js";
-
-describe("skill onboarding text bounds", () => {
-  it("keeps install failures and hints UTF-16 well-formed", () => {
-    expect(testing.summarizeInstallFailure(`${"x".repeat(138)}🚀tail`)).toBe(`${"x".repeat(138)}…`);
-    expect(testing.formatSkillHint({ description: `${"x".repeat(88)}🚀tail`, install: [] })).toBe(
-      `${"x".repeat(88)}…`,
-    );
-  });
-});
 
 function createBundledSkill(params: {
   name: string;
@@ -203,6 +193,36 @@ describe("setupSkills", () => {
     mocks.resolveBrewExecutable.mockReset();
     mocks.resolveInstallerKindReadiness.mockReset();
     mocks.resolveInstallerKindReadiness.mockResolvedValue({ ready: true });
+  });
+
+  it("bounds skill hints and install failures through the onboarding flow", async () => {
+    const hintPrefix = "x".repeat(88);
+    const failurePrefix = "y".repeat(138);
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "node-helper",
+        description: `${hintPrefix}🚀tail`,
+        bins: ["node-helper"],
+        installLabel: "",
+        installKind: "node",
+      }),
+    ]);
+    mocks.installSkill.mockResolvedValueOnce({
+      ok: false,
+      message: `Install failed: ${failurePrefix}🚀tail`,
+      stdout: "",
+      stderr: "",
+      code: 1,
+    });
+    const stop = vi.fn();
+    const { prompter } = createPrompter({ multiselect: ["node-helper"] });
+    vi.mocked(prompter.progress).mockReturnValue({ update: vi.fn(), stop });
+
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    const options = vi.mocked(prompter.multiselect).mock.calls[0]?.[0].options ?? [];
+    expect(options.find((option) => option.value === "node-helper")?.hint).toBe(`${hintPrefix}…`);
+    expect(stop).toHaveBeenCalledWith(expect.stringContaining(`${failurePrefix}…`));
   });
 
   it("hides brew-only installs in Linux containers when brew is missing", async () => {

@@ -1,8 +1,10 @@
+import { spawnSync } from "node:child_process";
 // Sandbox filesystem bridge boundary tests cover host-side validation before
 // any Docker filesystem command can run.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createHostEscapeFixture,
   createSandbox,
@@ -118,4 +120,39 @@ describe("sandbox fs bridge boundary validation", () => {
     await expect(bridge.readFile({ filePath: "a.txt" })).rejects.toThrow(/ENOENT|no such file/i);
     expect(mockedExecDockerRaw).not.toHaveBeenCalled();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a regular file replaced by a FIFO at descriptor open",
+    async () => {
+      await withTempDir("openclaw-fs-bridge-fifo-swap-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        const filePath = path.join(workspaceDir, "live.pipe");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.writeFile(filePath, "regular");
+        const bridge = createSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+        });
+        const realOpenSync = fsSync.openSync.bind(fsSync);
+        const openSync = vi.spyOn(fsSync, "openSync").mockImplementation((target, flags, mode) => {
+          if (path.resolve(String(target)) === filePath) {
+            if (typeof flags !== "number" || (flags & fsSync.constants.O_NONBLOCK) === 0) {
+              throw new Error("sandbox read descriptor open is blocking");
+            }
+            fsSync.unlinkSync(filePath);
+            expect(spawnSync("mkfifo", [filePath]).status).toBe(0);
+          }
+          return realOpenSync(target, flags, mode);
+        });
+
+        try {
+          await expect(bridge.readFile({ filePath: "live.pipe" })).rejects.toThrow(
+            /boundary checks|cannot read/i,
+          );
+        } finally {
+          openSync.mockRestore();
+        }
+        expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+      });
+    },
+  );
 });

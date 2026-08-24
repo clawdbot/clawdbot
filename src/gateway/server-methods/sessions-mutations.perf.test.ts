@@ -5,7 +5,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { CronJob } from "../../cron/types.js";
 import {
@@ -54,16 +54,81 @@ function humanClient(): GatewayClient {
   };
 }
 
+function isWholeSessionStoreProjection(normalizedSql: string): boolean {
+  const source = ' from "session_nodes" order by "session_key"';
+  if (!normalizedSql.startsWith("select ") || !normalizedSql.endsWith(source)) {
+    return false;
+  }
+  const selection = normalizedSql.slice("select ".length, -source.length);
+  return (
+    selection === "*" ||
+    ['"current_session_id"', '"entry_json"', '"session_key"', '"updated_at"'].every((column) =>
+      selection.includes(column),
+    )
+  );
+}
+
+test("single non-label sessions.patch avoids a whole-store projection", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const targetKey = "agent:main:single-patch-target";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: targetKey },
+      { sessionId: "session-single-patch-target", updatedAt: 1 },
+    );
+    for (let index = 0; index < 20; index += 1) {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: `agent:main:single-patch-unrelated-${index}` },
+        { sessionId: `session-single-patch-unrelated-${index}`, updatedAt: index + 2 },
+      );
+    }
+
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const statements = trackSqliteStatementExecutions(
+      database.db,
+      ["whole-store-projection"] as const,
+      (sql) => {
+        const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
+        return isWholeSessionStoreProjection(normalized) ? "whole-store-projection" : null;
+      },
+    );
+    const respond = vi.fn();
+    try {
+      await sessionMutationHandlers["sessions.patch"]!({
+        params: { key: targetKey, pinned: true },
+        respond,
+        context: {
+          getRuntimeConfig: () => ({}),
+          loadGatewayModelCatalog: vi.fn(async () => []),
+          broadcastToConnIds: vi.fn(),
+          getSessionEventSubscriberConnIds: () => new Set(),
+          chatAbortControllers: new Map(),
+          chatQueuedTurns: new Map(),
+          dedupe: new Map(),
+        } as unknown as GatewayRequestContext,
+        client: humanClient(),
+      } as never);
+    } finally {
+      statements.restore();
+    }
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(statements.counts["whole-store-projection"]).toBe(0);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: targetKey })).toHaveProperty("pinnedAt");
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:single-patch-unrelated-0" }),
+    ).not.toHaveProperty("pinnedAt");
+  });
+});
+
 test("sessions.patchMany archives 30 human sessions without transcript hydration", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const targets = Array.from({ length: 30 }, (_, index) => ({
       key: `agent:main:archive-perf-${index}`,
+      expectedSessionId: `session-archive-perf-${index}`,
     }));
-    const transcriptRoots = new Map<string, string>();
-    const transcriptTails = new Map<string, string>();
     for (const [index, target] of targets.entries()) {
       const sessionId = `session-archive-perf-${index}`;
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: target.key },
         { sessionId, updatedAt: index + 1 },
       );
@@ -78,7 +143,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
           now: 1,
         },
       );
-      const tail = await appendTranscriptMessage(
+      await appendTranscriptMessage(
         { agentId: "main", sessionId, sessionKey: target.key },
         {
           message: {
@@ -90,8 +155,6 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
           parentId: root.messageId,
         },
       );
-      transcriptRoots.set(target.key, root.messageId);
-      transcriptTails.set(target.key, tail.messageId);
     }
 
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
@@ -100,13 +163,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       ["whole-store-projection", "transcript-full-hydration"] as const,
       (sql) => {
         const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
-        if (
-          normalized.includes(
-            'select "current_session_id", "entry_json", "session_key", "updated_at"',
-          ) &&
-          normalized.includes('from "session_nodes"') &&
-          normalized.includes('order by "session_key"')
-        ) {
+        if (isWholeSessionStoreProjection(normalized)) {
           return "whole-store-projection";
         }
         const fromIndex = normalized.indexOf(" from ");
@@ -195,6 +252,8 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         broadcastToConnIds: vi.fn(),
         getSessionEventSubscriberConnIds: () => new Set(),
         chatAbortControllers: new Map(),
+        chatQueuedTurns: new Map(),
+        dedupe: new Map(),
         cron: {
           list: cronList,
           updateWithPrecondition: cronUpdate,
@@ -222,12 +281,12 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       );
       expect(statements.counts["whole-store-projection"]).toBe(1);
       expect(statements.counts["transcript-full-hydration"]).toBe(0);
-      // One session-store batch plus one parent-linked audit append per target.
-      expect(transactionCounts).toEqual({ begin: 31, commit: 31 });
+      // Archive attribution stays in the session-store batch; transcripts are untouched.
+      expect(transactionCounts).toEqual({ begin: 1, commit: 1 });
       expect(
         sqliteTransactionLabels.filter((label) => label === "session.entry-replacements"),
       ).toHaveLength(1);
-      expect(sqliteTransactionLabels.filter((label) => label === "agent.write")).toHaveLength(30);
+      expect(sqliteTransactionLabels.filter((label) => label === "agent.write")).toHaveLength(0);
       expect(cronList).toHaveBeenCalledOnce();
       expect(cronUpdate.mock.calls.map(([id, patch]) => [id, patch])).toEqual([
         ["bound-first", { enabled: false }],
@@ -262,7 +321,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
           sessionId,
           sessionKey: target.key,
         })
-      ).filter((event): event is Record<string, unknown> & { message: Record<string, unknown> } => {
+      ).filter((event) => {
         if (!event || typeof event !== "object" || !("message" in event)) {
           return false;
         }
@@ -274,16 +333,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
           message.customType === "openclaw.system-note"
         );
       });
-      expect(auditNotes).toHaveLength(1);
-      expect(transcriptTails.get(target.key)).not.toBe(transcriptRoots.get(target.key));
-      expect(auditNotes[0]?.parentId).not.toBe(transcriptRoots.get(target.key));
-      expect(auditNotes[0]).toMatchObject({
-        parentId: transcriptTails.get(target.key),
-        message: {
-          content: "System note: archived by Performance Reviewer",
-          display: true,
-        },
-      });
+      expect(auditNotes).toEqual([]);
     }
   });
 });

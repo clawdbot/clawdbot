@@ -1,7 +1,9 @@
 /** Focused HTTP coverage for hook admission feedback and pending replay behavior. */
+import { Agent, request as httpRequest } from "node:http";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "../infra/http-body.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import {
   cronIsolatedRun,
@@ -50,7 +52,98 @@ async function waitForDuplicateRequest(): Promise<void> {
   });
 }
 
+async function postOversizedChunkedHook(port: number): Promise<{
+  statusCode: number | undefined;
+  body: string;
+  connection: string | undefined;
+  events: string[];
+}> {
+  const agent = new Agent({ keepAlive: true });
+  const events: string[] = [];
+  try {
+    return await new Promise((resolve, reject) => {
+      const req = httpRequest(
+        {
+          agent,
+          host: "127.0.0.1",
+          port,
+          path: "/hooks/wake",
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${HOOK_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk: Buffer) => chunks.push(chunk));
+          res.on("error", reject);
+          res.on("end", () => {
+            events.push("response-end");
+            void socketClosed.then(() => {
+              events.push("socket-close");
+              resolve({
+                statusCode: res.statusCode,
+                body: Buffer.concat(chunks).toString("utf8"),
+                connection: res.headers.connection,
+                events,
+              });
+            }, reject);
+          });
+        },
+      );
+      const socketClosed = new Promise<void>((resolveClose) => {
+        req.once("socket", (socket) => socket.once("close", resolveClose));
+      });
+      req.on("error", reject);
+      req.setTimeout(5_000, () => req.destroy(new Error("chunked hook request timed out")));
+      req.write('{"text":"');
+      req.write("x".repeat(DEFAULT_WEBHOOK_MAX_BODY_BYTES + 1));
+      req.end('"}');
+    });
+  } finally {
+    agent.destroy();
+  }
+}
+
 describe("gateway hook admission", () => {
+  test("flushes an oversized chunked hook response before closing the socket", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      const response = await postOversizedChunkedHook(port);
+
+      expect(response).toEqual({
+        statusCode: 413,
+        body: JSON.stringify({ ok: false, error: "payload too large" }),
+        connection: "close",
+        events: ["response-end", "socket-close"],
+      });
+    });
+  });
+
+  test("rejects deferred wake delivery to an explicit session", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+    };
+    await withGatewayServer(async ({ port }) => {
+      const response = await postHook(
+        port,
+        "/hooks/wake",
+        { text: "Wake later", mode: "next-heartbeat", sessionKey: "hook:wake:later" },
+        "deferred-custom-wake",
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        ok: false,
+        error: "sessionKey requires mode=now",
+      });
+    });
+  });
+
   test("shares one pending persistent dispatch without losing its session target", async () => {
     testState.hooksConfig = {
       enabled: true,

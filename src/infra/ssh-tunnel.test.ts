@@ -255,7 +255,10 @@ describe("startSshPortForward", () => {
   it.each(["active", "teardown"] as const)(
     "does not crash when stderr errors while the tunnel is %s",
     async (phase) => {
-      vi.useFakeTimers();
+      // Real timers only. The fake spawn opens a real socket, and
+      // waitForLocalListener retries on setTimeout against a Date.now() deadline.
+      // Under fake timers neither advances, so a listener that loses the race on the
+      // first probe hangs to the suite timeout instead of failing on its own budget.
       spawnFakeSshListening();
 
       const tunnel = await startSshPortForward({

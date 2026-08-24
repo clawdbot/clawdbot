@@ -67,6 +67,29 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     ]);
   });
 
+  it("extends only groups containing expanded survivor lanes", () => {
+    expect(
+      planTargetedDockerLaneGroups({
+        groupSize: 2,
+        lanes:
+          "doctor-switch published-upgrade-survivor plugins-offline update-migration plugin-update",
+        upgradeSurvivorScenarios: "base plugin-deps-cleanup",
+      }),
+    ).toEqual([
+      {
+        docker_lanes: "doctor-switch published-upgrade-survivor",
+        label: "doctor-switch--published-upgrade-survivor",
+        timeout_minutes: 90,
+      },
+      {
+        docker_lanes: "plugins-offline update-migration",
+        label: "plugins-offline--update-migration",
+        timeout_minutes: 90,
+      },
+      { docker_lanes: "plugin-update", label: "plugin-update" },
+    ]);
+  });
+
   it("rejects malformed group size values", () => {
     expect(() =>
       planTargetedDockerLaneGroups({

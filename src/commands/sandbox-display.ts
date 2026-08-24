@@ -6,7 +6,6 @@ import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import type { RuntimeEnv } from "../runtime.js";
-import { formatImageMatch, formatSimpleStatus, formatStatus } from "./sandbox-formatters.js";
 
 type DisplayConfig<T> = {
   emptyMessage: string;
@@ -34,9 +33,9 @@ export function displayContainers(containers: SandboxContainerInfo[], runtime: R
       title: "📦 Sandbox Runtimes:",
       renderItem: (container, rt) => {
         rt.log(`  ${container.runtimeLabel ?? container.containerName}`);
-        rt.log(`    Status:  ${formatStatus(container.running)}`);
+        rt.log(`    Status:  ${container.running ? "🟢 running" : "⚫ stopped"}`);
         rt.log(
-          `    ${container.configLabelKind ?? "Image"}:   ${container.image} ${formatImageMatch(container.imageMatch)}`,
+          `    ${container.configLabelKind ?? "Image"}:   ${container.image} ${container.imageMatch ? "✓" : "⚠️  mismatch"}`,
         );
         rt.log(`    Backend: ${container.backendId ?? "docker"}`);
         rt.log(
@@ -61,8 +60,8 @@ export function displayBrowsers(browsers: SandboxBrowserInfo[], runtime: Runtime
       title: "🌐 Sandbox Browser Containers:",
       renderItem: (browser, rt) => {
         rt.log(`  ${browser.containerName}`);
-        rt.log(`    Status:  ${formatStatus(browser.running)}`);
-        rt.log(`    Image:   ${browser.image} ${formatImageMatch(browser.imageMatch)}`);
+        rt.log(`    Status:  ${browser.running ? "🟢 running" : "⚫ stopped"}`);
+        rt.log(`    Image:   ${browser.image} ${browser.imageMatch ? "✓" : "⚠️  mismatch"}`);
         rt.log(`    CDP:     ${browser.cdpPort}`);
         if (browser.noVncPort) {
           rt.log(`    noVNC:   ${browser.noVncPort}`);
@@ -113,7 +112,7 @@ export function displayRecreatePreview(
     runtime.log("📦 Sandbox Runtimes:");
     for (const container of containers) {
       runtime.log(
-        `  - ${container.runtimeLabel ?? container.containerName} [${container.backendId ?? "docker"}] (${formatSimpleStatus(container.running)})`,
+        `  - ${container.runtimeLabel ?? container.containerName} [${container.backendId ?? "docker"}] (${container.running ? "running" : "stopped"})`,
       );
     }
   }
@@ -121,7 +120,7 @@ export function displayRecreatePreview(
   if (browsers.length > 0) {
     runtime.log("\n🌐 Browser Containers:");
     for (const browser of browsers) {
-      runtime.log(`  - ${browser.containerName} (${formatSimpleStatus(browser.running)})`);
+      runtime.log(`  - ${browser.containerName} (${browser.running ? "running" : "stopped"})`);
     }
   }
 

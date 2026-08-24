@@ -113,7 +113,7 @@ export type InlineDirectives = {
 };
 
 /** Parses supported inline directives in the same order they are stripped from text. */
-export function parseInlineDirectives(
+export function parseInlineSessionDirectives(
   body: string,
   options?: {
     modelAliases?: string[];

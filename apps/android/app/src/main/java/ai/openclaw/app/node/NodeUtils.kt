@@ -8,28 +8,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
-/** Default canvas seam color used when gateway/user params omit a hex color. */
-const val DEFAULT_SEAM_COLOR_ARGB: Long = 0xFF4F7A9A
-
-/** Small tuple used by Android node handlers that need four return values. */
-data class Quad<A, B, C, D>(
-  val first: A,
-  val second: B,
-  val third: C,
-  val fourth: D,
-)
-
-/** Escapes a Kotlin string into a JSON string literal without building a JsonElement. */
-fun String.toJsonString(): String {
-  val escaped =
-    this
-      .replace("\\", "\\\\")
-      .replace("\"", "\\\"")
-      .replace("\n", "\\n")
-      .replace("\r", "\\r")
-  return "\"$escaped\""
-}
-
 fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
 /** Parses invoke params into a JSON object, returning null for absent/malformed input. */
@@ -95,6 +73,21 @@ fun parseHexColorArgb(raw: String?): Long? {
   if (hex.length != 6) return null
   val rgb = hex.toLongOrNull(16) ?: return null
   return 0xFF000000L or rgb
+}
+
+fun resolveGatewayAccentArgb(config: JsonObject?): Long? {
+  val ui = config?.get("ui").asObjectOrNull()
+  // Control UI precedence (gateway talk.config): a present user accent wins over the
+  // operator seam color even when it is not a usable hex string; only an absent or
+  // JSON-null accent falls through, matching the gateway's `??` selection.
+  val chosen =
+    ui
+      ?.get("prefs")
+      .asObjectOrNull()
+      ?.get("accent")
+      ?.takeIf { it !is JsonNull }
+      ?: ui?.get("seamColor")
+  return parseHexColorArgb((chosen as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull)
 }
 
 /** Converts gateway invocation throwables into protocol code/message pairs. */

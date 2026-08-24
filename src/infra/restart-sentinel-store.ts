@@ -612,8 +612,8 @@ export function writeUpdateInstallReceiptRowSync(
   rawPayload: RestartSentinelPayload,
 ): RestartSentinel {
   const payload = requireValidPayload(rawPayload);
-  if (payload.kind !== "update" || payload.status !== "ok") {
-    throw new TypeError("Update install receipt requires a successful update payload");
+  if (payload.kind !== "update" || payload.stats?.mode !== "git") {
+    throw new TypeError("Update install receipt requires a git update payload");
   }
   const current = readRestartSentinelRowForKeySync(db, UPDATE_INSTALL_RECEIPT_KEY);
   const currentRevision =

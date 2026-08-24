@@ -124,6 +124,7 @@ async function handleDiscordCommandArgInteraction(params: {
     preferFollowUp: true,
     threadBindings: ctx.threadBindings,
     responseEphemeral: resolveDiscordSlashCommandConfig(ctx.discordConfig?.slashCommand).ephemeral,
+    pluginCommandDispatch: { kind: "non-plugin" },
   });
 }
 

@@ -45,10 +45,10 @@ import type {
   ToolOutcomeObserver,
 } from "./agent-tools.before-tool-call.types.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
-import { BEFORE_TOOL_CALL_SOURCE_TOOL } from "./before-tool-call-metadata.js";
+import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
@@ -79,10 +79,7 @@ export function resolveToolTerminalPresentation(params: {
   result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
 }): string | undefined {
   try {
-    const taggedTool = params.tool as unknown as Record<symbol, unknown>;
-    const sourceTool = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];
-    const presentationTool =
-      sourceTool && typeof sourceTool === "object" ? (sourceTool as AnyAgentTool) : params.tool;
+    const presentationTool = getBeforeToolCallSourceTool(params.tool) ?? params.tool;
     const text = getToolTerminalPresentation(presentationTool)?.(
       params.toolParams,
       params.result,
@@ -391,7 +388,7 @@ export function findSkillUsageMatch(params: {
 }): SkillUsageMatch | undefined {
   const command = params.ctx?.skillCommand;
   if (command) {
-    const commandToolName = normalizeToolName(command.toolName ?? params.toolName);
+    const commandToolName = normalizeToolPolicyName(command.toolName ?? params.toolName);
     if (!commandToolName || commandToolName === params.toolName) {
       const skillSource = resolveSkillTelemetrySourceValue(command.skillSource);
       const snapshotMatch = findResolvedSkillUsageMatch({

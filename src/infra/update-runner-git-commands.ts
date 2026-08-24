@@ -94,7 +94,7 @@ function isSupersededInstallFailure(
 }
 
 function isPreflightCandidateFailure(step: UpdateStepResult): boolean {
-  return /^preflight (?:checkout|package manager|deps install(?: \(ignore scripts\))?|build|lint) \(.+\)$/u.test(
+  return /^preflight (?:checkout|package manager|deps install(?: \(ignore scripts\))?|build|config validate|lint) \(.+\)$/u.test(
     step.name,
   );
 }

@@ -1,8 +1,8 @@
 // Reads provider ids selected by auth, model, channel, and media configuration.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { asObjectRecord } from "./object.js";
 
 function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>();
@@ -12,16 +12,16 @@ function collectConfiguredProviderIds(cfg: OpenClawConfig): Set<string> {
       ids.add(id.toLowerCase());
     }
   };
-  for (const profile of Object.values(asObjectRecord(cfg.auth?.profiles) ?? {})) {
-    add(asObjectRecord(profile)?.provider);
+  for (const profile of Object.values(asNullableRecord(cfg.auth?.profiles) ?? {})) {
+    add(asNullableRecord(profile)?.provider);
   }
-  for (const providerId of Object.keys(asObjectRecord(cfg.models?.providers) ?? {})) {
+  for (const providerId of Object.keys(asNullableRecord(cfg.models?.providers) ?? {})) {
     add(providerId);
   }
-  const modelByChannel = asObjectRecord(cfg.channels?.modelByChannel);
+  const modelByChannel = asNullableRecord(cfg.channels?.modelByChannel);
   for (const [providerId, channelMap] of Object.entries(modelByChannel ?? {})) {
     add(providerId);
-    for (const modelRef of Object.values(asObjectRecord(channelMap) ?? {})) {
+    for (const modelRef of Object.values(asNullableRecord(channelMap) ?? {})) {
       if (typeof modelRef !== "string") {
         continue;
       }
@@ -55,7 +55,7 @@ function collectConfiguredMediaProviderIds(cfg: OpenClawConfig): Set<string> {
       return;
     }
     for (const model of value) {
-      add(asObjectRecord(model)?.provider);
+      add(asNullableRecord(model)?.provider);
     }
   };
   const media = cfg.tools?.media;

@@ -367,7 +367,6 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowThinking: true,
       chatShowToolCalls: true,
       chatPersistCommentary: true,
-      navCollapsed: false,
       navWidth: 258,
       sidebarEntries: [],
       sessionsByGateway: {
@@ -819,6 +818,18 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().chatSplitLayout).toEqual(chatSplitLayout);
   });
 
+  it("preserves an opted-in bottom workspace dock", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    saveSettings({ ...loadSettings(), chatWorkspaceDock: "bottom" });
+
+    expect(loadSettings().chatWorkspaceDock).toBe("bottom");
+  });
+
   it("persists dashboard tab and dock state per session", () => {
     setTestLocation({
       protocol: "https:",
@@ -869,7 +880,9 @@ describe("loadSettings default gateway URL derivation", () => {
 
     saveSettings({ ...settings, sidebarSessionLayouts });
 
-    expect(loadSettings().sidebarSessionLayouts).toEqual(sidebarSessionLayouts);
+    // Deep-partial match: loading also fills dock/expanded defaults, which the
+    // corrupt-layout test below pins down.
+    expect(loadSettings().sidebarSessionLayouts).toMatchObject(sidebarSessionLayouts);
   });
 
   it("normalizes corrupt stored sidebar layouts to empty columns", () => {
@@ -884,7 +897,7 @@ describe("loadSettings default gateway URL derivation", () => {
     );
 
     expect(loadSettings().sidebarSessionLayouts).toEqual({
-      "agent:main:main": { columns: [] },
+      "agent:main:main": { columns: [], open: false, expanded: false },
     });
   });
 

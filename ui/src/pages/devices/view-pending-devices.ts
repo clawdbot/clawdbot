@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 // Devices page renders the pending device pairing-request rows.
 import { html, nothing } from "lit";
 import {
@@ -9,7 +10,6 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatList, formatRelativeTimestamp } from "../../lib/format.ts";
 import type { PairedDevice, PendingDevice } from "../../lib/nodes/index.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { renderDeviceTile } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
 
@@ -108,10 +108,18 @@ function renderPendingDevice(req: PendingDevice, props: DevicesProps, paired?: P
           : nothing}
       </div>
       <div class="settings-row__control">
-        <button class="btn btn--sm" @click=${() => props.onDeviceApprove(req.requestId)}>
+        <button
+          class="btn btn--sm"
+          ?disabled=${!props.canManagePairing}
+          @click=${() => props.onDeviceApprove(req.requestId)}
+        >
           ${t("devices.inventory.approve")}
         </button>
-        <button class="btn btn--sm" @click=${() => props.onDeviceReject(req.requestId)}>
+        <button
+          class="btn btn--sm"
+          ?disabled=${!props.canManagePairing}
+          @click=${() => props.onDeviceReject(req.requestId)}
+        >
           ${t("devices.inventory.reject")}
         </button>
       </div>

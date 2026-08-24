@@ -29,10 +29,10 @@ describe("sessionClassificationForRow", () => {
     ["agent:main:acp:child", false, "acp", true],
     ["agent:main:cron:job", false, "cron", true],
     ["agent:main:hook:run", false, "hook", true],
+    ["agent:main:node-device", false, "node", false],
     ["agent:main:harness:codex:supervision:thread", false, "harness", true],
     ["agent:main:voice:call:123", false, "voice", false],
     ["agent:main:dreaming-narrative-rem-workspace", false, "dreaming", true],
-    ["agent:main:commitments:run", false, "system", true],
   ] as const)("classifies %s", (key, isMain, expected, isBackground) => {
     expect(classification({ key, isMain, entry: entry() })).toMatchObject({
       classification: expected,

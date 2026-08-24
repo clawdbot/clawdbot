@@ -32,7 +32,7 @@ const oauthMocks = vi.hoisted(() => ({
 
 const computerUseServiceMocks = vi.hoisted(() => ({
   ensureCodexComputerUseServiceApp: vi.fn(async () => ({
-    status: "already_installed" as const,
+    status: "already_current" as const,
     changed: false,
   })),
 }));
@@ -261,10 +261,12 @@ describe("bridgeCodexAppServerStartOptions", () => {
         await writeCodexCliAuthFile(codexHome);
         vi.stubEnv("CODEX_API_KEY", "");
         vi.stubEnv("OPENAI_API_KEY", "");
+        vi.stubEnv("CODEX_HOME", "");
+        vi.stubEnv("HOME", path.join(agentDir, "empty-home"));
 
         await expect(
           bridgeCodexAppServerStartOptions({
-            startOptions: createStartOptions(),
+            startOptions: createStartOptions({ headers: {} }),
             agentDir,
             agentId: "research",
             authRequirement,
@@ -346,6 +348,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
 
       expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith({
         codexHome,
+        ownershipRoot: agentDir,
         appServerCommand: startOptions.command,
       });
     });
@@ -357,6 +360,35 @@ describe("bridgeCodexAppServerStartOptions", () => {
         startOptions: createStartOptions(),
         agentDir,
         pluginConfig: { computerUse: { enabled: true, autoInstall: false } },
+      });
+
+      expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not replace the native service app for user-scoped homes", async () => {
+    await withTempDir("openclaw-codex-computer-use-user-home-", async (root) => {
+      const codexHome = path.join(root, "user-codex-home");
+      vi.stubEnv("CODEX_HOME", codexHome);
+
+      await bridgeCodexAppServerStartOptions({
+        startOptions: createStartOptions({ homeScope: "user" }),
+        agentDir: path.join(root, "agent"),
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+      });
+
+      expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not replace the native service app for an explicit CODEX_HOME", async () => {
+    await withTempDir("openclaw-codex-computer-use-explicit-home-", async (root) => {
+      const codexHome = path.join(root, "explicit-codex-home");
+
+      await bridgeCodexAppServerStartOptions({
+        startOptions: createStartOptions({ env: { CODEX_HOME: codexHome } }),
+        agentDir: path.join(root, "agent"),
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
       });
 
       expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).not.toHaveBeenCalled();
@@ -784,6 +816,37 @@ describe("bridgeCodexAppServerStartOptions", () => {
     ).resolves.toEqual({
       authProfileId: "openai:legacy",
       nativeAuthProfile: true,
+    });
+  });
+
+  it("prepares a selected profile when remote execution forbids legacy auth", async () => {
+    const authProfileStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:remote": {
+          type: "api_key",
+          provider: "openai",
+          key: "prepared-remote-key",
+        },
+      },
+    };
+
+    await expect(
+      resolveCodexAppServerPreparedAuthHandoff({
+        authProfileId: "openai:remote",
+        authProfileStore,
+        homeScope: "agent",
+        requirePreparedAuth: true,
+        subscriptionProfileRequiredError: "unused",
+        subscriptionProfileUnusableError: "unused",
+      }),
+    ).resolves.toMatchObject({
+      authProfileId: "openai:remote",
+      preparedAuth: {
+        kind: "profile",
+        profileId: "openai:remote",
+        snapshot: { loginParams: { type: "apiKey", apiKey: "prepared-remote-key" } },
+      },
     });
   });
 
@@ -1713,6 +1776,36 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("exposes only a genuine credential account id for scheduled authorization identity", async () => {
+    const base = {
+      type: "oauth" as const,
+      provider: "openai",
+      access: "subscription-token",
+      refresh: "refresh-token",
+      expires: Date.now() + 60 * 60_000,
+      email: "operator@example.test",
+    };
+    const withAccount = await resolveCodexAppServerPreparedAuthProfileSnapshot({
+      agentDir: "/tmp/openclaw-agent",
+      authProfileId: "openai:work",
+      authProfileStore: {
+        version: 1,
+        profiles: { "openai:work": { ...base, accountId: "account-123" } },
+      },
+    });
+    const emailOnly = await resolveCodexAppServerPreparedAuthProfileSnapshot({
+      agentDir: "/tmp/openclaw-agent",
+      authProfileId: "openai:email-only",
+      authProfileStore: {
+        version: 1,
+        profiles: { "openai:email-only": base },
+      },
+    });
+
+    expect(withAccount?.chatgptAccountId).toBe("account-123");
+    expect(emailOnly).not.toHaveProperty("chatgptAccountId");
+  });
+
   it("applies a normal OpenAI API-key profile as a Codex app-server backup", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "apiKey" }));
@@ -2260,6 +2353,8 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
     vi.stubEnv("CODEX_API_KEY", "codex-env-api-key");
     vi.stubEnv("OPENAI_API_KEY", "openai-env-api-key");
+    vi.stubEnv("CODEX_HOME", path.join(agentDir, "empty-codex-home"));
+    vi.stubEnv("HOME", path.join(agentDir, "empty-home"));
     try {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,
@@ -2459,6 +2554,8 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
     vi.stubEnv("CODEX_API_KEY", "codex-env-api-key");
     vi.stubEnv("OPENAI_API_KEY", "openai-env-api-key");
+    vi.stubEnv("CODEX_HOME", path.join(agentDir, "empty-codex-home"));
+    vi.stubEnv("HOME", path.join(agentDir, "empty-home"));
     try {
       await applyCodexAppServerAuthProfile({
         client: { request } as never,

@@ -15,6 +15,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpencodeGoLiveProviderConfig,
   buildStaticOpencodeGoProviderConfig,
+  resolveOpencodeGoStarterModel,
 } from "./provider-catalog.js";
 import opencodeGoProviderDiscovery from "./provider-discovery.js";
 
@@ -487,6 +488,27 @@ describe("opencode-go provider plugin", () => {
     expect(live.models.map((model) => model.id)).toEqual(activeModelIds);
   });
 
+  it.each([
+    [["deepseek-v4-pro"], "opencode-go/deepseek-v4-pro"],
+    [["glm-5.1"], undefined],
+  ])("selects only the advertised preferred onboarding model %#", async (modelIds, expected) => {
+    const fetchGuard = vi.fn(async () => ({
+      response: new Response(
+        JSON.stringify({ data: modelIds.map((id) => ({ id, object: "model" })) }),
+      ),
+      finalUrl: "https://opencode.ai/zen/go/v1/models",
+      release: vi.fn(async () => undefined),
+    }));
+
+    await expect(
+      resolveOpencodeGoStarterModel({
+        apiKey: "resolved-opencode-key",
+        preferredModelRef: "opencode-go/deepseek-v4-pro",
+        fetchGuard,
+      }),
+    ).resolves.toBe(expected);
+  });
+
   it("does not mix provider-specific runtime auth with shared discovery auth", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("blocked fetch"));
@@ -562,6 +584,12 @@ describe("opencode-go provider plugin", () => {
     expect(fallback.models.map((model) => model.id).toSorted()).toEqual(
       ACTIVE_MODEL_IDS.toSorted(),
     );
+  });
+
+  it("does not synthesize a stream when the runtime provides none", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.wrapStreamFn?.({ streamFn: undefined } as never)).toBeUndefined();
   });
 
   it.each(["deepseek-v4-pro", "deepseek-v4-flash"] as const)(

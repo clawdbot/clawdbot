@@ -85,6 +85,7 @@ describe("msteams doctor state migration", () => {
 
   afterEach(async () => {
     setMaxPluginStateEntriesPerPluginForTests(undefined);
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 

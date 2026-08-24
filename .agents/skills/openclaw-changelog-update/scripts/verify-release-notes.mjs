@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --import tsx
 
 import { execFileSync, spawnSync } from "node:child_process";
 import {
@@ -20,7 +20,7 @@ import {
   parseShippedBaselineExclusions,
   releaseNotesVersionForTag,
   verifyGithubReleaseNotes,
-} from "../../../../scripts/render-github-release-notes.mjs";
+} from "../../../../scripts/render-github-release-notes.mts";
 
 const repo = "openclaw/openclaw";
 const githubSnapshotSchemaVersion = 1;
@@ -32,6 +32,7 @@ const excludedHandles = new Set([
   "claude",
   "codex",
   "hugin-bot",
+  "roboclaw-bot",
   "steipete",
   "steipete-oai",
 ]);
@@ -78,7 +79,7 @@ function fail(message) {
 
 function printUsage() {
   console.log(`Usage:
-  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \\
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \\
     --base <tag-or-sha> --target <tag-or-sha> --version <version> [options]
 
 Required:
@@ -684,7 +685,7 @@ export function contributionRecordTarget(section) {
 }
 
 export function pullRequestTitleFromCommitSubject(subject, number) {
-  const match = subject.match(/^(?<title>\S(?:.*?\S)?)(?<pr> \(#(?<number>[1-9]\d*)\))\k<pr>*$/u);
+  const match = subject.match(/^(?<title>\S(?:.*\S)?)(?<! \(#\d+\)) \(#(?<number>[1-9]\d*)\)$/u);
   return match?.groups?.number === String(number) ? match.groups.title : undefined;
 }
 
@@ -839,7 +840,7 @@ function appendReferences(references, additions) {
 
 function normalizedCommitSubject(subject) {
   return subject
-    .replace(/\s+\(#\d+\)\s*$/, "")
+    .replace(/(?:\s+\(#\d+\))+\s*$/, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();

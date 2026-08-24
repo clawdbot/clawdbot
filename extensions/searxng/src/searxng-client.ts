@@ -332,4 +332,3 @@ export const testing = {
   validateSearxngBaseUrl,
   SEARXNG_SEARCH_CACHE,
 };
-export { testing as __testing };

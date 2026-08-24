@@ -6,8 +6,7 @@ type CompactionSafeguardTestApi = {
   collectToolFailures: CallableFunction;
   formatToolFailuresSection: CallableFunction;
   splitPreservedRecentTurns: CallableFunction;
-  formatPreservedTurnsSection: CallableFunction;
-  formatSplitTurnContextSection: CallableFunction;
+  buildPreservedTurnsSection: CallableFunction;
   buildCompactionStructureInstructions: CallableFunction;
   buildStructuredFallbackSummary: CallableFunction;
   prependPreviousSummaryForRedistill: CallableFunction;
@@ -17,10 +16,9 @@ type CompactionSafeguardTestApi = {
   extractOpaqueIdentifiers: CallableFunction;
   auditSummaryQuality: CallableFunction;
   capCompactionSummary: CallableFunction;
-  capCompactionSummaryPreservingSuffix: CallableFunction;
+  budgetCompactionSummary: CallableFunction;
   formatFileOperations: CallableFunction;
   computeAdaptiveChunkRatio: CallableFunction;
-  isOversizedForSummary: CallableFunction;
   readWorkspaceContextForSummary: CallableFunction;
   hasMeaningfulConversationContent: CallableFunction;
   isRealConversationMessage: CallableFunction;
@@ -31,6 +29,8 @@ type CompactionSafeguardTestApi = {
   MAX_FILE_OPS_SECTION_CHARS: number;
   MAX_FILE_OPS_LIST_CHARS: number;
   SUMMARY_TRUNCATED_MARKER: string;
+  CONTEXT_TRUNCATED_MARKER: string;
+  MAX_SPLIT_TURN_CONTEXT_CHARS: number;
 };
 
 function getTestApi(): CompactionSafeguardTestApi {

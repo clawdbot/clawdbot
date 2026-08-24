@@ -1,23 +1,40 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.test-helpers.js";
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db-registry.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  openOpenClawAgentDatabase,
+  readOpenIncognitoAgentDatabaseGeneration,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+import { bumpSessionAutomationVersion } from "../session-automation-index.js";
+import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
+import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const loader = vi.hoisted(() => ({
@@ -31,15 +48,15 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-utils.js")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: (
-      ...args: Parameters<typeof actual.loadCombinedSessionStoreForGateway>
+    loadCombinedSessionStoreForGatewayCore: (
+      ...args: Parameters<typeof actual.loadCombinedSessionStoreForGatewayCore>
     ) => {
       loader.calls(...args);
       if (loader.failNext) {
         loader.failNext = false;
         throw new Error("synthetic store load failure");
       }
-      return actual.loadCombinedSessionStoreForGateway(...args);
+      return actual.loadCombinedSessionStoreForGatewayCore(...args);
     },
     listSessionsFromStoreAsync: async (
       ...args: Parameters<typeof actual.listSessionsFromStoreAsync>
@@ -53,6 +70,7 @@ vi.mock("../session-utils.js", async (importOriginal) => {
 
 const { sessionReadHandlers } = await import("./sessions-read.js");
 const { emitSessionsChanged } = await import("./session-change-event.js");
+const { emitSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js");
 
 function identifiedClient(profileId: string): GatewayClient {
   return {
@@ -108,43 +126,23 @@ async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
     agents: { list: [{ id: "main", default: true }, { id: "work" }] },
   };
-  await upsertSessionEntry(
-    { agentId: "main", sessionKey: "agent:main:active" },
-    {
-      sessionId: "main-active",
-      updatedAt: 400,
-      createdActor: { type: "human", id: "owner@example.com" },
-      visibility: "shared",
-    },
-  );
-  await upsertSessionEntry(
-    { agentId: "main", sessionKey: "agent:main:draft" },
-    {
-      sessionId: "main-draft",
-      updatedAt: 300,
-      createdActor: { type: "human", id: "owner@example.com" },
-      visibility: "draft",
-    },
-  );
-  await upsertSessionEntry(
-    { agentId: "main", sessionKey: "agent:main:archived" },
-    {
-      sessionId: "main-archived",
-      updatedAt: 200,
-      archivedAt: 200,
-      createdActor: { type: "human", id: "viewer@example.com" },
-      visibility: "shared",
-    },
-  );
-  await upsertSessionEntry(
-    { agentId: "work", sessionKey: "agent:work:active" },
-    {
-      sessionId: "work-active",
-      updatedAt: 100,
-      createdActor: { type: "human", id: "viewer@example.com" },
-      visibility: "shared",
-    },
-  );
+  for (const [agentId, name, updatedAt, owner, overrides] of [
+    ["main", "active", 400, "owner@example.com", {}],
+    ["main", "draft", 300, "owner@example.com", { visibility: "draft" }],
+    ["main", "archived", 200, "viewer@example.com", { archivedAt: 200 }],
+    ["work", "active", 100, "viewer@example.com", {}],
+  ] as const) {
+    await upsertSessionEntryCore(
+      { agentId, sessionKey: `agent:${agentId}:${name}` },
+      {
+        sessionId: `${agentId}-${name}`,
+        updatedAt,
+        createdActor: { type: "human", id: owner },
+        visibility: "shared",
+        ...overrides,
+      },
+    );
+  }
   return config;
 }
 
@@ -224,10 +222,17 @@ describe("sessions.list single-flight", () => {
     });
   });
 
-  it("reuses a completed result until the session mutation version advances", async () => {
+  it("reuses a completed result until a projection fence advances", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = await seedSessions();
-      const context = requestContext(config);
+      let diskSpaceVersion = 0;
+      const context = {
+        ...requestContext(config),
+        workerPlacementDiskSpaceReader: {
+          read: () => undefined,
+          version: () => diskSpaceVersion,
+        },
+      };
       const client = identifiedClient("owner@example.com");
       const request = { archived: "all" as const, limit: 100 };
       const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
@@ -238,7 +243,298 @@ describe("sessions.list single-flight", () => {
       expect(cached).toBe(first);
       expect(loader.calls).toHaveBeenCalledTimes(1);
 
+      diskSpaceVersion += 1;
+      await listSessions({ client, context, request });
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+
       emitSessionsChanged(context, { reason: "test", sessionKey: "agent:main:active" });
+      await listSessions({ client, context, request });
+      expect(loader.calls).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("rebuilds cached runner availability after burst inventory transitions", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      let runnerAvailable = true;
+      let runnerAvailabilityVersion = 0;
+      const placement = {
+        sessionId: "main-active",
+        sessionKey: "agent:main:active",
+        agentId: "main",
+        executionMode: "worker-turn",
+        state: "active",
+        generation: 4,
+        environmentId: "environment-device",
+        activeOwnerEpoch: 2,
+        workerBundleHash: "a".repeat(64),
+        workspaceBaseManifestRef: "manifest-device",
+        remoteWorkspaceDir: "/workspace",
+        lastTranscriptAckCursor: null,
+        lastLiveEventAckCursor: null,
+        recoveryError: null,
+        terminalReason: null,
+        terminalAtMs: null,
+        turnClaim: null,
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        stateChangedAtMs: 2,
+      } satisfies WorkerSessionPlacementRecord;
+      const context = {
+        ...requestContext(config),
+        workerSessionPlacementService: {
+          getMany: () =>
+            new Map<string, WorkerSessionPlacementRecord>([[placement.sessionId, placement]]),
+        },
+        workerPlacementRunnerAvailabilityReader: {
+          read: () => ({
+            kind: "device" as const,
+            status: runnerAvailable ? ("available" as const) : ("offline" as const),
+          }),
+          version: () => runnerAvailabilityVersion,
+        },
+      } as GatewayRequestContext;
+      const client = identifiedClient("owner@example.com");
+      const request = { agentId: "main", archived: "all" as const, limit: 100 };
+
+      const available = await listSessions({ client, context, request });
+      expect(
+        available.sessions.find((session) => session.key === placement.sessionKey)?.placement,
+      ).toMatchObject({ runner: { kind: "device", status: "available" } });
+      expect(await listSessions({ client, context, request })).toBe(available);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      runnerAvailable = false;
+      runnerAvailabilityVersion += 3;
+      const offline = await listSessions({ client, context, request });
+      expect(
+        offline.sessions.find((session) => session.key === placement.sessionKey)?.placement,
+      ).toMatchObject({ runner: { kind: "device", status: "offline" } });
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("reprojects a cached list when a completed model catalog replaces startup metadata", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      config.agents = {
+        ...config.agents,
+        defaults: { model: { primary: "dynamic-router/reasoner" } },
+      };
+      const startupCatalog: ModelCatalogEntry[] = [
+        {
+          provider: "dynamic-router",
+          id: "reasoner",
+          name: "Reasoner",
+          reasoning: false,
+        },
+      ];
+      const fullCatalog: ModelCatalogEntry[] = [
+        {
+          provider: "dynamic-router",
+          id: "reasoner",
+          name: "Reasoner",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["low", "high", "max"] },
+        },
+      ];
+      let catalog = startupCatalog;
+      const context = {
+        ...requestContext(config),
+        readPreparedGatewayModelCatalog: vi.fn(async () => catalog),
+      };
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+
+      const first = await listSessions({ client, context, request });
+      expect(first.sessions.find((session) => session.agentId === "main")?.thinkingOptions).toEqual(
+        ["off"],
+      );
+      expect(await listSessions({ client, context, request })).toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      catalog = fullCatalog;
+      const refreshed = await listSessions({ client, context, request });
+      expect(refreshed).not.toBe(first);
+      expect(
+        refreshed.sessions.find((session) => session.agentId === "main")?.thinkingOptions,
+      ).toEqual(expect.arrayContaining(["off", "low", "high", "max"]));
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("rebuilds configured targets after registry-only register and unregister", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config = await seedSessions();
+      const extraStorePath = path.join(state.stateDir, "extra-main-sessions.json");
+      const extraDatabasePath = resolveSqliteTargetFromSessionStorePath(extraStorePath, {
+        agentId: "main",
+      }).path;
+      const extraSessionKey = "agent:main:registry-only";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: extraSessionKey, storePath: extraStorePath },
+        {
+          sessionId: "registry-only",
+          updatedAt: 500,
+          createdActor: { type: "human", id: "owner@example.com" },
+          visibility: "shared",
+        },
+      );
+      closeOpenClawAgentDatabaseByPath(extraDatabasePath);
+      unregisterOpenClawAgentDatabase({ agentId: "main", env: state.env, path: extraDatabasePath });
+
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, configuredAgentsOnly: true, limit: 100 };
+      const first = await listSessions({ client, context, request });
+      expect(first.sessions.map((session) => session.key)).not.toContain(extraSessionKey);
+      expect(await listSessions({ client, context, request })).toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      registerOpenClawAgentDatabase({ agentId: "main", env: state.env, path: extraDatabasePath });
+      const registered = await listSessions({ client, context, request });
+      expect(registered.sessions.map((session) => session.key)).toContain(extraSessionKey);
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+      expect(await listSessions({ client, context, request })).toBe(registered);
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+
+      unregisterOpenClawAgentDatabase({ agentId: "main", env: state.env, path: extraDatabasePath });
+      const unregistered = await listSessions({ client, context, request });
+      expect(unregistered.sessions.map((session) => session.key)).not.toContain(extraSessionKey);
+      expect(loader.calls).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("fences configured lists when incognito membership opens and closes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      client.connect.scopes = [...(client.connect.scopes ?? []), "operator.admin"];
+      const request = { archived: "all" as const, configuredAgentsOnly: true, limit: 100 };
+      const childKey = "agent:guest:subagent:incognito-cache-fence";
+      const first = await listSessions({ client, context, request });
+      expect(first.sessions.map((session) => session.key)).not.toContain(childKey);
+      expect(await listSessions({ client, context, request })).toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({
+        agentId: "guest",
+        env: state.env,
+      });
+      const generationBeforeOpen = readOpenIncognitoAgentDatabaseGeneration();
+      const database = openOpenClawAgentDatabase({
+        agentId: "guest",
+        env: state.env,
+        path: incognitoPath,
+      });
+      const openedGeneration = readOpenIncognitoAgentDatabaseGeneration();
+      expect(openedGeneration).toBeGreaterThan(generationBeforeOpen);
+      expect(
+        openOpenClawAgentDatabase({ agentId: "guest", env: state.env, path: incognitoPath }),
+      ).toBe(database);
+      expect(readOpenIncognitoAgentDatabaseGeneration()).toBe(openedGeneration);
+      const entry = {
+        sessionId: "incognito-cache-fence",
+        updatedAt: 600,
+        incognito: true,
+        parentSessionKey: "agent:main:active",
+      };
+      database.db
+        .prepare(
+          "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, parent_session_key) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          childKey,
+          entry.sessionId,
+          JSON.stringify(entry),
+          entry.updatedAt,
+          entry.parentSessionKey,
+        );
+      database.db
+        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+        .run(childKey);
+
+      const opened = await listSessions({ client, context, request });
+      expect(opened.sessions.map((session) => session.key)).toContain(childKey);
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+
+      expect(closeOpenClawAgentDatabaseByPath(incognitoPath)).toBe(true);
+      const closed = await listSessions({ client, context, request });
+      expect(closed.sessions.map((session) => session.key)).not.toContain(childKey);
+      expect(loader.calls).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("invalidates a completed result after terminal lifecycle persistence lands", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+      const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
+
+      const first = await listSessions({ client, context, request });
+      clock.mockReturnValue(60_401);
+      expect(await listSessions({ client, context, request })).toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      // The terminal entry write (status/endedAt/runtimeMs) commits after the
+      // run-index fence bumped at lifecycle end. A list computed in that
+      // window cached the pre-terminal row; the persistence fence evicts it.
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey: "agent:main:active",
+        agentId: "main",
+        event: {
+          ts: 60_500,
+          runId: "run-terminal-fence",
+          data: { phase: "end", startedAt: 60_000, endedAt: 60_450 },
+        },
+      });
+      await listSessions({ client, context, request });
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("invalidates a completed result after a committed transcript update", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+      const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
+
+      const first = await listSessions({ client, context, request });
+      clock.mockReturnValue(60_401);
+
+      // A transcript commit changes row previews/derived titles without any
+      // session-entry mutation; serving the cached page would hide it forever.
+      emitSessionTranscriptUpdate({
+        target: { agentId: "main", sessionId: "main-active", sessionKey: "agent:main:active" },
+      });
+      const refreshed = await listSessions({ client, context, request });
+      expect(refreshed).not.toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("invalidates a completed result when a cron automation binding changes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const client = identifiedClient("owner@example.com");
+      const request = { archived: "all" as const, limit: 100 };
+      const clock = vi.spyOn(Date, "now").mockReturnValue(60_400);
+
+      const first = await listSessions({ client, context, request });
+      clock.mockReturnValue(60_401);
+      expect(await listSessions({ client, context, request })).toBe(first);
+      expect(loader.calls).toHaveBeenCalledTimes(1);
+
+      // Cron job add/remove/enable changes hasAutomation on projected rows but
+      // historically bumped only the automation memo, so cached lists served
+      // stale badges forever.
+      bumpSessionAutomationVersion();
       await listSessions({ client, context, request });
       expect(loader.calls).toHaveBeenCalledTimes(2);
     });
@@ -299,7 +595,7 @@ describe("sessions.list single-flight", () => {
       const request = { archived: "all" as const, limit: 100 };
 
       const first = await listSessions({ client, context, request });
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:external" },
         {
           sessionId: "main-external",
@@ -380,7 +676,7 @@ describe("sessions.list single-flight", () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const parentSessionKey = "agent:main:active";
       const childSessionKey = "agent:main:zzz-child";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: childSessionKey },
         {
           sessionId: "completed-hidden-child",
@@ -524,7 +820,7 @@ describe("sessions.list single-flight", () => {
       const { clock, config } = await seedSessionsWithActivityTimes();
       const parentSessionKey = "agent:main:active";
       const childSessionKey = "agent:main:child";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: childSessionKey },
         {
           sessionId: "completed-child",
@@ -642,7 +938,7 @@ describe("sessions.list single-flight", () => {
     });
   });
 
-  it("does not share filtered results across client identities", async () => {
+  it("fences cached rows across client identities and operator-role changes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = await seedSessions();
       const context = requestContext(config);
@@ -663,6 +959,32 @@ describe("sessions.list single-flight", () => {
       expect(owner.sessions.map((session) => session.key)).toContain("agent:main:draft");
       expect(viewer.sessions.map((session) => session.key)).not.toContain("agent:main:draft");
       expect(loader.calls).toHaveBeenCalledTimes(2);
+      const scopes: Array<"operator.read" | "operator.write"> = ["operator.read", "operator.write"];
+      const defineRole = (others: "write" | "none") => ({
+        sessions: { others },
+        agents: "*" as const,
+        scopes,
+      });
+      config.gateway = {
+        roles: {
+          default: "maintainer",
+          definitions: {
+            maintainer: defineRole("write"),
+            guest: defineRole("none"),
+          },
+        },
+      };
+      const profile = ensureProfileForEmail("cache-role@example.com");
+      const request = { agentId: "main", archived: "all" as const, limit: 100 };
+      const listProfileSessions = () =>
+        listSessions({ client: identifiedClient(profile.id), context, request });
+      const privileged = await listProfileSessions();
+      expect(privileged.sessions.map((session) => session.key)).toContain("agent:main:active");
+      setUserProfileRole(profile.id, "guest");
+      invalidateOperatorRolePolicy(profile.id);
+      const restricted = await listProfileSessions();
+      expect(restricted.sessions.map((session) => session.key)).not.toContain("agent:main:active");
+      expect(loader.calls).toHaveBeenCalledTimes(4);
     });
   });
 
@@ -674,7 +996,7 @@ describe("sessions.list single-flight", () => {
         ["second", 600],
         ["first", 700],
       ] as const) {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:page-${name}` },
           {
             sessionId: `page-${name}`,
@@ -697,7 +1019,7 @@ describe("sessions.list single-flight", () => {
         request: { agentId: "main", archived: "all", limit: 1 },
       });
       await vi.waitFor(() => expect(loader.rowCalls).toHaveBeenCalledOnce());
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:page-first" },
         { visibility: "draft", updatedAt: 800 },
       );
@@ -755,7 +1077,7 @@ describe("sessions.list single-flight", () => {
 
       const beforeMutation = listSessions({ client, context, request });
       await vi.waitFor(() => expect(loader.rowCalls).toHaveBeenCalledTimes(1));
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:created-mid-list" },
         { sessionId: "created-mid-list", updatedAt: 500, visibility: "shared" },
       );

@@ -6,12 +6,12 @@ import type {
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import {
   appendMatchMetadata,
-  asString,
   isRecord,
   readAccountStatusSnapshot,
   resolveEnabledConfiguredAccountId,
   type AccountStatusSnapshot,
 } from "openclaw/plugin-sdk/status-helpers";
+import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const TELEGRAM_POLLING_CONNECT_GRACE_MS = 120_000;
 const TELEGRAM_POLLING_STALE_TRANSPORT_MS = 30 * 60_000;
@@ -41,17 +41,13 @@ type TelegramGroupMembershipAuditSummary = {
   }>;
 };
 
-function asFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 function appendTelegramRuntimeError(message: string, lastError: unknown): string {
-  const error = asString(lastError);
+  const error = normalizeOptionalString(lastError);
   return error ? `${message}: ${error}` : message;
 }
 
 function isTelegramPollingBacklogStallError(lastError: unknown): boolean {
-  const error = asString(lastError);
+  const error = normalizeOptionalString(lastError);
   return Boolean(
     error?.includes("isolated polling spool backlog stalled") ||
     error?.includes("isolated polling spool handler timed out"),
@@ -65,12 +61,12 @@ function collectTelegramPollingRuntimeIssues(params: {
   now: number;
 }) {
   const { account, accountId, issues, now } = params;
-  if (account.running !== true || asString(account.mode) !== "polling") {
+  if (account.running !== true || normalizeOptionalString(account.mode) !== "polling") {
     return;
   }
 
-  const lastStartAt = asFiniteNumber(account.lastStartAt);
-  const lastTransportActivityAt = asFiniteNumber(account.lastTransportActivityAt);
+  const lastStartAt = asFiniteNumber(account.lastStartAt) ?? null;
+  const lastTransportActivityAt = asFiniteNumber(account.lastTransportActivityAt) ?? null;
   const fix = `Run: ${formatCliCommand("openclaw channels status --probe")} (or restart the gateway). Check the bot token, proxy/network settings, and logs if it persists.`;
 
   if (account.connected === false) {
@@ -121,7 +117,7 @@ function collectTelegramWebhookRuntimeIssues(params: {
   now: number;
 }) {
   const { account, accountId, issues, now } = params;
-  if (account.running !== true || asString(account.mode) !== "webhook") {
+  if (account.running !== true || normalizeOptionalString(account.mode) !== "webhook") {
     return;
   }
 
@@ -129,7 +125,7 @@ function collectTelegramWebhookRuntimeIssues(params: {
     return;
   }
 
-  const lastStartAt = asFiniteNumber(account.lastStartAt);
+  const lastStartAt = asFiniteNumber(account.lastStartAt) ?? null;
   const withinStartupGrace =
     lastStartAt != null && now - lastStartAt < TELEGRAM_WEBHOOK_CONNECT_GRACE_MS;
   if (withinStartupGrace) {
@@ -169,15 +165,15 @@ function readTelegramGroupMembershipAuditSummary(
           if (!isRecord(entry)) {
             return null;
           }
-          const chatId = asString(entry.chatId);
+          const chatId = normalizeOptionalString(entry.chatId);
           if (!chatId) {
             return null;
           }
           const ok = typeof entry.ok === "boolean" ? entry.ok : undefined;
-          const status = asString(entry.status) ?? null;
-          const error = asString(entry.error) ?? null;
-          const matchKey = asString(entry.matchKey) ?? undefined;
-          const matchSource = asString(entry.matchSource) ?? undefined;
+          const status = normalizeOptionalString(entry.status) ?? null;
+          const error = normalizeOptionalString(entry.error) ?? null;
+          const matchKey = normalizeOptionalString(entry.matchKey);
+          const matchSource = normalizeOptionalString(entry.matchSource);
           return { chatId, ok, status, error, matchKey, matchSource };
         })
         .filter(Boolean) as TelegramGroupMembershipAuditSummary["groups"])

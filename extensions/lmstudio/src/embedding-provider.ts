@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   buildRemoteBaseUrlPolicy,
   createRemoteEmbeddingProvider,
+  embeddingProviderOwnsDestination,
   normalizeEmbeddingModelWithPrefixes,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
@@ -10,7 +11,6 @@ import {
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded, fetchLmstudioModels } from "./models.fetch.js";
 import {
@@ -24,6 +24,7 @@ import {
   resolveLmstudioConfiguredApiKeyForProvider,
   resolveLmstudioProviderHeaders,
   resolveLmstudioRuntimeApiKey,
+  sanitizeLmstudioStringHeaders,
 } from "./runtime.js";
 
 const log = createSubsystemLogger("memory/embeddings");
@@ -102,8 +103,6 @@ async function resolveLmstudioApiKey(
 function resolveEmbeddingPreloadContextLength(params: {
   model: string;
   models: unknown;
-  providerContextTokens: unknown;
-  providerContextWindow: unknown;
 }): number | undefined {
   const configuredModel = normalizeLmstudioConfiguredCatalogEntries(params.models).find(
     (entry) => normalizeLmstudioModel(entry.id) === params.model,
@@ -111,17 +110,7 @@ function resolveEmbeddingPreloadContextLength(params: {
   if (configuredModel?.contextTokens !== undefined) {
     return configuredModel.contextTokens;
   }
-  // Provider contextTokens is the model default, so it caps an explicit model
-  // window only when that model did not declare its own effective token cap.
-  const providerContextTokens = asPositiveSafeInteger(params.providerContextTokens);
-  if (configuredModel?.contextWindow !== undefined && providerContextTokens !== undefined) {
-    return Math.min(configuredModel.contextWindow, providerContextTokens);
-  }
-  return (
-    providerContextTokens ??
-    configuredModel?.contextWindow ??
-    asPositiveSafeInteger(params.providerContextWindow)
-  );
+  return configuredModel?.contextWindow;
 }
 
 function resolveConfiguredLmstudioProvider(options: MemoryEmbeddingProviderCreateOptions) {
@@ -155,6 +144,11 @@ function resolveLmstudioLocalServiceBaseUrl(
   const configuredPath = configured.replace(/[?#].*$/u, "").replace(/\/+$/u, "");
   const serverBaseUrl = resolveLmstudioServerBase(configured);
   return /\/api\/v1$/iu.test(configuredPath) ? `${serverBaseUrl}/api/v1` : `${serverBaseUrl}/v1`;
+}
+
+function resolveLmstudioEmbeddingBaseUrl(configuredBaseUrl?: string): string {
+  const query = configuredBaseUrl?.match(/\?[^#]*/u)?.[0] ?? "";
+  return `${resolveLmstudioInferenceBase(configuredBaseUrl)}${query}`;
 }
 
 async function resolveLmstudioEmbeddingModelKey(params: {
@@ -204,23 +198,33 @@ export async function createLmstudioEmbeddingProvider(
       : providerBaseUrl && providerBaseUrl.length > 0
         ? providerBaseUrl
         : undefined;
-  const baseUrl = resolveLmstudioInferenceBase(configuredBaseUrl);
+  const baseUrl = resolveLmstudioEmbeddingBaseUrl(configuredBaseUrl);
+  const providerOwnedBaseUrl = resolveLmstudioEmbeddingBaseUrl(providerBaseUrl);
+  const providerOwnsDestination =
+    !baseUrlSource ||
+    embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl: providerOwnedBaseUrl });
   const model = normalizeLmstudioModel(options.model, resolvedProvider?.providerId);
-  const providerHeaders = await resolveLmstudioProviderHeaders({
-    config: options.config,
-    env: process.env,
-    headers: Object.assign(
-      {},
-      providerConfig?.headers,
-      !isFallbackActivation ? options.remote?.headers : {},
-    ),
-  });
-  const apiKey = hasAuthorizationHeader(providerHeaders)
+  const providerHeaders = providerOwnsDestination
+    ? await resolveLmstudioProviderHeaders({
+        config: options.config,
+        env: process.env,
+        headers: providerConfig?.headers,
+      })
+    : undefined;
+  // Memory remote headers are resolved snapshot values, never fresh SecretRefs.
+  const headerOverrides = Object.assign(
+    {},
+    providerHeaders,
+    !isFallbackActivation ? sanitizeLmstudioStringHeaders(options.remote?.headers) : undefined,
+  );
+  const apiKey = hasAuthorizationHeader(headerOverrides)
     ? undefined
     : !isFallbackActivation
-      ? remoteApiKey?.trim() || (await resolveLmstudioApiKey(options, resolvedProvider?.providerId))
+      ? remoteApiKey?.trim() ||
+        (providerOwnsDestination
+          ? await resolveLmstudioApiKey(options, resolvedProvider?.providerId)
+          : undefined)
       : await resolveLmstudioApiKey(options, resolvedProvider?.providerId);
-  const headerOverrides = Object.assign({}, providerHeaders);
   const headers =
     buildLmstudioAuthHeaders({
       apiKey,
@@ -237,8 +241,6 @@ export async function createLmstudioEmbeddingProvider(
   const requestedContextLength = resolveEmbeddingPreloadContextLength({
     model,
     models: providerConfig?.models,
-    providerContextTokens: providerConfig?.contextTokens,
-    providerContextWindow: providerConfig?.contextWindow,
   });
   const localServiceTarget =
     providerConfig?.localService && !baseUrlSource

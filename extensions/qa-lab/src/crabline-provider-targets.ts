@@ -3,6 +3,7 @@ import type {
   OpenClawCrablineInbound,
   OpenClawCrablineInboundInput,
   StartedOpenClawCrablineAdapter,
+  StartedOpenClawCrablineCorrelatedAdapter,
 } from "@openclaw/crabline";
 import type { QaBusInboundMessageInput } from "./runtime-api.js";
 
@@ -142,15 +143,11 @@ export function resolveCrablineStateConversation(params: {
 }
 
 export function createCrablineProviderDelivery(
-  adapter: StartedOpenClawCrablineAdapter,
+  adapter: StartedOpenClawCrablineCorrelatedAdapter,
   target: string,
 ) {
-  const delivery = adapter.createAgentDelivery({
+  const { providerTargetKey, ...delivery } = adapter.createAgentDelivery({
     target: adapter.channel === "matrix" ? resolveMatrixQaTarget(target) : target,
   });
-  return {
-    delivery,
-    providerTargetKey:
-      adapter.channel === "matrix" ? delivery.to.replace(/^room:/u, "") : delivery.to,
-  };
+  return { delivery, providerTargetKey };
 }

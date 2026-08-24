@@ -579,13 +579,13 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     await transport.start();
     const peer = FakePeerConnection.instances[0];
-    for (const type of [
-      "input_audio_buffer.speech_started",
-      "input_audio_buffer.speech_stopped",
-      "response.created",
-      "response.done",
+    for (const event of [
+      { type: "input_audio_buffer.speech_started" },
+      { type: "input_audio_buffer.speech_stopped" },
+      { type: "response.created", response: { id: "response-1" } },
+      { type: "response.done", response: { id: "response-1", status: "completed" } },
     ]) {
-      peer?.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ type }) }));
+      peer?.channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(event) }));
     }
 
     expect(onStatus).toHaveBeenCalledWith("listening", "Speech detected");
@@ -602,6 +602,49 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       "turn-1",
       "turn-1",
     ]);
+    transport.stop();
+  });
+
+  it.each([
+    ["cancelled", "turn.cancelled"],
+    ["failed", "turn.ended"],
+    ["incomplete", "turn.ended"],
+  ] as const)("keeps browser Talk reusable after a %s response", async (status, terminalType) => {
+    stubAnswerSdpFetch();
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = createOpenAiTransport({}, { onStatus, onTalkEvent });
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    const response = {
+      id: "response-1",
+      status,
+      ...(status === "failed"
+        ? { status_details: { error: { code: "provider_error" } } }
+        : status === "incomplete"
+          ? { status_details: { reason: "max_output_tokens" } }
+          : { status_details: { reason: "client_cancelled" } }),
+    };
+    dispatchRealtimeEvent(peer, { type: "response.created", response: { id: "response-1" } });
+    dispatchRealtimeEvent(peer, { type: "response.done", response });
+    dispatchRealtimeEvent(peer, { type: "response.done", response });
+    dispatchRealtimeEvent(peer, { type: "response.created", response: { id: "response-2" } });
+    dispatchRealtimeEvent(peer, {
+      type: "response.done",
+      response: { id: "response-2", status: "completed" },
+    });
+
+    const terminalEvents = onTalkEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.type === "turn.ended" || event.type === "turn.cancelled");
+    expect(terminalEvents).toHaveLength(2);
+    expect(terminalEvents[0]?.type).toBe(terminalType);
+    expect(
+      onTalkEvent.mock.calls
+        .map(([event]) => event.type)
+        .filter((type) => type === "session.error"),
+    ).toHaveLength(status === "cancelled" ? 0 : 1);
+    expect(onStatus).toHaveBeenLastCalledWith("listening", undefined);
     transport.stop();
   });
 

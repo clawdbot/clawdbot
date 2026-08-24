@@ -13,6 +13,7 @@ import {
   candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
+  fullReleaseTrustedWorkflowFields,
   githubApi,
   isDirectReleaseCandidateExecution,
   parseArgs,
@@ -33,7 +34,7 @@ import {
   validatePreflightManifest,
   validateTrustedToolingPin,
   validateWindowsSourceRelease,
-} from "../../scripts/release-candidate-checklist.mjs";
+} from "../../scripts/release-candidate-checklist.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -62,8 +63,8 @@ describe("release candidate checklist", () => {
 
     expect(
       isDirectReleaseCandidateExecution(
-        "/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mjs",
-        "/private/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mjs",
+        "/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mts",
+        "/private/tmp/openclaw-release-tooling/checkout/scripts/release-candidate-checklist.mts",
         realpath,
       ),
     ).toBe(true);
@@ -203,11 +204,11 @@ describe("release candidate checklist", () => {
         targetTrackedStatus: "",
         toolingSha: "b".repeat(40),
         trustedToolingSha: "b".repeat(40),
-        toolingTrackedStatus: " M scripts/release-candidate-checklist.mjs",
+        toolingTrackedStatus: " M scripts/release-candidate-checklist.mts",
         workflowRef: "main",
       }),
     ).toThrow("clean tracked tooling checkout");
-    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     expect(source).toContain('const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url))');
     expect(source).toContain('mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"))');
     expect(source).toContain(
@@ -217,7 +218,7 @@ describe("release candidate checklist", () => {
     expect(source).toContain("`+refs/heads/${workflowRef}:${remoteRef}`");
     expect(source).toContain('"worktree", "add", "--detach", toolingRoot, trustedToolingSha');
     expect(source).toContain(
-      '[join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv]',
+      '["--import", "tsx", join(toolingRoot, "scripts/release-candidate-checklist.mts"), ...argv]',
     );
     expect(source).toContain("[TRUSTED_TOOLING_SHA_ENV]: trustedToolingSha");
     expect(source).toContain("cwd: targetRoot");
@@ -277,7 +278,7 @@ describe("release candidate checklist", () => {
       repository: "openclaw/openclaw",
       tag: "v2026.7.1-beta.3",
     });
-    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     const validationIndex = source.indexOf(
       "const releaseNotesCheck = validateCandidateReleaseNotes",
     );
@@ -576,6 +577,79 @@ describe("release candidate checklist", () => {
         "full",
       ]).releaseProfile,
     ).toBe("full");
+  });
+
+  it("defaults beta and alpha Parallels to postpublish confidence", () => {
+    const beta = parseArgs(["--tag", "v2026.5.14-beta.3"]);
+    const alpha = parseArgs([
+      "--tag",
+      "v2026.5.14-alpha.2",
+      "--workflow-ref",
+      "tideclaw/alpha/2026-07-10-1200Z",
+      "--npm-dist-tag",
+      "alpha",
+    ]);
+
+    for (const options of [beta, alpha]) {
+      expect(options.releaseProfile).toBe("beta");
+      expect(options.parallelsMode).toBe("auto");
+      expect(options.skipParallels).toBe(true);
+      expect(options.parallelsSkipReason).toBe("deferred to postpublish release:beta-smoke");
+    }
+  });
+
+  it("supports explicit and profile-default Parallels execution", () => {
+    const beta = parseArgs(["--tag", "v2026.5.14-beta.3", "--run-parallels"]);
+    const stable = parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]);
+    const full = parseArgs([
+      "--tag",
+      "v2026.5.14",
+      "--windows-node-tag",
+      "v0.6.3",
+      "--release-profile",
+      "full",
+    ]);
+
+    expect(beta).toMatchObject({
+      parallelsMode: "run",
+      parallelsSkipReason: "",
+      skipParallels: false,
+    });
+    for (const options of [stable, full]) {
+      expect(options.parallelsMode).toBe("auto");
+      expect(options.skipParallels).toBe(false);
+      expect(options.parallelsSkipReason).toBe("");
+    }
+  });
+
+  it("supports an explicit Parallels skip without changing persisted state shape", () => {
+    const options = parseArgs([
+      "--tag",
+      "v2026.5.14",
+      "--windows-node-tag",
+      "v0.6.3",
+      "--skip-parallels",
+    ]);
+    const state = buildReleaseCandidateState(options, {
+      targetSha: "a".repeat(40),
+      toolingSha: "b".repeat(40),
+    });
+
+    expect(options).toMatchObject({
+      parallelsMode: "skip",
+      parallelsSkipReason: "operator skipped --skip-parallels",
+      skipParallels: true,
+    });
+    expect(state.skipParallels).toBe(true);
+    expect(state).not.toHaveProperty("parallelsMode");
+    expect(state).not.toHaveProperty("parallelsSkipReason");
+    expect(state).not.toHaveProperty("runParallels");
+  });
+
+  it("rejects conflicting Parallels modes", () => {
+    expect(() =>
+      parseArgs(["--tag", "v2026.5.14-beta.3", "--run-parallels", "--skip-parallels"]),
+    ).toThrow("--run-parallels and --skip-parallels cannot be combined");
   });
 
   it("runs Parallels against the exact prepared candidate tarball", () => {
@@ -894,7 +968,7 @@ describe("release candidate checklist", () => {
     expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1");
     expect(releaseBranchForTag("v2026.7.1-alpha.4")).toBe("");
 
-    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     expect(source).toContain("target_context_ref: targetContextRef");
   });
 
@@ -937,6 +1011,7 @@ describe("release candidate checklist", () => {
       duplicateOption("--windows-node-tag", "v0.6.3", "v0.6.4"),
       duplicateFlag("--skip-dispatch"),
       duplicateFlag("--skip-local-generated-check"),
+      duplicateFlag("--run-parallels"),
       duplicateFlag("--skip-parallels"),
       duplicateFlag("--skip-telegram"),
       duplicateOption("--telegram-provider-mode", "mock-openai", "live-frontier"),
@@ -1017,7 +1092,7 @@ describe("release candidate checklist", () => {
   });
 
   it("binds SHA-pinned full validation evidence through its manifest", () => {
-    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
 
     expect(source).toContain("allowShaPinnedWorkflowRef: true");
     expect(source).toContain(
@@ -1075,6 +1150,8 @@ describe("release candidate checklist", () => {
         "111",
         "--npm-preflight-run",
         "222",
+        "--plugin-sdk-api-acknowledgement",
+        "a1b2c3d4",
         "--skip-dispatch",
       ]),
       workflowRef: "main",
@@ -1085,6 +1162,7 @@ describe("release candidate checklist", () => {
     expect(command).toContain("'full_release_validation_run_id=111'");
     expect(command).toContain("'full_release_validation_run_attempt=2'");
     expect(command).toContain("'preflight_run_id=222'");
+    expect(command).toContain("'plugin_sdk_api_acknowledgement=a1b2c3d4'");
     expect(command).toContain("'tag=v2026.5.14-beta.3'");
     expect(command).toContain("'plugin_publish_scope=all-publishable'");
     expect(command).toContain("'--ref' 'main'");
@@ -1101,6 +1179,12 @@ describe("release candidate checklist", () => {
     for (const input of emittedInputs) {
       expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
     }
+  });
+
+  it("validates Plugin SDK acknowledgement digests", () => {
+    expect(() =>
+      parseArgs(["--tag", "v2026.5.14-beta.3", "--plugin-sdk-api-acknowledgement", "ABC"]),
+    ).toThrow("8-character lowercase digest");
   });
 
   it("requires and carries an exact Windows Node tag for stable release candidates", () => {
@@ -1287,6 +1371,59 @@ describe("release candidate checklist", () => {
         "full-release-validation.yml",
       ),
     ).toThrow("refusing to guess from recent workflow_dispatch runs");
+  });
+
+  it("keeps contract 1 callers compatible and sends identity for contract 2", () => {
+    const workflowSha = "a".repeat(40);
+    const source = (contract: string, declareIdentity: boolean) => `env:
+  RELEASE_ISOLATION_TOOLING_CONTRACT: "${contract}"
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha: {}
+${declareIdentity ? "      trusted_workflow_json: {}\n" : ""}`;
+
+    expect(
+      fullReleaseTrustedWorkflowFields({
+        workflowRef: "main",
+        workflowSha,
+        workflowSource: source("1", false),
+      }),
+    ).toEqual({});
+    const fields = fullReleaseTrustedWorkflowFields({
+      workflowRef: "main",
+      workflowSha,
+      workflowSource: source("2", true),
+    });
+    expect(JSON.parse(fields.trusted_workflow_json ?? "{}")).toEqual({
+      ref: "main",
+      fullRef: "refs/heads/main",
+      sha: workflowSha,
+    });
+    expect(() =>
+      fullReleaseTrustedWorkflowFields({
+        workflowRef: "main",
+        workflowSha,
+        workflowSource: source("2", false),
+      }),
+    ).toThrow("contract 2 requires trusted_workflow_json");
+    for (const contract of ["3", "4"]) {
+      expect(() =>
+        fullReleaseTrustedWorkflowFields({
+          workflowRef: "main",
+          workflowSha,
+          workflowSource: source(contract, true),
+        }),
+      ).toThrow("supported release tooling contract");
+    }
+  });
+
+  it("threads the selected tooling identity into direct full validation dispatch", () => {
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
+
+    expect(source).toContain("const trustedWorkflowFields = fullReleaseTrustedWorkflowFields({");
+    expect(source).toContain("workflowSha: toolingSha");
+    expect(source).toContain("...trustedWorkflowFields");
   });
 
   it("falls back to a single compatible artifact from the same run", () => {

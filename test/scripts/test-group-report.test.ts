@@ -12,8 +12,7 @@ import {
   renderGroupedTestComparison,
   resolveGroupKey,
   resolveTestArea,
-} from "../../scripts/lib/test-group-report.mjs";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+} from "../../scripts/lib/test-group-report.mts";
 import {
   parseTestGroupReportArgs,
   resolveFullSuiteVitestEnv,
@@ -23,13 +22,13 @@ import {
   resolveRunPlanConcurrency,
   resolveRunPlans,
   runReportPlans,
-  signalTestGroupReportChild,
   spawnText,
-} from "../../scripts/test-group-report.mjs";
+} from "../../scripts/test-group-report.mts";
 import { withEnv } from "../../src/test-utils/env.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs = new Set<string>();
+const tsxImport = import.meta.resolve("tsx");
 
 afterAll(() => {
   cleanupTempDirs(tempDirs);
@@ -70,10 +69,6 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     await sleep(5);
   }
   throw new Error(`timed out waiting for pid ${pid} to exit`);
-}
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
 }
 
 function waitForChildClose(
@@ -213,7 +208,15 @@ describe("scripts/test-group-report aggregation", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["scripts/test-group-report.mjs", "--report", missingReport, "--output", output],
+        [
+          "--import",
+          tsxImport,
+          "scripts/test-group-report.mts",
+          "--report",
+          missingReport,
+          "--output",
+          output,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -239,7 +242,15 @@ describe("scripts/test-group-report aggregation", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["scripts/test-group-report.mjs", "--report", reportPath, "--output", output],
+        [
+          "--import",
+          tsxImport,
+          "scripts/test-group-report.mts",
+          "--report",
+          reportPath,
+          "--output",
+          output,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -263,7 +274,9 @@ describe("scripts/test-group-report aggregation", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-group-report.mjs",
+          "--import",
+          tsxImport,
+          "scripts/test-group-report.mts",
           "--config",
           missingConfig,
           "--allow-failures",
@@ -675,7 +688,16 @@ describe("scripts/test-group-report comparison", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["scripts/test-group-report.mjs", "--compare", beforePath, afterPath, "--output", output],
+        [
+          "--import",
+          tsxImport,
+          "scripts/test-group-report.mts",
+          "--compare",
+          beforePath,
+          afterPath,
+          "--output",
+          output,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -711,7 +733,16 @@ describe("scripts/test-group-report comparison", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["scripts/test-group-report.mjs", "--compare", beforePath, afterPath, "--output", output],
+        [
+          "--import",
+          tsxImport,
+          "scripts/test-group-report.mts",
+          "--compare",
+          beforePath,
+          afterPath,
+          "--output",
+          output,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -899,75 +930,6 @@ describe("scripts/test-group-report arg parsing", () => {
 });
 
 describe("scripts/test-group-report child process guard", () => {
-  it("signals Windows child process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalTestGroupReportChild(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    signalTestGroupReportChild(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows child process trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalTestGroupReportChild(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
   it.concurrent("times out a child that ignores SIGTERM", async () => {
     if (process.platform === "win32") {
       return;
@@ -1052,7 +1014,7 @@ describe("scripts/test-group-report child process guard", () => {
 
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const childPidPath = path.join(tempDir, "child.pid");
-    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mjs")).href;
+    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mts")).href;
     let childPid: number | undefined;
     try {
       const childScript = [
@@ -1071,11 +1033,15 @@ describe("scripts/test-group-report child process guard", () => {
         ");",
         "process.stdout.write(JSON.stringify(result));",
       ].join("\n");
-      const result = spawnSync(process.execPath, ["--input-type=module", "--eval", runnerScript], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        timeout: 5_000,
-      });
+      const result = spawnSync(
+        process.execPath,
+        ["--import", tsxImport, "--input-type=module", "--eval", runnerScript],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          timeout: 5_000,
+        },
+      );
       if (fs.existsSync(childPidPath)) {
         childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
       }
@@ -1104,7 +1070,7 @@ describe("scripts/test-group-report child process guard", () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const childPidPath = path.join(tempDir, "child.pid");
     const readyPath = path.join(tempDir, "child.ready");
-    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mjs")).href;
+    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mts")).href;
     let childPid: number | undefined;
     let runner: ReturnType<typeof spawn> | undefined;
     try {
@@ -1134,10 +1100,14 @@ describe("scripts/test-group-report child process guard", () => {
         ");",
       ].join("\n");
 
-      runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
-        cwd: process.cwd(),
-        stdio: ["ignore", "ignore", "pipe"],
-      });
+      runner = spawn(
+        process.execPath,
+        ["--import", tsxImport, "--input-type=module", "--eval", runnerScript],
+        {
+          cwd: process.cwd(),
+          stdio: ["ignore", "ignore", "pipe"],
+        },
+      );
       // Generous poll deadlines: spawning the nested runner/parent/child node
       // chain can take multiple seconds on loaded CI runners.
       await waitForFile(readyPath, 10_000);

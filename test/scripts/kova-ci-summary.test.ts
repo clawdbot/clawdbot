@@ -12,7 +12,16 @@ function runSummary(report: unknown, extraArgs: string[] = []) {
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   const result = spawnSync(
     process.execPath,
-    ["scripts/kova-ci-summary.mjs", "--report", reportPath, "--output", outputPath, ...extraArgs],
+    [
+      "--import",
+      "tsx",
+      "scripts/kova-ci-summary.mts",
+      "--report",
+      reportPath,
+      "--output",
+      outputPath,
+      ...extraArgs,
+    ],
     {
       cwd: process.cwd(),
       encoding: "utf8",
@@ -28,24 +37,34 @@ function runSummary(report: unknown, extraArgs: string[] = []) {
 
 describe("scripts/kova-ci-summary", () => {
   it("prints help without treating --help as a valued option", () => {
-    const result = spawnSync(process.execPath, ["scripts/kova-ci-summary.mjs", "--help"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/kova-ci-summary.mts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("usage: node scripts/kova-ci-summary.mjs --report");
+    expect(result.stdout).toContain(
+      "usage: node --import tsx scripts/kova-ci-summary.mts --report",
+    );
   });
 
   it.each([
     ["flag-shaped value", ["--report", "-h"]],
     ["option separator before help", ["--report", "--", "--help"]],
   ])("rejects %s before help handling", (_name, args) => {
-    const result = spawnSync(process.execPath, ["scripts/kova-ci-summary.mjs", ...args], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/kova-ci-summary.mts", ...args],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");

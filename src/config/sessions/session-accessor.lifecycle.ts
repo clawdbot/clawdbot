@@ -12,22 +12,24 @@ import {
   resolveAccessStorePath,
   loadSessionEntry,
   loadExactSessionEntry,
-  listSessionEntries,
+  listSessionEntriesCore,
   replaceSessionEntry,
-  patchSessionEntry,
+  patchSessionEntryCore,
 } from "./session-accessor.entry.js";
+import { applySessionEntryBatchProjection } from "./session-accessor.sqlite-batch-projection.js";
 import {
-  applySqliteSessionEntryBatchProjection as applySessionEntryBatchProjection,
-  applySqliteSessionEntryLifecycleMutation as applySessionEntryLifecycleMutation,
-  applySqliteSessionEntryReplacements as applySessionEntryReplacements,
-  applySqliteSessionStoreProjection as applySessionStoreProjection,
-  cleanupSqliteSessionLifecycleArtifacts as cleanupSessionLifecycleArtifacts,
-  deleteSqliteSessionEntryLifecycle as deleteSessionEntryLifecycle,
-  purgeSqliteDeletedAgentSessionEntries as purgeDeletedAgentSessionEntries,
-  rollbackSqliteAgentHarnessSessionEntryLifecycle as rollbackAgentHarnessSessionEntryLifecycle,
-  rollbackSqlitePluginOwnedSessionEntryLifecycle as rollbackPluginOwnedSessionEntryLifecycle,
-  resetSqliteSessionEntryLifecycle as resetSessionEntryLifecycle,
-} from "./session-accessor.sqlite.js";
+  cleanupSessionLifecycleArtifactsCore,
+  deleteSessionEntryLifecycle,
+  rollbackAgentHarnessSessionEntryLifecycle,
+  rollbackPluginOwnedSessionEntryLifecycle,
+  resetSessionEntryLifecycle,
+} from "./session-accessor.sqlite-lifecycle.js";
+import {
+  applySessionEntryLifecycleMutation,
+  applySessionEntryReplacements,
+  applySessionStoreProjection,
+  purgeDeletedAgentSessionEntries,
+} from "./session-accessor.sqlite-projection.js";
 import type {
   SessionAccessScope,
   SessionCompactionCheckpointMutationResult,
@@ -47,7 +49,7 @@ import {
   resolveProjectionExistingEntry,
   SessionLabelOwnerIndex,
 } from "./session-entry-selection.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry, SessionCompactionCheckpoint } from "./types.js";
 
 // Session lifecycle storage is canonical SQLite; direct exports keep reset,
 // rollback, cleanup, and bulk projections on their actual transaction owner.
@@ -55,7 +57,7 @@ export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
   applySessionStoreProjection,
-  cleanupSessionLifecycleArtifacts,
+  cleanupSessionLifecycleArtifactsCore,
   deleteSessionEntryLifecycle,
   purgeDeletedAgentSessionEntries,
   resetSessionEntryLifecycle,
@@ -207,10 +209,12 @@ export async function applySessionPatchProjections<
 >(params: {
   agentId?: string;
   operations: readonly SessionPatchProjectionOperation<TFailure>[];
+  sessionKeys?: readonly string[];
   storePath: string;
 }): Promise<SessionPatchProjectionResult<TFailure>[]> {
   return await applySessionEntryBatchProjection({
     agentId: params.agentId,
+    sessionKeys: params.sessionKeys,
     storePath: params.storePath,
     skipMaintenance: true,
     update: async (workingStore) => {
@@ -277,6 +281,8 @@ export async function applySessionPatchProjection<
   agentId?: string;
   /** Revalidates request-scoped authorization after the writer slot is held. */
   assertCurrent?: () => void;
+  /** Complete key authority for resolvers that can operate on a bounded store view. */
+  sessionKeys?: readonly string[];
   storePath: string;
   resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
   project: (
@@ -285,6 +291,7 @@ export async function applySessionPatchProjection<
 }): Promise<SessionPatchProjectionResult<TFailure>> {
   const [result] = await applySessionPatchProjections({
     agentId: params.agentId,
+    sessionKeys: params.sessionKeys,
     storePath: params.storePath,
     operations: [
       {
@@ -354,7 +361,7 @@ export async function cleanupPluginHostSessionStore(
   }
   const now = Date.now();
   let cleared = 0;
-  for (const { entry, sessionKey } of listSessionEntries({
+  for (const { entry, sessionKey } of listSessionEntriesCore({
     agentId: params.agentId,
     storePath: params.storePath,
   })) {
@@ -367,7 +374,7 @@ export async function cleanupPluginHostSessionStore(
     ) {
       continue;
     }
-    const updated = await patchSessionEntry(
+    const updated = await patchSessionEntryCore(
       { agentId: params.agentId, sessionKey, storePath: params.storePath },
       (currentEntry) => {
         if (isLockedHarnessSessionOwnedByPlugin(currentEntry, params.preserveLockedHarnessIds)) {

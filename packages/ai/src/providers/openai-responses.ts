@@ -50,22 +50,6 @@ function getPromptCacheRetention(
   return cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined;
 }
 
-function formatOpenAIResponsesError(error: unknown): string {
-  if (error instanceof Error) {
-    const status = (error as Error & { status?: unknown }).status;
-    const statusCode = typeof status === "number" ? status : undefined;
-    if (statusCode !== undefined) {
-      return `OpenAI API error (${statusCode}): ${error.message}`;
-    }
-    return error.message;
-  }
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-}
-
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends BaseOpenAIStreamOptions {
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -108,7 +92,6 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
       applyServiceTierPricing: (usage, serviceTier) =>
         applyResponsesServiceTierPricing(usage, serviceTier, model),
     },
-    formatError: formatOpenAIResponsesError,
   });
 
   return stream;

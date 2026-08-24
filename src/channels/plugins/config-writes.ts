@@ -83,7 +83,7 @@ export function canBypassConfigWritePolicy(params: {
  */
 export function formatConfigWriteDeniedMessage(params: {
   result: Exclude<ConfigWriteAuthorizationResult, { allowed: true }>;
-  fallbackChannelId?: ChannelId | null;
+  fallbackChannelId?: string | null;
 }): string {
   return formatConfigWriteDeniedMessageShared(params);
 }

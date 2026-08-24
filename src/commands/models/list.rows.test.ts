@@ -8,14 +8,14 @@ const mocks = vi.hoisted(() => ({
   loadScopedModelCatalogSnapshot: vi.fn(),
   normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
   resolveBundledProviderPolicySurface: vi.fn(() => null),
-  shouldSuppressBuiltInModel: vi.fn(() => {
+  shouldSuppressBuiltInModelCore: vi.fn(() => {
     throw new Error("runtime model suppression should be skipped");
   }),
   shouldSuppressBuiltInModelFromManifest: vi.fn(() => false),
 }));
 
 vi.mock("../../agents/model-suppression.js", () => ({
-  shouldSuppressBuiltInModel: mocks.shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelCore: mocks.shouldSuppressBuiltInModelCore,
   shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
 }));
 
@@ -565,7 +565,7 @@ describe("prepared provider catalog projection", () => {
       },
     });
 
-    expect(mocks.shouldSuppressBuiltInModel).not.toHaveBeenCalled();
+    expect(mocks.shouldSuppressBuiltInModelCore).not.toHaveBeenCalled();
     expect(mocks.shouldSuppressBuiltInModelFromManifest).toHaveBeenCalledWith({
       provider: "openai",
       id: "gpt-5.3-codex-spark",
@@ -792,7 +792,7 @@ describe("appendConfiguredProviderRows", () => {
     expect(requireOnlyRow(rows).input).toBe("text");
   });
 
-  it("keeps provider normalization for configured provider models", async () => {
+  it("keeps authored input while normalizing configured provider models", async () => {
     mocks.normalizeProviderResolvedModelWithPlugin.mockReturnValueOnce({
       provider: "anthropic",
       id: "claude-sonnet-4-6",
@@ -837,7 +837,10 @@ describe("appendConfiguredProviderRows", () => {
     });
 
     expect(mocks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledOnce();
-    expect(requireOnlyRow(rows).input).toBe("text+image");
+    // models.providers is authoritative for configured capabilities. Runtime
+    // normalization may fill provider details but must not add image input the
+    // operator did not configure.
+    expect(requireOnlyRow(rows).input).toBe("text");
   });
 
   it("threads configured model route facts into auth availability", async () => {
@@ -948,6 +951,29 @@ describe("appendConfiguredProviderRows", () => {
 });
 
 describe("appendAuthenticatedCatalogRows", () => {
+  it("does not append authenticated catalog rows in replace mode", async () => {
+    const rows: ModelRow[] = [];
+
+    await appendAuthenticatedCatalogRows({
+      rows,
+      seenKeys: new Set(),
+      context: {
+        cfg: { models: { mode: "replace" } },
+        agentDir: "/tmp/openclaw-agent",
+        authIndex: {
+          evaluateModelAuth: () => ({ availability: true, routeResolution: null }),
+        },
+        configuredByKey: new Map(),
+        discoveredKeys: new Set(),
+        filter: {},
+      },
+    });
+
+    expect(rows).toEqual([]);
+    expect(mocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+    expect(mocks.loadScopedModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+
   it("keeps runnable synthetic local catalog rows", async () => {
     const entries = [
       {

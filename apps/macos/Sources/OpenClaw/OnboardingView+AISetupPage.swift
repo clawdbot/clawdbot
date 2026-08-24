@@ -49,9 +49,6 @@ extension OnboardingView {
         if self.aiSetup.configuredGatewayAuthIssue != nil {
             return "Finish the remote Gateway connection before continuing."
         }
-        if aiSetup.connected {
-            return "All good — your assistant has a working AI connection."
-        }
         if state.connectionMode == .remote {
             return "AI access is configured on the remote Gateway. OpenClaw will use that existing setup."
         }

@@ -13,7 +13,7 @@ import {
   resolveRuntimeWebFetchProviders,
 } from "../plugins/web-fetch-providers.runtime.js";
 import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
-import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
+import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
 import {
   hasWebProviderEntryCredential,
@@ -278,7 +278,8 @@ function resolveWebFetchDefinitionUncached(
   if (!resolveWebFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
     return null;
   }
-  const runtimeWebFetch = options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadata()?.fetch;
+  const runtimeWebFetch =
+    options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadataFromState()?.fetch;
   const providers = resolveWebFetchProvidersForOptions(options);
   return resolveWebProviderDefinition({
     config: options?.config,

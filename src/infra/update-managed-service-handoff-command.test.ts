@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const tempDirs = new Set<string>();
@@ -44,7 +45,13 @@ afterEach(async () => {
 async function startHandoffAndReadCommand(params: {
   channel: "beta" | "extended-stable";
   tag?: string;
-}): Promise<{ command: string; commandArgv: string[] | undefined }> {
+  devTarget?: DevUpdateTarget;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{
+  command: string;
+  commandArgv: string[] | undefined;
+  spawnEnv: NodeJS.ProcessEnv | undefined;
+}> {
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
   const result = await startManagedServiceUpdateHandoff({
     root: "/tmp/openclaw",
@@ -55,8 +62,12 @@ async function startHandoffAndReadCommand(params: {
     execPath: "/usr/local/bin/node",
     argv1: "/opt/openclaw/openclaw.mjs",
     meta: {},
+    ...(params.devTarget ? { devTarget: params.devTarget } : {}),
+    ...(params.env ? { env: params.env } : {}),
   });
-  const spawnCall = spawnMock.mock.calls[0] as unknown as [string, string[]] | undefined;
+  const spawnCall = spawnMock.mock.calls[0] as unknown as
+    | [string, string[], { env?: NodeJS.ProcessEnv }]
+    | undefined;
   const paramsPath = spawnCall?.[1]?.[1];
   if (!paramsPath) {
     throw new Error("expected managed-service handoff params path");
@@ -65,7 +76,18 @@ async function startHandoffAndReadCommand(params: {
   const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
     commandArgv?: string[];
   };
-  return { command: result.command, commandArgv: helperParams.commandArgv };
+  const metaPath = path.join(path.dirname(paramsPath), "sentinel-meta.json");
+  const metaFile = JSON.parse(await fs.readFile(metaPath, "utf-8")) as {
+    meta?: { root?: string };
+  };
+  expect(metaFile.meta?.root).toBe(
+    await fs.realpath("/tmp/openclaw").catch(() => path.resolve("/tmp/openclaw")),
+  );
+  return {
+    command: result.command,
+    commandArgv: helperParams.commandArgv,
+    spawnEnv: spawnCall?.[2]?.env,
+  };
 }
 
 describe("managed service update handoff command", () => {
@@ -103,5 +125,30 @@ describe("managed service update handoff command", () => {
     ]);
     expect(result.command).toContain("--tag 2.0.0-beta.1");
     expect(result.command).toContain("--channel beta");
+  });
+
+  it("merges a tracked target into the child environment without replacing caller fields", async () => {
+    const result = await startHandoffAndReadCommand({
+      channel: "beta",
+      env: {
+        KEEP: "value",
+        OPENCLAW_UPDATE_DEV_TARGET_REF: "stale-ref",
+      },
+      devTarget: {
+        mode: "tracked",
+        upstreamRef: "origin/main",
+        upstreamSha: "frozen-sha",
+      },
+    });
+
+    expect(result.spawnEnv?.KEEP).toBe("value");
+    expect(parseDevUpdateTargetEnv(result.spawnEnv ?? {})).toEqual({
+      status: "valid",
+      target: {
+        mode: "tracked",
+        upstreamRef: "origin/main",
+        upstreamSha: "frozen-sha",
+      },
+    });
   });
 });

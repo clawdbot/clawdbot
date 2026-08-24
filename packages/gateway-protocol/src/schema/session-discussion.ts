@@ -18,10 +18,12 @@ export const SessionDiscussionInfoSchema = closedObject({
 
 export const SessionDiscussionInfoParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 
 export const SessionDiscussionOpenParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 
 export const SessionDiscussionInfoResultSchema = SessionDiscussionInfoSchema;

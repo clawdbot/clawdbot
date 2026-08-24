@@ -3,7 +3,6 @@
  * Provides complete session objects so tests can focus on the field under
  * inspection without repeating registry defaults.
  */
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { ProcessSession } from "./bash-process-registry.js";
 
 /** Build a process-session fixture with safe defaults for registry tests. */
@@ -16,7 +15,6 @@ export function createProcessSessionFixture(params: {
   pendingMaxOutputChars?: number;
   backgrounded?: boolean;
   pid?: number;
-  child?: ChildProcessWithoutNullStreams;
   cursorKeyMode?: ProcessSession["cursorKeyMode"];
 }): ProcessSession {
   const session: ProcessSession = {
@@ -27,8 +25,7 @@ export function createProcessSessionFixture(params: {
     maxOutputChars: params.maxOutputChars ?? 10_000,
     pendingMaxOutputChars: params.pendingMaxOutputChars ?? 30_000,
     totalOutputChars: 0,
-    pendingStdout: [],
-    pendingStderr: [],
+    pendingOutput: [],
     pendingStdoutChars: 0,
     pendingStderrChars: 0,
     pendingOutputDropped: false,
@@ -43,9 +40,6 @@ export function createProcessSessionFixture(params: {
   };
   if (params.pid !== undefined) {
     session.pid = params.pid;
-  }
-  if (params.child) {
-    session.child = params.child;
   }
   return session;
 }

@@ -43,6 +43,16 @@ const AUDIT_ADVISORY_VERSION_OVERRIDES = [
   },
 ];
 
+/** @typedef {{ write: (chunk: string) => boolean }} AuditOutput */
+/**
+ * @typedef {object} PnpmAuditOptions
+ * @property {string} [rootDir]
+ * @property {typeof fetch} [fetchImpl]
+ * @property {AuditOutput} [stdout]
+ * @property {AuditOutput} [stderr]
+ * @property {string} [minSeverity]
+ */
+
 function normalizeAuditLevel(level) {
   const normalized = String(level ?? "").toLowerCase();
   if (normalized in SEVERITY_RANK) {
@@ -698,7 +708,7 @@ function parsePositiveIntegerEnv(name, fallback) {
 }
 
 function resolveBulkAdvisoryRequestTimeoutMs() {
-  return clampTimerTimeoutMs(
+  return clampBulkAdvisoryTimeoutMs(
     parsePositiveIntegerEnv(
       "OPENCLAW_PNPM_AUDIT_BULK_TIMEOUT_MS",
       BULK_ADVISORY_REQUEST_TIMEOUT_MS,
@@ -713,13 +723,13 @@ function resolveBulkAdvisoryResponseBodyMaxBytes() {
   );
 }
 
-function clampTimerTimeoutMs(valueMs) {
+function clampBulkAdvisoryTimeoutMs(valueMs) {
   const value = Number.isFinite(valueMs) ? valueMs : BULK_ADVISORY_REQUEST_TIMEOUT_MS;
   return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
 }
 
 async function withBulkAdvisoryTimeout({ label, timeoutMs, run }) {
-  const resolvedTimeoutMs = clampTimerTimeoutMs(timeoutMs);
+  const resolvedTimeoutMs = clampBulkAdvisoryTimeoutMs(timeoutMs);
   const controller = new AbortController();
   let timeout;
   const timeoutPromise = new Promise((_resolve, reject) => {
@@ -853,6 +863,7 @@ export async function fetchBulkAdvisories({
   });
 }
 
+/** @param {PnpmAuditOptions} [options] */
 export async function runPnpmAuditProd({
   rootDir = process.cwd(),
   fetchImpl = fetch,

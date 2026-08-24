@@ -26,7 +26,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
 import type { FixedWindowRateLimiter } from "../infra/fixed-window-rate-limit.js";
 import type { AcpEventLedgerReplay } from "./event-ledger.js";
-import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
+import { parseSessionMeta, resetSessionIfNeeded, resolveAcpSessionKey } from "./session-mapper.js";
 import { extractReplayChunks, type GatewayTranscriptMessage } from "./translator.replay.js";
 import {
   ACP_LIST_SESSIONS_MAX_FETCH_LIMIT,
@@ -336,7 +336,7 @@ export class AcpTranslatorSessionLifecycle {
     meta: ReturnType<typeof parseSessionMeta>;
     fallbackKey: string;
   }): Promise<string> {
-    const sessionKey = await resolveSessionKey({
+    const sessionKey = await resolveAcpSessionKey({
       meta: params.meta,
       fallbackKey: params.fallbackKey,
       gateway: this.gateway,

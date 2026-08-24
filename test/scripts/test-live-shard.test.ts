@@ -18,8 +18,9 @@ import {
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
-} from "../../scripts/test-live-shard.mjs";
+} from "../../scripts/test-live-shard.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { waitForPidFile } from "../helpers/process-wait.js";
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
@@ -118,6 +119,7 @@ describe("scripts/test-live-shard", () => {
       "src/infra/push-apns-http2.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-test", allFiles)).toEqual([
+      "test/e2e/qa-lab/runtime/gateway-node-mcp.live.test.ts",
       "test/image-generation.infer-cli.live.test.ts",
       "test/image-generation.runtime.live.test.ts",
       "test/openai-onboarding.live.test.ts",
@@ -138,6 +140,7 @@ describe("scripts/test-live-shard", () => {
       "extensions/openai/realtime-voice-provider.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-extensions-l-n", allFiles)).toEqual([
+      "extensions/llama-cpp/src/external-server/llama-server.live.test.ts",
       "extensions/memory-lancedb/memory-lancedb.live.test.ts",
       "extensions/meta/meta.live.test.ts",
       "extensions/microsoft/microsoft.live.test.ts",
@@ -238,6 +241,28 @@ describe("scripts/test-live-shard", () => {
     ).toEqual(expected);
     expect(
       resolveLiveShardPreparation(selectLiveShardFiles("native-live-extensions-xai", allFiles)),
+    ).toBeNull();
+  });
+
+  it("prepares gateway profile shards with observable source-runtime diagnostics", () => {
+    const preparation = resolveLiveShardPreparation(
+      selectLiveShardFiles("native-live-src-gateway-profiles", allFiles),
+    );
+
+    expect(preparation).toEqual({
+      env: {},
+      profile: "sourcePerformance",
+      requiredArtifact: "dist/.runtime-postbuildstamp",
+      runtimeEnv: {
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+        OPENCLAW_LIVE_TEST_QUIET: "0",
+        OPENCLAW_LOG_LEVEL: "info",
+        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+      },
+    });
+    expect(
+      resolveLiveShardPreparation(selectLiveShardFiles("native-live-src-gateway-core", allFiles)),
     ).toBeNull();
   });
 
@@ -555,6 +580,26 @@ describe("scripts/test-live-shard", () => {
       env: { PATH: "/usr/bin" },
       stdio: "inherit",
     });
+    expect(
+      buildLiveShardSpawnParams({ OPENCLAW_LOG_LEVEL: "warn", PATH: "/usr/bin" }, "darwin", {
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+        OPENCLAW_LIVE_TEST_QUIET: "0",
+        OPENCLAW_LOG_LEVEL: "info",
+        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+      }),
+    ).toEqual({
+      detached: true,
+      env: {
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+        OPENCLAW_LIVE_TEST_QUIET: "0",
+        OPENCLAW_LOG_LEVEL: "info",
+        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+        PATH: "/usr/bin",
+      },
+      stdio: "inherit",
+    });
   });
 
   it.skipIf(process.platform === "win32")(
@@ -586,12 +631,8 @@ describe("scripts/test-live-shard", () => {
           },
         );
 
-        await waitFor(() => existsSync(childPidPath), 5_000);
-        await waitFor(() => existsSync(descendantPidPath), 5_000);
-        childPid = Number(readFileSync(childPidPath, "utf8"));
-        descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
-        expect(Number.isInteger(childPid)).toBe(true);
-        expect(Number.isInteger(descendantPid)).toBe(true);
+        childPid = await waitForPidFile(childPidPath, 5_000);
+        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
 
         runner.kill("SIGTERM");
 

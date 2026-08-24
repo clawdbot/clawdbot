@@ -26,7 +26,9 @@ const { sendDurableMessageBatch } = vi.hoisted(() => ({
   sendDurableMessageBatch: vi.fn(async () => ({ status: "sent" })),
 }));
 
-vi.mock("../channels/message/runtime.js", () => ({ sendDurableMessageBatch }));
+vi.mock("../channels/message/runtime.js", () => ({
+  sendDurableMessageBatchCore: sendDurableMessageBatch,
+}));
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 let tempDir: string;

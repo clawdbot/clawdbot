@@ -33,7 +33,7 @@ export const discordChannelConfigUiHints = {
       "preview.toolProgress":
         "Show tool/progress activity in the live draft preview message (default: true). Set false to hide interim tool updates while the draft preview stays active.",
       "preview.commandText":
-        'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+        'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
     },
     progress: { includeCommentary: true },
   }),
@@ -172,7 +172,11 @@ export const discordChannelConfigUiHints = {
   },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",
-    help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",
+    help: "Voice channels to auto-join (list of guildId/channelId entries). Set whenOccupied on an entry to connect only while humans are present.",
+  },
+  "voice.autoJoin.*.whenOccupied": {
+    label: "Discord Voice Auto-Join When Occupied",
+    help: "Join and remain in this auto-managed voice channel only while at least one human is present. The OpenClaw bot and other bots do not count. Default: false.",
   },
   "voice.allowedChannels": {
     label: "Discord Voice Allowed Channels",
@@ -305,7 +309,7 @@ export const discordChannelConfigUiHints = {
   },
   activities: {
     label: "Discord Activities",
-    help: "Enable Discord Activity widgets for this account. Routes, the agent tool, and the launch handler remain disabled when this block is absent.",
+    help: "Enable the Discord Activity presenter for the core show_widget tool on this account. Activity routes and the launch handler remain disabled when this block is absent.",
   },
   "activities.clientSecret": {
     label: "Discord Activities Client Secret",

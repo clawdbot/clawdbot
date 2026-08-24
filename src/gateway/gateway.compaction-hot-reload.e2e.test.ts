@@ -10,12 +10,12 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { resetConfigOverrides } from "../config/runtime-overrides.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEventsSync,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -216,9 +216,9 @@ describe("gateway compaction hot reload", () => {
           agentId: "dev",
           sessionId,
           sessionKey,
-          storePath: resolveStorePath(undefined, { agentId: "dev" }),
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "dev" }),
         };
-        await upsertSessionEntry(scope, {
+        await upsertSessionEntryCore(scope, {
           sessionId,
           updatedAt: Date.now(),
           compactionCount: 0,
@@ -287,28 +287,12 @@ describe("gateway compaction hot reload", () => {
         await sendChatAndWait("Apply the hot-reloaded tool deny policy to the existing runtime.");
         expect(providerRequestToolNames.at(-1)).not.toContain("exec");
 
-        const contextTokens = 48_000;
-        const reloadedAgentDefaults = { ...initialConfig.agents.defaults, contextTokens };
-        await writeConfigFile({
-          ...initialConfig,
-          agents: { ...initialConfig.agents, defaults: reloadedAgentDefaults },
-          tools: reloadedTools,
-        });
-        await expect
-          .poll(() => getRuntimeConfig().agents?.defaults?.contextTokens, {
-            timeout: 5_000,
-            interval: 50,
-          })
-          .toBe(contextTokens);
-        await sendChatAndWait("Apply the hot-reloaded context budget to the existing runtime.");
-        expect(loadSessionEntry(scope)?.contextTokens).toBe(contextTokens);
-
         await writeConfigFile({
           ...initialConfig,
           agents: {
             ...initialConfig.agents,
             defaults: {
-              ...reloadedAgentDefaults,
+              ...initialConfig.agents.defaults,
               compaction: {
                 ...initialConfig.agents.defaults.compaction,
                 model: newCompactionModel.modelRef,

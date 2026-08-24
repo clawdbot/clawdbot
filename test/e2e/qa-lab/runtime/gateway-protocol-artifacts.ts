@@ -11,6 +11,7 @@ import {
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
 import { ProtocolSchemas } from "../../../../packages/gateway-protocol/src/schema/protocol-schemas.js";
+import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import { listCoreGatewayMethodMetadata } from "../../../../src/gateway/methods/core-descriptors.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
@@ -185,10 +186,6 @@ struct GatewayProtocolArtifactHarness {
 
 export function buildPortableSwiftAnyCodableSource(source: string) {
   return source.includes("import CoreFoundation") ? source : `import CoreFoundation\n${source}`;
-}
-
-function formatErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export function parseGatewayProtocolArtifactOptions(

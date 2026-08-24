@@ -56,18 +56,21 @@ final class CLIInstallPrompter {
             if Self.hasPendingManagedRestart() { return }
         }
         guard !status.isReady else { return }
-        let lastPrompt = UserDefaults.standard.string(forKey: cliInstallPromptedVersionKey)
+        let lastPrompt = AppDefaults.standard.string(forKey: cliInstallPromptedVersionKey)
         guard lastPrompt != version else { return }
-        UserDefaults.standard.set(version, forKey: cliInstallPromptedVersionKey)
+        AppDefaults.standard.set(version, forKey: cliInstallPromptedVersionKey)
 
-        if let target = self.installTargetForCurrentBuild(confirmStable: true) {
+        if let target = await self.installTargetForCurrentBuild(confirmStable: true, presentingSheetOn: nil) {
             Task { _ = await self.installCLI(target: target) }
         }
 
         self.logger.debug("cli install prompt handled reason=\(reason, privacy: .public)")
     }
 
-    func installTargetForCurrentBuild(confirmStable: Bool = false) -> CLIInstaller.InstallTarget? {
+    func installTargetForCurrentBuild(
+        confirmStable: Bool = false,
+        presentingSheetOn window: NSWindow?) async -> CLIInstaller.InstallTarget?
+    {
         let appVersion = Self.appVersion()
         if let target = CLIInstaller.automaticInstallTarget(
             appVersion: appVersion,
@@ -80,7 +83,7 @@ final class CLIInstallPrompter {
             alert.addButton(withTitle: "Install CLI")
             alert.addButton(withTitle: "Not Now")
             alert.addButton(withTitle: "Open Settings")
-            switch alert.runModal() {
+            switch await self.present(alert, presentingSheetOn: window) {
             case .alertFirstButtonReturn:
                 return target
             case .alertThirdButtonReturn:
@@ -91,14 +94,18 @@ final class CLIInstallPrompter {
             }
         }
 
-        return self.chooseChannel(
+        return await self.chooseChannel(
             suggested: CLIInstaller.suggestedChannel(
                 appVersion: appVersion,
-                isDebug: CLIInstallBuild.isDebug))
+                isDebug: CLIInstallBuild.isDebug),
+            presentingSheetOn: window)
             .map(CLIInstaller.InstallTarget.channel)
     }
 
-    private func chooseChannel(suggested: CLIInstaller.Channel) -> CLIInstaller.Channel? {
+    private func chooseChannel(
+        suggested: CLIInstaller.Channel,
+        presentingSheetOn window: NSWindow?) async -> CLIInstaller.Channel?
+    {
         let channels = [suggested] + CLIInstaller.Channel.allCases.filter { $0 != suggested }
         let alert = NSAlert()
         alert.messageText = "Choose OpenClaw CLI channel"
@@ -111,10 +118,16 @@ final class CLIInstallPrompter {
             alert.addButton(withTitle: channel.label)
         }
         alert.addButton(withTitle: "Not Now")
-        let response = alert.runModal()
+        let response = await self.present(alert, presentingSheetOn: window)
         let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
         guard channels.indices.contains(index) else { return nil }
         return channels[index]
+    }
+
+    private func present(_ alert: NSAlert, presentingSheetOn window: NSWindow?) async -> NSApplication.ModalResponse {
+        // Attaching onboarding alerts preserves their AX visibility and window-relative z-order.
+        guard let window else { return alert.runModal() }
+        return await alert.beginSheetModal(for: window)
     }
 
     private func installCLI(
@@ -161,7 +174,7 @@ final class CLIInstallPrompter {
             } else {
                 activation = nil
             }
-            activated = activation != .failed
+            if case .failed = activation { activated = false } else { activated = true }
             if shouldRestartManagedGateway {
                 // Only proven gateway health closes the recovery loop; the
                 // on-disk CLI already reads ready, so a lost marker here means
@@ -217,22 +230,22 @@ final class CLIInstallPrompter {
             return false
         }
         await GatewayConnection.shared.shutdown()
-        guard await CLIInstaller.activateLocalGateway() != .failed else { return false }
+        if case .failed = await CLIInstaller.activateLocalGateway() { return false }
         Self.clearPendingManagedRestart()
         self.logger.info("pending managed Gateway restart completed")
         return true
     }
 
     static func hasPendingManagedRestart() -> Bool {
-        UserDefaults.standard.bool(forKey: cliManagedRestartPendingKey)
+        AppDefaults.standard.bool(forKey: cliManagedRestartPendingKey)
     }
 
     static func setPendingManagedRestart() {
-        UserDefaults.standard.set(true, forKey: cliManagedRestartPendingKey)
+        AppDefaults.standard.set(true, forKey: cliManagedRestartPendingKey)
     }
 
     static func clearPendingManagedRestart() {
-        UserDefaults.standard.removeObject(forKey: cliManagedRestartPendingKey)
+        AppDefaults.standard.removeObject(forKey: cliManagedRestartPendingKey)
     }
 
     static func shouldManageCLI(connectionMode: AppState.ConnectionMode) -> Bool {

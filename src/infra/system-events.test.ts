@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { enqueueRoutedSystemEvent } from "../plugin-sdk/system-event-runtime.js";
 import { isCronSystemEvent } from "./heartbeat-events-filter.js";
 import {
   resolveSystemEventOwnerAgentId,
@@ -17,6 +18,7 @@ import {
   drainSystemEventEntries,
   enqueueSystemEvent,
   enqueueSystemEventEntry,
+  enqueueSystemEventWithReceipt,
   hasSystemEvents,
   isSystemEventContextChanged,
   peekSystemEventEntries,
@@ -218,6 +220,42 @@ describe("system events (session routing)", () => {
       "third",
     ]);
     expect(peekSystemEvents(key)).toEqual(["second"]);
+  });
+
+  it("removes an exact receipt once while preserving its sibling", () => {
+    const key = "agent:main:test-receipt";
+    const receipt = enqueueSystemEventWithReceipt("first", {
+      sessionKey: ` ${key} `,
+      contextKey: "exec:first",
+    });
+    expect(receipt).not.toBeNull();
+    enqueueSystemEvent("sibling", { sessionKey: key, contextKey: "exec:sibling" });
+
+    expect(receipt?.()).toBe(true);
+    expect(peekSystemEvents(key)).toEqual(["sibling"]);
+    expect(receipt?.()).toBe(false);
+  });
+
+  it("keeps structurally identical receipt-owned siblings distinct", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-09T00:00:00Z"));
+    const key = "agent:main:test-identical-receipts";
+    const options = { sessionKey: key, contextKey: "exec:reused-slug" };
+    const first = enqueueSystemEventWithReceipt("completed", options, {
+      allowDuplicate: true,
+    });
+    const second = enqueueSystemEventWithReceipt("completed", options, {
+      allowDuplicate: true,
+    });
+    const queued = peekSystemEventEntries(key);
+
+    expect(queued[0]).toEqual({ ...queued[1], id: queued[0]?.id });
+    expect(queued[0]?.id).not.toBe(queued[1]?.id);
+    expect(second?.()).toBe(true);
+    expect(peekSystemEventEntries(key).map((event) => event.id)).toEqual([queued[0]?.id]);
+    expect(second?.()).toBe(false);
+    expect(first?.()).toBe(true);
+    expect(peekSystemEventEntries(key)).toStrictEqual([]);
   });
 
   it.each([
@@ -664,6 +702,29 @@ describe("system events (session routing)", () => {
       ["Hook finished", "beta"],
       ["Later alpha event", "alpha"],
     ]);
+  });
+
+  it("keeps routed global Slack and Discord events isolated by route owner", async () => {
+    const slackRoute = { agentId: "alpha", sessionKey: "global" };
+    const discordRoute = { agentId: "beta", sessionKey: "global" };
+    enqueueRoutedSystemEvent("Slack event for alpha", slackRoute);
+    enqueueRoutedSystemEvent("Discord event for beta", discordRoute);
+
+    const alpha = await drainFormattedEvents("global", { agentId: "alpha" });
+    expect(alpha).toContain("Slack event for alpha");
+    expect(alpha).not.toContain("Discord event for beta");
+    expect(peekSystemEvents("global")).toEqual(["Discord event for beta"]);
+
+    const beta = await drainFormattedEvents("global", { agentId: "beta" });
+    expect(beta).toContain("Discord event for beta");
+    expect(peekSystemEvents("global")).toStrictEqual([]);
+  });
+
+  it("rejects routed system events without an owner", () => {
+    expect(() =>
+      enqueueRoutedSystemEvent("Unbound event", { agentId: " ", sessionKey: "global" }),
+    ).toThrow("route.agentId");
+    expect(peekSystemEvents("global")).toStrictEqual([]);
   });
 
   it("replaces only the matching owner slot", () => {

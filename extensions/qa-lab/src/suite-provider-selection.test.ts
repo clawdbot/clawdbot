@@ -1,5 +1,5 @@
 // QA Lab suite selection keeps scenario requirements on their declared provider lane.
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -114,6 +114,37 @@ describe("qa suite provider selection", () => {
     }
   });
 
+  it("invalidates prior terminal artifacts before replacement startup fails", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-generation-"));
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "replacement");
+    const artifactPaths = [
+      path.join(outputDir, "qa-suite-summary.json"),
+      path.join(outputDir, "qa-evidence.json"),
+      path.join(outputDir, "qa-suite-report.md"),
+    ];
+    await mkdir(outputDir, { recursive: true });
+    await Promise.all(artifactPaths.map((artifactPath) => writeFile(artifactPath, "stale\n")));
+
+    try {
+      await expect(
+        runQaFlowSuiteFromRuntime({
+          repoRoot,
+          outputDir,
+          scenarioIds: ["goal-context-next-turn"],
+          concurrency: 1,
+          startLab: async () => {
+            throw new Error("replacement startup failed");
+          },
+        }),
+      ).rejects.toThrow("replacement startup failed");
+      for (const artifactPath of artifactPaths) {
+        await expect(access(artifactPath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("adopts a single runtime-partitioned flow scenario's required provider", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-unified-provider-"));
     const startLab = vi.fn(async () => {
@@ -140,9 +171,10 @@ describe("qa suite provider selection", () => {
       };
       expect(summary.run).toMatchObject({
         providerMode: "live-frontier",
-        primaryModel: expect.stringMatching(/^openai\//),
-        alternateModel: expect.stringMatching(/^openai\//),
+        primaryModel: "openai/gpt-5.6",
+        alternateModel: "openai/gpt-5.6-luna",
       });
+      expect(summary.run.primaryModel).not.toBe(summary.run.alternateModel);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }

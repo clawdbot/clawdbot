@@ -35,7 +35,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   executeSqliteQuerySync,
@@ -52,7 +52,7 @@ import {
   hasRestartSentinel,
   markUpdateRestartSentinelFailure,
   readRestartSentinel,
-  readUpdateInstallReceipt,
+  readVerifiedGitUpdateReceipt,
   summarizeRestartSentinel,
   trimLogTail,
   writeRestartSentinel,
@@ -71,7 +71,7 @@ beforeEach(() => {
 });
 
 async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
-  await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
+  await withTestDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, run);
     } finally {
@@ -541,35 +541,52 @@ describe("restart sentinel", () => {
     });
   });
 
-  it("persists the verified Git install receipt after restart", async () => {
+  it.each([
+    { name: "successful update", status: "ok", reason: undefined },
+    {
+      name: "failed handoff",
+      status: "error",
+      reason: "managed-service-handoff-failed",
+    },
+  ] as const)("persists the verified Git install receipt after a $name", async (testCase) => {
     await withRestartSentinelStateDir(async () => {
-      const ts = Date.now();
-      await writeRestartSentinel({
-        kind: "update",
-        status: "ok",
-        ts,
-        stats: {
-          mode: "git",
-          before: { sha: "aaaaaaaa" },
-          after: { sha: "bbbbbbbb", version: "expected-version" },
-        },
-      });
+      await withTestDir({ prefix: "openclaw-install-root-" }, async (tempDir) => {
+        const installRoot = path.join(tempDir, "checkout");
+        const installAlias = path.join(tempDir, "checkout-alias");
+        await fs.mkdir(installRoot);
+        await fs.symlink(installRoot, installAlias, "dir");
+        const ts = Date.now();
+        await writeRestartSentinel({
+          kind: "update",
+          status: testCase.status,
+          ts,
+          stats: {
+            mode: "git",
+            ...(testCase.reason ? { reason: testCase.reason } : {}),
+            root: installAlias,
+            before: { sha: "aaaaaaaa" },
+            after: {
+              sha: " bbbbbbbb ",
+              upstreamRef: " origin/main ",
+              version: "expected-version",
+            },
+          },
+        });
 
-      await finalizeUpdateRestartSentinelRunningVersion(
-        "actual-version",
-        process.env,
-        "bbbbbbbb1234",
-      );
-      await clearRestartSentinel();
+        await finalizeUpdateRestartSentinelRunningVersion(
+          "actual-version",
+          process.env,
+          "bbbbbbbb1234",
+          installRoot,
+        );
+        await clearRestartSentinel();
 
-      await expect(readUpdateInstallReceipt()).resolves.toMatchObject({
-        kind: "update",
-        status: "ok",
-        ts,
-        stats: {
-          mode: "git",
-          after: { sha: "bbbbbbbb", version: "actual-version" },
-        },
+        await expect(readVerifiedGitUpdateReceipt()).resolves.toEqual({
+          root: await fs.realpath(installRoot),
+          sha: "bbbbbbbb",
+          upstreamRef: "origin/main",
+          installedAtMs: ts,
+        });
       });
     });
   });
@@ -582,38 +599,104 @@ describe("restart sentinel", () => {
         ts: Date.now(),
         stats: {
           mode: "git",
+          root: process.cwd(),
           before: { sha: "aaaaaaaa" },
           after: { sha: "aaaaaaaa", version: "expected-version" },
         },
       });
 
-      await finalizeUpdateRestartSentinelRunningVersion("actual-version", process.env, "aaaaaaaa");
+      await finalizeUpdateRestartSentinelRunningVersion(
+        "actual-version",
+        process.env,
+        "aaaaaaaa",
+        process.cwd(),
+      );
 
-      await expect(readUpdateInstallReceipt()).resolves.toBeNull();
+      await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
     });
   });
 
-  it("rejects a restarted Git revision that does not match the update result", async () => {
+  it.each([
+    {
+      name: "successful update",
+      status: "ok",
+      runningCommit: "cccccccc",
+      beforeSha: undefined,
+      expectedReason: "restart-revision-mismatch",
+    },
+    {
+      name: "error-status update",
+      status: "error",
+      runningCommit: "aaaaaaaa",
+      beforeSha: "aaaaaaaa",
+      expectedReason: "managed-service-handoff-failed",
+    },
+  ] as const)("rejects a $name whose running Git revision does not match", async (testCase) => {
     await withRestartSentinelStateDir(async () => {
       await writeRestartSentinel({
         kind: "update",
-        status: "ok",
+        status: testCase.status,
         ts: Date.now(),
         stats: {
           mode: "git",
+          root: process.cwd(),
+          ...(testCase.beforeSha ? { before: { sha: testCase.beforeSha } } : {}),
+          ...(testCase.status === "error" ? { reason: "managed-service-handoff-failed" } : {}),
           after: { sha: "bbbbbbbb", version: "expected-version" },
         },
       });
 
-      await finalizeUpdateRestartSentinelRunningVersion("actual-version", process.env, "cccccccc");
+      await finalizeUpdateRestartSentinelRunningVersion(
+        "actual-version",
+        process.env,
+        testCase.runningCommit,
+        process.cwd(),
+      );
 
       await expect(readRestartSentinel()).resolves.toMatchObject({
         payload: {
           status: "error",
-          stats: { reason: "restart-revision-mismatch" },
+          stats: { reason: testCase.expectedReason },
         },
       });
-      await expect(readUpdateInstallReceipt()).resolves.toBeNull();
+      await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+    });
+  });
+
+  it("rejects the same Git revision when the restarted checkout root differs", async () => {
+    await withRestartSentinelStateDir(async () => {
+      await withTestDir({ prefix: "openclaw-install-root-mismatch-" }, async (tempDir) => {
+        const expectedRoot = path.join(tempDir, "expected");
+        const runningRoot = path.join(tempDir, "running");
+        await fs.mkdir(expectedRoot);
+        await fs.mkdir(runningRoot);
+        await writeRestartSentinel({
+          kind: "update",
+          status: "ok",
+          ts: Date.now(),
+          stats: {
+            mode: "git",
+            root: expectedRoot,
+            before: { sha: "aaaaaaaa" },
+            after: { sha: "bbbbbbbb", version: "expected-version" },
+          },
+        });
+
+        await finalizeUpdateRestartSentinelRunningVersion(
+          "actual-version",
+          process.env,
+          "bbbbbbbb1234",
+          runningRoot,
+        );
+
+        await expect(readRestartSentinel()).resolves.toMatchObject({
+          payload: {
+            status: "error",
+            stats: { reason: "restart-root-mismatch" },
+          },
+        });
+        await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+      });
     });
   });
 

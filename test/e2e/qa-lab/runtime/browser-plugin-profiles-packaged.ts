@@ -5,6 +5,7 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { coerceErrorMessage as formatError } from "../../../../scripts/lib/error-format.mts";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "browser-plugin-profiles-packaged";
@@ -19,10 +20,6 @@ type DockerOutcome = {
   markerSeen: boolean;
   signal: NodeJS.Signals | null;
 };
-
-function formatError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export function parseBrowserPluginProfilesOptions(args: string[]): ProducerOptions {
   if (args.length !== 2 || args[0] !== "--artifact-base" || !args[1]) {

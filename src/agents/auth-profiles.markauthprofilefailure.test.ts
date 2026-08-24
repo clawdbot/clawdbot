@@ -19,11 +19,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
-  saveAuthProfileStore,
-} from "./auth-profiles/store.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import {
   calculateAuthProfileCooldownMs,
   markAuthProfileFailure,
@@ -432,6 +429,33 @@ describe("markAuthProfileFailure", () => {
         expect(throwingHook).toHaveBeenCalledTimes(1);
         // Failure still got recorded despite the hook throwing.
         expect(store.usageStats?.["anthropic:default"]?.errorCount ?? 0).toBeGreaterThan(0);
+      } finally {
+        setAuthProfileFailureHook(undefined);
+      }
+    });
+  });
+
+  it("does not break inline failure recording when the hook throws", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const throwingHook = vi.fn(() => {
+        throw new Error("boom");
+      });
+      setAuthProfileFailureHook(throwingHook);
+      try {
+        await expect(
+          markInlineProviderApiKeyFailure({
+            store,
+            provider: "anthropic",
+            reason: "billing",
+            agentDir,
+          }),
+        ).resolves.toBeUndefined();
+        expect(throwingHook).toHaveBeenCalledTimes(1);
+        const usageId = resolveInlineProviderApiKeyUsageId("anthropic");
+        expect(store.usageStats?.[usageId]?.disabledReason).toBe("billing");
+        expect(ensureAuthProfileStore(agentDir).usageStats?.[usageId]?.disabledReason).toBe(
+          "billing",
+        );
       } finally {
         setAuthProfileFailureHook(undefined);
       }

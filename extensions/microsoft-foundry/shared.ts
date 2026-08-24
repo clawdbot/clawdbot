@@ -129,16 +129,6 @@ type FoundryConfigShape = {
   };
 };
 
-type FoundryImageDefaultPatch = {
-  agents?: {
-    defaults?: {
-      imageGenerationModel?: {
-        primary: string;
-      };
-    };
-  };
-};
-
 function normalizeFoundryModelName(value?: string | null): string | undefined {
   const trimmed = normalizeLowercaseStringOrEmpty(value);
   return trimmed || undefined;
@@ -303,18 +293,6 @@ function supportsFoundryReasoningEffort(value?: string | null): boolean {
     normalized.startsWith("o3") ||
     normalized.startsWith("o4")
   );
-}
-
-if (process.env.VITEST === "true") {
-  const key = Symbol.for("openclaw.microsoftFoundryTestApi");
-  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
-  Reflect.set(globalThis, key, {
-    ...api,
-    isAnthropicFoundryDeployment,
-    supportsFoundryImageInput,
-    supportsFoundryReasoningContent,
-    supportsFoundryReasoningEffort,
-  });
 }
 
 function resolveFoundryReasoningEfforts(value?: string | null): string[] | undefined {
@@ -614,15 +592,17 @@ function buildFoundryImageDefaultPatch(params: {
   modelId: string;
   modelNameHint?: string | null;
   deployments?: FoundryDeploymentConfigInput[];
-}): FoundryImageDefaultPatch {
+}) {
   if (!isSelectedMaiImageDeployment(params)) {
     return {};
   }
   return {
     agents: {
       defaults: {
-        imageGenerationModel: {
-          primary: `${PROVIDER_ID}/${params.modelId}`,
+        mediaModels: {
+          image: {
+            primary: `${PROVIDER_ID}/${params.modelId}`,
+          },
         },
       },
     },
@@ -763,7 +743,7 @@ export function buildFoundryAuthResult(params: {
               api: params.api,
               deployments: params.deployments,
             },
-          ) as unknown as ModelProviderConfig,
+          ),
         },
       },
       ...buildPluginsAllowPatch(params.currentPluginsAllow),

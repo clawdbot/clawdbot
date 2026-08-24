@@ -16,7 +16,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => ({ diagnostics: [], plugins: mocks.plugins }),
+  loadPluginManifestRegistryCore: () => ({ diagnostics: [], plugins: mocks.plugins }),
 }));
 
 vi.mock("./plugin-registry-contributions.js", () => ({

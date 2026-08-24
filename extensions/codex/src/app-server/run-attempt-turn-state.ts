@@ -1,4 +1,5 @@
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -66,6 +67,8 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     lifecycleTerminalEmitted: false,
     nativeHookRelayLastRenewedAt: 0,
     activeAppServerTurnRequests: 0,
+    // Requests without their own deadline must leave the attempt watchdog armed.
+    activeAppServerTurnRequestsWithoutTimeout: 0,
     unsettledFinalizationHookCount: 0,
     rejectedFinalizationHookAssistant: undefined as { itemId?: string } | undefined,
     turnCrossedToolHandoff: false,
@@ -79,10 +82,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     terminalDynamicToolReleaseCheckScheduled: false,
     currentTurnHadNonTerminalDynamicToolResult: false,
   };
-  let resolveCompletion!: () => void;
-  const completion = new Promise<void>((resolve) => {
-    resolveCompletion = resolve;
-  });
+  const { promise: completion, resolve: resolveCompletion } = createDeferred<void>();
   const turnCompletionIdleTimeoutMs = resolveCodexTurnCompletionIdleTimeoutMs(
     options.turnCompletionIdleTimeoutMs ?? appServer.turnCompletionIdleTimeoutMs,
   );
@@ -116,6 +116,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
       return;
     }
     state.completed = true;
+    steeringQueueRef.current?.cancel();
     turnWatches.clearAllTimers();
     resolveCompletion();
   };
@@ -165,6 +166,8 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     isCompleted: () => state.completed,
     isTerminalTurnNotificationQueued: () => state.terminalTurnNotificationQueued,
     getActiveAppServerTurnRequests: () => state.activeAppServerTurnRequests,
+    getActiveAppServerTurnRequestsWithoutTimeout: () =>
+      state.activeAppServerTurnRequestsWithoutTimeout,
     getActiveTurnItemCount: () => activeTurnItemIds.size,
     getActiveCompletionBlockerItemCount: () => activeCompletionBlockerItemIds.size,
     getActiveFinalizationHookCount: () => state.unsettledFinalizationHookCount,

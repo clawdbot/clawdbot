@@ -3,7 +3,7 @@ import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:chil
 import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs";
+import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
 import {
   readPositiveIntEnv,
   readTcpPortEnv,

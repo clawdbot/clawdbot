@@ -1,5 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { readPositiveEnvInt } from "../../scripts/lib/numeric-options.mjs";
+import {
+  parseStrictNonNegativeDecimal,
+  readPositiveEnvInt,
+} from "../../scripts/lib/numeric-options.mjs";
+
+describe("parseStrictNonNegativeDecimal", () => {
+  it.each([
+    ["0", 0],
+    [" 42 ", 42],
+    [42, 42],
+  ])("parses canonical decimal value %j", (raw, expected) => {
+    expect(parseStrictNonNegativeDecimal(raw, "limit")).toBe(expected);
+  });
+
+  it.each(["", "00", "01", "+1", "-1", "1.5", "1e3", "0x10"])(
+    "rejects non-canonical value %j",
+    (raw) => {
+      expect(() => parseStrictNonNegativeDecimal(raw, "limit")).toThrow(
+        "limit must be a non-negative integer",
+      );
+    },
+  );
+
+  it("distinguishes unsafe canonical integers", () => {
+    expect(() => parseStrictNonNegativeDecimal("9007199254740992", "limit")).toThrow(
+      "limit must be a safe integer",
+    );
+  });
+});
 
 describe("readPositiveEnvInt", () => {
   it("uses the fallback for missing or blank values", () => {

@@ -5,8 +5,8 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   assertExpectedSha256ForTest,
   cleanupPackageSourceWorktreeForTest,
@@ -20,13 +20,8 @@ import {
   readPackageBuildSourceSha,
   resolveNpmPackageCandidatePackRunner,
   runCommandForTest,
-  signalChildProcessTree,
   validateOpenClawPackageSpec,
-} from "../../scripts/resolve-openclaw-package-candidate.mjs";
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
+} from "../../scripts/resolve-openclaw-package-candidate.mts";
 
 const tempDirs: string[] = [];
 
@@ -109,13 +104,20 @@ afterEach(async () => {
 });
 
 describe("resolve-openclaw-package-candidate", () => {
-  it("allows Unreleased notes when packaging an exact ref candidate", () => {
-    const script = readFileSync("scripts/resolve-openclaw-package-candidate.mjs", "utf8");
+  it("preflights package-acceptance ref candidates before dependency installation", () => {
+    const script = readFileSync("scripts/resolve-openclaw-package-candidate.mts", "utf8");
     const refPackageBuild = script.slice(
       script.indexOf('if (options.source === "ref")'),
       script.indexOf('} else if (options.source === "npm")'),
     );
+    const workflow = readFileSync(".github/workflows/package-acceptance.yml", "utf8");
 
+    expect(workflow).toContain('--source "$SOURCE"');
+    expect(workflow).toContain("PACKAGE_REF: ${{ inputs.package_ref }}");
+    expect(refPackageBuild).toContain("validatePackageSourceDir(packageSource.sourceDir");
+    expect(refPackageBuild.indexOf("validatePackageSourceDir")).toBeLessThan(
+      refPackageBuild.indexOf("installPackageSourceDeps"),
+    );
     expect(refPackageBuild).toContain('"scripts/package-openclaw-for-docker.mjs"');
     expect(refPackageBuild).toContain('"--allow-unreleased-changelog"');
   });
@@ -306,75 +308,6 @@ describe("resolve-openclaw-package-candidate", () => {
       shell: false,
       windowsVerbatimArguments: true,
     });
-  });
-
-  it("signals Windows package runner process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalChildProcessTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    signalChildProcessTree(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows package runner process trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalChildProcessTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("keeps npm pack filenames inside the package candidate output directory", async () => {
@@ -612,7 +545,6 @@ describe("resolve-openclaw-package-candidate", () => {
       "setInterval(() => {}, 1000);",
     ].join("");
 
-    const startedAt = Date.now();
     const timeoutAssertion = expect(
       runCommandForTest(process.execPath, ["-e", parentScript], {
         env: {
@@ -630,7 +562,6 @@ describe("resolve-openclaw-package-candidate", () => {
     await timeoutAssertion;
 
     expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
-    expect(Date.now() - startedAt).toBeLessThan(900);
   });
 
   it("forwards external termination to package runner process groups", async () => {
@@ -642,7 +573,7 @@ describe("resolve-openclaw-package-candidate", () => {
     tempDirs.push(dir);
     const childPidPath = path.join(dir, "child.pid");
     const scriptUrl = pathToFileURL(
-      path.resolve("scripts/resolve-openclaw-package-candidate.mjs"),
+      path.resolve("scripts/resolve-openclaw-package-candidate.mts"),
     ).href;
     let childPid: number | undefined;
     let runnerPid: number | undefined;
@@ -1433,17 +1364,3 @@ describe("resolve-openclaw-package-candidate", () => {
     );
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

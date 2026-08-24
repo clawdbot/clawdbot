@@ -1,16 +1,16 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
 
 export function readLiveModelCatalogRecord(body: unknown): Record<string, unknown> | undefined {
-  return body && typeof body === "object" && !Array.isArray(body)
-    ? (body as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(body);
 }
 
-function readLiveModelString(
-  record: Record<string, unknown> | undefined,
-  keys: readonly string[],
+export function readLiveModelCatalogStringField(
+  row: unknown,
+  keys: string | readonly string[],
 ): string | undefined {
-  for (const key of keys) {
+  const record = readLiveModelCatalogRecord(row);
+  for (const key of typeof keys === "string" ? [keys] : keys) {
     const value = record?.[key];
     if (typeof value === "string" && value.trim()) {
       return value.trim();
@@ -19,11 +19,12 @@ function readLiveModelString(
   return undefined;
 }
 
-function readLiveModelBoolean(
-  record: Record<string, unknown> | undefined,
-  keys: readonly string[],
+export function readLiveModelCatalogBooleanField(
+  row: unknown,
+  keys: string | readonly string[],
 ): boolean | undefined {
-  for (const key of keys) {
+  const record = readLiveModelCatalogRecord(row);
+  for (const key of typeof keys === "string" ? [keys] : keys) {
     const value = record?.[key];
     if (typeof value === "boolean") {
       return value;
@@ -32,16 +33,28 @@ function readLiveModelBoolean(
   return undefined;
 }
 
-function readLiveModelPositiveInteger(
+export function readLiveModelCatalogPositiveSafeIntegerField(
+  row: unknown,
+  keys: string | readonly string[],
+): number | undefined {
+  const record = readLiveModelCatalogRecord(row);
+  for (const key of typeof keys === "string" ? [keys] : keys) {
+    const value = record?.[key];
+    if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readLiveModelPositiveIntegerFromRecords(
   records: readonly (Record<string, unknown> | undefined)[],
   keys: readonly string[],
 ): number | undefined {
   for (const record of records) {
-    for (const key of keys) {
-      const value = record?.[key];
-      if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
-        return value;
-      }
+    const value = readLiveModelCatalogPositiveSafeIntegerField(record, keys);
+    if (value !== undefined) {
+      return value;
     }
   }
   return undefined;
@@ -95,7 +108,7 @@ function rowAdvertisesNonTextModel(
   if (outputModalities.length > 0 && !outputModalities.includes("text")) {
     return true;
   }
-  const kind = readLiveModelString(record, [
+  const kind = readLiveModelCatalogStringField(record, [
     "type",
     "task",
     "model_type",
@@ -109,7 +122,7 @@ function rowAdvertisesChatModel(
   record: Record<string, unknown>,
   nestedRecords: readonly (Record<string, unknown> | undefined)[],
 ): boolean | undefined {
-  const explicitChatCapability = readLiveModelBoolean(nestedRecords[0], [
+  const explicitChatCapability = readLiveModelCatalogBooleanField(nestedRecords[0], [
     "completion_chat",
     "chat_completion",
     "chatCompletion",
@@ -169,20 +182,40 @@ function inferLiveModelReasoning(modelId: string): boolean {
   );
 }
 
+function readLiveModelContextWindow(
+  records: readonly (Record<string, unknown> | undefined)[],
+): number | undefined {
+  return readLiveModelPositiveIntegerFromRecords(records, [
+    "context_window",
+    "contextWindow",
+    "context_length",
+    "contextLength",
+    "context_size",
+    "contextSize",
+    "max_context_length",
+    "maxModelLen",
+    "max_model_len",
+    // Anthropic names the context window by its input side. Appended so a
+    // provider already matching an earlier key keeps its current value.
+    "max_input_tokens",
+    "maxInputTokens",
+  ]);
+}
+
 function buildOpenAICompatibleLiveModel(
   row: unknown,
   fallback: ModelProviderConfig,
   acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean,
 ): ModelDefinitionConfig | undefined {
   const record = readLiveModelCatalogRecord(row);
-  const id = readLiveModelString(record, ["id", "model", "model_name", "modelName"]);
+  const id = readLiveModelCatalogStringField(record, ["id", "model", "model_name", "modelName"]);
   if (!record || !id || !isSafeLiveModelId(id)) {
     return undefined;
   }
-  if (readLiveModelBoolean(record, ["active", "enabled", "available"]) === false) {
+  if (readLiveModelCatalogBooleanField(record, ["active", "enabled", "available"]) === false) {
     return undefined;
   }
-  if (readLiveModelBoolean(record, ["archived", "deprecated"]) === true) {
+  if (readLiveModelCatalogBooleanField(record, ["archived", "deprecated"]) === true) {
     return undefined;
   }
   const capabilities = readLiveModelCatalogRecord(record.capabilities);
@@ -201,7 +234,10 @@ function buildOpenAICompatibleLiveModel(
 
   const exact = fallback.models.find((model) => model.id === id);
   if (exact) {
-    return exact;
+    const liveContextWindow = readLiveModelContextWindow([record, ...nestedRecords]);
+    return exact.contextWindow === undefined && liveContextWindow !== undefined
+      ? { ...exact, contextWindow: liveContextWindow }
+      : exact;
   }
   // Manifest-published ids returned above are known-good. Everything past this
   // point is a model the manifest has never described, so an opted-in provider
@@ -216,29 +252,9 @@ function buildOpenAICompatibleLiveModel(
     ["input_modalities", "inputModalities", "input"],
   );
   const contextWindow =
-    readLiveModelPositiveInteger(
-      [record, topProvider, capabilities, modelInfo],
-      [
-        "context_window",
-        "contextWindow",
-        "context_length",
-        "contextLength",
-        "context_size",
-        "contextSize",
-        "max_context_length",
-        "maxModelLen",
-        "max_model_len",
-        // Anthropic names the context window by its input side. Appended so a
-        // provider already matching an earlier key keeps its current value.
-        "max_input_tokens",
-        "maxInputTokens",
-      ],
-    ) ??
-    fallback.contextWindow ??
-    template?.contextWindow ??
-    128_000;
+    readLiveModelContextWindow([record, ...nestedRecords]) ?? template?.contextWindow ?? 128_000;
   const maxTokens =
-    readLiveModelPositiveInteger(
+    readLiveModelPositiveIntegerFromRecords(
       [record, topProvider, capabilities, modelInfo],
       [
         "max_completion_tokens",
@@ -257,7 +273,7 @@ function buildOpenAICompatibleLiveModel(
     fallback.maxTokens ??
     template?.maxTokens ??
     Math.min(contextWindow, 8192);
-  const explicitReasoning = readLiveModelBoolean(record, [
+  const explicitReasoning = readLiveModelCatalogBooleanField(record, [
     "reasoning",
     "supports_reasoning",
     "supportsReasoning",
@@ -278,7 +294,7 @@ function buildOpenAICompatibleLiveModel(
 
   return {
     id,
-    name: readLiveModelString(record, ["display_name", "displayName", "name"]) ?? id,
+    name: readLiveModelCatalogStringField(record, ["display_name", "displayName", "name"]) ?? id,
     ...(template?.api ? { api: template.api } : {}),
     reasoning,
     input,

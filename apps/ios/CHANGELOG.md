@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2026.8.10
+
+- Chat keeps the keyboard available when you tap the message composer and preserves a stable sidebar layout while typing.
+
 ## 2026.7.23
 
 - Permission requests now open the native iOS authorization sheet only when you use a related feature, and Calendar and Reminders access completes without relaunching.

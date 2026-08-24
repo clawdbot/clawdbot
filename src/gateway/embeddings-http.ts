@@ -6,7 +6,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { drainRetainedLocalEmbeddingWorkerClients } from "../../packages/memory-host-sdk/src/host/embeddings-worker.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
@@ -21,12 +20,12 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMissingScopeForbidden, watchClientDisconnect } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
-  OPENCLAW_MODEL_ID,
   authorizeOpenAiCompatibleHttpModelOverride,
   getHeader,
+  isAgentSelectionRequiredError,
+  isOpenClawAgentModelId,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
-  resolveAgentIdFromModel,
   resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 
@@ -130,7 +129,6 @@ async function drainEmbeddingProviderRetirements(scopeKey: string): Promise<void
   if (closeFailed) {
     throw firstError;
   }
-  await drainRetainedLocalEmbeddingWorkerClients();
 }
 
 function retainEmbeddingProviderForRetirement(
@@ -343,7 +341,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   }
 
   const cfg = getRuntimeConfig();
-  if (requestModel !== OPENCLAW_MODEL_ID && !resolveAgentIdFromModel(requestModel, cfg)) {
+  if (!isOpenClawAgentModelId(requestModel)) {
     sendJson(res, 400, {
       error: {
         message: "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
@@ -375,7 +373,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model: requestModel });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err)) {
+    if (isAgentSelectionRequiredError(err) || isUnknownGatewayAgentError(err)) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });

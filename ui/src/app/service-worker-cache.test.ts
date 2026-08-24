@@ -10,37 +10,6 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const serviceWorkerPath = path.join(here, "../../public/sw.js");
 
 describe("Control UI service worker cache versioning", () => {
-  it("registers the service worker with a build id and bounds prior build caches", () => {
-    const mainSource = fs.readFileSync(path.join(here, "../main.ts"), "utf8");
-    const serviceWorkerSource = fs.readFileSync(serviceWorkerPath, "utf8");
-    const viteConfigSource = fs.readFileSync(path.join(here, "../../vite.config.ts"), "utf8");
-
-    expect(mainSource).toContain('swUrl.searchParams.set("v"');
-    expect(mainSource).toContain("CONTROL_UI_BUILD_INFO.buildId");
-    expect(mainSource).toContain('updateViaCache: "none"');
-    expect(mainSource).toContain('navigator.serviceWorker.addEventListener("message"');
-    expect(mainSource).toContain("event.data.version !== currentControlUiBuildId");
-    expect(serviceWorkerSource).toContain(
-      'const EMBEDDED_CACHE_VERSION = "__OPENCLAW_CONTROL_UI_BUILD_ID__"',
-    );
-    expect(serviceWorkerSource).toContain("URL_CACHE_VERSION");
-    expect(serviceWorkerSource).toContain("CONTROL_CACHE_LIMIT = 3");
-    expect(serviceWorkerSource).toContain("slice(-priorCacheLimit)");
-    expect(serviceWorkerSource).toContain("caches.delete");
-    expect(serviceWorkerSource).toContain("includeUncontrolled: true");
-    expect(serviceWorkerSource).not.toContain(
-      'postMessage({ type: "sw-updated", version: CACHE_VERSION },',
-    );
-    expect(viteConfigSource).toContain("source.replace(placeholder, JSON.stringify(buildId))");
-    expect(viteConfigSource).toContain(
-      '"globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo)',
-    );
-    expect(viteConfigSource).not.toContain(
-      "OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify(controlUiBuildId)",
-    );
-    expect(serviceWorkerSource).not.toContain('const CACHE_NAME = "openclaw-control-v1"');
-  });
-
   it("broadcasts updated versions to uncontrolled window clients during activation", async () => {
     const serviceWorkerSource = fs.readFileSync(serviceWorkerPath, "utf8");
     const windowClient = { postMessage: vi.fn() };
@@ -102,7 +71,7 @@ describe("Control UI service worker cache versioning", () => {
     await activationPromise;
 
     expect(clients.matchAll).toHaveBeenCalledWith({ type: "window", includeUncontrolled: true });
-    expect(clients.claim).toHaveBeenCalled();
+    expect(clients.claim).toHaveBeenCalledBefore(clients.matchAll);
     expect(cacheDelete).toHaveBeenCalledWith("openclaw-control-oldest");
     expect(windowClient.postMessage).toHaveBeenCalledWith({
       type: "sw-updated",

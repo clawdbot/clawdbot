@@ -6,6 +6,20 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct NodesStoreTests {
+    @Test func `named profile keeps durable node service unavailability informational`() {
+        let store = NodesStore(
+            appProfile: AppProfile(environment: ["OPENCLAW_PROFILE": "work"]),
+            localNodeIdentityProfile: .node,
+            localNodeIDLoader: { _ in nil })
+
+        #expect(store.persistentServiceNotice ==
+            "Persistent Mac node service unavailable under app profile; runtime node remains available.")
+        #expect(store.lastError == nil)
+        store.statusMessage = "Refreshing devices…"
+        #expect(store.persistentServiceNotice != nil)
+        #expect(store.lastError == nil)
+    }
+
     @Test func `local node identity is prepared once`() async {
         let loader = LocalNodeIdentityLoader(results: ["node-id"])
         let store = NodesStore(

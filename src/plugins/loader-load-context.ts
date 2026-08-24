@@ -189,6 +189,7 @@ function buildCacheKey(params: {
   runtimeBindingIdentity?: string;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
+  allowProcessHomeSessionCatalogs?: boolean;
   activate?: boolean;
 }): string {
   const discoveryContext = resolvePluginDiscoveryContext({
@@ -237,6 +238,7 @@ function buildCacheKey(params: {
       installs,
       loadPaths,
       activationMetadataKey: params.activationMetadataKey ?? "",
+      allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
     },
   )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
   return createHash("sha256").update(cacheIdentity).digest("hex");
@@ -387,6 +389,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options.runtimeOptions),
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
+    allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs,
     activate: options.activate,
   });
   return {

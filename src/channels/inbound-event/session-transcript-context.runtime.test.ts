@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
-import { runPreparedInboundReply } from "../turn/kernel.js";
+import { runPreparedChannelTurn } from "../turn/execution.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
 
 vi.mock("../../config/sessions/transcript.js", () => ({
@@ -39,7 +39,7 @@ describe("session transcript inbound context", () => {
     ]);
     const ctx = context();
 
-    await runPreparedInboundReply({
+    await runPreparedChannelTurn({
       channel: "slack",
       routeSessionKey: ctx.SessionKey!,
       storePath: "/tmp/sessions.json",

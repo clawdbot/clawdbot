@@ -3,7 +3,7 @@ import { WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES } from "../../packages/gateway-pro
 import type { WorkerInferenceContext } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import type { AgentSessionWriteLockRunner } from "../agents/sessions/agent-session.js";
+import type { AgentSessionWriteSettlementRunner } from "../agents/sessions/agent-session.js";
 import type { Context, Message } from "../llm/types.js";
 import {
   windowWorkerReplayMessages,
@@ -117,7 +117,7 @@ type WorkerTranscriptClient = {
 
 type WorkerTranscriptRuntime = {
   onMessagePersisted: (message: AgentMessage) => void;
-  withSessionWriteLock: AgentSessionWriteLockRunner;
+  withSessionWriteSettlement: AgentSessionWriteSettlementRunner;
 };
 
 export function createWorkerTranscriptRuntime(
@@ -147,7 +147,7 @@ export function createWorkerTranscriptRuntime(
     }
   };
   let sessionWriteQueue: Promise<unknown> = Promise.resolve();
-  const withSessionWriteLock: AgentSessionWriteLockRunner = <T>(
+  const withSessionWriteSettlement: AgentSessionWriteSettlementRunner = <T>(
     operation: () => Promise<T> | T,
   ): Promise<T> => {
     const result = sessionWriteQueue.then(async () => {
@@ -161,5 +161,5 @@ export function createWorkerTranscriptRuntime(
     );
     return result;
   };
-  return { onMessagePersisted, withSessionWriteLock };
+  return { onMessagePersisted, withSessionWriteSettlement };
 }

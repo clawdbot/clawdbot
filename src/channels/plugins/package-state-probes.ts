@@ -39,7 +39,14 @@ type ChannelPackageStateMetadata = {
 /**
  * Metadata keys that can declare a lightweight package-state checker.
  */
-type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
+const CHANNEL_PACKAGE_STATE_METADATA_KEYS = ["configuredState", "persistedAuthState"] as const;
+type ChannelPackageStateMetadataKey = (typeof CHANNEL_PACKAGE_STATE_METADATA_KEYS)[number];
+
+type ChannelPackageStateLoadFailure = {
+  detail: string;
+  metadataKey: ChannelPackageStateMetadataKey;
+  pluginId: string;
+};
 
 const log = createSubsystemLogger("channels");
 const sourcePackageStateLoaderCache: PluginModuleLoaderCache = new Map();
@@ -193,7 +200,9 @@ function listChannelPackageStateCatalog(
 
 function resolveChannelPackageStateChecker(params: {
   entry: PluginChannelCatalogEntry;
+  emitWarning?: boolean;
   metadataKey: ChannelPackageStateMetadataKey;
+  onLoadError?: (detail: string) => void;
 }): ChannelPackageStateChecker | null {
   const metadata = resolveChannelPackageStateMetadata(params.entry, params.metadataKey);
   if (!metadata) {
@@ -235,9 +244,12 @@ function resolveChannelPackageStateChecker(params: {
 
   if (loadError) {
     const detail = formatErrorMessage(loadError);
-    log.warn(
-      `[channels] failed to load ${params.metadataKey} checker for ${params.entry.pluginId}: ${detail}`,
-    );
+    if (params.emitWarning !== false) {
+      log.warn(
+        `[channels] failed to load ${params.metadataKey} checker for ${params.entry.pluginId}: ${detail}`,
+      );
+    }
+    params.onLoadError?.(detail);
   }
   return null;
 }
@@ -257,6 +269,24 @@ export function listBundledChannelIdsForPackageState(
     .map((entry) => resolvePackageStateChannelId(entry))
     .filter((channelId): channelId is string => Boolean(channelId))
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Reports declared bundled channel package-state modules that cannot load. */
+export function collectBundledChannelPackageStateLoadFailures(
+  discovery?: PluginDiscoveryResult,
+): ChannelPackageStateLoadFailure[] {
+  const failures: ChannelPackageStateLoadFailure[] = [];
+  for (const metadataKey of CHANNEL_PACKAGE_STATE_METADATA_KEYS) {
+    for (const entry of listChannelPackageStateCatalog(metadataKey, discovery)) {
+      resolveChannelPackageStateChecker({
+        entry,
+        emitWarning: false,
+        metadataKey,
+        onLoadError: (detail) => failures.push({ detail, metadataKey, pluginId: entry.pluginId }),
+      });
+    }
+  }
+  return failures;
 }
 
 /**

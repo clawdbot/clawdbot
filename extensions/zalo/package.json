@@ -73,7 +73,8 @@
             "cli": {
               "flags": "--use-env",
               "description": "Use ZALO_BOT_TOKEN"
-            }
+            },
+            "envVars": ["ZALO_BOT_TOKEN"]
           }
         ]
       }

@@ -14,9 +14,12 @@ import {
 import { testing as updateCommandPluginsTesting } from "./update-command-plugins.test-support.js";
 import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
-import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 import {
   resolvePostInstallDoctorEnv,
+  resolveOwnedManagedUpdateEnv,
+  resolveUpdatedInstallCommandEnv,
+} from "./update-command-service-env.js";
+import {
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
   maybeRestartService,
@@ -260,11 +263,13 @@ describe("resolvePostInstallDoctorEnv", () => {
         OPENCLAW_STATE_DIR: "/wrong/state",
         OPENCLAW_CONFIG_PATH: "/wrong/openclaw.json",
         OPENCLAW_PROFILE: "wrong",
+        OPENCLAW_SYSTEMD_UNIT: "wrong.service",
       },
       serviceEnv: {
         OPENCLAW_STATE_DIR: "daemon-state",
         OPENCLAW_CONFIG_PATH: "daemon-state/openclaw.json",
         OPENCLAW_PROFILE: "work",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-work.service",
       },
     });
 
@@ -275,6 +280,7 @@ describe("resolvePostInstallDoctorEnv", () => {
       path.join("/srv/openclaw", "daemon-state", "openclaw.json"),
     );
     expect(env.OPENCLAW_PROFILE).toBe("work");
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-work.service");
   });
 
   it("keeps the caller env when no managed service env is available", () => {
@@ -312,6 +318,35 @@ describe("resolveUpdatedInstallCommandEnv", () => {
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.PATH).toBe("/daemon/bin");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+  });
+
+  it("clears caller selectors omitted by the managed service definition", () => {
+    const env = resolveOwnedManagedUpdateEnv({
+      processEnv: {
+        HOME: "/home/operator",
+        OPENCLAW_HOME: "/home/operator/openclaw-home",
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
+        OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "19111",
+      },
+      serviceEnv: {
+        HOME: "/home/operator",
+        OPENCLAW_HOME: "/home/operator/openclaw-home",
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
+        OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "19111",
+      },
+      serviceDefinitionEnv: {},
+    });
+
+    expect(env.HOME).toBe("/home/operator");
+    expect(env.OPENCLAW_HOME).toBeUndefined();
+    expect(env.OPENCLAW_PROFILE).toBeUndefined();
+    expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
+    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
   });
 });
 
@@ -715,7 +750,7 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
     const recoveredEnv = { ...serviceEnv, OPENCLAW_PORT: "18790" } as NodeJS.ProcessEnv;
     const readState = vi.fn(async () => ({
       installed: true,
-      loaded: false,
+      loadState: { status: "not-loaded" },
       running: false,
       env: recoveredEnv,
       command: null,
@@ -769,7 +804,7 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   it("does not recover a loaded LaunchAgent", async () => {
     const readState = vi.fn(async () => ({
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: true,
       env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
       command: null,
@@ -794,7 +829,7 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   it("returns an explicit failed recovery state when bootstrap repair fails", async () => {
     const readState = vi.fn(async () => ({
       installed: true,
-      loaded: false,
+      loadState: { status: "not-loaded" },
       running: false,
       env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
       command: null,
@@ -822,7 +857,7 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   it("preserves system LaunchDaemon recovery guidance", async () => {
     const readState = vi.fn(async () => ({
       installed: true,
-      loaded: false,
+      loadState: { status: "not-loaded" },
       running: false,
       env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
       command: null,

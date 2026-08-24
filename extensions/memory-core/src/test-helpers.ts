@@ -2,7 +2,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeAll } from "vitest";
 import {
@@ -53,12 +58,6 @@ type ShortTermLockEntry = {
   acquiredAt: number;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 async function readShortTermStoreEntries<T>(params: {
   namespace: string;
   workspaceDir: string;
@@ -88,8 +87,8 @@ async function writeRawShortTermStore(params: {
   namespace: string;
   metaKey: "recall" | "phase";
 }): Promise<void> {
-  const record = asRecord(params.raw);
-  const entries = asRecord(record?.entries);
+  const record = asOptionalRecord(params.raw);
+  const entries = asOptionalRecord(record?.entries);
   await Promise.all([
     writeMemoryCoreWorkspaceEntries({
       namespace: params.namespace,
@@ -215,6 +214,10 @@ export function createMemoryCoreTestHarness() {
     if (!fixtureRoot) {
       return;
     }
+    // The agent close releases its leases through shared state and reopens it, so the
+    // shared handle is released second; otherwise Windows fails the removal with EBUSY.
+    closeOpenClawAgentDatabasesForTest();
+    resetPluginStateStoreForTests();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
     resetMemoryCoreDreamingStateForTests();
   });

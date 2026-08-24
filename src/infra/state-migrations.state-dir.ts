@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isWithinDir } from "./path-safety.js";
@@ -29,6 +31,65 @@ type StateDirMigrationResult = {
   warnings: string[];
   notices?: string[];
 };
+
+function lstatIfPresent(filePath: string): fs.Stats | null {
+  try {
+    return fs.lstatSync(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export function migrateLegacyProfileWorkspace(params: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): { changes: string[]; warnings: string[] } {
+  const env = params.env ?? process.env;
+  const homedir = params.homedir ?? os.homedir;
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  if (!profile || normalizeLowercaseStringOrEmpty(profile) === "default") {
+    return { changes: [], warnings: [] };
+  }
+
+  try {
+    const legacyDir = path.join(
+      resolveProfileStateDir("default", env, homedir),
+      `workspace-${profile}`,
+    );
+    const targetDir = path.join(resolveProfileStateDir(profile, env, homedir), "workspace");
+    const legacyStat = lstatIfPresent(legacyDir);
+    if (!legacyStat) {
+      return { changes: [], warnings: [] };
+    }
+    if (!legacyStat.isDirectory() && !legacyStat.isSymbolicLink()) {
+      return {
+        changes: [],
+        warnings: [
+          `Profile workspace migration skipped: legacy path is not a directory (${legacyDir}).`,
+        ],
+      };
+    }
+    if (lstatIfPresent(targetDir)) {
+      return {
+        changes: [],
+        warnings: [
+          `Profile workspace migration skipped: target already exists (${targetDir}). Kept legacy workspace at ${legacyDir}; merge manually.`,
+        ],
+      };
+    }
+    fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+    fs.renameSync(legacyDir, targetDir);
+    return { changes: [`Profile workspace: ${legacyDir} → ${targetDir}`], warnings: [] };
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [`Profile workspace migration failed: ${String(error)}`],
+    };
+  }
+}
 
 function resolveSymlinkTarget(linkPath: string): string | null {
   try {

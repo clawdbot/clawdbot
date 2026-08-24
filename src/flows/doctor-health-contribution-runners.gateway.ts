@@ -56,6 +56,11 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
   await noteMacLaunchctlGatewayEnvOverrides(ctx.cfg);
 }
 
+export async function runHostDesktopHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteHostDesktopHealth } = await import("../commands/doctor-host-desktop.js");
+  await noteHostDesktopHealth(ctx.cfg, { prompter: ctx.prompter });
+}
+
 export async function runStartupChannelMaintenanceHealth(
   ctx: DoctorHealthFlowContext,
 ): Promise<void> {
@@ -82,6 +87,16 @@ export async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Prom
   }
   const { noteWebFetchProxyDiagnostic } = await import("../commands/doctor-web-fetch-proxy.js");
   await noteWebFetchProxyDiagnostic({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+}
+
+export async function runGitHubProjectHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { hasConfiguredGitHubApiCredential } = await import("../gateway/control-ui-github-api.js");
+  if (!hasConfiguredGitHubApiCredential(ctx.env ?? process.env, ctx.cfg)) {
+    note(
+      "Prefer gateway.controlUi.github.token for Gateway-owned GitHub project access, or set GH_TOKEN/GITHUB_TOKEN in the shared Gateway process environment. Without either, search is public-only.",
+      "GitHub projects",
+    );
+  }
 }
 
 export async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {

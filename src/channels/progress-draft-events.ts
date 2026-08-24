@@ -22,6 +22,8 @@ export type ChannelProgressDraftEventLineBuilder = (
 export function createChannelProgressDraftEventHandlers(params: {
   entry: StreamingCompatEntry | null | undefined;
   buildLine?: ChannelProgressDraftEventLineBuilder;
+  onTool?: (payload: ToolProgressPayload) => void;
+  onItem?: (payload: ItemProgressPayload) => void;
   pushLine: (
     line: ChannelProgressDraftEventLine | undefined,
     options?: { toolName?: string; startImmediately?: boolean },
@@ -41,10 +43,12 @@ export function createChannelProgressDraftEventHandlers(params: {
   return {
     pushToolEvent: (payload: ToolProgressPayload) => {
       const { detailMode, ...input } = payload;
+      params.onTool?.(payload);
       return pushEvent({ event: "tool", ...input }, detailMode);
     },
     pushItemEvent: (payload: ItemProgressPayload) => {
       const { kind: itemKind, ...input } = payload;
+      params.onItem?.(payload);
       return pushEvent({ event: "item", ...input, itemKind });
     },
     pushApprovalEvent: (payload: ProgressPayload<"approval">) => {

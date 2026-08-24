@@ -56,6 +56,7 @@ function clearProcessLocalTabState(): void {
   const state = globalThis as Record<symbol, unknown>;
   for (const name of [
     "openclaw.browser.session-tabs.volatile",
+    "openclaw.browser.session-tabs.volatile-cleanup",
     "openclaw.browser.session-tabs.active-durable-keys",
     "openclaw.browser.session-tabs.cold-native-activity",
     "openclaw.browser.session-tabs.interaction-storage-keys",

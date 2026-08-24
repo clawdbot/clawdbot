@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../api/types.ts";
 import {
   resolveSessionKey,
@@ -16,7 +17,6 @@ import {
   resolveUiDefaultAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalLowercaseString } from "../../lib/string-coerce.ts";
 
 type ChatPickerPatchHost = SessionScopeHost & { sessions: SessionCapability };
 type ChatCommandSettingsContext = {
@@ -112,7 +112,10 @@ function trackPendingChatSettingsPatch(
 export function patchChatSessionSettings(
   host: ChatPickerPatchHost,
   sessionKey: string,
-  patch: Pick<SessionPatch, "model" | "thinkingLevel" | "fastMode" | "toolOverrides">,
+  patch: Pick<
+    SessionPatch,
+    "model" | "contextWindow" | "thinkingLevel" | "fastMode" | "toolOverrides"
+  >,
   options: {
     agentId?: string;
     deferModelOverride?: boolean;

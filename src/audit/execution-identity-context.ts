@@ -1,12 +1,9 @@
 /** Immutable execution identity context storage and run-admission projection. */
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
-import type {
-  AuditRunInspectResult,
-  DecisionReceiptV1,
-  ExecutionIdentityContextV1,
-} from "../../packages/gateway-protocol/src/index.js";
+import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
 import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
+import { hasOperatorApprovalReceiptsForRun } from "../gateway/operator-approval-store.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -22,6 +19,11 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { clearAuditIdentityKeyCacheForDatabase } from "./audit-identity.js";
+import { hasExecutionDecisionFactsForRun } from "./execution-decision-facts.js";
+import {
+  presentExecutionDecisionReceipts,
+  type InternalAuditRunInspectResult,
+} from "./execution-decision-receipts.js";
 import {
   parseExecutionIdentityAdmissionEnvelope,
   parseExecutionIdentityAdmissionWork,
@@ -381,44 +383,6 @@ function readExecutionIdentityContextByExecutionId(
   );
 }
 
-function admissionDecision(context: ExecutionIdentityContextV1): DecisionReceiptV1 {
-  return {
-    schemaVersion: 1,
-    receiptId: `${context.contextId}:admission`,
-    contextId: context.contextId,
-    executionId: context.executionId,
-    runId: context.runId,
-    occurredAt: context.createdAt,
-    action: {
-      family: "run",
-      operation: "admission",
-      summary: "Run admission was recorded without an identity-aware policy or grant decision.",
-    },
-    decision: {
-      outcome: "not-applicable",
-      reasonCode: "run_admission_identity_not_evaluated",
-    },
-    enforcement: {
-      coverageState: context.coverageState,
-      policyRefs: [],
-      grantRefs: [],
-      contextFieldsUsed: [],
-    },
-    source: {
-      owner: "agent-command",
-      recordRef: context.contextId,
-      decisionBoundary: "agent-command.run-admission",
-    },
-    missingEvidence: [...context.missingEvidence],
-    remediation: [
-      {
-        code: "no_identity_enforcement_claimed",
-        text: "Treat this receipt as attribution only; it does not prove authorization.",
-      },
-    ],
-  };
-}
-
 function unavailableResult(params: {
   selector: { runId: string } | { executionId: string };
   resolvedRunId?: string;
@@ -427,8 +391,8 @@ function unavailableResult(params: {
   reasonCode: string;
   missingEvidence: string[];
   remediation: Array<{ code: string; text: string }>;
-}): AuditRunInspectResult {
-  const run: AuditRunInspectResult["run"] =
+}): InternalAuditRunInspectResult {
+  const run: InternalAuditRunInspectResult["run"] =
     "executionId" in params.selector
       ? {
           executionId: params.selector.executionId,
@@ -449,6 +413,7 @@ function unavailableResult(params: {
       remediation: params.remediation,
     },
     decisions: [],
+    decisionDisplays: [],
     coverage: { state: params.state, missingEvidence: params.missingEvidence },
   };
 }
@@ -457,7 +422,7 @@ function unavailableIdentityContext(
   selector: { runId: string } | { executionId: string },
   remediation: { code: string; text: string },
   resolvedRunId?: string,
-): AuditRunInspectResult {
+): InternalAuditRunInspectResult {
   return unavailableResult({
     selector,
     resolvedRunId,
@@ -469,45 +434,19 @@ function unavailableIdentityContext(
   });
 }
 
-function presentResult(params: {
-  context: ExecutionIdentityContextV1;
-  decisionOffset?: number;
-  decisionLimit?: number;
-}): AuditRunInspectResult {
-  const allDecisions = [admissionDecision(params.context)];
-  const offset = params.decisionOffset ?? 0;
-  const limit = params.decisionLimit ?? 50;
-  const decisions = allDecisions.slice(offset, offset + limit);
-  const nextOffset = offset + decisions.length;
-  return {
-    schemaVersion: 1,
-    run: {
-      runId: params.context.runId,
-      executionId: params.context.executionId,
-      status: "known",
-    },
-    identity: { state: "present", context: params.context },
-    decisions,
-    coverage: {
-      state: params.context.coverageState,
-      missingEvidence: [...params.context.missingEvidence],
-    },
-    ...(nextOffset < allDecisions.length ? { nextDecisionCursor: String(nextOffset) } : {}),
-  };
-}
-
 function inspectExactExecution(
-  params: { executionId: string; decisionOffset?: number; decisionLimit?: number },
+  params: { executionId: string; decisionCursor?: string; decisionLimit?: number },
   options: ExecutionIdentityReadOptions,
-): AuditRunInspectResult {
+): InternalAuditRunInspectResult {
   const executionId = ensureBoundedExecutionIdentityRef(params.executionId, "execution id");
   const selector = { executionId };
   const contextResult = readExecutionIdentityContextByExecutionId(executionId, options);
   if (contextResult.status === "found") {
-    return presentResult({
+    return presentExecutionDecisionReceipts({
       context: contextResult.context,
-      decisionOffset: params.decisionOffset,
+      decisionCursor: params.decisionCursor,
       decisionLimit: params.decisionLimit,
+      options,
     });
   }
   if (contextResult.status === "corrupt") {
@@ -587,108 +526,129 @@ function inspectRunSelector(
     runId: string;
     executionOffset?: number;
     executionLimit?: number;
-    decisionOffset?: number;
+    decisionCursor?: string;
     decisionLimit?: number;
   },
   options: ExecutionIdentityReadOptions,
-): AuditRunInspectResult {
+): InternalAuditRunInspectResult {
   const runId = ensureBoundedExecutionIdentityRef(params.runId, "run id");
   const now = options.now ?? Date.now();
-  const inspected = withExistingOpenClawStateDatabaseReadOnly<AuditRunInspectResult | undefined>(
-    ({ db }) => {
-      const firstMatches = tableExists(db, "execution_identity_contexts")
-        ? readRowsByRunId(db, runId, now, 0, 2)
-        : [];
-      if (firstMatches.length === 1) {
-        try {
-          return presentResult({
-            context: parseExecutionIdentityRow(firstMatches[0]!),
-            decisionOffset: params.decisionOffset,
-            decisionLimit: params.decisionLimit,
-          });
-        } catch {
-          return unavailableResult({
-            selector: { runId },
-            runStatus: "known",
-            state: "unknown",
-            reasonCode: "identity_context_corrupt",
-            missingEvidence: ["identity.context.valid"],
-            remediation: [
-              {
-                code: "inspect_state_integrity",
-                text: "Run openclaw doctor and inspect the shared state database before trusting this run.",
-              },
-            ],
-          });
-        }
-      }
-      if (firstMatches.length > 1) {
-        const offset = params.executionOffset ?? 0;
-        const limit = params.executionLimit ?? 50;
-        const page = readRowsByRunId(db, runId, now, offset, limit + 1);
-        const candidates = page.slice(0, limit).map((row) => ({
-          executionId: row.execution_id,
-          contextId: row.context_id,
-          createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
-        }));
-        return {
-          schemaVersion: 1,
-          run: { runId, status: "known" },
-          identity: {
-            state: "ambiguous",
-            reasonCode: "execution_selection_required",
-            candidates,
-            missingEvidence: ["execution.selection"],
-            remediation: [
-              {
-                code: "select_execution_id",
-                text: "Select one candidate with openclaw audit --execution <id> --explain.",
-              },
-            ],
-          },
-          decisions: [],
-          coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
-          ...(page.length > limit ? { nextExecutionCursor: String(offset + limit) } : {}),
-        };
-      }
-      if (tableExists(db, "execution_identity_contexts") && hasAnyRunContext(db, runId)) {
-        return unavailableIdentityContext(
-          { runId },
-          {
-            code: "run_again_after_expiry",
-            text: "This run's retained identity contexts are outside the 30-day window; run the operation again to record a new execution.",
-          },
-        );
-      }
+  const inspected = withExistingOpenClawStateDatabaseReadOnly<
+    InternalAuditRunInspectResult | undefined
+  >(({ db }) => {
+    const firstMatches = tableExists(db, "execution_identity_contexts")
+      ? readRowsByRunId(db, runId, now, 0, 2)
+      : [];
+    if (firstMatches.length === 1) {
+      let context: ExecutionIdentityContextV1;
       try {
-        if (hasRetainedAuditRun(db, runId, now)) {
-          return unavailableIdentityContext(
-            { runId },
-            {
-              code: "record_new_identity_context",
-              text: "Confirm audit collection is enabled and the Gateway is current, then run the operation again to record a new execution context.",
-            },
-          );
-        }
+        context = parseExecutionIdentityRow(firstMatches[0]!);
       } catch {
         return unavailableResult({
           selector: { runId },
-          runStatus: "unknown",
+          runStatus: "known",
           state: "unknown",
-          reasonCode: "run_evidence_unreadable",
-          missingEvidence: ["run.record", "identity.context"],
+          reasonCode: "identity_context_corrupt",
+          missingEvidence: ["identity.context.valid"],
           remediation: [
             {
               code: "inspect_state_integrity",
-              text: "Run openclaw doctor and retry the run inspection.",
+              text: "Run openclaw doctor and inspect the shared state database before trusting this run.",
             },
           ],
         });
       }
-      return undefined;
-    },
-    options,
-  );
+      return presentExecutionDecisionReceipts({
+        context,
+        decisionCursor: params.decisionCursor,
+        decisionLimit: params.decisionLimit,
+        options,
+      });
+    }
+    if (firstMatches.length > 1) {
+      const offset = params.executionOffset ?? 0;
+      const limit = params.executionLimit ?? 50;
+      const page = readRowsByRunId(db, runId, now, offset, limit + 1);
+      const candidates = page.slice(0, limit).map((row) => ({
+        executionId: row.execution_id,
+        contextId: row.context_id,
+        createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
+      }));
+      return {
+        schemaVersion: 1,
+        run: { runId, status: "known" },
+        identity: {
+          state: "ambiguous",
+          reasonCode: "execution_selection_required",
+          candidates,
+          missingEvidence: ["execution.selection"],
+          remediation: [
+            {
+              code: "select_execution_id",
+              text: "Select one candidate with openclaw audit --execution <id> --explain.",
+            },
+          ],
+        },
+        decisions: [],
+        decisionDisplays: [],
+        coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
+        ...(page.length > limit ? { nextExecutionCursor: String(offset + limit) } : {}),
+      };
+    }
+    if (
+      hasOperatorApprovalReceiptsForRun({ runId, nowMs: now, databaseOptions: options }) ||
+      hasExecutionDecisionFactsForRun({ runId, now, database: options })
+    ) {
+      return unavailableResult({
+        selector: { runId },
+        runStatus: "known",
+        state: "unknown",
+        reasonCode: "decision_context_link_missing",
+        missingEvidence: ["identity.context", "decision.context_link"],
+        remediation: [
+          {
+            code: "record_new_identity_context",
+            text: "Confirm execution identity collection is enabled, then run and request the action again to record a linked context.",
+          },
+        ],
+      });
+    }
+    if (tableExists(db, "execution_identity_contexts") && hasAnyRunContext(db, runId)) {
+      return unavailableIdentityContext(
+        { runId },
+        {
+          code: "run_again_after_expiry",
+          text: "This run's retained identity contexts are outside the 30-day window; run the operation again to record a new execution.",
+        },
+      );
+    }
+    try {
+      if (hasRetainedAuditRun(db, runId, now)) {
+        return unavailableIdentityContext(
+          { runId },
+          {
+            code: "record_new_identity_context",
+            text: "Confirm audit collection is enabled and the Gateway is current, then run the operation again to record a new execution context.",
+          },
+        );
+      }
+    } catch {
+      return unavailableResult({
+        selector: { runId },
+        runStatus: "unknown",
+        state: "unknown",
+        reasonCode: "run_evidence_unreadable",
+        missingEvidence: ["run.record", "identity.context"],
+        remediation: [
+          {
+            code: "inspect_state_integrity",
+            text: "Run openclaw doctor and retry the run inspection.",
+          },
+        ],
+      });
+    }
+    return undefined;
+  }, options);
   if (inspected) {
     return inspected;
   }
@@ -714,12 +674,12 @@ export function inspectExecutionIdentityRun(
         runId: string;
         executionOffset?: number;
         executionLimit?: number;
-        decisionOffset?: number;
+        decisionCursor?: string;
         decisionLimit?: number;
       }
-    | { executionId: string; decisionOffset?: number; decisionLimit?: number },
+    | { executionId: string; decisionCursor?: string; decisionLimit?: number },
   options: ExecutionIdentityReadOptions = {},
-): AuditRunInspectResult {
+): InternalAuditRunInspectResult {
   return "executionId" in params
     ? inspectExactExecution(params, options)
     : inspectRunSelector(params, options);

@@ -68,7 +68,7 @@ enum TestIsolation {
             }
         }
 
-        let userDefaults = UserDefaults.standard
+        let userDefaults = AppDefaults.standard
         var previousDefaults: [String: Any?] = [:]
         for (key, value) in defaults {
             previousDefaults[key] = userDefaults.object(forKey: key)

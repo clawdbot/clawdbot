@@ -7,28 +7,29 @@ import {
 } from "../../infra/event-session-routing.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { RunExit } from "../../process/supervisor/types.js";
-import {
-  createCliJsonlStreamingParser,
-  extractCliErrorMessage,
-  parseCliOutput,
-  type CliOutput,
-} from "../cli-output.js";
-import { classifyFailoverReason } from "../embedded-agent-helpers.js";
-import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
+import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
+import { parseCliOutput } from "../cli-output.js";
+import type { FailoverError } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { runClaudeLiveSessionTurn } from "./claude-live-session.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import {
   createCliAbortError,
   executeNodeClaudeRun,
-  type resolveNodeClaudePlacement,
+  type resolveNodeClaudeTarget,
 } from "./execute-node-claude.js";
 import { appendCliOutputTail } from "./execute-output-buffer.js";
+import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
+import { createCliExitFailoverError, createCliFailoverError } from "./exit-error.js";
 import { buildCliSupervisorScopeKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
+import {
+  createCliTimeoutError,
+  resolveCliNoOutputTimeoutDecision,
+} from "./no-output-timeout-policy.js";
 import { createCliOutputFailoverError } from "./output-error.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -69,11 +70,13 @@ export async function executeCliProcess(params: {
   events: CliEventHandlers;
   toolTracking: CliToolTracking;
   diagnostics: ReturnType<typeof createClaudeCliModelCallDiagnostics>;
-  nodePlacement: ReturnType<typeof resolveNodeClaudePlacement>;
+  nodePlacement: ReturnType<typeof resolveNodeClaudeTarget>;
   nodeSystemPrompt?: string;
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];
   useManagedClaudeLiveSession: boolean;
+  usePluginOwnedExecution: boolean;
+  initialGatewayCaptureKey?: string;
   useResume: boolean;
   cliSessionIdToUse?: string;
   resolvedSessionId?: string;
@@ -88,8 +91,6 @@ export async function executeCliProcess(params: {
   outputMode: CliBackendConfig["output"];
   logOutputText: boolean;
   cliTurnStartedAt: number;
-  fallbackCleanup?: () => Promise<void>;
-  claimFallbackCleanup: () => void;
   observeForkSuccessor: (sessionId: string) => void;
   options?: ExecuteCliProcessOptions;
 }): Promise<CliOutput> {
@@ -103,65 +104,6 @@ export async function executeCliProcess(params: {
   };
   const outputErrorContext = { ...failoverContext, runId: runParams.runId };
   const hasJsonlOutput = params.outputMode === "jsonl";
-  if (params.useManagedClaudeLiveSession) {
-    if (!hasJsonlOutput) {
-      throw new Error("Claude live session requires JSONL streaming parser");
-    }
-    runParams.onExecutionPhase?.({
-      phase: "process_spawned",
-      provider: runParams.provider,
-      model: context.modelId,
-      backend: context.backendResolved.id,
-    });
-    params.claimFallbackCleanup();
-    const liveResult = await runClaudeLiveSessionTurn({
-      context,
-      args: params.executionArgs,
-      executableCommand: params.executionCommand,
-      executableLeadingArgv: params.executionLeadingArgv,
-      env: params.env,
-      prompt: params.prompt,
-      useResume: params.useResume,
-      forceNewSession:
-        params.cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
-      requiredSessionGeneration: params.cliSessionIdToUse
-        ? context.requiredClaudeLiveSessionGeneration
-        : undefined,
-      noOutputTimeoutMs: params.noOutputTimeoutMs,
-      getProcessSupervisor: params.deps.getProcessSupervisor,
-      onAssistantDelta: params.events.emitCliAssistantDelta,
-      onThinkingDelta: params.events.emitCliThinkingDelta,
-      onThinkingProgress: params.events.emitCliThinkingProgress,
-      onToolUseStart: params.events.emitCliToolUseStart,
-      onToolResult: params.events.emitCliToolResult,
-      resolveToolResultTerminalOutcome: (event) => {
-        const outcome = params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId);
-        return outcome?.outcome === "completed" ? undefined : outcome;
-      },
-      onCommentaryText:
-        params.events.emitLiveEvents && runParams.emitCommentaryText
-          ? params.events.emitCliCommentaryText
-          : undefined,
-      onMcpCaptureReady: params.toolTracking.beginGatewayCapture,
-      cleanup: async () => {
-        await params.fallbackCleanup?.();
-      },
-      onSessionId: params.observeForkSuccessor,
-      onAssistantMessage: params.diagnostics?.observeAssistantMessage,
-      onUsage: params.diagnostics?.observeUsage,
-      onCliOutput: params.diagnostics?.observeCliOutput,
-      onRequestPayload: params.diagnostics?.observeRequestPayload,
-      onPhase: params.options?.onPhase,
-    });
-    params.options?.onPhase?.("resolve");
-    const rawText = liveResult.output.text;
-    return {
-      ...liveResult.output,
-      rawText,
-      finalPromptText: params.prompt,
-      text: applyPluginTextReplacements(rawText, context.backendResolved.textTransforms?.output),
-    };
-  }
 
   const streamingParser = hasJsonlOutput
     ? createCliJsonlStreamingParser({
@@ -171,7 +113,6 @@ export async function executeCliProcess(params: {
         onAssistantDelta: params.events.emitCliAssistantDelta,
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
-        onPlanUpdate: params.events.emitCliPlanUpdate,
         onToolUseStart: params.events.emitParsedToolUseStart,
         onToolResult: params.events.emitParsedToolResult,
         onDisplayToolUseStart: params.events.emitCliDisplayToolUseStart,
@@ -229,6 +170,8 @@ export async function executeCliProcess(params: {
   let managedRunPid: number | undefined;
   let nodeRunAbortSignal: AbortSignal | undefined;
   let nodeRunTruncated = false;
+  const pluginTimeout: { error?: FailoverError } = {};
+  let terminalInterruption: CliTerminalInterruption | undefined;
   let result: RunExit;
   params.diagnostics?.observeRequestPayload(params.stdin ?? params.argsPrompt ?? "");
   if (params.nodePlacement) {
@@ -250,6 +193,49 @@ export async function executeCliProcess(params: {
     result = nodeRun.result;
     nodeRunAbortSignal = nodeRun.nodeRunAbortSignal;
     nodeRunTruncated = nodeRun.nodeRunTruncated;
+  } else if (params.usePluginOwnedExecution && context.preparedBackend.execute) {
+    result = await executePluginOwnedProcess({
+      context,
+      execute: context.preparedBackend.execute,
+      executionCommand: params.executionCommand,
+      executionArgs: params.executionArgs,
+      env: params.env,
+      prompt: params.prompt,
+      useResume: params.useResume,
+      forceNewSession:
+        params.cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,
+      sessionId: params.resolvedSessionId,
+      noOutputTimeoutMs: params.noOutputTimeoutMs,
+      consumeStdout,
+      activeToolCount: params.events.activeParsedToolCount,
+      onNoOutputTimeout: (error) => {
+        pluginTimeout.error = error;
+      },
+      onInterrupted: (reason) => {
+        streamingParser?.finish();
+        const partialOutput = streamingParser?.getOutput();
+        if (
+          !partialOutput?.text.trim() ||
+          partialOutput.errorText ||
+          partialOutput.terminalFailure
+        ) {
+          return false;
+        }
+        terminalInterruption = { reason };
+        return true;
+      },
+      ...(params.useManagedClaudeLiveSession
+        ? {
+            liveSession: {
+              captureKey: params.initialGatewayCaptureKey,
+              beginCapture: params.toolTracking.beginGatewayCapture,
+              requiredGeneration: params.cliSessionIdToUse
+                ? context.requiredClaudeLiveSessionGeneration
+                : undefined,
+            },
+          }
+        : {}),
+    });
   } else {
     const supervisor = params.deps.getProcessSupervisor();
     const scopeKey = buildCliSupervisorScopeKey({
@@ -288,6 +274,7 @@ export async function executeCliProcess(params: {
         ? {
             kind: "cli" as const,
             runId: runParams.runId,
+            toolAuthorityFingerprint: runParams.toolAuthorityFingerprint,
             cancel: () => managedRun.cancel("manual-cancel"),
           }
         : undefined;
@@ -307,7 +294,8 @@ export async function executeCliProcess(params: {
   }
   if (
     (runParams.abortSignal?.aborted || nodeRunAbortSignal?.aborted) &&
-    result.reason === "manual-cancel"
+    result.reason === "manual-cancel" &&
+    !terminalInterruption
   ) {
     throw createCliAbortError();
   }
@@ -316,11 +304,7 @@ export async function executeCliProcess(params: {
   const streamingParserErrorText =
     params.outputMode === "jsonl" ? (streamingParser?.getErrorText() ?? null) : null;
   if (streamingParserErrorText) {
-    throw new FailoverError(streamingParserErrorText, {
-      reason: "format",
-      ...failoverContext,
-      status: resolveFailoverStatus("format"),
-    });
+    throw createCliFailoverError(streamingParserErrorText, "format", failoverContext);
   }
   // The node re-injects the terminal result after truncation. If even that is
   // missing, the turn outcome is unknowable and cannot pass as a clean exit.
@@ -328,15 +312,12 @@ export async function executeCliProcess(params: {
     nodeRunTruncated &&
     result.exitCode === 0 &&
     !result.timedOut &&
-    !streamingParser?.getOutput()
+    !streamingParser?.hasTerminalResult()
   ) {
-    throw new FailoverError(
+    throw createCliFailoverError(
       "paired node truncated the Claude CLI stream before the terminal result; refusing to accept partial output.",
-      {
-        reason: "format",
-        ...failoverContext,
-        status: resolveFailoverStatus("format"),
-      },
+      "format",
+      failoverContext,
     );
   }
 
@@ -398,15 +379,32 @@ export async function executeCliProcess(params: {
     }
   }
 
-  if (result.exitCode !== 0 || result.reason !== "exit") {
+  if (!terminalInterruption && (result.exitCode !== 0 || result.reason !== "exit")) {
     params.options?.onPhase?.("send");
     if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
       const timeoutSeconds = Math.round(params.noOutputTimeoutMs / 1000);
       cliBackendLog.warn(
         `cli watchdog timeout: provider=${runParams.provider} model=${context.modelId} session=${params.resolvedSessionId ?? runParams.sessionId} noOutputTimeoutMs=${params.noOutputTimeoutMs} pid=${managedRunPid ?? "node"}`,
       );
-      const retryable =
-        !params.events.hasObservedCliActivity() && !stdoutDiagnostic && !stderrDiagnostic;
+      const observedActivity = params.events.hasObservedCliActivity();
+      const timeoutDecision = pluginTimeout.error
+        ? { error: pluginTimeout.error }
+        : resolveCliNoOutputTimeoutDecision({
+            context: failoverContext,
+            timeoutMs: params.noOutputTimeoutMs,
+            quietDurationMs: params.noOutputTimeoutMs,
+            cliTimeout: {
+              mode: "no-output",
+              timeoutSeconds,
+              observedActivity,
+              activeToolCount: params.events.activeParsedToolCount(),
+              backgroundTaskCount: 0,
+            },
+            hasOutputText: Boolean(stdoutDiagnostic || stderrDiagnostic),
+            useResume: params.useResume,
+            hasReplayUnsafeActivity: observedActivity,
+          });
+      const retryable = timeoutDecision.error.code === "cli_no_output_timeout";
       const deferNotice =
         retryable &&
         Boolean(params.cliSessionIdToUse) &&
@@ -418,9 +416,7 @@ export async function executeCliProcess(params: {
         const stallNotice = [
           `CLI agent (${runParams.provider}) produced no output for ${timeoutSeconds}s and was terminated.`,
           "It may have been waiting for interactive input or an approval prompt.",
-          ...(params.nodePlacement
-            ? ["Check the node's Claude permission settings for pending prompts."]
-            : ["For Claude Code, prefer --permission-mode bypassPermissions --print."]),
+          "Check CLI permission settings and OpenClaw approval prompts.",
         ].join(" ");
         const routing = resolveEventSessionRoutingPolicy({
           cfg: runParams.config,
@@ -439,80 +435,54 @@ export async function executeCliProcess(params: {
           ),
         );
       }
-      throw new FailoverError(`CLI produced no output for ${timeoutSeconds}s and was terminated.`, {
-        reason: "timeout",
-        ...failoverContext,
-        status: resolveFailoverStatus("timeout"),
-        code: retryable ? "cli_no_output_timeout" : undefined,
-        cliTimeout: {
-          mode: "no-output",
-          timeoutSeconds,
-          observedActivity: params.events.hasObservedCliActivity(),
-          activeToolCount: params.events.activeParsedToolCount(),
-          backgroundTaskCount: 0,
-        },
-      });
+      throw timeoutDecision.error;
     }
     if (result.reason === "overall-timeout") {
       const timeoutSeconds = Math.round(runParams.timeoutMs / 1000);
-      throw new FailoverError(`CLI exceeded timeout (${timeoutSeconds}s) and was terminated.`, {
-        reason: "timeout",
-        ...failoverContext,
-        status: resolveFailoverStatus("timeout"),
-        code: "cli_overall_timeout",
-        cliTimeout: {
+      throw createCliTimeoutError(
+        failoverContext,
+        {
           mode: "overall",
           timeoutSeconds,
           observedActivity: params.events.hasObservedCliActivity(),
           activeToolCount: params.events.activeParsedToolCount(),
           backgroundTaskCount: 0,
         },
-      });
+        "cli_overall_timeout",
+      );
     }
-    const errorCandidates = [stderr, stdout, stderrDiagnostic, stdoutDiagnostic].filter(Boolean);
-    const structuredError =
-      errorCandidates.map((candidate) => extractCliErrorMessage(candidate)).find(Boolean) ?? null;
-    let classifiedErrorText = structuredError;
-    let reason = structuredError
-      ? classifyFailoverReason(structuredError, { provider: runParams.provider })
-      : null;
-    if (!reason) {
-      for (const candidate of errorCandidates) {
-        reason = classifyFailoverReason(candidate, { provider: runParams.provider });
-        if (reason) {
-          classifiedErrorText = candidate;
-          break;
-        }
-      }
-    }
-    const errorText = structuredError || classifiedErrorText || errorCandidates[0] || "CLI failed.";
-    reason ??= "unknown";
-    const retryCode =
-      reason === "context_overflow"
-        ? "cli_context_overflow"
-        : reason === "unknown" &&
-            result.reason === "exit" &&
-            errorCandidates.length === 0 &&
-            !params.events.hasObservedCliActivity()
-          ? "cli_unknown_empty_failure"
-          : undefined;
-    throw new FailoverError(errorText, {
-      reason,
-      ...failoverContext,
-      status: resolveFailoverStatus(reason),
-      code: retryCode,
+    throw createCliExitFailoverError({
+      context: failoverContext,
+      candidates: [stderr, stdout, stderrDiagnostic, stdoutDiagnostic],
+      fallbackMessage: "CLI failed.",
+      retryEmptyFailure: result.reason === "exit" && !params.events.hasObservedCliActivity(),
     });
   }
 
   if (stdoutParseExceeded && !streamedJsonlOutput) {
-    throw new FailoverError(
+    throw createCliFailoverError(
       `CLI stdout exceeded ${CLI_RUNNER_OUTPUT_PARSE_BYTES} bytes; refusing to parse truncated output.`,
-      {
-        reason: "format",
-        ...failoverContext,
-        status: resolveFailoverStatus("format"),
-      },
+      "format",
+      failoverContext,
     );
+  }
+  if (runParams.controlOperation === "compact") {
+    const manualCompaction = context.backendResolved.manualCompaction;
+    if (!manualCompaction) {
+      throw new Error(
+        `CLI backend ${context.backendResolved.id} does not support manual compaction`,
+      );
+    }
+    const validation = manualCompaction.validateOutput(stdout);
+    if (!validation.ok) {
+      throw createCliFailoverError(validation.reason, "unknown", failoverContext);
+    }
+    return {
+      text: "",
+      rawText: "",
+      diagnostics: { process: processDiagnostics },
+      finalPromptText: params.prompt,
+    };
   }
   const parsed =
     parsedStructuredOutput ??
@@ -536,6 +506,7 @@ export async function executeCliProcess(params: {
   );
   return {
     ...parsed,
+    ...(terminalInterruption ? { terminalInterruption } : {}),
     diagnostics: { ...parsed.diagnostics, process: processDiagnostics },
     rawText,
     finalPromptText: params.prompt,

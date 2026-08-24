@@ -6,13 +6,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   forceKillVitestProcessGroup,
   forwardSignalToVitestProcessGroup,
-} from "../../scripts/vitest-process-group.mjs";
-import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
+} from "../../scripts/vitest-process-group.mts";
+import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { runE2eGlobalSetup } from "../vitest/vitest.e2e.global-setup.js";
 
 type SetupCommandRunner = NonNullable<Parameters<typeof runE2eGlobalSetup>[0]>;
@@ -44,7 +39,10 @@ describe("vitest E2E global setup", () => {
           OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
         },
       ],
-      [["scripts/tsdown-build.mjs", "--config", "tsdown.ai.config.ts"], process.env],
+      [
+        ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"],
+        process.env,
+      ],
     ]);
   });
 
@@ -54,9 +52,20 @@ describe("vitest E2E global setup", () => {
       .mockResolvedValueOnce(0)
       .mockResolvedValueOnce(23);
     await expect(runE2eGlobalSetup(runCommand)).rejects.toThrow(
-      "E2E setup command failed with exit code 23: scripts/tsdown-build.mjs --config tsdown.ai.config.ts",
+      "E2E setup command failed with exit code 23: --import tsx scripts/tsdown-build.mts --config tsdown.ai.config.ts",
     );
   });
+
+  it.each(["OPENCLAW_E2E_SKIP_BUILD", "OPENCLAW_E2E_USE_PREBUILT_DIST"] as const)(
+    "skips rebuilding when %s is set",
+    async (envName) => {
+      const runCommand = vi.fn<SetupCommandRunner>();
+
+      await runE2eGlobalSetup(runCommand, { [envName]: "1" });
+
+      expect(runCommand).not.toHaveBeenCalled();
+    },
+  );
 
   posixIt("forwards output and SIGTERM through the runner process group", async () => {
     const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-setup-group-"));
@@ -113,8 +122,12 @@ await runE2eSetupCommand([${JSON.stringify(fixturePath)}], process.env);`;
     } finally {
       forceKillVitestProcessGroup(runner);
       for (const pid of pids) {
-        if (isProcessAlive(pid)) {
+        try {
           process.kill(pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            throw error;
+          }
         }
       }
       fs.rmSync(fixtureDir, { force: true, recursive: true });

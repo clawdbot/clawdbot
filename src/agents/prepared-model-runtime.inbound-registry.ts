@@ -1,13 +1,23 @@
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
+import {
+  listRuntimePluginIdsFromRegistry,
+  registryMatchesManifestPluginIds,
+} from "../plugins/active-runtime-registry.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
-import type {
-  PreparedModelRuntimeInput,
-  PreparedModelRuntimeSnapshot,
-} from "./prepared-model-runtime.types.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryWorkspaceDir,
+  getActivePluginRuntimeSubagentMode,
+} from "../plugins/runtime.js";
+import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 
-export type PreparedInboundRegistryLoader = (input: PreparedModelRuntimeInput) => PluginRegistry;
+export type PreparedInboundRegistryLoader = (
+  input: PreparedModelRuntimeInput,
+  metadataSnapshot: PluginMetadataSnapshot,
+) => PluginRegistry;
 
 function inboundRegistryIdentity(input: PreparedModelRuntimeInput): string {
   return JSON.stringify({
@@ -24,27 +34,58 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
     config: hashRuntimeConfigValue(input.config),
     env: hashRuntimeConfigValue(input.env ?? process.env),
     readOnly: input.readOnly === true,
+    loadRuntimePlugins: input.loadRuntimePlugins === true,
     workspaceDir: input.workspaceDir,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
-    runtimePluginSelections: input.runtimePluginSelections,
+    // Normalization already resolves each model to its runtime. The workspace
+    // registry depends on provider/runtime ownership, not the model id itself.
+    runtimePluginSelections: input.runtimePluginSelections?.map(({ provider, runtime }) => ({
+      provider,
+      runtime,
+    })),
   });
 }
 
 /** Creates one lifecycle-batch loader that shares exact generic registry identities. */
 export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLoader {
   const registries = new Map<string, PluginRegistry>();
-  return (input) => {
+  return (input, metadataSnapshot) => {
     const key = inboundRegistryIdentity(input);
     const existing = registries.get(key);
     if (existing) {
       return existing;
     }
-    const registry = loadAgentRuntimePluginRegistryHandle({
-      config: input.config,
-      env: input.env ?? process.env,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-    });
+    const activeRegistry = getActivePluginRegistry();
+    // Identity is the generation authority. Manifest equivalence alone could let a
+    // stale active registry satisfy a newer bundled snapshot.
+    const reusableGatewayRegistry =
+      input.allowGatewaySubagentBinding === true &&
+      input.env === undefined &&
+      getActivePluginRuntimeSubagentMode() === "gateway-bindable" &&
+      activeRegistry &&
+      getActivePluginRegistryWorkspaceDir() === metadataSnapshot.workspaceDir &&
+      getCurrentPluginMetadataSnapshot({
+        config: input.config,
+        workspaceDir: metadataSnapshot.workspaceDir,
+        allowWorkspaceScopedSnapshot: true,
+      }) === metadataSnapshot &&
+      registryMatchesManifestPluginIds(
+        activeRegistry,
+        metadataSnapshot.manifestRegistry.plugins,
+        listRuntimePluginIdsFromRegistry(activeRegistry),
+      )
+        ? activeRegistry
+        : undefined;
+    const registry =
+      reusableGatewayRegistry ??
+      loadAgentRuntimePluginRegistryHandle({
+        config: input.config,
+        env: input.env ?? process.env,
+        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+        metadataSnapshot,
+        preferBuiltPluginArtifacts: true,
+      });
     registries.set(key, registry);
     return registry;
   };
@@ -53,68 +94,40 @@ export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLo
 /** Prepares distinct generic-inbound and model-selected registries for one workspace generation. */
 export function prepareWorkspacePluginRegistries(
   input: PreparedModelRuntimeInput,
+  metadataSnapshot: PluginMetadataSnapshot,
   loadInboundRegistry?: PreparedInboundRegistryLoader,
+  preferBuiltPluginArtifacts = false,
 ): {
   runtimePluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
 } {
-  if (input.readOnly) {
+  // Read-only catalog owners stay runtime-free. Executable probes opt in to provider runtime,
+  // while non-core harness probes carry the exact selected plugin generation.
+  if (input.readOnly && !input.loadRuntimePlugins && !input.runtimePluginSelections) {
     return {};
   }
-  const inboundPluginRegistry = loadInboundRegistry?.(input);
+  const inboundPluginRegistry = input.readOnly
+    ? undefined
+    : loadInboundRegistry?.(input, metadataSnapshot);
   const runtimePluginRegistry =
     input.runtimePluginSelections || !inboundPluginRegistry
       ? loadAgentRuntimePluginRegistryHandle({
+          ...(input.loadRuntimePlugins
+            ? { basePluginIds: [] }
+            : inboundPluginRegistry
+              ? { basePluginIds: listRuntimePluginIdsFromRegistry(inboundPluginRegistry) }
+              : {}),
           config: input.config,
           env: input.env ?? process.env,
           ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+          metadataSnapshot,
+          ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
           selections: input.runtimePluginSelections,
         })
       : inboundPluginRegistry;
   return {
     runtimePluginRegistry,
     ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
-  };
-}
-
-type PreparedInboundRegistryLifecycleHost<Owner> = Readonly<{
-  isGatewayLifecycleActive: () => boolean;
-  getPendingReplacement: () => Promise<void> | undefined;
-  resolveConfiguredOwner: (agentId: string) => Owner | undefined;
-  getPublishedSnapshot: (owner: Owner) => PreparedModelRuntimeSnapshot | undefined;
-  prepareSnapshot: (owner: Owner) => Promise<PreparedModelRuntimeSnapshot>;
-}>;
-
-function requireInboundRegistry(snapshot: PreparedModelRuntimeSnapshot): PluginRegistry {
-  if (!snapshot.inboundPluginRegistry) {
-    throw new Error(`prepared inbound plugin registry was not published for ${snapshot.agentDir}`);
-  }
-  return snapshot.inboundPluginRegistry;
-}
-
-/** Binds Gateway turns to the configured owner without exposing mutable lifecycle state. */
-export function createPublishedGatewayInboundPluginRegistryLoader<Owner>(
-  host: PreparedInboundRegistryLifecycleHost<Owner>,
-): (params: { agentId: string }) => Promise<PluginRegistry | undefined> {
-  return async ({ agentId }) => {
-    if (!host.isGatewayLifecycleActive()) {
-      return undefined;
-    }
-    for (;;) {
-      const replacement = host.getPendingReplacement();
-      if (replacement) {
-        await replacement;
-        continue;
-      }
-      const owner = host.resolveConfiguredOwner(agentId);
-      if (!owner) {
-        throw new PreparedModelRuntimeOwnerNotPublishedError(
-          `prepared inbound plugin registry owner was not published for ${agentId}`,
-        );
-      }
-      const published = host.getPublishedSnapshot(owner);
-      return requireInboundRegistry(published ?? (await host.prepareSnapshot(owner)));
-    }
   };
 }

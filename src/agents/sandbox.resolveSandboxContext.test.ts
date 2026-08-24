@@ -60,8 +60,8 @@ vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => ({ note: "test-remote" })),
 }));
 
-vi.mock("../skills/loading/workspace.js", () => ({
-  syncSkillsToWorkspace: syncSkillsToWorkspaceMock,
+vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
+  syncWorkspaceSkills: syncSkillsToWorkspaceMock,
 }));
 
 let sandboxFixtureRoot = "";
@@ -219,6 +219,7 @@ describe("resolveSandboxContext", () => {
   }, 15_000);
 
   it("resolves a registered non-docker backend", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
     resolveNodeExecEligibilityMock.mockClear();
     readRegisteredSandboxRuntimeIdsMock.mockResolvedValue(["registered-runtime"]);
     const backendFactory = vi.fn(async () => ({
@@ -255,11 +256,17 @@ describe("resolveSandboxContext", () => {
           },
         },
       };
+      const skillsSnapshot = {
+        prompt: "skills",
+        skills: [{ name: "alpha" }],
+        version: 42,
+      };
 
       const result = await resolveSandboxContext({
         config: cfg,
         execOverrides: { host: "node", node: "build-node", security: "allowlist" },
         sessionKey: "agent:worker:task",
+        skillsSnapshot,
         workspaceDir: "/tmp/openclaw-test",
       });
 
@@ -276,6 +283,9 @@ describe("resolveSandboxContext", () => {
         expect.objectContaining({
           execOverrides: { host: "node", node: "build-node", security: "allowlist" },
         }),
+      );
+      expect(syncSkillsToWorkspaceMock).toHaveBeenCalledWith(
+        expect.objectContaining({ skillsSnapshot }),
       );
 
       const workspace = await ensureSandboxWorkspaceForSession({

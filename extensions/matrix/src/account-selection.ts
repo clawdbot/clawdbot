@@ -12,13 +12,12 @@ import {
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveMatrixAccountStringValues,
   type MatrixResolvedStringField,
 } from "./auth-precedence.js";
 import { getMatrixScopedEnvVarNames, listMatrixEnvAccountIds } from "./env-vars.js";
-import { isRecord } from "./record-shared.js";
 
 type MatrixTopologyStringSources = Partial<Record<MatrixResolvedStringField, string>>;
 

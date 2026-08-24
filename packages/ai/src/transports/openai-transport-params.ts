@@ -2,6 +2,7 @@ import type { Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
+import type { CodeModeToolSurfaceObservation } from "../provider-options.js";
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import type { OpenAIToolProjection } from "../providers/openai-tool-projection.js";
 import {
@@ -42,9 +43,78 @@ export function readCodeModePayloadToolName(tool: unknown): string | undefined {
   return typeof fnName === "string" ? fnName : undefined;
 }
 
+function readCodeModePayloadToolIdentity(
+  tool: unknown,
+  visibleToolNames: ReadonlySet<string>,
+  allowedHostedToolTypes?: ReadonlySet<string>,
+): string | false | undefined {
+  if (!isRecord(tool)) {
+    return undefined;
+  }
+  const type = readToolPayloadField(tool, "type");
+  if (typeof type === "string" && allowedHostedToolTypes?.has(type)) {
+    try {
+      if (
+        Object.hasOwn(tool, "name") ||
+        Object.hasOwn(tool, "function") ||
+        Object.hasOwn(tool, "functionDeclarations") ||
+        Object.hasOwn(tool, "function_declarations")
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    return `hosted:${type}`;
+  }
+  const name = readCodeModePayloadToolName(tool);
+  return typeof name === "string" && isCodeModeModelVisibleToolName(name, visibleToolNames)
+    ? `client:${name}`
+    : undefined;
+}
+
+function readCodeModePayloadToolIdentities(payload: unknown): string[] {
+  if (!isRecord(payload)) {
+    return [];
+  }
+  const tools = readToolPayloadField(payload, "tools");
+  if (!Array.isArray(tools)) {
+    return [];
+  }
+  return tools.flatMap((tool) => {
+    if (!isRecord(tool)) {
+      return [];
+    }
+    const identities: string[] = [];
+    const name = readCodeModePayloadToolName(tool);
+    if (name) {
+      identities.push(`client:${name}`);
+    }
+    for (const key of ["functionDeclarations", "function_declarations"] as const) {
+      const declarations = readToolPayloadField(tool, key);
+      if (!Array.isArray(declarations)) {
+        continue;
+      }
+      for (const declaration of declarations) {
+        const declarationName = readCodeModePayloadToolName(declaration);
+        if (declarationName) {
+          identities.push(`client:${declarationName}`);
+        }
+      }
+    }
+    const type = readToolPayloadField(tool, "type");
+    if (typeof type === "string" && type !== "function") {
+      identities.push(`hosted:${type}`);
+    }
+    return identities;
+  });
+}
+
 export function filterCodeModePayloadTools(
   payload: unknown,
   visibleToolNames: ReadonlySet<string>,
+  allowedHostedToolTypes?: ReadonlySet<string>,
+  observer?: (observation: CodeModeToolSurfaceObservation) => void,
 ): void {
   if (!isRecord(payload)) {
     return;
@@ -53,10 +123,18 @@ export function filterCodeModePayloadTools(
   if (!Array.isArray(tools)) {
     return;
   }
+  const beforeToolIdentities = observer ? readCodeModePayloadToolIdentities(payload) : undefined;
   payload.tools = tools.flatMap((tool) => {
-    const name = readCodeModePayloadToolName(tool);
-    if (typeof name === "string" && isCodeModeModelVisibleToolName(name, visibleToolNames)) {
+    const identity = readCodeModePayloadToolIdentity(
+      tool,
+      visibleToolNames,
+      allowedHostedToolTypes,
+    );
+    if (identity) {
       return [tool];
+    }
+    if (identity === false) {
+      return [];
     }
     if (!isRecord(tool)) {
       return [];
@@ -80,6 +158,12 @@ export function filterCodeModePayloadTools(
     }
     return Object.keys(filteredGroups).length > 0 ? [filteredGroups] : [];
   });
+  if (beforeToolIdentities) {
+    observer?.({
+      beforeToolIdentities,
+      afterToolIdentities: readCodeModePayloadToolIdentities(payload),
+    });
+  }
 }
 
 export function resolveCodeModeResponsesVisibleToolNames(
@@ -95,6 +179,8 @@ export function resolveCodeModeResponsesVisibleToolNames(
 export function enforceCodeModeResponsesToolSurface(
   payload: unknown,
   visibleToolNames: ReadonlySet<string>,
+  allowedHostedToolTypes?: ReadonlySet<string>,
+  observer?: (observation: CodeModeToolSurfaceObservation) => void,
 ): void {
   if (!isRecord(payload)) {
     return;
@@ -103,31 +189,43 @@ export function enforceCodeModeResponsesToolSurface(
   if (!Array.isArray(tools)) {
     return;
   }
-  payload.tools = tools.filter((tool) => {
-    const name = readCodeModePayloadToolName(tool);
-    return typeof name === "string" && isCodeModeModelVisibleToolName(name, visibleToolNames);
-  });
+  const beforeToolIdentities = observer ? readCodeModePayloadToolIdentities(payload) : undefined;
+  payload.tools = tools.filter((tool) =>
+    Boolean(readCodeModePayloadToolIdentity(tool, visibleToolNames, allowedHostedToolTypes)),
+  );
+  if (beforeToolIdentities) {
+    observer?.({
+      beforeToolIdentities,
+      afterToolIdentities: readCodeModePayloadToolIdentities(payload),
+    });
+  }
 }
 
 export function assertCodeModeResponsesToolSurface(
   payload: unknown,
   visibleToolNames: ReadonlySet<string>,
+  allowedHostedToolTypes?: ReadonlySet<string>,
 ): void {
   const tools = isRecord(payload) ? readToolPayloadField(payload, "tools") : undefined;
   if (!Array.isArray(tools)) {
     throw new Error("Code mode payload tool surface violation: expected exec,wait; got no tools");
   }
-  const names = tools
-    .map(readCodeModePayloadToolName)
-    .filter((name): name is string => typeof name === "string" && name.length > 0)
+  const identities = tools.map((tool) =>
+    readCodeModePayloadToolIdentity(tool, visibleToolNames, allowedHostedToolTypes),
+  );
+  const names = identities
+    .flatMap((identity) =>
+      typeof identity === "string" && identity.startsWith("client:")
+        ? [identity.slice("client:".length)]
+        : [],
+    )
     .toSorted((left, right) => left.localeCompare(right));
   if (
     names.length >= 2 &&
-    names.length === tools.length &&
-    new Set(names).size === names.length &&
+    identities.every((identity): identity is string => typeof identity === "string") &&
+    new Set(identities).size === identities.length &&
     names.includes("exec") &&
-    names.includes("wait") &&
-    names.every((name) => isCodeModeModelVisibleToolName(name, visibleToolNames))
+    names.includes("wait")
   ) {
     return;
   }
@@ -260,7 +358,7 @@ export function buildOpenAIClientHeaders(
     );
   }
   const callerHeaders = { ...optionHeaders, ...turnHeaders };
-  const headers = resolveProviderRequestPolicyConfig({
+  const headers = resolveProviderRequestPolicyConfig(model, {
     provider: model.provider,
     api: model.api,
     baseUrl: model.baseUrl,

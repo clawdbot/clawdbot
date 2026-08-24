@@ -22,6 +22,7 @@ function encodeLockIdentity(identity) {
     identity.token,
   ].join(".");
 }
+// Lock files are transient current-runtime state; unknown identity shapes fail closed.
 function parseLockIdentity(parts) {
   if (parts.length !== 5) return null;
   const [entryAction, entryNonce, rawPid, rawControllerPid, token] = parts;
@@ -34,6 +35,7 @@ function parseLockIdentity(parts) {
     !Number.isSafeInteger(pid) ||
     !/^[1-9][0-9]*$/.test(rawControllerPid || "") ||
     !Number.isSafeInteger(controllerPid) ||
+    (entryAction !== "receiver" && controllerPid !== pid) ||
     !/^[a-f0-9]{32}$/.test(token || "")
   ) {
     return null;
@@ -70,8 +72,14 @@ function processGroupIsAlive(pid) {
   }
 }
 function lockIdentityIsAlive(identity) {
-  return processIsAlive(identity.controllerPid) ||
-    (identity.action === "receiver" && processGroupIsAlive(identity.pid));
+  if (identity.action === "receiver") {
+    // Receiver descendants own mutation liveness; the wrapper owns acquire/release.
+    // Reclaim is safe only after both the receiver group and wrapper are dead.
+    return processIsAlive(identity.pid) ||
+      processGroupIsAlive(identity.pid) ||
+      processIsAlive(identity.controllerPid);
+  }
+  return processIsAlive(identity.pid);
 }
 function ownerEntryName(owner) {
   return "owner." + encodeLockIdentity(owner);

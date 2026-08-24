@@ -4,12 +4,16 @@ import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
-import type { DiffScreenshotter } from "./browser.js";
+import type { DiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffsPluginDefaults } from "./config.js";
 import { DiffArtifactStore } from "./store.js";
 import { createDiffStoreHarness } from "./test-helpers.js";
 import { createDiffsTool } from "./tool.js";
 import type { DiffRenderOptions } from "./types.js";
+
+vi.mock("./browser.runtime.js", () => {
+  throw new Error("viewer-only rendering must not load the Playwright renderer");
+});
 
 const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
 
@@ -342,6 +346,26 @@ describe("diffs tool", () => {
     await expect(fs.readdir(rootDir)).resolves.toEqual([]);
   });
 
+  it("falls back to view output when the default image renderer cannot load", async () => {
+    const tool = createDiffsTool({
+      api: createApi(),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+    });
+
+    const result = await tool.execute?.("tool-3b", {
+      before: "one\n",
+      after: "two\n",
+      mode: "both",
+    });
+
+    expect(readTextContent(result, 0)).toContain("Diff viewer ready.");
+    expect((result.details as Record<string, unknown>).viewerUrl).toEqual(expect.any(String));
+    expect((result.details as Record<string, unknown>).fileError).toContain(
+      "viewer-only rendering must not load the Playwright renderer",
+    );
+  });
+
   it("rejects invalid base URLs as tool input errors", async () => {
     const tool = createDiffsTool({
       api: createApi(),
@@ -357,6 +381,21 @@ describe("diffs tool", () => {
         baseUrl: "javascript:alert(1)",
       }),
     ).rejects.toThrow("Invalid baseUrl");
+  });
+
+  it("returns a tool input error for malformed raw arguments", async () => {
+    const tool = createDiffsTool({
+      api: createApi(),
+      store,
+      defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
+    });
+
+    await expect(tool.execute?.("tool-malformed-null", null)).rejects.toThrow(
+      "Provide patch or both before and after text.",
+    );
+    await expect(tool.execute?.("tool-malformed-undefined", undefined)).rejects.toThrow(
+      "Provide patch or both before and after text.",
+    );
   });
 
   it("rejects oversized patch payloads", async () => {
@@ -651,13 +690,13 @@ function createPdfScreenshotter(
   return { screenshotHtml };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObjectValue(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function readDetails(result: unknown): Record<string, unknown> {
   const details = (result as { details?: unknown } | null | undefined)?.details;
-  if (!isRecord(details)) {
+  if (!isObjectValue(details)) {
     throw new Error("expected diffs tool result details");
   }
   return details;
@@ -688,7 +727,7 @@ function extractViewerArtifactToken(viewerPath: string): string {
 }
 
 function readParametersProperties(parameters: unknown): Record<string, unknown> {
-  if (isRecord(parameters) && isRecord(parameters.properties)) {
+  if (isObjectValue(parameters) && isObjectValue(parameters.properties)) {
     return parameters.properties;
   }
   throw new Error("expected diffs tool parameter properties");

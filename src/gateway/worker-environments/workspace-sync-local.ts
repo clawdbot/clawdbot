@@ -1,16 +1,11 @@
-import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
-import { killProcessTree } from "../../process/kill-tree.js";
-import { workerSshCommandOptions } from "./ssh.js";
-import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
-
-const STDERR_LIMIT = 4_096;
-const COMMAND_KILL_GRACE_MS = 300;
-const COMMAND_CLOSE_GRACE_MS = 1_000;
+import {
+  createWorkspaceGitTransferList,
+  runWorkspaceInventoryCommandToFile,
+} from "./workspace-sync-inventory.js";
 
 function validateGitRelativePath(file: string): string {
   if (
@@ -46,190 +41,23 @@ async function* readNulFile(filePath: string): AsyncGenerator<string> {
   }
 }
 
+export async function readWorkspaceTransferPaths(filePath: string): Promise<Set<string>> {
+  const paths = new Set<string>();
+  for await (const entry of readNulFile(filePath)) {
+    paths.add(entry);
+  }
+  return paths;
+}
+
 export async function runLocalCommandToFile(params: {
   argv: string[];
   inputPath?: string;
   outputPath: string;
   signal: AbortSignal;
   timeoutMs: number;
+  maxOutputBytes?: number;
 }): Promise<void> {
-  const [command, ...args] = params.argv;
-  if (!command) {
-    throw new Error("Worker workspace command requires an executable");
-  }
-  const output = await fs.open(params.outputPath, "wx", 0o600);
-  const input = params.inputPath ? await fs.open(params.inputPath, "r") : undefined;
-  let stderr = "";
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let terminationTimer: ReturnType<typeof setTimeout> | undefined;
-  let abort: (() => void) | undefined;
-  try {
-    if (params.signal.aborted) {
-      throw new Error("Worker workspace file enumeration was aborted");
-    }
-    const child = spawn(command, args, {
-      env: workerSshCommandOptions({ timeoutMs: params.timeoutMs }).baseEnv,
-      stdio: [input?.fd ?? "ignore", output.fd, "pipe"],
-      ...(process.platform !== "win32" ? { detached: true } : {}),
-      windowsHide: true,
-    });
-    const childStderr = child.stderr;
-    if (!childStderr) {
-      throw new Error("Worker workspace command has no stderr pipe");
-    }
-    childStderr.setEncoding("utf8");
-    childStderr.on("data", (chunk: string) => {
-      stderr = sliceUtf16Safe(`${stderr}${chunk}`, -STDERR_LIMIT);
-    });
-    const result = await new Promise<{ code: number | null; error?: Error }>((resolve) => {
-      let settled = false;
-      const finish = (value: { code: number | null; error?: Error }) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        resolve(value);
-      };
-      let terminationStarted = false;
-      const terminate = () => {
-        if (settled || terminationStarted) {
-          return;
-        }
-        terminationStarted = true;
-        const pid = child.pid;
-        if (typeof pid === "number" && pid > 0) {
-          killProcessTree(pid, {
-            graceMs: COMMAND_KILL_GRACE_MS,
-            detached: process.platform !== "win32",
-          });
-        } else {
-          child.kill("SIGTERM");
-        }
-        // A descendant can retain stderr even after the direct child exits. Bound
-        // shutdown so placement replacement cannot wait forever on that pipe.
-        terminationTimer = setTimeout(() => {
-          if (typeof pid === "number" && pid > 0) {
-            killProcessTree(pid, { force: true, detached: process.platform !== "win32" });
-          } else {
-            child.kill("SIGKILL");
-          }
-          childStderr.destroy();
-          finish({ code: null });
-        }, COMMAND_KILL_GRACE_MS + COMMAND_CLOSE_GRACE_MS);
-        terminationTimer.unref?.();
-      };
-      child.once("error", (error) => finish({ code: null, error }));
-      child.once("close", (code) => finish({ code }));
-      abort = terminate;
-      params.signal.addEventListener("abort", abort, { once: true });
-      timer = setTimeout(terminate, params.timeoutMs);
-      timer.unref?.();
-      if (params.signal.aborted) {
-        terminate();
-      }
-    });
-    if (result.error) {
-      throw result.error;
-    }
-    if (params.signal.aborted) {
-      throw new Error("Worker workspace file enumeration was aborted");
-    }
-    if (result.code !== 0) {
-      throw new Error(
-        stderr.trim()
-          ? `Worker workspace file enumeration failed: ${stderr.trim()}`
-          : "Worker workspace file enumeration failed",
-      );
-    }
-  } finally {
-    clearTimeout(timer);
-    clearTimeout(terminationTimer);
-    if (abort) {
-      params.signal.removeEventListener("abort", abort);
-    }
-    await output.close();
-    await input?.close();
-  }
-}
-
-async function writeEligibleGitFiles(params: {
-  gitRoot: string;
-  eligiblePath: string;
-  ignoredPath: string;
-  selectedPath: string;
-  outputPath: string;
-}): Promise<void> {
-  const output = await fs.open(params.outputPath, "wx", 0o600);
-  const canonicalRoot = await fs.realpath(params.gitRoot);
-  let buffered: string[] = [];
-  let bufferedBytes = 0;
-  const flush = async () => {
-    if (buffered.length === 0) {
-      return;
-    }
-    await output.write(buffered.join(""));
-    buffered = [];
-    bufferedBytes = 0;
-  };
-  const appendIfTransferable = async (file: string) => {
-    if (isDerivedWorkspacePath(file)) {
-      return;
-    }
-    const absolute = path.join(canonicalRoot, file);
-    const stats = await fs.lstat(absolute).catch((error: unknown) => {
-      if (hasNodeErrorCode(error, "ENOENT")) {
-        return undefined;
-      }
-      throw error;
-    });
-    // Gitlinks are directories. Keep their commit in the base repository without
-    // recursively copying nested repositories or their credential-bearing metadata.
-    if (!stats || (!stats.isFile() && !stats.isSymbolicLink())) {
-      return;
-    }
-    if (stats.isSymbolicLink()) {
-      // Mirrors the remote manifest guard, but before transfer: macOS openrsync
-      // stat-fails escaping links with an opaque error instead of copying them.
-      const target = await fs.readlink(absolute);
-      const resolvedTarget = path.resolve(path.dirname(absolute), target);
-      if (
-        resolvedTarget !== canonicalRoot &&
-        !resolvedTarget.startsWith(canonicalRoot + path.sep)
-      ) {
-        throw new Error(`worker workspace symlink escapes the sync root: ${file}`);
-      }
-    }
-    const record = `${file}\0`;
-    buffered.push(record);
-    bufferedBytes += Buffer.byteLength(record);
-    if (bufferedBytes >= 64 * 1024) {
-      await flush();
-    }
-  };
-  try {
-    for await (const file of readNulFile(params.eligiblePath)) {
-      await appendIfTransferable(file);
-    }
-    const ignored = readNulFile(params.ignoredPath)[Symbol.asyncIterator]();
-    const selected = readNulFile(params.selectedPath)[Symbol.asyncIterator]();
-    let ignoredItem = await ignored.next();
-    let selectedItem = await selected.next();
-    while (!ignoredItem.done && !selectedItem.done) {
-      const order = Buffer.compare(Buffer.from(ignoredItem.value), Buffer.from(selectedItem.value));
-      if (order === 0) {
-        await appendIfTransferable(ignoredItem.value);
-        ignoredItem = await ignored.next();
-        selectedItem = await selected.next();
-      } else if (order < 0) {
-        ignoredItem = await ignored.next();
-      } else {
-        selectedItem = await selected.next();
-      }
-    }
-    await flush();
-  } finally {
-    await output.close();
-  }
+  await runWorkspaceInventoryCommandToFile(params);
 }
 
 export async function createGitTransferList(params: {
@@ -238,82 +66,29 @@ export async function createGitTransferList(params: {
   signal: AbortSignal;
   timeoutMs: number;
 }): Promise<string> {
-  const eligiblePath = path.join(params.temporaryDirectory, "eligible");
-  const ignoredPath = path.join(params.temporaryDirectory, "ignored");
-  const selectedPath = path.join(params.temporaryDirectory, "selected");
-  const outputPath = path.join(params.temporaryDirectory, "transfer-list");
-  await fs.mkdir(params.temporaryDirectory, { mode: 0o700 });
-  await runLocalCommandToFile({
-    argv: [
-      "git",
-      "-C",
-      params.gitRoot,
-      "ls-files",
-      "--full-name",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "-z",
-    ],
-    outputPath: eligiblePath,
-    signal: params.signal,
-    timeoutMs: params.timeoutMs,
-  });
-  const worktreeIncludePath = path.join(params.gitRoot, ".worktreeinclude");
-  const worktreeInclude = await fs.lstat(worktreeIncludePath).catch(() => undefined);
-  if (worktreeInclude?.isFile()) {
-    const [ignoredResult, selectedResult] = await Promise.allSettled([
-      runLocalCommandToFile({
-        argv: [
-          "git",
-          "-C",
-          params.gitRoot,
-          "ls-files",
-          "--full-name",
-          "--others",
-          "--ignored",
-          "--exclude-standard",
-          "-z",
-        ],
-        outputPath: ignoredPath,
-        signal: params.signal,
-        timeoutMs: params.timeoutMs,
-      }),
-      runLocalCommandToFile({
-        argv: [
-          "git",
-          "-C",
-          params.gitRoot,
-          "ls-files",
-          "--full-name",
-          "--others",
-          "--ignored",
-          `--exclude-from=${worktreeIncludePath}`,
-          "-z",
-        ],
-        outputPath: selectedPath,
-        signal: params.signal,
-        timeoutMs: params.timeoutMs,
-      }),
-    ]);
-    if (ignoredResult.status === "rejected") {
-      throw ignoredResult.reason;
+  return await createWorkspaceGitTransferList(params);
+}
+
+export async function filterExistingGitTransferList(params: {
+  gitRoot: string;
+  preparedListPath: string;
+  outputPath: string;
+}): Promise<string> {
+  const output = await fs.open(params.outputPath, "wx", 0o600);
+  try {
+    for await (const file of readNulFile(params.preparedListPath)) {
+      const stats = await fs.lstat(path.join(params.gitRoot, file)).catch((error: unknown) => {
+        if (hasNodeErrorCode(error, "ENOENT")) {
+          return undefined;
+        }
+        throw error;
+      });
+      if (stats?.isFile() || stats?.isSymbolicLink()) {
+        await output.writeFile(`${file}\0`);
+      }
     }
-    if (selectedResult.status === "rejected") {
-      throw selectedResult.reason;
-    }
-  } else {
-    await Promise.all([
-      fs.writeFile(ignoredPath, "", { mode: 0o600 }),
-      fs.writeFile(selectedPath, "", { mode: 0o600 }),
-    ]);
+  } finally {
+    await output.close();
   }
-  await writeEligibleGitFiles({
-    gitRoot: params.gitRoot,
-    eligiblePath,
-    ignoredPath,
-    selectedPath,
-    outputPath,
-  });
-  return outputPath;
+  return params.outputPath;
 }

@@ -1,0 +1,118 @@
+import { describe, expect, it } from "vitest";
+import { createPluginRecord } from "./loader-records.js";
+import { createPluginRegistry } from "./registry.js";
+import type { PluginRuntime } from "./runtime/types.js";
+import { startPluginServices } from "./services.js";
+
+class ClassBackedLifecycleService {
+  starts = 0;
+  advertisements = 0;
+
+  constructor(readonly id: string) {}
+
+  start() {
+    this.starts += 1;
+  }
+
+  advertise() {
+    this.advertisements += 1;
+  }
+}
+
+function createRegistrationFixture() {
+  const builder = createPluginRegistry({
+    logger: {
+      info() {},
+      warn() {},
+      error() {},
+      debug() {},
+    },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: false,
+  });
+  const createRecord = (id: string) =>
+    createPluginRecord({
+      id,
+      source: `/plugins/${id}/index.ts`,
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+  return { builder, createRecord };
+}
+
+describe("plugin service registration identity", () => {
+  it.each([
+    { surface: "service", sameOwner: false, paddedFirst: true },
+    { surface: "service", sameOwner: false, paddedFirst: false },
+    { surface: "service", sameOwner: true, paddedFirst: true },
+    { surface: "service", sameOwner: true, paddedFirst: false },
+    { surface: "discovery", sameOwner: false, paddedFirst: true },
+    { surface: "discovery", sameOwner: false, paddedFirst: false },
+    { surface: "discovery", sameOwner: true, paddedFirst: true },
+    { surface: "discovery", sameOwner: true, paddedFirst: false },
+  ] as const)(
+    "deduplicates $surface registrations (same owner: $sameOwner, padded first: $paddedFirst)",
+    async ({ surface, sameOwner, paddedFirst }) => {
+      const { builder, createRecord } = createRegistrationFixture();
+      const firstRecord = createRecord("first-owner");
+      const secondRecord = sameOwner ? firstRecord : createRecord("second-owner");
+      const firstApi = builder.createApi(firstRecord, { config: {} });
+      const secondApi = builder.createApi(secondRecord, { config: {} });
+      const firstService = new ClassBackedLifecycleService(
+        paddedFirst ? " shared-service " : "shared-service",
+      );
+      const secondService = new ClassBackedLifecycleService(
+        paddedFirst ? "shared-service" : " shared-service ",
+      );
+
+      if (surface === "service") {
+        firstApi.registerService(firstService);
+        secondApi.registerService(secondService);
+      } else {
+        firstApi.registerGatewayDiscoveryService(firstService);
+        secondApi.registerGatewayDiscoveryService(secondService);
+      }
+
+      const registrations =
+        surface === "service"
+          ? builder.registry.services
+          : builder.registry.gatewayDiscoveryServices;
+      expect(registrations).toHaveLength(1);
+      expect(registrations[0]?.service).toBe(firstService);
+      expect(registrations[0]?.service).toBeInstanceOf(ClassBackedLifecycleService);
+
+      const recordIds =
+        surface === "service" ? firstRecord.services : firstRecord.gatewayDiscoveryServiceIds;
+      expect(recordIds).toEqual(["shared-service"]);
+
+      if (sameOwner) {
+        expect(builder.registry.diagnostics).toEqual([]);
+      } else {
+        expect(builder.registry.diagnostics).toEqual([
+          expect.objectContaining({
+            pluginId: "second-owner",
+            message:
+              surface === "service"
+                ? "service already registered: shared-service (first-owner)"
+                : "gateway discovery service already registered: shared-service (first-owner)",
+          }),
+        ]);
+        expect(
+          surface === "service" ? secondRecord.services : secondRecord.gatewayDiscoveryServiceIds,
+        ).toEqual([]);
+      }
+
+      if (surface === "service") {
+        const handle = await startPluginServices({ registry: builder.registry, config: {} });
+        expect(firstService.starts).toBe(1);
+        expect(secondService.starts).toBe(0);
+        await handle.stop();
+      } else {
+        await builder.registry.gatewayDiscoveryServices[0]?.service.advertise({} as never);
+        expect(firstService.advertisements).toBe(1);
+        expect(secondService.advertisements).toBe(0);
+      }
+    },
+  );
+});

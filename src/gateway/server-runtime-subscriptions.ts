@@ -1,30 +1,36 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { isAuditLedgerEnabled, resolveAuditMessageMode } from "../audit/audit-config.js";
+import {
+  isAuditLedgerEnabled,
+  isExecutionIdentityCollectionEnabled,
+  resolveAuditMessageMode,
+} from "../audit/audit-config.js";
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
+import { configureMessageActionDecisionSink } from "../audit/message-action-decision.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
+import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
+import {
+  configureChannelAdmissionDecisionSink,
+  configureChannelAdmissionEvidenceCollection,
+} from "../channels/message-access/admission-evidence.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { onAgentAuditEvent, onAgentRuntimeEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
-import {
-  isAcpSessionKey,
-  isCronRunSessionKey,
-  isSubagentSessionKey,
-} from "../sessions/session-key-utils.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { isTerminalTaskStatus } from "../tasks/task-executor-policy.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
+import { markChatAbortTerminalPersistenceError } from "./chat-abort-lifecycle-internal.js";
 import {
   type ChatAbortControllerEntry,
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import type {
   ChatRunState,
   SessionEventSubscriberRegistry,
@@ -33,8 +39,11 @@ import type {
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { createSessionObserver } from "./session-observer.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { resolveTaskRequesterSessionTarget } from "./task-session-access.js";
 import type { TerminalSessionManager } from "./terminal/session-manager.js";
 
 function dispatchEventHandler<TEvent>(params: {
@@ -52,30 +61,20 @@ function dispatchEventHandler<TEvent>(params: {
     });
 }
 
-function terminalTaskSessionKey(event: TaskRegistryObserverEvent): string | undefined {
+function terminalTaskId(event: TaskRegistryObserverEvent): string | undefined {
   if (event.kind !== "upserted" || !isTerminalTaskStatus(event.task.status)) {
     return undefined;
   }
   if (event.previous && isTerminalTaskStatus(event.previous.status)) {
     return undefined;
   }
-  const sessionKey = event.task.childSessionKey?.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  // Persistent conversation targets intentionally retain their terminals.
-  // Only task-run identities end when their authoritative task row terminalizes.
-  const taskRunScoped =
-    isCronRunSessionKey(sessionKey) ||
-    isSubagentSessionKey(sessionKey) ||
-    isAcpSessionKey(sessionKey);
-  return taskRunScoped ? sessionKey : undefined;
+  return event.task.taskId;
 }
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
   log: SubsystemLogger;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  broadcast: GatewayBroadcastFn;
   broadcastToConnIds: (
     event: string,
     payload: unknown,
@@ -90,7 +89,7 @@ export function startGatewayEventSubscriptions(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
-  terminalSessions: Pick<TerminalSessionManager, "closeAgentSessions">;
+  terminalSessions: Pick<TerminalSessionManager, "closeTaskSessions">;
 }) {
   // The worker always runs retention maintenance. audit.enabled only controls
   // producer subscriptions, so disabling collection cannot strand expired rows.
@@ -103,6 +102,18 @@ export function startGatewayEventSubscriptions(params: {
   const clearExecutionIdentityAdmissionSink = configureExecutionIdentityAdmissionSink(
     auditRecorder.recordExecutionIdentity,
   );
+  const clearChannelAdmissionEvidenceCollection = configureChannelAdmissionEvidenceCollection(
+    isExecutionIdentityCollectionEnabled(runtimeConfig),
+  );
+  const clearChannelAdmissionDecisionSink = configureChannelAdmissionDecisionSink(
+    auditRecorder.recordExecutionDecision,
+  );
+  const clearMessageActionDecisionSink = configureMessageActionDecisionSink(
+    auditRecorder.recordExecutionDecision,
+  );
+  const clearRuntimeActionDecisionSink = configureRuntimeActionDecisionSink(
+    auditRecorder.recordExecutionDecision,
+  );
   const sessionObserver = createSessionObserver({
     getConfig: getRuntimeConfig,
     subscribers: params.sessionMessageSubscribers,
@@ -110,6 +121,7 @@ export function startGatewayEventSubscriptions(params: {
     broadcastToConnIds: params.broadcastToConnIds,
   });
   const sessionCompanion = createSessionCompanion({
+    contextReader: defaultSessionCompanionContextReader,
     getConfig: getRuntimeConfig,
     sessionObserver,
   });
@@ -157,6 +169,7 @@ export function startGatewayEventSubscriptions(params: {
                   entry.projectSessionActive = false;
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersisted = false;
+                  markChatAbortTerminalPersistenceError(entry, undefined);
                   queueMicrotask(() => {
                     const current = params.chatAbortControllers.get(candidateRunId);
                     if (
@@ -183,6 +196,7 @@ export function startGatewayEventSubscriptions(params: {
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersisted = true;
                   entry.projectSessionTerminalPersistence = undefined;
+                  markChatAbortTerminalPersistenceError(entry, undefined);
                 }
               }
             },
@@ -199,6 +213,9 @@ export function startGatewayEventSubscriptions(params: {
                 if (entry) {
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersistence = persistence;
+                  void persistence.catch((error: unknown) => {
+                    markChatAbortTerminalPersistenceError(entry, error);
+                  });
                   if (entry.registrationCleanupRequested === true) {
                     void persistence
                       .catch(() => undefined)
@@ -244,7 +261,10 @@ export function startGatewayEventSubscriptions(params: {
               resolveVisibleActiveSessionRunState({
                 context: params,
                 ...session,
-                defaultAgentId: resolveDefaultAgentId(getRuntimeConfig()),
+                defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(
+                  getRuntimeConfig(),
+                  session.requestedKey,
+                ),
               }),
           }),
       );
@@ -355,6 +375,10 @@ export function startGatewayEventSubscriptions(params: {
     unsubscribeToolAuditEvents?.();
     unsubscribeMessageAuditEvents?.();
     clearExecutionIdentityAdmissionSink();
+    clearChannelAdmissionEvidenceCollection();
+    clearChannelAdmissionDecisionSink();
+    clearMessageActionDecisionSink();
+    clearRuntimeActionDecisionSink();
     await agentEventHandlerLoader
       .peek()
       ?.then((handler) => handler.dispose())
@@ -387,24 +411,42 @@ export function startGatewayEventSubscriptions(params: {
   });
 
   let taskObserverDisposed = false;
+  const lastTaskSummaryById = new Map<string, string>();
   const taskObservers = {
     onEvent: (event: TaskRegistryObserverEvent) => {
       let payload: TaskEventPayload;
+      let sessionTarget: ReturnType<typeof resolveTaskRequesterSessionTarget>;
       switch (event.kind) {
-        case "upserted":
-          payload = { action: "upserted", task: mapTaskSummary(event.task) };
+        case "upserted": {
+          const task = mapTaskSummary(event.task);
+          const summary = JSON.stringify(task);
+          if (lastTaskSummaryById.get(task.id) === summary) {
+            return;
+          }
+          lastTaskSummaryById.set(task.id, summary);
+          payload = { action: "upserted", task };
+          sessionTarget = resolveTaskRequesterSessionTarget(event.task);
           break;
+        }
         case "deleted":
+          lastTaskSummaryById.delete(event.taskId);
           payload = { action: "deleted", taskId: event.taskId };
+          sessionTarget = resolveTaskRequesterSessionTarget(event.previous);
           break;
         case "restored":
+          lastTaskSummaryById.clear();
           payload = { action: "restored" };
           break;
       }
-      params.broadcast("task", payload, { dropIfSlow: true });
-      const sessionKey = terminalTaskSessionKey(event);
-      if (sessionKey) {
-        params.terminalSessions.closeAgentSessions(sessionKey);
+      params.broadcast("task", payload, {
+        dropIfSlow: true,
+        ...(sessionTarget
+          ? { sessionKeys: [sessionTarget.sessionKey], agentId: sessionTarget.agentId }
+          : {}),
+      });
+      const taskId = terminalTaskId(event);
+      if (taskId) {
+        params.terminalSessions.closeTaskSessions(taskId);
       }
     },
   };

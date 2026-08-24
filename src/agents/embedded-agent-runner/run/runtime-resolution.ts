@@ -106,10 +106,12 @@ export function resolveInitialEmbeddedRunModel(params: {
     const provider = explicitProvider ?? defaultProvider;
     const aliasIndex = buildModelAliasIndex({
       cfg,
+      agentId: params.agentId,
       defaultProvider: provider,
     });
     const resolved = resolveModelRefFromString({
       cfg,
+      agentId: params.agentId,
       raw: explicitModel,
       defaultProvider: provider,
       aliasIndex,

@@ -1,12 +1,16 @@
 // Qa Lab tests cover suite runtime agent session plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  appendSqliteSessionTranscriptEventForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSession,
@@ -22,6 +26,11 @@ const { cleanup, makeTempDir } = createTempDirHarness();
 
 afterEach(async () => {
   vi.useRealTimers();
+  // Fixtures point a state dir at these temp workspaces, so the shared and per-agent
+  // SQLite handles stay cached and Windows fails the removal with EBUSY. The agent close
+  // releases its leases through shared state and reopens it, so the store is released second.
+  closeOpenClawAgentDatabasesForTest();
+  resetPluginStateStoreForTests();
   await cleanup();
 });
 
@@ -94,52 +103,6 @@ describe("qa suite runtime agent session helpers", () => {
     expect(method).toBe("sessions.create");
     expect(params).toEqual({ label: "Test Session" });
     expect(options?.timeoutMs).toBe(60_000);
-  });
-
-  it("retries transient session store lock timeouts while creating sessions", async () => {
-    const lockTimeoutError = Object.assign(
-      new Error("SessionWriteLockTimeoutError: session file locked"),
-      { code: "OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT" },
-    );
-    gatewayCall
-      .mockRejectedValueOnce(lockTimeoutError)
-      .mockResolvedValueOnce({ key: " session-2 " });
-
-    vi.useFakeTimers();
-    const pending = createSession(env, "Retry Session", "agent:qa:retry");
-
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    await expect(pending).resolves.toBe("session-2");
-    expect(gatewayCall).toHaveBeenCalledTimes(2);
-    expect(gatewayCall).toHaveBeenNthCalledWith(
-      2,
-      "sessions.create",
-      { label: "Retry Session", key: "agent:qa:retry" },
-      expect.objectContaining({ timeoutMs: expect.any(Number) }),
-    );
-  });
-
-  it("retries transient session store stale locks while creating sessions", async () => {
-    const lockStaleError = Object.assign(
-      new Error("SessionWriteLockStaleError: session file lock stale"),
-      { code: "OPENCLAW_SESSION_WRITE_LOCK_STALE" },
-    );
-    gatewayCall.mockRejectedValueOnce(lockStaleError).mockResolvedValueOnce({ key: " session-3 " });
-
-    vi.useFakeTimers();
-    const pending = createSession(env, "Retry Stale Session", "agent:qa:stale-retry");
-
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    await expect(pending).resolves.toBe("session-3");
-    expect(gatewayCall).toHaveBeenCalledTimes(2);
-    expect(gatewayCall).toHaveBeenNthCalledWith(
-      2,
-      "sessions.create",
-      { label: "Retry Stale Session", key: "agent:qa:stale-retry" },
-      expect.objectContaining({ timeoutMs: expect.any(Number) }),
-    );
   });
 
   it("reads effective tool ids once and drops blanks", async () => {

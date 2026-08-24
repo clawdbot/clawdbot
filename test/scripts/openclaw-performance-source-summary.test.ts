@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildMarkdown, parseArgs } from "../../scripts/openclaw-performance-source-summary.mjs";
+import { buildMarkdown, parseArgs } from "../../scripts/openclaw-performance-source-summary.mts";
 
 const tmpRoots: string[] = [];
 
@@ -19,10 +19,14 @@ function writeJson(filePath: string, value: unknown) {
 }
 
 function runCli(...args: string[]) {
-  return spawnSync(process.execPath, ["scripts/openclaw-performance-source-summary.mjs", ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/openclaw-performance-source-summary.mts", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
 }
 
 function expectNoNodeStack(stderr: string) {

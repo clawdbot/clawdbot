@@ -14,16 +14,14 @@ import { withEnvAsync } from "../../test-utils/env.js";
 let capturedPayload: RestartSentinelPayload | undefined;
 let restartSentinelWriteError: Error | null = null;
 
-const runGatewayUpdateMock = vi.fn<() => Promise<UpdateRunResult>>();
-type UpdateInstallSurface = Awaited<
-  ReturnType<typeof import("../../infra/update-runner.js").resolveUpdateInstallSurface>
->;
-const resolveUpdateInstallSurfaceMock = vi.fn<() => Promise<UpdateInstallSurface>>(async () => ({
-  kind: "git",
-  mode: "git",
-  root: "/tmp/openclaw",
-  packageRoot: "/tmp/openclaw",
-}));
+const runGatewayUpdateMock =
+  vi.fn<typeof import("../../infra/update-runner.js").runGatewayUpdate>();
+const runGatewayUpdatePreflightMock =
+  vi.fn<typeof import("../../infra/update-runner.js").runGatewayUpdatePreflight>();
+const resolveUpdateInstallSurfaceMock =
+  vi.fn<typeof import("../../infra/update-runner.js").resolveUpdateInstallSurface>();
+const initializeGatewayUpdateStatusMock =
+  vi.fn<typeof import("../../infra/update-startup.js").initializeGatewayUpdateStatus>();
 const getLatestUpdateRestartSentinelMock = vi.fn<() => RestartSentinelPayload | null>(() => null);
 const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentinelPayload | null>>(
   async () => null,
@@ -31,7 +29,6 @@ const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentin
 const recordLatestUpdateRestartSentinelMock = vi.fn();
 const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
-const checkUpdateStatusMock = vi.fn();
 const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
 const normalizeUpdateChannelMock = vi.fn((): UpdateChannel | null => null);
@@ -114,16 +111,6 @@ vi.mock("../../config/sessions.js", () => ({
   },
 }));
 
-vi.mock("../../infra/openclaw-root.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/openclaw-root.js")>(
-    "../../infra/openclaw-root.js",
-  );
-  return {
-    ...actual,
-    resolveOpenClawPackageRoot: async () => "/tmp/openclaw",
-  };
-});
-
 vi.mock("../../infra/restart-sentinel.js", async () => {
   const actual = await vi.importActual("../../infra/restart-sentinel.js");
   return {
@@ -151,10 +138,6 @@ vi.mock("../../infra/package-json.js", () => ({
   readPackageVersion: readPackageVersionMock,
 }));
 
-vi.mock("../../infra/update-check.js", () => ({
-  checkUpdateStatus: checkUpdateStatusMock,
-}));
-
 vi.mock("../../version.js", () => ({
   get VERSION() {
     return versionMock.value;
@@ -175,6 +158,7 @@ vi.mock("../../infra/update-channels.js", async () => {
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
   getUpdateSchedule: getUpdateScheduleMock,
+  initializeGatewayUpdateStatus: initializeGatewayUpdateStatusMock,
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
@@ -185,6 +169,7 @@ vi.mock("../../infra/update-campaign.js", () => ({
 vi.mock("../../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: resolveUpdateInstallSurfaceMock,
   runGatewayUpdate: runGatewayUpdateMock,
+  runGatewayUpdatePreflight: runGatewayUpdatePreflightMock,
 }));
 
 // Keep the real `foldPostCoreFinalizeIntoResult` so the restart-gate behavior on
@@ -284,12 +269,21 @@ beforeEach(() => {
     steps: [],
     durationMs: 100,
   });
-  resolveUpdateInstallSurfaceMock.mockClear();
-  resolveUpdateInstallSurfaceMock.mockResolvedValue({
-    kind: "git",
-    mode: "git",
+  runGatewayUpdatePreflightMock.mockReset();
+  runGatewayUpdatePreflightMock.mockResolvedValue(undefined);
+  resolveUpdateInstallSurfaceMock.mockReset();
+  resolveUpdateInstallSurfaceMock.mockImplementation(async ({ root, installKind }) =>
+    root && installKind === "git"
+      ? { kind: "git", mode: "git", root, packageRoot: root }
+      : root && installKind === "package"
+        ? { kind: "package-root", mode: "unknown", root, packageRoot: root }
+        : { kind: "missing", mode: "unknown" },
+  );
+  initializeGatewayUpdateStatusMock.mockReset();
+  initializeGatewayUpdateStatusMock.mockResolvedValue({
     root: "/tmp/openclaw",
-    packageRoot: "/tmp/openclaw",
+    status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
+    installReceipt: null,
   });
   getLatestUpdateRestartSentinelMock.mockClear();
   refreshLatestUpdateRestartSentinelMock.mockClear();
@@ -372,6 +366,11 @@ async function withProcessEnv<T>(
 }
 
 function mockGlobalInstallSurface() {
+  initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
+    root: "/tmp/openclaw-global",
+    status: { root: "/tmp/openclaw-global", installKind: "package", packageManager: "npm" },
+    installReceipt: null,
+  });
   resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
     kind: "global",
     mode: "npm",
@@ -381,11 +380,10 @@ function mockGlobalInstallSurface() {
 }
 
 function mockGitInstallSurface(root: string) {
-  resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
-    kind: "git",
-    mode: "git",
+  initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
     root,
-    packageRoot: root,
+    status: { root, installKind: "git", packageManager: "pnpm" },
+    installReceipt: null,
   });
 }
 
@@ -532,13 +530,14 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        root: "/tmp/openclaw",
+        root: "/tmp/openclaw-global",
         restartDrainTimeoutMs: 300_000,
         restartDelayMs: 2000,
         handoffId: expect.any(String),
         supervisor: "launchd",
         meta: expect.objectContaining({
           handoffId: expect.any(String),
+          root: "/tmp/openclaw-global",
         }),
       }),
     );
@@ -704,27 +703,32 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        root: "/tmp/openclaw",
+        root: "/tmp/openclaw-global",
       }),
     );
   });
 
-  it("hands supervised git/dev updates to the CLI path instead of rebuilding live dist in-process", async () => {
+  it("preflights supervised git/dev updates before handing them to the CLI path", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGitInstallSurface("/tmp/openclaw-git");
     const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload(),
     );
 
-    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(runGatewayUpdatePreflightMock).toHaveBeenCalledWith(
+      "/tmp/openclaw-git",
+      undefined,
+      undefined,
+    );
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        root: "/tmp/openclaw",
+        root: "/tmp/openclaw-git",
         handoffId: expect.any(String),
         supervisor: "launchd",
         meta: expect.objectContaining({
           handoffId: expect.any(String),
+          root: "/tmp/openclaw-git",
         }),
       }),
     );
@@ -741,6 +745,39 @@ describe("update.run restart scheduling", () => {
     expect(readCapturedPayload().status).toBe("skipped");
   });
 
+  it("keeps the serving gateway when managed git target preflight rejects active config", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGitInstallSurface("/tmp/openclaw-git");
+    runGatewayUpdatePreflightMock.mockResolvedValueOnce({
+      status: "error",
+      mode: "git",
+      root: "/tmp/openclaw-git",
+      reason: "preflight-no-good-commit",
+      steps: [
+        {
+          name: "preflight config validate (target)",
+          command: "openclaw config validate --json",
+          cwd: "/tmp/openclaw-candidate",
+          durationMs: 1,
+          exitCode: 1,
+          stderrTail: "target rejected the active config",
+        },
+      ],
+      durationMs: 1,
+    });
+
+    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(payload?.result).toMatchObject({
+      status: "error",
+      reason: "preflight-no-good-commit",
+    });
+  });
+
   it("hands Windows fallback gateways to the CLI path before doctor activation", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("schtasks");
     mockGitInstallSurface("C:\\openclaw");
@@ -753,7 +790,7 @@ describe("update.run restart scheduling", () => {
       () => captureUpdateRunPayload(),
     );
 
-    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(runGatewayUpdatePreflightMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         supervisor: "schtasks",
@@ -850,11 +887,11 @@ describe("update.run restart scheduling", () => {
       () => captureUpdateRunPayload(),
     );
 
-    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(runGatewayUpdatePreflightMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        root: "/tmp/openclaw",
+        root: "/tmp/openclaw-git",
         supervisor: "systemd",
       }),
     );

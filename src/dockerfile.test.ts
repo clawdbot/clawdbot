@@ -79,10 +79,10 @@ describe("Dockerfile", () => {
   it("uses full bookworm for build stages and slim bookworm for runtime", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059"',
+      'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584"',
     );
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d"',
+      'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03"',
     );
     expect(dockerfile).toContain(
       'ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4"',
@@ -268,7 +268,7 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       'node /tmp/docker-plugin-selection.mjs "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}" "$OPENCLAW_EXTENSIONS"',
     );
-    expect(dockerfile).toContain("done < /out/openclaw-selected-plugin-dirs");
+    expect(dockerfile).toContain("done < /tmp/openclaw-workspace-plugin-dirs");
     expect(dockerfile).toContain(`if [ -f "$ext_dir/package.json" ]; then`);
     expect(dockerfile).toContain(
       "COPY --from=workspace-deps /out/openclaw-selected-plugin-dirs /tmp/openclaw-selected-plugin-dirs",
@@ -451,6 +451,11 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain(
       `npm install --prefix "${BUNDLED_PLUGIN_ROOT_DIR}/$ext" --omit=dev --silent`,
     );
+    const pluginPruneIndex = dockerfile.indexOf("node scripts/prune-docker-plugin-dist.mjs");
+    const grammyImportIndex = dockerfile.indexOf(
+      `node --input-type=module -e 'await import("grammy")'`,
+    );
+    expect(grammyImportIndex).toBeGreaterThan(pluginPruneIndex);
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
     );
@@ -547,8 +552,8 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("Build and push amd64 browser image");
     expect(workflow).toContain("Build and push arm64 browser image");
     expect(workflow).toContain("OPENCLAW_INSTALL_BROWSER=1");
-    expect(workflow).toContain('${GHCR_IMAGE}:${version}-browser"');
-    expect(workflow).toContain('${DOCKERHUB_IMAGE}:${version}-browser"');
+    expect(workflow).toContain('${GHCR_IMAGE}:${image_version}-browser"');
+    expect(workflow).toContain('${DOCKERHUB_IMAGE}:${image_version}-browser"');
     expect(workflow).not.toContain("main-browser-amd64");
     expect(workflow).not.toContain("main-browser-arm64");
     expect(workflow).toContain("Smoke test amd64 browser image");
@@ -572,8 +577,8 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("Login to Docker Hub");
     expect(workflow).toContain('images=("${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}")');
     expect(workflow).toContain("DOCKERHUB_TAGS: ${{ steps.tags.outputs.dockerhub }}");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-amd64");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-arm64");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}-amd64");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}-arm64");
     expect(workflow).toContain("DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}");
   });
 
@@ -587,14 +592,15 @@ describe("Dockerfile", () => {
     expect(workflow).toContain('! "${RELEASE_SHA}" =~ ^[a-f0-9]{40}$');
     expect(workflow).toContain('git rev-parse "refs/tags/${RELEASE_TAG}^{commit}"');
     expect(workflow).toContain('"${tag_sha}" != "${RELEASE_SHA}"');
+    expect(workflow).toContain('! "${IMAGE_TAG_SUFFIX}" =~ ^-r[0-9]{8}$');
     expect(workflow).toContain('"v${package_version}" != "${RELEASE_TAG}"');
     expect(workflow).toContain("^v${package_version}-[1-9][0-9]*$");
     expect(workflow).not.toContain("workflow_dispatch:");
     expect(workflow).not.toContain("push:\n");
     expect(workflow).toContain("(-(beta\\.)?[1-9][0-9]*)?");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-slim");
-    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-browser");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}-slim");
+    expect(workflow).toContain("${DOCKERHUB_IMAGE}:${image_version}-browser");
     expect(workflow).toContain("node workflow-source/scripts/lib/docker-release-policy.mjs");
     expect(workflow).not.toContain("needs.resolve_release_policy.outputs.default_aliases");
     expect(workflow).not.toContain("needs.resolve_release_policy.outputs.slim_aliases");

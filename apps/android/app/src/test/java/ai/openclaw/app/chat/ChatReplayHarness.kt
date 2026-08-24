@@ -19,9 +19,11 @@ internal fun CoroutineScope.createChatController(
   cacheScope: () -> ChatCacheScope? = { null },
   currentDefaultAgentId: () -> String? = { "main" },
   currentDefaultAgentRevision: () -> Long = { 0L },
+  gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
   recordModelRecent: (String) -> Unit = {},
   onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   onOfflineDefaultAgentRestored: (String) -> Unit = {},
+  onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
   requestGateway: suspend (method: String, paramsJson: String?) -> String = { _, _ -> "{}" },
 ): ChatController {
   val scopedRequest =
@@ -46,9 +48,11 @@ internal fun CoroutineScope.createChatController(
     cacheScope = cacheScope,
     currentDefaultAgentId = currentDefaultAgentId,
     currentDefaultAgentRevision = currentDefaultAgentRevision,
+    gatewayAdvertisesMethod = gatewayAdvertisesMethod,
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
+    onAssistantReplyFinalized = onAssistantReplyFinalized,
   )
 }
 
@@ -57,6 +61,7 @@ internal class ChatControllerTestSetup(
 ) {
   val requests = mutableListOf<Pair<String, String?>>()
   var cacheScope: () -> ChatCacheScope? = { null }
+  var gatewayAdvertisesMethod: (method: String) -> Boolean? = { null }
   var recordModelRecent: (String) -> Unit = {}
 
   private val handlers = mutableMapOf<String, suspend (String?) -> String>()
@@ -78,6 +83,7 @@ internal class ChatControllerTestSetup(
   val controller: ChatController by lazy {
     scope.createChatController(
       cacheScope = cacheScope,
+      gatewayAdvertisesMethod = gatewayAdvertisesMethod,
       recordModelRecent = recordModelRecent,
       requestGateway = { method, paramsJson ->
         requests += method to paramsJson
@@ -130,6 +136,7 @@ internal class ScriptedGateway(
     respondWith("health", "{}")
     respondWith("chat.metadata", """{"commands":[],"models":[]}""")
     respondWith("sessions.list", """{"sessions":[]}""")
+    respondWith("progressCard.get", """{"card":null}""")
   }
 
   fun respond(
@@ -200,7 +207,6 @@ internal fun historyResponse(
   sessionId: String,
   messages: List<ReplayHistoryMessage>,
   inFlightRun: Pair<String, String>? = null,
-  inFlightPlan: ChatPlanSnapshot? = null,
   hasActiveRun: Boolean? = inFlightRun?.let { true },
   activeRunIds: List<String>? = inFlightRun?.let { listOf(it.first) },
 ): String =
@@ -212,34 +218,6 @@ internal fun historyResponse(
         buildJsonObject {
           put("runId", JsonPrimitive(inFlightRun.first))
           put("text", JsonPrimitive(inFlightRun.second))
-          if (inFlightPlan != null) {
-            put(
-              "plan",
-              buildJsonObject {
-                put(
-                  "steps",
-                  JsonArray(
-                    inFlightPlan.steps.map { step ->
-                      buildJsonObject {
-                        put("step", JsonPrimitive(step.step))
-                        put(
-                          "status",
-                          JsonPrimitive(
-                            when (step.status) {
-                              ChatPlanStepStatus.Pending -> "pending"
-                              ChatPlanStepStatus.InProgress -> "in_progress"
-                              ChatPlanStepStatus.Completed -> "completed"
-                            },
-                          ),
-                        )
-                      }
-                    },
-                  ),
-                )
-                inFlightPlan.explanation?.let { put("explanation", JsonPrimitive(it)) }
-              },
-            )
-          }
         },
       )
     }

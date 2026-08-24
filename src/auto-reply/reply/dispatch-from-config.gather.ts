@@ -44,6 +44,7 @@ import {
 } from "./dispatch-from-config.runtime-loaders.js";
 import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
+import { noteDispatchProcessedOutcome } from "./dispatch-processed-outcome.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
 import { finalizeInboundContext, isFinalizedInboundContext } from "./inbound-context.js";
@@ -64,16 +65,39 @@ export async function gatherDispatchRequest(
   const ctx = isFinalizedInboundContext(params.ctx)
     ? params.ctx
     : finalizeInboundContext(params.ctx);
-  const normalizedParams = ctx === params.ctx ? params : { ...params, ctx };
+  const turnAdoptionLifecycle = params.replyOptions?.turnAdoptionLifecycle;
+  const turnAdoptionState = { adopted: false };
+  const normalizedParams: DispatchFromConfigParams = {
+    ...params,
+    ctx,
+    replyOptions: {
+      ...params.replyOptions,
+      ...(turnAdoptionLifecycle
+        ? {
+            turnAdoptionLifecycle: {
+              ...turnAdoptionLifecycle,
+              onAdopted: async () => {
+                // The upstream owner is durable only after its callback commits.
+                // A rejected callback must leave replay dedupe releasable.
+                await turnAdoptionLifecycle.onAdopted();
+                turnAdoptionState.adopted = true;
+              },
+            },
+          }
+        : {}),
+    },
+  };
   const state = {
     params: normalizedParams,
     messageAuditTerminal,
     inboundDedupeReplayUnsafe: false,
+    turnAdoptionState: turnAdoptionLifecycle ? turnAdoptionState : undefined,
   };
   const { cfg, dispatcher } = normalizedParams;
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
   if (params.replyOptions?.abortSignal?.aborted) {
+    noteDispatchProcessedOutcome({ outcome: "skipped", reason: "reply_operation_aborted" });
     messageAuditTerminal?.note("skipped", { reason: "reply_operation_aborted" });
     return {
       status: "complete" as const,
@@ -136,6 +160,10 @@ export async function gatherDispatchRequest(
   let agentDispatchStartedAt = 0;
 
   const recordProcessed = (outcome: DispatchProcessedOutcome, opts?: DispatchProcessedOptions) => {
+    noteDispatchProcessedOutcome({
+      outcome,
+      ...(opts?.reason !== undefined ? { reason: opts.reason } : {}),
+    });
     messageAuditTerminal?.note(outcome, opts);
     if (diagnosticsEnabled) {
       replyHotPathTiming.logIfSlow({
@@ -226,6 +254,7 @@ export async function gatherDispatchRequest(
     dispatchOperationSessionKey &&
     initialDispatchReplyOperation
   ) {
+    noteDispatchProcessedOutcome({ outcome: "skipped", reason: "reply-operation-active" });
     messageAuditTerminal?.note("skipped", { reason: "reply-operation-active" });
     return {
       status: "complete" as const,
@@ -324,7 +353,21 @@ export async function gatherDispatchRequest(
   const routeReplyThreadId = replyRoute.threadId ?? routeThreadId;
   const inboundAudio = hasInboundAudio(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  // A bound ACP key names an external harness, not a configured model-runtime owner.
+  // Keep the source owner for Gateway dispatch while ACP execution uses the bound target below.
+  const preparedReplyDispatchAgentId = boundAcpDispatchSessionKey
+    ? resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId })
+    : sessionAgentId;
+  const preparedReplyDispatchRuntime = params.usePublishedModelRuntime
+    ? await traceReplyPhase("reply.load_prepared_dispatch_runtime", async () => {
+        const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
+        return await loadPublishedGatewayReplyDispatchRuntime({
+          agentId: preparedReplyDispatchAgentId,
+        });
+      })
+    : undefined;
+  const workspaceDir =
+    preparedReplyDispatchRuntime?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const replyOperationCoordinator = createDispatchReplyOperationCoordinator({
     ctx,
     dispatcher,
@@ -332,15 +375,17 @@ export async function gatherDispatchRequest(
     initialDispatchReplyOperation,
     messageAuditTerminal,
     operationSessionStoreEntry,
-    replyOptions: params.replyOptions,
+    replyOptions: normalizedParams.replyOptions,
     resolveOperationExpectedSessionId,
     routeThreadId,
+    sessionWorkerPlacementContext: normalizedParams.sessionWorkerPlacementContext,
   });
   const {
     completeDispatchReplyOperation,
     dispatchHookDispatcher,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
+    getAgentRunTerminalOutcome,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
     getDispatchReplyOperation,
@@ -361,16 +406,8 @@ export async function gatherDispatchRequest(
     hasInboundAudio: () =>
       inboundAudio || getDispatchReplyOperation()?.acceptedSteeredInboundAudio === true,
   });
-  const preparedPluginRegistry = params.usePublishedModelRuntime
-    ? await traceReplyPhase("reply.load_prepared_inbound_plugin_registry", async () => {
-        const { loadPublishedGatewayInboundPluginRegistry } = await loadPreparedModelRuntime();
-        return await loadPublishedGatewayInboundPluginRegistry({
-          agentId: sessionAgentId,
-        });
-      })
-    : undefined;
   const pluginRegistry =
-    preparedPluginRegistry ??
+    preparedReplyDispatchRuntime?.inboundPluginRegistry ??
     (await traceReplyPhase("reply.load_runtime_plugin_registry_handle", async () => {
       const { loadAgentRuntimePluginRegistryHandle } = await traceReplyPhase(
         "reply.load_runtime_plugins",
@@ -480,12 +517,14 @@ export async function gatherDispatchRequest(
     inboundAudio,
     sessionTtsAuto,
     workspaceDir,
+    preparedReplyDispatchRuntime,
     pluginRegistry,
     replyOperationRunState,
     completeDispatchReplyOperation,
     dispatchHookDispatcher,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
+    getAgentRunTerminalOutcome,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
     getDispatchReplyOperation,

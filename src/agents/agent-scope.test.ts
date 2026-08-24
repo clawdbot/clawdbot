@@ -24,7 +24,6 @@ import {
   resolveAgentWorkspaceDir,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentIdByWorkspacePath,
-  resolveAgentIdsByWorkspacePath,
   setAgentEffectiveModelPrimary,
 } from "./agent-scope.js";
 
@@ -1137,6 +1136,7 @@ describe("resolveAgentIdByWorkspacePath", () => {
         list: [
           { id: "main", workspace: workspaceRoot },
           { id: "ops", workspace: opsWorkspace },
+          { id: "ops-shadow", workspace: opsWorkspace },
         ],
       },
     };
@@ -1191,29 +1191,6 @@ describe("resolveAgentIdByWorkspacePath", () => {
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
-  });
-});
-
-describe("resolveAgentIdsByWorkspacePath", () => {
-  it("returns matching workspaces ordered by specificity", () => {
-    const workspaceRoot = `/tmp/openclaw-agent-scope-${Date.now()}-root`;
-    const opsWorkspace = `${workspaceRoot}/projects/ops`;
-    const opsDevWorkspace = `${opsWorkspace}/dev`;
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [
-          { id: "main", workspace: workspaceRoot },
-          { id: "ops", workspace: opsWorkspace },
-          { id: "ops-dev", workspace: opsDevWorkspace },
-        ],
-      },
-    };
-
-    expect(resolveAgentIdsByWorkspacePath(cfg, `${opsDevWorkspace}/pkg`)).toEqual([
-      "ops-dev",
-      "ops",
-      "main",
-    ]);
   });
 });
 

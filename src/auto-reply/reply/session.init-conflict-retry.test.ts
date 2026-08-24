@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
@@ -18,6 +23,9 @@ const initSessionState = (
 
 const commitConflictControl = vi.hoisted(() => ({
   abortController: undefined as AbortController | undefined,
+  beforeEntryMutation: undefined as
+    | ((params: { sessionKey: string; storePath: string }) => Promise<void> | void)
+    | undefined,
   commitCalls: 0,
   remainingFailures: 0,
 }));
@@ -43,7 +51,22 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
           revision: `forced-conflict-${commitConflictControl.commitCalls}`,
         };
       }
-      return await actual.commitReplySessionInitialization(...args);
+      const [params] = args;
+      const beforeEntryMutation = commitConflictControl.beforeEntryMutation;
+      return await actual.commitReplySessionInitialization({
+        ...params,
+        ...(beforeEntryMutation
+          ? {
+              beforeEntryMutation: async (context) => {
+                await params.beforeEntryMutation?.(context);
+                await beforeEntryMutation({
+                  sessionKey: params.sessionKey,
+                  storePath: params.storePath,
+                });
+              },
+            }
+          : {}),
+      });
     },
   };
 });
@@ -203,6 +226,79 @@ describe("runWithSessionInitConflictRetry", () => {
 });
 
 describe("initSessionState conflict retry wiring", () => {
+  it("retries a late same-session lifecycle conflict without losing either update", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-late-conflict-"));
+    const storePath = path.join(root, "sessions.json");
+    let lateWrites = 0;
+    commitConflictControl.commitCalls = 0;
+    commitConflictControl.beforeEntryMutation = ({ sessionKey, storePath: targetStorePath }) => {
+      if (lateWrites >= 2) {
+        return;
+      }
+      const currentEntry = loadSessionEntry({
+        readConsistency: "latest",
+        sessionKey,
+        storePath: targetStorePath,
+      });
+      if (!currentEntry) {
+        throw new Error("expected the projected reply session row");
+      }
+      lateWrites += 1;
+      replaceSessionEntrySync(
+        { sessionKey, storePath: targetStorePath },
+        {
+          ...currentEntry,
+          lastHeartbeatSentAt: 100 + lateWrites,
+          lastHeartbeatText: `concurrent metadata ${lateWrites}`,
+        },
+      );
+      if (lateWrites === 2) {
+        commitConflictControl.beforeEntryMutation = undefined;
+      }
+    };
+
+    try {
+      await upsertSessionEntryCore(
+        { sessionKey: SESSION_KEY, storePath },
+        {
+          displayName: "before reply initialization",
+          sessionId: "existing-session",
+          updatedAt: Date.now(),
+        },
+      );
+
+      const result = await initSessionState({
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        commandAuthorized: true,
+        ctx: {
+          Body: "hello",
+          SessionKey: SESSION_KEY,
+          ThreadLabel: "reply initialization update",
+        },
+      });
+
+      expect(commitConflictControl.commitCalls).toBe(3);
+      expect(lateWrites).toBe(2);
+      expect(result.sessionEntry).toMatchObject({
+        displayName: "reply initialization update",
+        lastHeartbeatSentAt: 102,
+        lastHeartbeatText: "concurrent metadata 2",
+        sessionId: "existing-session",
+      });
+      expect(
+        loadSessionEntry({ readConsistency: "latest", sessionKey: SESSION_KEY, storePath }),
+      ).toMatchObject({
+        displayName: "reply initialization update",
+        lastHeartbeatSentAt: 102,
+        lastHeartbeatText: "concurrent metadata 2",
+        sessionId: "existing-session",
+      });
+    } finally {
+      commitConflictControl.beforeEntryMutation = undefined;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("cancels the production backoff through the initializer signal", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-conflict-abort-"));
     const controller = new AbortController();

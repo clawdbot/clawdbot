@@ -56,11 +56,11 @@ describe("sessions tools visibility", () => {
       tools: { agentToAgent: { enabled: false } },
     };
     mockGatewayWithHistory((req) => {
-      if (req.method === "sessions.list" && req.params?.spawnedBy === "main") {
-        return { sessions: [{ key: "subagent:child-1" }] };
-      }
       if (req.method === "sessions.resolve") {
         const key = typeof req.params?.key === "string" ? req.params.key : "";
+        if (req.params?.spawnedBy === "main" && key !== "subagent:child-1") {
+          return {};
+        }
         return { key };
       }
       return undefined;
@@ -100,8 +100,8 @@ describe("sessions tools visibility", () => {
       agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
     };
     mockGatewayWithHistory((req) => {
-      if (req.method === "sessions.list" && req.params?.spawnedBy === "main") {
-        return { sessions: [] };
+      if (req.method === "sessions.resolve" && req.params?.spawnedBy === "main") {
+        return {};
       }
       return undefined;
     });

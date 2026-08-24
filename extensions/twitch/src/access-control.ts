@@ -2,18 +2,29 @@
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
+  type ChannelIngressContextBinding,
   type ChannelIngressIdentitySubjectInput,
   type IngressReasonCode,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
-type TwitchAccessControlResult = {
-  allowed: boolean;
-  reason?: string;
-  matchKey?: string;
-  matchSource?: string;
-};
+type TwitchAccessControlResult =
+  | {
+      allowed: false;
+      reason?: string;
+      matchKey?: string;
+      matchSource?: string;
+    }
+  | {
+      allowed: true;
+      channelIngress: Awaited<
+        ReturnType<ReturnType<typeof createChannelIngressResolver>["message"]>
+      >;
+      reason?: string;
+      matchKey?: string;
+      matchSource?: string;
+    };
 
 type TwitchPolicyKind = "open" | "allowFrom" | "role";
 
@@ -41,6 +52,7 @@ export async function checkTwitchAccessControl(params: {
   message: TwitchChatMessage;
   account: TwitchAccountConfig;
   botUsername: string;
+  contextBinding?: ChannelIngressContextBinding;
 }): Promise<TwitchAccessControlResult> {
   const { message, account, botUsername } = params;
   const policyKind = resolveTwitchPolicyKind(account);
@@ -57,6 +69,7 @@ export async function checkTwitchAccessControl(params: {
       kind: "group",
       id: message.channel,
     },
+    contextBinding: params.contextBinding,
     event: { mayPair: false },
     mentionFacts: {
       canDetectMention: true,
@@ -91,6 +104,7 @@ export async function checkTwitchAccessControl(params: {
     if (policyKind === "allowFrom") {
       return {
         allowed: true,
+        channelIngress: resolved,
         matchKey: params.message.userId,
         matchSource: "allowlist",
       };
@@ -98,12 +112,14 @@ export async function checkTwitchAccessControl(params: {
     if (policyKind === "role") {
       return {
         allowed: true,
+        channelIngress: resolved,
         matchKey: params.account.allowedRoles?.join(","),
         matchSource: "role",
       };
     }
     return {
       allowed: true,
+      channelIngress: resolved,
     };
   }
 

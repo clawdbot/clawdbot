@@ -32,7 +32,7 @@ vi.mock("../runtime.js", () => ({
     runtime.writeJson(value, space),
 }));
 
-vi.mock("../infra/clawhub.js", () => ({
+vi.mock("../infra/clawhub-packages.js", () => ({
   searchClawHubPackages: mocks.searchClawHubPackages,
 }));
 
@@ -109,6 +109,26 @@ describe("plugins search command", () => {
     await runPluginsSearchCommand("calendar", { json: true }, mocks.runtime);
 
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith({ results: [] }, 2);
+  });
+
+  it("leaves missing-query JSON failures to the root renderer", async () => {
+    await expect(runPluginsSearchCommand([], { json: true }, mocks.runtime)).rejects.toThrow(
+      "Usage: openclaw plugins search <query>",
+    );
+
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("leaves ClawHub JSON failures to the root renderer", async () => {
+    mocks.searchClawHubPackages.mockRejectedValueOnce(new Error("offline fixture"));
+
+    await expect(
+      runPluginsSearchCommand("calendar", { json: true }, mocks.runtime),
+    ).rejects.toThrow("offline fixture");
+
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("rejects partial numeric search limits", async () => {

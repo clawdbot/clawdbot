@@ -732,6 +732,11 @@ function assertPluginFileRemoved() {
 
 function assertNpmPluginRemoved() {
   const installPath = fs.readFileSync(scratchFile("plugins-npm-install-path.txt"), "utf8").trim();
+  const packageParent = path.dirname(installPath);
+  const nodeModulesPath = path.basename(packageParent).startsWith("@")
+    ? path.dirname(packageParent)
+    : packageParent;
+  const projectRoot = path.dirname(nodeModulesPath);
   const dependencyPackagePath = fs
     .readFileSync(scratchFile("plugins-npm-dependency-path.txt"), "utf8")
     .trim();
@@ -746,6 +751,26 @@ function assertNpmPluginRemoved() {
     throw new Error(
       `npm managed dependency still exists after uninstall: ${dependencyPackagePath}`,
     );
+  }
+  if (fs.existsSync(projectRoot)) {
+    throw new Error(`npm managed project still exists after uninstall: ${projectRoot}`);
+  }
+}
+
+function assertNpmPluginRetained() {
+  const installPath = fs.readFileSync(scratchFile("plugins-npm-install-path.txt"), "utf8").trim();
+  const dependencyPackagePath = fs
+    .readFileSync(scratchFile("plugins-npm-dependency-path.txt"), "utf8")
+    .trim();
+  assertPluginRemoved({
+    pluginId: "demo-plugin-npm",
+    listFile: scratchFile("plugins-npm-retained.json"),
+  });
+  if (!fs.existsSync(installPath)) {
+    throw new Error(`npm managed package was deleted by --keep-files: ${installPath}`);
+  }
+  if (!fs.existsSync(dependencyPackagePath)) {
+    throw new Error(`npm managed dependency was deleted by --keep-files: ${dependencyPackagePath}`);
   }
 }
 
@@ -1025,6 +1050,7 @@ const commands = {
   "plugin-file-removed": assertPluginFileRemoved,
   "plugin-npm": assertNpmPlugin,
   "plugin-npm-update": assertNpmPluginUpdateUnchanged,
+  "plugin-npm-retained": assertNpmPluginRetained,
   "plugin-npm-removed": assertNpmPluginRemoved,
   "invalid-openclaw-extensions": assertInvalidOpenClawExtensionsRejected,
   "bundle-disabled": assertClaudeBundleDisabled,

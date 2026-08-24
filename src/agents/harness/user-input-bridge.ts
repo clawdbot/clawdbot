@@ -1,3 +1,4 @@
+import { markReplyPayloadForSourceSuppressionDelivery } from "../../auto-reply/reply-payload.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 
@@ -79,7 +80,9 @@ export async function deliverAgentHarnessUserInputPrompt(
 ): Promise<void> {
   const text = formatAgentHarnessUserInputPrompt(questions, options);
   if (params.onBlockReply) {
-    await params.onBlockReply({ text, presentation: options.presentation });
+    await params.onBlockReply(
+      markReplyPayloadForSourceSuppressionDelivery({ text, presentation: options.presentation }),
+    );
     return;
   }
   await params.onPartialReply?.({ text });
@@ -159,14 +162,14 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
     new Set(normalizedOptionValues).size === candidateOptionValues.length
       ? candidateOptionValues
       : undefined;
-  return {
+  return markReplyPayloadForSourceSuppressionDelivery({
     text: `${prompt}\n\n${questionReplyGuidance(params.questions)}`,
     ...(presentation ? { presentation, presentationTextMode: "fallback" as const } : {}),
     // Native callbacks need Gateway option order even when presentation controls are reordered.
     channelData: {
       askUser: { questionId: params.questionId, ...(optionValues ? { optionValues } : {}) },
     },
-  };
+  });
 }
 
 function questionReplyGuidance(questions: readonly AgentHarnessUserInputQuestion[]): string {

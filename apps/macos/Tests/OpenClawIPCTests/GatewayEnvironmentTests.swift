@@ -3,21 +3,6 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayEnvironmentTests {
-    private final class LockedCounter: @unchecked Sendable {
-        private let lock = NSLock()
-        private var count = 0
-
-        func increment() {
-            self.lock.withLock {
-                self.count += 1
-            }
-        }
-
-        func value() -> Int {
-            self.lock.withLock { self.count }
-        }
-    }
-
     @Test func `semver parses common forms`() {
         #expect(Semver.parse("1.2.3") == Semver(major: 1, minor: 2, patch: 3))
         #expect(Semver.parse("  v1.2.3  \n") == Semver(major: 1, minor: 2, patch: 3))
@@ -88,44 +73,6 @@ struct GatewayEnvironmentTests {
         #expect(version == "2026.7.30")
     }
 
-    @Test func `gateway launch resolution scans preferred paths once`() async throws {
-        let root = try makeTempDirForTests()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let bin = root.appendingPathComponent("bin", isDirectory: true)
-        let node = bin.appendingPathComponent("node")
-        let gateway = bin.appendingPathComponent("openclaw")
-        try makeExecutableForTests(at: node)
-        try makeExecutableForTests(at: gateway)
-        try "#!/bin/sh\necho v24.15.0\n".write(to: node, atomically: true, encoding: .utf8)
-        let expectedVersion = GatewayEnvironment.expectedGatewayVersionString()
-        let gatewayVersion = expectedVersion.flatMap { Semver.parse($0) == nil ? nil : $0 } ?? "2026.7.30"
-        try "#!/bin/sh\necho OpenClaw \(gatewayVersion)\n"
-            .write(to: gateway, atomically: true, encoding: .utf8)
-
-        let scans = LockedCounter()
-        let resolution = await GatewayEnvironment.resolveGatewayCommand(searchPathsProvider: {
-            scans.increment()
-            return [bin.path]
-        })
-
-        #expect(scans.value() == 1)
-        #expect(resolution.status.kind == .ok)
-        #expect(resolution.status.gatewayVersion == gatewayVersion)
-        #expect(resolution.command?.first == gateway.path)
-    }
-
-    @Test func `failed gateway launch resolution scans preferred paths once`() async {
-        let scans = LockedCounter()
-        let resolution = await GatewayEnvironment.resolveGatewayCommand(searchPathsProvider: {
-            scans.increment()
-            return ["/missing/\(UUID().uuidString)"]
-        })
-
-        #expect(scans.value() == 1)
-        #expect(resolution.status.kind == .missingNode)
-        #expect(resolution.command == nil)
-    }
-
     @Test func `semver compatibility requires same major and not older`() {
         let required = Semver(major: 2, minor: 1, patch: 0)
         #expect(Semver(major: 2, minor: 1, patch: 0).compatible(with: required))
@@ -149,6 +96,50 @@ struct GatewayEnvironmentTests {
             defer { UserDefaults.standard.removeObject(forKey: "gatewayPort") }
             #expect(GatewayEnvironment.gatewayPort() == 19999)
         }
+    }
+
+    @Test func `named profiles derive stable distinct gateway ports after explicit precedence`() {
+        let work = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+        let personal = AppProfile(environment: ["OPENCLAW_PROFILE": "personal"])
+        let workPort = GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: nil,
+            storedPort: 0,
+            profile: work)
+        #expect((20000..<60000).contains(workPort))
+        #expect(workPort == work.defaultGatewayPort)
+        #expect(workPort != personal.defaultGatewayPort)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: ["OPENCLAW_GATEWAY_PORT": "21001"],
+            configPort: 22001,
+            storedPort: 23001,
+            profile: work) == 21001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: 22001,
+            storedPort: 23001,
+            profile: work) == 22001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: nil,
+            storedPort: 23001,
+            profile: work) == 23001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: ["OPENCLAW_GATEWAY_PORT": "65536"],
+            configPort: 22001,
+            storedPort: 23001,
+            profile: work) == 22001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: 65536,
+            storedPort: 23001,
+            profile: work) == 23001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: nil,
+            storedPort: 65536,
+            profile: work) == work.defaultGatewayPort)
+        #expect(AppProfile(environment: [:]).defaultGatewayPort == 18789)
     }
 
     @Test func `expected gateway version from string uses parser`() {

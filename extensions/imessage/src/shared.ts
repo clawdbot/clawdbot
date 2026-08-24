@@ -53,6 +53,7 @@ export const imessageSecurityAdapter =
     groupPolicyPath: "channels.imessage.groupPolicy",
     groupAllowFromPath: "channels.imessage.groupAllowFrom",
     mentionGated: false,
+    findingTitle: "iMessage security warning",
     policyPathSuffix: "dmPolicy",
   });
 

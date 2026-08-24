@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import { extractAgentRunText } from "../agents/agent-run-result.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
@@ -143,11 +145,18 @@ async function runConfiguredSystemAgentText(params: {
   }
   const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
   let text: string | undefined;
+  let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
   try {
     const runId = `${params.runIdPrefix}-${randomUUID()}`;
     const timeoutMs =
       params.timeoutMs ??
       (params.deps?.resolveAssistantTimeoutMs ?? resolveSystemAgentAssistantTimeoutMs)(route);
+    preparedRunAdmission = prepareSystemAgentRunAdmission(
+      route.runConfig,
+      runId,
+      route.agentId,
+      "system-agent.assistant",
+    );
     const shared = {
       sessionId: `${runId}-session`,
       // OpenClaw is the planner surface, but the configured roster owner supplies runtime policy.
@@ -179,6 +188,7 @@ async function runConfiguredSystemAgentText(params: {
         ? await (params.deps?.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent)(
             {
               ...shared,
+              preparedRunAdmission,
               executionMode: "side-question",
               cleanupCliLiveSessionOnRunEnd: true,
             },
@@ -188,19 +198,21 @@ async function runConfiguredSystemAgentText(params: {
             (await import("../agents/embedded-agent.js")).runEmbeddedAgent
           )({
             ...shared,
+            preparedRunAdmission,
             toolsAllow: [],
             agentHarnessRuntimeOverride: route.agentHarnessRuntimeOverride,
             ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
             cleanupBundleMcpOnRunEnd: true,
             ...(route.authProfileId ? { authProfileIdSource: "user" as const } : {}),
           });
-    text = extractPlannerResultText(result)?.trim();
+    text = extractAgentRunText(result)?.trim();
   } catch (error) {
     if (error instanceof SystemAgentInferenceUnavailableError) {
       throw error;
     }
     text = undefined;
   } finally {
+    preparedRunAdmission?.close();
     await (params.deps?.removeTempDir ?? removeTempPlannerDir)(tempDir);
   }
   if (!text) {
@@ -236,21 +248,4 @@ async function createTempPlannerDir(): Promise<string> {
 
 async function removeTempPlannerDir(dir: string): Promise<void> {
   await fs.rm(dir, { recursive: true, force: true });
-}
-
-function extractPlannerResultText(result: {
-  payloads?: Array<{ text?: string }>;
-  meta?: {
-    finalAssistantVisibleText?: string;
-    finalAssistantRawText?: string;
-  };
-}): string | undefined {
-  return (
-    result.meta?.finalAssistantVisibleText ??
-    result.meta?.finalAssistantRawText ??
-    result.payloads
-      ?.map((payload) => payload.text?.trim())
-      .filter(Boolean)
-      .join("\n")
-  );
 }

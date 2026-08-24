@@ -1,5 +1,7 @@
-import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
 // Cron tool type declarations shared with the cron tool implementation.
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
+import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { callGatewayTool } from "./gateway.js";
 
@@ -22,17 +24,30 @@ export type CronToolsAllowCaptureRef = {
 export type CronCreatorToolAuthorityMaterialization = {
   tools: readonly CronCreatorToolAllowlistEntry[];
   provenance: CronToolsAllowCaptureProvenance;
+  /** Opaque runtime-owned authority captured with the same exact executable surface. */
+  runtimeAuthority?: CronRuntimeAuthority;
 };
 
-export type CronCreatorToolAuthoritySnapshot = CronCreatorToolAuthorityMaterialization & {
+export type CronCreatorToolAuthoritySnapshot = Omit<
+  CronCreatorToolAuthorityMaterialization,
+  "runtimeAuthority"
+> & {
   /** Gateway-process one-shot proof consumed only at the matching cron write. */
   grant: CronCreatorAuthorityGrant;
 };
 
 export type CronToolOptions = {
   agentSessionKey?: string;
+  agentId?: string;
   /** Authenticated source account; authority must not be inferred from delivery. */
   agentAccountId?: string;
+  /**
+   * Resolved config for the calling context. Shapes the advertised schema and
+   * description: when cron.triggers.enabled is off, trigger-gated surfaces
+   * (trigger, script payloads, stream schedules) are not advertised. Omitting
+   * config keeps the full surface for config-less callers.
+   */
+  config?: OpenClawConfig;
   currentDeliveryContext?: DeliveryContext;
   /**
    * Effective tool surface visible to the caller that created or edited a cron job.

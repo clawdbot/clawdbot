@@ -29,7 +29,7 @@ describe("telegramMessageActions", () => {
     for (const action of ["sendMessage", "editMessage", "deleteMessage", "react", "topic-edit"]) {
       expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(true);
     }
-    for (const action of ["searchSticker", "stickerCacheStats"]) {
+    for (const action of ["searchSticker", "stickerCacheStats", "emoji-list"]) {
       expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(false);
     }
   });
@@ -54,6 +54,7 @@ describe("telegramMessageActions", () => {
       params: {
         messageId: "9001",
         to: "-1001:topic:77",
+        reply: { replyToId: "forged", source: "explicit", mode: "all" },
         conversationReadOrigin: "direct-operator",
         mediaAccess: { localRoots: ["/tmp/forged-root"], workspaceDir: "/tmp/forged-root" },
       },
@@ -63,6 +64,8 @@ describe("telegramMessageActions", () => {
       mediaLocalRoots: ["/tmp/conflicting-root"],
       requesterAccountId: "work",
       conversationReadOrigin: "delegated",
+      deliveryRetryOwner: "caller",
+      reply: { replyToId: "9001", source: "implicit", mode: "first" },
       toolContext: {
         currentChannelProvider: "telegram",
         currentChannelId: "telegram:-1001:topic:77",
@@ -75,7 +78,9 @@ describe("telegramMessageActions", () => {
       expect.anything(),
       expect.objectContaining({
         conversationReadOrigin: "delegated",
+        deliveryRetryOwner: "caller",
         mediaAccess,
+        reply: { replyToId: "9001", source: "implicit", mode: "first" },
         requesterAccountId: "work",
         toolContext: expect.objectContaining({ currentMessageId: "9001" }),
       }),
@@ -85,6 +90,7 @@ describe("telegramMessageActions", () => {
       messageId: "9001",
     });
     expect(handleTelegramActionMock.mock.calls[0]?.[0]).not.toHaveProperty("mediaAccess");
+    expect(handleTelegramActionMock.mock.calls[0]?.[0]).not.toHaveProperty("reply");
     expect(handleTelegramActionMock.mock.calls[0]?.[2]?.mediaAccess).toBe(mediaAccess);
   });
 
@@ -332,8 +338,10 @@ describe("telegramMessageActions", () => {
     expect(defaultActions).toContain("send");
     expect(defaultActions).toContain("poll");
     expect(defaultActions).not.toContain("react");
+    expect(defaultActions).not.toContain("emoji-list");
     expect(workActions).not.toContain("send");
     expect(workActions).toContain("react");
+    expect(workActions).toContain("emoji-list");
     expect(workActions).not.toContain("poll");
   });
 

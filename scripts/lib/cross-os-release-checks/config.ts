@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
+import { parsePermissiveBooleanToken } from "../arg-utils.mts";
 import { trimForSummary } from "./shared.ts";
 
 type CrossOsSuite = "packaged-fresh" | "installer-fresh" | "packaged-upgrade" | "dev-update";
@@ -314,11 +315,9 @@ function parseBooleanEnv(name: string, fallback: boolean, env = process.env): bo
   if (!raw) {
     return fallback;
   }
-  if (/^(1|true|yes|on)$/iu.test(raw)) {
-    return true;
-  }
-  if (/^(0|false|no|off)$/iu.test(raw)) {
-    return false;
+  const parsed = parsePermissiveBooleanToken(raw);
+  if (parsed !== undefined) {
+    return parsed;
   }
   throw new Error(`${name} must be a boolean. Got: ${JSON.stringify(raw)}`);
 }

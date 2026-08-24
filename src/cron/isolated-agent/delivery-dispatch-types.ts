@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
@@ -16,6 +17,7 @@ export type DispatchCronDeliveryParams = {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
+  sourceSessionKey?: string;
   runSessionKey: string;
   sessionId: string;
   lifecycleRevision: string;
@@ -29,6 +31,8 @@ export type DispatchCronDeliveryParams = {
   skipHeartbeatDelivery: boolean;
   spawnOnlyHandoff: boolean;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
+  /** Queues same-source fallback awareness only after a durable completion commit fails. */
+  queueSourceSessionMessageToolAwareness?: () => Promise<void>;
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
@@ -51,6 +55,7 @@ export type DispatchCronDeliveryState = {
   delivered: boolean;
   deliveryAttempted: boolean;
   deliveryError?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
   cronRunSessionCleanupAttempted: boolean;
   summary?: string;
   outputText?: string;

@@ -3,7 +3,8 @@
  *
  * Doctor contract enumeration cold-loads plugin `doctor-contract-api` closures, so
  * this subpath must stay off heavy runtime graphs (state DB, plugin state stores,
- * uninstall flows). Those stay on `runtime-doctor`.
+ * uninstall flows). Those stay on focused repair and plugin-state-store subpaths;
+ * the deprecated `runtime-doctor` package facade re-exports only this light module.
  */
 import fs from "node:fs/promises";
 import { asObjectRecord } from "../config/channel-compat-normalization.js";

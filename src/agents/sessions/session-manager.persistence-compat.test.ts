@@ -11,7 +11,7 @@ import {
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
@@ -38,6 +38,71 @@ function buildAssistantMessage(text: string) {
 }
 
 describe("SessionManager persistence compatibility", () => {
+  it("persists canonical delivery facts and keeps the live assistant bytes identical", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-directives-");
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "directive-session";
+    const sessionKey = "agent:main:dashboard:directives";
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+
+    const manager = SessionManager.open(scope, dir);
+    const tagged = buildAssistantMessage(
+      [
+        "[[reply_to_current]]",
+        "[[reply_to:message-7]]",
+        "[[audio_as_voice]]",
+        "[[tts:provider=mock voiceId=voice-7]]",
+        "Final answer [[tts:text]]Spoken answer[[/tts:text]]",
+      ].join("\n"),
+    );
+    const codeExampleText = [
+      "Use `[[reply_to_current]]` literally.",
+      "Use `[[tts:text]]spoken[[/tts:text]]` literally.",
+      "```text",
+      "[[audio_as_voice]]",
+      "[[tts:provider=mock voiceId=voice-7]]",
+      "```",
+    ].join("\n");
+    const codeExample = buildAssistantMessage(codeExampleText);
+    const indentedCode = buildAssistantMessage("    [[reply_to_current]]\n    [[audio_as_voice]]");
+    manager.appendMessage(tagged);
+    manager.appendMessage(codeExample);
+    manager.appendMessage(indentedCode);
+
+    expect(tagged.content).toEqual([{ type: "text", text: "Final answer" }]);
+    expect(tagged).toMatchObject({
+      openclawDelivery: {
+        audioAsVoice: true,
+        replyToCurrent: true,
+        replyToId: "message-7",
+        tts: {
+          tagged: true,
+          text: "Spoken answer",
+          directives: [
+            {
+              provider: "mock",
+              values: { voiceid: "voice-7" },
+            },
+          ],
+        },
+      },
+    });
+    expect(codeExample.content).toEqual([{ type: "text", text: codeExampleText }]);
+    expect(codeExample).not.toHaveProperty("openclawDelivery");
+    expect(indentedCode).not.toHaveProperty("openclawDelivery");
+
+    const persistedMessages = (await loadTranscriptEvents(scope))
+      .filter((event) => (event as { type?: unknown }).type === "message")
+      .map((event) => (event as { message: unknown }).message);
+    expect(persistedMessages).toEqual([tagged, codeExample, indentedCode]);
+    expect(SessionManager.open(scope, dir).buildSessionContext().messages).toEqual([
+      tagged,
+      codeExample,
+      indentedCode,
+    ]);
+  });
+
   it("rewrites SQLite transcript rows when removing trailing entries", async () => {
     const dir = tempDirs.make("openclaw-session-manager-compat-");
     const storePath = path.join(dir, "sessions.json");
@@ -45,7 +110,7 @@ describe("SessionManager persistence compatibility", () => {
     const sessionKey = "agent:main:dashboard:sqlite-remove-trailing";
     const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionFile: marker, sessionId, updatedAt: 10 },
     );

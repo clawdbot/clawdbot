@@ -1,4 +1,4 @@
-import type { resolveConfiguredBindingRecord } from "../../channels/plugins/binding-registry.js";
+import type { resolveConfiguredBindingRecord } from "../../channels/plugins/configured-binding-registry.js";
 import type { listAcpBindings } from "../../config/bindings.js";
 import type { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import "./acp-reset-target.js";

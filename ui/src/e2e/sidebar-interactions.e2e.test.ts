@@ -194,7 +194,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const agentsList = {
-      agents: [{ id: "main" }, { id: "research" }],
+      agents: [{ id: "main" }, { id: "research" }, { id: "forge" }],
       defaultId: "main",
       mainKey: "main",
       scope: "agent",
@@ -215,6 +215,10 @@ suite.define(() => {
                   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
                 name: "Research",
               },
+            },
+            {
+              match: { agentId: "forge" },
+              response: { agentId: "forge", avatar: "", emoji: "🔧", name: "Forge" },
             },
           ],
         },
@@ -239,7 +243,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           researchSwitch.evaluate(
-            (element) => element.parentElement?.matches("wa-dropdown.sidebar-agent-menu") ?? false,
+            (element) => element.parentElement?.matches(".sidebar-agent-menu__agent-grid") ?? false,
           ),
         )
         .toBe(true);
@@ -247,9 +251,78 @@ suite.define(() => {
         .poll(() => researchSwitch.locator("img.agent-select__avatar").getAttribute("src"))
         .toContain("data:image/png;base64,");
       await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
+      const gridLayout = await menu.evaluate((dropdown) => {
+        const center = (element: Element | null | undefined) => {
+          const rect = element?.getBoundingClientRect();
+          return rect ? Math.round(rect.x + rect.width / 2) : Number.NaN;
+        };
+        const grid = dropdown.querySelector(".sidebar-agent-menu__agent-grid");
+        const agentRows = [
+          ...dropdown.querySelectorAll("wa-dropdown-item.sidebar-agent-menu__agent-switch"),
+        ].slice(0, 3);
+        return {
+          columns: grid ? getComputedStyle(grid).gridTemplateColumns.split(" ").length : 0,
+          bottomGap:
+            grid && agentRows.length > 0
+              ? Math.round(
+                  grid.getBoundingClientRect().bottom -
+                    Math.max(...agentRows.map((row) => row.getBoundingClientRect().bottom)),
+                )
+              : Number.NaN,
+          widths: agentRows.map((row) => Math.round(row.getBoundingClientRect().width)),
+          avatarOffsets: agentRows.map(
+            (row) => center(row.querySelector(".sidebar-agent-menu__agent-avatar")) - center(row),
+          ),
+          labelOffsets: agentRows.map(
+            (row) => center(row.querySelector(".agent-select__option-copy")) - center(row),
+          ),
+        };
+      });
+      expect(gridLayout.columns).toBe(3);
+      expect(gridLayout.bottomGap).toBe(0);
+      expect(new Set(gridLayout.widths).size).toBe(1);
+      expect(gridLayout.avatarOffsets).toEqual([0, 0, 0]);
+      expect(gridLayout.labelOffsets).toEqual([0, 0, 0]);
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
+      });
+      await expect
+        .poll(() =>
+          menu.evaluate((dropdown) => {
+            const grid = dropdown.querySelector(".sidebar-agent-menu__agent-grid");
+            const rows = [
+              ...dropdown.querySelectorAll("wa-dropdown-item.sidebar-agent-menu__agent-switch"),
+            ];
+            if (!grid || rows.length === 0) {
+              return Number.NaN;
+            }
+            return Math.round(
+              grid.getBoundingClientRect().bottom -
+                Math.max(...rows.map((row) => row.getBoundingClientRect().bottom)),
+            );
+          }),
+        )
+        .toBe(0);
       await expect
         .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);
+      await page.keyboard.press("End");
+      await expect
+        .poll(() =>
+          menu
+            .getByRole("menuitem", { name: "Agent settings" })
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+      await page.keyboard.press("Home");
+      await expect
+        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("r");
+      await expect
+        .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Home");
       await page.keyboard.press("ArrowDown");
       await expect
         .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))

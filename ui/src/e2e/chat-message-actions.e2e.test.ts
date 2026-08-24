@@ -18,6 +18,40 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-message-actions");
 
+// Neutral filler line repeated to push the fixture past the transport
+// preview limit without embedding stale implementation narrative; the
+// heading, list, code block, and path sample below exercise Markdown
+// rendering, while the repeated line only pads length.
+const FULL_ASSISTANT_CONTENT_FILLER_LINE =
+  "Repeat neutral filler text to exceed the transport preview limit while staying deterministic and readable.\n";
+
+const realisticFullAssistantContent = `# Deployment report
+
+## Summary
+
+- service: payment-gateway
+- environment: production
+- status: completed
+
+## Rollout steps
+
+1. Build the release artifact and run smoke tests.
+2. Deploy to the canary pool and watch the error budget.
+3. Promote to the full fleet.
+
+~~~ts
+export function verifyRollout(serviceName: string): Promise<boolean> {
+  return healthCheck(serviceName);
+}
+~~~
+
+Reference: src/services/payment-gateway/deploy.ts:88
+
+${FULL_ASSISTANT_CONTENT_FILLER_LINE.repeat(75)}
+## Final verification
+
+All health checks passed and the rollout is complete.`;
+
 let browser: Browser;
 let server: ControlUiE2eServer;
 
@@ -26,6 +60,19 @@ async function screenshot(page: Page, fileName: string): Promise<void> {
     return;
   }
   await page.screenshot({ animations: "disabled", path: path.join(artifactDir, fileName) });
+}
+
+async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
+  await page.emulateMedia({ colorScheme: mode });
+  await page.evaluate((nextMode) => {
+    const root = document.documentElement;
+    root.dataset.themeMode = nextMode;
+    root.dataset.themeResolved = nextMode;
+    root.classList.toggle("wa-light", nextMode === "light");
+    root.classList.toggle("wa-dark", nextMode === "dark");
+    root.style.colorScheme = nextMode;
+  }, mode);
+  await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
 }
 
 async function expectHoverTooltip(button: Locator, text: string): Promise<void> {
@@ -119,8 +166,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
     await server?.close();
   });
 
-  it("offers Reply inline and mirrors every assistant action in the context menu", async () => {
+  it("keeps oversized history notices consistent through recovery and message actions", async () => {
     const context = await browser.newContext({
+      colorScheme: "dark",
       locale: "en-US",
       recordVideo: captureUiProof
         ? { dir: path.join(artifactDir, "video"), size: { height: 900, width: 1440 } }
@@ -135,9 +183,11 @@ describeControlUiE2e("Control UI chat message actions", () => {
     const messageText = "Reply and context menu action proof.";
     const privateThinking = "private reply reasoning";
     const visibleThinkingAnswer = "Visible reply context only.";
-    const truncatedPreview = "Truncated assistant preview\n...(truncated)...";
-    const fullAssistantContent = "Complete assistant content loaded inline.";
+    const fullAssistantContent = realisticFullAssistantContent;
+    const rawOversizedMarker = "[chat.history omitted: message too large]";
+    const oversizedNotice = "This message is too large to display here.";
     const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.message.get"],
       historyMessages: [
         {
           role: "assistant",
@@ -170,31 +220,57 @@ describeControlUiE2e("Control UI chat message actions", () => {
         },
         {
           role: "assistant",
-          content: [{ type: "text", text: truncatedPreview }],
+          content: [{ type: "text", text: rawOversizedMarker }],
           timestamp: Date.now() + 4,
-          __openclaw: { id: "assistant-truncated-proof", seq: 5 },
+          __openclaw: {
+            id: "assistant-full-message",
+            seq: 5,
+            truncated: true,
+            reason: "oversized",
+          },
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: rawOversizedMarker }],
+          timestamp: Date.now() + 5,
+          __openclaw: { id: "oversized-user", seq: 6, truncated: true, reason: "oversized" },
+        },
+        {
+          role: "toolResult",
+          toolCallId: "oversized-tool-call-1",
+          toolName: "read_file",
+          content: rawOversizedMarker,
+          timestamp: Date.now() + 6,
+          __openclaw: { id: "oversized-tool-1", seq: 7, truncated: true, reason: "oversized" },
+        },
+        {
+          role: "toolResult",
+          toolCallId: "oversized-tool-call-2",
+          toolName: "run_command",
+          content: rawOversizedMarker,
+          timestamp: Date.now() + 7,
+          __openclaw: { id: "oversized-tool-2", seq: 8, truncated: true, reason: "oversized" },
         },
       ],
-      methodResponses: {
-        "chat.message.get": {
-          ok: true,
-          message: { role: "assistant", content: fullAssistantContent },
-        },
-      },
     });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
-      const commandPaletteShortcut = process.platform === "darwin" ? "⌘K" : "Ctrl K";
-      await expectHoverTooltip(page.getByRole("button", { name: "New session" }), "New session");
+      await setThemeMode(page, "dark");
+      const applePlatform = process.platform === "darwin";
+      const commandPaletteShortcut = applePlatform ? "⌘K" : "Ctrl+K";
+      const sidebarShortcut = applePlatform ? "⌘B" : "Ctrl+B";
+      await expectHoverTooltip(
+        page.locator(".sidebar-brand").getByRole("button", { name: "New session" }),
+        "New session",
+      );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open command palette" }),
         `Open command palette (${commandPaletteShortcut})`,
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Collapse sidebar" }),
-        "Collapse sidebar (⌘B)",
+        `Collapse sidebar (${sidebarShortcut})`,
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open split view" }),
@@ -305,7 +381,26 @@ describeControlUiE2e("Control UI chat message actions", () => {
         "Reply",
         "Copy as markdown",
       ]);
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          }),
+      );
+      expect(await page.locator(".chat-selection-popup").count()).toBe(0);
       await screenshot(page, "04-selected-text-context-menu.png");
+      await bubble.dispatchEvent("pointerup", {
+        button: 0,
+        ctrlKey: true,
+        pointerType: "mouse",
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          }),
+      );
+      expect(await page.locator(".chat-selection-popup").count()).toBe(0);
       await menu.getByRole("menuitem", { name: "Copy", exact: true }).click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
@@ -328,81 +423,91 @@ describeControlUiE2e("Control UI chat message actions", () => {
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
         .toBe(messageText);
 
-      const expandableBubble = page.locator(
-        '.chat-bubble[data-entry-id="assistant-truncated-proof"]',
-      );
-      const expandableGroup = expandableBubble.locator(
+      const fullTextBubble = page.locator('.chat-bubble[data-entry-id="assistant-full-message"]');
+      const fullTextGroup = fullTextBubble.locator(
         "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' chat-group ')]",
       );
-      await expandableGroup.hover();
-      await expandableGroup.getByRole("button", { name: "Copy as markdown" }).click();
-      await expect
-        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-        .toBe(truncatedPreview);
-      await expandableGroup.getByRole("button", { name: "Reply to message" }).click();
-      const expandableReplyPreview = page.locator(".chat-reply-preview");
-      await expect
-        .poll(() => expandableReplyPreview.locator(".chat-reply-preview__text").textContent())
-        .toBe(truncatedPreview);
-      await expandableReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
-
-      await expandableBubble.getByRole("button", { name: "Show more" }).click();
       const fullMessageRequest = await gateway.waitForRequest("chat.message.get");
       expect(fullMessageRequest.params).toMatchObject({
         sessionKey: "main",
-        messageId: "assistant-truncated-proof",
+        messageId: "assistant-full-message",
         maxChars: 500_000,
       });
-      await expandableBubble.getByText(fullAssistantContent, { exact: true }).waitFor({
-        state: "visible",
+      await expect
+        .poll(() => fullTextBubble.locator(".chat-text").textContent())
+        .toContain(oversizedNotice);
+      expect(await fullTextBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
+      expect(await page.locator("body").textContent()).not.toContain(rawOversizedMarker);
+      await screenshot(page, "07-oversized-pending-dark.png");
+      const fullTextReplyPreview = page.locator(".chat-reply-preview");
+      await fullTextBubble.click({ button: "right" });
+      await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(oversizedNotice);
+      await fullTextBubble.click({ button: "right" });
+      await menu.getByRole("menuitem", { name: "Reply to message" }).click();
+      await expect
+        .poll(() => fullTextReplyPreview.locator(".chat-reply-preview__text").textContent())
+        .toBe(oversizedNotice);
+      await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+      await gateway.resolveDeferred("chat.message.get", {
+        ok: true,
+        message: { role: "assistant", content: fullAssistantContent },
       });
-      await expandableGroup.hover();
-      await expandableGroup.getByRole("button", { name: "Copy as markdown" }).click();
+      const fullTail = fullTextBubble.getByRole("heading", { name: "Final verification" });
+      await fullTail.waitFor({ state: "visible" });
+      expect(await fullTextBubble.getByRole("button", { name: "Show more" }).count()).toBe(0);
+      expect(await fullTextBubble.getByRole("button", { name: "Show less" }).count()).toBe(0);
+      await fullTail.scrollIntoViewIfNeeded();
+      await screenshot(page, "08-oversized-resolved-dark.png");
+
+      await fullTextGroup.hover();
+      await fullTextGroup.getByRole("button", { name: "Copy as markdown" }).click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
         .toBe(fullAssistantContent);
-      await expandableGroup.getByRole("button", { name: "Reply to message" }).click();
+      await fullTextGroup.getByRole("button", { name: "Reply to message" }).click();
       await expect
-        .poll(() => expandableReplyPreview.locator(".chat-reply-preview__text").textContent())
-        .toBe(fullAssistantContent);
-      await expandableReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+        .poll(() => fullTextReplyPreview.locator(".chat-reply-preview__text").textContent())
+        .toContain("# Deployment report");
+      await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
-      await expandableBubble.click({ button: "right" });
+      await fullTextBubble.click({ button: "right" });
       await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
         .toBe(fullAssistantContent);
-      await expandableBubble.click({ button: "right" });
+      await fullTextBubble.click({ button: "right" });
       await menu.getByRole("menuitem", { name: "Reply to message" }).click();
       await expect
-        .poll(() => expandableReplyPreview.locator(".chat-reply-preview__text").textContent())
-        .toBe(fullAssistantContent);
-      await expandableReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+        .poll(() => fullTextReplyPreview.locator(".chat-reply-preview__text").textContent())
+        .toContain("# Deployment report");
+      await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
-      await expandableBubble.getByRole("button", { name: "Show less" }).click();
+      const userOversizedBubble = page.locator('.chat-bubble[data-entry-id="oversized-user"]');
+      expect(await userOversizedBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
       await expect
-        .poll(async () =>
-          (await expandableBubble.locator(".chat-message-disclosure__content").textContent())
-            ?.split("\n")
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .join("\n"),
-        )
-        .toBe(truncatedPreview);
-      await expandableGroup.hover();
-      await expandableGroup.getByRole("button", { name: "Copy as markdown" }).click();
+        .poll(() => userOversizedBubble.locator(".chat-text").textContent())
+        .toContain(oversizedNotice);
+
+      const activitySummary = page.locator(".chat-activity-group__summary").last();
+      await activitySummary.click();
+      const groupedToolBubble = page.locator('.chat-bubble[data-entry-id="oversized-tool-1"]');
+      await groupedToolBubble.waitFor({ state: "visible" });
+      expect(await groupedToolBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
+      await groupedToolBubble.click({ button: "right" });
+      expect(await menu.getByRole("menuitem").allTextContents()).toEqual(["Reply"]);
+      await screenshot(page, "09-oversized-tool-actions.png");
+      await menu.getByRole("menuitem", { name: "Reply to message" }).click();
       await expect
-        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-        .toBe(truncatedPreview);
-      await expandableGroup.getByRole("button", { name: "Reply to message" }).click();
-      await expect
-        .poll(() => expandableReplyPreview.locator(".chat-reply-preview__text").textContent())
-        .toBe(truncatedPreview);
-      await expandableReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
-      await expandableBubble.getByRole("button", { name: "Show more" }).click();
-      await expandableBubble.getByText(fullAssistantContent, { exact: true }).waitFor({
-        state: "visible",
-      });
+        .poll(() => fullTextReplyPreview.locator(".chat-reply-preview__text").textContent())
+        .toBe(oversizedNotice);
+      await fullTextReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
+
+      await setThemeMode(page, "light");
+      await fullTail.scrollIntoViewIfNeeded();
+      await screenshot(page, "10-oversized-resolved-light.png");
       expect(await gateway.getRequests("chat.message.get")).toHaveLength(1);
     } finally {
       await context.close();

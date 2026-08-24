@@ -315,6 +315,14 @@ class SessionObserverDigestTest {
       "Agent note",
       sessionListSubtitle(failed.copy(status = "running", lastRunError = null), fallback = "Work", nowMs = 1_000),
     )
+    assertEquals(
+      "Waiting for a concurrency slot",
+      sessionListSubtitle(
+        failed.copy(agentStatus = null, status = "queued", lastRunError = null),
+        fallback = "Work",
+        nowMs = 1_000,
+      ),
+    )
 
     val finalDigest = digest(runId = null, revision = 2, updatedAt = 2_000, headline = "Finished", health = "done")
     val idle = ChatSessionEntry(key = "work", updatedAtMs = 2_000, lastReadAt = 1_999, observerDigest = finalDigest)

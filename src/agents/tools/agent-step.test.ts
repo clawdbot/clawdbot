@@ -32,12 +32,10 @@ describe("runAgentStep", () => {
     // Nested steps disable automatic delivery and carry provenance so the reply
     // returns through the message tool path instead of the channel.
     const gatewayCalls: CallGatewayOptions[] = [];
-    testing.setDepsForTest({
-      callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
-        gatewayCalls.push(opts);
-        return { runId: "run-nested" } as T;
-      },
-    });
+    const callGateway = async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
+      gatewayCalls.push(opts);
+      return { runId: "run-nested" } as T;
+    };
     runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
       status: "ok",
       replyText: "done",
@@ -49,6 +47,7 @@ describe("runAgentStep", () => {
         message: "hello",
         extraSystemPrompt: "reply briefly",
         timeoutMs: 10_000,
+        callGateway,
       }),
     ).resolves.toBe("done");
 
@@ -78,9 +77,7 @@ describe("runAgentStep", () => {
   });
 
   it("does not retire bundle MCP runtime while nested agent steps are still pending", async () => {
-    testing.setDepsForTest({
-      callGateway: async <T = unknown>(): Promise<T> => ({ runId: "run-pending" }) as T,
-    });
+    const callGateway = async <T = unknown>(): Promise<T> => ({ runId: "run-pending" }) as T;
     runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
       status: "timeout",
     });
@@ -91,6 +88,7 @@ describe("runAgentStep", () => {
         message: "hello",
         extraSystemPrompt: "reply briefly",
         timeoutMs: 10_000,
+        callGateway,
       }),
     ).resolves.toBeUndefined();
 
@@ -98,17 +96,12 @@ describe("runAgentStep", () => {
   });
 
   it("forwards explicit transcript bodies for nested bookkeeping turns", async () => {
-    const gatewayCalls: CallGatewayOptions[] = [];
     const agentCommandFromIngress = vi.fn(async () => ({
       payloads: [{ text: "done", mediaUrl: null }],
       meta: { durationMs: 1 },
     }));
     testing.setDepsForTest({
       agentCommandFromIngress,
-      callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
-        gatewayCalls.push(opts);
-        return { runId: "run-nested" } as T;
-      },
     });
     runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
       status: "ok",
@@ -123,7 +116,6 @@ describe("runAgentStep", () => {
       timeoutMs: 10_000,
     });
 
-    expect(gatewayCalls).toStrictEqual([]);
     expect(agentCommandFromIngress).toHaveBeenCalledTimes(1);
     const ingressCalls = agentCommandFromIngress.mock.calls as unknown as Array<
       [{ message?: string; sourceReplyDeliveryMode?: string; transcriptMessage?: string }]
@@ -155,7 +147,6 @@ describe("runAgentStep", () => {
     }));
     testing.setDepsForTest({
       agentCommandFromIngress,
-      callGateway: async <T = unknown>(): Promise<T> => ({ runId: "unused" }) as T,
     });
 
     await expect(
@@ -191,7 +182,6 @@ describe("runAgentStep", () => {
     }));
     testing.setDepsForTest({
       agentCommandFromIngress,
-      callGateway: async <T = unknown>(): Promise<T> => ({ runId: "unused" }) as T,
     });
 
     await expect(

@@ -23,14 +23,14 @@ const callGatewayStatusProbe = vi.fn<
     ok: boolean;
     url?: string;
     error?: string | null;
-    server?: { version?: string | null; connId?: string | null };
+    server?: { version?: string | null; buildId?: string | null; connId?: string | null };
     version?: string | null;
   }>
 >(async (_opts?: unknown) => ({
   ok: true,
   url: "ws://127.0.0.1:19001",
   error: null,
-  server: { version: "2026.5.6", connId: "conn-1" },
+  server: { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" },
 }));
 const isDefaultInstallIdentity = vi.fn((_env?: NodeJS.ProcessEnv) => true);
 const isGatewayExternallySupervised = vi.fn((_env?: NodeJS.ProcessEnv) => false);
@@ -152,10 +152,13 @@ const resolveStateDir = vi.fn(
 const resolveConfigPath = vi.fn((env: NodeJS.ProcessEnv, stateDir: string) => {
   return env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`;
 });
-const createConfigIOCalls = vi.fn((configPath: string, pluginValidation?: "full" | "skip") => ({
-  configPath,
-  pluginValidation,
-}));
+const createConfigIOCalls = vi.fn(
+  (configPath: string, pluginValidation?: "full" | "skip", observe?: boolean) => ({
+    configPath,
+    pluginValidation,
+    observe,
+  }),
+);
 const readConfigFileSnapshotCalls = vi.fn((configPath: string) => configPath);
 const loadConfigCalls = vi.fn((configPath: string) => configPath);
 let daemonConfigWarnings: Array<{ path: string; message: string }> = [];
@@ -176,15 +179,17 @@ let cliLoadedConfig: Record<string, unknown> = {
 vi.mock("../../config/config.js", () => ({
   createConfigIO: ({
     configPath,
+    observe,
     pluginValidation,
   }: {
     configPath: string;
+    observe?: boolean;
     pluginValidation?: "full" | "skip";
   }) => {
     const isDaemon = configPath.includes("/openclaw-daemon/");
     const runtimeConfig = isDaemon ? daemonLoadedConfig : cliLoadedConfig;
     const warnings = isDaemon ? daemonConfigWarnings : cliConfigWarnings;
-    createConfigIOCalls(configPath, pluginValidation);
+    createConfigIOCalls(configPath, pluginValidation, observe);
     return {
       readConfigFileSnapshot: async () => {
         readConfigFileSnapshotCalls(configPath);
@@ -330,6 +335,10 @@ function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   return call[0];
 }
 
+function gatherStatus(overrides: Partial<Parameters<typeof gatherDaemonStatus>[0]> = {}) {
+  return gatherDaemonStatus({ rpc: {}, probe: true, deep: false, ...overrides });
+}
+
 describe("gatherDaemonStatus", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -351,6 +360,7 @@ describe("gatherDaemonStatus", () => {
     deleteTestEnvValue("DAEMON_GATEWAY_PASSWORD");
     isDefaultInstallIdentity.mockReset().mockReturnValue(true);
     isGatewayExternallySupervised.mockReset().mockReturnValue(false);
+    auditGatewayServiceConfig.mockClear();
     callGatewayStatusProbe.mockClear();
     resolveAdvertisedControlUiLinks.mockClear();
     resolveAdvertisedControlUiLinks.mockResolvedValue({
@@ -433,6 +443,7 @@ describe("gatherDaemonStatus", () => {
       service: {
         label: "Scheduled Task",
         loaded: true,
+        loadState: { status: "loaded" as const },
         loadedText: "registered",
         notLoadedText: "not registered",
       },
@@ -449,11 +460,7 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("uses wss probe URL and forwards TLS fingerprint when daemon TLS is enabled", async () => {
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    const status = await gatherStatus();
 
     expect(loadGatewayTlsRuntime).toHaveBeenCalledTimes(1);
     const probeInput = callArg(callGatewayStatusProbe) as {
@@ -473,7 +480,11 @@ describe("gatherDaemonStatus", () => {
     expect(status.gateway?.version).toBe("2026.5.6");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
-    expect(status.rpc?.server).toEqual({ version: "2026.5.6", connId: "conn-1" });
+    expect(status.rpc?.server).toEqual({
+      version: "2026.5.6",
+      buildId: "build-2026.5.6",
+      connId: "conn-1",
+    });
     expect(status.cli?.version).toBe(VERSION);
     if (process.argv[1]) {
       expect(status.cli?.entrypoint).toBe(process.argv[1]);
@@ -483,11 +494,7 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("batches daemon and CLI port status inspection when ports differ", async () => {
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    await gatherStatus();
 
     expect(inspectPortUsages).toHaveBeenCalledWith(
       [19001, 18789],
@@ -508,11 +515,7 @@ describe("gatherDaemonStatus", () => {
       },
     });
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: false,
-      deep: false,
-    });
+    const status = await gatherStatus({ probe: false });
 
     expect(status.service.gatewayHeap).toMatchObject({ appliedMiB: 6144 });
     expect(status.service.gatewayHeap?.memorySource).toMatch(/^(constrained|physical)$/u);
@@ -527,11 +530,7 @@ describe("gatherDaemonStatus", () => {
       details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
     });
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: false,
-      deep: true,
-    });
+    const status = await gatherStatus({ probe: false, deep: true });
 
     expect(inspectWindowsGatewayFirewall).toHaveBeenCalledWith(
       expect.objectContaining({ bind: "lan", mode: "quick", port: 19001 }),
@@ -550,11 +549,7 @@ describe("gatherDaemonStatus", () => {
       version: "2026.5.7",
     });
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    const status = await gatherStatus();
 
     expect(status.gateway?.version).toBe("2026.5.7");
     expect(status.rpc?.version).toBe("2026.5.7");
@@ -562,12 +557,7 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("forwards requireRpc and configPath to the daemon probe", async () => {
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      requireRpc: true,
-      deep: false,
-    });
+    await gatherStatus({ requireRpc: true });
 
     const probeInput = callArg(callGatewayStatusProbe) as {
       requireRpc?: boolean;
@@ -582,11 +572,7 @@ describe("gatherDaemonStatus", () => {
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
     });
 
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    await gatherStatus();
 
     expect(readConfigFileSnapshotCalls).toHaveBeenCalledTimes(1);
     expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith("/tmp/openclaw-cli/openclaw.json");
@@ -601,11 +587,7 @@ describe("gatherDaemonStatus", () => {
       },
     };
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    const status = await gatherStatus();
 
     expect(resolveGatewayBindHost).toHaveBeenCalledWith("loopback", undefined);
     expect(status.gateway?.bindMode).toBe("loopback");
@@ -626,11 +608,7 @@ describe("gatherDaemonStatus", () => {
       error: "connect ECONNREFUSED override.example:18790",
     });
 
-    const status = await gatherDaemonStatus({
-      rpc: { url: rawUrl },
-      probe: true,
-      deep: false,
-    });
+    const status = await gatherStatus({ rpc: { url: rawUrl } });
 
     expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
     const probeInput = callArg(callGatewayStatusProbe) as {
@@ -659,12 +637,7 @@ describe("gatherDaemonStatus", () => {
     serviceReadCommand.mockResolvedValueOnce(null);
     serviceIsLoaded.mockResolvedValueOnce(false);
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      requireRpc: true,
-      deep: true,
-    });
+    const status = await gatherStatus({ requireRpc: true, deep: true });
 
     expect(status.gateway?.probeUrl).toBe("ws://127.0.0.1:18789");
     expect((callArg(callGatewayStatusProbe) as { url?: string }).url).toBe("ws://127.0.0.1:18789");
@@ -697,12 +670,7 @@ describe("gatherDaemonStatus", () => {
         error: "connect ECONNREFUSED 127.0.0.1:18900",
       });
 
-      const status = await gatherDaemonStatus({
-        rpc: {},
-        probe: true,
-        requireRpc: true,
-        deep: true,
-      });
+      const status = await gatherStatus({ requireRpc: true, deep: true });
 
       expect(status.gateway?.probeUrl).toBe("ws://127.0.0.1:18900");
       expect((callArg(callGatewayStatusProbe) as { url?: string }).url).toBe(
@@ -740,11 +708,7 @@ describe("gatherDaemonStatus", () => {
       throw new Error("uv_interface_addresses failed");
     });
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    const status = await gatherStatus();
 
     expect(status.gateway?.bindMode).toBe("tailnet");
     expect(status.gateway?.bindHost).toBe("127.0.0.1");
@@ -767,20 +731,17 @@ describe("gatherDaemonStatus", () => {
       detail: env?.OPENCLAW_GATEWAY_PORT ?? "missing-port",
     }));
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: false,
-      deep: false,
-    });
+    const status = await gatherStatus({ probe: false });
 
     expect(
       serviceReadRuntime.mock.calls.some(([env]) => env?.OPENCLAW_GATEWAY_PORT === "19001"),
     ).toBe(true);
+    expect(status.service.loaded).toBe(true);
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
   });
 
-  it("bounds both service-manager reads and still emits JSON after they time out", async () => {
+  it("bounds all service-manager reads and still emits JSON after they time out", async () => {
     serviceIsLoaded.mockImplementationOnce(async (args?: { timeoutMs?: number }) => {
       if (args?.timeoutMs === undefined) {
         return await new Promise<boolean>(() => {});
@@ -794,7 +755,7 @@ describe("gatherDaemonStatus", () => {
       throw new Error("systemctl show timed out");
     });
 
-    const status = await gatherDaemonStatus({
+    const status = await gatherStatus({
       rpc: { timeout: "100", json: true },
       probe: false,
       deep: true,
@@ -802,7 +763,14 @@ describe("gatherDaemonStatus", () => {
 
     expect(serviceIsLoaded).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 100 }));
     expect(serviceReadRuntime).toHaveBeenCalledWith(expect.any(Object), { timeoutMs: 100 });
-    expect(status.service.loaded).toBe(false);
+    expect(auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 100 }),
+    );
+    expect(status.service.loadState).toEqual({
+      status: "unknown",
+      detail: "Error: systemctl is-enabled timed out",
+    });
+    expect(status.service.loaded).toBeNull();
     expect(status.service.runtime).toEqual({
       status: "unknown",
       detail: "Error: systemctl show timed out",
@@ -818,7 +786,11 @@ describe("gatherDaemonStatus", () => {
       }
       expect(JSON.parse(serialized)).toMatchObject({
         service: {
-          loaded: false,
+          loaded: null,
+          loadState: {
+            status: "unknown",
+            detail: "Error: systemctl is-enabled timed out",
+          },
           runtime: {
             status: "unknown",
             detail: "Error: systemctl show timed out",
@@ -834,12 +806,27 @@ describe("gatherDaemonStatus", () => {
     try {
       printDaemonStatus(status, { json: false, deep: true });
       const output = log.mock.calls.flat().join("\n");
+      expect(output).toContain("Service: LaunchAgent (unknown)");
+      expect(output).not.toContain("Service: LaunchAgent (not loaded)");
       expect(output).toContain("Runtime: unknown (Error: systemctl show timed out)");
     } finally {
       log.mockRestore();
       error.mockRestore();
     }
   }, 1_000);
+
+  it.each(["bogus", "0", "-1", "1.5"])(
+    "rejects invalid status timeout %s before reading service state",
+    async (timeout) => {
+      await expect(gatherStatus({ rpc: { timeout } })).rejects.toThrow(
+        `Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000. Received: "${timeout}".`,
+      );
+
+      expect(serviceReadCommand).not.toHaveBeenCalled();
+      expect(serviceIsLoaded).not.toHaveBeenCalled();
+      expect(serviceReadRuntime).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps gateway status read-only when service management is unsupported", async () => {
     serviceReadCommand.mockResolvedValueOnce(null);
@@ -849,14 +836,11 @@ describe("gatherDaemonStatus", () => {
       detail: "Gateway service install not supported on aix",
     });
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: false,
-      deep: false,
-    });
+    const status = await gatherStatus({ probe: false });
 
     expect(status.service.command).toBeNull();
     expect(status.service.loaded).toBe(false);
+    expect(status.service.loadState).toEqual({ status: "not-loaded" });
     expect(status.service.runtime).toEqual({
       status: "unknown",
       detail: "Gateway service install not supported on aix",
@@ -878,11 +862,7 @@ describe("gatherDaemonStatus", () => {
       supervisorMode: "launchd",
     });
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: false,
-      deep: true,
-    });
+    const status = await gatherStatus({ probe: false, deep: true });
 
     const handoffInput = callArg(readGatewayRestartHandoffSync) as NodeJS.ProcessEnv;
     expect(handoffInput.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-daemon");
@@ -914,11 +894,7 @@ describe("gatherDaemonStatus", () => {
         },
       ]);
 
-      const status = await gatherDaemonStatus({
-        rpc: {},
-        probe: false,
-        deep: true,
-      });
+      const status = await gatherStatus({ probe: false, deep: true });
 
       const staleScanEnv = findStaleOpenClawUpdateLaunchdJobs.mock.calls[0]?.[0];
       expect(staleScanEnv?.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-daemon");
@@ -938,11 +914,7 @@ describe("gatherDaemonStatus", () => {
   );
 
   it("does not read restart handoffs during normal status", async () => {
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: false,
-      deep: false,
-    });
+    await gatherStatus({ probe: false });
 
     expect(readGatewayRestartHandoffSync).not.toHaveBeenCalled();
     expect(findStaleOpenClawUpdateLaunchdJobs).not.toHaveBeenCalled();
@@ -964,11 +936,7 @@ describe("gatherDaemonStatus", () => {
       ],
     });
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: false,
-      deep: true,
-    });
+    const status = await gatherStatus({ probe: false, deep: true });
 
     expect(inspectPortConnections).toHaveBeenCalledWith(19001);
     expect(status.connections?.established).toEqual([
@@ -992,11 +960,7 @@ describe("gatherDaemonStatus", () => {
       },
     };
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: false,
-      deep: true,
-    });
+    const status = await gatherStatus({ probe: false, deep: true });
 
     expect(inspectPortConnections).not.toHaveBeenCalled();
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
@@ -1029,11 +993,7 @@ describe("gatherDaemonStatus", () => {
     });
 
     try {
-      const status = await gatherDaemonStatus({
-        rpc: {},
-        probe: false,
-        deep: false,
-      });
+      const status = await gatherStatus({ probe: false });
 
       expect(readConfigFileSnapshotCalls).not.toHaveBeenCalled();
       expect(loadConfigCalls).not.toHaveBeenCalled();
@@ -1079,13 +1039,9 @@ describe("gatherDaemonStatus", () => {
     });
 
     try {
-      const status = await gatherDaemonStatus({
-        rpc: {},
-        probe: false,
-        deep: true,
-      });
+      const status = await gatherStatus({ probe: false, deep: true });
 
-      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full");
+      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full", false);
       expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
       expect(status.config?.cli.warnings).toEqual(cliConfigWarnings);
       expect(status.config?.daemon).toBe(status.config?.cli);
@@ -1111,11 +1067,7 @@ describe("gatherDaemonStatus", () => {
     };
     setTestEnvValue("DAEMON_GATEWAY_PASSWORD", "daemon-secretref-password"); // pragma: allowlist secret
 
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    await gatherStatus();
 
     expect((callArg(callGatewayStatusProbe) as { password?: string }).password).toBe(
       "daemon-secretref-password",
@@ -1140,11 +1092,7 @@ describe("gatherDaemonStatus", () => {
     };
     setTestEnvValue("DAEMON_GATEWAY_TOKEN", "daemon-secretref-token");
 
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    await gatherStatus();
 
     expect((callArg(callGatewayStatusProbe) as { token?: string }).token).toBe(
       "daemon-secretref-token",
@@ -1167,6 +1115,39 @@ describe("gatherDaemonStatus", () => {
         },
       },
     };
+
+    const status = await gatherStatus({ allowExecSecretRefs: false });
+
+    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
+    const probeInput = callArg(callGatewayStatusProbe) as {
+      token?: string;
+      password?: string;
+      allowRpcConfigCredentials?: boolean;
+    };
+    expect(probeInput.token).toBeUndefined();
+    expect(probeInput.password).toBeUndefined();
+    expect(probeInput.allowRpcConfigCredentials).toBe(false);
+    expect(status.rpc?.authWarning).toContain(
+      "gateway credentials use an exec SecretRef and exec SecretRefs are disabled",
+    );
+  });
+
+  it("skips remote password exec SecretRef auth despite an ambient password", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://gateway.example",
+          password: { source: "exec", provider: "vault", id: "gateway/remote-password" },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/bin/false" },
+        },
+      },
+    };
+    setTestEnvValue("OPENCLAW_GATEWAY_PASSWORD", "ambient-password"); // pragma: allowlist secret
 
     const status = await gatherDaemonStatus({
       rpc: {},
@@ -1208,12 +1189,7 @@ describe("gatherDaemonStatus", () => {
       },
     };
 
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-      allowExecSecretRefs: false,
-    });
+    await gatherStatus({ allowExecSecretRefs: false });
 
     expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).toHaveBeenCalledTimes(1);
     const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
@@ -1240,12 +1216,7 @@ describe("gatherDaemonStatus", () => {
       },
     };
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-      allowExecSecretRefs: false,
-    });
+    const status = await gatherStatus({ allowExecSecretRefs: false });
 
     expect(status.rpc?.authWarning).toBeUndefined();
     expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).toHaveBeenCalledTimes(1);
@@ -1272,11 +1243,7 @@ describe("gatherDaemonStatus", () => {
       },
     };
 
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    await gatherStatus();
 
     const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
     expect(probeInput.token).toBe("daemon-token");
@@ -1300,11 +1267,7 @@ describe("gatherDaemonStatus", () => {
       },
     };
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    const status = await gatherStatus();
 
     const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
     expect(probeInput.token).toBeUndefined();
@@ -1334,11 +1297,7 @@ describe("gatherDaemonStatus", () => {
       url: "wss://127.0.0.1:19001",
     });
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    const status = await gatherStatus();
 
     expect(status.rpc?.ok).toBe(false);
     expect(status.rpc?.authWarning).toContain(
@@ -1347,7 +1306,7 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
   });
 
-  it("keeps remote probe auth strict when remote token is missing", async () => {
+  it("keeps configured remote password authoritative for remote probes", async () => {
     daemonLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -1365,23 +1324,15 @@ describe("gatherDaemonStatus", () => {
     setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "env-token");
     setTestEnvValue("OPENCLAW_GATEWAY_PASSWORD", "env-password"); // pragma: allowlist secret
 
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    await gatherStatus();
 
     const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
     expect(probeInput.token).toBeUndefined();
-    expect(probeInput.password).toBe("env-password"); // pragma: allowlist secret
+    expect(probeInput.password).toBe("remote-password"); // pragma: allowlist secret
   });
 
   it("skips TLS runtime loading when probe is disabled", async () => {
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: false,
-      deep: false,
-    });
+    const status = await gatherStatus({ probe: false });
 
     expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
     expect(callGatewayStatusProbe).not.toHaveBeenCalled();
@@ -1406,11 +1357,7 @@ describe("gatherDaemonStatus", () => {
       staleGatewayPids: [9000],
     });
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    const status = await gatherStatus();
 
     expect((callArg(inspectGatewayRestart) as { port?: number }).port).toBe(19001);
     expect(status.health).toEqual({
@@ -1442,11 +1389,7 @@ describe("gatherDaemonStatus", () => {
       "parse/handle error: Error: ENOSPC: no space left on device, write",
     );
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    const status = await gatherStatus();
 
     expect(readLastGatewayErrorLine).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1469,11 +1412,7 @@ describe("gatherDaemonStatus", () => {
       error: "gateway closed (1000): ",
     });
 
-    const status = await gatherDaemonStatus({
-      rpc: { url: "wss://remote.example:18790" },
-      probe: true,
-      deep: false,
-    });
+    const status = await gatherStatus({ rpc: { url: "wss://remote.example:18790" } });
 
     expect(readLastGatewayErrorLine).not.toHaveBeenCalled();
     expect(status.lastError).toBeUndefined();
@@ -1493,11 +1432,7 @@ describe("gatherDaemonStatus", () => {
       error: "gateway closed (1000): ",
     });
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    const status = await gatherStatus();
 
     expect(readLastGatewayErrorLine).not.toHaveBeenCalled();
     expect(status.lastError).toBeUndefined();
@@ -1521,11 +1456,7 @@ describe("gatherDaemonStatus", () => {
       },
     } as never);
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: true,
-    });
+    const status = await gatherStatus({ deep: true });
 
     expect(status.pluginVersionDrift?.gatewayVersion).toBe("2026.5.4");
     expect(status.pluginVersionDrift?.drifts).toEqual([]);
@@ -1546,22 +1477,14 @@ describe("gatherDaemonStatus", () => {
       },
     } as never);
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: true,
-    });
+    const status = await gatherStatus({ deep: true });
 
     expect(status.pluginVersionDrift?.gatewayVersion).toBe("2026.5.4");
     expect(status.pluginVersionDrift?.drifts.map((d) => d.pluginId)).toEqual(["whatsapp"]);
   });
 
   it("reads install records from the merged daemon service environment, not the CLI process env", async () => {
-    await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: true,
-    });
+    await gatherStatus({ deep: true });
 
     // The mock daemon service command sets OPENCLAW_STATE_DIR=/tmp/openclaw-daemon,
     // distinct from the CLI process OPENCLAW_STATE_DIR=/tmp/openclaw-cli. Drift
@@ -1584,11 +1507,7 @@ describe("gatherDaemonStatus", () => {
       },
     } as never);
 
-    const status = await gatherDaemonStatus({
-      rpc: {},
-      probe: true,
-      deep: false,
-    });
+    const status = await gatherStatus();
 
     expect(loadInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
       expect.objectContaining({

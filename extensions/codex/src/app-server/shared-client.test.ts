@@ -9,7 +9,7 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { createClientHarness } from "./test-support.js";
-import { CODEX_APP_SERVER_VERSION } from "./version.js";
+import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const mocks = vi.hoisted(() => ({
   bridgeCodexAppServerStartOptions: vi.fn(async ({ startOptions }) => startOptions),
@@ -186,6 +186,23 @@ function deferNextAuthProfileApplication(): () => void {
   return release;
 }
 
+function configureManagedDesktopFallback(): CodexAppServerStartOptions {
+  mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(async (startOptions) => ({
+    ...startOptions,
+    command: "/Applications/Codex.app/Contents/Resources/codex",
+    commandSource: "resolved-managed",
+    managedFallbackCommandPaths: ["/cache/openclaw/codex"],
+  }));
+  return {
+    transport: "stdio",
+    homeScope: "user",
+    command: "codex",
+    commandSource: "managed",
+    args: ["app-server", "--listen", "stdio://"],
+    headers: {},
+  };
+}
+
 describe("shared Codex app-server client", () => {
   beforeAll(async () => {
     ({ listCodexAppServerModels } = await import("./models.js"));
@@ -262,7 +279,7 @@ describe("shared Codex app-server client", () => {
     await sendInitializeResult(harness, "openclaw/0.117.9 (macOS; test)");
 
     await expect(listPromise).rejects.toThrow(
-      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required`,
+      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required`,
     );
     expect(harness.process.stdin.destroyed).toBe(true);
     startSpy.mockRestore();
@@ -450,29 +467,32 @@ describe("shared Codex app-server client", () => {
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true));
   });
 
-  it("falls back to the next managed app-server when desktop initialize is unsupported", async () => {
+  it("reuses the successful managed fallback after desktop initialize is unsupported", async () => {
     const desktop = createClientHarness();
     const pluginLocal = createClientHarness();
     const startSpy = vi
       .spyOn(CodexAppServerClient, "start")
       .mockReturnValueOnce(desktop.client)
-      .mockReturnValueOnce(pluginLocal.client);
-    mocks.resolveManagedCodexAppServerStartOptions.mockImplementationOnce(async (startOptions) => ({
-      ...startOptions,
-      command: "/Applications/Codex.app/Contents/Resources/codex",
-      commandSource: "resolved-managed",
-      managedFallbackCommandPaths: ["/cache/openclaw/codex"],
-    }));
+      .mockReturnValueOnce(pluginLocal.client)
+      .mockImplementation(() => {
+        throw new Error("unexpected duplicate start");
+      });
+    const startOptions = configureManagedDesktopFallback();
 
-    const listPromise = listCodexAppServerModels({ timeoutMs: 1000 });
+    const firstAcquire = getSharedCodexAppServerClient({ startOptions, timeoutMs: 1_000 });
     await sendInitializeResult(desktop, "openclaw/0.124.9 (macOS; test)");
     await sendInitializeResult(pluginLocal, "openclaw/0.147.0 (macOS; test)");
-    await sendEmptyModelList(pluginLocal);
+    const firstClient = await firstAcquire;
 
-    await expect(listPromise).resolves.toEqual({ models: [] });
+    const secondClient = await getSharedCodexAppServerClient({ startOptions, timeoutMs: 1_000 });
+
+    expect(secondClient).toBe(firstClient);
     expect(desktop.process.stdin.destroyed).toBe(true);
     expect(pluginLocal.process.stdin.destroyed).toBe(false);
     expect(startSpy).toHaveBeenCalledTimes(2);
+    const retained = retainSharedCodexAppServerClientByInstanceId(firstClient.getInstanceId());
+    expect(retained?.client).toBe(firstClient);
+    retained?.release();
     expect(startSpy.mock.calls[0]?.[0]).toMatchObject({
       command: "/Applications/Codex.app/Contents/Resources/codex",
       commandSource: "resolved-managed",
@@ -483,6 +503,60 @@ describe("shared Codex app-server client", () => {
       commandSource: "resolved-managed",
     });
     expect(startSpy.mock.calls[1]?.[0]).not.toHaveProperty("managedFallbackCommandPaths");
+
+    await clearSharedCodexAppServerClientAndWait({ exitTimeoutMs: 25, forceKillDelayMs: 5 });
+    expect(pluginLocal.process.stdin.destroyed).toBe(true);
+  });
+
+  it("keeps a supported desktop prerelease instead of falling back by version", async () => {
+    const desktop = createClientHarness();
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(desktop.client);
+    const startOptions = configureManagedDesktopFallback();
+
+    const acquire = getSharedCodexAppServerClient({ startOptions, timeoutMs: 1_000 });
+    await sendInitializeResult(desktop, "openclaw/0.148.0-alpha.23 (macOS; test)");
+    const client = await acquire;
+
+    expect(client).toBe(desktop.client);
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(startSpy.mock.calls[0]?.[0]).toMatchObject({
+      command: "/Applications/Codex.app/Contents/Resources/codex",
+      commandSource: "resolved-managed",
+      managedFallbackCommandPaths: ["/cache/openclaw/codex"],
+    });
+    expect(desktop.process.stdin.destroyed).toBe(false);
+    expect(mocks.embeddedAgentLog.warn).not.toHaveBeenCalled();
+
+    await clearSharedCodexAppServerClientAndWait({ exitTimeoutMs: 25, forceKillDelayMs: 5 });
+    expect(desktop.process.stdin.destroyed).toBe(true);
+  });
+
+  it("shares a managed fallback with a waiter that arrives during fallback initialize", async () => {
+    const desktop = createClientHarness();
+    const fallback = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(desktop.client)
+      .mockReturnValueOnce(fallback.client)
+      .mockImplementation(() => {
+        throw new Error("unexpected duplicate start");
+      });
+    const options = {
+      timeoutMs: 1_000,
+      startOptions: configureManagedDesktopFallback(),
+    };
+
+    const firstAcquire = getSharedCodexAppServerClient(options);
+    await sendInitializeResult(desktop, "openclaw/0.124.9 (macOS; test)");
+    await vi.waitFor(() => expect(fallback.writes.length).toBeGreaterThanOrEqual(1));
+    const secondAcquire = getSharedCodexAppServerClient(options);
+    await sendInitializeResult(fallback, "openclaw/0.147.0 (macOS; test)");
+
+    const [firstClient, secondClient] = await Promise.all([firstAcquire, secondAcquire]);
+    expect(secondClient).toBe(firstClient);
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(desktop.process.stdin.destroyed).toBe(true);
+    expect(fallback.process.stdin.destroyed).toBe(false);
   });
 
   it("keeps capture clients separate from ordinary shared clients", async () => {

@@ -8,7 +8,7 @@ import {
   findForbiddenChangelogThanks,
   isForbiddenChangelogThanksHandle,
   requiresExplicitHumanChangelogThanks,
-} from "../../scripts/check-changelog-attributions.mjs";
+} from "../../scripts/check-changelog-attributions.mts";
 
 const changelogScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "changelog.sh");
 const commonScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "common.sh");

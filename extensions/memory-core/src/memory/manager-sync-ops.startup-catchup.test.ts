@@ -1,4 +1,5 @@
 // Memory Core tests cover manager sync ops.startup catchup plugin behavior.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +19,7 @@ import {
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -238,6 +240,11 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     });
   }
 
+  async getCorpusPathsForTest(): Promise<string[]> {
+    const entries = await this.listSessionCorpusEntries();
+    return entries.map((entry) => this.sessionPathForCorpusEntry(entry));
+  }
+
   getDirtyArchiveFiles(): string[] {
     return Array.from(this.sessionsDirtyFiles);
   }
@@ -407,6 +414,10 @@ describe("session startup catch-up", () => {
     }
     startupHarnessDatabases.clear();
     closeOpenClawAgentDatabasesForTest();
+    // Closing the agent databases releases their leases through shared state, which
+    // reopens it, so the shared handle has to be released after that and before the
+    // removal or Windows fails the unlink with EBUSY.
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -513,6 +524,50 @@ describe("session startup catch-up", () => {
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
   });
 
+  it("prunes indexed sessions that are absent from the live corpus", async () => {
+    const stalePath = "sessions/main/deleted.jsonl";
+    const harness = new SessionStartupCatchupHarness(
+      [{ path: stalePath, hash: "stale-hash", mtime: 10, size: 20 }],
+      true,
+    );
+
+    await expect(harness.catchUp()).resolves.toEqual([]);
+    await harness.waitForSessionSync();
+
+    expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
+    expect(harness.getIndexedSourceState(stalePath)).toBeUndefined();
+  });
+
+  it("preserves indexed sessions when corpus enumeration fails", async () => {
+    const stalePath = "sessions/main/preserved.jsonl";
+    const harness = new SessionStartupCatchupHarness(
+      [{ path: stalePath, hash: "preserved-hash", mtime: 10, size: 20 }],
+      true,
+    );
+    const scanError = Object.assign(new Error("transient session archive scan failure"), {
+      code: "EIO",
+    });
+    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockImplementation(() => {
+      throw scanError;
+    });
+
+    try {
+      const catchUp = harness.catchUp();
+      const corpusList = harness.waitForCorpusList();
+      await expect(catchUp).rejects.toBe(scanError);
+      await expect(corpusList).rejects.toBe(scanError);
+      expect(harness.syncCalls).toEqual([]);
+      expect(harness.getIndexedSourceState(stalePath)).toEqual({
+        path: stalePath,
+        hash: "preserved-hash",
+        mtime: 10,
+        size: 20,
+      });
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
   it("retries transient session transcript reads during session indexing", async () => {
     const session = await writeSessionFile("thread.jsonl.deleted.2026-02-16T22-27-33.000Z");
     const harness = new SessionStartupCatchupHarness([]);
@@ -595,10 +650,15 @@ describe("session startup catch-up", () => {
   });
 
   it("leaves unchanged indexed session files clean", async () => {
-    const session = await writeSessionFile("thread.jsonl");
+    const session = await writeSessionFile("thread.jsonl.deleted.2026-08-09T00-00-00.000Z");
+    const discovery = new SessionStartupCatchupHarness([]);
+    const [corpusPath] = await discovery.getCorpusPathsForTest();
+    if (!corpusPath) {
+      throw new Error("expected session transcript corpus path");
+    }
     const harness = new SessionStartupCatchupHarness([
       {
-        path: "sessions/main/thread.jsonl",
+        path: corpusPath,
         hash: "current-hash",
         mtime: session.mtimeMs,
         size: session.size,
@@ -825,7 +885,8 @@ describe("session startup catch-up", () => {
     await Promise.resolve();
 
     expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
-    expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
+    expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.sessionKey]);
+    expect(harness.syncCalls[0]?.sessions).toHaveLength(1);
   });
 
   it("keeps targeted indexing on the SQLite store resolved by its corpus snapshot", async () => {
@@ -1008,7 +1069,7 @@ describe("session startup catch-up", () => {
         await harness.waitForSessionSync();
 
         expect(harness.getDirtyArchiveFiles()).toEqual([session.filePath]);
-        expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
+        expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.filePath]);
         expect(harness.indexedPaths).toEqual([
           `sessions/main/thread.jsonl.${reason}.2026-06-23T10-00-00.000Z`,
         ]);
