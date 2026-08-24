@@ -44,7 +44,7 @@ export function lazyShellEvent(
 
 export function hasStoredLazyShellAction(): boolean {
   try {
-    return getSafeSessionStorage()?.getItem(STORAGE_KEY) !== null;
+    return getSafeSessionStorage()?.getItem(STORAGE_KEY) != null;
   } catch {
     return false;
   }

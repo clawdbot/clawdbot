@@ -14,6 +14,16 @@ import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { LazyCustomElementRequestController } from "./lazy-custom-element.ts";
 import { persistLazyShellAction, readLazyShellAction } from "./lazy-shell-action.ts";
+import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
+
+vi.mock("./stale-chunk-reload.ts", async () => {
+  const actual =
+    await vi.importActual<typeof import("./stale-chunk-reload.ts")>("./stale-chunk-reload.ts");
+  return {
+    ...actual,
+    retryStaleChunkReloadWhenReachable: vi.fn(async () => true),
+  };
+});
 
 type ShellPanelToggleState = {
   lazyCustomElements: LazyCustomElementRequestController;
@@ -56,6 +66,7 @@ function configureTerminalShell(terminalElement: TestOptionalCustomElement): She
 afterEach(() => {
   window.history.replaceState(null, "", "/");
   resetAppHostTestGlobals();
+  vi.clearAllMocks();
 });
 
 describe("OpenClaw shell panel toggles", () => {
@@ -100,6 +111,35 @@ describe("OpenClaw shell panel toggles", () => {
     expect(delivered).not.toBe(event);
     expect(delivered.type).toBe(TERMINAL_PANEL_TOGGLE_EVENT);
     expect(delivered.detail).toEqual(event.detail);
+  });
+
+  it("retries a stale panel in place when its action cannot survive a document reload", async () => {
+    vi.stubGlobal("sessionStorage", undefined);
+    const error = new Error("Failed to fetch dynamically imported module: terminal.js");
+    const terminalElement = createLazyElementSpec("storage-disabled terminal panel", {
+      firstError: error,
+    });
+    const terminalToggle = vi.fn();
+    const shell = configureTerminalShell(terminalElement);
+    const owner = chromeOwner(shell);
+    const event = new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
+      detail: { dock: "right", open: true },
+    });
+    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, terminalToggle);
+
+    try {
+      owner.handleDeferredTerminalToggle(event);
+      await vi.waitFor(() => expect(shell.lazyCustomElements.visibleState?.status).toBe("error"));
+
+      shell.lazyCustomElements.retry();
+
+      expect(retryStaleChunkReloadWhenReachable).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(terminalToggle).toHaveBeenCalledOnce());
+      const delivered = terminalToggle.mock.calls[0]?.[0] as CustomEvent;
+      expect(delivered.detail).toEqual(event.detail);
+    } finally {
+      window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, terminalToggle);
+    }
   });
 
   it("restores a structured panel event once in a replacement shell", async () => {

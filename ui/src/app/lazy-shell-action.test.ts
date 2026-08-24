@@ -12,7 +12,7 @@ import {
 } from "./app-host.test-support.ts";
 import "./app-host.ts";
 import { DEBUG_OVERLAY_ELEMENT } from "./lazy-custom-element.ts";
-import { readLazyShellAction } from "./lazy-shell-action.ts";
+import { hasStoredLazyShellAction, readLazyShellAction } from "./lazy-shell-action.ts";
 
 const storageKey = "openclaw:lazy-event";
 
@@ -33,6 +33,58 @@ async function withConnectedShell(shell: ShellLifecycle, run: () => void | Promi
 afterEach(resetAppHostTestGlobals);
 
 describe("lazy shell action storage", () => {
+  it("does not report a stored action when session storage is unavailable", () => {
+    vi.stubGlobal("sessionStorage", undefined);
+
+    expect(hasStoredLazyShellAction()).toBe(false);
+  });
+
+  it("does not report a stored action when browser storage access is denied", () => {
+    const originalVitest = process.env.VITEST;
+    const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+    process.env.VITEST = "";
+    Object.defineProperty(globalThis, "sessionStorage", {
+      configurable: true,
+      get() {
+        throw new DOMException("Access is denied", "SecurityError");
+      },
+    });
+
+    try {
+      expect(hasStoredLazyShellAction()).toBe(false);
+    } finally {
+      if (originalVitest === undefined) {
+        Reflect.deleteProperty(process.env, "VITEST");
+      } else {
+        process.env.VITEST = originalVitest;
+      }
+      if (originalStorage) {
+        Object.defineProperty(globalThis, "sessionStorage", originalStorage);
+      } else {
+        Reflect.deleteProperty(globalThis, "sessionStorage");
+      }
+    }
+  });
+
+  it("does not report a stored action when session storage rejects reads", () => {
+    const storage = createStorageMock();
+    storage.getItem = () => {
+      throw new DOMException("Access is denied", "SecurityError");
+    };
+    vi.stubGlobal("sessionStorage", storage);
+
+    expect(hasStoredLazyShellAction()).toBe(false);
+  });
+
+  it("reports only actions actually present in available session storage", () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("sessionStorage", storage);
+
+    expect(hasStoredLazyShellAction()).toBe(false);
+    storage.setItem(storageKey, JSON.stringify({ eventType: COMMAND_PALETTE_OPEN_EVENT }));
+    expect(hasStoredLazyShellAction()).toBe(true);
+  });
+
   it.each([
     "{",
     JSON.stringify({ eventType: COMMAND_PALETTE_OPEN_EVENT, extra: true }),
