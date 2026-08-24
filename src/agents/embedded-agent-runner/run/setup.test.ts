@@ -380,7 +380,10 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       cfg: {
         models: {
           providers: {
-            anthropic: { models: [{ id: "claude-sonnet-5", contextTokens: 1_000_000 }] },
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [createConfiguredModel({ id: "claude-sonnet-5", contextTokens: 1_000_000 })],
+            },
           },
         },
       } satisfies OpenClawConfig,
