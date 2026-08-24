@@ -6,6 +6,7 @@ import { assertNoSymlinkParents, root } from "openclaw/plugin-sdk/security-runti
 import {
   runMantisCommand,
   type MantisCommandExecution,
+  type MantisCommandResult,
   type MantisCommandRunner,
   type MantisCommandTimeouts,
 } from "./run-command.runtime.js";
@@ -16,6 +17,12 @@ export type MantisWorktreeOwnership = {
   targetDevice: number;
   targetInode: number;
 };
+
+type MantisCleanupRoot = Pick<
+  Awaited<ReturnType<typeof root>>,
+  "exists" | "list" | "move" | "remove" | "stat"
+>;
+type MantisCleanupRootFactory = (rootDir: string) => Promise<MantisCleanupRoot>;
 
 type MantisCleanupDeadline = {
   expiresAtMs: number;
@@ -204,7 +211,7 @@ async function removeMantisWorktreeDirectory(params: {
   deadline: MantisCleanupDeadline;
   ownership: MantisWorktreeOwnership;
   repoRoot: string;
-  rootFactory: typeof root;
+  rootFactory: MantisCleanupRootFactory;
   worktreeDir: string;
 }): Promise<void> {
   // Recursive fallback removal stays anchored to the canonical repo root; a raw
@@ -477,7 +484,7 @@ export async function removeMantisWorktree(params: {
   commandTimeouts: MantisCommandTimeouts;
   lane: "baseline" | "candidate";
   repoRoot: string;
-  rootFactory?: typeof root;
+  rootFactory?: MantisCleanupRootFactory;
   runner: MantisCommandRunner;
   worktreeDir: string;
   ownership: MantisWorktreeOwnership;

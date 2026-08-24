@@ -447,8 +447,11 @@ describe("mantis before/after runtime", () => {
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "existing-worktree");
     const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
     const sentinelPath = path.join(baselineWorktreeDir, "keep.txt");
+    const publishedSentinelPath = path.join(outputDir, "baseline", "last-good.txt");
     await fs.mkdir(baselineWorktreeDir, { recursive: true });
+    await fs.mkdir(path.dirname(publishedSentinelPath), { recursive: true });
     await fs.writeFile(sentinelPath, "keep", "utf8");
+    await fs.writeFile(publishedSentinelPath, "last good evidence", "utf8");
     const runner = vi.fn(async () => successfulCommandResult());
 
     await expect(
@@ -466,6 +469,7 @@ describe("mantis before/after runtime", () => {
     );
     expect(runner).not.toHaveBeenCalled();
     await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("keep");
+    await expect(fs.readFile(publishedSentinelPath, "utf8")).resolves.toBe("last good evidence");
   });
 
   it("fails closed when the worktree parent is replaced before fallback cleanup", async () => {

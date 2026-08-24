@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements run behavior.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -6,6 +7,7 @@ import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-p
 import { trimToValue } from "../mantis-options.runtime.js";
 import {
   copyMantisLaneArtifact,
+  publishMantisLaneOutput,
   readMantisLaneResult,
   type LaneResult,
 } from "./run-artifacts.runtime.js";
@@ -334,6 +336,10 @@ async function runLane(params: {
   const worktreeDir = path.join(params.worktreeRoot, params.lane);
   const worktreeOutputDir = path.join(".artifacts", "qa-e2e", "mantis", "run", params.lane);
   const publishedLaneDir = path.join(params.outputDir, params.lane);
+  const stagedLaneDir = path.join(
+    params.outputDir,
+    `.mantis-staged-${params.lane}-${process.pid}-${randomUUID()}`,
+  );
   const worktreeAddArgs = ["worktree", "add", "--detach", "--", worktreeDir, params.ref];
   const worktreeAddExecution = {
     cwd: params.repoRoot,
@@ -354,10 +360,6 @@ async function runLane(params: {
     execution: worktreeAddExecution,
     lane: params.lane,
   });
-  // Reset published output before owning a worktree. The completed lane output
-  // can then move out atomically so artifact processing never delays cleanup.
-  await fs.rm(publishedLaneDir, { force: true, recursive: true });
-
   try {
     try {
       worktreeOwnership = await createMantisWorktreeDirectory({
@@ -447,7 +449,9 @@ async function runLane(params: {
       lane: params.lane,
       runner: params.runner,
     });
-    await fs.rename(path.join(worktreeDir, worktreeOutputDir), publishedLaneDir);
+    // Move completed output outside the worktree before cleanup, while leaving
+    // the last published evidence untouched until the replacement is ready.
+    await fs.rename(path.join(worktreeDir, worktreeOutputDir), stagedLaneDir);
   } catch (error) {
     workloadFailed = true;
     workloadError = error;
@@ -487,6 +491,7 @@ async function runLane(params: {
       cause: params.signal.reason,
     });
   }
+  await publishMantisLaneOutput({ publishedLaneDir, stagedLaneDir });
   const result = await readMantisLaneResult({
     laneOutputDir: path.join(worktreeDir, worktreeOutputDir),
     publishedLaneDir,

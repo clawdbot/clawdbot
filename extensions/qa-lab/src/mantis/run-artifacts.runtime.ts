@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements Mantis evidence artifact handling.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -23,6 +24,67 @@ export type LaneResult = {
 
 function isNotFoundError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function createMantisPublishRollbackError(params: {
+  previousLaneDir: string;
+  publishError: unknown;
+  rollbackError: unknown;
+}): AggregateError {
+  return new AggregateError(
+    [params.publishError, params.rollbackError],
+    `Mantis could not publish staged lane output or restore ${params.previousLaneDir}`,
+    { cause: params.publishError },
+  );
+}
+
+export async function publishMantisLaneOutput(params: {
+  publishedLaneDir: string;
+  stagedLaneDir: string;
+}): Promise<void> {
+  // Keep the old evidence recoverable until the staged directory becomes the
+  // stable lane path. A failed replacement rolls the previous directory back.
+  const previousLaneDir = path.join(
+    path.dirname(params.publishedLaneDir),
+    `.mantis-previous-${path.basename(params.publishedLaneDir)}-${process.pid}-${randomUUID()}`,
+  );
+  let hasPreviousLane = false;
+  try {
+    await fs.rename(params.publishedLaneDir, previousLaneDir);
+    hasPreviousLane = true;
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+
+  try {
+    await fs.rename(params.stagedLaneDir, params.publishedLaneDir);
+  } catch (publishError) {
+    if (!hasPreviousLane) {
+      throw publishError;
+    }
+    try {
+      await fs.rename(previousLaneDir, params.publishedLaneDir);
+    } catch (rollbackError) {
+      throw createMantisPublishRollbackError({
+        previousLaneDir,
+        publishError,
+        rollbackError,
+      });
+    }
+    throw publishError;
+  }
+
+  if (hasPreviousLane) {
+    try {
+      await fs.rm(previousLaneDir, { force: true, recursive: true });
+    } catch (error) {
+      throw new Error(`Mantis published new evidence but could not remove ${previousLaneDir}`, {
+        cause: error,
+      });
+    }
+  }
 }
 
 function remapPublishedArtifactPath(params: {

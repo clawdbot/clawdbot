@@ -11,7 +11,7 @@ export function requireArgAfter(args: readonly string[], flag: string): string {
   return expectDefined(args[index + 1], `${flag} argument value`);
 }
 
-type StubCommandResult = {
+export type StubCommandResult = {
   code: number | null;
   killed: boolean;
   signal: NodeJS.Signals | null;

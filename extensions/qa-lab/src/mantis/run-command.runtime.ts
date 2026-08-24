@@ -16,7 +16,7 @@ export type MantisCommandExecution = {
   stage: MantisCommandStage;
   timeoutMs: number;
 };
-type MantisCommandResult = Awaited<ReturnType<typeof runCommandWithTimeout>>;
+export type MantisCommandResult = Awaited<ReturnType<typeof runCommandWithTimeout>>;
 export type MantisCommandRunner = (
   command: string,
   args: readonly string[],

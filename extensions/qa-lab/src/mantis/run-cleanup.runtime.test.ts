@@ -10,6 +10,7 @@ import {
   legacyWorktreeListOutput,
   successfulCommandResult,
   timedOutCommandResult,
+  type StubCommandResult,
   worktreeListOutput,
   writeLegacyLaneSummary,
 } from "./run.test-support.js";
@@ -130,13 +131,27 @@ describe("mantis worktree cleanup runtime", () => {
     const moveStarted = new Promise<void>((resolve) => {
       markMoveStarted = resolve;
     });
-    const rootFactory = (async () => ({
+    const rootFactory: NonNullable<
+      Parameters<typeof removeMantisWorktree>[0]["rootFactory"]
+    > = async () => ({
+      exists: async () => {
+        throw new Error("unexpected exists after expired move");
+      },
+      list: async () => {
+        throw new Error("unexpected list after expired move");
+      },
       move: async (fromRelative: string, toRelative: string) => {
         markMoveStarted?.();
         await moveRelease;
         await fs.rename(path.join(repoRoot, fromRelative), path.join(repoRoot, toRelative));
       },
-    })) as NonNullable<Parameters<typeof removeMantisWorktree>[0]["rootFactory"]>;
+      remove: async () => {
+        throw new Error("unexpected remove after expired move");
+      },
+      stat: async () => {
+        throw new Error("unexpected stat after expired move");
+      },
+    });
     const runner = vi.fn(async (_command: string, args: readonly string[]) =>
       args[1] === "remove" ? failedCommandResult() : successfulCommandResult(""),
     );
