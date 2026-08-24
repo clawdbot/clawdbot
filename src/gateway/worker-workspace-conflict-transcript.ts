@@ -30,17 +30,6 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
       agentId: identity.agentId,
       clone: false,
     });
-    const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
-    if (
-      entry?.sessionId !== identity.sessionId ||
-      (strictIdentity &&
-        (target.canonicalKey !== identity.sessionKey || target.agentId !== identity.agentId))
-    ) {
-      if (missingMessage) {
-        throw new Error(`${missingMessage} lost session ${identity.sessionId}`);
-      }
-      return undefined;
-    }
     return await withTranscriptWriteTransaction(
       {
         agentId: target.agentId,
@@ -48,7 +37,23 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
         sessionKey: target.canonicalKey,
         storePath: target.storePath,
       },
-      (transcriptTarget) => run(SessionManager.open(transcriptTarget)),
+      (transcriptTarget) => {
+        const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(
+          target.store,
+          target.storeKeys,
+        );
+        if (
+          entry?.sessionId !== identity.sessionId ||
+          (strictIdentity &&
+            (target.canonicalKey !== identity.sessionKey || target.agentId !== identity.agentId))
+        ) {
+          if (missingMessage) {
+            throw new Error(`${missingMessage} lost session ${identity.sessionId}`);
+          }
+          return undefined;
+        }
+        return run(SessionManager.open(transcriptTarget));
+      },
     );
   }
 
