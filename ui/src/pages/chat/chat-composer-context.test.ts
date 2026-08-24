@@ -371,11 +371,13 @@ describe("renderChatComposer context usage", () => {
         defaults: { contextTokens: 200_000 },
       } as never,
     });
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
+    const compact = container.querySelector<HTMLButtonElement>(".context-ring__compact");
+    expect(compact?.getAttribute("aria-label")).toContain(
       "Session context usage: 190k of 200k (95%)",
     );
-    expect(container.querySelector(".context-ring")?.classList).toContain("context-ring--warning");
-    container.querySelector<HTMLButtonElement>(".context-ring__action")?.click();
+    expect(container.querySelector(".context-ring")).toBeNull();
+    expect(compact?.textContent).toContain("Compact");
+    compact?.click();
     expect(onCompact).toHaveBeenCalledOnce();
 
     container = renderComposer({
@@ -400,6 +402,6 @@ describe("renderChatComposer context usage", () => {
     expect(container.querySelector(".context-ring")?.classList).not.toContain(
       "context-ring--warning",
     );
-    expect(container.querySelector(".context-ring__action")).toBeNull();
+    expect(container.querySelector(".context-ring__compact")).toBeNull();
   });
 });
