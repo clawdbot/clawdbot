@@ -79,12 +79,7 @@ function formatDelegateTaskForSystemEvent(task: string): string {
  * Called by agent-runner.ts after the response finalizes.
  * Each delegate goes through chain/cost enforcement and is spawned via spawnSubagentDirect.
  */
-function markDelegateFailed(
-  delegate: { flowId?: string; expectedRevision?: number; task: string },
-  summary: string,
-): boolean {
-  return markPendingDelegateFailed(delegate, summary);
-}
+const markDelegateFailed = markPendingDelegateFailed;
 
 export async function dispatchToolDelegates(
   params: DelegateDispatchParams,

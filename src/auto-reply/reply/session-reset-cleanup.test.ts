@@ -25,8 +25,11 @@ import {
   finalizeStagedPostCompactionDelegates,
   stagePostCompactionTaskFlowDelegate,
 } from "../continuation/delegate-store-post-compaction.js";
-import { consumePendingDelegates, enqueuePendingDelegate } from "../continuation/delegate-store.js";
-import { markPendingDelegateSpawnAccepted } from "../continuation/delegate-store.js";
+import {
+  consumePendingDelegates,
+  enqueuePendingDelegate,
+  markPendingDelegateSpawnAccepted,
+} from "../continuation/delegate-store.js";
 import {
   hasLiveContinuationTimerRefs,
   registerContinuationTimerHandle,
