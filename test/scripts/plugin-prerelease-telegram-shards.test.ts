@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,7 +7,9 @@ import { parse } from "yaml";
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestShards,
+  listTrackedTestFilesForRoots,
 } from "../../scripts/lib/extension-test-plan.mts";
+import { createVitestRunSpecs } from "../../scripts/test-projects.test-support.mts";
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -27,11 +29,17 @@ function runPluginPrereleaseManifest() {
   if (!manifestStep?.run) {
     throw new Error("Missing plugin prerelease manifest step");
   }
+  const source = manifestStep.run.match(
+    /node --import tsx --input-type=module <<'EOF'\n([\s\S]*?)\nEOF/u,
+  )?.[1];
+  if (!source) {
+    throw new Error("Missing plugin prerelease manifest source");
+  }
 
   const root = mkdtempSync(join(tmpdir(), "openclaw-plugin-prerelease-telegram-shards-"));
   const outputPath = join(root, "github-output");
   try {
-    const result = spawnSync("bash", ["-c", manifestStep.run], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module"], {
       cwd: process.cwd(),
       encoding: "utf8",
       env: {
@@ -40,6 +48,7 @@ function runPluginPrereleaseManifest() {
         FULL_RELEASE_VALIDATION: "false",
         GITHUB_OUTPUT: outputPath,
       },
+      input: source,
     });
     expect(result.status, result.stderr).toBe(0);
     const output = new Map(
@@ -95,7 +104,7 @@ describe("plugin prerelease Telegram extension shards", () => {
     );
   });
 
-  it("keeps native Telegram shards inside the existing aggregate job contract", () => {
+  it("keeps dedicated Telegram shards inside the existing aggregate job contract", () => {
     const workflow = readPluginPrereleaseWorkflow();
     const preflight = workflow.jobs.preflight;
     const manifestStep = preflight.steps.find(
@@ -113,14 +122,8 @@ describe("plugin prerelease Telegram extension shards", () => {
     const telegramRows = matrix.include.filter(
       (row: Record<string, unknown>) => row.task === "extension-file-shard",
     );
+    const telegramTestFiles = listTrackedTestFilesForRoots(["extensions/telegram"]);
 
-    expect(manifestStep?.run).toContain('extensionId !== "telegram"');
-    expect(manifestStep?.run).toContain("const telegramShardCount = 2");
-    expect(manifestStep?.run).toContain(
-      "check_name: `checks-node-extensions-telegram-shard-${index + 1}`",
-    );
-    expect(manifestStep?.run).toContain("vitest_shard: `${index + 1}/${telegramShardCount}`");
-    expect(manifestStep?.run).not.toContain("createExtensionTestFileShards");
     expect(genericRows).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
     expect(
       genericRows.some((row: Record<string, unknown>) =>
@@ -133,29 +136,66 @@ describe("plugin prerelease Telegram extension shards", () => {
         extensions_csv: "telegram",
         runner: "blacksmith-8vcpu-ubuntu-2404",
         vitest_config: "test/vitest/vitest.extension-telegram.config.ts",
-        vitest_shard: "1/2",
       }),
       expect.objectContaining({
         check_name: "checks-node-extensions-telegram-shard-2",
         extensions_csv: "telegram",
         runner: "blacksmith-8vcpu-ubuntu-2404",
         vitest_config: "test/vitest/vitest.extension-telegram.config.ts",
-        vitest_shard: "2/2",
       }),
     ]);
+    const telegramPartitions = telegramRows.map((row: Record<string, unknown>) => {
+      expect(row.includePatterns).toBeInstanceOf(Array);
+      return row.includePatterns as string[];
+    });
+    expect(telegramPartitions.every((partition) => partition.length > 0)).toBe(true);
+    expect(telegramPartitions.flat().toSorted((left, right) => left.localeCompare(right))).toEqual(
+      telegramTestFiles,
+    );
+    expect(new Set(telegramPartitions.flat()).size).toBe(telegramTestFiles.length);
+    expect(
+      Math.abs(telegramPartitions[0].length - telegramPartitions[1].length),
+    ).toBeLessThanOrEqual(1);
+
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-prerelease-telegram-specs-"));
+    try {
+      for (const [index, partition] of telegramPartitions.entries()) {
+        const includeFile = join(tempDir, `telegram-shard-${index + 1}.json`);
+        writeFileSync(includeFile, JSON.stringify(partition));
+        const specs = createVitestRunSpecs(["test/vitest/vitest.extension-telegram.config.ts"], {
+          baseEnv: {
+            OPENCLAW_TEST_PROJECTS_PARALLEL: "2",
+            OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+          },
+        });
+
+        expect(specs).toHaveLength(partition.length);
+        expect(specs.map((spec) => spec.includePatterns)).toEqual(partition.map((file) => [file]));
+        expect(new Set(specs.map((spec) => spec.env.OPENCLAW_VITEST_INCLUDE_FILE)).size).toBe(
+          partition.length,
+        );
+        expect(specs.every((spec) => spec.env.OPENCLAW_VITEST_INCLUDE_FILE !== includeFile)).toBe(
+          true,
+        );
+      }
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+
     expect(extensionJob.strategy["fail-fast"]).toBe(false);
     expect(extensionJob["timeout-minutes"]).toBe(60);
     expect(extensionJob.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}",
     );
     expect(runStep?.env).toMatchObject({
+      OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON: "${{ toJson(matrix.includePatterns) }}",
       OPENCLAW_EXTENSION_TASK: "${{ matrix.task }}",
       OPENCLAW_EXTENSION_VITEST_CONFIG: "${{ matrix.vitest_config }}",
-      OPENCLAW_EXTENSION_VITEST_SHARD: "${{ matrix.vitest_shard }}",
     });
     expect(runStep?.run).toContain("extension-file-shard)");
-    expect(runStep?.run).toContain("node scripts/run-vitest.mjs");
-    expect(runStep?.run).toContain('--shard "$OPENCLAW_EXTENSION_VITEST_SHARD"');
+    expect(runStep?.run).toContain("OPENCLAW_TEST_PROJECTS_PARALLEL=2");
+    expect(runStep?.run).toContain('OPENCLAW_VITEST_INCLUDE_FILE="$include_file"');
+    expect(runStep?.run).toContain('pnpm test -- "$OPENCLAW_EXTENSION_VITEST_CONFIG"');
     expect(runStep?.run?.match(/extension-file-shard\)([\s\S]*?)\n\s*;;/u)?.[1]).not.toContain(
       "--retry",
     );

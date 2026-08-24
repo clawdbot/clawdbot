@@ -236,26 +236,39 @@ jobs:
                 : 1,
               runner: shard.extensionIds.some((extensionId) => extensionId.startsWith("memory-"))
                 ? "blacksmith-16vcpu-ubuntu-2404"
-                : [0, 1, 2, 3].includes(shard.index)
-                  ? "blacksmith-8vcpu-ubuntu-2404"
-                  : "blacksmith-4vcpu-ubuntu-2404",
+                  : [0, 1, 2, 3].includes(shard.index)
+                    ? "blacksmith-8vcpu-ubuntu-2404"
+                    : "blacksmith-4vcpu-ubuntu-2404",
               shard_index: shard.index + 1,
-              vitest_shard: "",
               task: "extensions-batch",
             }));
             const telegramShardCount = 2;
-            const telegramShards = telegramPlanGroup
-              ? Array.from({ length: telegramShardCount }, (_, index) => ({
+            const telegramTestFiles = telegramPlanGroup
+              ? execFileSync("git", ["ls-files", "--", ...telegramPlanGroup.roots], {
+                  encoding: "utf8",
+                })
+                  .trim()
+                  .split("\n")
+                  .filter((file) => /\.test\.tsx?$/u.test(file))
+                  .sort()
+              : [];
+            const telegramPartitionSize = Math.ceil(telegramTestFiles.length / telegramShardCount);
+            const telegramShards =
+              telegramPlanGroup && telegramTestFiles.length > 0
+                ? Array.from({ length: telegramShardCount }, (_, index) => ({
                   check_name: `checks-node-extensions-telegram-shard-${index + 1}`,
                   extensions_csv: "telegram",
+                  includePatterns: telegramTestFiles.slice(
+                    index * telegramPartitionSize,
+                    (index + 1) * telegramPartitionSize,
+                  ),
                   vitest_config: telegramPlanGroup.config,
                   vitest_max_workers: 1,
                   runner: "blacksmith-8vcpu-ubuntu-2404",
                   shard_index: DEFAULT_EXTENSION_TEST_SHARD_COUNT + index + 1,
-                  vitest_shard: `${index + 1}/${telegramShardCount}`,
                   task: "extension-file-shard",
                 }))
-              : [];
+                : [];
             extensionShards = [...batchShards, ...telegramShards];
           } catch (error) {
             const errorCode =
@@ -522,9 +535,9 @@ jobs:
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
           OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
+          OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_EXTENSION_TASK: ${{ matrix.task }}
           OPENCLAW_EXTENSION_VITEST_CONFIG: ${{ matrix.vitest_config }}
-          OPENCLAW_EXTENSION_VITEST_SHARD: ${{ matrix.vitest_shard }}
         shell: bash
         run: |
           set -euo pipefail
@@ -533,10 +546,22 @@ jobs:
               pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" -- --retry=1 --exclude extensions/codex/src/app-server/run-attempt.test.ts
               ;;
             extension-file-shard)
-              node scripts/run-vitest.mjs \
-                --config "$OPENCLAW_EXTENSION_VITEST_CONFIG" \
-                --shard "$OPENCLAW_EXTENSION_VITEST_SHARD" \
-                "extensions/$OPENCLAW_EXTENSION_BATCH"
+              include_file="${RUNNER_TEMP}/telegram-test-include-${GITHUB_JOB}.json"
+              trap 'rm -f -- "$include_file"' EXIT
+              INCLUDE_FILE="$include_file" node --input-type=module <<'EOF'
+              import { writeFileSync } from "node:fs";
+
+              const patterns = JSON.parse(process.env.OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON);
+              if (!Array.isArray(patterns) || patterns.length === 0) {
+                throw new Error("Invalid Telegram extension file shard");
+              }
+              writeFileSync(process.env.INCLUDE_FILE, JSON.stringify(patterns), "utf8");
+              EOF
+              OPENCLAW_TEST_PROJECTS_PARALLEL=2 \
+                OPENCLAW_VITEST_INCLUDE_FILE="$include_file" \
+                pnpm test -- "$OPENCLAW_EXTENSION_VITEST_CONFIG"
+              trap - EXIT
+              rm -f -- "$include_file"
               ;;
             *)
               echo "Unknown extension test task: $OPENCLAW_EXTENSION_TASK" >&2
