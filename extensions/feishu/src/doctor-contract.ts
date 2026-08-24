@@ -11,6 +11,7 @@ import {
   hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { hasFeishuAllowFromWildcard } from "./allow-from-wildcard.js";
 import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 
 // Feishu's legacy boolean `streaming` gated streaming-card replies with an
@@ -119,17 +120,13 @@ function normalizeLegacyWebhookPath(params: {
   return { entry: { ...params.entry, webhookPath: canonical }, changed: true };
 }
 
-function hasAllowFromWildcard(value: unknown): boolean {
-  return Array.isArray(value) && value.some((entry) => String(entry).trim() === "*");
-}
-
 function hasInvalidOpenDmAccount(entry: Record<string, unknown>, parent: Record<string, unknown>) {
   if (parent.enabled === false || entry.enabled === false) {
     return false;
   }
   const effectivePolicy = entry.dmPolicy ?? parent.dmPolicy ?? "pairing";
   const effectiveAllowFrom = entry.allowFrom ?? parent.allowFrom;
-  return effectivePolicy === "open" && !hasAllowFromWildcard(effectiveAllowFrom);
+  return effectivePolicy === "open" && !hasFeishuAllowFromWildcard(effectiveAllowFrom);
 }
 
 function hasInvalidOpenDmAccounts(value: unknown): boolean {
@@ -217,7 +214,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "feishu"],
     message:
-      'channels.feishu.accounts.<id>.dmPolicy="open" requires effective allowFrom to include "*"; run "openclaw doctor --fix".',
+      'channels.feishu.accounts.<id>.dmPolicy="open" requires effective allowFrom to include a Feishu wildcard; run "openclaw doctor --fix".',
     match: hasInvalidOpenDmAccounts,
   },
 ];
