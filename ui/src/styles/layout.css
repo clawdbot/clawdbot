@@ -2442,6 +2442,14 @@ body.update-dialog-open .sidebar-update-card__status {
     min-height: 44px;
   }
 
+  .sidebar-recent-session {
+    --sidebar-child-session-toggle-width: max(44px, calc(36px * var(--control-ui-text-scale)));
+  }
+
+  .sidebar-child-session-toggle {
+    height: 44px;
+  }
+
   .sidebar-recent-session:not(.sidebar-recent-session--child):not(
       .sidebar-recent-session--single-line
     )

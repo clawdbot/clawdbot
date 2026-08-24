@@ -91,3 +91,29 @@ export function stopHoverMarquee(host: HTMLElement): void {
   clearPendingMarquee(label);
   label.classList.remove("hover-marquee--scrolling");
 }
+
+export function restartHoverMarqueeIfHovered(element: Element | undefined): void {
+  if (!(element instanceof HTMLElement)) {
+    return;
+  }
+  queueMicrotask(() => {
+    const host = element.isConnected
+      ? element.closest<HTMLElement>(".session-row-host")
+      : undefined;
+    if (host?.matches(":hover")) {
+      startHoverMarquee(host);
+    }
+  });
+}
+
+export function startHoverMarqueeFromEvent(event: Event): void {
+  if (event.currentTarget instanceof HTMLElement) {
+    startHoverMarquee(event.currentTarget);
+  }
+}
+
+export function stopHoverMarqueeFromEvent(event: Event): void {
+  if (event.currentTarget instanceof HTMLElement) {
+    stopHoverMarquee(event.currentTarget);
+  }
+}

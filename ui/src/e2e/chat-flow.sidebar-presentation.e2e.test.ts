@@ -635,4 +635,298 @@ suite.define(() => {
       await suite.closeBrowserContext(context);
     }
   });
+
+  it("preserves adopted-row focus across repeated catalog reorders", async () => {
+    const context = await suite.newBrowserContext({});
+    const page = await context.newPage();
+    const firstKey = "agent:main:first-adopted";
+    const secondKey = "agent:main:second-adopted";
+    const catalogResponse = (order: ReadonlyArray<readonly [string, string]>) => ({
+      catalogs: [
+        {
+          id: "codex",
+          label: "Codex",
+          capabilities: { continueSession: true, archive: true },
+          hosts: [
+            {
+              hostId: "gateway:local",
+              label: "Local Codex",
+              kind: "gateway",
+              connected: true,
+              sessions: order.map(([threadId, sessionKey]) => ({
+                threadId,
+                sessionKey,
+                name: threadId,
+                status: "idle",
+                archived: false,
+                canContinue: true,
+                canArchive: true,
+              })),
+            },
+          ],
+        },
+      ],
+    });
+    const initialOrder = [
+      ["First adopted", firstKey],
+      ["Second adopted", secondKey],
+    ] as const;
+    const reversedOrder = initialOrder.toReversed();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list", "sessions.patch"],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([
+          {
+            key: firstKey,
+            kind: "direct",
+            label: "First adopted",
+            updatedAt: 2,
+            childSessions: ["agent:main:child"],
+          },
+          { key: secondKey, kind: "direct", label: "Second adopted", updatedAt: 1 },
+        ]),
+        "sessions.catalog.list": catalogResponse(initialOrder),
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const catalog = page.locator('[data-session-section="catalog:codex"]');
+      await catalog.waitFor({ state: "visible" });
+      const toggle = catalog.locator(".sidebar-session-group-toggle");
+      if ((await toggle.getAttribute("aria-expanded")) === "false") {
+        await toggle.click();
+      }
+      const rows = catalog.locator(".sidebar-session-catalog-host__sessions > [data-session-key]");
+      for (const [control, selector] of [
+        ["link", ".sidebar-recent-session__link"],
+        ["child-toggle", "[data-child-session-toggle]"],
+        ["pin", "[data-sidebar-session-pin]"],
+        ["menu", "[data-session-menu]"],
+      ] as const) {
+        const requestCount = (await gateway.getRequests("sessions.catalog.list")).length;
+        await gateway.setMethodResponse("sessions.catalog.list", catalogResponse(initialOrder));
+        await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+        await expect
+          .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+          .toBeGreaterThan(requestCount);
+        await expect
+          .poll(() => rows.evaluateAll((elements) => elements.map((row) => row.dataset.sessionKey)))
+          .toEqual(initialOrder.map(([, sessionKey]) => sessionKey));
+        const focusedControl = catalog.locator(`[data-session-key="${firstKey}"] ${selector}`);
+        await focusedControl.focus();
+        await focusedControl.evaluate((element, value) => {
+          element.setAttribute("data-focus-probe", value);
+        }, control);
+
+        for (const order of [reversedOrder, initialOrder, reversedOrder]) {
+          const reorderRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
+          await gateway.setMethodResponse("sessions.catalog.list", catalogResponse(order));
+          await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+          await expect
+            .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+            .toBeGreaterThan(reorderRequestCount);
+          await expect
+            .poll(() =>
+              rows.evaluateAll((elements) => elements.map((row) => row.dataset.sessionKey)),
+            )
+            .toEqual(order.map(([, sessionKey]) => sessionKey));
+          expect(await focusedControl.getAttribute("data-focus-probe")).toBe(control);
+          await expect
+            .poll(() => focusedControl.evaluate((element) => element === document.activeElement))
+            .toBe(true);
+        }
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("resets an adopted catalog marquee when its label becomes short", async () => {
+    const context = await suite.newBrowserContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:adopted-marquee";
+    const catalogResponse = (name: string) => ({
+      catalogs: [
+        {
+          id: "codex",
+          label: "Codex",
+          capabilities: { continueSession: true, archive: true },
+          hosts: [
+            {
+              hostId: "gateway:local",
+              label: "Local Codex",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                {
+                  threadId: "thread-adopted-marquee",
+                  sessionKey,
+                  name,
+                  status: "idle",
+                  archived: false,
+                  canContinue: true,
+                  canArchive: true,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const initialName = "Trace every adopted catalog refresh before releasing the sidebar";
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([
+          { key: sessionKey, kind: "direct", label: initialName, updatedAt: 1 },
+        ]),
+        "sessions.catalog.list": catalogResponse(initialName),
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const catalog = page.locator('[data-session-section="catalog:codex"]');
+      await catalog.waitFor({ state: "visible" });
+      const toggle = catalog.locator(".sidebar-session-group-toggle");
+      if ((await toggle.getAttribute("aria-expanded")) === "false") {
+        await toggle.click();
+      }
+      const row = catalog.locator(`[data-session-key="${sessionKey}"]`);
+      await row.hover();
+      const menu = row.locator("[data-session-menu]");
+      await expect
+        .poll(() => menu.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+      await menu.hover();
+      const label = row.locator(".hover-marquee");
+      await expect
+        .poll(() => label.evaluate((element) => element.classList.value), { timeout: 1_500 })
+        .toContain("hover-marquee--scrolling");
+
+      const requestCount = (await gateway.getRequests("sessions.catalog.list")).length;
+      await gateway.setMethodResponse("sessions.catalog.list", catalogResponse("Short"));
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+        .toBeGreaterThan(requestCount);
+      await expect.poll(() => label.textContent()).toBe("Short");
+      expect(await row.evaluate((element) => element.matches(":hover"))).toBe(true);
+      await expect
+        .poll(() => label.evaluate((element) => element.classList.value))
+        .not.toContain("hover-marquee--scrolling");
+      await expect
+        .poll(() =>
+          label.evaluate((element) => element.style.getPropertyValue("--hover-marquee-shift")),
+        )
+        .toBe("");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("restarts a catalog marquee when its hovered label changes", async () => {
+    const context = await suite.newBrowserContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const catalogResponse = (name: string, pullRequest?: { numbers: number[]; state: "open" }) => ({
+      catalogs: [
+        {
+          id: "codex",
+          label: "Codex",
+          capabilities: { continueSession: true, archive: true },
+          hosts: [
+            {
+              hostId: "gateway:local",
+              label: "Local Codex",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                {
+                  threadId: "thread-hovered",
+                  name,
+                  status: "idle",
+                  archived: false,
+                  canContinue: true,
+                  canArchive: true,
+                  ...(pullRequest ? { pullRequest } : {}),
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const initialName = "Trace the complete native catalog refresh lifecycle before release";
+    const updatedName = "Verify the rewritten catalog title keeps scrolling under the pointer";
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: {
+        "sessions.list": chatSessionListResponse(),
+        "sessions.catalog.list": catalogResponse(initialName),
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const catalog = page.locator('[data-session-section="catalog:codex"]');
+      await catalog.waitFor({ state: "visible" });
+      const toggle = catalog.locator(".sidebar-session-group-toggle");
+      if ((await toggle.getAttribute("aria-expanded")) === "false") {
+        await toggle.click();
+      }
+      const row = catalog.locator('[data-session-key$=":thread-hovered"]');
+      await row.hover();
+      const menu = row.locator("[data-catalog-session-menu]");
+      await expect
+        .poll(() => menu.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe("1");
+      await menu.hover();
+      const initialLabel = row.locator(".hover-marquee");
+      await expect
+        .poll(() => initialLabel.evaluate((element) => element.classList.value), { timeout: 1_500 })
+        .toContain("hover-marquee--scrolling");
+
+      const requestCount = (await gateway.getRequests("sessions.catalog.list")).length;
+      await gateway.setMethodResponse("sessions.catalog.list", catalogResponse(updatedName));
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+        .toBeGreaterThan(requestCount);
+      const label = row.locator(".hover-marquee");
+      await expect.poll(() => label.textContent()).toBe(updatedName);
+      expect(await row.evaluate((element) => element.matches(":hover"))).toBe(true);
+      await expect
+        .poll(() => label.evaluate((element) => element.classList.value), { timeout: 1_500 })
+        .toContain("hover-marquee--scrolling");
+
+      const shiftWithoutBadge = await label.evaluate((element) =>
+        Number.parseFloat(getComputedStyle(element).getPropertyValue("--hover-marquee-shift")),
+      );
+      const badgeRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
+      await gateway.setMethodResponse(
+        "sessions.catalog.list",
+        catalogResponse(updatedName, { numbers: [125820], state: "open" }),
+      );
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+        .toBeGreaterThan(badgeRequestCount);
+      await row
+        .locator('.session-row-badge--pull-request[data-pull-request-state="open"]')
+        .waitFor();
+      await expect
+        .poll(() => label.evaluate((element) => element.classList.value), { timeout: 1_500 })
+        .toContain("hover-marquee--scrolling");
+      await expect
+        .poll(() =>
+          label.evaluate((element) =>
+            Number.parseFloat(getComputedStyle(element).getPropertyValue("--hover-marquee-shift")),
+          ),
+        )
+        .toBeLessThan(shiftWithoutBadge);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
 });

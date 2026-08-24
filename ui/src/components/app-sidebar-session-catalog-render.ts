@@ -1,4 +1,7 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
+import { repeat } from "lit/directives/repeat.js";
 import type {
   SessionCatalog,
   SessionCatalogHost,
@@ -9,6 +12,11 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import {
+  restartHoverMarqueeIfHovered,
+  startHoverMarqueeFromEvent,
+  stopHoverMarqueeFromEvent,
+} from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
@@ -75,6 +83,7 @@ type SessionCatalogGroupsParams = {
     y: number,
     trigger?: HTMLElement,
   ) => void;
+  onCatalogMenuTriggerRendered: (key: CatalogSessionKey, element: Element | undefined) => void;
 };
 
 function renderSessionRunSpinner(showTitle = true) {
@@ -294,6 +303,47 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
 
 export type SessionCatalogGroupsRenderer = typeof renderSessionCatalogGroups;
 
+function catalogSessionIdentityKey(
+  catalog: SessionCatalog,
+  host: SessionCatalogHost,
+  session: SessionCatalogSession,
+): string {
+  return buildCatalogSessionKey({
+    catalogId: catalog.id,
+    hostId: host.hostId,
+    threadId: session.threadId,
+  });
+}
+
+function renderCatalogSessionRows(
+  catalog: SessionCatalog,
+  host: SessionCatalogHost,
+  sessions: readonly SessionCatalogSession[],
+  liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
+  params: SessionCatalogGroupsParams,
+  projectChild = false,
+) {
+  return repeat(
+    sessions,
+    (session) => catalogSessionIdentityKey(catalog, host, session),
+    (session) =>
+      renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params, projectChild),
+  );
+}
+
+function restoreCatalogControlFocus(element: Element | undefined): void {
+  if (!(element instanceof HTMLAnchorElement || element instanceof HTMLButtonElement)) {
+    return;
+  }
+  // Reordering moves the keyed row through a disconnected state. Restore only
+  // the focus that movement dropped; never override a newer user focus choice.
+  queueMicrotask(() => {
+    if (element.isConnected && document.activeElement === document.body) {
+      element.focus({ preventScroll: true });
+    }
+  });
+}
+
 function renderCatalogHostGroup(
   catalog: SessionCatalog,
   host: SessionCatalogHost,
@@ -334,54 +384,58 @@ function renderCatalogHostGroup(
         : nothing}
       <div class="sidebar-session-catalog-host__sessions" role="list" aria-label=${host.label}>
         ${projectGroups
-          ? html`${projectGroups.groups.map((group) => {
-              const sectionId = `catalog-project:${catalog.id}:${host.hostId}:${group.key}`;
-              const collapsed = params.collapsedSections.has(sectionId);
-              return html`
-                <div class="sidebar-session-catalog-project" role="listitem">
-                  <button
-                    type="button"
-                    class="sidebar-session-catalog-project__head"
-                    data-session-catalog-project=${group.key}
-                    aria-expanded=${String(!collapsed)}
-                    title=${group.title}
-                    @click=${() => params.onToggleSection(sectionId)}
-                  >
-                    <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
-                      >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+          ? html`${repeat(
+              projectGroups.groups,
+              (group) => group.key,
+              (group) => {
+                const sectionId = `catalog-project:${catalog.id}:${host.hostId}:${group.key}`;
+                const collapsed = params.collapsedSections.has(sectionId);
+                return html`
+                  <div class="sidebar-session-catalog-project" role="listitem">
+                    <button
+                      type="button"
+                      class="sidebar-session-catalog-project__head"
+                      data-session-catalog-project=${group.key}
+                      aria-expanded=${String(!collapsed)}
+                      title=${group.title}
+                      @click=${() => params.onToggleSection(sectionId)}
                     >
-                    <span class="sidebar-session-catalog-project__label">${group.label}</span>
-                    <span class="sidebar-session-catalog-project__count" aria-hidden="true"
-                      >${group.sessions.length}</span
-                    >
-                  </button>
-                  ${collapsed
-                    ? nothing
-                    : html`<div
-                        class="sidebar-session-catalog-project__sessions"
-                        role="list"
-                        aria-label=${`${host.label}: ${group.label}`}
+                      <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
+                        >${collapsed ? icons.chevronRight : icons.chevronDown}</span
                       >
-                        ${group.sessions.map((session) =>
-                          renderCatalogSessionRow(
+                      <span class="sidebar-session-catalog-project__label">${group.label}</span>
+                      <span class="sidebar-session-catalog-project__count" aria-hidden="true"
+                        >${group.sessions.length}</span
+                      >
+                    </button>
+                    ${collapsed
+                      ? nothing
+                      : html`<div
+                          class="sidebar-session-catalog-project__sessions"
+                          role="list"
+                          aria-label=${`${host.label}: ${group.label}`}
+                        >
+                          ${renderCatalogSessionRows(
                             catalog,
                             host,
-                            session,
+                            group.sessions,
                             liveRowsByKey,
                             params,
                             true,
-                          ),
-                        )}
-                      </div>`}
-                </div>
-              `;
-            })}
-            ${projectGroups.ungrouped.map((session) =>
-              renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
-            )}`
-          : host.sessions.map((session) =>
-              renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+                          )}
+                        </div>`}
+                  </div>
+                `;
+              },
             )}
+            ${renderCatalogSessionRows(
+              catalog,
+              host,
+              projectGroups.ungrouped,
+              liveRowsByKey,
+              params,
+            )}`
+          : renderCatalogSessionRows(catalog, host, host.sessions, liveRowsByKey, params)}
       </div>
     </section>
   `;
@@ -400,21 +454,46 @@ function renderCatalogSessionRow(
     typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
       ? rawTimestamp * 1000
       : rawTimestamp;
-  const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
-  if (adoptedRow) {
-    const label = session.name || session.threadId;
-    return params.renderLiveRow(adoptedRow, {
-      label,
-      ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
-    });
-  }
   const catalogKey = {
     catalogId: catalog.id,
     hostId: host.hostId,
     threadId: session.threadId,
   } satisfies CatalogSessionKey;
-  const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey);
+  const catalogMenuTriggerRef = (element: Element | undefined) =>
+    params.onCatalogMenuTriggerRendered(catalogKey, element);
+  const identityKey = catalogSessionIdentityKey(catalog, host, session);
+  const key = session.sessionKey ?? identityKey;
+  const focusedControl =
+    document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+  const focusedRowKey =
+    focusedControl?.closest<HTMLElement>("[data-session-key]")?.dataset.sessionKey;
+  const restoreFocusedControl = focusedRowKey === identityKey || focusedRowKey === key;
+  const focusedControlKind = focusedControl?.matches(".sidebar-recent-session__link")
+    ? "link"
+    : focusedControl?.matches("[data-child-session-toggle]")
+      ? "child-toggle"
+      : focusedControl?.matches("[data-sidebar-session-pin]")
+        ? "pin"
+        : focusedControl?.matches("[data-catalog-session-menu], [data-session-menu]")
+          ? "menu"
+          : undefined;
+  const focusRef =
+    restoreFocusedControl && focusedControlKind
+      ? (element: Element | undefined) => restoreCatalogControlFocus(element)
+      : undefined;
   const label = session.name || session.threadId;
+  const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
+  if (adoptedRow) {
+    return params.renderLiveRow(adoptedRow, {
+      label,
+      marqueeKey: JSON.stringify([label, session.pullRequest]),
+      catalogMenuTriggerRef,
+      ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
+      ...(focusRef && focusedControlKind
+        ? { focusedControl: focusedControlKind, restoreControlFocus: focusRef }
+        : {}),
+    });
+  }
   const meta = formatSidebarTimestamp(timestamp);
   const routeId = "chat";
   const target = sessionNavigationTarget({
@@ -453,7 +532,16 @@ function renderCatalogSessionRow(
         : null,
       (trigger, x, y) => openMenu(x, y, trigger ?? undefined),
     );
-  return html`
+  // Marquee state lives on the label; reset it without replacing focused row controls.
+  const marqueeLabel = keyed(
+    JSON.stringify([label, session.status, session.pullRequest]),
+    html`<span
+      ${ref(restartHoverMarqueeIfHovered)}
+      class="sidebar-recent-session__name hover-marquee"
+      >${label}</span
+    >`,
+  );
+  const row = html`
     <div
       class="sidebar-recent-session session-row-host sidebar-recent-session--single-line ${active
         ? "sidebar-recent-session--active"
@@ -465,8 +553,11 @@ function renderCatalogSessionRow(
       role="listitem"
       @contextmenu=${openMenuFromEvent}
       @keydown=${openMenuFromEvent}
+      @mouseenter=${startHoverMarqueeFromEvent}
+      @mouseleave=${stopHoverMarqueeFromEvent}
     >
       <a
+        ${focusedControlKind === "link" && focusRef ? ref(focusRef) : nothing}
         href=${href}
         class="sidebar-recent-session__link"
         aria-current=${active ? "page" : nothing}
@@ -485,9 +576,7 @@ function renderCatalogSessionRow(
       >
         <span class="sidebar-session-indicator"></span>
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__title-row">
-            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
-          </span>
+          <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
           <span class="sidebar-recent-session__details">
             <span class="sidebar-recent-session__details-endcap">
               ${renderSessionRowBadges({
@@ -512,6 +601,8 @@ function renderCatalogSessionRow(
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-actions">
           <button
+            ${ref(catalogMenuTriggerRef)}
+            ${focusedControlKind === "menu" && focusRef ? ref(focusRef) : nothing}
             class="session-action"
             data-catalog-session-menu="true"
             type="button"
@@ -531,4 +622,5 @@ function renderCatalogSessionRow(
       </span>
     </div>
   `;
+  return row;
 }

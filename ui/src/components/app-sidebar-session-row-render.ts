@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
@@ -9,9 +10,14 @@ import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
-import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
+import {
+  restartHoverMarqueeIfHovered,
+  startHoverMarquee,
+  stopHoverMarquee,
+} from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { projectPresencePayload } from "../lib/presence-users.ts";
+import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
@@ -133,6 +139,7 @@ export interface SessionListHost {
     y: number,
     trigger?: HTMLElement,
   ): void;
+  retargetCatalogMenuTrigger(key: CatalogSessionKey, element: Element | undefined): void;
 }
 
 export function visibleSessionChildren(params: {
@@ -270,6 +277,28 @@ export function renderRecentSession(params: {
     requiredScope: "operator.write",
   });
   const rowDraggable = !session.isChild && groupWriteAccess.allowed;
+  const marqueeLabelTemplate = html`<span
+    ${display?.marqueeKey ? ref(restartHoverMarqueeIfHovered) : nothing}
+    class="sidebar-recent-session__name hover-marquee"
+    >${session.archived
+      ? html`<span
+          class="sidebar-session__archive-glyph"
+          aria-label=${t("sessionsView.archived")}
+          title=${t("sessionsView.archived")}
+          >${icons.archive}</span
+        >`
+      : nothing}${session.forkSource
+      ? html`<span
+          class="sidebar-session-fork-indicator"
+          role="img"
+          aria-label=${t("sessionsView.forkedSession")}
+          >${icons.gitFork}</span
+        >`
+      : nothing}${label}</span
+  >`;
+  const marqueeLabel = display?.marqueeKey
+    ? keyed(display.marqueeKey, marqueeLabelTemplate)
+    : marqueeLabelTemplate;
   // Always reserve the lead so every title shares the section-label text line.
   const row = html`
     <div
@@ -296,6 +325,9 @@ export function renderRecentSession(params: {
       @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
     >
       <a
+        ${display?.focusedControl === "link" && display.restoreControlFocus
+          ? ref(display.restoreControlFocus)
+          : nothing}
         href=${session.href}
         class="sidebar-recent-session__link"
         draggable="false"
@@ -312,25 +344,7 @@ export function renderRecentSession(params: {
             : nothing}</span
         >
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__title-row">
-            <span class="sidebar-recent-session__name hover-marquee"
-              >${session.archived
-                ? html`<span
-                    class="sidebar-session__archive-glyph"
-                    aria-label=${t("sessionsView.archived")}
-                    title=${t("sessionsView.archived")}
-                    >${icons.archive}</span
-                  >`
-                : nothing}${session.forkSource
-                ? html`<span
-                    class="sidebar-session-fork-indicator"
-                    role="img"
-                    aria-label=${t("sessionsView.forkedSession")}
-                    >${icons.gitFork}</span
-                  >`
-                : nothing}${label}</span
-            >
-          </span>
+          <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
           <span class="sidebar-recent-session__details">
             ${renderSidebarSessionSubtitle({ subtitle, narration })}
             <span class="sidebar-recent-session__details-endcap">
@@ -394,6 +408,9 @@ export function renderRecentSession(params: {
       </a>
       ${session.childSessionKeys.length > 0
         ? html`<button
+            ${display?.focusedControl === "child-toggle" && display.restoreControlFocus
+              ? ref(display.restoreControlFocus)
+              : nothing}
             class="sidebar-child-session-toggle ${session.runningChildCount > 0
               ? "sidebar-child-session-toggle--running"
               : session.failedChildCount > 0
@@ -425,6 +442,9 @@ export function renderRecentSession(params: {
           ${session.isChild
             ? nothing
             : html`<button
+                ${display?.focusedControl === "pin" && display.restoreControlFocus
+                  ? ref(display.restoreControlFocus)
+                  : nothing}
                 class="session-action session-action--pin"
                 data-sidebar-session-pin="true"
                 type="button"
@@ -437,6 +457,10 @@ export function renderRecentSession(params: {
               </button>`}
           <openclaw-tooltip .content=${menuTooltip} .describe=${false} .disabled=${menuOpen}>
             <button
+              ${display?.catalogMenuTriggerRef ? ref(display.catalogMenuTriggerRef) : nothing}
+              ${display?.focusedControl === "menu" && display.restoreControlFocus
+                ? ref(display.restoreControlFocus)
+                : nothing}
               class="session-action"
               data-session-menu="true"
               type="button"

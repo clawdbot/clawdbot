@@ -34,6 +34,7 @@ describe("hover marquee", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     document.body.replaceChildren();
   });
