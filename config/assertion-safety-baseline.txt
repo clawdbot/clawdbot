@@ -1063,7 +1063,7 @@ extensions/qa-lab/src/live-transports/whatsapp/scenario-runtime.ts	6
 extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.setup.ts	1
 extensions/qa-lab/src/mantis/crabbox-runtime.ts	2
 extensions/qa-lab/src/mantis/discord-smoke.runtime.ts	3
-extensions/qa-lab/src/mantis/run.runtime.ts	3
+extensions/qa-lab/src/mantis/run.runtime.ts	2
 extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.ts	4
 extensions/qa-lab/src/mantis/telegram-desktop-builder.runtime.ts	2
 extensions/qa-lab/src/mantis/visual-task.runtime.ts	2
