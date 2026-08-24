@@ -2492,6 +2492,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     });
 
     expect(sendMessageCall()?.text).toBe("first line  \nsecond line");
+    expect(sendMessageCall()?.preparedPostText).toBe(true);
   });
 
   it("re-chunks expanded post-md text and scopes reply metadata to the first send", async () => {

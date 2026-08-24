@@ -468,6 +468,7 @@ async function sendOutboundText(params: {
         cfg,
         to,
         text: chunk,
+        preparedPostText: true,
         accountId,
         replyToMessageId: preserveThread ? replyToMessageId : nextReplyToMessageId(),
         replyInThread: preserveThread ? true : i === 0 ? replyInThread : undefined,
