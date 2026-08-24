@@ -50,17 +50,17 @@ type SqliteReadOnlyWorkerResult = { ok: true; location: string } | { ok: false; 
 
 class SqliteSourceChangedError extends Error {}
 
-function sqliteSnapshotStagingError(root: string, cause: unknown, destination = false): unknown {
+function sqliteSnapshotStagingError(tempDir: string, cause: unknown, allocation = false): unknown {
   for (let depth = 0, error = cause; depth < 8 && error instanceof Error; depth += 1) {
     const { code, errcode, path: errorPath }: NodeJS.ErrnoException & { errcode?: unknown } = error;
     // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
     if (
-      destination ||
+      allocation ||
       ["ENOSPC", "EDQUOT"].includes(code ?? "") ||
       (typeof errcode === "number" && [13, 778, 1034, 1290].includes(errcode)) ||
-      `${errorPath ?? ""}${path.sep}`.startsWith(`${root}${path.sep}`)
+      `${errorPath ?? ""}${path.sep}`.startsWith(`${tempDir}${path.sep}`)
     ) {
-      const message = `${cause instanceof Error ? cause.message : String(cause)}${typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : ""}; snapshot staging root ${root}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`;
+      const message = `${cause instanceof Error ? cause.message : String(cause)}${typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : ""}; snapshot staging root ${allocation ? tempDir : path.dirname(tempDir)}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`;
       return new Error(message, { cause });
     }
     error = error.cause;
@@ -406,7 +406,7 @@ function createStableReadOnlyCopyInTempDirectory(
     if (tempDir) {
       removeTempDirectory(tempDir);
     }
-    throw sqliteSnapshotStagingError(stagingRoot, error, !tempDir);
+    throw sqliteSnapshotStagingError(tempDir ?? stagingRoot, error, !tempDir);
   }
 }
 
@@ -463,7 +463,7 @@ async function createOnlineReadOnlyBackup(
     return adoptPreparedLocation(snapshotPath);
   } catch (error) {
     removeTempDirectory(tempDir);
-    throw sqliteSnapshotStagingError(path.dirname(tempDir), error);
+    throw sqliteSnapshotStagingError(tempDir, error);
   }
 }
 

@@ -362,6 +362,31 @@ describe("prepareSqliteReadOnlyLocation", () => {
     expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
   });
 
+  it("preserves source failures inside the snapshot cache without staging guidance", async () => {
+    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-cached-source-");
+    const stagingRoot = path.join(cacheRoot, "openclaw");
+    fs.mkdirSync(stagingRoot, { mode: 0o700 });
+    const databasePath = path.join(stagingRoot, "source.sqlite");
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(databasePath);
+    database.exec("CREATE TABLE probe (value TEXT);");
+    database.close();
+    const sourceError = Object.assign(new Error("source permission denied"), {
+      code: "EACCES",
+      path: databasePath,
+    });
+    vi.spyOn(sqlite, "backup").mockRejectedValueOnce(sourceError);
+
+    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+      const error = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
+        (cause: unknown) => cause,
+      );
+      expect(error).toBe(sourceError);
+      expect((error as Error).message).not.toMatch(/staging|quota|XDG_CACHE_HOME/u);
+    });
+    expect(fs.readdirSync(stagingRoot)).toEqual(["source.sqlite"]);
+  });
+
   it("identifies filesystem failures whose path belongs to the staging destination", async () => {
     const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-destination-path-");
     const sqlite = requireNodeSqlite();
