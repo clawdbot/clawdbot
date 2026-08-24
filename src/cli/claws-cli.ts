@@ -47,6 +47,7 @@ export type ClawsRemoveOptions = {
   json?: boolean;
 };
 export type ClawsExportOptions = { out: string; bootstrap?: string; json?: boolean };
+export type ClawsGcOptions = { yes?: boolean; json?: boolean };
 
 function collectOption(value: string, previous: string[]): string[] {
   return [...previous, value];
@@ -126,6 +127,16 @@ export function registerClawsCli(program: Command) {
     .action(async (source: string, opts: ClawsAddOptions) => {
       const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
       await runClawsAddCommand(source, opts);
+    });
+
+  claws
+    .command("gc")
+    .description("Remove ClawHub packages left behind by removed Claws")
+    .option("--yes", "Remove the orphaned packages", false)
+    .option("--json", "Print JSON", false)
+    .action(async (opts: ClawsGcOptions) => {
+      const { runClawsGcCommand } = await import("./claws-gc-command.js");
+      await runClawsGcCommand(opts);
     });
 
   claws
