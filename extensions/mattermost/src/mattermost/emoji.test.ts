@@ -23,6 +23,9 @@ describe("normalizeMattermostEmojiName", () => {
   it("passes through an unknown glyph or short name unchanged (no regression)", () => {
     expect(normalizeMattermostEmojiName("custom_emoji")).toBe("custom_emoji");
     expect(normalizeMattermostEmojiName("🫶")).toBe("🫶");
+    expect(normalizeMattermostEmojiName("constructor")).toBe("constructor");
+    expect(normalizeMattermostEmojiName("toString")).toBe("toString");
+    expect(normalizeMattermostEmojiName("__proto__")).toBe("__proto__");
   });
 
   it("returns undefined for blank input", () => {
