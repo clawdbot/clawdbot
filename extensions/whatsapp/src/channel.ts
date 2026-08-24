@@ -2,6 +2,7 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createComputedAccountStatusAdapter,
@@ -37,7 +38,7 @@ import {
   normalizeWhatsAppTarget,
 } from "./normalize.js";
 import { getWhatsAppRuntime } from "./runtime.js";
-import { sendTypingWhatsApp } from "./send.js";
+import { sendMessageWhatsApp, sendTypingWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { whatsappSetupContract } from "./setup-core.js";
 import { createWhatsAppPluginBase, whatsappSetupWizardProxy } from "./shared.js";
@@ -73,6 +74,15 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
     pairing: {
       idLabel: "whatsappSenderId",
       normalizeAllowEntry: (entry) => normalizeWhatsAppAllowFromEntry(entry) ?? "",
+      notifyApproval: async ({ cfg, id, accountId }) => {
+        const account = resolveWhatsAppAccount({ cfg, accountId });
+        const target = normalizeWhatsAppMessagingTarget(id) ?? id;
+        await sendMessageWhatsApp(target, PAIRING_APPROVED_MESSAGE, {
+          verbose: false,
+          cfg,
+          accountId: account.accountId,
+        });
+      },
     },
     outbound: whatsappChannelOutbound,
     threading: {
