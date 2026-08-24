@@ -196,6 +196,7 @@ export function hasMatrixSpoilerMetadataCollision(markdown: string): boolean {
   const projected = projectMatrixMarkdown(markdown);
   const ordinary = new Set(findMatrixSpoilerDelimiterOffsets(projected));
   const tables = findMatrixTableSourceRanges(projected);
+  const codeRegions = findCodeRegions(projected);
   for (let index = 0; index < projected.length - 1; index += 1) {
     if (projected[index] !== "|" || projected[index + 1] !== "|") {
       continue;
@@ -204,6 +205,14 @@ export function hasMatrixSpoilerMetadataCollision(markdown: string): boolean {
       continue;
     }
     if (tables.some((range) => index >= range.start && index < range.end)) {
+      continue;
+    }
+    // A `||` inside a code span/block is a literal (e.g. `rg foo || true`),
+    // not a spoiler attempt the finder failed to pair — exclude it so the
+    // collision check does not collapse the body to "[Spoiler]". Link metadata
+    // and tag attributes stay fail-closed: a `||` there may be a spoiler the
+    // parser cannot safely resolve, so it must still trigger the redaction.
+    if (isInsideCode(index, codeRegions)) {
       continue;
     }
     return true;

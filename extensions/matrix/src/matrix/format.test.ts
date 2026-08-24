@@ -191,6 +191,34 @@ describe("Matrix formatting migration goldens", () => {
       "exhausted its private marker pool",
     );
   });
+
+  it("keeps the body when || appears inside inline code (#128429)", () => {
+    // A `||` inside a code span is not a spoiler delimiter — the delimiter
+    // finder already excludes code regions. The collision predicate must
+    // apply the same exclusion, or the whole body collapses to "[Spoiler]".
+    const markdown = "Ran `rg foo || true` and found nothing.";
+    const body = markdownToMatrixBody(markdown);
+    expect(body).toContain("rg foo");
+    expect(body).toContain("|| true");
+    expect(body).not.toBe("[Spoiler]");
+  });
+
+  it("keeps the body when || appears inside a fenced code block (#128429)", () => {
+    const markdown = "Result:\n\n```\nrg foo || true\n```\n";
+    const body = markdownToMatrixBody(markdown);
+    expect(body).toContain("rg foo");
+    expect(body).not.toBe("[Spoiler]");
+  });
+
+  it("renders a real spoiler alongside || inside inline code (#128429)", () => {
+    // A genuine spoiler in the same message still redacts while the code-span
+    // `||` is preserved — the exclusion is per-range, not message-wide.
+    const markdown = "Ran `rg foo || true` and ||secret|| found nothing.";
+    const body = markdownToMatrixBody(markdown);
+    expect(body).toContain("rg foo");
+    expect(body).toContain("|| true");
+    expect(body).not.toContain("secret");
+  });
 });
 
 describe("markdownToMatrixHtml", () => {
