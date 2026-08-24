@@ -80,6 +80,7 @@ async function runContainerCommand(
 
 async function resolveContainerEngineTarget(
   engine: Pick<NodeWorkerContainerEngine, "id" | "command" | "env">,
+  options: { pinned?: boolean } = {},
 ): Promise<Pick<NodeWorkerContainerEngine, "target" | "env">> {
   const env = engine.env ?? process.env;
   if (engine.id === "docker") {
@@ -122,21 +123,24 @@ async function resolveContainerEngineTarget(
     throw new Error("Podman did not report a stable host and storage identity");
   }
 
-  const output = await runContainerCommand(
-    engine,
-    ["system", "connection", "list", "--format", "json"],
-    5_000,
-  );
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(output);
-  } catch {
-    throw new Error("Podman returned invalid connection metadata");
+  let connections: Record<string, unknown>[] = [];
+  if (!options.pinned) {
+    const output = await runContainerCommand(
+      engine,
+      ["system", "connection", "list", "--format", "json"],
+      5_000,
+    );
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(output);
+    } catch {
+      throw new Error("Podman returned invalid connection metadata");
+    }
+    if (!Array.isArray(parsed)) {
+      throw new Error("Podman returned invalid connection metadata");
+    }
+    connections = parsed.filter(isRecord);
   }
-  if (!Array.isArray(parsed)) {
-    throw new Error("Podman returned invalid connection metadata");
-  }
-  const connections = parsed.filter(isRecord);
   const configuredHost = env.CONTAINER_HOST?.trim() ?? "";
   const configuredConnection = env.CONTAINER_CONNECTION?.trim() ?? "";
   const selected = configuredHost
@@ -303,6 +307,12 @@ export async function createNodeWorkerContainer(
     params.image ?? DEFAULT_NODE_WORKER_CONTAINER_IMAGE,
     params.bundleEntry,
   );
+  const current = await resolveContainerEngineTarget(engine, { pinned: true });
+  if (current.target !== engine.target) {
+    throw new Error(
+      `node worker container daemon changed since hosting startup (pinned ${engine.target}, current ${current.target}); restore the original daemon context or restart the node host`,
+    );
+  }
   const containerId = await runContainerCommand(engine, args, 300_000);
   if (!CONTAINER_ID_PATTERN.test(containerId)) {
     try {

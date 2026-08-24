@@ -584,13 +584,16 @@ Restart the node host after changing either setting. Isolation defaults to
 enforced locally on the node; the Gateway cannot silently disable it or fall
 back to an unisolated worker.
 
-The node must have a working Docker-compatible container engine. OpenClaw
-tries the `docker` CLI first, including Docker-backed OrbStack installations,
-and then `podman`. The selected engine and daemon are checked when the node
-host starts. If neither works, session hosting is disabled with an actionable
-error instead of advertising workers that would run without isolation. Install
-or start the engine, verify `docker version` or `podman version`, and restart
-the node host.
+Container isolation is supported on Linux and macOS node hosts; Windows is
+unsupported because native Windows paths cannot be mounted at their original
+paths inside the container. The node must have a working Docker-compatible
+container engine. OpenClaw tries the `docker` CLI first, including Docker-backed
+OrbStack installations, and then `podman`. The selected engine and daemon are
+checked when the node host starts and again before each container is created.
+If the platform is unsupported, neither engine works, or the daemon changes,
+session hosting or the affected launch fails visibly instead of falling back to
+an unisolated worker. Install or start the engine, verify `docker version` or
+`podman version`, and restart the node host.
 
 The default image is `node:22-slim`; the engine pulls it on first use when it
 is not already present. Set `nodeHost.workerRuns.containerImage` to choose a

@@ -21,7 +21,6 @@ export class NodeWorkerContainerLifecycle {
   ) {}
 
   async initialize(): Promise<void> {
-    this.store.ensureContainerIdentityColumn();
     for (const receipt of this.store.listNonterminal()) {
       if (
         receipt.container &&

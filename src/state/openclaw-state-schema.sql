@@ -964,7 +964,6 @@ CREATE TABLE IF NOT EXISTS node_worker_launches (
   worker_start_time INTEGER CHECK (
     worker_start_time IS NULL OR worker_start_time BETWEEN 0 AND 9007199254740991
   ),
-  worker_container_json TEXT,
   result_json TEXT CHECK (
     result_json IS NULL
     OR (
@@ -1012,6 +1011,11 @@ CREATE TABLE IF NOT EXISTS node_worker_launches (
 CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
   ON node_worker_launches(completed_at_ms, launch_id)
   WHERE completed_at_ms IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
+  launch_id TEXT PRIMARY KEY,
+  container_json TEXT
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS voicewake_triggers (
   config_key TEXT NOT NULL,

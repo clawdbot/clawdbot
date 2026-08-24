@@ -301,6 +301,11 @@ export async function prepareNodeHostRuntime(params?: {
   if (workerRunsEnabled && config.nodeHost?.workerRuns?.isolation === "container") {
     let engineResolved = false;
     try {
+      if (platform === "win32") {
+        throw new Error(
+          'Container-isolated node workers are unsupported on Windows because native paths cannot be mounted at their container paths; run the node host on Linux or macOS, or set isolation to "none".',
+        );
+      }
       const containerEngine = await resolveNodeWorkerContainerEngine({ env });
       engineResolved = true;
       preparedContainerWorkspace = new NodeWorkerWorkspaceRuntime({ env });

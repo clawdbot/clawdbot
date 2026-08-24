@@ -303,6 +303,12 @@ class NodeWorkerSupervisor {
     }
     const startup = this.starting.get(expected.launchId);
     if (startup && receipt.state === "pending" && receipt.supervisor.pid === process.pid) {
+      if (this.containerEngine) {
+        // Startup may already own a container while its create/start client is
+        // in flight; retain the durable slot until normal cancellation fences it.
+        await startup;
+        return await this.cancel(expected);
+      }
       const cancelled = this.capacity.finishCancelled({
         expected,
         supervisor: receipt.supervisor,

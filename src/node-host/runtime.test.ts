@@ -188,6 +188,30 @@ describe("node-host worker manifest", () => {
     await runtime.close();
   });
 
+  it("disables container-isolated hosting on Windows before probing or advertising an engine", async () => {
+    const prepared = await prepareNodeHostRuntime({
+      config: {
+        nodeHost: {
+          skills: { enabled: false },
+          workerRuns: { enabled: true, isolation: "container" },
+        },
+      },
+      env: { PATH: "/usr/bin" },
+      enableWorkerRuns: true,
+      platform: "win32",
+    });
+
+    expect(prepared.workerHostingEnabled).toBe(false);
+    expect(prepared.workerHostingDisabledReason).toMatch(/windows.*(?:linux|macos)/iu);
+    expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
+    expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
+    const runtime = prepared.start({
+      client: { request: vi.fn(async () => ({})) } as unknown as NodeHostClient,
+    });
+    expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
+    await runtime.close();
+  });
+
   it("resolves the container engine once and passes its exact identity to the supervisor", async () => {
     mocks.initializeWorkerSupervisor.mockImplementationOnce(async () => {
       const options = vi.mocked(createNodeWorkerSupervisor).mock.calls[0]?.[0];

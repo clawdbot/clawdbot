@@ -61,16 +61,35 @@ const launchIdFor = (container) =>
 const journalState = (launchId) => {
   try {
     const database = new DatabaseSync(path.join(stateRoot, "state", "openclaw.sqlite"), { readOnly: true });
-    const row = database.prepare(
-      "SELECT state, worker_container_json FROM node_worker_launches WHERE launch_id = ?",
-    ).get(launchId);
+    const row = database.prepare("SELECT state FROM node_worker_launches WHERE launch_id = ?").get(launchId);
+    const hasContainerTable = database.prepare(
+      "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'node_worker_launch_containers'",
+    ).get();
+    const container = hasContainerTable
+      ? database.prepare(
+        "SELECT container_json FROM node_worker_launch_containers WHERE launch_id = ?",
+      ).get(launchId)
+      : undefined;
     database.close();
-    return row;
+    return row && { state: row.state, container_json: container?.container_json ?? null };
   } catch {
     return undefined;
   }
 };
 const record = (entry) => fs.appendFileSync(commandLog, JSON.stringify(entry) + "\n");
+const releaseAfterMarker = (marker, operation) => {
+  const markerPath = path.join(engineRoot, marker);
+  if (!fs.existsSync(markerPath)) {
+    operation();
+    return;
+  }
+  const timer = setInterval(() => {
+    if (!fs.existsSync(markerPath)) {
+      clearInterval(timer);
+      operation();
+    }
+  }, 10);
+};
 const missing = (id) => {
   process.stderr.write("Error: No such object: " + id + "\n");
   process.exit(1);
@@ -83,6 +102,10 @@ const readContainer = (id) => {
 if (command === "version") {
   record({ argv: args });
   process.stdout.write("27.0.0\n");
+} else if (command === "info") {
+  const daemonId = fs.readFileSync(path.join(engineRoot, "daemon-id"), "utf8");
+  record({ argv: args, daemonId });
+  process.stdout.write(daemonId + "\n");
 } else if (command === "create") {
   const id = createHash("sha256").update(JSON.stringify(args)).digest("hex");
   const labels = {};
@@ -102,7 +125,7 @@ if (command === "version") {
   const container = { id, labels, env, mounts, image, entry, running: false, pid: null };
   save(container);
   record({ argv: args, container, journal: journalState(launchIdFor(container)) });
-  process.stdout.write(id + "\n");
+  releaseAfterMarker("hold-create", () => process.stdout.write(id + "\n"));
 } else if (command === "start") {
   void (async () => {
     let descriptor = "";
@@ -110,7 +133,7 @@ if (command === "version") {
     const container = readContainer(args.at(-1));
     const journal = journalState(launchIdFor(container));
     record({ argv: args, journal });
-    const persisted = journal?.worker_container_json && JSON.parse(journal.worker_container_json);
+    const persisted = journal?.container_json && JSON.parse(journal.container_json);
     if (
       journal?.state !== "running" ||
       persisted?.containerId !== container.id ||
@@ -183,8 +206,10 @@ if (command === "version") {
     process.stderr.write("injected container removal failure\n");
     process.exit(1);
   }
-  fs.unlinkSync(statePath(container.id));
-  process.stdout.write(container.id + "\n");
+  releaseAfterMarker("hold-removal", () => {
+    fs.unlinkSync(statePath(container.id));
+    process.stdout.write(container.id + "\n");
+  });
 } else if (command === "ps") {
   record({ argv: args });
   const ownerFilter = args.find((arg) => arg.startsWith("label=openclaw.node-worker.host="));
@@ -220,7 +245,8 @@ type FakeContainer = {
 type EngineEvent = {
   argv: string[];
   container?: FakeContainer;
-  journal?: { state: string; worker_container_json: string | null };
+  daemonId?: string;
+  journal?: { state: string; container_json: string | null };
 };
 
 afterEach(() => {
@@ -243,14 +269,21 @@ function containerFixture(
   const engineRoot = path.join(root, "fake-engine");
   const commandLog = path.join(engineRoot, "commands.jsonl");
   const command = path.join(engineRoot, "docker");
-  const engineTarget = "e".repeat(64);
+  const daemonId = "fake-original-daemon";
+  const engineTarget = createHash("sha256").update(`docker\0${daemonId}`).digest("hex");
   fs.mkdirSync(engineRoot);
+  fs.writeFileSync(path.join(engineRoot, "daemon-id"), daemonId);
   fs.writeFileSync(
     command,
     `#!${process.execPath}\nconst engineRoot = ${JSON.stringify(engineRoot)};\nconst stateRoot = ${JSON.stringify(stateDir)};\nconst commandLog = ${JSON.stringify(commandLog)};\nconst expectedEngineTarget = ${JSON.stringify(engineTarget)};\n${fakeEngineSource}`,
     { mode: 0o755 },
   );
-  const containerEngine = { id: "docker" as const, command, target: engineTarget };
+  const containerEngine = {
+    id: "docker" as const,
+    command,
+    target: engineTarget,
+    env: { PATH: process.env.PATH, DOCKER_HOST: "unix:///fake-node-worker-daemon.sock" },
+  };
   const workerEnv = { ...env, ...options.env };
   const supervisor = createNodeWorkerSupervisor({
     bundleRoot,
@@ -412,7 +445,7 @@ describe("node worker supervisor container isolation", () => {
       ]);
       expect(started?.journal).toMatchObject({
         state: "running",
-        worker_container_json: JSON.stringify(running.container),
+        container_json: JSON.stringify(running.container),
       });
     } finally {
       await fixture.supervisor.close();
@@ -429,6 +462,86 @@ describe("node worker supervisor container isolation", () => {
         "node:22-slim",
       );
     } finally {
+      await fixture.supervisor.close();
+    }
+  });
+
+  it("rejects a daemon switch before launch so the replacement receives zero create or start requests", async () => {
+    const fixture = containerFixture();
+    const input = testWorkerLaunchInput(fixture.workspaceDir, "container-replacement-daemon");
+    const replacementDaemonId = "fake-replacement-daemon";
+    const replacementTarget = createHash("sha256")
+      .update(`docker\0${replacementDaemonId}`)
+      .digest("hex");
+
+    try {
+      await fixture.supervisor.initialize();
+      const startupEventCount = fixture.events().length;
+      fs.writeFileSync(path.join(fixture.engineRoot, "daemon-id"), replacementDaemonId);
+
+      const failed = await fixture.supervisor.launch(input, endpoint);
+
+      expect(failed).toMatchObject({ state: "failed" });
+      expect(failed.errorText).toContain(fixture.containerEngine.target);
+      expect(failed.errorText).toContain(replacementTarget);
+      const replacementEvents = fixture.events().slice(startupEventCount);
+      expect(replacementEvents.filter((event) => event.argv[0] === "info")).toHaveLength(1);
+      expect(
+        replacementEvents.filter(
+          (event) => event.argv[0] === "create" || event.argv[0] === "start",
+        ),
+      ).toEqual([]);
+    } finally {
+      await fixture.supervisor.close();
+    }
+  });
+
+  it("keeps a pending cancelled container slot occupied until the fake engine confirms removal", async () => {
+    const capacitySnapshots: Array<{ total: number; available: number }> = [];
+    const fixture = containerFixture({
+      capacity: 1,
+      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
+    });
+    const input = testWorkerLaunchInput(fixture.workspaceDir, "container-pending-cancel", "wait");
+    const createMarker = path.join(fixture.engineRoot, "hold-create");
+    const removalMarker = path.join(fixture.engineRoot, "hold-removal");
+    const store = new NodeWorkerLaunchStore({ env: fixture.env });
+    fs.writeFileSync(createMarker, "hold");
+    fs.writeFileSync(removalMarker, "hold");
+
+    try {
+      const launch = fixture.supervisor.launch(input, endpoint);
+      await vi.waitFor(
+        () => expect(fixture.events().some((event) => event.argv[0] === "create")).toBe(true),
+        { timeout: 5_000 },
+      );
+      expect(store.get(input.launchId)?.state).toBe("pending");
+
+      const cancellation = fixture.supervisor.cancel(testNodeWorkerLaunchIdentity(input));
+      await vi.waitFor(() => expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 }));
+      expect(store.get(input.launchId)?.state).toBe("pending");
+
+      fs.unlinkSync(createMarker);
+      await vi.waitFor(
+        () => expect(fixture.events().some((event) => event.argv[0] === "rm")).toBe(true),
+        { timeout: 5_000 },
+      );
+      expect(store.get(input.launchId)?.state).toMatch(/^(?:pending|running)$/u);
+      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
+
+      fs.unlinkSync(removalMarker);
+      await expect(cancellation).resolves.toMatchObject({ state: "cancelled" });
+      await launch;
+      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 1 });
+      expect(fixture.events().find((event) => event.argv[0] === "rm")?.journal?.state).toMatch(
+        /^(?:pending|running)$/u,
+      );
+    } finally {
+      for (const marker of [createMarker, removalMarker]) {
+        if (fs.existsSync(marker)) {
+          fs.unlinkSync(marker);
+        }
+      }
       await fixture.supervisor.close();
     }
   });
