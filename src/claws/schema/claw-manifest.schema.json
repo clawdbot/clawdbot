@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ai/schemas/claw-manifest.v1.schema.json",
+  "title": "OpenClaw Claw manifest (schema version 1)",
+  "description": "Structural JSON Schema for CLAW.md frontmatter and grouped Claw manifest JSON. Semantic rules (bounded tool grants, profile/tool overlap, package-manager pinning, cron expression validity, environment key safety, remote MCP URL policy, avatar constraints) are enforced by the OpenClaw validator (src/claws/schema.ts) and are documented in $comment entries here; editors and CI should treat this schema as the structural envelope.",
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "$comment": "OpenClaw additionally rejects leading or trailing whitespace."
+    },
+    "agentId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    },
+    "exactVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+",
+      "$comment": "OpenClaw requires an exact semantic version (isExactSemVer)."
+    },
+    "clawhubPackageName": {
+      "type": "string",
+      "$comment": "OpenClaw requires the canonical lowercase ClawHub package name."
+    },
+    "packageRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "$comment": "OpenClaw rejects traversal segments and non-package-relative paths."
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "theme": { "$ref": "#/$defs/nonEmptyString" },
+        "emoji": { "$ref": "#/$defs/nonEmptyString" },
+        "avatar": {
+          "$ref": "#/$defs/nonEmptyString",
+          "$comment": "OpenClaw requires a bounded image data URL or a managed workspace-relative path."
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/agentId" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "description": { "$ref": "#/$defs/nonEmptyString" },
+        "identity": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "workspaceSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {
+        "source": { "$ref": "#/$defs/packageRelativePath" }
+      }
+    },
+    "workspaceFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "path"],
+      "properties": {
+        "source": { "$ref": "#/$defs/packageRelativePath" },
+        "path": { "$ref": "#/$defs/packageRelativePath" }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bootstrapFiles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "AGENTS.md": { "$ref": "#/$defs/workspaceSource" },
+            "SOUL.md": { "$ref": "#/$defs/workspaceSource" },
+            "IDENTITY.md": { "$ref": "#/$defs/workspaceSource" },
+            "TOOLS.md": { "$ref": "#/$defs/workspaceSource" },
+            "HEARTBEAT.md": { "$ref": "#/$defs/workspaceSource" }
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workspaceFile" }
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "source", "ref", "version"],
+      "properties": {
+        "kind": { "enum": ["skill", "plugin"] },
+        "source": { "const": "clawhub" },
+        "ref": { "$ref": "#/$defs/clawhubPackageName" },
+        "version": { "$ref": "#/$defs/exactVersion" }
+      }
+    },
+    "toolFilter": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "OpenClaw allows only exact names and * wildcards, and rejects duplicates.",
+      "properties": {
+        "include": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "exclude": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      }
+    },
+    "stdioMcpServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "$comment": "OpenClaw requires package-manager MCP commands to pin one exact immutable version, and blocks dangerous host environment keys.",
+      "properties": {
+        "command": { "$ref": "#/$defs/nonEmptyString" },
+        "transport": { "const": "stdio" },
+        "args": { "type": "array", "items": { "$ref": "#/$defs/nonEmptyString" } },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "pattern": "^\\$\\{[A-Z_][A-Z0-9_]*\\}$" },
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+        },
+        "toolFilter": { "$ref": "#/$defs/toolFilter" },
+        "timeout": { "type": "number", "exclusiveMinimum": 0 },
+        "connectTimeout": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "remoteMcpServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "transport"],
+      "$comment": "OpenClaw restricts remote MCP URLs to HTTPS (HTTP only on exact loopback) without user info or fragments.",
+      "properties": {
+        "url": { "type": "string", "format": "uri" },
+        "transport": { "enum": ["sse", "streamable-http"] },
+        "auth": { "const": "oauth" },
+        "toolFilter": { "$ref": "#/$defs/toolFilter" },
+        "timeout": { "type": "number", "exclusiveMinimum": 0 },
+        "connectTimeout": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "mcpServer": {
+      "oneOf": [{ "$ref": "#/$defs/stdioMcpServer" }, { "$ref": "#/$defs/remoteMcpServer" }]
+    },
+    "cronJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "schedule", "session", "message"],
+      "$comment": "OpenClaw requires exactly five cron fields and a valid expression/timezone.",
+      "properties": {
+        "id": { "$ref": "#/$defs/agentId" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "schedule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cron", "timezone"],
+          "properties": {
+            "cron": { "$ref": "#/$defs/nonEmptyString" },
+            "timezone": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        },
+        "session": { "enum": ["main", "isolated"] },
+        "message": { "$ref": "#/$defs/nonEmptyString" },
+        "delivery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": { "enum": ["none", "announce"] },
+            "channel": { "const": "last" }
+          }
+        }
+      }
+    },
+    "openClawExtension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "format", "source", "ref", "version"],
+      "properties": {
+        "id": { "$ref": "#/$defs/agentId" },
+        "kind": { "const": "plugin" },
+        "format": { "enum": ["openclaw", "claude", "codex", "cursor"] },
+        "source": { "const": "clawhub" },
+        "ref": { "$ref": "#/$defs/clawhubPackageName" },
+        "version": { "$ref": "#/$defs/exactVersion" }
+      }
+    },
+    "openClawProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "agent"],
+      "$comment": "This is the shape of the optional profiles/openclaw.yml file, not the CLAW.md frontmatter. Semantic tool-profile rules are enforced by OpenClaw only.",
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "agent": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "groupChat": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mentionPatterns": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmptyString" } }
+              }
+            },
+            "sandbox": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "enum": ["off", "non-main", "all"] },
+                "scope": { "enum": ["session", "agent", "shared"] },
+                "workspaceAccess": { "enum": ["none", "ro", "rw"] }
+              }
+            },
+            "tools": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "profile": { "$ref": "#/$defs/nonEmptyString" },
+                "allow": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmptyString" } },
+                "alsoAllow": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmptyString" } },
+                "deny": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/nonEmptyString" } },
+                "fs": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": { "workspaceOnly": { "const": true } }
+                }
+              }
+            },
+            "memory": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "search": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "rememberAcrossConversations": { "type": "boolean" },
+                    "sources": { "type": "array", "minItems": 1, "items": { "enum": ["memory", "sessions"] } }
+                  }
+                }
+              }
+            },
+            "heartbeat": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "every": { "$ref": "#/$defs/nonEmptyString" },
+                "activeHours": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "start": { "type": "string", "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$" },
+                    "end": { "type": "string", "pattern": "^(?:(?:[01]\\d|2[0-3]):[0-5]\\d|24:00)$" },
+                    "timezone": { "$ref": "#/$defs/nonEmptyString" }
+                  }
+                },
+                "lightContext": { "type": "boolean" },
+                "isolatedSession": { "type": "boolean" },
+                "timeoutSeconds": { "type": "integer", "exclusiveMinimum": 0 }
+              }
+            },
+            "humanDelay": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "enum": ["off", "natural", "custom"] },
+                "minMs": { "type": "integer", "minimum": 0 },
+                "maxMs": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        },
+        "extensions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/openClawExtension" }
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "agent"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "agent": { "$ref": "#/$defs/agent" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "workspace": { "$ref": "#/$defs/workspace" },
+    "packages": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/package" }
+    },
+    "mcpServers": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+      "additionalProperties": { "$ref": "#/$defs/mcpServer" }
+    },
+    "cronJobs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/cronJob" }
+    }
+  }
+}
