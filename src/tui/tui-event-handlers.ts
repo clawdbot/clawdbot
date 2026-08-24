@@ -399,7 +399,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as SessionChangedEvent;
     syncSessionKey();
-    if (!matchesSelectedTuiSession(state, evt)) {
+    if (!matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true })) {
       return;
     }
 
@@ -408,11 +408,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         typeof evt.sessionId !== "string" ||
         !state.currentSessionId ||
         evt.sessionId === state.currentSessionId;
-      if (
-        !matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true }) ||
-        !matchesCurrentSessionId ||
-        !isIdentityOnlyTuiSessionInvalidation(evt)
-      ) {
+      if (!matchesCurrentSessionId || !isIdentityOnlyTuiSessionInvalidation(evt)) {
         return;
       }
       // Legacy atomic batches expose no replayable message identity. Refresh
