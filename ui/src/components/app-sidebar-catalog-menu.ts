@@ -1,6 +1,6 @@
 // Owns catalog-row menu state, actions, focus anchor, and rendering for AppSidebar.
 import { html, nothing } from "lit";
-import { buildCatalogSessionKey, type CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import "./catalog-session-menu.ts";
@@ -60,18 +60,13 @@ export class SidebarCatalogMenuController {
   }
 
   retargetTrigger(key: CatalogSessionKey, element: Element | undefined): void {
-    if (!(element instanceof HTMLElement)) {
+    if (!(element instanceof HTMLElement) || !this.isOpenFor(key)) {
       return;
     }
     // A catalog refresh can replace the owning row while popup focus is elsewhere.
     // Retarget only after the old trigger disconnects so dismissal has a live focus anchor.
     queueMicrotask(() => {
-      if (
-        !element.isConnected ||
-        !this.state ||
-        this.trigger?.isConnected ||
-        buildCatalogSessionKey(this.state.key) !== buildCatalogSessionKey(key)
-      ) {
+      if (!element.isConnected || this.trigger?.isConnected || !this.isOpenFor(key)) {
         return;
       }
       this.trigger = element;

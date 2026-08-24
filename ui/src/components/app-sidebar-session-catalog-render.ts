@@ -460,15 +460,19 @@ function renderCatalogSessionRow(
     hostId: host.hostId,
     threadId: session.threadId,
   } satisfies CatalogSessionKey;
-  const catalogMenuTriggerRef = (element: Element | undefined) =>
-    params.onCatalogMenuTriggerRendered(catalogKey, element);
+  const catalogMenuOpen = params.isMenuOpen(catalogKey);
+  const catalogMenuTriggerRef = catalogMenuOpen
+    ? (element: Element | undefined) => params.onCatalogMenuTriggerRendered(catalogKey, element)
+    : undefined;
   const identityKey = catalogSessionIdentityKey(catalog, host, session);
   const key = session.sessionKey ?? identityKey;
   const focusedControl =
     document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-  const focusedRowKey =
-    focusedControl?.closest<HTMLElement>("[data-session-key]")?.dataset.sessionKey;
-  const restoreFocusedControl = focusedRowKey === identityKey || focusedRowKey === key;
+  const focusedRow = focusedControl?.closest<HTMLElement>("[data-session-key]");
+  const restoreFocusedControl =
+    focusedRow?.dataset.catalogSessionKey === identityKey ||
+    focusedRow?.dataset.sessionKey === identityKey ||
+    focusedRow?.dataset.sessionKey === key;
   const focusedControlKind = focusedControl?.matches(".sidebar-recent-session__link")
     ? "link"
     : focusedControl?.matches("[data-child-session-toggle]")
@@ -487,9 +491,10 @@ function renderCatalogSessionRow(
   if (adoptedRow) {
     return params.renderLiveRow(adoptedRow, {
       label,
+      catalogIdentityKey: identityKey,
       marqueeKey: JSON.stringify([label, session.pullRequest]),
-      catalogMenuOpen: params.isMenuOpen(catalogKey),
-      catalogMenuTriggerRef,
+      catalogMenuOpen,
+      ...(catalogMenuTriggerRef ? { catalogMenuTriggerRef } : {}),
       ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
       ...(focusRef && focusedControlKind
         ? { focusedControl: focusedControlKind, restoreControlFocus: focusRef }
@@ -551,6 +556,7 @@ function renderCatalogSessionRow(
         ? "session-row-host--running"
         : ""}"
       data-session-key=${key}
+      data-catalog-session-key=${identityKey}
       data-session-row-action-count="1"
       role="listitem"
       @contextmenu=${openMenuFromEvent}
@@ -603,7 +609,7 @@ function renderCatalogSessionRow(
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-actions">
           <button
-            ${ref(catalogMenuTriggerRef)}
+            ${catalogMenuTriggerRef ? ref(catalogMenuTriggerRef) : nothing}
             ${focusedControlKind === "menu" && focusRef ? ref(focusRef) : nothing}
             class="session-action"
             data-catalog-session-menu="true"
@@ -611,7 +617,7 @@ function renderCatalogSessionRow(
             title=${t("chat.sidebar.openSessionMenu")}
             aria-label=${t("chat.sidebar.openSessionMenu")}
             aria-haspopup="menu"
-            aria-expanded=${String(params.isMenuOpen(catalogKey))}
+            aria-expanded=${String(catalogMenuOpen)}
             @click=${(event: MouseEvent) => {
               event.stopPropagation();
               const trigger = event.currentTarget as HTMLElement;

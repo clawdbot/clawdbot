@@ -310,6 +310,7 @@ export function renderRecentSession(params: {
     <div
       class=${rowClass}
       data-session-key=${session.key}
+      data-catalog-session-key=${display?.catalogIdentityKey ?? nothing}
       role=${ifDefined(listItem ? "listitem" : undefined)}
       draggable=${rowDraggable ? "true" : "false"}
       @dragstart=${!rowDraggable

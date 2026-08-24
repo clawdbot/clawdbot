@@ -88,4 +88,39 @@ describe("AppSidebar session catalog row identity", () => {
     );
     expect(document.activeElement).toBe(adoptedMenu);
   });
+
+  it("restores menu focus when an adopted catalog thread loses its session", async () => {
+    const adoptedKey = "agent:main:released";
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", adoptedKey]),
+    );
+    sidebar.sessionData.sessionCatalogs = catalogPage([
+      {
+        threadId: "thread-released",
+        name: "Adopted catalog session",
+        sessionKey: adoptedKey,
+      },
+    ]).catalogs;
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+
+    const adoptedMenu = sidebar.querySelector<HTMLButtonElement>(
+      `[data-session-key="${adoptedKey}"] [data-session-menu]`,
+    );
+    adoptedMenu?.focus();
+    expect(document.activeElement).toBe(adoptedMenu);
+
+    sidebar.sessionData.sessionCatalogs = catalogPage([
+      { threadId: "thread-released", name: "Native catalog session" },
+    ]).catalogs;
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+
+    const nativeMenu = sidebar.querySelector<HTMLButtonElement>(
+      '[data-session-key$=":thread-released"] [data-catalog-session-menu]',
+    );
+    expect(document.activeElement).toBe(nativeMenu);
+  });
 });
