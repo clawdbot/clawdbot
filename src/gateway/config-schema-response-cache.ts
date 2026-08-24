@@ -9,7 +9,7 @@ import type { ConfigSchemaResponse } from "../config/schema.js";
 
 let cache: {
   pluginRegistryVersion: number;
-  configSnapshotRevision: number | null;
+  configSnapshotIdentity: string | null;
   response: ConfigSchemaResponse;
 } | null = null;
 
@@ -17,24 +17,36 @@ let cache: {
 // whose effective diff is empty is published as a new source snapshot instead
 // (`setRuntimeConfigSourceSnapshotIfCurrent`), and ownership reads explicit selection from that
 // source, so the answer can change while both the registry version and the invalidation hold
-// still. The snapshot revision advances on every publication — rollback republish included — so
-// the entry records the revision it was built at and a hit must prove it.
+// still. The entry therefore records the snapshot identity it was built from, and a hit must
+// prove it.
 //
-// Known edge: the revision is a session counter, not content-addressed. `resetConfigRuntimeState`
-// zeroes it, and the managed-secrets failure paths reach that through
-// `clearSecretsRuntimeSnapshotState` without touching this cache, so an entry stamped R can
-// false-hit once the counter climbs back to R with the registry version unchanged. Keying on
-// `metadata.fingerprint`/`sourceFingerprint` would close that (and stop over-invalidating on the
-// rollback republish); deferred as a wider change than this fix.
-function currentConfigSnapshotRevision(): number | null {
-  return getRuntimeConfigSnapshotMetadata()?.revision ?? null;
+// That identity is the metadata's content fingerprints, not its revision: the revision is a
+// session counter that `resetConfigRuntimeState` zeroes (the managed-secrets failure paths reach
+// it through `clearSecretsRuntimeSnapshotState` without touching this cache), so a recycled count
+// can alias two different snapshots. The fingerprints hash content, so they cannot recycle — and
+// a republish that restores identical content restores the same key, so a rollback no longer
+// evicts an entry that is still correct. Both halves are load-bearing: the schema is built from
+// the runtime config (`getRuntimeConfig` and the registry resolved from it) while ownership reads
+// explicit selection from the source snapshot, and either can change while the other holds still.
+// No published snapshot means nothing to prove, so a null identity never hits.
+function currentConfigSnapshotIdentity(): string | null {
+  const metadata = getRuntimeConfigSnapshotMetadata();
+  if (!metadata) {
+    return null;
+  }
+  // Fingerprints are base64url, so ":" appears in neither half and the join is unambiguous. A
+  // snapshot published without a source config keys as the empty marker rather than missing:
+  // "no source snapshot" is itself deterministic ownership-policy input, not unproven state.
+  return `${metadata.fingerprint}:${metadata.sourceFingerprint ?? ""}`;
 }
 
 export function getCachedConfigSchemaResponse(
   pluginRegistryVersion: number,
 ): ConfigSchemaResponse | undefined {
-  return cache?.pluginRegistryVersion === pluginRegistryVersion &&
-    cache.configSnapshotRevision === currentConfigSnapshotRevision()
+  const identity = currentConfigSnapshotIdentity();
+  return identity !== null &&
+    cache?.pluginRegistryVersion === pluginRegistryVersion &&
+    cache.configSnapshotIdentity === identity
     ? cache.response
     : undefined;
 }
@@ -45,7 +57,7 @@ export function setCachedConfigSchemaResponse(
 ): void {
   cache = {
     pluginRegistryVersion,
-    configSnapshotRevision: currentConfigSnapshotRevision(),
+    configSnapshotIdentity: currentConfigSnapshotIdentity(),
     response,
   };
 }

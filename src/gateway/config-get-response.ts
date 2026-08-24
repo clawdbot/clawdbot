@@ -17,7 +17,7 @@ let configGetResponseCache:
       revisionProjector: GatewayConfigRevisionProjector;
       appliedConfigHash: string | null;
       pluginRegistryVersion: number;
-      configSnapshotRevision: number | null;
+      configSnapshotSourceFingerprint: string | null;
       promise: Promise<ConfigGetResponse>;
     }
   | undefined;
@@ -64,15 +64,21 @@ export async function readConfigGetResponse(params: {
   const pluginRegistryVersion = getActivePluginRegistryVersion();
   // An authored edit whose effective diff is empty is committed as a source-only publication: the
   // watcher's invalidation is gated on changed paths, the applied hash moves only when a candidate
-  // is runtime-applied, and the registry version holds still too. The snapshot revision advances
-  // on every publication (`setRuntimeConfigSourceSnapshotIfCurrent` republishes through
-  // `setRuntimeConfigSnapshot`, rollback included), so a hit must prove it or config.get keeps
-  // serving the pre-edit authored snapshot. Known edge: the revision is a session counter, not
-  // content-addressed — a snapshot clear (`clearSecretsRuntimeSnapshotState` on the
-  // managed-secrets failure paths) zeroes it without invalidating this cache, so a recycled count
-  // can false-hit; keying on the metadata fingerprints would close that and is the follow-up, not
-  // this change.
-  const configSnapshotRevision = getRuntimeConfigSnapshotMetadata()?.revision ?? null;
+  // is runtime-applied, and the registry version holds still too. A hit must prove that
+  // publication or config.get keeps serving the pre-edit authored snapshot.
+  //
+  // The proof is the snapshot's source fingerprint, not its revision: the revision is a session
+  // counter that `resetConfigRuntimeState` zeroes (`clearSecretsRuntimeSnapshotState` reaches it
+  // on the managed-secrets failure paths without invalidating this cache), so a recycled count can
+  // alias two different snapshots, while the fingerprint hashes the canonical source content and
+  // cannot recycle — a rollback republish that restores identical content now keeps hitting
+  // instead of rebuilding. The source half alone is the right key: this response is built from the
+  // config file snapshot and hints derived from that snapshot's own source config, and the runtime
+  // config object appears nowhere in it (the applied hash and registry version already cover the
+  // runtime side), so keying on `metadata.fingerprint` too would only evict identical bytes. A
+  // snapshot without a source fingerprint proves nothing about the file, so it never hits.
+  const configSnapshotSourceFingerprint =
+    getRuntimeConfigSnapshotMetadata()?.sourceFingerprint ?? null;
   // With an active watcher, cache hits never re-read the file. External edits
   // become visible after its successful commit; the write path invalidates early.
   if (
@@ -80,7 +86,8 @@ export async function readConfigGetResponse(params: {
     configGetResponseCache.revisionProjector === params.revisionProjector &&
     configGetResponseCache.appliedConfigHash === appliedConfigHash &&
     configGetResponseCache.pluginRegistryVersion === pluginRegistryVersion &&
-    configGetResponseCache.configSnapshotRevision === configSnapshotRevision
+    configGetResponseCache.configSnapshotSourceFingerprint !== null &&
+    configGetResponseCache.configSnapshotSourceFingerprint === configSnapshotSourceFingerprint
   ) {
     return await configGetResponseCache.promise;
   }
@@ -99,7 +106,7 @@ export async function readConfigGetResponse(params: {
     appliedConfigHash,
     // Metadata notification precedes registry activation; this version changes at handoff.
     pluginRegistryVersion,
-    configSnapshotRevision,
+    configSnapshotSourceFingerprint,
     promise,
   };
   try {

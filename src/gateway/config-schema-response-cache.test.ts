@@ -62,4 +62,56 @@ describe("config schema response cache", () => {
     expect(getRuntimeConfigAppliedHash()).toBe(appliedBefore);
     expect(getCachedConfigSchemaResponse(7)).toBeUndefined();
   });
+
+  // `resetConfigRuntimeState` zeroes the snapshot revision counter without touching this cache
+  // (`clearSecretsRuntimeSnapshotState` reaches it on the managed-secrets failure paths), so a
+  // later publication can carry a previously seen revision number for different content. The
+  // content-addressed key must miss where a revision key would false-hit.
+  it("misses when a cleared runtime republishes different content at a recycled revision", () => {
+    setAppliedRuntimeConfigSnapshot(
+      { channels: { zzalpha: {} } } as unknown as OpenClawConfig,
+      { channels: { zzalpha: {} } } as unknown as OpenClawConfig,
+    );
+    const revisionBefore = getRuntimeConfigSnapshotMetadata()!.revision;
+    setCachedConfigSchemaResponse(7, response);
+    expect(getCachedConfigSchemaResponse(7)).toBe(response);
+
+    resetConfigRuntimeState();
+    setAppliedRuntimeConfigSnapshot(
+      { channels: { zzbeta: {} } } as unknown as OpenClawConfig,
+      { channels: { zzbeta: {} } } as unknown as OpenClawConfig,
+    );
+
+    // Same counter value, same registry version, different snapshot content.
+    expect(getRuntimeConfigSnapshotMetadata()!.revision).toBe(revisionBefore);
+    expect(getCachedConfigSchemaResponse(7)).toBeUndefined();
+  });
+
+  // An entry stored while runtime state is cleared has no snapshot identity behind it, so there is
+  // nothing a later hit could prove against.
+  it("never hits without a published runtime snapshot to prove", () => {
+    setCachedConfigSchemaResponse(7, response);
+    expect(getCachedConfigSchemaResponse(7)).toBeUndefined();
+  });
+
+  // The other side of content addressing: the managed-secrets rollback republishes the pre-write
+  // source through `setRuntimeConfigSourceSnapshotIfCurrent`, advancing the revision counter while
+  // restoring identical content. The revision key evicted the still-correct entry; the fingerprint
+  // key keeps serving it.
+  it("keeps serving when a republish restores identical content", () => {
+    setAppliedRuntimeConfigSnapshot(
+      { channels: { zzalpha: {} } } as unknown as OpenClawConfig,
+      { channels: { zzalpha: {} } } as unknown as OpenClawConfig,
+    );
+    setCachedConfigSchemaResponse(7, response);
+
+    expect(
+      setRuntimeConfigSourceSnapshotIfCurrent({
+        expectedRevision: getRuntimeConfigSnapshotMetadata()!.revision,
+        sourceConfig: { channels: { zzalpha: {} } } as unknown as OpenClawConfig,
+      }),
+    ).toBe(true);
+
+    expect(getCachedConfigSchemaResponse(7)).toBe(response);
+  });
 });
