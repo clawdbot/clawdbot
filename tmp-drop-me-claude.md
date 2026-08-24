@@ -45,3 +45,17 @@ The corrected checkpoint restored the canonical result: 945 files examined, 639 
 - `telegram-emoji-list-gateway.e2e.test.ts` (2): the same canonical `withTestDir` helper replacement remains at the plugin-SDK import and call.
 
 No row contains frozen upstream-only content, so no restoration is warranted. Gate 2 reran at the same checkpoint with all 40 invariants passing and three tombstones.
+
+## §3 — 2026-08-24 focused behavior and type proof
+
+- Final focused commentary, async block-reply delivery/generation/retry/deferred-event, and shutdown owners pass 329/329 across six files.
+- Gate 2.5's seven latest-drift intersections pass 517/517; the commentary correction reran its two affected owners 22/22.
+- Production and core-test types report only the previously classified unreconciled-dependency baseline: missing `FinishReason.TOO_MANY_TOOL_CALLS`, named `markdown-it` types, and `TuiMainScreen`, plus their derived implicit-any diagnostics. Every diagnostic owner path is byte-unchanged across `a6a9f553..6fe4e11a`; no candidate-only diagnostic remains.
+- No dependency install or reconciliation was performed.
+
+## §4 — 2026-08-24 static, dead-code, and hygiene proof
+
+- Targeted Oxfmt, Oxlint, and `git diff --check` pass for all six semantically resolved files.
+- Owned `check-changed` passes conflict markers, ratchets, attribution/deprecation checks, plugin boundaries, dependency/package guards, formatting, wrapper shadowing, and the warning-only temp report, then stops only at the exact dependency type baseline above.
+- The checkout's absolute cached Knip link was stale. Canonical Knip `6.32.2` reran from a fresh isolated cache/store: production, full-tree, and script unused-export scans all returned zero; production and full-tree unused-file scans also returned zero.
+- Manifest and lock status remained untouched. `src/skills/**` candidate diff is zero and the full `r: skill` labeler surface is zero.
