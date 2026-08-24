@@ -234,6 +234,7 @@ export async function runClaudeAppServerAttempt(
       sessionKey: sandboxSessionKey,
       runId: params.runId,
       channelId: hookChannelFields.channelId,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     };
 
     // 3. Materialize OpenClaw's tool registry for this turn.
@@ -570,6 +571,13 @@ export async function runClaudeAppServerAttempt(
     // media artifacts, audio-as-voice flag, heartbeat response. The bridge
     // mutates these as each tool call lands.
     result.didSendViaMessagingTool = bridge.telemetry.didSendViaMessagingTool;
+    // Without this the run result never carries source-reply delivery
+    // evidence, so `hasCompletedSourceReplyDeliveryEvidence` is false for
+    // every claude-bridge turn: message_tool_only runs are all accounted as
+    // `mute`, and undelivered-reply recovery re-nags a reply the agent
+    // already posted.
+    result.didDeliverSourceReplyViaMessageTool =
+      bridge.telemetry.didDeliverSourceReplyViaMessageTool;
     result.messagingToolSentTexts = bridge.telemetry.messagingToolSentTexts;
     result.messagingToolSentMediaUrls = bridge.telemetry.messagingToolSentMediaUrls;
     result.messagingToolSentTargets = bridge.telemetry.messagingToolSentTargets;

@@ -15,6 +15,11 @@
  *   - `isMessagingTool` + `isMessagingToolSendAction` detect when Claude
  *     called OpenClaw's `message` tool so we can populate
  *     `didSendViaMessagingTool` and the messagingToolSent* fields.
+ *   - `isDeliveredMessageToolOnlySourceReplyResult` decides whether such a
+ *     send actually satisfied the current source reply, so
+ *     `didDeliverSourceReplyViaMessageTool` and the per-send
+ *     `sourceReplyFinal` markers carry the same meaning they do on the
+ *     embedded and codex paths.
  */
 
 import {
@@ -22,6 +27,7 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   HEARTBEAT_RESPONSE_TOOL_NAME,
+  isDeliveredMessageToolOnlySourceReplyResult,
   isMessagingTool,
   isMessagingToolSendAction,
   isToolWrappedWithBeforeToolCallHook,
@@ -51,10 +57,19 @@ export type ClaudeDynamicToolHookContext = {
   sessionKey?: string;
   runId?: string;
   channelId?: string;
+  sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
 };
 
 export type ClaudeDynamicToolTelemetry = {
   didSendViaMessagingTool: boolean;
+  /**
+   * True once a messaging-tool send satisfied the run's current source
+   * reply. `hasCompletedSourceReplyDeliveryEvidence` reads this (plus the
+   * `sourceReplyFinal` markers below) to decide whether a
+   * `message_tool_only` turn delivered anything visible; without it every
+   * claude-bridge turn settles as if the agent had stayed silent.
+   */
+  didDeliverSourceReplyViaMessageTool: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
@@ -161,6 +176,7 @@ export function createClaudeDynamicToolBridge(params: {
   });
   const telemetry: ClaudeDynamicToolTelemetry = {
     didSendViaMessagingTool: false,
+    didDeliverSourceReplyViaMessageTool: false,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
@@ -196,7 +212,15 @@ export function createClaudeDynamicToolBridge(params: {
         >[0]["result"],
       });
       const isError = rawIsError || isResultError(result);
-      collectTelemetry({ telemetry, toolName: tool.name, args, result, isError });
+      collectTelemetry({
+        telemetry,
+        toolName: tool.name,
+        args,
+        result,
+        hookResult: rawResult,
+        isError,
+        sourceReplyDeliveryMode: hookContext.sourceReplyDeliveryMode,
+      });
       void runAgentHarnessAfterToolCallHook({
         toolName: tool.name,
         toolCallId: call.callId,
@@ -214,7 +238,14 @@ export function createClaudeDynamicToolBridge(params: {
         success: !isError,
       };
     } catch (err) {
-      collectTelemetry({ telemetry, toolName: tool.name, args, result: undefined, isError: true });
+      collectTelemetry({
+        telemetry,
+        toolName: tool.name,
+        args,
+        result: undefined,
+        isError: true,
+        sourceReplyDeliveryMode: hookContext.sourceReplyDeliveryMode,
+      });
       const message = err instanceof Error ? err.message : String(err);
       void runAgentHarnessAfterToolCallHook({
         toolName: tool.name,
@@ -242,7 +273,10 @@ function collectTelemetry(params: {
   toolName: string;
   args: Record<string, unknown>;
   result: unknown;
+  /** Pre-middleware result; carries the same delivery envelope codex reads. */
+  hookResult?: unknown;
   isError: boolean;
+  sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
 }): void {
   if (!params.isError && params.toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
     const response = normalizeHeartbeatToolResponse(
@@ -275,6 +309,28 @@ function collectTelemetry(params: {
     return;
   }
   params.telemetry.didSendViaMessagingTool = true;
+  // Did this send satisfy the run's *current source* reply? Mirrors codex's
+  // attribution (extensions/codex/.../dynamic-tools.ts). `allowExplicitSourceRoute`
+  // is deliberately left unset so a send carrying an explicit route
+  // (`to`/`channel`/`target`/...) is not credited as the source reply — the
+  // bridge has no confirmed target record to route-check it against, and
+  // failing closed here only costs a `mute`, while failing open would
+  // suppress genuine undelivered-reply recovery.
+  const deliveredSourceReply = isDeliveredMessageToolOnlySourceReplyResult({
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    toolName: params.toolName,
+    args: params.args,
+    result: params.result,
+    hookResult: params.hookResult,
+    isError: params.isError,
+  });
+  // `final` defaults to true: an ordinary `message(action=send)` with no
+  // `final` argument terminates the source reply, matching the message tool's
+  // own `resolveMessageToolSourceReplyFinal`.
+  const sourceReplyFinal = deliveredSourceReply ? params.args.final !== false : undefined;
+  if (deliveredSourceReply) {
+    params.telemetry.didDeliverSourceReplyViaMessageTool = true;
+  }
   // Source-reply path: the agent invoked a messaging tool to surface a
   // structured reply to a parent source message (not a fresh outbound
   // send). The tool result carries the rich payload under
@@ -285,7 +341,10 @@ function collectTelemetry(params: {
     (params.result as { details?: unknown } | undefined)?.details,
   );
   if (sourceReplyPayload) {
-    params.telemetry.messagingToolSourceReplyPayloads.push(sourceReplyPayload);
+    params.telemetry.messagingToolSourceReplyPayloads.push({
+      ...sourceReplyPayload,
+      ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
+    });
     return;
   }
   const text = readFirstString(params.args, ["text", "message", "body", "content"]);
@@ -302,6 +361,7 @@ function collectTelemetry(params: {
     threadId: readFirstString(params.args, ["threadId", "thread_id", "messageThreadId"]),
     ...(text ? { text } : {}),
     ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+    ...(sourceReplyFinal !== undefined ? { sourceReplyFinal } : {}),
   } as MessagingToolSend);
 }
 
