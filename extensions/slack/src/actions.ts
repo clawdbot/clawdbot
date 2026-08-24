@@ -683,7 +683,7 @@ function collectSlackThreadShares(
   return matches;
 }
 
-function hasSlackScopeMismatch(params: {
+function lacksSlackScopeProof(params: {
   file: SlackFileInfoSummary;
   channelId?: string;
   threadId?: string;
@@ -696,9 +696,8 @@ function hasSlackScopeMismatch(params: {
 
   const directIds = collectSlackDirectShareChannelIds(params.file);
   const sharedIds = collectSlackSharedChannelIds(params.file);
-  const hasChannelEvidence = directIds.size > 0 || sharedIds.size > 0;
   const inChannel = directIds.has(channelId) || sharedIds.has(channelId);
-  if (hasChannelEvidence && !inChannel) {
+  if (!inChannel) {
     return true;
   }
 
@@ -706,13 +705,7 @@ function hasSlackScopeMismatch(params: {
     return false;
   }
   const threadShares = collectSlackThreadShares(params.file, channelId);
-  if (threadShares.length === 0) {
-    return false;
-  }
   const threadEvidence = threadShares.filter((entry) => entry.threadTs || entry.ts);
-  if (threadEvidence.length === 0) {
-    return false;
-  }
   return !threadEvidence.some((entry) => entry.threadTs === threadId || entry.ts === threadId);
 }
 
@@ -735,7 +728,7 @@ export async function downloadSlackFile(
   if (!file?.url_private_download && !file?.url_private) {
     return null;
   }
-  if (hasSlackScopeMismatch({ file, channelId: opts.channelId, threadId: opts.threadId })) {
+  if (lacksSlackScopeProof({ file, channelId: opts.channelId, threadId: opts.threadId })) {
     return null;
   }
 

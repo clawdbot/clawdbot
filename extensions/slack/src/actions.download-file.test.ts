@@ -201,6 +201,52 @@ describe("downloadSlackFile", () => {
     expectNoMediaDownload(result);
   });
 
+  it.each([
+    { name: "public channel metadata", file: { channels: ["C123"] } },
+    { name: "private channel metadata", file: { groups: ["C123"] } },
+    { name: "DM metadata", file: { ims: ["C123"] } },
+    {
+      name: "share metadata",
+      file: { shares: { private: { C123: [{ ts: "111.111" }] } } },
+    },
+  ])("downloads when $name proves the requested channel", async ({ file }) => {
+    const client = createClient();
+    client.files.info.mockResolvedValueOnce({
+      file: makeSlackFileInfo(file),
+    });
+    resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
+
+    const result = await downloadSlackFile("F123", {
+      client,
+      token: "xoxb-test",
+      maxBytes: 1024,
+      channelId: "C123",
+    });
+
+    expect(result).toEqual(makeResolvedSlackMedia());
+  });
+
+  it("accepts positive channel proof even when Slack reports additional shares", async () => {
+    const client = createClient();
+    client.files.info.mockResolvedValueOnce({
+      file: makeSlackFileInfo({
+        channels: ["C123"],
+        has_more_shares: true,
+        skipped_shares: true,
+      }),
+    });
+    resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
+
+    const result = await downloadSlackFile("F123", {
+      client,
+      token: "xoxb-test",
+      maxBytes: 1024,
+      channelId: "C123",
+    });
+
+    expect(result).toEqual(makeResolvedSlackMedia());
+  });
+
   it("returns null when thread scope definitely mismatches file share thread", async () => {
     const client = createClient();
     client.files.info.mockResolvedValueOnce({
@@ -224,9 +270,11 @@ describe("downloadSlackFile", () => {
     expectNoMediaDownload(result);
   });
 
-  it("keeps legacy behavior when file metadata does not expose channel/thread shares", async () => {
+  it("returns null when file metadata proves the channel but not the requested thread", async () => {
     const client = createClient();
-    mockSuccessfulMediaDownload(client);
+    client.files.info.mockResolvedValueOnce({
+      file: makeSlackFileInfo({ channels: ["C123"] }),
+    });
 
     const result = await downloadSlackFile("F123", {
       client,
@@ -236,9 +284,44 @@ describe("downloadSlackFile", () => {
       threadId: "222.222",
     });
 
+    expectNoMediaDownload(result);
+  });
+
+  it.each([
+    { name: "share message timestamp", share: { ts: "111.111" } },
+    { name: "thread timestamp", share: { ts: "222.222", thread_ts: "111.111" } },
+  ])("downloads when $name proves the requested thread", async ({ share }) => {
+    const client = createClient();
+    client.files.info.mockResolvedValueOnce({
+      file: makeSlackFileInfo({
+        shares: { private: { C123: [share] } },
+      }),
+    });
+    resolveSlackMedia.mockResolvedValueOnce([makeResolvedSlackMedia()]);
+
+    const result = await downloadSlackFile("F123", {
+      client,
+      token: "xoxb-test",
+      maxBytes: 1024,
+      channelId: "C123",
+      threadId: "111.111",
+    });
+
     expect(result).toEqual(makeResolvedSlackMedia());
-    expect(resolveSlackMedia).toHaveBeenCalledTimes(1);
-    expectResolveSlackMediaCalledWithDefaults(client);
+  });
+
+  it("returns null when file metadata does not prove the requested channel", async () => {
+    const client = createClient();
+    mockSuccessfulMediaDownload(client);
+
+    const result = await downloadSlackFile("F123", {
+      client,
+      token: "xoxb-test",
+      maxBytes: 1024,
+      channelId: "C123",
+    });
+
+    expectNoMediaDownload(result);
   });
 
   it("resolves the bot token from cfg when no explicit token or client is provided", async () => {
