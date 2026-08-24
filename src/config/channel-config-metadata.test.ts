@@ -4,6 +4,7 @@ import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   collectChannelSchemaMetadataWithOwnership,
+  collectRuntimeDisplacedChannelOwners,
   type ChannelOwnershipPolicy,
 } from "./channel-config-metadata.js";
 
@@ -127,11 +128,14 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
   // decide that channel's schema.
   it("ignores a preference from a record that does not claim the channel", () => {
     const core = claimant({ id: "clickclack-core" });
-    const ghost = claimant({
-      id: "clickclack-ghost",
-      channels: [],
-      preferOver: ["clickclack-core"],
-    });
+    const ghost = {
+      ...claimant({
+        id: "clickclack-ghost",
+        channels: [],
+        preferOver: ["clickclack-core"],
+      }),
+      manifestPath: "/tmp/clickclack-ghost/openclaw.plugin.json",
+    };
 
     expect(ownerOf([ghost, core])).toBe("clickclack-core");
   });
@@ -251,6 +255,39 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     const second = claimant({ id: "clickclack-core", preferOver: ["clickclack-plus"] });
 
     expect(ownerOf([first, second])).toBe("clickclack-plus");
+  });
+
+  // Codex review on #123209: a ring longer than two — a names b, b names c, c names a — satisfies
+  // the reciprocal test in neither direction, so every member was displaced and the tie fell to
+  // the last claimant in registry order, while auto-enable settled the same ring by candidate
+  // processing order. A cycle settles nothing whatever its length: every member stays active and
+  // the schema follows the first claimant, matching the runtime facade's first registrant.
+  it.each([
+    { order: ["clickclack-a", "clickclack-b", "clickclack-c"], owner: "clickclack-a" },
+    { order: ["clickclack-c", "clickclack-b", "clickclack-a"], owner: "clickclack-c" },
+  ])("keeps the first claimant of a three-member ring ($order)", ({ order, owner }) => {
+    const byId = {
+      "clickclack-a": claimant({ id: "clickclack-a", preferOver: ["clickclack-b"] }),
+      "clickclack-b": claimant({ id: "clickclack-b", preferOver: ["clickclack-c"] }),
+      "clickclack-c": claimant({ id: "clickclack-c", preferOver: ["clickclack-a"] }),
+    };
+
+    expect(ownerOf(order.map((id) => byId[id as keyof typeof byId]))).toBe(owner);
+  });
+
+  // The four-member ring is where per-edge reasoning breaks down entirely: a and c sit on the
+  // ring together yet share no declared edge. If only declared pairs were set aside, the (a, c)
+  // comparison would fall through to last-writer and hand c the channel. Opposite corners must
+  // tie-break exactly like the mutual pair, so the whole component is set aside pairwise.
+  it("keeps the first claimant of a four-member ring", () => {
+    const ring = [
+      claimant({ id: "clickclack-a", preferOver: ["clickclack-b"] }),
+      claimant({ id: "clickclack-b", preferOver: ["clickclack-c"] }),
+      claimant({ id: "clickclack-c", preferOver: ["clickclack-d"] }),
+      claimant({ id: "clickclack-d", preferOver: ["clickclack-a"] }),
+    ];
+
+    expect(ownerOf(ring)).toBe("clickclack-a");
   });
 
   // Codex review P2 on #123209: a manifest that names itself declares nothing. Candidate discovery
@@ -415,6 +452,49 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
   });
 });
 
+// The loader consumes this displacement graph to decide which claimants cede a channel, so the
+// runtime plane must read a ring exactly as the schema plane does: no member displaces any other,
+// every member registers, and the first registrant keeps the channel. Displacing all of them
+// instead silently disabled every ring member but the auto-enable survivor.
+describe("collectRuntimeDisplacedChannelOwners on preference rings", () => {
+  function displacedFor(plugins: ReturnType<typeof claimant>[]) {
+    const registry = { plugins, diagnostics: [] } as unknown as PluginManifestRegistry;
+    return collectRuntimeDisplacedChannelOwners(registry, policyFor({}));
+  }
+
+  const ringOfThree = () => [
+    claimant({ id: "clickclack-a", preferOver: ["clickclack-b"] }),
+    claimant({ id: "clickclack-b", preferOver: ["clickclack-c"] }),
+    claimant({ id: "clickclack-c", preferOver: ["clickclack-a"] }),
+  ];
+
+  it.each([
+    { length: "three", plugins: ringOfThree() },
+    {
+      length: "four",
+      plugins: [
+        claimant({ id: "clickclack-a", preferOver: ["clickclack-b"] }),
+        claimant({ id: "clickclack-b", preferOver: ["clickclack-c"] }),
+        claimant({ id: "clickclack-c", preferOver: ["clickclack-d"] }),
+        claimant({ id: "clickclack-d", preferOver: ["clickclack-a"] }),
+      ],
+    },
+  ])("displaces nobody on a $length-member ring", ({ plugins }) => {
+    expect(displacedFor(plugins).get("clickclack")).toBeUndefined();
+  });
+
+  // The stand-off is the ring's alone. A fourth claimant outside it still applies its declaration
+  // against a ring member — and only that member is displaced, never the whole ring.
+  it("still applies an outside claimant's edge into a ring", () => {
+    const plugins = [
+      ...ringOfThree(),
+      claimant({ id: "clickclack-z", preferOver: ["clickclack-a"] }),
+    ];
+
+    expect([...(displacedFor(plugins).get("clickclack") ?? [])]).toEqual(["clickclack-a"]);
+  });
+});
+
 // Codex review P1 on #123209: ownership decides on `normalizeClaimedChannelId`, but the metadata
 // and redaction maps were keyed by the spelling the manifest declared. A claimant spelling the
 // channel differently landed in its own bucket, so a field only it marked sensitive carried no
@@ -507,5 +587,176 @@ describe("replacement chains across the materialization boundary", () => {
 
     // chain-c is never displaced, and it sits closest to the operator.
     expect(owner).toBe("chain-c");
+  });
+});
+
+// A catalog-preferred replacement can claim a channel while shipping no `channelConfigs`
+// descriptor of its own. Counting schema descriptors left such a channel out of displacement —
+// one descriptor is no contest — and the descriptor walk then installed the displaced fallback's
+// strict schema because no owner existed yet. Validation and the Control UI enforced the
+// fallback's `additionalProperties: false` schema against a channel the loader cedes to the
+// replacement, rejecting every key the replacement accepts. The contest counts claimants like the
+// runtime plane, and a displaced claimant may not seed the schema while the active winner serves
+// the channel: with no descriptor from the winner the channel stays permissive.
+describe("replacements that ship no descriptor", () => {
+  const fallback = () => ({
+    id: "zz-fallback",
+    origin: "global",
+    channels: ["zzalpha"],
+    channelConfigs: {
+      zzalpha: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: { fallbackToken: { type: "string" } },
+        },
+      },
+    },
+  });
+  const replacement = () => ({
+    id: "zz-replacement",
+    origin: "global",
+    channels: ["zzalpha"],
+    channelCatalogMeta: { id: "zzalpha", preferOver: ["zz-fallback"] },
+  });
+
+  it.each([
+    { order: "fallback first", plugins: () => [fallback(), replacement()] },
+    { order: "replacement first", plugins: () => [replacement(), fallback()] },
+  ])("drops the displaced fallback's schema on the ceded channel ($order)", ({ plugins }) => {
+    const registry = {
+      plugins: plugins(),
+      diagnostics: [],
+    } as unknown as PluginManifestRegistry;
+
+    const entry = collectChannelSchemaMetadataWithOwnership(registry).find(
+      (candidate) => candidate.id === "zzalpha",
+    );
+
+    expect(entry).toBeDefined();
+    expect(entry?.schemaPluginId).toBeUndefined();
+    expect(entry?.configSchema).toBeUndefined();
+  });
+
+  // The gate must not fire without an active, non-displaced winner. Only the all-inactive state
+  // reaches its guard: a replacement that is merely disabled never declares, so the fallback is
+  // not displaced and the gate's first condition already fails. With every claimant inactive the
+  // declarations are read from the whole claimant set — the fallback IS displaced — but nothing
+  // outranks its descriptor at runtime, so the schema must stay with the fallback.
+  it("keeps the displaced fallback's schema when no claimant is active", () => {
+    const registry = {
+      plugins: [fallback(), replacement()],
+      diagnostics: [],
+    } as unknown as PluginManifestRegistry;
+    const policy = policyFor({ isPluginActive: () => false });
+
+    const entry = collectChannelSchemaMetadataWithOwnership(registry, policy).find(
+      (candidate) => candidate.id === "zzalpha",
+    );
+
+    expect(entry?.schemaPluginId).toBe("zz-fallback");
+  });
+});
+
+// The descriptor walk read `channelConfigs` regardless of `record.channels`, even though the
+// manifest contract says `channels` declares ownership. While a channel is unconfigured no
+// candidate set exists, every claimant counts as active, and a closer-origin non-claimant won
+// the schema. The Control UI then offered its fields; saving one made the channel configured,
+// candidates narrowed to records that actually claim it, ownership flipped to the real claimant,
+// and its strict schema rejected the exact field the UI had just offered.
+describe("descriptors from records that do not claim the channel", () => {
+  function schemaPropertyKeys(entry: { configSchema?: Record<string, unknown> } | undefined) {
+    const properties = entry?.configSchema?.properties;
+    return Object.keys((properties as Record<string, unknown> | undefined) ?? {});
+  }
+
+  const claimantRecord = () => ({
+    id: "zz-claimant",
+    origin: "bundled",
+    channels: ["zzalpha"],
+    channelConfigs: {
+      zzalpha: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: { realKey: { type: "string" } },
+        },
+      },
+    },
+  });
+  const ghostRecord = () => ({
+    id: "zz-ghost",
+    origin: "config",
+    channels: ["zzother"],
+    manifestPath: "/tmp/zz-ghost/openclaw.plugin.json",
+    channelConfigs: {
+      zzalpha: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: { ghostKey: { type: "string" } },
+        },
+      },
+      zzother: {
+        schema: { type: "object", additionalProperties: true },
+      },
+    },
+  });
+
+  it("drops the non-claimant's descriptor and reports it once", () => {
+    const registry = {
+      plugins: [claimantRecord(), ghostRecord()],
+      diagnostics: [],
+    } as unknown as PluginManifestRegistry;
+
+    // The collector runs repeatedly against one registry; the drop must not accumulate.
+    collectChannelSchemaMetadataWithOwnership(registry);
+    const entry = collectChannelSchemaMetadataWithOwnership(registry).find(
+      (candidate) => candidate.id === "zzalpha",
+    );
+
+    expect(entry?.schemaPluginId).toBe("zz-claimant");
+    expect(schemaPropertyKeys(entry)).toContain("realKey");
+    const dropped = registry.diagnostics.filter((diagnostic) => diagnostic.pluginId === "zz-ghost");
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]?.level).toBe("warn");
+    expect(dropped[0]?.message).toContain("zzalpha");
+    // The claimed channel's own descriptor still lands.
+    const other = collectChannelSchemaMetadataWithOwnership(registry).find(
+      (candidate) => candidate.id === "zzother",
+    );
+    expect(other?.schemaPluginId).toBe("zz-ghost");
+  });
+
+  it("offers no field the post-save owner rejects across the configure flip", () => {
+    const registry = () =>
+      ({
+        plugins: [claimantRecord(), ghostRecord()],
+        diagnostics: [],
+      }) as unknown as PluginManifestRegistry;
+    // Unconfigured channel: no candidate set exists yet, so every claimant counts as active.
+    const offered = collectChannelSchemaMetadataWithOwnership(
+      registry(),
+      policyFor({ isPluginActive: () => true }),
+    ).find((candidate) => candidate.id === "zzalpha");
+    // The operator saves a field the surfaced schema offered; zzalpha becomes configured and
+    // candidates narrow to records that claim it, so the non-claimant goes inactive there.
+    const saved = collectChannelSchemaMetadataWithOwnership(
+      registry(),
+      policyFor({
+        isPluginActive: (pluginId, channelId) =>
+          channelId !== "zzalpha" || pluginId === "zz-claimant",
+      }),
+    ).find((candidate) => candidate.id === "zzalpha");
+
+    // Ownership must not flip on save: whatever fields the UI offered before the save must still
+    // be accepted by the owner enforced after it.
+    expect(offered?.schemaPluginId).toBe("zz-claimant");
+    expect(saved?.schemaPluginId).toBe("zz-claimant");
+    const offeredKeys = schemaPropertyKeys(offered);
+    const savedKeys = schemaPropertyKeys(saved);
+    expect(offeredKeys).toContain("realKey");
+    expect(offeredKeys).not.toContain("ghostKey");
+    expect(savedKeys).toEqual(expect.arrayContaining(offeredKeys));
   });
 });

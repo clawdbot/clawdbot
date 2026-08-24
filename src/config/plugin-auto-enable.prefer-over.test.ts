@@ -312,3 +312,121 @@ describe("shouldSkipPreferredPluginAutoEnable", () => {
     expect(shouldSkipPreferredPluginAutoEnable(skipParams("bundled"))).toBe(false);
   });
 });
+
+// Codex review on #123209: the one-hop test — does the entry name its displacer back — recognizes
+// only a mutual pair. On a ring of three or more it holds for no member, so every candidate found
+// its displacer, auto-enable disabled all but the processing-order survivor, and schema ownership
+// (which sets the whole ring aside) validated against a plugin the runtime had disabled. Both
+// planes share the component test now, so every ring member stays enabled.
+describe("shouldSkipPreferredPluginAutoEnable on preference rings", () => {
+  const ringParams = (ring: { pluginId: string; prefers: string }[]) => {
+    const candidates = ring.map(
+      ({ pluginId }) =>
+        ({
+          kind: "channel-configured",
+          pluginId,
+          channelId: "ringchat",
+        }) as PluginAutoEnableCandidate,
+    );
+    const registry = {
+      diagnostics: [],
+      plugins: ring.map(({ pluginId, prefers }) => ({
+        id: pluginId,
+        origin: "workspace",
+        channels: ["ringchat"],
+        channelConfigs: { ringchat: { preferOver: [prefers] } },
+      })),
+    } as unknown as PluginManifestRegistry;
+    return { candidates, registry };
+  };
+
+  it.each([
+    {
+      length: "three",
+      ring: [
+        { pluginId: "ring-a", prefers: "ring-b" },
+        { pluginId: "ring-b", prefers: "ring-c" },
+        { pluginId: "ring-c", prefers: "ring-a" },
+      ],
+    },
+    // Four members also rules out reasoning that special-cases the three-ring.
+    {
+      length: "four",
+      ring: [
+        { pluginId: "ring-a", prefers: "ring-b" },
+        { pluginId: "ring-b", prefers: "ring-c" },
+        { pluginId: "ring-c", prefers: "ring-d" },
+        { pluginId: "ring-d", prefers: "ring-a" },
+      ],
+    },
+  ])("skips no member of a $length-member ring", ({ ring }) => {
+    const { candidates, registry } = ringParams(ring);
+    const preferOverCache = new Map<string, string[]>();
+
+    for (const entry of candidates) {
+      expect(
+        shouldSkipPreferredPluginAutoEnable({
+          config: {} as OpenClawConfig,
+          entry,
+          configured: candidates,
+          env: {},
+          registry,
+          preferOverCache,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  // The ring is read over the union of each plugin's candidate edges, deliberately wider than the
+  // entry candidate's own channel: two plugins that each declare the other a succeeded predecessor
+  // on their own channels form a cycle in spirit, and "a cycle settles nothing" must cover every
+  // candidate of both — not skip whichever candidate happens to carry no edge itself.
+  it("keeps every candidate of a cross-channel reciprocal pair", () => {
+    const entry = {
+      kind: "channel-configured",
+      pluginId: "modern-suite",
+      channelId: "beta-chat",
+    } as PluginAutoEnableCandidate;
+    const configured = [
+      entry,
+      {
+        kind: "channel-configured",
+        pluginId: "modern-suite",
+        channelId: "alpha-chat",
+      } as PluginAutoEnableCandidate,
+      {
+        kind: "channel-configured",
+        pluginId: "legacy-suite",
+        channelId: "legacy-chat",
+      } as PluginAutoEnableCandidate,
+    ];
+    const registry = {
+      diagnostics: [],
+      plugins: [
+        {
+          id: "modern-suite",
+          origin: "workspace",
+          channels: ["alpha-chat", "beta-chat"],
+          channelConfigs: { "alpha-chat": { preferOver: ["legacy-suite"] } },
+        },
+        {
+          id: "legacy-suite",
+          origin: "workspace",
+          channels: ["legacy-chat"],
+          channelConfigs: { "legacy-chat": { preferOver: ["modern-suite"] } },
+        },
+      ],
+    } as unknown as PluginManifestRegistry;
+
+    expect(
+      shouldSkipPreferredPluginAutoEnable({
+        config: {} as OpenClawConfig,
+        entry,
+        configured,
+        env: {},
+        registry,
+        preferOverCache: new Map<string, string[]>(),
+      }),
+    ).toBe(false);
+  });
+});

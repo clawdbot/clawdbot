@@ -480,6 +480,44 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.config.plugins?.entries?.["pairchat-b"]?.enabled).toBe(true);
     });
 
+    // Codex review on #123209: with three claimants each naming the next around a ring, no pair
+    // is mutual, so candidate processing order disabled two of the three and left a survivor the
+    // schema plane never picked. A ring settles nothing whatever its length: no claimant is
+    // skipped, all register, and the runtime facade keeps the first registrant.
+    it("enables every claimant when three declare each other around a ring", () => {
+      const result = applyPluginAutoEnable({
+        config: { channels: { ringchat: { token: "ring" } } },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "ringchat-b",
+            channels: ["ringchat"],
+            channelConfigs: {
+              ringchat: { schema: { type: "object" }, preferOver: ["ringchat-c"] },
+            },
+          },
+          {
+            id: "ringchat-a",
+            channels: ["ringchat"],
+            channelConfigs: {
+              ringchat: { schema: { type: "object" }, preferOver: ["ringchat-b"] },
+            },
+          },
+          {
+            id: "ringchat-c",
+            channels: ["ringchat"],
+            channelConfigs: {
+              ringchat: { schema: { type: "object" }, preferOver: ["ringchat-a"] },
+            },
+          },
+        ]),
+      });
+
+      for (const id of ["ringchat-a", "ringchat-b", "ringchat-c"]) {
+        expect(result.config.plugins?.entries?.[id]?.enabled).toBe(true);
+      }
+    });
+
     it("does not disable a renamed external owner through its removed bundled channel id", () => {
       const result = applyPluginAutoEnable({
         config: {

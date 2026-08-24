@@ -11,6 +11,7 @@ import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-al
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
+import { collectPreferenceCycleComponents } from "./channel-preference-cycles.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import { isPluginPolicyDisabled } from "./plugin-replacement-eligibility.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -352,6 +353,36 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
         ),
     );
 
+  // The candidate set's preference graph, for the cycle test below. Nodes are the configured
+  // plugins the operator has not disabled — a policy-disabled claimant contributes no edges, so
+  // an operator-broken ring resolves here exactly as it does in the schema plane's declarant set.
+  // Edges union a plugin's declarations across its candidates; the cycle comment below says why
+  // the union is deliberately wider than the entry candidate's own channel. The resolutions land
+  // in `preferOverCache`, so the loop below pays no second resolution for them.
+  const cycleEdgesByPluginId = new Map<string, string[]>();
+  for (const candidate of params.configured) {
+    if (isPluginPolicyDisabled(params.config, candidate.pluginId, resolveAlias, params.registry)) {
+      continue;
+    }
+    const pluginId = resolveAlias(candidate.pluginId);
+    const edges = cycleEdgesByPluginId.get(pluginId);
+    if (edges === undefined) {
+      cycleEdgesByPluginId.set(pluginId, [...getPreferredOverIds(candidate)]);
+    } else {
+      edges.push(...getPreferredOverIds(candidate));
+    }
+  }
+  const componentByPluginId = new Map<string, number>();
+  collectPreferenceCycleComponents(
+    [...cycleEdgesByPluginId.keys()],
+    (nodeId) => cycleEdgesByPluginId.get(nodeId) ?? [],
+  ).forEach((members, componentIndex) => {
+    for (const member of members) {
+      componentByPluginId.set(member, componentIndex);
+    }
+  });
+  const entryComponent = componentByPluginId.get(entryPluginId);
+
   for (const other of params.configured) {
     if (resolveAlias(other.pluginId) === entryPluginId) {
       continue;
@@ -377,13 +408,21 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     if (declaredChannelId !== entryChannelId && claimsChannel(entryPluginId, declaredChannelId)) {
       continue;
     }
-    // Two claimants that each declare the other settle nothing. Applying both edges disables
-    // whichever candidate this loop reaches first and hands the channel to the survivor — an
-    // answer made of processing order, while schema ownership walks registry order and can pick
-    // the other plugin. Set the pair aside like a declaration naming an explicitly selected
-    // plugin: neither is skipped, both register, and the runtime facade keeps the first
-    // registrant — the same claimant schema ownership keeps for a set-aside pair.
-    if (getPreferredOverIds(params.entry).includes(resolveAlias(other.pluginId))) {
+    // Claimants whose declarations chase each other around a cycle settle nothing. Applying the
+    // edges disables every candidate but the one processing order reaches last, while schema
+    // ownership sets the whole component aside and keeps the first claimant. So the entry
+    // survives whenever it shares a cycle component with its displacer: nobody on the ring is
+    // skipped, all register, and the runtime facade keeps the first registrant — the same
+    // claimant schema ownership keeps. The component is read over the union of each plugin's
+    // candidate edges, deliberately wider than the one-hop mutual check it replaces, which read
+    // only the entry candidate's own channel: two plugins that each name the other a succeeded
+    // predecessor on their own channels form a cycle in spirit, and the stand-off must cover
+    // every candidate of both plugins rather than skip whichever candidate carries no edge
+    // itself.
+    if (
+      entryComponent !== undefined &&
+      entryComponent === componentByPluginId.get(resolveAlias(other.pluginId))
+    ) {
       continue;
     }
     return true;

@@ -7,10 +7,12 @@ import {
  * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { collectPreferenceCycleComponents } from "./channel-preference-cycles.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
@@ -306,12 +308,45 @@ function collectDisplacedOwnersForClaimants(
         declared.set(declarantId, setAsideIds);
         setAsideIds.add(namedId);
       };
+      // Resolved once per declarant and read twice below: resolving can consult an external
+      // plugin catalog, and the cycle computation must see exactly the edges the displacement
+      // loop applies.
+      const declarantEdges = new Map<string, string[]>();
       for (const record of declarants) {
-        for (const replacedId of policy.resolveChannelPreferOverIds(record, claimedId)) {
+        const resolved = policy.resolveChannelPreferOverIds(record, claimedId);
+        const edges = declarantEdges.get(record.id);
+        if (edges === undefined) {
+          declarantEdges.set(record.id, [...resolved]);
+        } else {
+          edges.push(...resolved);
+        }
+      }
+      // Declarants on one preference cycle settle nothing among themselves: every member both
+      // displaces and is displaced, so no member outranks another. The reciprocal-pair rule was
+      // the 2-member case of this, but a longer ring satisfies it in neither direction, so every
+      // member got displaced and the tie fell to registry order while auto-enable settled the
+      // same ring by processing order. Every pair in the component is set aside, declared edge
+      // or not — a 4-cycle's opposite corners share no edge yet must tie-break exactly like the
+      // mutual pair, or their comparison falls through to last-writer mid-ring.
+      const componentByDeclarantId = new Map<string, number>();
+      collectPreferenceCycleComponents(
+        [...declarantEdges.keys()],
+        (nodeId) => declarantEdges.get(nodeId) ?? [],
+      ).forEach((members, componentIndex) => {
+        members.forEach((member, memberIndex) => {
+          componentByDeclarantId.set(member, componentIndex);
+          // One direction per pair suffices: `hasSuppressedChannelDeclaration` is symmetric.
+          for (const laterMember of members.slice(memberIndex + 1)) {
+            setAsideDeclaration(member, laterMember);
+          }
+        });
+      });
+      for (const [declarantId, declaredIds] of declarantEdges) {
+        for (const replacedId of declaredIds) {
           // A manifest that names itself declares nothing: `shouldSkipPreferredPluginAutoEnable`
           // skips the self comparison, so a self-edge would strand ownership on another claimant
           // while that plugin stays active.
-          if (replacedId === record.id) {
+          if (replacedId === declarantId) {
             continue;
           }
           // A declaration naming an explicitly selected plugin is set aside, not applied — the
@@ -320,21 +355,16 @@ function collectDisplacedOwnersForClaimants(
           // facade rejects the later registration, while an undeclared pair stays on last-writer.
           // The two are indistinguishable at decision time, so record the suppression here.
           if (policy.isPluginExplicitlySelected(replacedId)) {
-            setAsideDeclaration(record.id, replacedId);
+            setAsideDeclaration(declarantId, replacedId);
             continue;
           }
-          // Two declarants that each name the other settle nothing either. Displacing both let
-          // the tie fall through to registry order while auto-enable settles the same pair by
-          // candidate processing order, so validation could select one plugin's schema and
-          // startup serve the other. `shouldSkipPreferredPluginAutoEnable` skips neither of a
-          // mutual pair for the same reason; setting the pair aside here keeps both claimants
-          // active and leaves the channel with the first registrant on both planes.
-          const replacedDeclarant = declarants.find((declarant) => declarant.id === replacedId);
+          // An edge between two members of one cycle component is the stand-off recorded above;
+          // an edge from outside a component, or leaving one, displaces exactly as before.
+          const componentIndex = componentByDeclarantId.get(declarantId);
           if (
-            replacedDeclarant &&
-            policy.resolveChannelPreferOverIds(replacedDeclarant, claimedId).includes(record.id)
+            componentIndex !== undefined &&
+            componentIndex === componentByDeclarantId.get(replacedId)
           ) {
-            setAsideDeclaration(record.id, replacedId);
             continue;
           }
           const replacedIds = displaced.get(claimedId) ?? new Set<string>();
@@ -354,24 +384,22 @@ function collectDisplacedOwnersForClaimants(
 }
 
 /**
- * Schema-plane displacement: a channel counts as contested only when two or more claimants supply
- * a schema descriptor — with fewer there is no schema contest to settle, and presentation for such
- * channels stays with origin rank and registry order.
+ * Displacement over the claimant set, shared by both planes: a channel counts as contested once
+ * two records claim it in `record.channels`, descriptors or not. A bare claim serves a channel —
+ * `channelConfigs` is optional, and a channel declared without one still registers — so the
+ * schema plane must count the contest exactly as the runtime plane does. Counting schema
+ * descriptors here instead let a preferred replacement that ships no descriptor keep the count at
+ * one: the channel then left displacement entirely, the fallback the replacement named was never
+ * displaced on this plane, and the fallback's strict schema stayed surfaced for a channel the
+ * loader cedes to the replacement — validation rejected every key the replacement accepts.
  */
 function collectDisplacedChannelOwners(
   registry: PluginManifestRegistry,
   policy: ChannelOwnershipPolicy,
 ): { displaced: DisplacedChannelOwners; suppressed: SuppressedChannelDeclarations } {
-  const schemaClaimantCounts = new Map<string, number>();
-  for (const record of registry.plugins) {
-    for (const channelId of Object.keys(record.channelConfigs ?? {})) {
-      const claimedId = normalizeClaimedChannelId(channelId);
-      schemaClaimantCounts.set(claimedId, (schemaClaimantCounts.get(claimedId) ?? 0) + 1);
-    }
-  }
   const claimantsByChannel = collectChannelClaimants(registry);
-  for (const claimedId of claimantsByChannel.keys()) {
-    if ((schemaClaimantCounts.get(claimedId) ?? 0) < 2) {
+  for (const [claimedId, claimants] of claimantsByChannel) {
+    if (claimants.length < 2) {
       claimantsByChannel.delete(claimedId);
     }
   }
@@ -379,22 +407,15 @@ function collectDisplacedChannelOwners(
 }
 
 /**
- * Runtime-plane displacement: a bare claim serves a channel — `channelConfigs` is optional, and a
- * channel declared without one still registers — so contest is two claimants, descriptors or not.
- * Gating on schema descriptors here let a fallback with no descriptor keep a channel its
- * replacement declared it takes, settled by discovery order — the defect the cede exists to close.
+ * Runtime-plane displacement, read by the loader to decide which claimants cede a channel. It is
+ * the same contest as the schema plane on purpose: the two planes counting differently is exactly
+ * what let one plane keep a plugin the other had already ruled out.
  */
 export function collectRuntimeDisplacedChannelOwners(
   registry: PluginManifestRegistry,
   policy: ChannelOwnershipPolicy,
 ): DisplacedChannelOwners {
-  const claimantsByChannel = collectChannelClaimants(registry);
-  for (const [claimedId, claimants] of claimantsByChannel) {
-    if (claimants.length < 2) {
-      claimantsByChannel.delete(claimedId);
-    }
-  }
-  return collectDisplacedOwnersForClaimants(claimantsByChannel, policy).displaced;
+  return collectDisplacedChannelOwners(registry, policy).displaced;
 }
 
 /**
@@ -482,6 +503,10 @@ export function collectChannelSchemaMetadataWithOwnership(
   const byChannelId = new Map<string, ChannelMetadataRecord>();
   const { displaced: displacedOwners, suppressed: suppressedDeclarations } =
     collectDisplacedChannelOwners(registry, policy);
+  // Who claims each channel, for the two descriptor gates below: a descriptor is read only from a
+  // record that claims the channel, and a displaced claimant may not seed an empty channel while
+  // an active claimant that beat it serves the channel.
+  const claimantsByChannel = collectChannelClaimants(registry);
   // Redaction is a property of the field, not of whichever claimant wins the schema. A displaced
   // plugin's config can survive under the shared channel when the replacement accepts additional
   // properties, so dropping its hints with its schema would leave a retained secret with no hint
@@ -554,6 +579,36 @@ export function collectChannelSchemaMetadataWithOwnership(
       // Same canonicalization as the declaration loop: a sensitive hint collected under a
       // non-canonical spelling never lines up with the config path redaction actually reads.
       const channelId = normalizeClaimedChannelId(declaredChannelId);
+      // Only a record that claims the channel in `record.channels` may supply its descriptor:
+      // auto-enable and the channel facade build candidate sets from that list alone. Reading the
+      // descriptor anyway let a closer-origin non-claimant win an unconfigured channel's schema —
+      // with no candidate set yet every claimant counts as active — so the Control UI offered the
+      // non-claimant's fields, and the first save narrowed candidates to real claimants and flipped
+      // ownership to a strict schema that rejects the exact field the UI just offered. Manifest
+      // validation only warns about the opposite gap (a claim without a descriptor), so the drop
+      // is reported here where it is decided.
+      if (!claimantsByChannel.get(channelId)?.includes(record)) {
+        const message = `plugin ships channelConfigs metadata for ${sanitizeForLog(channelId)} (in its manifest or merged from the official plugin catalog) without declaring the channel in openclaw.plugin.json#channels; ignoring the descriptor. Only a claimant may supply a channel's config schema — add the channel to channels if this plugin should own it.`;
+        const pluginId = sanitizeForLog(record.id);
+        // The collector runs many times against one registry (validation, schema responses,
+        // reloads), so an already-reported drop must not accumulate duplicates.
+        if (
+          !registry.diagnostics.some(
+            (diagnostic) =>
+              diagnostic.level === "warn" &&
+              diagnostic.pluginId === pluginId &&
+              diagnostic.message === message,
+          )
+        ) {
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId,
+            source: sanitizeForLog(record.manifestPath),
+            message,
+          });
+        }
+        continue;
+      }
       // Collect before any ownership decision: a claimant that loses the schema still contributes
       // sensitivity, and the decision below `continue`s past this point for losers.
       for (const [relPath, hint] of Object.entries(channelConfig.uiHints ?? {})) {
@@ -595,6 +650,25 @@ export function collectChannelSchemaMetadataWithOwnership(
         if (decision === "keepCurrent") {
           continue;
         }
+      } else if (
+        isDisplacedChannelOwner(displacedOwners, channelId, record.id) &&
+        claimantsByChannel
+          .get(channelId)
+          ?.some(
+            (claimant) =>
+              !isDisplacedChannelOwner(displacedOwners, channelId, claimant.id) &&
+              policy.isPluginActive(claimant.id, channelId),
+          )
+      ) {
+        // The ownership decision above only protects an existing owner, so the first descriptor
+        // used to install unconditionally. When the claimant that wins the channel ships no
+        // descriptor of its own, that seeded the displaced fallback's strict schema for a channel
+        // the loader cedes to the winner, and validation then rejected every key the winner
+        // accepts. A displaced claimant may not seed the schema while an active, non-displaced
+        // claimant exists to serve the channel; with no descriptor from that winner the channel
+        // correctly stays permissive. When every claimant is displaced or inactive nothing
+        // outranks this record at runtime, so its descriptor still lands.
+        continue;
       }
       // Accepted tradeoff, recorded so it is a decision and not an oversight: a replacement that
       // wins the channel supplies the schema, so a strict replacement can reject a key the operator
