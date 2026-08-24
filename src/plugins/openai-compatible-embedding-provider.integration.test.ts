@@ -44,6 +44,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
 
   function createOptions(params: {
     providerOwnsDestination?: boolean;
+    providerBaseUrl?: string;
     remote: NonNullable<EmbeddingProviderCreateOptions["remote"]>;
   }): EmbeddingProviderCreateOptions {
     return {
@@ -52,9 +53,9 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
           providers: {
             "tenant-embeddings": {
               api: "openai-completions",
-              baseUrl: params.providerOwnsDestination
-                ? baseUrl
-                : "https://provider.example.test/v1",
+              baseUrl:
+                params.providerBaseUrl ??
+                (params.providerOwnsDestination ? baseUrl : "https://provider.example.test/v1"),
               apiKey: "synthetic-provider-key",
               headers: { "X-Provider-Tenant": "provider-tenant", "X-Shared": "provider-value" },
               models: [],
@@ -71,6 +72,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
   it.each<{
     name: string;
     providerOwnsDestination?: boolean;
+    queryDistinctDestination?: boolean;
     remote: NonNullable<EmbeddingProviderCreateOptions["remote"]>;
     authorization: string | undefined;
     expectedHeaders: Record<string, string>;
@@ -91,6 +93,13 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
     },
     {
       name: "different destination receives only remote-owned credentials",
+      remote: { apiKey: "synthetic-remote-key", headers: { "X-Remote-Tenant": "remote-tenant" } },
+      authorization: "Bearer synthetic-remote-key",
+      expectedHeaders: { "x-remote-tenant": "remote-tenant" },
+    },
+    {
+      name: "query-distinct destination preserves its tenant and excludes provider credentials",
+      queryDistinctDestination: true,
       remote: { apiKey: "synthetic-remote-key", headers: { "X-Remote-Tenant": "remote-tenant" } },
       authorization: "Bearer synthetic-remote-key",
       expectedHeaders: { "x-remote-tenant": "remote-tenant" },
@@ -131,23 +140,38 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
       authorization: "Bearer ${OPENCLAW_TEST_EMBEDDING_LITERAL_KEY}",
       expectedHeaders: { "x-literal": "$OPENCLAW_TEST_EMBEDDING_LITERAL_HEADER" },
     },
-  ])("$name", async ({ providerOwnsDestination, remote, authorization, expectedHeaders }) => {
-    const result = await openAICompatibleEmbeddingProviderAdapter.create(
-      createOptions({ providerOwnsDestination, remote }),
-    );
+  ])(
+    "$name",
+    async ({
+      providerOwnsDestination,
+      queryDistinctDestination,
+      remote,
+      authorization,
+      expectedHeaders,
+    }) => {
+      const result = await openAICompatibleEmbeddingProviderAdapter.create(
+        createOptions({
+          providerOwnsDestination,
+          ...(queryDistinctDestination ? { providerBaseUrl: `${baseUrl}?tenant=provider` } : {}),
+          remote: queryDistinctDestination
+            ? { ...remote, baseUrl: `${baseUrl}?tenant=remote` }
+            : remote,
+        }),
+      );
 
-    await expect(result.provider?.embed("hello")).resolves.toEqual(vector);
-    expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({
-      url: "/v1/embeddings",
-      headers: expectedHeaders,
-    });
-    expect(requests[0]?.headers.authorization).toBe(authorization);
-    if (!providerOwnsDestination) {
-      expect(requests[0]?.headers).not.toHaveProperty("x-provider-tenant");
-      expect(requests[0]?.headers).not.toHaveProperty("x-shared");
-    }
-  });
+      await expect(result.provider?.embed("hello")).resolves.toEqual(vector);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        url: `/v1/embeddings${queryDistinctDestination ? "?tenant=remote" : ""}`,
+        headers: expectedHeaders,
+      });
+      expect(requests[0]?.headers.authorization).toBe(authorization);
+      if (!providerOwnsDestination) {
+        expect(requests[0]?.headers).not.toHaveProperty("x-provider-tenant");
+        expect(requests[0]?.headers).not.toHaveProperty("x-shared");
+      }
+    },
+  );
 
   it.each(["apiKey", "header"])("rejects an unresolved remote %s before egress", async (field) => {
     const ref = { source: "env" as const, provider: "default", id: "MISSING_EMBEDDING_SECRET" };

@@ -146,6 +146,11 @@ function resolveLmstudioLocalServiceBaseUrl(
   return /\/api\/v1$/iu.test(configuredPath) ? `${serverBaseUrl}/api/v1` : `${serverBaseUrl}/v1`;
 }
 
+function resolveLmstudioEmbeddingBaseUrl(configuredBaseUrl?: string): string {
+  const query = configuredBaseUrl?.match(/\?[^#]*/u)?.[0] ?? "";
+  return `${resolveLmstudioInferenceBase(configuredBaseUrl)}${query}`;
+}
+
 async function resolveLmstudioEmbeddingModelKey(params: {
   baseUrl: string;
   apiKey?: string;
@@ -193,8 +198,8 @@ export async function createLmstudioEmbeddingProvider(
       : providerBaseUrl && providerBaseUrl.length > 0
         ? providerBaseUrl
         : undefined;
-  const baseUrl = resolveLmstudioInferenceBase(configuredBaseUrl);
-  const providerOwnedBaseUrl = resolveLmstudioInferenceBase(providerBaseUrl);
+  const baseUrl = resolveLmstudioEmbeddingBaseUrl(configuredBaseUrl);
+  const providerOwnedBaseUrl = resolveLmstudioEmbeddingBaseUrl(providerBaseUrl);
   const providerOwnsDestination =
     !baseUrlSource ||
     embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl: providerOwnedBaseUrl });

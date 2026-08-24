@@ -87,9 +87,19 @@ describe("Gemini embedding provider", () => {
       expectedApiKey: "GOOGLE_API_KEY",
       expectedHeaders: { "X-Remote-Tenant": "remote-b" },
     },
+    {
+      name: "query-distinct on the provider host",
+      remote: {
+        baseUrl: `${providerBaseUrl}?tenant=remote`,
+        apiKey: "remote-tenant-key",
+        headers: { "X-Remote-Tenant": "remote-b" },
+      },
+      expectedApiKey: "remote-tenant-key",
+      expectedHeaders: { "X-Remote-Tenant": "remote-b" },
+    },
   ])("binds Gemini credentials to the $name destination", async (testCase) => {
     vi.stubEnv("GOOGLE_API_KEY", testCase.remote.baseUrl === providerBaseUrl ? "" : "ambient-bait");
-    const { client } = await createGeminiEmbeddingProvider({
+    const { client, provider } = await createGeminiEmbeddingProvider({
       config: config as never,
       provider: "google",
       remote: testCase.remote,
@@ -102,6 +112,20 @@ describe("Gemini embedding provider", () => {
     if (testCase.remote.baseUrl !== providerBaseUrl) {
       expect(client.apiKeys).toEqual([testCase.expectedApiKey]);
       expect(client.headers).not.toHaveProperty("X-Provider-Tenant");
+    }
+    if (testCase.remote.baseUrl.includes("?")) {
+      const fetchMock = installFetchMock(() => ({ embedding: { values: [1, 0] } }));
+      await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+      const fetchInput = requireFirstFetchInput(fetchMock);
+      const requestUrl = new URL(
+        typeof fetchInput === "string"
+          ? fetchInput
+          : fetchInput instanceof URL
+            ? fetchInput.href
+            : fetchInput.url,
+      );
+      expect(requestUrl.pathname).toBe("/v1beta/models/gemini-embedding-001:embedContent");
+      expect(requestUrl.search).toBe("?tenant=remote");
     }
   });
 

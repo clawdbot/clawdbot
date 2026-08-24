@@ -8,7 +8,20 @@ afterEach(() => {
 });
 
 describe("LM Studio embedding request headers", () => {
-  it("preserves resolved remote literals while resolving provider-owned headers", async () => {
+  it.each([
+    {
+      name: "preserves resolved remote literals while resolving provider-owned headers",
+      providerQuery: "",
+      remoteQuery: "",
+      providerOwnsDestination: true,
+    },
+    {
+      name: "preserves query-distinct destinations without inheriting provider credentials",
+      providerQuery: "?tenant=provider",
+      remoteQuery: "?tenant=remote",
+      providerOwnsDestination: false,
+    },
+  ])("$name", async ({ providerQuery, remoteQuery, providerOwnsDestination }) => {
     vi.stubEnv("NO_PROXY", "127.0.0.1");
     vi.stubEnv("no_proxy", "127.0.0.1");
     vi.stubEnv("OPENCLAW_TEST_LMSTUDIO_LITERAL", "ambient-bait");
@@ -38,7 +51,7 @@ describe("LM Studio embedding request headers", () => {
           models: {
             providers: {
               lmstudio: {
-                baseUrl,
+                baseUrl: `${baseUrl}${providerQuery}`,
                 params: { preload: false },
                 headers: {
                   "X-Provider-Only": "${OPENCLAW_TEST_LMSTUDIO_PROVIDER}",
@@ -53,7 +66,7 @@ describe("LM Studio embedding request headers", () => {
         model: "fixture-embedding-model",
         fallback: "none",
         remote: {
-          baseUrl,
+          baseUrl: `${baseUrl}${remoteQuery}`,
           apiKey: "synthetic-memory-key",
           headers: {
             "X-Already-Resolved": "  ${OPENCLAW_TEST_LMSTUDIO_LITERAL}  ",
@@ -66,16 +79,19 @@ describe("LM Studio embedding request headers", () => {
       await expect(provider.embedQuery("hello")).resolves.toEqual([0.25, 0.5, 0.75]);
       expect(observedRequests).toMatchObject([
         {
-          url: "/v1/embeddings",
+          url: `/v1/embeddings${remoteQuery}`,
           headers: {
             "x-already-resolved": "${OPENCLAW_TEST_LMSTUDIO_LITERAL}",
             "x-shared": "remote-value",
-            "x-provider-only": "resolved-provider-value",
+            ...(providerOwnsDestination ? { "x-provider-only": "resolved-provider-value" } : {}),
             authorization: "Bearer synthetic-memory-key",
           },
         },
       ]);
       expect(observedRequests[0]?.headers).not.toHaveProperty("x-empty");
+      if (!providerOwnsDestination) {
+        expect(observedRequests[0]?.headers).not.toHaveProperty("x-provider-only");
+      }
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {

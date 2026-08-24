@@ -41,6 +41,7 @@ export {
   normalizeEmbeddingModelWithPrefixes,
   postJsonWithRetry,
   readEmbeddingBatchJsonl,
+  resolveEmbeddingEndpointUrl,
   resolveBatchCompletionFromStatus,
   resolveCompletedBatchResult,
   resolveRemoteEmbeddingBearerClient,

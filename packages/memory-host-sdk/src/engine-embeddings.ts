@@ -58,6 +58,7 @@ export { debugEmbeddingsLog } from "./host/embeddings-debug.js";
 export { normalizeEmbeddingModelWithPrefixes } from "./host/embeddings-model-normalize.js";
 export {
   embeddingProviderOwnsDestination,
+  resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,
 } from "./host/embeddings-remote-client.js";

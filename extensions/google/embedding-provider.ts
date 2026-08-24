@@ -3,6 +3,7 @@ import {
   buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
   embeddingProviderOwnsDestination,
+  resolveEmbeddingEndpointUrl,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
   type EmbeddingInput,
@@ -243,7 +244,10 @@ function normalizeGeminiBaseUrl(raw: string): string {
   const trimmed = raw.replace(/\/+$/, "");
   const openAiIndex = trimmed.indexOf("/openai");
   if (openAiIndex > -1) {
-    return normalizeGoogleApiBaseUrl(trimmed.slice(0, openAiIndex));
+    const queryIndex = trimmed.indexOf("?", openAiIndex);
+    return normalizeGoogleApiBaseUrl(
+      `${trimmed.slice(0, openAiIndex)}${queryIndex < 0 ? "" : trimmed.slice(queryIndex)}`,
+    );
   }
   return normalizeGoogleApiBaseUrl(trimmed);
 }
@@ -260,7 +264,6 @@ function normalizeGoogleApiBaseUrl(baseUrl: string): string {
   try {
     const url = new URL(trimmed);
     url.hash = "";
-    url.search = "";
     if (
       url.origin.toLowerCase() === "https://generativelanguage.googleapis.com" &&
       url.pathname.replace(/\/+$/, "") === ""
@@ -277,9 +280,11 @@ export async function createGeminiEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: GeminiEmbeddingClient }> {
   const client = await resolveGeminiEmbeddingClient(options);
-  const baseUrl = client.baseUrl.replace(/\/$/, "");
-  const embedUrl = `${baseUrl}/${client.modelPath}:embedContent`;
-  const batchUrl = `${baseUrl}/${client.modelPath}:batchEmbedContents`;
+  const embedUrl = resolveEmbeddingEndpointUrl(client.baseUrl, `${client.modelPath}:embedContent`);
+  const batchUrl = resolveEmbeddingEndpointUrl(
+    client.baseUrl,
+    `${client.modelPath}:batchEmbedContents`,
+  );
   const isV2 = isGeminiEmbedding2Model(client.model);
   const outputDimensionality = client.outputDimensionality;
 
@@ -421,8 +426,8 @@ async function resolveGeminiEmbeddingClient(
     model,
     modelPath,
     outputDimensionality,
-    embedEndpoint: `${baseUrl}/${modelPath}:embedContent`,
-    batchEndpoint: `${baseUrl}/${modelPath}:batchEmbedContents`,
+    embedEndpoint: resolveEmbeddingEndpointUrl(baseUrl, `${modelPath}:embedContent`),
+    batchEndpoint: resolveEmbeddingEndpointUrl(baseUrl, `${modelPath}:batchEmbedContents`),
   });
   return { baseUrl, headers, ssrfPolicy, model, modelPath, apiKeys, outputDimensionality };
 }

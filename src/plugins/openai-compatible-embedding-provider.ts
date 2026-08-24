@@ -32,6 +32,7 @@ const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
 type OpenAICompatibleEmbeddingClient = {
   providerId: string;
   baseUrl: string;
+  endpointUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
@@ -326,7 +327,7 @@ async function postEmbeddingRequest(params: {
       : undefined;
   try {
     const { response, release } = await fetchWithSsrFGuard({
-      url: `${client.baseUrl}/embeddings`,
+      url: client.endpointUrl,
       init: {
         method: "POST",
         headers: client.headers,
@@ -366,11 +367,10 @@ async function createOpenAICompatibleEmbeddingClient(
   const providerBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
   const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? providerBaseUrl);
   // The embedding SDK also loads the provider registry; keep this shared policy edge lazy.
+  const { embeddingProviderOwnsDestination, resolveEmbeddingEndpointUrl } =
+    await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
   const providerOwnsDestination =
-    providerBaseUrl !== undefined &&
-    (
-      await import("../plugin-sdk/memory-core-host-engine-embeddings.js")
-    ).embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
+    providerBaseUrl !== undefined && embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
   const model = normalizeModel(options.model, options.provider);
   const inputType = normalizeOptionalInputType(options.inputType);
   const queryInputType = normalizeOptionalInputType(options.queryInputType);
@@ -393,6 +393,7 @@ async function createOpenAICompatibleEmbeddingClient(
   return {
     providerId,
     baseUrl,
+    endpointUrl: resolveEmbeddingEndpointUrl(baseUrl, "embeddings"),
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
     model,

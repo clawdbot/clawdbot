@@ -43,6 +43,14 @@ export function embeddingProviderOwnsDestination(params: {
   return baseUrlKey !== undefined && baseUrlKey === providerBaseUrlKey;
 }
 
+/** Append an embedding endpoint without changing its destination-owned query. */
+export function resolveEmbeddingEndpointUrl(baseUrl: string, endpoint: string): string {
+  const url = new URL(baseUrl);
+  url.pathname = `${url.pathname.replace(/\/+$/u, "")}/${endpoint.replace(/^\/+/, "")}`;
+  url.hash = "";
+  return url.toString();
+}
+
 function resolveEmbeddingHeaders(params: {
   headers: Record<string, unknown> | undefined;
   path: string;
