@@ -57,13 +57,17 @@ Every option is optional. The defaults are a working setup.
 | `attributionUrl`  | `https://db-ip.com`           | Link target for the credit.                                          |
 | `refreshDays`     | `30`                          | How stale the cached database may get before it is downloaded again. |
 
-```json
+```json5
 {
-  "plugins": {
-    "geolocation": {
-      "refreshDays": 7
-    }
-  }
+  plugins: {
+    entries: {
+      geolocation: {
+        config: {
+          refreshDays: 7,
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -73,15 +77,19 @@ Monthly builds appear a few days into the month, so the plugin tries the current
 
 Set `databaseUrl` together with both attribution fields. The credit belongs to whichever dataset you point at, so changing the source without changing the credit misattributes the data:
 
-```json
+```json5
 {
-  "plugins": {
-    "geolocation": {
-      "databaseUrl": "https://example.internal/geoip/city.mmdb",
-      "attributionText": "IP data by Example",
-      "attributionUrl": "https://example.internal"
-    }
-  }
+  plugins: {
+    entries: {
+      geolocation: {
+        config: {
+          databaseUrl: "https://example.internal/geoip/city.mmdb",
+          attributionText: "IP data by Example",
+          attributionUrl: "https://example.internal",
+        },
+      },
+    },
+  },
 }
 ```
 
