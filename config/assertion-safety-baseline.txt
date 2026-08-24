@@ -3091,7 +3091,7 @@ src/gateway/session-companion-rpc.ts	3
 src/gateway/session-history-state.ts	3
 src/gateway/session-lifecycle-state.ts	1
 src/gateway/session-observer-rpc.ts	1
-src/gateway/session-recovery-service.ts	3
+src/gateway/session-recovery-service.ts	2
 src/gateway/session-sharing-target-input.ts	2
 src/gateway/session-sharing.ts	1
 src/gateway/session-transcript-derived-readers.ts	2

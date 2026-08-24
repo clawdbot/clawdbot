@@ -12,6 +12,7 @@ import { recoverSessionEntryFromRestartTombstone } from "../config/sessions/sess
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -26,6 +27,10 @@ import {
   loadGatewaySessionEntryReadOnly,
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
+import {
+  prepareSessionWorkerPlacementForArchive,
+  type SessionWorkerPlacementContext,
+} from "./worker-environments/session-placement-lifecycle.js";
 
 export type SessionRecoveryContinuationOutcome = SessionsRecoverResult["continuation"];
 
@@ -62,6 +67,7 @@ export async function recoverGatewaySession(params: {
   key: string;
   requestingOperatorProfileId?: string;
   operatorRoleActor?: GatewayOperatorRoleActor;
+  workerPlacementContext: SessionWorkerPlacementContext;
   launchContinuation: (params: {
     agentId: string;
     idempotencyKey: string;
@@ -74,9 +80,18 @@ export async function recoverGatewaySession(params: {
     key: params.key,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  const initialSource = loadGatewaySessionEntryReadOnly(sourceTarget.canonicalKey, {
-    agentId: sourceTarget.agentId,
-  }).entry as InternalSessionEntry | undefined;
+  const readSource = () =>
+    loadGatewaySessionEntryReadOnly(sourceTarget.canonicalKey, {
+      agentId: sourceTarget.agentId,
+    }).entry as InternalSessionEntry | undefined;
+  const initialSource = readSource();
+  const checkOwnership = (entry: InternalSessionEntry | undefined) =>
+    resolvePluginSessionOwnershipError({
+      action: "recover",
+      entry,
+      key: sourceTarget.canonicalKey,
+      pluginOwnerId: params.authorizedPluginId,
+    });
   if (!initialSource?.sessionId) {
     return {
       ok: false,
@@ -93,12 +108,7 @@ export async function recoverGatewaySession(params: {
       ),
     };
   }
-  const ownershipError = resolvePluginSessionOwnershipError({
-    action: "recover",
-    entry: initialSource,
-    key: sourceTarget.canonicalKey,
-    pluginOwnerId: params.authorizedPluginId,
-  });
+  const ownershipError = checkOwnership(initialSource);
   if (ownershipError) {
     return { ok: false, error: ownershipError };
   }
@@ -134,7 +144,7 @@ export async function recoverGatewaySession(params: {
     targets: [
       {
         scope: sourceTarget.storePath,
-        identities: [sourceTarget.canonicalKey, initialSource.sessionId],
+        identities: [...sourceTarget.storeKeys, sourceTarget.canonicalKey, initialSource.sessionId],
       },
       {
         scope: successorTarget.storePath,
@@ -142,26 +152,13 @@ export async function recoverGatewaySession(params: {
       },
     ],
     run: async () => {
-      const currentSource = loadGatewaySessionEntryReadOnly(sourceTarget.canonicalKey, {
-        agentId: sourceTarget.agentId,
-      }).entry as InternalSessionEntry | undefined;
-      const currentOwnershipError = resolvePluginSessionOwnershipError({
-        action: "recover",
-        entry: currentSource,
-        key: sourceTarget.canonicalKey,
-        pluginOwnerId: params.authorizedPluginId,
-      });
+      let currentSource = readSource();
+      const currentOwnershipError = checkOwnership(currentSource);
       if (currentOwnershipError) {
         return { ok: false as const, error: currentOwnershipError };
       }
       if (!currentSource?.sessionId) {
-        return {
-          ok: false as const,
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Session changed before recovery; refresh and retry.",
-          ),
-        };
+        return { ok: false as const, error: recoveryConflictError("source-changed") };
       }
       if (!currentSource.mainRestartRecovery?.tombstone?.recoveredSessionKey) {
         const creationError = authorizeGatewaySessionCreation({
@@ -190,6 +187,45 @@ export async function recoverGatewaySession(params: {
           ),
         };
       }
+      const alreadyRecovered = currentSource.mainRestartRecovery?.tombstone?.recoveredSessionKey;
+      const placement = params.workerPlacementContext.workerSessionPlacementService
+        ?.getMany([currentSource.sessionId])
+        .get(currentSource.sessionId);
+      if (placement && !alreadyRecovered) {
+        try {
+          await prepareSessionWorkerPlacementForArchive({
+            agentId: sourceTarget.agentId,
+            ...(params.commitGuard ? { authorize: params.commitGuard } : {}),
+            context: params.workerPlacementContext,
+            reclaimActive: true,
+            sessionId: currentSource.sessionId,
+            sessionKey: sourceTarget.canonicalKey,
+          });
+        } catch (error) {
+          params.commitGuard?.();
+          return {
+            ok: false as const,
+            error: errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `Session recovery cannot safely stop/reclaim its cloud worker: ${formatErrorMessage(error)} Stop cloud worker or call sessions.reclaim, then retry recovery.`,
+              { retryable: true },
+            ),
+          };
+        }
+        params.commitGuard?.();
+        const settledSource = readSource();
+        if (
+          settledSource?.sessionId !== currentSource.sessionId ||
+          settledSource.lifecycleRevision !== currentSource.lifecycleRevision
+        ) {
+          return { ok: false as const, error: recoveryConflictError("source-changed") };
+        }
+        const settledOwnershipError = checkOwnership(settledSource);
+        if (settledOwnershipError) {
+          return { ok: false as const, error: settledOwnershipError };
+        }
+        currentSource = settledSource;
+      }
       const successorEntry = buildRestartRecoverySuccessorEntry({
         sessionId: successorSessionId,
         source: currentSource,
@@ -202,6 +238,7 @@ export async function recoverGatewaySession(params: {
         ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
         expected: {
           cycleId: recovery.cycleId,
+          lifecycleRevision: initialSource.lifecycleRevision,
           revision: recovery.revision,
           sessionId: initialSource.sessionId,
           ...(normalizeOptionalString(initialSource.pluginOwnerId)

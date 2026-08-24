@@ -55,6 +55,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
   archivedBy?: SessionCreatedActor;
   expected: {
     cycleId: string;
+    lifecycleRevision?: string;
     pluginOwnerId?: string;
     revision: number;
     sessionId: string;
@@ -123,6 +124,7 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
 
       if (
         source.sessionId !== params.expected.sessionId ||
+        source.lifecycleRevision !== params.expected.lifecycleRevision ||
         recovery.cycleId !== params.expected.cycleId ||
         recovery.revision !== params.expected.revision ||
         source.pluginOwnerId !== params.expected.pluginOwnerId
