@@ -133,10 +133,20 @@ class ChatControllerSubagentActivityTest {
       assertTrue(controller.subagentActivities.value.isEmpty())
 
       controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "running"))
-      assertEquals("running", controller.subagentActivities.value.getValue("task-1").status)
+      assertEquals(
+        "running",
+        controller.subagentActivities.value
+          .getValue("task-1")
+          .status,
+      )
 
       controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "completed"))
-      assertEquals("completed", controller.subagentActivities.value.getValue("task-1").status)
+      assertEquals(
+        "completed",
+        controller.subagentActivities.value
+          .getValue("task-1")
+          .status,
+      )
     }
 
   @Test
