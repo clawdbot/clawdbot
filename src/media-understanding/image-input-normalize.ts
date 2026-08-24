@@ -4,7 +4,7 @@ import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { extractImageContentFromSource } from "../media/input-files.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 
-const HEIC_MIME_RE = /^image\/hei[cf]$/i;
+const HEIC_MIME_RE = /^image\/hei[cf](?:-sequence)?$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 
 function isHeicInput(params: { mime?: string; fileName?: string }): boolean {

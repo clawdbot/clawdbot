@@ -575,28 +575,47 @@ describe("media-understanding runtime", () => {
     );
   });
 
-  it("normalizes local HEIC explicit image descriptions before provider execution", async () => {
-    mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("heic-source") });
-
-    await describeImageFileWithModel({
-      filePath: "/tmp/sample.bin",
+  it.each([
+    {
+      name: "HEIC",
       mime: "image/heic; charset=binary",
-      provider: "zai",
-      model: "glm-4.6v",
-      prompt: "Describe it",
-      cfg: {} as OpenClawConfig,
-      agentDir: "/tmp/agent",
-    });
+      bytes: Buffer.from("heic-source"),
+    },
+    {
+      name: "HEIC sequence",
+      mime: "image/heic-sequence",
+      bytes: Buffer.from("000000186674797068657663000000000000000000000000", "hex"),
+    },
+    {
+      name: "HEIF sequence",
+      mime: "image/heif-sequence",
+      bytes: Buffer.from("00000018667479706d736631000000000000000000000000", "hex"),
+    },
+  ])(
+    "normalizes local $name explicit image descriptions before provider execution",
+    async (testCase) => {
+      mocks.readLocalFileSafely.mockResolvedValue({ buffer: testCase.bytes });
 
-    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(Buffer.from("heic-source"));
-    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        buffer: Buffer.from("jpeg-normalized"),
-        fileName: "sample.bin",
-        mime: "image/jpeg",
-      }),
-    );
-  });
+      await describeImageFileWithModel({
+        filePath: "/tmp/sample.bin",
+        mime: testCase.mime,
+        provider: "zai",
+        model: "glm-4.6v",
+        prompt: "Describe it",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      });
+
+      expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(testCase.bytes);
+      expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          buffer: Buffer.from("jpeg-normalized"),
+          fileName: "sample.bin",
+          mime: "image/jpeg",
+        }),
+      );
+    },
+  );
 
   it("preserves fetched metadata for explicit model URL inputs", async () => {
     await describeImageFileWithModel({
