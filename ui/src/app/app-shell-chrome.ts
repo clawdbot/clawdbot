@@ -634,6 +634,7 @@ export class ShellChromeOwner {
     const elements: Record<LazyShellEvent["eventType"], OptionalCustomElement> = {
       [COMMAND_PALETTE_OPEN_EVENT]: host.commandPaletteElement,
       [DEBUG_OVERLAY_REQUEST_EVENT]: DEBUG_OVERLAY_ELEMENT,
+      [KEYBOARD_SHORTCUTS_REQUEST_EVENT]: KEYBOARD_SHORTCUTS_ELEMENT,
       [TERMINAL_PANEL_TOGGLE_EVENT]: host.terminalPanelElement,
       [BROWSER_PANEL_TOGGLE_EVENT]: host.browserPanelElement,
       [DESKTOP_PANEL_TOGGLE_EVENT]: host.desktopPanelElement,
