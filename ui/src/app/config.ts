@@ -80,8 +80,8 @@ function loadControlUiPresentation(environment: ControlUiEnvironment | null, sea
     root.hasAttribute(CONTROL_UI_ENVIRONMENT_ATTRIBUTE) ||
     root.style.getPropertyValue("--ring")
   ) {
-    void import("./control-ui-presentation.ts").then(({ applyControlUiPresentation }) =>
-      applyControlUiPresentation({ environment, seamColor }),
+    void import("./control-ui-environment-presentation.runtime.ts").then(
+      ({ applyControlUiPresentation }) => applyControlUiPresentation({ environment, seamColor }),
     );
   }
 }

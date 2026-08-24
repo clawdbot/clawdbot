@@ -2440,12 +2440,12 @@ openclaw-chat-session-rail {
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion {
   color: var(--hljs-deletion);
-  background: rgba(248, 81, 73, 0.12);
+  background: var(--danger-subtle);
 }
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition {
   color: var(--hljs-addition);
-  background: rgba(46, 160, 67, 0.12);
+  background: var(--ok-subtle);
 }
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-emphasis {
@@ -4433,7 +4433,11 @@ td.data-table-key-col {
   overscroll-behavior: contain;
   padding: clamp(18px, 3vw, 28px);
   background:
-    radial-gradient(circle at top right, rgba(255, 92, 92, 0.055), transparent 32%),
+    radial-gradient(
+      circle at top right,
+      color-mix(in srgb, var(--accent) 5.5%, transparent),
+      transparent 32%
+    ),
     radial-gradient(circle at bottom left, rgba(20, 184, 166, 0.045), transparent 28%),
     linear-gradient(
       180deg,

@@ -377,6 +377,62 @@
   --theme-chip-accent-2: var(--accent-2);
 }
 
+.settings-accent-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-accent-swatch {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-radius: 50%;
+  background: var(--settings-accent-swatch, var(--accent));
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+.settings-accent-swatch--active {
+  box-shadow:
+    0 0 0 2px var(--bg-elevated),
+    0 0 0 4px var(--accent);
+}
+
+.settings-accent-swatch__check {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  color: var(--accent-foreground);
+}
+
+.settings-accent-swatch__check svg {
+  width: 18px;
+  height: 18px;
+}
+
+.settings-accent-swatch--custom {
+  overflow: hidden;
+}
+
+.settings-accent-swatch--custom::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.settings-accent-swatch--custom::-webkit-color-swatch {
+  border: 0;
+  border-radius: 50%;
+}
+
+.settings-accent-swatch--custom::-moz-color-swatch {
+  border: 0;
+  border-radius: 50%;
+}
+
 .settings-theme-import {
   display: grid;
   gap: 12px;

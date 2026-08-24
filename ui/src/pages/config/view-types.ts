@@ -104,6 +104,9 @@ export type ConfigProps = {
   themeModeOverridden: boolean;
   themeModeProvenance: ServerUiPrefProvenance;
   themeModeResetValue: ThemeMode;
+  accent: string | undefined;
+  accentOverridden: boolean;
+  accentProvenance: ServerUiPrefProvenance;
   systemLocale: Locale;
   localeOverride?: Locale;
   localeOverridden: boolean;
@@ -115,6 +118,8 @@ export type ConfigProps = {
   resetTheme: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   resetThemeMode: () => void;
+  setAccent: (accent: string) => void;
+  resetAccent: () => void;
   hasCustomTheme: boolean;
   customThemeLabel: string | null;
   customThemeSourceUrl: string | null;

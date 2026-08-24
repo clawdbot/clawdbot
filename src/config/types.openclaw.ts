@@ -162,6 +162,8 @@ export type OpenClawConfig = {
       theme?: "claw" | "knot" | "dash" | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
+      /** User-selected Control UI accent color (#RRGGBB). */
+      accent?: string;
       /** BCP 47 UI locale, e.g. "en" or "pt-BR". */
       locale?: string;
       /** Show model thinking output in chat. */
