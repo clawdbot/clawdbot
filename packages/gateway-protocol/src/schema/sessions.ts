@@ -23,7 +23,6 @@ export {
   type SessionsDeleteResult,
   type WorktreePreservationReason,
 } from "./sessions-delete.js";
-export { SessionsResolveParamsSchema, type SessionsResolveParams } from "./sessions-resolve.js";
 export {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
   SessionsPatchManyParamsSchema,

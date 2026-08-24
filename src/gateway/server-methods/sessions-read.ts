@@ -667,7 +667,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(true, { ok: false, candidates: resolved.candidates }, undefined);
       return;
     }
-    respond(true, { ok: true, key: resolved.key, agentId: resolved.agentId }, undefined);
+    respond(true, resolved, undefined);
   },
   "sessions.get": async ({ params, respond, context }) => {
     const p = params as {

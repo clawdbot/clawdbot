@@ -238,6 +238,60 @@ async function configureFixedSessionStore(label = "default"): Promise<string> {
   return storePath;
 }
 
+test("sessions.resolve preserves presentation facts on unique and ambiguous wire results", async () => {
+  const firstKey = "agent:main:thread:12345678-0aaa-4000-8000-000000000001";
+  const secondKey = "agent:main:thread:12345678-0bbb-4000-8000-000000000002";
+  const storePath = resolveStorePath(undefined, { agentId: "main" });
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: firstKey, storePath },
+    {
+      sessionId: "first-session",
+      updatedAt: 2,
+      displayName: "Deploy monitor",
+      boardFace: "dashboard",
+    },
+  );
+
+  const unique = await directSessionReq("sessions.resolve", {
+    shortId: "12345678",
+    agentId: "main",
+  });
+  expect(unique).toMatchObject({
+    ok: true,
+    payload: {
+      ok: true,
+      key: firstKey,
+      agentId: "main",
+      displayName: "Deploy monitor",
+      boardFace: "dashboard",
+    },
+  });
+
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: secondKey, storePath },
+    {
+      sessionId: "second-session",
+      updatedAt: 1,
+      displayName: "Release monitor",
+      boardFace: "chat",
+    },
+  );
+  const ambiguous = await directSessionReq("sessions.resolve", {
+    shortId: "12345678",
+    agentId: "main",
+  });
+  expect(ambiguous).toMatchObject({
+    ok: true,
+    payload: {
+      ok: false,
+      candidates: [
+        { key: firstKey, agentId: "main", displayName: "Deploy monitor", boardFace: "dashboard" },
+        { key: secondKey, agentId: "main", displayName: "Release monitor", boardFace: "chat" },
+      ],
+    },
+  });
+});
+
 test("unknown-agent session reads return missing results without provisioning an agent", async () => {
   const described = await directSessionReq<{ session: unknown }>("sessions.describe", {
     key: UNKNOWN_SESSION_KEY,
