@@ -1585,6 +1585,22 @@ describe("capability cli", () => {
     expect(outputs[0]?.kind).toBe("image.description");
   });
 
+  it.each([
+    { domain: "audio", action: "transcribe", file: "memo.m4a", result: "meeting notes" },
+    { domain: "image", action: "describe", file: "photo.jpg", result: "friendly lobster" },
+    { domain: "image", action: "describe-many", file: "photo.jpg", result: "friendly lobster" },
+    { domain: "video", action: "describe", file: "clip.mp4", result: "friendly lobster" },
+  ])(
+    "prints both the input path and result for $domain $action by default",
+    async ({ domain, action, file, result }) => {
+      await runCapability(domain, action, "--file", file);
+
+      const output = mocks.runtime.log.mock.calls.at(-1)?.[0];
+      expect(output).toContain(path.resolve(file));
+      expect(output).toContain(result);
+    },
+  );
+
   it("keeps encoded image describe HTTP URLs intact", async () => {
     const mediaUrl = "https://cdn.example.com/clip%2Emp4?download=1#preview";
     await runCapability("image", "describe", "--file", mediaUrl, "--json");
