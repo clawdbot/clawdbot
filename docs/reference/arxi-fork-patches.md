@@ -10,6 +10,13 @@ title: "Arxi fork patch manifest"
 
 Upstream pin: `4e7bf407d19bc96d1e95d48b562d1960de68511d`.
 
+The fork also backports the Codex transcript portion of upstream commit
+`b28a687830483e422747faddca226eadfdf46d2a` (`fix: scope terminal cleanup by
+run`). It publishes the exact OpenClaw run identity only on the terminal
+assistant transcript update, allowing source delivery to settle the originating
+run before the no-visible-reply fallback is evaluated. The upstream regression
+is retained in `extensions/codex/src/app-server/transcript-mirror.test.ts`.
+
 Only these Arxi-specific gaps remain patched in the fork:
 
 | Outcome                                                               | Missing upstream contract                                                                                                                                                                                             | Reproducible tests                                                                                                                                                                                       | Why retained                                                                                                                                                                                        |
