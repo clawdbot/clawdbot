@@ -1008,7 +1008,16 @@ function convertMessages(
               break;
             case "toolCall":
               contentBlocks.push({
-                toolUse: { toolUseId: c.id, name: c.name, input: c.arguments as DocumentType },
+                toolUse: {
+                  toolUseId: c.id,
+                  name: c.name,
+                  // Bedrock Converse rejects a non-object toolUse.input on replay
+                  // with "Invalid 'input': value did not match any expected variant";
+                  // a non-Anthropic model can leave stored arguments as a raw
+                  // string/array/primitive. Fall back to an empty document rather
+                  // than replaying malformed input that poisons every later turn.
+                  input: isRecord(c.arguments) ? (c.arguments as DocumentType) : {},
+                },
               });
               break;
             case "thinking": {

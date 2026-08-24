@@ -944,3 +944,53 @@ describe("Bedrock canonical Claude aliases", () => {
     },
   );
 });
+
+describe("Bedrock toolUse.input replay sanitization", () => {
+  // A non-Anthropic model on Bedrock can stream tool-argument deltas that fail
+  // to parse into an object, leaving a stored toolCall.arguments as a raw
+  // string/array/primitive. Bedrock Converse validates toolUse.input against a
+  // strict document schema on replay and rejects a non-object with
+  // "Invalid 'input': value did not match any expected variant" — poisoning
+  // every subsequent turn that replays the history until the session is reset.
+  const assistantToolCall = (args: unknown) =>
+    ({
+      messages: [
+        { role: "user", content: "run the tool", timestamp: 0 },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_replay", name: "search", arguments: args }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_replay",
+          toolName: "search",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        },
+      ],
+    }) as never;
+
+  const toolUseInputOf = async (args: unknown) => {
+    const input = await captureCommandInput(bedrockModel({}), assistantToolCall(args));
+    const messages = input.messages as Array<{
+      content?: Array<{ toolUse?: { input?: unknown } }>;
+    }>;
+    const block = messages
+      .flatMap((message) => message.content ?? [])
+      .find((content) => content.toolUse);
+    return block?.toolUse?.input;
+  };
+
+  it.each([
+    { label: "a raw string", value: "not-an-object" },
+    { label: "an array", value: ["a", "b"] },
+    { label: "a number", value: 42 },
+    { label: "null", value: null },
+  ])("falls back to an empty document when toolCall arguments is $label", async ({ value }) => {
+    expect(await toolUseInputOf(value)).toEqual({});
+  });
+
+  it("preserves a well-formed object toolCall arguments as-is", async () => {
+    expect(await toolUseInputOf({ path: "README.md" })).toEqual({ path: "README.md" });
+  });
+});
