@@ -14,6 +14,7 @@ import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-compl
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
@@ -75,8 +76,22 @@ export function installSystemAgentClaudeCliBackendTestFixture(): () => void {
 /** Install the process-stable plugin metadata snapshot that the real Gateway owns. */
 export function installSystemAgentPluginMetadataTestSnapshot(
   config: OpenClawConfig = {},
+  options?: {
+    /** Extra manifest records appended after the discovered inventory, in registry order. */
+    manifestPlugins?: readonly PluginManifestRegistry["plugins"][number][];
+  },
 ): SystemAgentPluginMetadataTestSnapshot {
-  const prepared = resolvePluginMetadataSnapshot({ config, env: process.env });
+  const resolved = resolvePluginMetadataSnapshot({ config, env: process.env });
+  const extraManifestPlugins = options?.manifestPlugins ?? [];
+  const prepared = extraManifestPlugins.length
+    ? {
+        ...resolved,
+        manifestRegistry: {
+          ...resolved.manifestRegistry,
+          plugins: [...resolved.manifestRegistry.plugins, ...extraManifestPlugins],
+        },
+      }
+    : resolved;
   let releaseCurrentSnapshot: () => boolean = () => false;
   const bind = (params: Parameters<typeof resolvePluginMetadataSnapshot>[0]) => {
     releaseCurrentSnapshot();

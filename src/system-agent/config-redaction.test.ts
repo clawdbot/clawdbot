@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
   setRuntimeConfigSnapshot,
+  setRuntimeConfigSourceSnapshotIfCurrent,
 } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   isSystemAgentSensitiveConfigPathEmbedding,
   isSystemAgentSensitiveConfigValue,
@@ -130,6 +134,84 @@ describe("isSystemAgentSensitiveConfigPathEmbedding", () => {
     expect(
       isSystemAgentSensitiveConfigPathEmbedding('hooks.mappings["token=abcDEF123"].agentId'),
     ).toBe(true);
+  });
+
+  // Codex review P1 on #123209: `setRuntimeConfigSourceSnapshotIfCurrent` republishes a new
+  // source while keeping the very runtime config object this cache is keyed on, and channel
+  // schema ownership reads explicit selection from that source. Caching on the config pair alone
+  // kept the former owner's schema after such a republish, so a dynamic-record exemption the new
+  // owner does not grant left a secret-bearing path segment visible in the operation plan.
+  it("rebuilds ownership metadata when a source-only republish changes the channel owner", () => {
+    type ManifestPlugin = PluginManifestRegistry["plugins"][number];
+    const fallback = {
+      id: "zzproof-core",
+      origin: "workspace",
+      channels: ["zzproofchat"],
+      channelConfigs: {
+        zzproofchat: {
+          schema: {
+            type: "object",
+            properties: {
+              groups: {
+                type: "object",
+                additionalProperties: {
+                  type: "object",
+                  properties: { webhookUrl: { type: "string" } },
+                  additionalProperties: false,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+    } as unknown as ManifestPlugin;
+    const replacement = {
+      id: "zzproof-plus",
+      origin: "workspace",
+      channels: ["zzproofchat"],
+      channelConfigs: {
+        zzproofchat: {
+          preferOver: ["zzproof-core"],
+          schema: {
+            type: "object",
+            properties: { webhookPath: { type: "string" } },
+            additionalProperties: false,
+          },
+        },
+      },
+    } as unknown as ManifestPlugin;
+    const effective = {
+      channels: { zzproofchat: {} },
+      plugins: { entries: { "zzproof-core": { enabled: true } } },
+    } as unknown as OpenClawConfig;
+    // The operator authored the fallback's entry, so its declared replacement is set aside and
+    // the fallback keeps the schema; the effective config reads the same either way because
+    // auto-enable materializes that entry when the operator did not write it.
+    const authoredSource = structuredClone(effective);
+    const sourceWithoutSelection = { channels: { zzproofchat: {} } } as unknown as OpenClawConfig;
+    const embeddedSecretPath = 'channels.zzproofchat.groups["token=abcDEF123"].webhookUrl';
+
+    pluginMetadata?.restore();
+    clearRuntimeConfigSnapshot();
+    setRuntimeConfigSnapshot(effective, authoredSource);
+    pluginMetadata = installSystemAgentPluginMetadataTestSnapshot(effective, {
+      manifestPlugins: [fallback, replacement],
+    });
+
+    // The fallback's schema owns the channel, and it reads `groups` as a dynamic record.
+    expect(isSystemAgentSensitiveConfigPathEmbedding(embeddedSecretPath)).toBe(false);
+
+    const revision = getRuntimeConfigSnapshotMetadata()?.revision ?? -1;
+    expect(
+      setRuntimeConfigSourceSnapshotIfCurrent({
+        expectedRevision: revision,
+        sourceConfig: sourceWithoutSelection,
+      }),
+    ).toBe(true);
+
+    // Ownership now resolves to the replacement, whose schema knows no `groups` record.
+    expect(isSystemAgentSensitiveConfigPathEmbedding(embeddedSecretPath)).toBe(true);
   });
 
   it("redacts unknown-owner and sensitive descendant paths", () => {

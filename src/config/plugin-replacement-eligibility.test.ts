@@ -276,6 +276,24 @@ describe("isPluginExplicitlySelectedByAlias", () => {
     ).toBe(true);
   });
 
+  // Codex review P2 on #123209: startup canonicalizes an authored slot only to decide which
+  // plugins to consider (`resolveContextEngineSlotStartupPluginId`); the activation cause is an
+  // exact match on the authored spelling (`config-normalization-shared.ts` leaves slot values
+  // raw, `config-activation-shared.ts` compares `slots.contextEngine === params.id`). A slot
+  // authored as a legacy alias therefore selects nothing and the workspace gate disables the
+  // claimant. Resolving the alias in the predicate marked that claimant hand-picked, kept its
+  // replacement's edge suppressed, and validation retained the schema of a plugin the runtime
+  // never loads.
+  it("does not resolve aliases for the context-engine slot startup matches exactly", () => {
+    const config = {
+      plugins: { slots: { contextEngine: "clickclack-legacy" } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(config, "clickclack-plus", canonicalId, registry),
+    ).toBe(false);
+  });
+
   // Codex review P2 on #123209: the workspace gate in `resolvePluginActivationDecisionShared` runs
   // BEFORE the memory-slot branch and exempts only `selected-context-engine-slot`
   // (`config-activation-shared.ts:186-201`). So for an untrusted workspace plugin the memory slot

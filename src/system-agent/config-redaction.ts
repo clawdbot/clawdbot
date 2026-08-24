@@ -88,16 +88,26 @@ const metadataConfigRedaction = new WeakMap<
 // Ownership is config-dependent, so the same snapshot yields different hints under different
 // configs. Keying the cache on the snapshot alone would return the previous owner's hints and
 // could expose a field only the configured owner marks sensitive.
+//
+// The source snapshot is part of the key for the same reason: ownership reads explicit selection
+// from it, and `setRuntimeConfigSourceSnapshotIfCurrent` republishes a new source while keeping
+// this very runtime config object. A hit must prove the same source built it, or a source-only
+// republish that moves the channel to another owner keeps serving the former owner's hints.
+type MetadataConfigRedactionCacheEntry = {
+  metadata: SystemAgentConfigRedactionMetadata;
+  sourceConfig: OpenClawConfig | null;
+};
 const metadataConfigRedactionByConfig = new WeakMap<
   PluginMetadataSnapshot,
-  WeakMap<OpenClawConfig, SystemAgentConfigRedactionMetadata>
+  WeakMap<OpenClawConfig, MetadataConfigRedactionCacheEntry>
 >();
 
 function resolveMetadataConfigRedaction(
   snapshot: PluginMetadataSnapshot,
   config?: OpenClawConfig,
 ): SystemAgentConfigRedactionMetadata {
-  let configCache: WeakMap<OpenClawConfig, SystemAgentConfigRedactionMetadata> | undefined;
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  let configCache: WeakMap<OpenClawConfig, MetadataConfigRedactionCacheEntry> | undefined;
   if (config) {
     configCache = metadataConfigRedactionByConfig.get(snapshot);
     if (!configCache) {
@@ -105,8 +115,8 @@ function resolveMetadataConfigRedaction(
       metadataConfigRedactionByConfig.set(snapshot, configCache);
     }
     const cachedForConfig = configCache.get(config);
-    if (cachedForConfig) {
-      return cachedForConfig;
+    if (cachedForConfig && cachedForConfig.sourceConfig === runtimeSourceConfig) {
+      return cachedForConfig.metadata;
     }
   } else {
     const cached = metadataConfigRedaction.get(snapshot);
@@ -114,7 +124,6 @@ function resolveMetadataConfigRedaction(
       return cached;
     }
   }
-  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
   const plugins = collectPluginSchemaMetadataCore(snapshot.manifestRegistry);
   // Redaction must follow the owner the operator's config activates. Without a config there is
   // nothing to consult, so manifest order stands.
@@ -157,7 +166,7 @@ function resolveMetadataConfigRedaction(
     ]),
   };
   if (config && configCache) {
-    configCache.set(config, metadata);
+    configCache.set(config, { metadata, sourceConfig: runtimeSourceConfig });
   } else {
     metadataConfigRedaction.set(snapshot, metadata);
   }

@@ -137,14 +137,28 @@ export function isPluginExplicitlySelectedByAlias(
   const slots = cfg.plugins?.slots;
   // The context-engine slot is the one explicit-selection cause the workspace gate exempts, so it
   // selects even for an untrusted workspace plugin.
+  //
+  // Matched exactly, not through the resolver: startup canonicalizes an authored slot only to
+  // decide which plugins to *consider* (`resolveContextEngineSlotStartupPluginId`), while the
+  // activation cause this predicate mirrors is an exact match on the authored spelling —
+  // normalization leaves slot values raw (`config-normalization-shared.ts`) and the cause
+  // requires `slots.contextEngine === params.id` (`config-activation-shared.ts`). A slot
+  // authored as a legacy alias therefore selects nothing, and the workspace gate disables the
+  // claimant no matter how it was considered. Resolving the alias here marked that claimant
+  // hand-picked while the runtime never loads it.
   const authoredContextEngine = normalizeSlotValue(slots?.contextEngine);
-  if (authoredContextEngine && canonicalId(authoredContextEngine) === target) {
+  if (authoredContextEngine && authoredContextEngine === target) {
     return true;
   }
   // The memory branch sits *after* that gate, so it never rescues a workspace plugin that is
   // neither allowlisted nor entry-enabled: startup returns `workspace-disabled-by-default` first.
   // Reading slot presence alone marked such a plugin selected here while the runtime never loads
   // it, which is the disagreement this predicate exists to prevent, pointing the other way.
+  //
+  // This arm still resolves the authored value through the resolver, and the memory activation
+  // cause is the same exact match — the divergence fixed on the context-engine arm above is
+  // latent here, not absent. No bundled memory plugin declares `legacyPluginIds`, so firing it
+  // takes an externally installed legacy-aliased memory plugin; deferred on that basis.
   const memorySelection = resolveSlotSelection("memory", slots?.memory);
   if (memorySelection.kind !== "off" && canonicalId(memorySelection.pluginId) === target) {
     const isWorkspaceOrigin =
