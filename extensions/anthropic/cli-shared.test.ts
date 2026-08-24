@@ -721,8 +721,6 @@ describe("normalizeClaudeBackendConfig", () => {
       entrypoint: "command",
       nativeExecutableNames: ["claude", "claude.exe"],
     });
-    expect(backend.liveSessionRequirement).toBeUndefined();
-
     const normalized = normalizeConfig?.({
       ...backend.config,
       args: ["-p", "--output-format", "stream-json", "--verbose"],

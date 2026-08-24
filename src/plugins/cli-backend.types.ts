@@ -186,20 +186,15 @@ export type CliBackendLiveSessionCloseReason =
 
 /** Plugin-owned process lifecycle registered with the generic host owner. */
 export type CliBackendLiveSessionHandle = {
-  key: string;
   generation: string;
   fingerprint: string;
-  providerId: string;
-  modelId: string;
   isIdle(): boolean;
   close(reason: CliBackendLiveSessionCloseReason, error?: unknown): void;
   waitForExit(): Promise<void>;
-  cleanupResources(): Promise<void>;
 };
 
 /** Closure-bound host capability for one admitted reusable-runtime turn. */
 export type CliBackendLiveSessionCapability = {
-  ownerKey: string;
   fingerprint: string;
   current(): CliBackendLiveSessionHandle | undefined;
   register(handle: CliBackendLiveSessionHandle): void;
@@ -336,18 +331,6 @@ export type CliBackendRuntimeArtifactPolicy = Readonly<{
   nativeExecutableNames?: readonly string[];
 }>;
 
-/** Provider-owned protocol requirement for a long-lived CLI session. */
-export type CliBackendLiveSessionRequirement = Readonly<{
-  /** Exact capability the CLI must advertise before streamed output is trusted. */
-  capability: string;
-  /** First published version known to advertise the capability; runtime still feature-detects. */
-  minimumVersion: string;
-  /** Arguments used by setup and Doctor to obtain the installed CLI version. */
-  versionArgs: readonly string[];
-  /** Operator command that installs a compatible CLI version. */
-  updateCommand: string;
-}>;
-
 /** Complete backend-owned contract for in-place native session compaction. */
 type CliBackendManualCompaction = Readonly<{
   /** Builds the exact backend command for the resumed native session. */
@@ -398,8 +381,6 @@ type CliBackendPluginBase = {
   };
   /** Required whenever this backend can become a verified inference owner. */
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
-  /** Negotiated protocol capability required by this backend's live-session transport. */
-  liveSessionRequirement?: CliBackendLiveSessionRequirement;
   /**
    * Whether OpenClaw should inject bundle MCP config for this backend.
    *

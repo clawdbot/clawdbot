@@ -17,10 +17,10 @@ import {
 } from "./claude-live-tool-approval.js";
 import {
   closeCliLiveSession,
+  createCliLiveSessionCapability,
   getCliLiveSessionApprovalGrants,
 } from "./cli-live-session-registry.js";
 import { createCliAbortError } from "./execute-node-claude.js";
-import { createCliLiveSessionCapability } from "./live-session-capability.js";
 import { resolveCliNoOutputTimeoutDecision } from "./no-output-timeout-policy.js";
 import { buildCliBackendToolAvailability } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";

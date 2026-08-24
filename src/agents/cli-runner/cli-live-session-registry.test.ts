@@ -1,69 +1,124 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { CliBackendLiveSessionHandle } from "../../plugins/cli-backend.types.js";
+import type {
+  CliBackendLiveSessionCapability,
+  CliBackendLiveSessionHandle,
+} from "../../plugins/cli-backend.types.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import {
   acceptsCliLiveSession,
-  beginCliLiveSessionCreate,
   buildCliLiveOwnerKey,
-  buildCliLiveSessionKey,
   closeCliLiveSession,
-  enqueueCliLiveTurn,
-  ensureCliLiveSessionCapacity,
-  finishCliLiveSessionCreate,
-  getCliLiveSession,
+  createCliLiveSessionCapability,
   getCliLiveSessionGeneration,
   hasCliLiveSession,
-  registerCliLiveSession,
-  removeCliLiveSession,
 } from "./cli-live-session-registry.js";
-import { resetCliLiveSessionsForTest } from "./cli-live-session.test-support.js";
 import { buildCliLiveSessionFingerprint } from "./live-session-fingerprint.js";
 
-function createSession(
-  key: string,
-  options: { generation?: string; idle?: boolean; deferExit?: boolean } = {},
+const admissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
+const sessions = new Set<CliBackendLiveSessionHandle>();
+let nextOwnerId = 0;
+
+async function createOwner(
+  options: {
+    sessionId?: string;
+    generation?: string;
+    idle?: boolean;
+    deferExit?: boolean;
+    cleanup?: () => Promise<void>;
+    systemPrompt?: string;
+    capture?: { token: string; key: string };
+    requiredGeneration?: string;
+  } = {},
 ) {
+  const index = ++nextOwnerId;
+  const sessionId = options.sessionId ?? `registry-session-${index}`;
+  const sessionKey = `agent:main:${sessionId}`;
+  const context = buildPreparedCliRunContext({
+    provider: "claude-cli",
+    agentId: "main",
+    runId: `registry-run-${index}`,
+    sessionId,
+    sessionKey,
+    ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
+  });
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    context.params.runId,
+    "main",
+    "registry-test",
+  );
+  admissions.push(admission);
+  context.params.admittedRunContext = await admission.admit("plugin-harness");
+  const grant = options.capture
+    ? {
+        transportToken: options.capture.token,
+        adoptProcessToken: vi.fn(),
+        revokeProcessToken: vi.fn(),
+        activate: vi.fn(),
+        deactivate: vi.fn(),
+      }
+    : undefined;
+  if (grant) {
+    context.preparedBackend.mcpClientGrantCapture = grant;
+  }
+  const beginCapture = vi.fn();
+  const capability: CliBackendLiveSessionCapability = createCliLiveSessionCapability({
+    context,
+    argv: ["claude", "-p"],
+    env: { PATH: "/usr/bin:/bin" },
+    beginCapture,
+    abortSignal: new AbortController().signal,
+    ...(options.cleanup ? { claimResources: () => options.cleanup } : {}),
+    ...(options.capture ? { captureKey: options.capture.key } : {}),
+    ...(options.requiredGeneration ? { requiredGeneration: options.requiredGeneration } : {}),
+  });
   const exited = createDeferred<void>();
   const session: CliBackendLiveSessionHandle = {
-    key,
-    generation: options.generation ?? `generation-${key}`,
-    fingerprint: "owner-policy-fingerprint",
-    providerId: "test-cli",
-    modelId: "test-model",
+    generation: options.generation ?? `generation-${index}`,
+    fingerprint: capability.fingerprint,
     isIdle: vi.fn(() => options.idle ?? false),
     close: vi.fn(() => {
-      removeCliLiveSession(session);
+      capability.remove(session);
       if (!options.deferExit) {
         exited.resolve();
       }
     }),
     waitForExit: vi.fn(() => exited.promise),
-    cleanupResources: vi.fn(async () => {}),
   };
-  return { session, exited };
+  const register = () => {
+    capability.register(session);
+    sessions.add(session);
+    return session;
+  };
+  return {
+    admission,
+    beginCapture,
+    capability,
+    context,
+    exited,
+    grant,
+    register,
+    session,
+    sessionId,
+    sessionKey,
+  };
 }
-
-function registerSession(
-  session: CliBackendLiveSessionHandle,
-  cleanup?: () => Promise<void>,
-): void {
-  const pending = beginCliLiveSessionCreate(session.key, session.generation);
-  registerCliLiveSession(session, pending, cleanup);
-  finishCliLiveSessionCreate(session.key, pending);
-}
-
-beforeEach(() => {
-  resetCliLiveSessionsForTest();
-});
 
 afterEach(() => {
-  resetCliLiveSessionsForTest();
+  for (const session of sessions) {
+    session.close("restart");
+  }
+  sessions.clear();
+  for (const admission of admissions.splice(0)) {
+    admission.close();
+  }
   vi.restoreAllMocks();
 });
 
 describe("generic plugin-owned live session registry", () => {
-  it("keeps owner identity deterministic and isolated across sessions and providers", () => {
+  it("keeps owner identity deterministic and isolated across sessions", () => {
     const owner = {
       agentAccountId: "acct-1",
       agentId: "agent-main",
@@ -72,16 +127,10 @@ describe("generic plugin-owned live session registry", () => {
       sessionKey: "key-a",
     };
 
-    expect(buildCliLiveOwnerKey(owner)).toBe(
-      "718b9a6cf473526c3c357883dfc8f1da1cf90b709d9ed38d675b52314abe6800",
-    );
+    expect(buildCliLiveOwnerKey({ ...owner })).toBe(buildCliLiveOwnerKey(owner));
     expect(buildCliLiveOwnerKey({ ...owner, sessionKey: "key-b" })).not.toBe(
       buildCliLiveOwnerKey(owner),
     );
-
-    const first = buildPreparedCliRunContext({ provider: "claude-cli" });
-    const second = buildPreparedCliRunContext({ provider: "google-gemini-cli" });
-    expect(buildCliLiveSessionKey(first)).not.toBe(buildCliLiveSessionKey(second));
   });
 
   it("keeps fresh and resumed process fingerprints identical without hiding prompt changes", () => {
@@ -111,116 +160,131 @@ describe("generic plugin-owned live session registry", () => {
     ).not.toBe(freshFingerprint);
   });
 
-  it("exposes pending and registered generations without reviving a removed owner", () => {
-    const context = buildPreparedCliRunContext({ sessionId: "session-owner" });
-    const owner = { backendId: "claude-cli", sessionId: "session-owner" };
-    const key = buildCliLiveSessionKey(context);
-    const { session } = createSession(key, { generation: "generation-exact" });
-    const pending = beginCliLiveSessionCreate(key, session.generation);
+  it("exposes only an active registered generation and never revives a removed owner", async () => {
+    const owner = await createOwner({ generation: "generation-exact" });
+    const identity = {
+      backendId: "claude-cli",
+      agentId: "main",
+      sessionId: owner.sessionId,
+      sessionKey: owner.sessionKey,
+    };
 
-    expect(hasCliLiveSession(owner)).toBe(true);
-    expect(getCliLiveSessionGeneration(owner)).toBe("generation-exact");
+    expect(hasCliLiveSession(identity)).toBe(false);
+    owner.register();
+    expect(hasCliLiveSession(identity)).toBe(true);
+    expect(getCliLiveSessionGeneration(identity)).toBe("generation-exact");
 
-    registerCliLiveSession(session, pending);
-    finishCliLiveSessionCreate(key, pending);
-    expect(getCliLiveSession(key)).toBe(session);
-
-    removeCliLiveSession(session);
-    expect(getCliLiveSession(key)).toBeUndefined();
-    expect(hasCliLiveSession(owner)).toBe(false);
+    owner.capability.remove(owner.session);
+    expect(owner.capability.current()).toBeUndefined();
+    expect(hasCliLiveSession(identity)).toBe(false);
   });
 
-  it("rejects a late registration after the pending owner has been closed", async () => {
-    const context = buildPreparedCliRunContext({ sessionId: "session-pending" });
-    const key = buildCliLiveSessionKey(context);
-    const { session } = createSession(key);
-    const pending = beginCliLiveSessionCreate(key, session.generation);
+  it("rejects registration once its exact admitted run has closed", async () => {
+    const owner = await createOwner();
+    owner.admission.close();
 
-    await closeCliLiveSession(context, "abort");
-    registerCliLiveSession(session, pending);
-
-    expect(session.close).toHaveBeenCalledWith("abort");
-    expect(getCliLiveSession(key)).toBeUndefined();
+    expect(() => owner.register()).toThrow("no longer active");
     expect(
-      getCliLiveSessionGeneration({ backendId: "claude-cli", sessionId: "session-pending" }),
-    ).toBeUndefined();
+      hasCliLiveSession({
+        backendId: "claude-cli",
+        agentId: "main",
+        sessionId: owner.sessionId,
+        sessionKey: owner.sessionKey,
+      }),
+    ).toBe(false);
   });
 
-  it("serializes turns for the same owner without blocking another owner", async () => {
-    const releaseFirst = createDeferred<void>();
-    const events: string[] = [];
-    const first = enqueueCliLiveTurn("owner-a", async () => {
-      events.push("a:first:start");
-      await releaseFirst.promise;
-      events.push("a:first:end");
-    });
-    const second = enqueueCliLiveTurn("owner-a", async () => {
-      events.push("a:second");
-    });
-    const independent = enqueueCliLiveTurn("owner-b", async () => {
-      events.push("b:independent");
-    });
+  it("rejects the same process handle under a different owner despite a matching fingerprint", async () => {
+    const original = await createOwner({ sessionId: "original-owner" });
+    const other = await createOwner({ sessionId: "different-owner" });
+    original.register();
 
-    await independent;
-    expect(events).toEqual(["a:first:start", "b:independent"]);
-    releaseFirst.resolve();
-    await Promise.all([first, second]);
-
-    expect(events).toEqual(["a:first:start", "b:independent", "a:first:end", "a:second"]);
+    expect(other.capability.fingerprint).toBe(original.capability.fingerprint);
+    expect(() => other.capability.register(original.session)).toThrow();
+    expect(other.capability.current()).toBeUndefined();
+    expect(original.capability.current()).toBe(original.session);
   });
 
-  it("keeps native skill resources alive until the registered subprocess actually exits", async () => {
-    const context = buildPreparedCliRunContext({ sessionId: "session-native-skills" });
-    const key = buildCliLiveSessionKey(context);
-    const { session, exited } = createSession(key, { deferExit: true });
+  it("rejects required generation reuse after prompt changes without closing its only process", async () => {
+    const original = await createOwner({
+      sessionId: "required-prompt-owner",
+      generation: "required-generation",
+      systemPrompt: "Original system policy.",
+    });
+    original.register();
+    const changed = await createOwner({
+      sessionId: "required-prompt-owner",
+      requiredGeneration: "required-generation",
+      systemPrompt: "Changed system policy.",
+    });
+
+    expect(changed.capability.fingerprint).not.toBe(original.capability.fingerprint);
+    expect(() => changed.capability.current()).toThrow(
+      expect.objectContaining({ reason: "session_expired", code: "cli_live_session_changed" }),
+    );
+    expect(original.session.close).not.toHaveBeenCalled();
+    expect(original.capability.current()).toBe(original.session);
+  });
+
+  it("transfers admitted MCP authority to the original private process before capture", async () => {
+    const original = await createOwner({
+      sessionId: "captured-owner",
+      capture: { token: "process-token-a", key: "capture-a" },
+    });
+    original.register();
+    const resumed = await createOwner({
+      sessionId: "captured-owner",
+      capture: { token: "turn-token-b", key: "capture-b" },
+    });
+
+    resumed.capability.activate(original.session);
+
+    expect(resumed.grant?.adoptProcessToken).toHaveBeenCalledExactlyOnceWith("process-token-a");
+    expect(resumed.beginCapture).toHaveBeenCalledExactlyOnceWith("capture-a");
+    expect(resumed.grant?.adoptProcessToken.mock.invocationCallOrder[0]).toBeLessThan(
+      resumed.beginCapture.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(Object.keys(resumed.capability)).not.toEqual(
+      expect.arrayContaining(["ownerKey", "transportToken", "captureKey"]),
+    );
+
+    resumed.capability.remove(original.session);
+    expect(original.grant?.revokeProcessToken).toHaveBeenCalledOnce();
+    expect(resumed.grant?.revokeProcessToken).not.toHaveBeenCalled();
+    expect(original.capability.current()).toBeUndefined();
+  });
+
+  it("keeps claimed native skill resources until subprocess exit and cleans exactly once", async () => {
     const cleanup = vi.fn(async () => {});
-    registerSession(session, cleanup);
+    const owner = await createOwner({ deferExit: true, cleanup });
+    owner.register();
 
-    removeCliLiveSession(session);
-    removeCliLiveSession(session);
+    const closing = closeCliLiveSession(owner.context, "restart");
+    owner.capability.remove(owner.session);
     await Promise.resolve();
     expect(cleanup).not.toHaveBeenCalled();
 
-    exited.resolve();
-    await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
-  });
+    owner.exited.resolve();
+    await closing;
 
-  it("waits for process shutdown and cleans claimed runtime resources exactly once", async () => {
-    const context = buildPreparedCliRunContext({ sessionId: "session-resource-owner" });
-    const key = buildCliLiveSessionKey(context);
-    const { session, exited } = createSession(key, { deferExit: true });
-    const cleanup = vi.fn(async () => {});
-    registerSession(session, cleanup);
-
-    const close = closeCliLiveSession(context, "restart");
-    await Promise.resolve();
-    expect(cleanup).not.toHaveBeenCalled();
-    expect(session.cleanupResources).not.toHaveBeenCalled();
-
-    exited.resolve();
-    await close;
-
-    expect(session.close).toHaveBeenCalledWith("restart");
-    expect(session.cleanupResources).toHaveBeenCalledOnce();
+    expect(owner.session.close).toHaveBeenCalledWith("restart");
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
-  it("evicts an idle owner at capacity and fails closed when every owner is active", () => {
-    const context = buildPreparedCliRunContext();
-    const handles = Array.from({ length: 16 }, (_, index) => {
-      const entry = createSession(`bounded-${index}`, { idle: index === 0 });
-      registerSession(entry.session);
-      return entry.session;
-    });
+  it("evicts an idle owner at capacity and fails closed when every owner is active", async () => {
+    const owners = [];
+    for (let index = 0; index < 16; index += 1) {
+      const owner = await createOwner({ idle: index === 0 });
+      owner.register();
+      owners.push(owner);
+    }
 
-    expect(() => ensureCliLiveSessionCapacity("next-owner", context)).not.toThrow();
-    expect(handles[0]?.close).toHaveBeenCalledWith("idle");
+    const replacement = await createOwner();
+    expect(() => replacement.register()).not.toThrow();
+    expect(owners[0]?.session.close).toHaveBeenCalledWith("idle");
 
-    const replacement = createSession("replacement-owner");
-    registerSession(replacement.session);
-    expect(() => ensureCliLiveSessionCapacity("overflow-owner", context)).toThrow(
-      "Too many CLI live sessions are active.",
-    );
+    const overflow = await createOwner();
+    expect(() => overflow.register()).toThrow("Too many CLI live sessions are active.");
   });
 
   it("admits only local plugin-owned structured execution to reusable sessions", () => {
@@ -237,15 +301,6 @@ describe("generic plugin-owned live session registry", () => {
     });
     node.preparedBackend.execute = eligible.preparedBackend.execute;
     expect(acceptsCliLiveSession(node)).toBe(false);
-
-    eligible.backendResolved.liveSessionRequirement = {
-      capability: "third_party_stream_correlation_v1",
-      minimumVersion: "1.2.3",
-      versionArgs: ["--version"],
-      updateCommand: "third-party-cli update",
-    };
-    expect(acceptsCliLiveSession(eligible)).toBe(false);
-    delete eligible.backendResolved.liveSessionRequirement;
 
     delete eligible.preparedBackend.execute;
     expect(acceptsCliLiveSession(eligible)).toBe(false);

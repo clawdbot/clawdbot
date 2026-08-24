@@ -56,7 +56,6 @@ import {
   requestHeartbeatMock,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
-import { resetCliLiveSessionsForTest } from "./cli-runner/cli-live-session.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import {
   resolveCliNoOutputTimeoutMs,
@@ -397,7 +396,6 @@ describe("runCliAgent reliability", () => {
     vi.unstubAllEnvs();
     sessionFileEnvSnapshot?.restore();
     sessionFileEnvSnapshot = undefined;
-    resetCliLiveSessionsForTest();
     resetDiagnosticEventsForTest();
     cliBackendsTesting.resetDepsForTest();
     vi.useRealTimers();

@@ -8,15 +8,9 @@ import type {
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { callGatewayTool } from "../tools/gateway.js";
-import {
-  beginCliLiveSessionCreate,
-  buildCliLiveSessionKey,
-  finishCliLiveSessionCreate,
-  registerCliLiveSession,
-  removeCliLiveSession,
-} from "./cli-live-session-registry.js";
-import { resetCliLiveSessionsForTest } from "./cli-live-session.test-support.js";
+import { createCliLiveSessionCapability } from "./cli-live-session-registry.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
@@ -26,6 +20,7 @@ vi.mock("../tools/gateway.js", () => ({
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 const activeAdmissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
+const activeSessions = new Set<CliBackendLiveSessionHandle>();
 let nextRunId = 0;
 
 const SUCCESS_RESULT = {
@@ -51,48 +46,32 @@ async function createExecution(
   const config = options.config ?? { tools: { exec: { security: "full", ask: "off" } } };
   const admission = prepareSystemAgentRunAdmission(config, runId, "main", "plugin-test");
   activeAdmissions.push(admission);
-  const backend = {
-    command: "/bin/sh",
-    args: [],
-    output: "jsonl" as const,
-    input: "stdin" as const,
-    ...(options.resumeArgs ? { resumeArgs: options.resumeArgs } : {}),
-  };
-  const context: PreparedCliRunContext = {
-    params: {
-      admittedRunContext: await admission.admit("plugin-harness"),
-      agentId: "main",
-      sessionId: "sdk-session",
-      sessionKey: "agent:main:main",
-      sessionFile: "/tmp/openclaw-plugin-owner-session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hello",
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      timeoutMs: options.timeoutMs ?? 5_000,
-      runId,
-      config,
-      executionMode: "agent",
-      ...(options.sessionEntry ? { sessionEntry: options.sessionEntry } : {}),
-      ...(options.nativeTools
-        ? { cliToolAvailability: { native: options.nativeTools, openClaw: [] } }
-        : {}),
-      ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-    },
-    started: Date.now(),
-    workspaceDir: "/tmp",
-    backendResolved: { id: "claude-cli", config: backend, bundleMcp: false },
-    preparedBackend: { backend, env: {} },
-    reusableCliSession: { mode: "none" },
-    hadSessionFile: false,
-    contextEngineConfig: {},
-    modelId: "claude-sonnet-4-6",
-    normalizedModel: "claude-sonnet-4-6",
+  const context = buildPreparedCliRunContext({
+    provider: "claude-cli",
+    model: "claude-sonnet-4-6",
+    agentId: "main",
+    runId,
+    sessionId: "sdk-session",
+    sessionKey: "agent:main:main",
+    prompt: "hello",
+    config,
+    executionMode: "agent",
+    timeoutMs: options.timeoutMs ?? 5_000,
+    sessionEntry: options.sessionEntry,
+    ...(options.nativeTools
+      ? { cliToolAvailability: { native: options.nativeTools, openClaw: [] } }
+      : {}),
     systemPrompt: "  Follow host policy.  ",
-    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    bootstrapPromptWarningLines: [],
-    authEpochVersion: 1,
-  };
+    backend: {
+      command: "/bin/sh",
+      args: [],
+      ...(options.resumeArgs ? { resumeArgs: options.resumeArgs } : {}),
+    },
+  });
+  context.params.admittedRunContext = await admission.admit("plugin-harness");
+  if (options.abortSignal) {
+    context.params.abortSignal = options.abortSignal;
+  }
 
   return { admission, context };
 }
@@ -140,22 +119,33 @@ function runPlugin(
 }
 
 function registerOwnerSession(context: PreparedCliRunContext, generation: string) {
-  const key = buildCliLiveSessionKey(context);
+  const capability = createCliLiveSessionCapability({
+    context,
+    argv: ["/bin/sh", "-p", "--permission-mode", "bypassPermissions"],
+    env: { PATH: "/bin:/usr/bin", OPENCLAW_TEST_MARKER: "host-owned" },
+    beginCapture: () => {},
+    abortSignal: new AbortController().signal,
+  });
   const session: CliBackendLiveSessionHandle = {
-    key,
     generation,
-    fingerprint: "existing-owner-policy",
-    providerId: context.backendResolved.id,
-    modelId: context.normalizedModel,
+    fingerprint: capability.fingerprint,
     isIdle: () => true,
-    close: vi.fn(() => removeCliLiveSession(session)),
+    close: vi.fn(() => capability.remove(session)),
     waitForExit: vi.fn(async () => {}),
-    cleanupResources: vi.fn(async () => {}),
   };
-  const pending = beginCliLiveSessionCreate(key, generation);
-  registerCliLiveSession(session, pending);
-  finishCliLiveSessionCreate(key, pending);
+  capability.register(session);
+  activeSessions.add(session);
   return session;
+}
+
+function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {
+  const signal = execution.abortSignal;
+  if (!signal) {
+    throw new Error("Host execution did not expose its abort signal.");
+  }
+  return new Promise((_, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
 }
 
 function requestNativeTool(
@@ -172,10 +162,13 @@ function requestNativeTool(
 }
 
 afterEach(() => {
+  for (const session of activeSessions) {
+    session.close("restart");
+  }
+  activeSessions.clear();
   for (const admission of activeAdmissions.splice(0)) {
     admission.close();
   }
-  resetCliLiveSessionsForTest();
   mockCallGatewayTool.mockReset();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -378,25 +371,7 @@ describe("plugin-owned CLI execution host boundary", () => {
       nativeTools: ["WebFetch"],
       runId: "plugin-approval-first",
     });
-    const registerLiveHandle = (generation: string) => {
-      const key = buildCliLiveSessionKey(first.context);
-      const handle: CliBackendLiveSessionHandle = {
-        key,
-        generation,
-        fingerprint: "same-owner-policy",
-        providerId: "claude-cli",
-        modelId: "claude-sonnet-4-6",
-        isIdle: () => true,
-        close: () => removeCliLiveSession(handle),
-        waitForExit: async () => {},
-        cleanupResources: async () => {},
-      };
-      const pending = beginCliLiveSessionCreate(key, generation);
-      registerCliLiveSession(handle, pending);
-      finishCliLiveSessionCreate(key, pending);
-      return handle;
-    };
-    const originalHandle = registerLiveHandle("original-live-process");
+    const originalHandle = registerOwnerSession(first.context, "original-live-process");
 
     const runApprovedTurn = async (context: PreparedCliRunContext, repeat: boolean) => {
       await runPlugin(context, async function* (execution) {
@@ -435,8 +410,8 @@ describe("plugin-owned CLI execution host boundary", () => {
     });
     expect(mockCallGatewayTool).toHaveBeenCalledOnce();
 
-    removeCliLiveSession(originalHandle);
-    registerLiveHandle("replacement-live-process");
+    originalHandle.close("restart");
+    registerOwnerSession(first.context, "replacement-live-process");
     const replacement = await createExecution({
       config,
       nativeTools: ["WebFetch"],
@@ -543,13 +518,7 @@ describe("plugin-owned CLI execution host boundary", () => {
       context,
       async function* (execution) {
         streamStarted.resolve();
-        const signal = execution.abortSignal;
-        if (!signal) {
-          throw new Error("Host execution did not expose its abort signal.");
-        }
-        await new Promise<void>((_, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-        });
+        await waitUntilAborted(execution);
         yield SUCCESS_RESULT;
       },
       { noOutputTimeoutMs: 100 },
@@ -586,13 +555,7 @@ describe("plugin-owned CLI execution host boundary", () => {
       context,
       async function* (execution) {
         yield event;
-        const signal = execution.abortSignal;
-        if (!signal) {
-          throw new Error("Host execution did not expose its abort signal.");
-        }
-        await new Promise<void>((_, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-        });
+        await waitUntilAborted(execution);
         yield SUCCESS_RESULT;
       },
       {
@@ -685,13 +648,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     const run = runPlugin(context, async function* (execution) {
       try {
         streamStarted.resolve();
-        const signal = execution.abortSignal;
-        if (!signal) {
-          throw new Error("Host execution did not expose its abort signal.");
-        }
-        await new Promise<void>((_, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-        });
+        await waitUntilAborted(execution);
         yield SUCCESS_RESULT;
       } finally {
         streamClosed();

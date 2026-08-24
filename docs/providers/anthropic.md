@@ -25,21 +25,10 @@ Admin API cost history comes from Anthropic's [Usage and Cost API](https://platf
 For an existing local Claude Code login, OpenClaw's Claude CLI backend uses
 Anthropic's official Agent SDK to run the installed Claude Code executable.
 Claude Code keeps ownership of its existing login and subscription; OpenClaw
-does not need to extract that login or synthesize Anthropic API requests.
-Explicit non-native API-key and token credentials continue to use the existing
-protected, per-invocation CLI credential-forwarding path for compatibility.
-Imported native
-OAuth profiles reuse the matching, identity-verified Claude Code login instead.
-Anthropic's June 15, 2026
-support update paused the announced separate Agent SDK billing change: Claude
-Agent SDK, `claude -p`, and third-party app usage still draw from a signed-in
-subscription's usage limits, and the previously announced monthly Agent SDK
-credit is not available while Anthropic revises that plan.
-
-Interactive Claude Code still draws from the signed-in Claude plan's limits.
-API key auth is direct pay-as-you-go billing and does not depend on that plan.
-For long-lived gateway hosts, shared automation, and predictable production
-spend, use an Anthropic API key.
+does not extract that login or synthesize Anthropic API requests. SDK and
+`claude -p` usage currently draw from the signed-in subscription's limits.
+API-key auth uses separate pay-as-you-go billing and is preferable for shared
+automation or predictable production spend.
 
 Anthropic's current support articles can change this behavior without an
 OpenClaw release:
@@ -201,14 +190,6 @@ OpenClaw release:
       Anthropic revises that plan.
     - Console/API-key logins use pay-as-you-go API billing and do not receive
       the subscription Agent SDK credit.
-
-    See Anthropic's [Agent SDK plan
-    article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
-    for the pause notice, and the Claude Code plan articles for
-    [Pro/Max](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan)
-    and
-    [Team/Enterprise](https://support.claude.com/en/articles/11845131-use-claude-code-with-your-team-or-enterprise-plan)
-    subscription behavior.
 
     Anthropic can change Claude Code billing and rate-limit behavior without an
     OpenClaw release. Check `claude auth status`, `/status`, and

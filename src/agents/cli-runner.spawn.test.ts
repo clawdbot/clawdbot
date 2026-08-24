@@ -36,7 +36,6 @@ import {
   requireRecord,
   requireRegexMatch,
 } from "./cli-runner.test-helpers.js";
-import { resetCliLiveSessionsForTest } from "./cli-runner/cli-live-session.test-support.js";
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
@@ -81,7 +80,6 @@ beforeEach(() => {
   resetAgentEventsForTest();
   resetDiagnosticRunActivityForTest();
   startDiagnosticRunActivityTracking();
-  resetCliLiveSessionsForTest();
   setCliRunnerExecuteTestDeps({
     writeCliSystemPromptFile,
     invokeNodeClaudeCliRun,
@@ -99,7 +97,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   resetDiagnosticRunActivityForTest();
-  resetCliLiveSessionsForTest();
 });
 
 const CLAUDE_OK_JSONL = `${JSON.stringify({ type: "result", result: "ok" })}\n`;

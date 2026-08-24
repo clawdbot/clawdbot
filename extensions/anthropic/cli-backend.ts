@@ -42,6 +42,19 @@ type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
 };
 
 const CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY = randomBytes(32);
+const CLAUDE_CLI_DEFAULT_ARGS = [
+  "-p",
+  "--output-format",
+  "stream-json",
+  "--include-partial-messages",
+  "--verbose",
+  "--setting-sources",
+  "user",
+  "--allowedTools",
+  "mcp__openclaw__*",
+  "--disallowedTools",
+  "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
+] as const;
 
 function createClaudeCliAuthInput(params: {
   envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" | "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR";
@@ -189,34 +202,8 @@ export function buildAnthropicCliBackend(
     subscriptionAuthDispatch: true,
     config: {
       command: "claude",
-      args: [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--include-partial-messages",
-        "--verbose",
-        "--setting-sources",
-        "user",
-        "--allowedTools",
-        "mcp__openclaw__*",
-        "--disallowedTools",
-        "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
-      ],
-      resumeArgs: [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--include-partial-messages",
-        "--verbose",
-        "--setting-sources",
-        "user",
-        "--allowedTools",
-        "mcp__openclaw__*",
-        "--disallowedTools",
-        "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
-        "--resume",
-        "{sessionId}",
-      ],
+      args: [...CLAUDE_CLI_DEFAULT_ARGS],
+      resumeArgs: [...CLAUDE_CLI_DEFAULT_ARGS, "--resume", "{sessionId}"],
       forkArg: "--fork-session",
       // Claude Code 2.1.209+ exposes this hidden print-mode flag, and stream-json
       // emits the matching transcript UUID on assistant records.

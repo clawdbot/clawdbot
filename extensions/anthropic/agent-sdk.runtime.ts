@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { PassThrough } from "node:stream";
 import type {
   Options as ClaudeAgentSdkOptions,
-  PermissionMode as ClaudeAgentSdkPermissionMode,
   PermissionResult as ClaudeAgentSdkPermissionResult,
   Query as ClaudeAgentSdkQuery,
   SDKUserMessage as ClaudeAgentSdkUserMessage,
@@ -16,14 +15,6 @@ import type {
 } from "openclaw/plugin-sdk/cli-backend";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const CLAUDE_PERMISSION_MODES = new Set<ClaudeAgentSdkPermissionMode>([
-  "default",
-  "acceptEdits",
-  "bypassPermissions",
-  "plan",
-  "dontAsk",
-  "auto",
-]);
 const CLAUDE_EFFORT_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const CLAUDE_STREAM_PROTOCOL_FLAGS = new Set([
   "-p",
@@ -78,7 +69,7 @@ type ClaudeAgentSdkSession = {
   currentTurn?: ClaudeAgentSdkTurn;
   query?: ClaudeAgentSdkQuery;
   idleTimer?: ReturnType<typeof setTimeout>;
-  outstandingBackgroundTaskIds: Set<string>;
+  hasResultHoldingBackgroundTasks: boolean;
   closed: boolean;
   resolveExit: () => void;
   exited: Promise<void>;
@@ -275,10 +266,6 @@ function resolveClaudeAgentSdkOptions(
         break;
       }
       case "--permission-mode": {
-        const permissionMode = value as ClaudeAgentSdkPermissionMode;
-        if (!CLAUDE_PERMISSION_MODES.has(permissionMode)) {
-          throw new Error(`Unsupported Claude Agent SDK permission mode: ${value}`);
-        }
         // Global argv can request bypass, auto, or accepted edits while the
         // admitted session narrows authority. Only the host callback decides.
         break;
@@ -443,25 +430,23 @@ function acceptClaudeAgentSdkMessage(
     return;
   }
   if (message.type === "system" && message.subtype === "background_tasks_changed") {
-    session.outstandingBackgroundTaskIds.clear();
-    for (const task of Array.isArray(message.tasks) ? message.tasks : []) {
-      if (
+    session.hasResultHoldingBackgroundTasks = (
+      Array.isArray(message.tasks) ? message.tasks : []
+    ).some(
+      (task) =>
         isRecord(task) &&
         typeof task.task_type === "string" &&
         RESULT_HOLDING_BACKGROUND_TASK_TYPES.has(task.task_type) &&
         typeof task.task_id === "string" &&
-        task.task_id
-      ) {
-        session.outstandingBackgroundTaskIds.add(task.task_id);
-      }
-    }
+        task.task_id.length > 0,
+    );
   }
   turn.events.write(message);
   if (message.type === "result") {
     turn.sawTerminalResult = true;
     // Local agents/workflows emit an interim result before their final
     // answer; keep the turn and capture grant alive until its final result.
-    if (session.outstandingBackgroundTaskIds.size === 0) {
+    if (!session.hasResultHoldingBackgroundTasks) {
       completeClaudeAgentSdkTurn(session);
     }
   }
@@ -488,36 +473,31 @@ async function consumeClaudeAgentSdkSession(session: ClaudeAgentSdkSession): Pro
   }
 }
 
-function createClaudeAgentSdkSession(params: {
-  context: CliBackendExecuteContext;
-  capability: CliBackendLiveSessionCapability;
-}): ClaudeAgentSdkSession {
+function createClaudeAgentSdkSession(
+  capability: CliBackendLiveSessionCapability,
+): ClaudeAgentSdkSession {
   let resolveExit: () => void = () => {};
   const exited = new Promise<void>((resolve) => {
     resolveExit = resolve;
   });
   const session: ClaudeAgentSdkSession = {
-    capability: params.capability,
+    capability,
     controller: new AbortController(),
     prompts: new PassThrough({ objectMode: true }),
-    outstandingBackgroundTaskIds: new Set(),
+    hasResultHoldingBackgroundTasks: false,
     closed: false,
     resolveExit,
     exited,
     handle: {
-      key: params.capability.ownerKey,
       generation: randomUUID(),
-      fingerprint: params.capability.fingerprint,
-      providerId: params.capability.ownerKey.split(":", 1)[0] ?? "claude-cli",
-      modelId: params.context.modelId,
+      fingerprint: capability.fingerprint,
       isIdle: () => !session.closed && !session.currentTurn,
       close: (reason, error) => closeClaudeAgentSdkSession(session, reason, error),
       waitForExit: () => session.exited,
-      cleanupResources: async () => {},
     },
   };
   claudeAgentSdkSessions.set(session.handle, session);
-  params.capability.register(session.handle);
+  capability.register(session.handle);
   return session;
 }
 
@@ -540,7 +520,7 @@ async function* executeClaudeAgentSdkLiveTurn(
     existingHandle = capability.current();
     session = undefined;
   }
-  session ??= createClaudeAgentSdkSession({ context, capability });
+  session ??= createClaudeAgentSdkSession(capability);
   session.capability = capability;
   if (session.currentTurn) {
     throw new Error("Claude Agent SDK live session is already handling another turn.");

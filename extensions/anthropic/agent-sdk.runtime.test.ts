@@ -94,12 +94,23 @@ function sdkOptions(): Record<string, unknown> {
   return call?.options ?? {};
 }
 
+type SdkNativeToolCallback = (
+  toolName: string,
+  input: Record<string, unknown>,
+  details: { signal: AbortSignal; toolUseID: string; requestId?: string },
+) => Promise<unknown>;
+
+function sdkNativeTool(options: Record<string, unknown>): SdkNativeToolCallback {
+  const callback = options.canUseTool as SdkNativeToolCallback;
+  expect(callback).toEqual(expect.any(Function));
+  return callback;
+}
+
 function createLiveCapability(
   fingerprint = "matching-session-policy",
   state: { current?: CliBackendLiveSessionHandle } = {},
 ): CliBackendLiveSessionCapability {
   const capability: CliBackendLiveSessionCapability = {
-    ownerKey: "claude-cli:authenticated-owner",
     fingerprint,
     current: () => state.current,
     register: vi.fn((handle) => {
@@ -347,11 +358,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       createContext({ requestToolPermission: firstApproval, liveSession: capability }),
     );
     await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
-    const canUseTool = sdkOptions().canUseTool as (
-      toolName: string,
-      input: Record<string, unknown>,
-      details: { signal: AbortSignal; toolUseID: string },
-    ) => Promise<unknown>;
+    const canUseTool = sdkNativeTool(sdkOptions());
     const firstRequest = {
       signal: new AbortController().signal,
       toolUseID: "native-turn-first",
@@ -586,12 +593,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     }));
     let decision: unknown;
     useSdkMessages([SUCCESS_RESULT], async (options) => {
-      const canUseTool = options.canUseTool as (
-        toolName: string,
-        input: Record<string, unknown>,
-        details: { signal: AbortSignal; toolUseID: string; requestId: string },
-      ) => Promise<unknown>;
-      decision = await canUseTool(
+      decision = await sdkNativeTool(options)(
         "Bash",
         { command: "cat private.txt" },
         {
@@ -618,134 +620,68 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     expect(requestToolPermission).toHaveBeenCalledOnce();
   });
 
-  it("forwards native tool decisions and exact inputs to the admitted OpenClaw host", async () => {
-    const requestToolPermission = vi.fn(async () => ({
-      behavior: "allow" as const,
-      updatedInput: { command: "echo approved" },
-    }));
+  it.each([
+    {
+      name: "forwards allowed decisions and exact host inputs",
+      resolve: async () => ({
+        behavior: "allow" as const,
+        updatedInput: { command: "echo approved" },
+      }),
+      expected: { behavior: "allow", updatedInput: { command: "echo approved" } },
+    },
+    {
+      name: "preserves a denied host decision",
+      resolve: async () => ({
+        behavior: "deny" as const,
+        message: "OpenClaw exec policy denied this action.",
+      }),
+      expected: { behavior: "deny", message: "OpenClaw exec policy denied this action." },
+    },
+    {
+      name: "fails closed when the host approval owner is unavailable",
+      resolve: async () => {
+        throw new Error("The Gateway approval owner is unavailable.");
+      },
+      expected: { behavior: "deny", message: "OpenClaw could not authorize this tool call." },
+    },
+  ])("$name and fences the retained callback after closure", async ({ resolve, expected }) => {
+    const requestToolPermission = vi.fn(resolve);
     const signal = new AbortController().signal;
+    const input = { command: "echo approved" };
     let decision: unknown;
+    let callback: SdkNativeToolCallback | undefined;
     useSdkMessages([SUCCESS_RESULT], async (options) => {
-      const canUseTool = options.canUseTool as
-        | ((
-            toolName: string,
-            input: Record<string, unknown>,
-            details: { signal: AbortSignal; toolUseID: string; requestId: string },
-          ) => Promise<unknown>)
-        | undefined;
-      expect(canUseTool).toEqual(expect.any(Function));
-      decision = await canUseTool?.(
-        "Bash",
-        { command: "echo approved" },
-        { signal, toolUseID: "native-tool-1", requestId: "approval-1" },
-      );
+      callback = sdkNativeTool(options);
+      decision = await callback("Bash", input, {
+        signal,
+        toolUseID: "native-tool-1",
+        requestId: "approval-1",
+      });
     });
 
     await collect(createContext({ requestToolPermission }));
 
-    expect(decision).toEqual({ behavior: "allow", updatedInput: { command: "echo approved" } });
+    expect(decision).toEqual(expected);
     expect(requestToolPermission).toHaveBeenCalledWith({
       toolName: "Bash",
-      toolInput: { command: "echo approved" },
+      toolInput: input,
       toolCallId: "native-tool-1",
       abortSignal: signal,
     });
-  });
-
-  it("preserves denied host decisions instead of granting SDK tools", async () => {
-    const requestToolPermission = vi.fn(async () => ({
-      behavior: "deny" as const,
-      message: "OpenClaw exec policy denied this action.",
-    }));
-    let decision: unknown;
-    useSdkMessages([SUCCESS_RESULT], async (options) => {
-      const canUseTool = options.canUseTool as (
-        toolName: string,
-        input: Record<string, unknown>,
-        details: { signal: AbortSignal; toolUseID: string; requestId: string },
-      ) => Promise<unknown>;
-      decision = await canUseTool(
-        "Bash",
-        { command: "cat private.txt" },
-        {
-          signal: new AbortController().signal,
-          toolUseID: "native-tool-2",
-          requestId: "approval-2",
-        },
-      );
-    });
-
-    await collect(createContext({ requestToolPermission }));
-
-    expect(decision).toEqual({
-      behavior: "deny",
-      message: "OpenClaw exec policy denied this action.",
-    });
-  });
-
-  it("fails closed when the host approval owner cannot authorize a native tool", async () => {
-    const requestToolPermission = vi.fn(async () => {
-      throw new Error("The Gateway approval owner is unavailable.");
-    });
-    let decision: unknown;
-    useSdkMessages([SUCCESS_RESULT], async (options) => {
-      const canUseTool = options.canUseTool as (
-        toolName: string,
-        input: Record<string, unknown>,
-        details: { signal: AbortSignal; toolUseID: string; requestId: string },
-      ) => Promise<unknown>;
-      decision = await canUseTool(
-        "Bash",
-        { command: "ls" },
-        {
-          signal: new AbortController().signal,
-          toolUseID: "native-tool-3",
-          requestId: "approval-3",
-        },
-      );
-    });
-
-    await collect(createContext({ requestToolPermission }));
-
-    expect(decision).toEqual({
-      behavior: "deny",
-      message: "OpenClaw could not authorize this tool call.",
-    });
-  });
-
-  it("rejects retained SDK permission callbacks after their run closes", async () => {
-    let canUseTool:
-      | ((
-          toolName: string,
-          input: Record<string, unknown>,
-          details: { signal: AbortSignal; toolUseID: string; requestId: string },
-        ) => Promise<unknown>)
-      | undefined;
-    useSdkMessages([SUCCESS_RESULT], async (options) => {
-      canUseTool = options.canUseTool as typeof canUseTool;
-    });
-    const requestToolPermission = vi.fn(async () => ({
-      behavior: "allow" as const,
-      updatedInput: { command: "echo stale" },
-    }));
-
-    await collect(createContext({ requestToolPermission }));
-
     await expect(
-      canUseTool?.(
+      callback?.(
         "Bash",
         { command: "echo stale" },
         {
-          signal: new AbortController().signal,
+          signal,
           toolUseID: "native-tool-stale",
-          requestId: "approval-stale",
         },
       ),
     ).resolves.toEqual({
       behavior: "deny",
       message: "The OpenClaw run is no longer active.",
     });
-    expect(requestToolPermission).not.toHaveBeenCalled();
+    expect(requestToolPermission).toHaveBeenCalledOnce();
   });
 
   it("preserves error-marked success results for the host error and failover owners", async () => {

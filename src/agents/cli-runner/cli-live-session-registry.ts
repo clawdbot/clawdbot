@@ -1,10 +1,12 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type {
+  CliBackendLiveSessionCapability,
   CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
 } from "../../plugins/cli-backend.types.js";
-import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import { createCliFailoverError } from "./exit-error.js";
+import { buildCliLiveSessionFingerprint } from "./live-session-fingerprint.js";
 import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -19,17 +21,19 @@ type CliLiveSessionOwner = {
   sessionKey?: string;
 };
 
-type CliLiveSessionCreate = {
-  generation: string;
-  closeReason?: CliBackendLiveSessionCloseReason;
+type CliLiveSessionRecord = {
+  handle: CliBackendLiveSessionHandle;
+  approvalGrants: Set<string>;
+  cleanup?: () => Promise<void>;
+  cleanupPromise?: Promise<void>;
+  capture?: {
+    token: string;
+    key: string;
+    revoke: () => void;
+  };
 };
 
-const liveSessions = new Map<string, CliBackendLiveSessionHandle>();
-const liveSessionCreates = new Map<string, CliLiveSessionCreate>();
-const liveSessionTurns = new KeyedAsyncQueue();
-const liveSessionCleanup = new WeakMap<CliBackendLiveSessionHandle, () => Promise<void>>();
-const liveSessionCleanupPromises = new WeakMap<CliBackendLiveSessionHandle, Promise<void>>();
-const liveSessionApprovalGrants = new WeakMap<CliBackendLiveSessionHandle, Set<string>>();
+const liveSessions = new Map<string, CliLiveSessionRecord>();
 
 function buildCliLiveRegistryKey(owner: CliLiveSessionOwner): string {
   return `${owner.backendId}:${buildCliLiveOwnerKey(owner)}`;
@@ -48,7 +52,7 @@ export function buildCliLiveOwnerKey(input: Omit<CliLiveSessionOwner, "backendId
   );
 }
 
-export function buildCliLiveSessionKey(context: PreparedCliRunContext): string {
+function buildCliLiveSessionKey(context: PreparedCliRunContext): string {
   return buildCliLiveRegistryKey({
     backendId: context.backendResolved.id,
     agentAccountId: context.params.agentAccountId,
@@ -64,75 +68,16 @@ export function hasCliLiveSession(owner: CliLiveSessionOwner): boolean {
   return getCliLiveSessionGeneration(owner) !== undefined;
 }
 
-/** Returns the opaque generation of this owner's current or pending execution session. */
+/** Returns the opaque generation of this owner's registered execution session. */
 export function getCliLiveSessionGeneration(owner: CliLiveSessionOwner): string | undefined {
-  const key = buildCliLiveRegistryKey(owner);
-  return liveSessions.get(key)?.generation ?? liveSessionCreates.get(key)?.generation;
-}
-
-export function getCliLiveSession(key: string): CliBackendLiveSessionHandle | undefined {
-  return liveSessions.get(key);
-}
-
-export function registerCliLiveSession(
-  session: CliBackendLiveSessionHandle,
-  pending: CliLiveSessionCreate,
-  cleanup?: () => Promise<void>,
-): void {
-  if (liveSessionCreates.get(session.key) !== pending || pending.closeReason) {
-    session.close(pending.closeReason ?? "restart");
-    return;
-  }
-  liveSessions.set(session.key, session);
-  liveSessionApprovalGrants.set(session, new Set());
-  if (cleanup) {
-    liveSessionCleanup.set(session, cleanup);
-  }
-  cliBackendLog.info(
-    `cli live session start: provider=${session.providerId} model=${session.modelId} activeSessions=${liveSessions.size}`,
-  );
-}
-
-export function removeCliLiveSession(session: CliBackendLiveSessionHandle): void {
-  if (liveSessions.get(session.key) === session) {
-    liveSessions.delete(session.key);
-    liveSessionApprovalGrants.delete(session);
-    const cleanup = liveSessionCleanup.get(session);
-    if (cleanup && !liveSessionCleanupPromises.has(session)) {
-      liveSessionCleanup.delete(session);
-      // Native runtime artifacts remain process-owned until the child has
-      // actually exited, even when close removes its lookup immediately.
-      const completed = session.waitForExit().then(cleanup);
-      void completed.catch((error: unknown) => {
-        cliBackendLog.warn(`cli live session cleanup failed: ${String(error)}`);
-      });
-      liveSessionCleanupPromises.set(session, completed);
-    }
-  }
+  return liveSessions.get(buildCliLiveRegistryKey(owner))?.handle.generation;
 }
 
 /** Reads owner-private standing approvals only from this exact current live process. */
 export function getCliLiveSessionApprovalGrants(
   context: PreparedCliRunContext,
 ): Set<string> | undefined {
-  const session = liveSessions.get(buildCliLiveSessionKey(context));
-  return session ? liveSessionApprovalGrants.get(session) : undefined;
-}
-
-export function beginCliLiveSessionCreate(key: string, generation: string): CliLiveSessionCreate {
-  const create = { generation };
-  liveSessionCreates.set(key, create);
-  return create;
-}
-
-export function finishCliLiveSessionCreate(key: string, create: CliLiveSessionCreate): void {
-  if (liveSessionCreates.get(key) === create) {
-    liveSessionCreates.delete(key);
-  }
-}
-
-export function enqueueCliLiveTurn<T>(key: string, task: () => Promise<T>): Promise<T> {
-  return liveSessionTurns.enqueue(key, task);
+  return liveSessions.get(buildCliLiveSessionKey(context))?.approvalGrants;
 }
 
 /** Closes the live execution session associated with a prepared run context, if one exists. */
@@ -140,49 +85,32 @@ export async function closeCliLiveSession(
   context: PreparedCliRunContext,
   reason: CliBackendLiveSessionCloseReason,
 ): Promise<void> {
-  const key = buildCliLiveSessionKey(context);
-  const session = liveSessions.get(key);
-  const pending = liveSessionCreates.get(key);
-  if (session) {
-    session.close(reason);
+  const record = liveSessions.get(buildCliLiveSessionKey(context));
+  if (!record) {
+    return;
   }
-  if (pending) {
-    pending.closeReason = reason;
-    liveSessionCreates.delete(key);
-  }
-  if (session) {
-    await session.waitForExit();
-    await session.cleanupResources();
-    await liveSessionCleanupPromises.get(session);
-  }
+  // close removes its registry record synchronously; retain the private record
+  // until its original child exits and process-owned artifacts finish cleanup.
+  record.handle.close(reason);
+  await record.handle.waitForExit();
+  await record.cleanupPromise;
 }
 
-function closeOldestIdleSession(): boolean {
-  for (const session of liveSessions.values()) {
-    if (session.isIdle()) {
-      session.close("idle");
-      return true;
+function ensureCliLiveSessionCapacity(context: PreparedCliRunContext): void {
+  if (liveSessions.size < MAX_LIVE_SESSIONS) {
+    return;
+  }
+  for (const { handle } of liveSessions.values()) {
+    if (handle.isIdle()) {
+      handle.close("idle");
+      return;
     }
   }
-  return false;
-}
-
-export function ensureCliLiveSessionCapacity(key: string, context: PreparedCliRunContext): void {
-  if (
-    liveSessions.has(key) ||
-    liveSessionCreates.has(key) ||
-    liveSessions.size + liveSessionCreates.size < MAX_LIVE_SESSIONS
-  ) {
-    return;
-  }
-  if (closeOldestIdleSession()) {
-    return;
-  }
-  throw new FailoverError("Too many CLI live sessions are active.", {
-    reason: "rate_limit",
+  throw createCliFailoverError("Too many CLI live sessions are active.", "rate_limit", {
     provider: context.params.provider,
     model: context.modelId,
-    status: resolveFailoverStatus("rate_limit"),
+    sessionId: context.params.sessionId,
+    lane: context.params.lane,
   });
 }
 
@@ -191,26 +119,146 @@ export function acceptsCliLiveSession(context: PreparedCliRunContext): boolean {
   return (
     context.params.sessionEntry?.execHost !== "node" &&
     Boolean(context.preparedBackend.execute) &&
-    context.backendResolved.liveSessionRequirement === undefined &&
     context.preparedBackend.backend.liveSession !== undefined &&
     context.preparedBackend.backend.output === "jsonl" &&
     context.preparedBackend.backend.input === "stdin"
   );
 }
 
-/** Closes all plugin-owned sessions and clears creation promises for tests. */
-function resetCliLiveSessionsForTest(): void {
-  for (const session of liveSessions.values()) {
-    session.close("restart");
+/** Creates host-owned lifecycle authority without exposing owner keys or bearer material. */
+export function createCliLiveSessionCapability(params: {
+  context: PreparedCliRunContext;
+  argv: readonly string[];
+  env: Record<string, string>;
+  captureKey?: string;
+  beginCapture: (captureKey: string | undefined) => void;
+  abortSignal: AbortSignal;
+  requiredGeneration?: string;
+  claimResources?: () => (() => Promise<void>) | undefined;
+}): CliBackendLiveSessionCapability {
+  const ownerKey = buildCliLiveSessionKey(params.context);
+  const fingerprint = buildCliLiveSessionFingerprint({
+    context: params.context,
+    argv: params.argv,
+    env: params.env,
+  });
+  const grant = params.context.preparedBackend.mcpClientGrantCapture;
+  if (Boolean(grant) !== Boolean(params.captureKey)) {
+    throw new Error("CLI live process and current turn disagree about MCP capture ownership.");
   }
-  liveSessions.clear();
-  for (const pending of liveSessionCreates.values()) {
-    pending.closeReason = "restart";
-  }
-  liveSessionCreates.clear();
-}
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliLiveRegistryReset")] =
-    resetCliLiveSessionsForTest;
+  const requiredSessionError = (code: "cli_live_session_changed" | "cli_live_session_missing") =>
+    createCliFailoverError(
+      "Managed CLI live session is no longer reusable.",
+      "session_expired",
+      {
+        provider: params.context.params.provider,
+        model: params.context.modelId,
+        sessionId: params.context.params.sessionId,
+        lane: params.context.params.lane,
+      },
+      { code },
+    );
+  const assertActive = () => {
+    const assertion = resolveAdmittedRunActiveAssertion(
+      params.context.params.admittedRunContext,
+      params.abortSignal,
+    );
+    if (!assertion) {
+      throw new Error("CLI live session turn is no longer active.");
+    }
+    assertion();
+  };
+  const requireRegisteredRecord = (handle: CliBackendLiveSessionHandle) => {
+    assertActive();
+    const record = liveSessions.get(ownerKey);
+    if (handle.fingerprint !== fingerprint || record?.handle !== handle) {
+      throw new Error("CLI live session no longer belongs to this admitted run.");
+    }
+    if (params.requiredGeneration && params.requiredGeneration !== handle.generation) {
+      throw requiredSessionError("cli_live_session_changed");
+    }
+    return record;
+  };
+
+  return Object.freeze({
+    fingerprint,
+    current: () => {
+      assertActive();
+      const handle = liveSessions.get(ownerKey)?.handle;
+      if (params.requiredGeneration && handle?.generation !== params.requiredGeneration) {
+        throw requiredSessionError(
+          handle ? "cli_live_session_changed" : "cli_live_session_missing",
+        );
+      }
+      if (params.requiredGeneration && handle?.fingerprint !== fingerprint) {
+        throw requiredSessionError("cli_live_session_changed");
+      }
+      return handle;
+    },
+    register: (handle) => {
+      assertActive();
+      if (params.requiredGeneration) {
+        throw requiredSessionError("cli_live_session_changed");
+      }
+      if (
+        handle.fingerprint !== fingerprint ||
+        !handle.generation.trim() ||
+        liveSessions.has(ownerKey) ||
+        // Owner keys stay private; one process handle must never cross owners.
+        Array.from(liveSessions.values()).some((record) => record.handle === handle)
+      ) {
+        throw new Error("CLI live session registration does not match its admitted owner.");
+      }
+      ensureCliLiveSessionCapacity(params.context);
+      const cleanup = params.claimResources?.();
+      const record: CliLiveSessionRecord = {
+        handle,
+        approvalGrants: new Set(),
+        ...(cleanup ? { cleanup } : {}),
+        ...(grant && params.captureKey
+          ? {
+              capture: {
+                token: grant.transportToken,
+                key: params.captureKey,
+                revoke: grant.revokeProcessToken,
+              },
+            }
+          : {}),
+      };
+      liveSessions.set(ownerKey, record);
+      cliBackendLog.info(
+        `cli live session start: provider=${params.context.backendResolved.id} model=${params.context.normalizedModel} activeSessions=${liveSessions.size}`,
+      );
+    },
+    activate: (handle) => {
+      const record = requireRegisteredRecord(handle);
+      if (Boolean(record.capture) !== Boolean(grant)) {
+        throw new Error("CLI live session MCP topology changed across admitted turns.");
+      }
+      if (record.capture && grant) {
+        // Transfer the exact current admission before activating the original
+        // child capture header; copied bearers never carry authority alone.
+        grant.adoptProcessToken(record.capture.token);
+        requireRegisteredRecord(handle);
+        params.beginCapture(record.capture.key);
+      }
+    },
+    remove: (handle) => {
+      const record = liveSessions.get(ownerKey);
+      if (record?.handle !== handle) {
+        return;
+      }
+      record.capture?.revoke();
+      liveSessions.delete(ownerKey);
+      record.approvalGrants.clear();
+      if (record.cleanup) {
+        // Native runtime artifacts remain process-owned until its child exits.
+        record.cleanupPromise = handle.waitForExit().then(record.cleanup);
+        void record.cleanupPromise.catch((error: unknown) => {
+          cliBackendLog.warn(`cli live session cleanup failed: ${String(error)}`);
+        });
+      }
+    },
+  });
 }
