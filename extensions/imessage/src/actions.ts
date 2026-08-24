@@ -281,23 +281,16 @@ function mapTapbackReaction(emoji?: string): string | undefined {
   return undefined;
 }
 
-// Buffer.from(value, "base64") silently drops characters outside the base64
-// alphabet, so malformed tool input would be sent as garbage bytes with no
-// error. Validate with a canonical round-trip first and fail loudly instead.
-function decodeStrictBase64Param(value: string, errorMessage: string): Uint8Array {
-  const canonical = canonicalizeBase64(value);
-  if (canonical === undefined) {
-    throw new Error(errorMessage);
-  }
-  return Uint8Array.from(Buffer.from(canonical, "base64"));
-}
-
 function decodeBase64Buffer(params: Record<string, unknown>, action: string): Uint8Array {
   const base64Buffer = readStringParam(params, "buffer");
   if (!base64Buffer) {
     throw new Error(`iMessage ${action} requires buffer (base64) parameter.`);
   }
-  return decodeStrictBase64Param(base64Buffer, `iMessage ${action} buffer must be valid base64.`);
+  const canonical = canonicalizeBase64(base64Buffer);
+  if (!canonical) {
+    throw new Error(`iMessage ${action} buffer must be valid base64.`);
+  }
+  return Uint8Array.from(Buffer.from(canonical, "base64"));
 }
 
 // Path-shaped attachment params the message-tool schema declares. We only
@@ -331,10 +324,7 @@ function extractReplyAttachment(
     return {
       spec: {
         kind: "buffer",
-        buffer: decodeStrictBase64Param(
-          buffer,
-          "iMessage reply attachment buffer must be valid base64.",
-        ),
+        buffer: decodeBase64Buffer(params, "reply attachment"),
         filename,
       },
       sourceParam: "buffer",
