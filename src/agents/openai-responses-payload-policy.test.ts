@@ -10,7 +10,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 
 describe("openai responses payload policy", () => {
-  it("forces store for native OpenAI responses payloads but keeps disable mode for transport defaults", () => {
+  it("forces store for native OpenAI responses payloads under both provider-policy and disable mode", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
@@ -30,9 +30,28 @@ describe("openai responses payload policy", () => {
     expect(providerPolicy.explicitStore).toBe(true);
     expect(providerPolicy.allowsServiceTier).toBe(true);
 
+    // A native, store-eligible connection needs store:true even under
+    // "disable" mode -- that mode's job is forcing store OFF BY DEFAULT,
+    // and eligibility is precisely what overrides that default (this is
+    // what makes HTTP continuation reachable at all for buildOpenAIResponsesParams
+    // callers, which always resolve this policy with storeMode:"disable").
     const disablePolicy = resolveOpenAIResponsesPayloadPolicy(model, { storeMode: "disable" });
-    expect(disablePolicy.explicitStore).toBe(false);
+    expect(disablePolicy.explicitStore).toBe(true);
     expect(disablePolicy.allowsServiceTier).toBe(true);
+  });
+
+  it("still forces store off under disable mode for a non-eligible (proxy) connection", () => {
+    const proxyModel = {
+      id: "gpt-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://proxy.example.com/v1",
+    } satisfies Pick<Model<"openai-responses">, "api" | "baseUrl" | "id" | "provider">;
+
+    const disablePolicy = resolveOpenAIResponsesPayloadPolicy(proxyModel, {
+      storeMode: "disable",
+    });
+    expect(disablePolicy.explicitStore).toBe(false);
   });
 
   it("couples native Responses server compaction to provider-managed store", () => {
@@ -167,7 +186,7 @@ describe("openai responses payload policy", () => {
       reasoning: {
         effort: "none",
       },
-      store: false,
+      store: true,
     });
   });
 
@@ -192,7 +211,7 @@ describe("openai responses payload policy", () => {
     );
 
     expect(payload).toEqual({
-      store: false,
+      store: true,
     });
   });
 
