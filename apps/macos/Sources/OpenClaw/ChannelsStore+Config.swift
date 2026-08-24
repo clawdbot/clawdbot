@@ -172,8 +172,17 @@ extension ChannelsStore {
 
     private func applyUIConfig(_ snap: ConfigSnapshot) {
         let ui = snap.config?["ui"]?.dictionaryValue
-        let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
+        AppStateStore.shared.seamColorHex = Self.uiAccent(
+            userAccent: ui?["prefs"]?.dictionaryValue?["accent"]?.stringValue,
+            seamColor: ui?["seamColor"]?.stringValue)
+    }
+
+    /// User accent wins over the operator seam color, mirroring the gateway's
+    /// talk.config precedence (ui.prefs.accent -> ui.seamColor -> theme default).
+    static func uiAccent(userAccent: String?, seamColor: String?) -> String? {
+        [userAccent, seamColor]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
     }
 
     func channelConfigSchema(for channelId: String) -> ConfigSchemaNode? {
