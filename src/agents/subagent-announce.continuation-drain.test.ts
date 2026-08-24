@@ -515,6 +515,55 @@ describe("subagent-announce continuation drain (F7)", () => {
     expect(markPendingDelegateFailedMock).not.toHaveBeenCalled();
   });
 
+  it("threads delegate admission authority through an accepted announce drain", async () => {
+    const delegate = {
+      task: "spawn from announce drain",
+      flowId: "flow-announce-drain",
+      expectedRevision: 3,
+    };
+    loadSessionStoreMock.mockImplementation(
+      () =>
+        ({
+          "agent:main:subagent:test": {
+            sessionId: "session-child",
+            lifecycleRevision: "child-lifecycle",
+            updatedAt: Date.now(),
+          },
+          "agent:main:main": { sessionId: "session-main", updatedAt: Date.now() },
+        }) as Record<string, unknown>,
+    );
+    consumePendingDelegatesMock.mockReturnValueOnce([delegate]);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-announce-drain",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "[continuation:chain-hop:1] prior delegate",
+      timeoutMs: 100,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    expect(spawnSubagentDirectMock.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        continuationDelegateAdmission: expect.objectContaining({
+          source: {
+            ownerSessionKey: "agent:main:subagent:test",
+            flowId: delegate.flowId,
+            expectedRevision: delegate.expectedRevision,
+          },
+        }),
+      }),
+    );
+    expect(markPendingDelegateFailedMock).not.toHaveBeenCalled();
+  });
+
   it("does not set inherited silent/wake for a normal (visible) parent", async () => {
     loadSessionStoreMock.mockImplementation(
       () =>

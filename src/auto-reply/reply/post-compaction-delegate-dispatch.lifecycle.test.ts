@@ -108,7 +108,7 @@ function createDeliveryDeps(params: {
 }) {
   const enqueueSystemEvent = vi.fn();
   const log = vi.fn();
-  const spawnSubagentDirect = vi.fn(async () => {
+  const spawnSubagentDirect = vi.fn(async (_request: unknown, _context: unknown) => {
     if (params.spawnError) {
       throw params.spawnError;
     }
@@ -381,6 +381,11 @@ describe("post-compaction delivery: continuation depth follows accepted children
         accepting.deps,
       );
       expect(accepting.spawnSubagentDirect).toHaveBeenCalledTimes(1);
+      expect(accepting.spawnSubagentDirect.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({
+          continuationDelegateAdmission: expect.any(Object),
+        }),
+      );
       expect(expectDefined(readSessionEntry(storePath), "main").continuationChainCount).toBe(4);
     });
   });

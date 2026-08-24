@@ -96,10 +96,10 @@ const ALLOWLIST = [
   },
   {
     file: "src/auto-reply/continuation/continuation-dispatch-claims.ts",
-    symbol: "activeWorkDispatchControllers",
-    owner: "continuation work dispatch claim registry",
+    symbol: "activeDispatchClaims",
+    owner: "continuation dispatch claim registry",
     purpose:
-      "Tracks live AbortControllers for claimed continue_work callbacks so explicit reset can close them before provider admission.",
+      "Tracks live AbortControllers for claimed continue_work and delegate callbacks so explicit reset can close them before provider admission.",
     safeVolatileClassification:
       "The map contains only current-process execution controllers; durable TaskFlow rows remain the restart and recovery authority.",
     restartContract:

@@ -385,7 +385,9 @@ describe("hedge timer ref/handle cleanup", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({ task: expect.stringContaining("crossed deadline work") }),
-      expect.anything(),
+      expect.objectContaining({
+        continuationDelegateAdmission: expect.any(Object),
+      }),
     );
     expect(hasLiveContinuationTimerRefs(sessionKey)).toBe(false);
   });

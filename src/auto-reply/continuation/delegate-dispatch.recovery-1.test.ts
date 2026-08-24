@@ -429,7 +429,10 @@ describe("recoverPendingContinuationDelegates", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({ continuationDelegateFlowId: "flow-1" }),
-      expect.objectContaining({ agentSessionKey: sessionKey }),
+      expect.objectContaining({
+        agentSessionKey: sessionKey,
+        continuationDelegateAdmission: expect.any(Object),
+      }),
     );
     expect(mockFlows.get("flow-1")).toMatchObject({
       status: "succeeded",
