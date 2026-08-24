@@ -1152,6 +1152,9 @@ exit 1
         sendCount: 1,
         status: "complete",
       });
+      expect(fs.readFileSync(harness.recorderLog, "utf8")).toMatch(
+        /stop --session desktop-recorder\.json --crop telegram-window --since \d{4}-\d{2}-\d{2}T/u,
+      );
     } finally {
       await harness.close();
     }

@@ -8,7 +8,7 @@ import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts
 
 const OUTCOMES = new Set(["blocked", "fail", "pass"]);
 const MEDIA = {
-  previewGifCropped: { extension: "gif", kind: "attachment" },
+  previewGifCropped: { extension: "gif", kind: "timeline" },
   screenshot: { extension: "png", kind: "attachment" },
   trimmedVideoCropped: { extension: "mp4", kind: "motionClip" },
 };
@@ -156,7 +156,7 @@ function loadLane({ factsFile, expectedSha, lane, outputDir, publishedRoot }) {
     copied.add(record.file);
     artifacts.push({
       alt: `${lane} ${name}`,
-      inline: false,
+      inline: name === "previewGifCropped",
       kind: media.kind,
       label: lane === "baseline" ? "Before — current main" : "After — this PR",
       lane,
@@ -172,18 +172,8 @@ function loadLane({ factsFile, expectedSha, lane, outputDir, publishedRoot }) {
       continue;
     }
     copy(path.join(trustedLaneDir, entry.name), path.join(laneDir, entry.name));
-    const artifactName = Object.entries(records).find(
-      ([, record]) => isRecord(record) && record.file === entry.name,
-    )?.[0];
-    const isInspection = /^inspection\d+$/u.test(artifactName ?? "");
     artifacts.push({
-      ...(isInspection
-        ? {
-            alt: `${lane} agent-selected Telegram screenshot`,
-            inline: true,
-          }
-        : {}),
-      kind: isInspection ? "desktopScreenshot" : "attachment",
+      kind: "attachment",
       label: `${lane} ${entry.name}`,
       lane,
       path: `${lane}/${entry.name}`,

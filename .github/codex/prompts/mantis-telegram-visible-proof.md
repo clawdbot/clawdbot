@@ -41,11 +41,9 @@ recording, cleanup, and publication. It does not decide what scenario is valid
 or what evidence matters. Raw credentials and publication credentials are not
 present in your account; the control CLIs already bind them.
 
-You also own the visual comparison. Use `screenshot` whenever the Desktop shows
-the fact you want reviewers to see. The last explicit screenshot from each lane
-is displayed side by side in the PR comment. The automatic final-state capture
-and full recording remain available as raw evidence, but are not the comparison:
-a final state cannot prove a transient message that has already disappeared.
+The trusted recorder mechanically builds the inline GIF from the final Telegram
+turn in each lane and keeps the full recording as raw evidence. Do not spend
+investigation time timing screenshots or editing media.
 
 ## Finish
 

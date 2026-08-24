@@ -38,7 +38,6 @@ function writeLane(
   const published = path.join(root, "published", lane);
   mkdirSync(published, { recursive: true });
   const artifacts = {
-    inspection1: writeMedia(path.join(published, `${lane}-chosen.png`), "PNG"),
     previewGifCropped: writeMedia(path.join(published, `${lane}.gif`), "GIF89a"),
     screenshot: writeMedia(path.join(published, `${lane}.png`), "PNG"),
     trimmedVideoCropped: writeMedia(path.join(published, `${lane}.mp4`), "MP4"),
@@ -155,19 +154,9 @@ describe("Mantis open-ended Telegram proof collector", () => {
     expect(candidate.botApiRequests).toHaveLength(1);
     expect(
       manifest.artifacts.find(
-        (artifact: { path: string }) => artifact.path === "baseline/baseline-chosen.png",
-      ),
-    ).toMatchObject({ inline: true, kind: "desktopScreenshot" });
-    expect(
-      manifest.artifacts.find(
-        (artifact: { path: string }) => artifact.path === "baseline/baseline-screenshot.png",
-      ),
-    ).toMatchObject({ kind: "attachment" });
-    expect(
-      manifest.artifacts.find(
         (artifact: { path: string }) => artifact.path === "baseline/baseline-previewGifCropped.gif",
       ),
-    ).toMatchObject({ kind: "attachment" });
+    ).toMatchObject({ inline: true, kind: "timeline" });
 
     const comment = renderEvidenceComment({
       manifest: loadEvidenceManifest(path.join(output, "mantis-evidence.json")),
@@ -175,13 +164,10 @@ describe("Mantis open-ended Telegram proof collector", () => {
       rawBase: "https://qa.openclaw.ai/mantis/telegram-visible/run-1",
     });
     expect(comment).toContain(
-      '<img src="https://qa.openclaw.ai/mantis/telegram-visible/run-1/baseline/baseline-chosen.png"',
+      '<img src="https://qa.openclaw.ai/mantis/telegram-visible/run-1/baseline/baseline-previewGifCropped.gif"',
     );
     expect(comment).not.toContain(
       '<img src="https://qa.openclaw.ai/mantis/telegram-visible/run-1/baseline/baseline-screenshot.png"',
-    );
-    expect(comment).not.toContain(
-      '<img src="https://qa.openclaw.ai/mantis/telegram-visible/run-1/baseline/baseline-previewGifCropped.gif"',
     );
   });
 

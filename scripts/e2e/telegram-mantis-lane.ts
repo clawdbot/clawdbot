@@ -1784,11 +1784,13 @@ async function stopActiveLane(
   }
   // Recorder export and SUT teardown are independent; start export before the
   // synchronous container calls so both cleanup paths make progress together.
+  const finalSendAt = state.invocations.findLast((invocation) => invocation.command === "send")?.at;
   const recorderStop = runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
     "stop",
     "--session",
     recorderRelativePath(state.recorderSession),
     ...(crop ? ["--crop", "telegram-window"] : []),
+    ...(crop && finalSendAt ? ["--since", finalSendAt] : []),
   ]);
   cleanupErrors.push(...teardownSut(state.sut, state.privateDir));
   try {
