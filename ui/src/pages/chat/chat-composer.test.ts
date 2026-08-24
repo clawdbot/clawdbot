@@ -415,9 +415,10 @@ describe("renderChatComposer controls", () => {
       ...container.querySelectorAll<HTMLButtonElement>(".chat-talk-input-picker__settings"),
     ];
     expect(settingsButtons.map((entry) => entry.textContent?.trim())).toEqual([
-      t("chat.composer.openRealtimeTalkSettings"),
-      t("chat.composer.openDictationSettings"),
+      t("chat.composer.configureCapability"),
+      t("chat.composer.configureCapability"),
     ]);
+    expect(settingsButtons.every((entry) => entry.querySelector("svg") !== null)).toBe(true);
     settingsButtons[0]?.click();
     expect(onOpenTalkSettings).toHaveBeenCalledOnce();
     expect(onOpenDictationSettings).not.toHaveBeenCalled();
@@ -933,7 +934,7 @@ describe("renderChatComposer status", () => {
     const interrupted = view.container.querySelector(".agent-chat__run-status--interrupted");
     expect(interrupted).not.toBeNull();
     expect(interrupted?.closest(".agent-chat__composer-run-status")).not.toBeNull();
-    expect(interrupted?.querySelector("path")?.getAttribute("d")).toBe("m2 2 20 20");
+    expect(interrupted?.querySelector("rect")?.getAttribute("width")).toBe("18");
     expect(
       view.container.querySelector(".agent-chat__run-status-announcement")?.textContent,
     ).toContain("Interrupted");

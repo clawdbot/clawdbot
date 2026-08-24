@@ -197,7 +197,7 @@ describe("chat pane composer controls", () => {
       '[data-chat-permission-option="default"]',
     );
     const permissionIcons = {
-      default: icons.shield,
+      default: icons.shieldCheck,
       "read-only": icons.shieldEllipsis,
       guarded: icons.shieldLock,
       workspace: icons.shieldCog,
@@ -214,7 +214,9 @@ describe("chat pane composer controls", () => {
     expect(defaultOption?.textContent).toContain("Follow the agent's configured policy");
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");
-    expect(full?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
+    expect(full?.querySelector(".chat-controls__permission-shortcut")).toBeNull();
+    expect(full?.querySelector(".chat-controls__permission-lock")).not.toBeNull();
+    expect(full?.querySelector(".chat-controls__inline-select-check")).toBeNull();
     expect(full?.getAttribute("aria-label")).toContain("operator.admin");
 
     dropdown?.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));

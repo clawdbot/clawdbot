@@ -39,6 +39,7 @@ type ChatModelPickerParams = {
   sessionKey: string;
   triggerModelLabel: string;
   triggerStatusLabel?: string;
+  triggerLoading?: boolean;
   onModelSetup?: () => void;
   onOpen?: () => unknown;
   onModelSelect: (value: string, sessionKey: string) => Promise<unknown>;
@@ -333,6 +334,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   // label replaces the model name outright, and a provider mark next to
   // "Loading..." would claim an identity the trigger is not showing.
   const triggerProviderIcon =
+    !params.triggerLoading &&
     !params.triggerStatusLabel &&
     activeModelOption &&
     hasProviderBrandIcon(activeModelOption.provider)
@@ -465,6 +467,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         data-chat-select-value=${params.selectedModelValue}
         data-chat-model-tools=${modelToolsUnavailable ? "unavailable" : "available"}
         aria-label=${settingsLabel}
+        aria-busy=${params.triggerLoading ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
         title=${params.disabledReason ?? triggerTitle}
         @click=${(event: MouseEvent) => {
@@ -490,7 +493,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
           : nothing}
         ${triggerProviderIcon}
         <span class="chat-controls__inline-select-label">
-          ${params.triggerStatusLabel ?? params.triggerModelLabel}
+          ${params.triggerLoading
+            ? html`<span
+                class="skeleton chat-controls__model-trigger-skeleton"
+                aria-hidden="true"
+              ></span>`
+            : (params.triggerStatusLabel ?? params.triggerModelLabel)}
         </span>
         ${showContextWindowBadge
           ? html`

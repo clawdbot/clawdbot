@@ -109,7 +109,6 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
       label: t("chat.composer.realtimeTalkCapability"),
       status: props.realtimeStatus,
       unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
-      settingsLabel: t("chat.composer.openRealtimeTalkSettings"),
       onOpenSettings: props.onOpenTalkSettings,
     },
     {
@@ -117,7 +116,6 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
       label: t("chat.composer.dictationCapability"),
       status: props.dictationStatus,
       unavailableReason: t("chat.composer.dictationProviderUnavailableShort"),
-      settingsLabel: t("chat.composer.openDictationSettings"),
       onOpenSettings: props.onOpenDictationSettings,
     },
   ].filter(
@@ -230,7 +228,7 @@ export function renderMicrophonePicker(props: MicrophonePickerProps) {
                               capability.onOpenSettings?.();
                             }}
                           >
-                            ${capability.settingsLabel}
+                            ${icons.settings}<span>${t("chat.composer.configureCapability")}</span>
                           </button>
                         `
                       : nothing}

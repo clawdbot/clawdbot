@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import {
   formatRawProviderLabel,
   providerDisplayLabel,
@@ -97,71 +98,79 @@ export function renderChatModelPickerOption(params: {
   const modelLabel = formatModelLabel(params.entry);
   const modelMeta = [
     formatModelContextMeta(params.entry),
-    params.entry.supportsTools === false ? t("chat.modelControls.chatOnly") : "",
     params.entry.agentRuntimeId ? formatAgentRuntimeLabel(params.entry.agentRuntimeId) : "",
     params.entry.disabled ? t("modelSetup.candidates.signInNeeded") : "",
   ]
     .filter(Boolean)
     .join(" · ");
-  return html`
-    <button
-      class="chat-controls__inline-select-option chat-controls__model-option ${selected
-        ? "chat-controls__inline-select-option--selected"
-        : ""}"
-      data-chat-model-option=${params.entry.value}
-      data-chat-model-default=${params.entry.isDefault ? "true" : nothing}
-      data-chat-model-index=${params.index}
-      data-chat-model-keywords=${params.entry.isDefault
-        ? t("chat.modelControls.default").toLocaleLowerCase()
-        : nothing}
-      data-chat-model-name=${modelLabel.toLocaleLowerCase()}
-      data-chat-model-provider-label=${providerDisplayLabel(
-        params.entry.provider,
-      ).toLocaleLowerCase()}
-      role="option"
-      aria-selected=${selected ? "true" : "false"}
-      type="button"
-      ?disabled=${params.disabled || (params.entry.disabled && !params.onModelSetup)}
-      data-chat-model-setup=${params.entry.disabled && params.onModelSetup ? "true" : nothing}
-      @mouseenter=${(event: MouseEvent) =>
-        params.onHighlight(event.currentTarget as HTMLButtonElement)}
-      @click=${(event: MouseEvent) => {
-        // A sign-in-gated model must not dead-end: the row routes to Model
-        // Setup instead of silently ignoring the click on a disabled button.
-        if (params.entry.disabled) {
-          event.stopPropagation();
-          params.onModelSetup?.();
-          return;
-        }
-        params.onSelect(params.entry, event);
-      }}
-    >
-      <span class="chat-controls__model-option-provider">
-        ${renderChatModelProviderIcon(params.entry.provider)}
-      </span>
-      <span class="chat-controls__model-option-copy">
-        <span class="chat-controls__model-option-title">
-          <span class="chat-controls__model-option-name">${modelLabel}</span>
-          ${params.entry.isDefault
-            ? html`<span
-                class="chat-controls__model-state-label chat-controls__model-state-label--default"
-                >${t("chat.modelControls.default")}</span
-              >`
-            : nothing}
-          ${modelMeta
-            ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
-            : nothing}
-        </span>
-      </span>
-      <span class="chat-controls__model-option-action">
-        ${selected
-          ? html`<span class="chat-controls__inline-select-check" aria-hidden="true"
-              >${icons.check}</span
+  const option = html`<button
+    class="chat-controls__inline-select-option chat-controls__model-option ${selected
+      ? "chat-controls__inline-select-option--selected"
+      : ""}"
+    data-chat-model-option=${params.entry.value}
+    data-chat-model-default=${params.entry.isDefault ? "true" : nothing}
+    data-chat-model-index=${params.index}
+    data-chat-model-keywords=${params.entry.isDefault
+      ? t("chat.modelControls.default").toLocaleLowerCase()
+      : nothing}
+    data-chat-model-name=${modelLabel.toLocaleLowerCase()}
+    data-chat-model-provider-label=${providerDisplayLabel(
+      params.entry.provider,
+    ).toLocaleLowerCase()}
+    role="option"
+    aria-selected=${selected ? "true" : "false"}
+    aria-label=${params.entry.supportsTools === false
+      ? `${modelLabel}. ${t("chat.modelControls.chatOnlyHelp")}`
+      : modelLabel}
+    type="button"
+    ?disabled=${params.disabled || (params.entry.disabled && !params.onModelSetup)}
+    data-chat-model-setup=${params.entry.disabled && params.onModelSetup ? "true" : nothing}
+    @mouseenter=${(event: MouseEvent) =>
+      params.onHighlight(event.currentTarget as HTMLButtonElement)}
+    @click=${(event: MouseEvent) => {
+      // A sign-in-gated model must not dead-end: the row routes to Model
+      // Setup instead of silently ignoring the click on a disabled button.
+      if (params.entry.disabled) {
+        event.stopPropagation();
+        params.onModelSetup?.();
+        return;
+      }
+      params.onSelect(params.entry, event);
+    }}
+  >
+    <span class="chat-controls__model-option-provider">
+      ${renderChatModelProviderIcon(params.entry.provider)}
+    </span>
+    <span class="chat-controls__model-option-copy">
+      <span class="chat-controls__model-option-title">
+        <span class="chat-controls__model-option-name">${modelLabel}</span>
+        ${params.entry.isDefault
+          ? html`<span
+              class="chat-controls__model-state-label chat-controls__model-state-label--default"
+              >${t("chat.modelControls.default")}</span
             >`
-          : html`<kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>`}
+          : nothing}
+        ${modelMeta
+          ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
+          : nothing}
+        ${params.entry.supportsTools === false
+          ? html`<span class="chat-controls__model-chat-only-info" aria-hidden="true">i</span>`
+          : nothing}
       </span>
-    </button>
-  `;
+    </span>
+    <span class="chat-controls__model-option-action">
+      ${selected
+        ? html`<span class="chat-controls__inline-select-check" aria-hidden="true"
+            >${icons.check}</span
+          >`
+        : html`<kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>`}
+    </span>
+  </button>`;
+  return params.entry.supportsTools === false
+    ? html`<openclaw-tooltip .content=${t("chat.modelControls.chatOnlyHelp")}>
+        ${option}
+      </openclaw-tooltip>`
+    : option;
 }
 
 export function renderChatModelPickerTargetOption(params: {

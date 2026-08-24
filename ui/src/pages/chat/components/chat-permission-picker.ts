@@ -65,7 +65,7 @@ function modeIcon(mode: SessionPermissionMode | null): unknown {
     case "full":
       return icons.shieldAlert;
     default:
-      return icons.shield;
+      return icons.shieldCheck;
   }
 }
 
@@ -164,13 +164,13 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
               </span>
             </span>
             <span slot="details" class="chat-controls__permission-option-state" aria-hidden="true">
-              ${selected
+              ${selected || locked
                 ? nothing
                 : html`<span class="chat-controls__permission-shortcut">${index + 1}</span>`}
               ${locked
                 ? html`<span class="chat-controls__permission-lock">${icons.lock}</span>`
                 : nothing}
-              ${selected
+              ${selected && !locked
                 ? html`<span class="chat-controls__inline-select-check">${icons.check}</span>`
                 : nothing}
             </span>

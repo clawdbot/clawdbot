@@ -6021,8 +6021,8 @@ export const en: TranslationMap = {
         savingBlocked: "Wait for the current session capability change to finish.",
       },
       overrides: {
-        count: "{count} session overrides",
-        countOne: "{count} session override",
+        count: "{count} overrides",
+        countOne: "{count} override",
         clear: "Clear session overrides",
       },
       contextUsage: {
@@ -6074,6 +6074,7 @@ export const en: TranslationMap = {
       talkCapabilityUnknown: "Provider availability could not be verified.",
       openRealtimeTalkSettings: "Talk settings",
       openDictationSettings: "Transcription setup",
+      configureCapability: "Configure",
       holdToRecordSetting: "Hold microphone button to start dictation",
       holdToDictate: "Hold to start dictation",
       holdToRecordSettingDescription:
@@ -6084,6 +6085,7 @@ export const en: TranslationMap = {
       dictationDisconnected: "Dictation stopped because the Gateway disconnected.",
       dictationFailed: "Dictation failed.",
       dictationFinalizing: "Finishing dictation…",
+      dictationListening: "Listening…",
       dictationFinalizationTimedOut:
         "Dictation stopped before the last partial transcript could be finalized.",
       dictationProviderUnavailable:

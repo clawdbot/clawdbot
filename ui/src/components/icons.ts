@@ -223,6 +223,10 @@ export const icons = {
   x: strokeIcon(svg` <path d="M18 6 6 18" />
     <path d="m6 6 12 12" />`),
   check: strokeIcon(svg`<path d="M20 6 9 17l-5-5" />`),
+  info: strokeIcon(
+    svg`<circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" />`,
+  ),
+  square: strokeIcon(svg`<rect width="18" height="18" x="3" y="3" rx="2" />`),
   play: strokeIcon(svg`<polygon points="6 3 20 12 6 21 6 3" />`),
   pause: strokeIcon(svg` <rect x="14" y="4" width="4" height="16" rx="1" />
     <rect x="6" y="4" width="4" height="16" rx="1" />`),

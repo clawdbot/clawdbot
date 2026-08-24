@@ -165,7 +165,7 @@ function resolveCatalogTriggerStatus(
   optionCount: number,
 ): string | undefined {
   if (state.status === "offline") {
-    return t("common.offline");
+    return undefined;
   }
   if (state.status === "error") {
     return optionCount === 0 ? t("chat.modelControls.modelsUnavailable") : undefined;
@@ -358,7 +358,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const catalogTriggerStatus = resolveCatalogTriggerStatus(managedCatalog, modelOptions.length);
   // A verified-empty catalog means there is nothing to reason about: the effort
   // picker would only steer a model that cannot be selected, so it hides with it.
-  const modelsEmpty = managedCatalog.hasSnapshot && modelOptions.length === 0;
+  const hasResolvableModel =
+    managedCatalog.status === "ready" &&
+    (modelOptions.some((option) => !option.disabled) ||
+      (props.modelSelectionLocked === true && activeModelOption !== undefined));
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
   const commonDisabled =
@@ -424,6 +427,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerStatusLabel: catalogTriggerStatus,
+        triggerLoading: catalogLoadingWithoutSnapshot,
         onModelSetup: props.onModelSetup,
         onOpen: props.onModelPickerOpen,
         onModelSelect: async (next, targetSessionKey) =>
@@ -432,7 +436,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       })}
-      ${modelsEmpty
+      ${!hasResolvableModel
         ? nothing
         : renderChatEffortPicker({
             disabled: effortDisabled,
