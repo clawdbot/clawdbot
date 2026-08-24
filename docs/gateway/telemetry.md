@@ -20,6 +20,9 @@ Run this command before or after changing your preference:
 openclaw telemetry show
 ```
 
+Add `--json` to get the same state and payload as one machine-readable
+document.
+
 The output shows whether feature statistics are enabled, why they are enabled
 or disabled, the request endpoint, and the last successful check. When feature
 statistics are enabled, it prints the exact JSON payload the next request would

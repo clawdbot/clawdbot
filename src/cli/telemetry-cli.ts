@@ -16,10 +16,34 @@ const TELEMETRY_REASON_LABELS = {
   "update-disabled": "update checks are disabled",
 } satisfies Record<ReturnType<typeof resolveTelemetryStatus>["reason"], string>;
 
-async function showTelemetry(): Promise<void> {
+async function showTelemetry(options: { json?: boolean }): Promise<void> {
   const config = getRuntimeConfig({ skipPluginValidation: true });
   const telemetry = resolveTelemetryStatus(config);
   const userAgent = buildTelemetryUserAgent("gateway");
+  const requestSent = telemetry.reason !== "update-disabled";
+  const payload = telemetry.enabled
+    ? buildTelemetryPayload(config, { surface: "gateway" })
+    : undefined;
+
+  if (options.json) {
+    defaultRuntime.log(
+      JSON.stringify({
+        featureStatsEnabled: telemetry.enabled,
+        reason: telemetry.reason,
+        endpoint: telemetry.endpoint,
+        lastPingAt: telemetry.lastPingAt ? new Date(telemetry.lastPingAt).toISOString() : null,
+        request: requestSent
+          ? {
+              method: telemetry.enabled ? "POST" : "GET",
+              userAgent,
+              ...(payload ? { payload } : {}),
+            }
+          : null,
+      }),
+    );
+    return;
+  }
+
   defaultRuntime.log(`Feature stats: ${telemetry.enabled ? "enabled" : "disabled"}`);
   defaultRuntime.log(`Reason: ${TELEMETRY_REASON_LABELS[telemetry.reason]}`);
   defaultRuntime.log(`Endpoint: ${telemetry.endpoint}`);
@@ -32,9 +56,9 @@ async function showTelemetry(): Promise<void> {
   }
   defaultRuntime.log(`Request: ${telemetry.enabled ? "POST" : "GET"} ${telemetry.endpoint}`);
   defaultRuntime.log(`User-Agent: ${userAgent}`);
-  if (telemetry.enabled) {
+  if (payload) {
     defaultRuntime.log("Payload:");
-    defaultRuntime.log(JSON.stringify(buildTelemetryPayload(config, { surface: "gateway" })));
+    defaultRuntime.log(JSON.stringify(payload));
   }
 }
 
@@ -62,7 +86,10 @@ export function registerTelemetryCli(program: Command): void {
   telemetry
     .command("show")
     .description("Show exactly what the daily update request sends")
-    .action(async () => runCommandWithRuntime(defaultRuntime, showTelemetry));
+    .option("--json", "Print the request and payload as JSON")
+    .action(async (options: { json?: boolean }) =>
+      runCommandWithRuntime(defaultRuntime, () => showTelemetry(options)),
+    );
 
   telemetry
     .command("on")

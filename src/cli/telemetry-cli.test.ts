@@ -79,6 +79,40 @@ describe("telemetry cli", () => {
     );
   });
 
+  it("reports the same state and canonical payload as one JSON document", async () => {
+    await runTelemetryCli(["show", "--json"]);
+
+    expect(mocks.runtimeLogs).toHaveLength(1);
+    expect(JSON.parse(mocks.runtimeLogs[0] ?? "")).toEqual({
+      featureStatsEnabled: true,
+      reason: "enabled",
+      endpoint: "https://telemetry.openclaw.ai/api/latest-version",
+      lastPingAt: "2026-08-22T12:00:00.000Z",
+      request: {
+        method: "POST",
+        userAgent: "openclaw/2026.8.2 (darwin; node/26.0.1; arm64; gateway)",
+        payload,
+      },
+    });
+  });
+
+  it("reports a null JSON request when update checks are disabled", async () => {
+    mocks.resolveTelemetryStatus.mockReturnValue({
+      enabled: false,
+      reason: "update-disabled",
+      endpoint: "https://telemetry.openclaw.ai/api/latest-version",
+    });
+
+    await runTelemetryCli(["show", "--json"]);
+
+    expect(JSON.parse(mocks.runtimeLogs[0] ?? "")).toMatchObject({
+      featureStatsEnabled: false,
+      reason: "update-disabled",
+      lastPingAt: null,
+      request: null,
+    });
+  });
+
   it("shows only the update request headers when feature statistics are disabled", async () => {
     mocks.resolveTelemetryStatus.mockReturnValue({
       enabled: false,
