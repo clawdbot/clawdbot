@@ -118,22 +118,16 @@ export async function waitForTurnOperation<T>(params: {
   });
 }
 
-function resolvePlacementIdentityField(params: {
-  field: string;
-  supplied: string | undefined;
-  persisted: string | undefined;
-}): string {
-  if (!params.persisted) {
-    return required(params.supplied, params.field);
+function resolvePlacementIdentityField(
+  supplied: string | undefined,
+  persisted: string | undefined,
+  field: string,
+): string {
+  const resolved = supplied === undefined && persisted ? persisted : required(supplied, field);
+  if (persisted && resolved !== persisted) {
+    throw new Error(`Worker turn ${field} does not match its placement`);
   }
-  if (params.supplied === undefined) {
-    return params.persisted;
-  }
-  const supplied = required(params.supplied, params.field);
-  if (supplied !== params.persisted) {
-    throw new Error(`Worker turn ${params.field} does not match its placement`);
-  }
-  return params.persisted;
+  return resolved;
 }
 
 export function resolvePlacementIdentity(
@@ -142,16 +136,12 @@ export function resolvePlacementIdentity(
 ) {
   return {
     sessionId: claim.sessionId,
-    agentId: resolvePlacementIdentityField({
-      field: "agent id",
-      supplied: claim.agentId,
-      persisted: placement?.agentId,
-    }),
-    sessionKey: resolvePlacementIdentityField({
-      field: "session key",
-      supplied: claim.sessionKey,
-      persisted: placement?.sessionKey,
-    }),
+    agentId: resolvePlacementIdentityField(claim.agentId, placement?.agentId, "agent id"),
+    sessionKey: resolvePlacementIdentityField(
+      claim.sessionKey,
+      placement?.sessionKey,
+      "session key",
+    ),
   };
 }
 
