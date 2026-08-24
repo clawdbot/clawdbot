@@ -44,6 +44,29 @@ describe("FeishuConfigSchema named-account open DM policy", () => {
     ).toBe(true);
   });
 
+  it.each(["feishu:*", "lark:*"])(
+    "accepts provider-prefixed wildcard %s for an open account",
+    (wildcard) => {
+      expect(
+        FeishuConfigSchema.safeParse({
+          accounts: { work: { dmPolicy: "open", allowFrom: [wildcard] } },
+        }).success,
+      ).toBe(true);
+    },
+  );
+
+  it.each(["feishu:*", "lark:*"])(
+    "accepts inherited provider-prefixed wildcard %s for an open account",
+    (wildcard) => {
+      expect(
+        FeishuConfigSchema.safeParse({
+          allowFrom: [wildcard],
+          accounts: { work: { dmPolicy: "open" } },
+        }).success,
+      ).toBe(true);
+    },
+  );
+
   it("does not enforce open DM access on disabled accounts", () => {
     expect(
       FeishuConfigSchema.safeParse({
