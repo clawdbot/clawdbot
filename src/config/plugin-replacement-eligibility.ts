@@ -176,10 +176,19 @@ export function isPluginExplicitlySelectedByAlias(
       return true;
     }
   }
+  // Activation gates its allowlist cause on non-bundled origin (`resolveExplicitPluginSelectionShared`,
+  // "selected-in-allowlist"): for a bundled plugin the allowlist only permits loading, so a
+  // disabled-by-default bundled fallback merely listed in `plugins.allow` stays off
+  // ("bundled-disabled-by-default"). Counting the listing as selection here set aside the
+  // replacement's edge and preserved a fallback the runtime never loads. A caller with no
+  // registry cannot see origin and keeps the wide reading.
   const allow = cfg.plugins?.allow;
   if (
     Array.isArray(allow) &&
-    allow.some((id) => typeof id === "string" && canonicalId(id) === target)
+    allow.some((id) => typeof id === "string" && canonicalId(id) === target) &&
+    !manifestRegistry?.plugins.some(
+      (plugin) => plugin.origin === "bundled" && canonicalId(plugin.id) === target,
+    )
   ) {
     return true;
   }

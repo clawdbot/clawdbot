@@ -210,6 +210,37 @@ describe("isPluginExplicitlySelectedByAlias", () => {
     ).toBe(false);
   });
 
+  // Activation gates its allowlist cause on non-bundled origin (`src/plugins/config-activation-shared.ts`,
+  // "selected-in-allowlist"): for a bundled plugin the allowlist only permits loading, so a
+  // disabled-by-default bundled fallback merely listed there stays off
+  // ("bundled-disabled-by-default"). Counting the listing as selection here set aside the
+  // replacement's edge and preserved a fallback the runtime never loads.
+  it("does not treat an allow listing as selection for a bundled plugin", () => {
+    const bundledRegistry = {
+      diagnostics: [],
+      plugins: [{ id: "telegram", origin: "bundled", channels: ["telegram"] }],
+    } as unknown as PluginManifestRegistry;
+    const config = { plugins: { allow: ["telegram"] } } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "telegram",
+        createManifestPluginAliasResolver(bundledRegistry),
+        bundledRegistry,
+      ),
+    ).toBe(false);
+  });
+
+  // For a non-bundled plugin the listing is the activation cause itself, registry or not.
+  it("still treats an allow listing as selection for a non-bundled plugin", () => {
+    const config = { plugins: { allow: ["clickclack"] } } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(config, "clickclack-plus", canonicalId, registry),
+    ).toBe(true);
+  });
+
   // Codex review P2 on #123209: `plugins.slots.memory` and `plugins.slots.contextEngine` are
   // explicit-selection causes in the activation contract, and activation checks entry disablement
   // before its slot branches. Missing them here let `disableImplicitPreferredOverPlugin` write
