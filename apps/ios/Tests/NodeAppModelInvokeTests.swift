@@ -1010,7 +1010,7 @@ private final class BatteryMonitoringDevice: UIDevice {
             #expect(payload.level == 0.5)
             #expect(payload.state == .charging)
             #expect(!device.monitoringStatesDuringBatteryReads.isEmpty)
-            #expect(device.monitoringStatesDuringBatteryReads.allSatisfy(\.self))
+            #expect(device.monitoringStatesDuringBatteryReads.allSatisfy { $0 })
             #expect(device.isBatteryMonitoringEnabled == initial)
         }
     }
