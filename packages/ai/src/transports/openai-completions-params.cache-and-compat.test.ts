@@ -486,16 +486,19 @@ describe("openai completions params", () => {
   it.each([
     ["qwen", "https://coding.dashscope.aliyuncs.com/v1"],
     ["qwen", "https://coding-intl.dashscope.aliyuncs.com/v1"],
-  ])("leaves Coding Plan %s on max_completion_tokens (undocumented surface)", (provider, baseUrl) => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({ id: "qwen3.5-plus", name: "Qwen 3.5 Plus", provider, baseUrl }),
-      { systemPrompt: "system", messages: [], tools: [] } as never,
-      undefined,
-    );
+  ])(
+    "leaves Coding Plan %s on max_completion_tokens (undocumented surface)",
+    (provider, baseUrl) => {
+      const params = buildOpenAICompletionsParams(
+        makeCompletionsModel({ id: "qwen3.5-plus", name: "Qwen 3.5 Plus", provider, baseUrl }),
+        { systemPrompt: "system", messages: [], tools: [] } as never,
+        undefined,
+      );
 
-    expect(params.max_completion_tokens).toBeDefined();
-    expect(params).not.toHaveProperty("max_tokens");
-  });
+      expect(params.max_completion_tokens).toBeDefined();
+      expect(params).not.toHaveProperty("max_tokens");
+    },
+  );
 
   it("omits output-token fields when the resolved model has no known cap", () => {
     const params = buildOpenAICompletionsParams(
