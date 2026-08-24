@@ -351,8 +351,9 @@ export function renderAppearanceSection(
                 const label = t(preset.labelKey);
                 // The default swatch previews the active theme's own accent via the
                 // theme-invariant chip vars; bare var(--accent) would show the live
-                // override and render as a duplicate of the selected preset.
-                const themeChipScope = preset.hex ? "" : ` settings-theme-card--${props.theme}`;
+                // override and render as a duplicate of the selected preset. Uses a
+                // swatch-scoped class so theme-card locators stay unique.
+                const themeChipScope = preset.hex ? "" : ` settings-accent-theme--${props.theme}`;
                 return html`
                   <button
                     type="button"
