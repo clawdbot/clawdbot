@@ -2670,3 +2670,12 @@ CREATE TABLE IF NOT EXISTS secret_store_entries (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS secret_store_entries_live_idx
   ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;
+
+-- Additive same-version table for Claw dry-run plan consent caching. New
+-- tables are ignored by older readers, so no user_version bump is required.
+CREATE TABLE IF NOT EXISTS claw_plan_consents (
+  agent_id TEXT PRIMARY KEY,
+  plan_kind TEXT NOT NULL CHECK (plan_kind IN ('add', 'update', 'remove')),
+  plan_integrity TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)
+) STRICT;

@@ -17,6 +17,7 @@ export type ClawsBuildOptions = { out: string; json?: boolean };
 export type ClawsDevOptions = { agentId?: string; workspace?: string; json?: boolean };
 
 export type ClawsAddOptions = {
+  consentLatest?: boolean;
   dryRun?: boolean;
   yes?: boolean;
   planIntegrity?: string;
@@ -33,8 +34,10 @@ export type ClawsUpdateOptions = {
   planIntegrity?: string;
   json?: boolean;
   skipManual?: boolean;
+  consentLatest?: boolean;
 };
 export type ClawsRemoveOptions = {
+  consentLatest?: boolean;
   dryRun?: boolean;
   yes?: boolean;
   planIntegrity?: string;
@@ -148,6 +151,11 @@ export function registerClawsCli(program: Command) {
       "Apply supported actions while preserving locally drifted or blocked state",
       false,
     )
+    .option(
+      "--consent-latest",
+      "Bind consent to the most recent dry-run plan instead of --plan-integrity",
+      false,
+    )
     .option("--json", "Print JSON", false)
     .action(async (target: string, opts: ClawsUpdateOptions) => {
       const { runClawsUpdateCommand } = await import("./claws-cli.runtime.js");
@@ -161,6 +169,11 @@ export function registerClawsCli(program: Command) {
     .option("--dry-run", "Preview removal without mutating state", false)
     .option("--yes", "Confirm removal", false)
     .option("--plan-integrity <digest>", "Bind consent to an exact removal plan")
+    .option(
+      "--consent-latest",
+      "Bind consent to the most recent dry-run plan instead of --plan-integrity",
+      false,
+    )
     .option(
       "--remove-unused",
       "Remove unchanged Claw-introduced references with no other current owner",

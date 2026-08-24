@@ -336,6 +336,13 @@ export interface ClawPackageRefs {
   updated_at_ms: number;
 }
 
+export interface ClawPlanConsents {
+  agent_id: string;
+  created_at_ms: number;
+  plan_integrity: string;
+  plan_kind: string;
+}
+
 export interface ClawWorkspaceFiles {
   agent_id: string;
   content_digest: string;
@@ -1845,6 +1852,7 @@ export interface DB {
   claw_installs: ClawInstalls;
   claw_mcp_server_refs: ClawMcpServerRefs;
   claw_package_refs: ClawPackageRefs;
+  claw_plan_consents: ClawPlanConsents;
   claw_workspace_files: ClawWorkspaceFiles;
   clawhub_promotion_claims: ClawhubPromotionClaims;
   clawhub_promotions_feed_state: ClawhubPromotionsFeedState;

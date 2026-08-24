@@ -23,7 +23,6 @@ import {
 import {
   applyClawRemovePlan,
   buildClawRemovePlan,
-  CLAW_REMOVE_PLAN_SCHEMA_VERSION,
   CLAW_REMOVE_RESULT_SCHEMA_VERSION,
   ClawRemoveError,
   readClawStatus,
@@ -34,6 +33,7 @@ import {
   readClawResumeStateReadOnly,
 } from "../claws/package-resume.js";
 import { preflightClawPackage } from "../claws/packages.js";
+import { storeClawPlanConsent } from "../claws/plan-consent-cache.js";
 import {
   clawInstallRecordMatchesPlan,
   readClawInstallRecord,
@@ -66,6 +66,7 @@ import type {
   ClawsRemoveOptions,
   ClawsStatusOptions,
 } from "./claws-cli.js";
+import { failNonDryRun, requireRemoveConsent, resolveLatestPlanConsent } from "./claws-consent.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -149,54 +150,6 @@ async function matchingResumeState(plan: ClawAddPlan, opts: ClawsAddOptions) {
     record,
     packageRefs: readOnlyState?.packageRefs ?? readClawPackageRefs({ agentId: plan.agent.finalId }),
   };
-}
-
-function failNonDryRun(opts: ClawsAddOptions, runtime: RuntimeEnv): boolean {
-  if (opts.dryRun) {
-    return false;
-  }
-  const consented = opts.yes && opts.planIntegrity;
-  if (consented) {
-    return false;
-  }
-  const code = opts.yes ? "plan_integrity_required" : "consent_required";
-  const message = opts.yes
-    ? "Claw add consent must include --plan-integrity from the exact dry-run plan."
-    : "Claw add requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to create the new agent and workspace.";
-  if (opts.json) {
-    writeRuntimeJson(runtime, {
-      schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      ok: false,
-      error: { code, message },
-    });
-  } else {
-    runtime.error(message);
-  }
-  runtime.exit(1);
-  return true;
-}
-
-function requireRemoveConsent(opts: ClawsRemoveOptions, runtime: RuntimeEnv): boolean {
-  if (opts.dryRun || (opts.yes && opts.planIntegrity)) {
-    return false;
-  }
-  const code = opts.yes ? "plan_integrity_required" : "consent_required";
-  const message = opts.yes
-    ? "Claw remove consent must include --plan-integrity from the exact dry-run plan."
-    : "Claw remove requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to remove owned state.";
-  if (opts.json) {
-    writeRuntimeJson(runtime, {
-      schemaVersion: CLAW_REMOVE_PLAN_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      ok: false,
-      error: { code, message },
-    });
-  } else {
-    runtime.error(message);
-  }
-  runtime.exit(1);
-  return true;
 }
 
 export async function runClawsInspectCommand(
@@ -476,6 +429,10 @@ export async function runClawsAddCommand(
       runtime.log(`Claw add plan: ${plan.claw.name}@${plan.claw.version}`);
       logClawAddPlanSummary(plan, runtime);
     }
+    storeClawPlanConsent(
+      { agentId: plan.agent.finalId, planKind: "add", planIntegrity: plan.planIntegrity },
+      {},
+    );
     return;
   }
 
@@ -503,7 +460,8 @@ export async function runClawsAddCommand(
   }
   try {
     addResult = await applyClawAddPlan(plan, {
-      consentPlanIntegrity: opts.planIntegrity,
+      consentPlanIntegrity:
+        opts.planIntegrity ?? resolveLatestPlanConsent(plan.agent.finalId, "add"),
       resumeRecord: resumableInstallRecord,
       resumePlan: legacyResumePlan,
       runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
@@ -622,6 +580,12 @@ export async function runClawsRemoveCommand(
         runtime.error(plan.blockers.map((blocker) => blocker.message).join("\n"));
       }
     }
+    if (opts.dryRun && plan.agentId && plan.blockers.length === 0) {
+      storeClawPlanConsent(
+        { agentId: plan.agentId, planKind: "remove", planIntegrity: plan.planIntegrity },
+        {},
+      );
+    }
     if (plan.blockers.length > 0) {
       runtime.exit(1);
     }
@@ -629,7 +593,7 @@ export async function runClawsRemoveCommand(
   }
   try {
     const result = await applyClawRemovePlan(plan, {
-      consentPlanIntegrity: opts.planIntegrity,
+      consentPlanIntegrity: opts.planIntegrity ?? resolveLatestPlanConsent(plan.agentId, "remove"),
       referencedCleanup,
       cronGateway: {
         get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
