@@ -275,6 +275,9 @@ export async function runWorkerDescriptor(
             }
           : {}),
         ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
+        ...(descriptor.assignment.loopGuardConfig === undefined
+          ? {}
+          : { loopGuardConfig: descriptor.assignment.loopGuardConfig }),
         inference: { stream },
         transcript: {
           commit: async (messages) => {

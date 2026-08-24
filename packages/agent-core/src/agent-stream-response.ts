@@ -33,6 +33,8 @@ export type ExecutedToolCallBatch = {
   terminateRun: boolean;
   intervention?: ToolLoopIntervention;
   fatal?: { error: unknown };
+  /** True when the batch had at least one call and every finalized call result is an error. */
+  allError: boolean;
 };
 
 type AssistantMessageUpdateEvent = Extract<

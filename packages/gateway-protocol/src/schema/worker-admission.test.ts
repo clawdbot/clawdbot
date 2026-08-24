@@ -34,6 +34,7 @@ import {
   validateWorkerSessionsSpawnParams,
   validateWorkerTranscriptCommitParams,
 } from "../index.js";
+import { WORKER_LOOP_GUARD_PROTOCOL_FEATURE } from "./worker-admission.js";
 import {
   WORKER_INFERENCE_MAX_OUTPUT_TOKENS,
   validateWorkerInferenceStartParams,
@@ -481,6 +482,10 @@ describe("worker protocol schemas", () => {
   it("validates the additive live-event protocol", () => {
     expect(WORKER_RPC_SET_VERSION).toBe(1);
     expect(WORKER_PROTOCOL_FEATURES).toContain("worker-live-event-v1");
+    // Loop-guard is an additive capability advertised by new worker builds.
+    // The launcher fences guard-enabled turns when the capability is absent;
+    // configless and enabled:false turns still run on bundles without it.
+    expect(WORKER_PROTOCOL_FEATURES).toContain(WORKER_LOOP_GUARD_PROTOCOL_FEATURE);
     for (const validEvent of [
       assistant,
       event("thinking", { text: "x", delta: "x" }),

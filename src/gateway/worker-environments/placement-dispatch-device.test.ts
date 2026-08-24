@@ -3,7 +3,10 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  WORKER_LOOP_GUARD_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
@@ -135,7 +138,10 @@ describe("device worker placement dispatch", () => {
       bootstrapReceipt: {
         bundleHash: "a".repeat(64),
         openclawVersion: "2026.8.12",
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_LOOP_GUARD_PROTOCOL_FEATURE,
+        ],
         installKind: "bundle",
       },
       sharedHost: true,

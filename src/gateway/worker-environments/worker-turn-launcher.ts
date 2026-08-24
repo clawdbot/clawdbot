@@ -27,6 +27,7 @@ import {
 } from "./worker-turn-admission.js";
 import { executeWorkerTurn } from "./worker-turn-execution.js";
 import {
+  WorkerCapabilityFenceError,
   failHandedOffTurn,
   WorkerTurnExecutionError,
   type ActiveWorkerPlacement,
@@ -303,6 +304,21 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         ) {
           // Reconciliation already released this turn. Neither runtime's model
           // error may turn its reusable placement into box teardown.
+          throw error;
+        }
+        if (error instanceof WorkerCapabilityFenceError) {
+          // A capability-fenced bundle cannot serve this or any later turn:
+          // releasing the claim would leave the placement active and dispatch
+          // would keep re-selecting the unusable worker. Fail the placement so
+          // the reclaim barrier reprovisions with a bundle that carries the
+          // required launch capability.
+          await failHandedOffTurn({
+            environments: options.environments,
+            placements: options.placements,
+            placement,
+            turnClaim,
+            error,
+          });
           throw error;
         }
         if (handedOff) {

@@ -300,17 +300,34 @@ Values shown are defaults except `applyPatch.allowModels` (empty/unset by defaul
 
 ### `tools.loopDetection`
 
-Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
+Loop protection has three layers:
+
+1. **RunLoop guards** (`maxTurns`, `maxConsecutiveErrorBatches`, `maxIdleRepeatCalls`) bound the native agent loop and are **opt-in**: each guard activates independently when its key (`turnLimit`, `maxConsecutiveErrorBatches`, `maxIdleRepeatCalls`) is explicitly set in the block, with the configured positive integer values (e.g. **200 assistant turns / 3 consecutive error batches / 3 idle repeat calls** as recommended starting points). `enabled: true` alone does NOT engage the hard cutoffs — it only activates the rolling-history detectors. They are hard cutoffs: hitting a limit ends the run gracefully with a terminal message instead of another provider request. With no block, or with `enabled` unset, the runLoop guards stay off (pre-guard behavior).
+2. **Rolling-history detectors** (the `tools` hook layer) stay **disabled by default** and only engage when `enabled: true`.
+3. **Post-compaction guard** - separate from the runLoop guards: arms whenever `enabled` is not explicitly `false` (including unset). Setting `enabled: false` disables all three layers.
+
+`tools.loopDetection.enabled` is the master switch: set `enabled: true` to activate the rolling-history detectors; set `enabled: false` to disable **all** layers (including the post-compaction guard). To engage the runLoop hard cutoffs, set at least one guard key (`turnLimit`, `maxConsecutiveErrorBatches`, `maxIdleRepeatCalls`) — `enabled: true` alone does NOT activate them. When `enabled` is unset inside an explicit block, the runLoop guards and rolling-history detectors stay off, but the post-compaction guard remains active. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.entries.*.tools.loopDetection`.
 
 ```json5
 {
   tools: {
     loopDetection: {
+      // enabled: true activates the rolling-history detectors.
+      // false: disables all layers (master opt-out). unset:
+      // runLoop guards and rolling-history detectors stay off; only the
+      // post-compaction guard remains active.
+      // To engage the runLoop hard cutoffs, set at least one guard key
+      // below — enabled: true alone does NOT activate hard cutoffs.
       enabled: true,
+      turnLimit: 200, // activates the turn guard (max assistant turns per run)
+      maxConsecutiveErrorBatches: 3, // activates the all-error batch circuit breaker
+      maxIdleRepeatCalls: 3, // activates the idle-repeat guard (same tool name + args)
     },
   },
 }
 ```
+
+See [Loop detection](/tools/loop-detection) for termination semantics, what counts as a repeat, and the `enabled: false` kill switch.
 
 ### `tools.web`
 

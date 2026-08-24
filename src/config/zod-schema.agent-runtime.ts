@@ -585,6 +585,9 @@ const ToolFsSchema = z
 const ToolLoopDetectionSchema = z
   .object({
     enabled: z.boolean().optional(),
+    turnLimit: z.number().int().positive().optional(),
+    maxConsecutiveErrorBatches: z.number().int().positive().optional(),
+    maxIdleRepeatCalls: z.number().int().positive().optional(),
   })
   .strict()
   .optional();

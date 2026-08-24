@@ -24,6 +24,10 @@ import {
   setInternalBeforeToolBatch,
   type InternalBeforeToolBatchHook,
 } from "../runtime/internal-hooks.js";
+import {
+  resolveLoopGuardRuntimeConfig,
+  type LoopGuardRuntimeConfig,
+} from "../tool-loop-detection-config.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession, type AgentSessionWriteSettlementRunner } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
@@ -96,12 +100,29 @@ export interface CreateAgentSessionOptions {
   sessionStartEvent?: SessionStartEvent;
   /** Optional settlement boundary for session writes and write-capable extension hooks. */
   withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
+  /**
+   * Resolved runLoop guard values for this session's agent. When omitted, the
+   * configless default applies (guards off: no loop guardrails). Pass a
+   * config-resolved value (e.g. from `resolveLoopGuardRuntimeConfig`) so
+   * `tools.loopDetection` settings — the per-key guard values and the
+   * `enabled: false` kill switch — take effect on every native-owner path,
+   * not just the embedded runner.
+   */
+  loopGuardConfig?: LoopGuardRuntimeConfig;
 }
 
 type CreateAgentSessionInternalOptions = Pick<
   AgentSessionConfig,
   "cleanupProviderSessionResourcesOnDispose" | "contextOverflowRecoveryOwner"
-> & { beforeToolBatch?: InternalBeforeToolBatchHook };
+> & {
+  beforeToolBatch?: InternalBeforeToolBatchHook;
+  /**
+   * Resolved runLoop guard values for the embedded runner. When omitted, the
+   * configless default applies (guards off). Pass all-`undefined` values to
+   * keep the guards disabled, or resolved values to engage them.
+   */
+  loopGuardConfig?: LoopGuardRuntimeConfig;
+};
 
 /** Result from createAgentSession */
 interface CreateAgentSessionResult {
@@ -286,6 +307,15 @@ async function createAgentSessionImpl(
   const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
   const sessionManager =
     options.sessionManager ?? (await createDefaultSdkSessionManager(cwd, agentDir));
+
+  // RunLoop guard values for the agent-core Agent. The embedded runner passes
+  // config-resolved values (per-agent over global, `enabled: false` disables);
+  // other native owners (worker, compaction) pass their resolved config via
+  // `options.loopGuardConfig`. Guards are opt-in: without a `tools.loopDetection`
+  // block anywhere, `resolveLoopGuardRuntimeConfig({})` yields all-`undefined`
+  // and the agent runs without the three loop guardrails (pre-guard behavior).
+  const loopGuardConfig =
+    internalOptions.loopGuardConfig ?? options.loopGuardConfig ?? resolveLoopGuardRuntimeConfig({});
 
   if (!resourceLoader) {
     resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
@@ -505,6 +535,9 @@ async function createAgentSessionImpl(
     transport: settingsManager.getTransport(),
     thinkingBudgets: settingsManager.getThinkingBudgets(),
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
+    maxTurns: loopGuardConfig.maxTurns,
+    maxConsecutiveErrorBatches: loopGuardConfig.maxConsecutiveErrorBatches,
+    maxIdleRepeatCalls: loopGuardConfig.maxIdleRepeatCalls,
   });
   setInternalBeforeToolBatch(agent, internalOptions.beforeToolBatch);
   if (agent.streamFn) {

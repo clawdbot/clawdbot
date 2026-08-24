@@ -155,6 +155,9 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
               supportsWorkerExecutionContextLaunch(exactEnvironment.bootstrapReceipt)))
         ) {
           // Transient provider or node-enrollment failure retains its exact durable operation.
+          // The loop-guard capability is not required here: a guard-off turn
+          // (configless or enabled:false) can still dispatch on a legacy bundle,
+          // and the launcher fences guard-enabled turns per turn.
           continue;
         }
         await failure.teardownEnvironment({
@@ -180,6 +183,11 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         }
         continue;
       }
+      // An interrupted dispatch cannot safely resume its one-shot SSH child
+      // regardless of capability state: the turn claim cannot be proven live
+      // after restart. The generic crash-style message covers all interrupted
+      // states; the launcher fence handles capability incompatibilities per
+      // turn when the placement is later re-adopted or re-dispatched.
       const error = new Error(`Worker dispatch interrupted in ${placement.state}`);
       if (placement.state === "draining") {
         await failure.failDraining(placement, error, { forceClaimFence: true });

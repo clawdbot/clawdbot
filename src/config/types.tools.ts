@@ -159,8 +159,28 @@ export type MediaToolsConfig = {
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
 export type ToolLoopDetectionConfig = {
-  /** Enable tool-loop protection (default: false). */
+  /**
+   * Master switch for loop protection.
+   *
+   * The runLoop hard cutoffs are opt-in and separate from the rolling-history
+   * `enabled` switch. Each guard (`turnLimit`, `maxConsecutiveErrorBatches`,
+   * `maxIdleRepeatCalls`) activates independently when set to a positive
+   * integer; `enabled: true` alone does NOT engage the hard cutoffs — it
+   * only activates the existing rolling-history detectors (pre-guard
+   * behavior). This preserves the upgrade contract: an existing
+   * `tools.loopDetection: { enabled: true }` configuration gains no new hard
+   * termination behavior unless the operator explicitly sets a guard key.
+   * `enabled: false` disables both layers. The post-compaction guard is
+   * separate: it arms whenever `enabled` is not explicitly `false`
+   * (including unset).
+   */
   enabled?: boolean;
+  /** Maximum assistant turns in one runLoop run before graceful termination (agent-core `maxTurns`). Activates the turn guard when set to a positive integer. */
+  turnLimit?: number;
+  /** Maximum consecutive all-error tool batches before graceful termination. Activates the error-batch guard when set to a positive integer. */
+  maxConsecutiveErrorBatches?: number;
+  /** Maximum consecutive identical tool calls (same name + arguments) before graceful termination. Activates the idle-repeat guard when set to a positive integer. */
+  maxIdleRepeatCalls?: number;
 };
 
 export type ToolSearchConfig =

@@ -331,6 +331,56 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   consumeQueuedMessageCancellation?: (message: AgentMessage) => boolean;
 
   /**
+   * @internal Requeues messages that were drained from the queue but not
+   * consumed because the run ended early (a run-loop guard fired). The agent's
+   * steering queue drains destructively, so without a requeue the user input
+   * would be lost. Called exactly once at guard termination with the
+   * unconsumed messages, in drain order. Follow-up messages that were polled
+   * into `pendingMessages` are re-enqueued here too so they are processed as
+   * steering on the next run instead of being dropped.
+   */
+  requeueSteeringMessages?: (messages: AgentMessage[]) => void;
+
+  /**
+   * Maximum number of assistant turns (one `streamAssistantResponse` call each)
+   * a single loop run may execute before the loop terminates gracefully.
+   *
+   * When reached, the loop emits a terminal message and `agent_end` without
+   * starting another provider request. `undefined` (the default) disables the
+   * limit, preserving legacy behavior.
+   *
+   * Guard state is scoped to one loop run: a continuation (`agentLoopContinue`)
+   * or a new prompt run restarts the counter.
+   */
+  maxTurns?: number;
+
+  /**
+   * Maximum number of consecutive tool batches in which EVERY tool call result
+   * is an error. When reached, the loop terminates gracefully with a terminal
+   * message and `agent_end`.
+   *
+   * A batch with at least one non-error result, a turn with no tool calls, or a
+   * new run resets the counter. `undefined` (the default) disables the breaker.
+   */
+  maxConsecutiveErrorBatches?: number;
+
+  /**
+   * Maximum number of consecutive tool calls with the same tool name AND the
+   * same arguments (stable-stringified signature). When reached, the loop
+   * terminates gracefully with a terminal message and `agent_end`.
+   *
+   * Detection keys on the tool name + raw arguments only, deliberately not on
+   * the result, so identical retries whose errors are hidden inside successful
+   * outputs are still caught. Repeats are counted per observed model decision:
+   * multiple identical calls inside one assistant message (a concurrent
+   * parallel batch) count as a single occurrence, because no result or model
+   * retry interval separates them. The streak resets when a different
+   * signature appears; turns without tool calls neither extend nor reset it.
+   * `undefined` (the default) disables detection.
+   */
+  maxIdleRepeatCalls?: number;
+
+  /**
    * Tool execution mode.
    * - "sequential": execute tool calls one by one, checking for steering before each starts
    * - "parallel": preflight tool calls sequentially, then execute allowed tools concurrently;
