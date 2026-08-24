@@ -232,6 +232,31 @@ describe("resolveDiscordThreadStarter", () => {
     }
   });
 
+  it("coalesces concurrent starter lookups for the same account and thread", async () => {
+    let releaseGet!: (message: ThreadStarterRestMessage | null) => void;
+    const response = new Promise<ThreadStarterRestMessage | null>((resolve) => {
+      releaseGet = resolve;
+    });
+    const get = vi.fn(() => response);
+    const client = { rest: { get } } as unknown as Client;
+    const params = {
+      channel: { id: `concurrent-starter-${++threadIdIndex}` },
+      client,
+      accountId: "test-account",
+      parentId: "parent-1",
+      parentType: ChannelType.GuildText,
+      resolveTimestampMs: () => undefined,
+    };
+
+    const first = resolveDiscordThreadStarter(params);
+    const second = resolveDiscordThreadStarter(params);
+    expect(get).toHaveBeenCalledOnce();
+
+    releaseGet(null);
+    await expect(Promise.all([first, second])).resolves.toEqual([null, null]);
+    expect(get).toHaveBeenCalledOnce();
+  });
+
   it("does not negative-cache transient REST failures", async () => {
     const get = vi
       .fn()

@@ -33,6 +33,15 @@ function writeJson(res: ServerResponse, status: number, value: unknown): void {
 
 async function startDiscordApi() {
   const calls: DiscordCall[] = [];
+  let missingRequestCount = 0;
+  let releaseFirstMissingRequest!: () => void;
+  let markFirstMissingRequestStarted!: () => void;
+  const firstMissingRequestStarted = new Promise<void>((resolve) => {
+    markFirstMissingRequestStarted = resolve;
+  });
+  const firstMissingRequestRelease = new Promise<void>((resolve) => {
+    releaseFirstMissingRequest = resolve;
+  });
   const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     await drainRequest(req);
     const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -41,7 +50,12 @@ async function startDiscordApi() {
     const missingPath = "/api/v10/channels/parent-missing/messages/thread-missing";
     const validPath = "/api/v10/channels/parent-valid/messages/thread-valid";
     if (method === "GET" && pathname === missingPath) {
+      missingRequestCount += 1;
       calls.push({ method, path: pathname, status: 404 });
+      if (missingRequestCount === 1) {
+        markFirstMissingRequestStarted();
+        await firstMissingRequestRelease;
+      }
       writeJson(res, 404, { message: "Unknown Message", code: 10008 });
       return;
     }
@@ -75,6 +89,8 @@ async function startDiscordApi() {
   return {
     baseUrl: `http://127.0.0.1:${address.port}/api`,
     calls,
+    firstMissingRequestStarted,
+    releaseFirstMissingRequest: () => releaseFirstMissingRequest(),
     stop: async () =>
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
@@ -181,7 +197,7 @@ try {
   const secondAccountRest = createRest(api.baseUrl);
   restClients.push(rest, secondAccountRest);
 
-  const missingFirst = await resolveDiscordThreadStarter(
+  const missingFirstPromise = resolveDiscordThreadStarter(
     resolverParams({
       rest,
       accountId: "proof-account-a",
@@ -189,7 +205,8 @@ try {
       parentId: "parent-missing",
     }),
   );
-  const missingSecond = await resolveDiscordThreadStarter(
+  await api.firstMissingRequestStarted;
+  const missingSecondPromise = resolveDiscordThreadStarter(
     resolverParams({
       rest,
       accountId: "proof-account-a",
@@ -197,6 +214,14 @@ try {
       parentId: "parent-missing",
     }),
   );
+  api.releaseFirstMissingRequest();
+  const [missingFirst, missingSecond] = await Promise.all([
+    missingFirstPromise,
+    missingSecondPromise,
+  ]);
+  const sameAccountMissingGets = api.calls.filter((call) =>
+    call.path.endsWith("parent-missing/messages/thread-missing"),
+  ).length;
   const missingSameThreadOtherAccount = await resolveDiscordThreadStarter(
     resolverParams({
       rest: secondAccountRest,
@@ -233,6 +258,7 @@ try {
     missingFirst === null &&
     missingSecond === null &&
     missingSameThreadOtherAccount === null &&
+    sameAccountMissingGets === 1 &&
     missingGets.length === 2 &&
     validFirst?.text === "Real Discord starter" &&
     validSecond?.text === "Real Discord starter" &&
@@ -247,7 +273,7 @@ try {
         missingStarter: {
           firstResult: missingFirst,
           secondResult: missingSecond,
-          sameAccountDiscordGetCalls: 1,
+          sameAccountDiscordGetCalls: sameAccountMissingGets,
           accountScopedOtherAccountGetCalls: 1,
           totalDiscordGetCalls: missingGets.length,
         },

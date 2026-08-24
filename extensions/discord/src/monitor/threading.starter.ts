@@ -36,6 +36,8 @@ function isDiscordForumParentType(parentType: ChannelType | undefined): boolean 
   return parentType === ChannelType.GuildForum || parentType === ChannelType.GuildMedia;
 }
 
+const IN_FLIGHT_DISCORD_THREAD_STARTERS = new Map<string, Promise<DiscordThreadStarter | null>>();
+
 export function resolveDiscordThreadChannel(params: {
   isGuildMessage: boolean;
   message: DiscordMessageEvent["message"];
@@ -116,6 +118,25 @@ export async function resolveDiscordThreadStarter(params: {
   if (cached) {
     return cached.kind === "hit" ? cached.starter : null;
   }
+  const inFlight = IN_FLIGHT_DISCORD_THREAD_STARTERS.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+  const pending = resolveDiscordThreadStarterUncached(params, cacheKey);
+  IN_FLIGHT_DISCORD_THREAD_STARTERS.set(cacheKey, pending);
+  try {
+    return await pending;
+  } finally {
+    if (IN_FLIGHT_DISCORD_THREAD_STARTERS.get(cacheKey) === pending) {
+      IN_FLIGHT_DISCORD_THREAD_STARTERS.delete(cacheKey);
+    }
+  }
+}
+
+async function resolveDiscordThreadStarterUncached(
+  params: Parameters<typeof resolveDiscordThreadStarter>[0],
+  cacheKey: string,
+): Promise<DiscordThreadStarter | null> {
   const cacheMiss = () => {
     setCachedThreadStarter(cacheKey, { kind: "miss" }, Date.now());
   };
