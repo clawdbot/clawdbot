@@ -446,6 +446,8 @@ describe("iOS Fastlane release upload gates", () => {
     const screenshots = laneBody(fastfile, "screenshots");
     const capture = functionBody(fastfile, "capture_release_ios_screenshot!");
     const archive = functionBody(fastfile, "archive_snapshot_test_result!");
+    const attemptRecorder = functionBody(fastfile, "record_release_ios_screenshot_attempt!");
+    const attemptWriter = functionBody(fastfile, "write_release_ios_screenshot_attempts!");
     const verifier = functionBody(fastfile, "verify_snapshot_test_result!");
 
     expect(screenshots).toContain("devices = snapshot_devices");
@@ -465,10 +467,21 @@ describe("iOS Fastlane release upload gates", () => {
     expect(capture).toContain("stop_after_first_error: true");
     expect(capture).toContain("retrying once in a fresh simulator session");
     expect(capture).toContain("verify_snapshot_test_result!");
+    expect(capture).toContain('capture_outcome: "failed"');
+    expect(capture).toContain('capture_outcome: "succeeded"');
+    expect(capture.indexOf('capture_outcome: "failed"')).toBeLessThan(
+      capture.indexOf("raise if attempt == 2"),
+    );
+    expect(attemptRecorder).toContain('"captureOutcome" => capture_outcome');
+    expect(attemptRecorder).toContain("write_release_ios_screenshot_attempts!(");
+    expect(attemptWriter).toContain('"schemaVersion" => 1');
     expect(archive).toContain('"#{device}-#{screenshot_name}-attempt-#{attempt}.xcresult"');
     expect(screenshots).toContain("verify_release_ios_screenshot_manifest!(");
     expect(screenshots).toContain(
       'result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")',
+    );
+    expect(screenshots).toContain(
+      'capture_attempts_path = File.join(result_bundle_archive_directory, "capture-attempts.json")',
     );
     expect(screenshots.indexOf("capture_release_ios_screenshot!")).toBeLessThan(
       screenshots.indexOf('FileUtils.rm_rf(File.join(output_directory, "test_output"))'),
@@ -551,6 +564,8 @@ describe("iOS Fastlane release upload gates", () => {
     const reducerJobEnd = workflow.indexOf("\n  android:\n", reducerJobStart);
     const reducerJob = workflow.slice(reducerJobStart, reducerJobEnd);
 
+    expect(workflow).toContain('IOS_SCREENSHOT_NODE_VERSION: "24.16.0"');
+    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.5 Build version 17F42"');
     expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).not.toContain("Capture iOS release screenshots");
     expect(shardJob).toContain("needs: [preflight, ios-build]");
@@ -562,12 +577,17 @@ describe("iOS Fastlane release upload gates", () => {
     expect(shardJob).toContain("run: pnpm ios:screenshots");
     expect(shardJob).toContain("id: package_screenshot_evidence");
     expect(shardJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
+    expect(shardJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
     expect(shardJob).toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
+    expect(shardJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
     expect(shardJob).toContain("IOS_SCREENSHOT_XCODE_VERSION");
+    expect(shardJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
     expect(shardJob).not.toContain("SnapshotDerivedData");
     expect(shardJob.match(/contents: read/g)).toHaveLength(1);
     expect(reducerJob).toContain("needs: [preflight, ios-screenshot-shard]");
     expect(reducerJob).toContain("merge-multiple: false");
+    expect(reducerJob).toContain("Setup screenshot evidence Node");
+    expect(reducerJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
     expect(reducerJob).toContain("id: reduce_screenshot_evidence");
     expect(reducerJob).toContain("scripts/ios-screenshot-evidence.mjs reduce");
     expect(reducerJob).toContain('--workflow-sha "$WORKFLOW_SHA"');

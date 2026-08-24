@@ -35,9 +35,9 @@ function provenance(targetSha = TARGET_SHA) {
     runId: "12345",
     runAttempt: 2,
     tooling: {
-      xcode: "Xcode 26.5 Build version 17F45",
+      xcode: "Xcode 26.5 Build version 17F42",
       fastlane: "2.236.1",
-      node: "v26.5.0",
+      node: "v24.16.0",
     },
   };
 }
@@ -45,7 +45,11 @@ function provenance(targetSha = TARGET_SHA) {
 function writeFamilySource(
   root: string,
   family: Family,
-  options: { retry?: string; retryTestResult?: "fail" | "pass" } = {},
+  options: {
+    retry?: string;
+    retryTestResult?: "fail" | "pass";
+    retryWithoutXcresult?: boolean;
+  } = {},
 ) {
   const screenshots = path.join(root, family, "screenshots");
   const xcresults = path.join(root, family, "xcresults");
@@ -58,21 +62,43 @@ function writeFamilySource(
         ? "iPad Pro 13-inch (M5)"
         : "Apple Watch Ultra 3 (49mm)";
   const names = family === "watch" ? ["01-now-face"] : SCREENSHOTS;
+  const captureAttempts = [];
   for (const name of names) {
     fs.writeFileSync(path.join(screenshots, `${device}-${name}.png`), PNG);
     if (family !== "watch") {
-      const attemptOne = path.join(xcresults, `${device}-${name}-attempt-1.xcresult`);
-      fs.mkdirSync(attemptOne, { recursive: true });
-      fs.writeFileSync(
-        path.join(attemptOne, "summary.txt"),
-        options.retry === name ? (options.retryTestResult ?? "pass") : "pass",
-      );
+      const retried = options.retry === name;
+      captureAttempts.push({
+        deviceName: device,
+        screenshotName: name,
+        attempt: 1,
+        captureOutcome: retried ? "failed" : "succeeded",
+      });
+      if (!(retried && options.retryWithoutXcresult)) {
+        const attemptOne = path.join(xcresults, `${device}-${name}-attempt-1.xcresult`);
+        fs.mkdirSync(attemptOne, { recursive: true });
+        fs.writeFileSync(
+          path.join(attemptOne, "summary.txt"),
+          retried ? (options.retryTestResult ?? "pass") : "pass",
+        );
+      }
       if (options.retry === name) {
+        captureAttempts.push({
+          deviceName: device,
+          screenshotName: name,
+          attempt: 2,
+          captureOutcome: "succeeded",
+        });
         const attemptTwo = path.join(xcresults, `${device}-${name}-attempt-2.xcresult`);
         fs.mkdirSync(attemptTwo, { recursive: true });
         fs.writeFileSync(path.join(attemptTwo, "summary.txt"), "pass");
       }
     }
+  }
+  if (family !== "watch") {
+    fs.writeFileSync(
+      path.join(xcresults, "capture-attempts.json"),
+      JSON.stringify({ schemaVersion: 1, attempts: captureAttempts }),
+    );
   }
   return { device, screenshots, xcresults };
 }
@@ -90,11 +116,16 @@ function manifestPath(input: string, family: Family, targetSha = TARGET_SHA) {
   return path.join(familyDirectory(input, family, targetSha), "manifest.json");
 }
 
-function collectAll(root: string, targetSha = TARGET_SHA) {
+function collectAll(
+  root: string,
+  targetSha = TARGET_SHA,
+  options: { retryWithoutXcresult?: boolean } = {},
+) {
   const output = path.join(root, "collected");
   for (const family of ["iphone", "ipad-13", "watch"] as const) {
     const source = writeFamilySource(root, family, {
       retry: family === "iphone" ? "02-chat-connected" : undefined,
+      retryWithoutXcresult: family === "iphone" && options.retryWithoutXcresult,
     });
     collectIosScreenshotEvidence({
       family,
@@ -146,7 +177,7 @@ describe("iOS screenshot evidence", () => {
 
     const manifest = reduceAll(input, output);
     const iphoneManifest = JSON.parse(fs.readFileSync(manifestPath(input, "iphone"), "utf8"));
-    const retryAttempts = iphoneManifest.xcresults.filter(
+    const retryAttempts = iphoneManifest.captureAttempts.filter(
       (entry: { screenshotName: string }) => entry.screenshotName === "02-chat-connected",
     );
 
@@ -181,6 +212,73 @@ describe("iOS screenshot evidence", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("accepts a failed first invocation without an xcresult before a passing retry", () => {
+    const root = tempDirs.make("ios-screenshot-missing-retry-xcresult-");
+    const input = collectAll(root, TARGET_SHA, { retryWithoutXcresult: true });
+    const output = path.join(root, "reduced");
+
+    reduceAll(input, output);
+    const iphoneManifest = JSON.parse(fs.readFileSync(manifestPath(input, "iphone"), "utf8"));
+    const retryAttempts = iphoneManifest.captureAttempts.filter(
+      (entry: { screenshotName: string }) => entry.screenshotName === "02-chat-connected",
+    );
+
+    expect(
+      retryAttempts.map(
+        (entry: { attempt: number; captureOutcome: string; artifactPath: string | null }) => ({
+          attempt: entry.attempt,
+          captureOutcome: entry.captureOutcome,
+          artifactPath: entry.artifactPath,
+        }),
+      ),
+    ).toEqual([
+      { attempt: 1, captureOutcome: "failed", artifactPath: null },
+      {
+        attempt: 2,
+        captureOutcome: "succeeded",
+        artifactPath: "xcresults/iPhone 17 Pro Max-02-chat-connected-attempt-2.xcresult",
+      },
+    ]);
+    expect(
+      fs.existsSync(
+        path.join(
+          output,
+          "apps/ios/build/SnapshotTestResults",
+          "iPhone 17 Pro Max-02-chat-connected-attempt-1.xcresult",
+        ),
+      ),
+    ).toBe(false);
+    expect(
+      fs.existsSync(
+        path.join(
+          output,
+          "apps/ios/build/SnapshotTestResults",
+          "iPhone 17 Pro Max-02-chat-connected-attempt-2.xcresult",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("requires the successful final invocation to have a passing xcresult", () => {
+    const root = tempDirs.make("ios-screenshot-missing-final-xcresult-");
+    const source = writeFamilySource(root, "iphone", { retry: "02-chat-connected" });
+    fs.rmSync(
+      path.join(source.xcresults, `${source.device}-02-chat-connected-attempt-2.xcresult`),
+      { recursive: true },
+    );
+
+    expect(() =>
+      collectIosScreenshotEvidence({
+        family: "iphone",
+        screenshotDirectory: source.screenshots,
+        xcresultDirectory: source.xcresults,
+        outputDirectory: path.join(root, "collected"),
+        provenance: provenance(),
+        readXcresultSummary: () => ({ testResult: "Passed", failedTests: 0 }),
+      }),
+    ).toThrow("is missing for the successful final capture attempt");
   });
 
   it.each([
@@ -362,7 +460,7 @@ describe("iOS screenshot evidence", () => {
     const root = tempDirs.make("ios-screenshot-final-failure-");
     const input = collectAll(root);
     updateManifest(input, "ipad-13", (manifest) => {
-      const final = manifest.xcresults.find(
+      const final = manifest.captureAttempts.find(
         (entry: { screenshotName: string }) => entry.screenshotName === "01-control-connected",
       );
       final.testResult = "Failed";
@@ -378,7 +476,7 @@ describe("iOS screenshot evidence", () => {
     const root = tempDirs.make("ios-screenshot-predecessor-");
     const input = collectAll(root);
     updateManifest(input, "iphone", (manifest) => {
-      const predecessor = manifest.xcresults.find(
+      const predecessor = manifest.captureAttempts.find(
         (entry: { attempt: number; screenshotName: string }) =>
           entry.screenshotName === "02-chat-connected" && entry.attempt === 1,
       );
@@ -426,18 +524,18 @@ describe("iOS screenshot evidence", () => {
     ).toThrow("PNG union mismatch");
   });
 
-  it("rejects unexpected xcresult entries in a shard manifest", () => {
+  it("rejects unexpected capture attempt entries in a shard manifest", () => {
     const root = tempDirs.make("ios-screenshot-unexpected-xcresult-");
     const input = collectAll(root);
     updateManifest(input, "iphone", (manifest) => {
-      manifest.xcresults.push({
-        ...manifest.xcresults[0],
+      manifest.captureAttempts.push({
+        ...manifest.captureAttempts[0],
         screenshotName: "99-unexpected",
       });
     });
 
     expect(() => reduceAll(input, path.join(root, "reduced"))).toThrow(
-      "xcresult union contains an unexpected screenshot",
+      "capture attempt union contains an unexpected screenshot",
     );
   });
 

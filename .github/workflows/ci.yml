@@ -70,7 +70,8 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   IOS_SCREENSHOT_FASTLANE_VERSION: "2.236.1"
-  IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.5 Build version 17F45"
+  IOS_SCREENSHOT_NODE_VERSION: "24.16.0"
+  IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.5 Build version 17F42"
   NODE_VERSION: "24.x"
 
 jobs:
@@ -4050,6 +4051,7 @@ jobs:
         with:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
+          node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}
 
       - name: Install iOS screenshot tooling
         run: |
@@ -4130,6 +4132,7 @@ jobs:
           name: ios-release-screenshot-failure-${{ matrix.device_family }}-${{ needs.preflight.outputs.checkout_revision }}
           path: |
             apps/ios/fastlane/screenshots/en-US/*.png
+            apps/ios/build/SnapshotTestResults/capture-attempts.json
             apps/ios/build/SnapshotTestResults/*.xcresult
           if-no-files-found: warn
           retention-days: 14
@@ -4144,6 +4147,14 @@ jobs:
     timeout-minutes: 10
     steps:
       - *linux_node_checkout_step
+
+      - name: Setup screenshot evidence Node
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          install-bun: "false"
+          install-deps: "false"
+          node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}
 
       - name: Download iOS screenshot shard evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
