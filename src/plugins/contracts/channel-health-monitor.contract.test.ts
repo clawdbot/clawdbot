@@ -41,9 +41,20 @@ function rejectsKey(schema: JsonSchemaLike | undefined, key: string): boolean {
   if (!schema) {
     return false;
   }
-  const alternatives = schema.anyOf ?? schema.oneOf;
-  if (Array.isArray(alternatives) && alternatives.length > 0) {
-    return alternatives.every((branch) => rejectsKey(asSchema(branch), key));
+  // oneOf validates only when exactly one branch matches, so a key two branches
+  // both accept is refused at config load even though either branch alone allows
+  // it. Collapsing oneOf into anyOf reported that as accepted.
+  if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
+    const accepting = schema.oneOf.filter((branch) => !rejectsKey(asSchema(branch), key)).length;
+    if (accepting !== 1) {
+      return true;
+    }
+  }
+  if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
+    return schema.anyOf.every((branch) => rejectsKey(asSchema(branch), key));
+  }
+  if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
+    return false;
   }
   // allOf is an intersection: the value must satisfy every component, so one
   // closed component that omits the key still refuses it at config load.
@@ -99,9 +110,19 @@ function rejectsNestedKey(
   if (!schema) {
     return false;
   }
-  const alternatives = schema.anyOf ?? schema.oneOf;
-  if (Array.isArray(alternatives) && alternatives.length > 0) {
-    return alternatives.every((branch) => rejectsNestedKey(asSchema(branch), parentKey, childKey));
+  if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
+    const accepting = schema.oneOf.filter(
+      (branch) => !rejectsNestedKey(asSchema(branch), parentKey, childKey),
+    ).length;
+    if (accepting !== 1) {
+      return true;
+    }
+  }
+  if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
+    return schema.anyOf.every((branch) => rejectsNestedKey(asSchema(branch), parentKey, childKey));
+  }
+  if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
+    return false;
   }
   if (Array.isArray(schema.allOf) && schema.allOf.length > 0) {
     return schema.allOf.some((branch) => rejectsNestedKey(asSchema(branch), parentKey, childKey));
@@ -137,8 +158,12 @@ function acceptsDocumentedOverride(
   if (!schema) {
     return false;
   }
-  const alternatives = schema.anyOf ?? schema.oneOf;
-  if (Array.isArray(alternatives) && alternatives.length > 0) {
+  // Exactly-one counting belongs in the key helpers, not here. This probe returns a
+  // vacuous true for a component that says nothing about the leaf, so counting those
+  // trues would treat "constrains nothing" as a matching oneOf branch. Whether a
+  // oneOf is satisfiable at all is rejectsKey/rejectsNestedKey's question.
+  const alternatives = [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])];
+  if (alternatives.length > 0) {
     return alternatives.some((branch, index) =>
       acceptsDocumentedOverride(asSchema(branch), `${cacheKey}.any${depth}_${index}`, depth + 1),
     );
@@ -336,4 +361,46 @@ describe("channel healthMonitor contract", () => {
       expect(acceptsDocumentedOverride(accountEntry, `${channelId}.account`)).toBe(true);
     },
   );
+});
+
+describe("schema combinator semantics", () => {
+  // A closed object that accepts healthMonitor.enabled.
+  const acceptingBranch = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      healthMonitor: {
+        type: "object",
+        additionalProperties: false,
+        properties: { enabled: { type: "boolean" } },
+      },
+    },
+  };
+
+  it("treats a oneOf matched by two branches as refused", () => {
+    // oneOf validates only when exactly one branch matches, so config load
+    // rejects this even though either branch alone would accept the key.
+    const schema = { oneOf: [acceptingBranch, acceptingBranch] } as JsonSchemaLike;
+
+    expect(rejectsKey(schema, "healthMonitor")).toBe(true);
+    expect(rejectsNestedKey(schema, "healthMonitor", "enabled")).toBe(true);
+  });
+
+  it("keeps a oneOf matched by exactly one branch accepted", () => {
+    const closedWithoutKey = { type: "object", additionalProperties: false, properties: {} };
+    const schema = { oneOf: [acceptingBranch, closedWithoutKey] } as JsonSchemaLike;
+
+    expect(rejectsKey(schema, "healthMonitor")).toBe(false);
+    expect(rejectsNestedKey(schema, "healthMonitor", "enabled")).toBe(false);
+  });
+
+  it("keeps anyOf accepting when any branch accepts", () => {
+    const closedWithoutKey = { type: "object", additionalProperties: false, properties: {} };
+    const schema = {
+      anyOf: [acceptingBranch, acceptingBranch, closedWithoutKey],
+    } as JsonSchemaLike;
+
+    expect(rejectsKey(schema, "healthMonitor")).toBe(false);
+    expect(acceptsDocumentedOverride(schema, "multi-branch-anyOf")).toBe(true);
+  });
 });
