@@ -497,8 +497,8 @@ class McpCuaDriverSession implements CuaDriverSession {
     return await this.sessionTool(name, args, signal);
   }
 
-  async callDesktopTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    return await this.sessionTool(name, args, signal);
+  async getCursorPosition(signal?: AbortSignal) {
+    return await this.sessionTool("get_cursor_position", {}, signal);
   }
 
   async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {

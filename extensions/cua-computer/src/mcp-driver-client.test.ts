@@ -166,6 +166,9 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
             ),
           );
           break;
+        case "get_cursor_position":
+          fake.respond(request, toolResult({ x: 11, y: 12, source: "core_graphics" }));
+          break;
         case "click":
           fake.respond(
             request,
@@ -208,6 +211,8 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         screenshot_width: 200,
       });
       expect(desktop.images).toHaveLength(1);
+      const cursor = await driver.getCursorPosition();
+      expect(JSON.parse(cursor.structuredJson!)).toMatchObject({ x: 11, y: 12 });
       const click = await driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 });
       expect(click.action).toEqual({
         effect: 0,
@@ -243,6 +248,12 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
           )
           .map((request) => request.params?.arguments?.session),
       ).toEqual([session, session]);
+      expect(
+        endpoint.requests.find(
+          (request) =>
+            request.method === "tools/call" && request.params?.name === "get_cursor_position",
+        )?.params?.arguments,
+      ).toEqual({ session });
 
       await driver.dispose();
       await vi.waitFor(() => {

@@ -153,7 +153,7 @@ describe("scripts/install-trufflehog.sh", () => {
       ),
     ).toThrow();
 
-    const archive = "trufflehog_3.95.9_linux_amd64.tar.gz";
+    const archive = "trufflehog_3.97.0_linux_amd64.tar.gz";
     const args = readFileSync(argsFile, "utf8").trimEnd().split("\n");
     const outputPath = args[10] ?? "";
     expect(args.slice(0, 10)).toEqual([
@@ -170,7 +170,7 @@ describe("scripts/install-trufflehog.sh", () => {
     ]);
     expect(outputPath).toBe(join(dirname(outputPath), archive));
     expect(args[11]).toBe(
-      `https://github.com/trufflesecurity/trufflehog/releases/download/v3.95.9/${archive}`,
+      `https://github.com/trufflesecurity/trufflehog/releases/download/v3.97.0/${archive}`,
     );
     expect(existsSync(dirname(outputPath))).toBe(false);
   });

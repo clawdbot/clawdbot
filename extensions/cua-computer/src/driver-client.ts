@@ -55,11 +55,7 @@ export interface CuaDriverSession {
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<CuaToolResult>;
-  callDesktopTool(
-    name: string,
-    args: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<CuaToolResult>;
+  getCursorPosition(signal?: AbortSignal): Promise<CuaToolResult>;
   escalateScope(reason: EscalationReason, signal?: AbortSignal): Promise<CuaSessionState>;
   getDesktopState(signal?: AbortSignal): Promise<CuaToolResult>;
   getScreenSize(signal?: AbortSignal): Promise<CuaToolResult>;
@@ -171,13 +167,9 @@ class DirectCuaDriverSession implements CuaDriverSession {
       ),
     );
   }
-  async callDesktopTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
+  async getCursorPosition(signal?: AbortSignal) {
     return await this.invoke(signal, () =>
-      this.session.callTool(
-        name,
-        JSON.stringify({ ...args, session: this.publicSession }),
-        asyncOptions(signal),
-      ),
+      this.session.getCursorPosition({ session: this.publicSession }, asyncOptions(signal)),
     );
   }
   async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
@@ -395,8 +387,8 @@ class LazyCuaDriverSession implements CuaDriverSession {
   async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
     return await (await this.requireRuntime()).callTool(name, args, signal);
   }
-  async callDesktopTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
-    return await (await this.requireRuntime()).callDesktopTool(name, args, signal);
+  async getCursorPosition(signal?: AbortSignal) {
+    return await (await this.requireRuntime()).getCursorPosition(signal);
   }
   async escalateScope(reason: EscalationReason, signal?: AbortSignal) {
     return await (await this.requireRuntime()).escalateScope(reason, signal);

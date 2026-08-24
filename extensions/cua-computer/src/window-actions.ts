@@ -288,7 +288,7 @@ export async function handleWindowAct(
       });
     }
     case "get_cursor_position": {
-      const result = await driver.callDesktopTool("get_cursor_position", {}, signal);
+      const result = await driver.getCursorPosition(signal);
       return JSON.stringify({
         ok: true,
         details: projectedToolDetails(result, "get_cursor_position"),

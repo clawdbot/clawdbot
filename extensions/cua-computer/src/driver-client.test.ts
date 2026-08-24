@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
     effectiveScope: "desktop",
     desktopUnlocked: true,
   })),
+  getCursorPosition: vi.fn(async () => ({})),
   getDesktopState: vi.fn(async () => ({})),
   getSessionState: vi.fn(async () => ({
     session: "openclaw-test",
@@ -75,6 +76,7 @@ describe("CUA Driver direct session", () => {
       drag: mocks.drag,
       endSession: mocks.endSession,
       escalateSession: mocks.escalateSession,
+      getCursorPosition: mocks.getCursorPosition,
       getDesktopState: mocks.getDesktopState,
       getSessionState: mocks.getSessionState,
       moveCursor: mocks.moveCursor,
@@ -150,7 +152,7 @@ describe("CUA Driver direct session", () => {
     expect(mocks.endSession).toHaveBeenCalledWith({ session: sessionOptions.publicSession });
   });
 
-  it("targets every desktop action per call through the CUA 0.20 contract", async () => {
+  it("targets desktop input while keeping the global cursor read untargeted", async () => {
     const driver = createCuaDriver({ loadSdk: () => sdk as never });
 
     await driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 });
@@ -159,7 +161,7 @@ describe("CUA Driver direct session", () => {
     await driver.scroll({ x: 8, y: 9, direction: ScrollDirection.Down, amount: 3n });
     await driver.typeText("hello");
     await driver.pressKey({ key: "a", modifiers: ["cmd"] });
-    await driver.callDesktopTool("get_cursor_position", {});
+    await driver.getCursorPosition();
     await driver.escalateScope(EscalationReason.Other);
 
     const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
@@ -191,9 +193,8 @@ describe("CUA Driver direct session", () => {
       { key: "a", modifiers: ["cmd"], target },
       undefined,
     );
-    expect(mocks.callTool).toHaveBeenCalledWith(
-      "get_cursor_position",
-      JSON.stringify({ session: sessionOptions.publicSession }),
+    expect(mocks.getCursorPosition).toHaveBeenCalledWith(
+      { session: sessionOptions.publicSession },
       undefined,
     );
     expect(mocks.getSessionState).toHaveBeenCalledWith(
