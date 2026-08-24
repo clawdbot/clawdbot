@@ -3126,7 +3126,7 @@ NODE
     expect(codeqlSelect.run).toContain('if [[ "$xcode_version" != 26.6* ]]; then');
 
     for (const [workflowPath, selectorCount] of [
-      [".github/workflows/ci.yml", 1],
+      [".github/workflows/ci.yml", 2],
       [".github/workflows/ios-periphery.yml", 1],
       [".github/workflows/macos-periphery.yml", 1],
       [".github/workflows/shared-openclawkit-periphery.yml", 2],

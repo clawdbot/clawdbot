@@ -35,7 +35,7 @@ function provenance(targetSha = TARGET_SHA) {
     runId: "12345",
     runAttempt: 2,
     tooling: {
-      xcode: "Xcode 26.5 Build version 17F42",
+      xcode: "Xcode 26.6 Build version 17F113",
       fastlane: "2.236.1",
       node: "v24.16.0",
     },
@@ -360,7 +360,7 @@ describe("iOS screenshot evidence", () => {
     {
       label: "Xcode version",
       mutate: (manifest: Record<string, any>) => {
-        manifest.tooling.xcode = "Xcode 26.5 Build version forged";
+        manifest.tooling.xcode = "Xcode 26.6 Build version forged";
       },
       error: "xcode version",
     },
