@@ -46,6 +46,7 @@ import {
 } from "./session-binding.js";
 import {
   applyCodexSessionPermissionPolicy,
+  resolveCodexEffectiveSessionPermissionPolicy,
   resolveCodexSessionPermissionCwd,
 } from "./session-permission-policy.js";
 import {
@@ -482,6 +483,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     effectiveWorkspace,
     effectiveCwd,
     appServer,
+    sessionPermissionPolicy: resolveCodexEffectiveSessionPermissionPolicy({
+      appServer,
+      permissionMode: params.permissionMode,
+      sessionRoot: params.sessionRoot,
+    }),
     nativeHookRelayEvents,
     runAbortController,
     terminalState,
