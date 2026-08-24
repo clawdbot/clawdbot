@@ -519,7 +519,8 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
 
         const request = getGuardedFetchCall(fetchMock);
         expect(request.timeoutMs).toBe(123_456);
-        expect(request.signal).toBe(signal);
+        expect(request.signal).toEqual(expect.any(AbortSignal));
+        expect(request.signal).not.toBe(signal);
         expect(request.init?.signal).toBeUndefined();
       },
     );
@@ -3900,8 +3901,8 @@ describe("createConfiguredOllamaStreamFn", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
       const fetchCall = getGuardedFetchCall(fetchWithSsrFGuardMock);
-      expect(fetchCall.signal).toBeUndefined();
-      expect(fetchCall.timeoutMs).toBe(25);
+      expect(fetchCall.signal).toEqual(expect.any(AbortSignal));
+      expect(fetchCall.timeoutMs).toBe(2_100);
       await vi.advanceTimersByTimeAsync(100);
       expect(acquisitionSignal?.aborted).toBe(false);
 
@@ -3942,29 +3943,30 @@ describe("createConfiguredOllamaStreamFn", () => {
           controller = streamController;
         },
       });
-      const armGuardTimer = () => {
+      const armGuardTimer = (timeoutMs: number) => {
         if (guardTimer !== undefined) {
           clearTimeout(guardTimer);
         }
         guardTimer = setTimeout(() => {
           guardTimedOut = true;
           controller?.error(new Error("guard timeout"));
-        }, 25);
+        }, timeoutMs);
       };
       const guardRelease = vi.fn(async () => {
         if (guardTimer !== undefined) {
           clearTimeout(guardTimer);
         }
       });
-      fetchWithSsrFGuardMock.mockImplementation(async () => {
-        armGuardTimer();
+      fetchWithSsrFGuardMock.mockImplementation(async (request: GuardedFetchCall) => {
+        const timeoutMs = request.timeoutMs ?? 25;
+        armGuardTimer(timeoutMs);
         return {
           response: new Response(body, {
             status: 200,
             headers: { "Content-Type": "application/x-ndjson" },
           }),
           release: guardRelease,
-          refreshTimeout: armGuardTimer,
+          refreshTimeout: () => armGuardTimer(timeoutMs),
         };
       });
 
@@ -3995,7 +3997,8 @@ describe("createConfiguredOllamaStreamFn", () => {
 
       expect(settled).toBe(false);
       expect(guardTimedOut).toBe(false);
-      expectDefined(controller, "controlled NDJSON stream").close();
+      expect(getGuardedFetchCall(fetchWithSsrFGuardMock).timeoutMs).toBe(2_100);
+      await vi.advanceTimersByTimeAsync(1_900);
       const events = await eventsPromise;
 
       expect(events.at(-1)).toMatchObject({ type: "done" });

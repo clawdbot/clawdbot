@@ -70,6 +70,7 @@ const OLLAMA_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const OLLAMA_TERMINAL_TAIL_MAX_BYTES = 256 * 1024;
 const OLLAMA_TERMINAL_TAIL_DEADLINE_MS = 2_000;
+const OLLAMA_TERMINAL_TAIL_GUARD_TIMEOUT_MS = OLLAMA_TERMINAL_TAIL_DEADLINE_MS + 100;
 const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
@@ -78,46 +79,6 @@ const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
 type OllamaStreamCooperativeScheduler = {
   afterEvent: () => Promise<void>;
 };
-
-type OllamaTerminalCompletionTimeoutPolicy = {
-  onTerminalRecord: () => void;
-  cleanup: () => void;
-};
-
-function createOllamaTerminalCompletionTimeoutPolicy(params: {
-  requestTimeoutMs?: number;
-  refreshTimeout?: () => void;
-}): OllamaTerminalCompletionTimeoutPolicy {
-  if (!params.refreshTimeout || params.requestTimeoutMs === undefined) {
-    return {
-      onTerminalRecord: () => undefined,
-      cleanup: () => undefined,
-    };
-  }
-
-  const refreshTimeout = params.refreshTimeout;
-  // The guarded request timeout remains authoritative until a terminal record
-  // is parsed. Once terminal completion starts, keep that guard alive while
-  // the parser applies its separate, bounded tail-validation deadline.
-  const refreshIntervalMs = Math.max(1, Math.min(100, Math.floor(params.requestTimeoutMs / 2)));
-  let refreshInterval: ReturnType<typeof setInterval> | undefined;
-  return {
-    onTerminalRecord() {
-      if (refreshInterval !== undefined) {
-        return;
-      }
-      refreshTimeout();
-      refreshInterval = setInterval(() => refreshTimeout(), refreshIntervalMs);
-    },
-    cleanup() {
-      if (refreshInterval === undefined) {
-        return;
-      }
-      clearInterval(refreshInterval);
-      refreshInterval = undefined;
-    },
-  };
-}
 
 function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -1224,6 +1185,16 @@ function createRawOllamaStreamFn(
             acquisitionDeadline?.signal,
           )
           .finally(acquisitionDeadline?.cleanup);
+        const requestTimeoutGuard = buildTimeoutAbortSignal({
+          timeoutMs: requestTimeoutMs,
+          signal: options?.signal,
+          operation: "ollama-stream.chat",
+          url: chatUrl,
+        });
+        const guardedFetchTimeoutMs =
+          requestTimeoutMs === undefined
+            ? undefined
+            : Math.max(requestTimeoutMs, OLLAMA_TERMINAL_TAIL_GUARD_TIMEOUT_MS);
         const guardedFetch = await fetchWithSsrFGuard({
           url: chatUrl,
           init: {
@@ -1232,18 +1203,23 @@ function createRawOllamaStreamFn(
             body: JSON.stringify(requestBody),
           },
           policy: ssrfPolicy,
-          ...(options?.signal ? { signal: options.signal } : {}),
-          timeoutMs: requestTimeoutMs,
+          ...(requestTimeoutGuard.signal ? { signal: requestTimeoutGuard.signal } : {}),
+          timeoutMs: guardedFetchTimeoutMs,
           auditContext: "ollama-stream.chat",
         }).catch((error: unknown) => {
+          requestTimeoutGuard.cleanup();
           localServiceLease?.release();
           throw error;
         });
         const { response, release, refreshTimeout } = guardedFetch;
-        const terminalCompletionTimeout = createOllamaTerminalCompletionTimeoutPolicy({
-          requestTimeoutMs,
-          refreshTimeout,
-        });
+        const onTerminalRecord = () => {
+          // The configured request timeout remains authoritative until a
+          // terminal record is parsed. The parser then owns a separate,
+          // bounded tail-validation window; refresh the transport guard so it
+          // cannot preempt that window.
+          requestTimeoutGuard.cleanup();
+          refreshTimeout?.();
+        };
 
         try {
           await notifyProviderHttpResponse({ options, response, model });
@@ -1398,7 +1374,7 @@ function createRawOllamaStreamFn(
           };
 
           for await (const chunk of parseNdjsonStream(reader, {
-            onTerminalRecord: terminalCompletionTimeout.onTerminalRecord,
+            onTerminalRecord,
           })) {
             throwIfOllamaStreamAborted(options?.signal);
             if (finalResponse) {
@@ -1553,7 +1529,7 @@ function createRawOllamaStreamFn(
             message: assistantMessage,
           });
         } finally {
-          terminalCompletionTimeout.cleanup();
+          requestTimeoutGuard.cleanup();
           try {
             await release();
           } finally {
