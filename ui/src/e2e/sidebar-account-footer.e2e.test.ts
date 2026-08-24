@@ -43,6 +43,9 @@ async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
 
 async function assertIdentityMenuContract(sidebar: Locator, menu: Locator) {
   expect(await menu.locator('wa-dropdown-item[value="command:recent-activity"]').count()).toBe(0);
+  expect(
+    await menu.evaluate((dropdown) => dropdown.closest("openclaw-menu-surface") !== null),
+  ).toBe(false);
 }
 
 async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feature" | "main") {
