@@ -2714,57 +2714,48 @@ describe("shared Codex app-server client", () => {
     expect(releaseLeasedSharedCodexAppServerClient(clientY)).toBe(true);
   });
 
-  it("tracks an explicit package client that uses managed desktop Computer Use artifacts", async () => {
-    const generationX = { epoch: 1, fingerprint: "desktop-x" };
-    const generationY = { epoch: 2, fingerprint: "desktop-y" };
-    mocks.desktopGeneration = generationX;
-    const packageX = createClientHarness();
-    const packageY = createClientHarness();
-    const startSpy = vi
-      .spyOn(CodexAppServerClient, "start")
-      .mockReturnValueOnce(packageX.client)
-      .mockReturnValueOnce(packageY.client);
-    const options = {
-      config: {},
-      pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
-      agentDir: "/tmp/openclaw-agent",
-      startOptions: {
-        transport: "stdio" as const,
-        homeScope: "agent" as const,
-        command: "/opt/codex/bin/codex",
-        commandSource: "config" as const,
-        args: ["app-server"],
-        headers: {},
-      },
-    };
+  it.each(["config", "env"] as const)(
+    "does not generation-bind a custom Computer Use app-server selected by %s",
+    async (commandSource) => {
+      const generationX = { epoch: 1, fingerprint: "desktop-x" };
+      const generationY = { epoch: 2, fingerprint: "desktop-y" };
+      mocks.desktopGeneration = generationX;
+      const packageX = createClientHarness();
+      const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(packageX.client);
+      const options = {
+        config: {},
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        agentDir: "/tmp/openclaw-agent",
+        startOptions: {
+          transport: "stdio" as const,
+          homeScope: "agent" as const,
+          command: "/opt/codex/bin/codex",
+          commandSource,
+          args: ["app-server"],
+          headers: {},
+        },
+      };
 
-    const firstAcquire = getLeasedSharedCodexAppServerClient(options);
-    await sendInitializeResult(packageX, "openclaw/0.148.0 (macOS; test)");
-    const clientX = await firstAcquire;
+      const firstAcquire = getLeasedSharedCodexAppServerClient(options);
+      await sendInitializeResult(packageX, "openclaw/0.148.0 (macOS; test)");
+      const clientX = await firstAcquire;
+      expect(readCodexAppServerClientDesktopGeneration(clientX)).toBeUndefined();
 
-    mocks.desktopGeneration = generationY;
-    retireSharedCodexAppServerClientsBeforeDesktopGeneration(generationY);
-    let replacementSettled = false;
-    const replacementAcquire = getLeasedSharedCodexAppServerClient(options).finally(() => {
-      replacementSettled = true;
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(replacementSettled).toBe(false);
-    expect(releaseLeasedSharedCodexAppServerClient(clientX)).toBe(true);
-    await sendInitializeResult(packageY, "openclaw/0.148.0 (macOS; test)");
-    const clientY = await replacementAcquire;
+      mocks.desktopGeneration = generationY;
+      retireSharedCodexAppServerClientsBeforeDesktopGeneration(generationY);
+      const clientAfterDesktopUpdate = await getLeasedSharedCodexAppServerClient(options);
 
-    expect(clientY).not.toBe(clientX);
-    expect(startSpy).toHaveBeenCalledTimes(2);
-    expect(
-      mocks.reconcileCodexComputerUseStartArtifacts.mock.calls.map(
-        ([params]) => params?.desktopGeneration,
-      ),
-    ).toEqual([generationX, generationY]);
-    expect(releaseLeasedSharedCodexAppServerClient(clientY)).toBe(true);
-  });
+      expect(clientAfterDesktopUpdate).toBe(clientX);
+      expect(startSpy).toHaveBeenCalledTimes(1);
+      expect(
+        mocks.reconcileCodexComputerUseStartArtifacts.mock.calls.map(
+          ([params]) => params?.desktopGeneration,
+        ),
+      ).toEqual([undefined]);
+      expect(releaseLeasedSharedCodexAppServerClient(clientAfterDesktopUpdate)).toBe(true);
+      expect(releaseLeasedSharedCodexAppServerClient(clientX)).toBe(true);
+    },
+  );
 
   it("generation-binds an explicit desktop client while Computer Use is disabled", async () => {
     const generation = { epoch: 1, fingerprint: "desktop-x" };

@@ -168,6 +168,10 @@ active turn for another home does not block them. If the bundle changes again
 during startup, OpenClaw fences the stale client before login or `thread/start`
 and uses the normal bounded startup retry.
 
+Explicit `appServer.command` and `OPENCLAW_CODEX_APP_SERVER_BIN` clients remain
+operator-owned and are not retired by standard desktop update events. Restart
+the Gateway after replacing a custom executable.
+
 This makes the first new request after a detected, settled standard desktop
 replacement transparent under normal updater behavior. It is not a general
 retry promise for unrelated Computer Use transport failures. A watcher failure

@@ -489,9 +489,12 @@ function shouldTrackDesktopGeneration(
   if (startOptions.transport !== "stdio") {
     return false;
   }
-  // Computer Use can publish desktop-owned artifacts even when an explicit
-  // package command owns the process, so both must share one generation fence.
-  if (resolveCodexComputerUseConfig({ pluginConfig }).enabled) {
+  // A managed package process can publish desktop-owned Computer Use artifacts,
+  // so both share one generation. Custom operator commands remain independent.
+  if (
+    resolveCodexComputerUseConfig({ pluginConfig }).enabled &&
+    (startOptions.commandSource === "managed" || startOptions.commandSource === "resolved-managed")
+  ) {
     return true;
   }
   return (

@@ -487,12 +487,7 @@ async function prepareExplicitManagedComputerUseInstall(
 async function resolveExplicitManagedComputerUseInstallContext(
   params: CodexComputerUseInspectionParams & { client: CodexAppServerClient },
 ): Promise<ExplicitManagedComputerUseInstallContext | undefined> {
-  if (
-    !params.agentDir ||
-    params.computerUseConfig.marketplaceSource ||
-    params.computerUseConfig.marketplacePath ||
-    params.computerUseConfig.marketplaceName
-  ) {
+  if (!params.agentDir) {
     return undefined;
   }
   const codexHome = params.client.getRuntimeIdentity()?.codexHome;

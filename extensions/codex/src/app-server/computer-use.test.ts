@@ -1077,9 +1077,42 @@ describe("Codex Computer Use setup", () => {
     });
   });
 
-  it.each(["config", "env"] as const)(
-    "provisions the managed wrapper and service for a %s-selected desktop install",
-    async (commandSource) => {
+  it.each([
+    {
+      label: "config-selected default marketplace",
+      commandSource: "config" as const,
+      selector: {},
+      provisionsWrapper: true,
+    },
+    {
+      label: "env-selected default marketplace",
+      commandSource: "env" as const,
+      selector: {},
+      provisionsWrapper: true,
+    },
+    {
+      label: "configured marketplace source",
+      commandSource: "config" as const,
+      selector: { marketplaceSource: "github:example/desktop-tools" },
+      provisionsWrapper: false,
+    },
+    {
+      label: "configured marketplace path",
+      commandSource: "config" as const,
+      selector: {
+        marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+      },
+      provisionsWrapper: false,
+    },
+    {
+      label: "configured marketplace name",
+      commandSource: "config" as const,
+      selector: { marketplaceName: "desktop-tools" },
+      provisionsWrapper: false,
+    },
+  ])(
+    "provisions the managed service for a $label explicit desktop install",
+    async ({ commandSource, selector, provisionsWrapper }) => {
       const root = tempDirs.make("openclaw-codex-explicit-install-");
       const agentDir = path.join(root, "agent");
       const codexHome = path.join(agentDir, "codex-home");
@@ -1123,24 +1156,32 @@ describe("Codex Computer Use setup", () => {
           release();
         },
       );
-      const request = createBundledMarketplaceComputerUseRequest(managedMarketplacePath);
+      const request = provisionsWrapper
+        ? createBundledMarketplaceComputerUseRequest(managedMarketplacePath)
+        : createComputerUseRequest({ installed: false });
 
       const status = await installCodexComputerUse({
         agentDir,
         client: harness.client,
         request,
-        pluginConfig: { computerUse: { enabled: true, autoInstall: false } },
+        pluginConfig: { computerUse: { enabled: true, autoInstall: false, ...selector } },
       });
 
       expect(status.ready).toBe(true);
       expect(drainedBeforeFence).toBe(true);
-      expect(managedProvisioningMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith(
-        expect.objectContaining({
-          codexHome,
-          ownershipRoot: agentDir,
-          appServerCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
-        }),
-      );
+      if (provisionsWrapper) {
+        expect(managedProvisioningMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith(
+          expect.objectContaining({
+            codexHome,
+            ownershipRoot: agentDir,
+            appServerCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
+          }),
+        );
+      } else {
+        expect(
+          managedProvisioningMocks.ensureCodexManagedBundledMarketplace,
+        ).not.toHaveBeenCalled();
+      }
       expect(managedProvisioningMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith(
         expect.objectContaining({
           codexHome,
@@ -1156,8 +1197,11 @@ describe("Codex Computer Use setup", () => {
         sharedClientMocks.waitForCodexAppServerClientDesktopGenerationDrain.mock
           .invocationCallOrder[0],
       ).toBeLessThan(
-        managedProvisioningMocks.ensureCodexManagedBundledMarketplace.mock.invocationCallOrder[0] ??
-          Number.POSITIVE_INFINITY,
+        (provisionsWrapper
+          ? managedProvisioningMocks.ensureCodexManagedBundledMarketplace.mock
+              .invocationCallOrder[0]
+          : managedProvisioningMocks.ensureCodexComputerUseServiceApp.mock
+              .invocationCallOrder[0]) ?? Number.POSITIVE_INFINITY,
       );
       expect(sharedClientMocks.readCodexAppServerClientDesktopGeneration).toHaveReturnedWith(
         desktopGeneration,
