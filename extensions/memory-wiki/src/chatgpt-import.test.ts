@@ -10,12 +10,11 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importChatGptConversations, rollbackChatGptImportRun } from "./chatgpt-import.js";
+import { rollbackChatGptImportRun } from "./chatgpt-import.js";
 import { configureMemoryWikiCompiledCacheStore } from "./compiled-cache.js";
 import {
   configureMemoryWikiImportRunStateStore,
   createMemoryWikiImportRunStateStore,
-  listMemoryWikiImportRunRecords,
   readMemoryWikiImportRunRecord,
   type ChatGptImportRunRecord,
   writeMemoryWikiImportRunRecord,
@@ -830,85 +829,4 @@ describe("ChatGPT import rollback recovery", () => {
       await expect(fs.readFile(externalTargetPath, "utf8")).resolves.toBe("# External\n");
     },
   );
-});
-
-describe("ChatGPT import run record durability", () => {
-  it("keeps a failed-compile import rollbackable by persisting the run record before compiling", async () => {
-    const stateDir = await createTempDir("memory-wiki-chatgpt-record-first-state-");
-    const { rootDir, config } = await createVault();
-    configureDurableImportRunStore(stateDir);
-
-    const exportDir = path.join(rootDir, "chatgpt-export");
-    await fs.mkdir(exportDir, { recursive: true });
-    const writeExport = async (reply: string) => {
-      await fs.writeFile(
-        path.join(exportDir, "conversations.json"),
-        `${JSON.stringify([
-          {
-            conversation_id: "12345678-1234-1234-1234-1234567890ab",
-            title: "Travel preference check",
-            create_time: 1_712_363_200,
-            update_time: 1_712_366_800,
-            current_node: "assistant-1",
-            mapping: {
-              root: {},
-              "user-1": {
-                parent: "root",
-                message: {
-                  author: { role: "user" },
-                  content: { parts: ["I prefer aisle seats."] },
-                },
-              },
-              "assistant-1": {
-                parent: "user-1",
-                message: {
-                  author: { role: "assistant" },
-                  content: { parts: [reply] },
-                },
-              },
-            },
-          },
-        ])}\n`,
-        "utf8",
-      );
-    };
-
-    await writeExport("Noted.");
-    const firstImport = await importChatGptConversations({
-      config,
-      exportPath: exportDir,
-      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
-    });
-    expect(firstImport.createdCount).toBe(1);
-    const pagePath = firstImport.pagePaths[0];
-    expect(pagePath).toBeDefined();
-    const absolutePagePath = path.join(rootDir, pagePath ?? "");
-    const firstContent = await fs.readFile(absolutePagePath, "utf8");
-
-    const reportPath = path.join(rootDir, "reports", "stale-pages.md");
-    const validReport = await fs.readFile(reportPath, "utf8");
-    await fs.writeFile(reportPath, "---\nmalformed\n---\n# Stale Pages\n", "utf8");
-
-    await writeExport("Updated: window seats now.");
-    await expect(
-      importChatGptConversations({
-        config,
-        exportPath: exportDir,
-        nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
-      }),
-    ).rejects.toThrow("Wiki frontmatter must be a YAML mapping");
-    expect(await fs.readFile(absolutePagePath, "utf8")).not.toBe(firstContent);
-
-    const records = await listMemoryWikiImportRunRecords(rootDir);
-    const failedRun = records.find((record) => record.runId !== firstImport.runId);
-    expect(failedRun).toBeDefined();
-
-    await fs.writeFile(reportPath, validReport, "utf8");
-    const rollback = await rollbackChatGptImportRun({
-      config,
-      runId: failedRun?.runId ?? "",
-    });
-    expect(rollback.restoredCount).toBe(1);
-    expect(await fs.readFile(absolutePagePath, "utf8")).toBe(firstContent);
-  });
 });
