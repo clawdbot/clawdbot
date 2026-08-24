@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   disposeSelectedSessionMessageSubscription,
   syncSelectedSessionMessageSubscription,
-  type ChatState,
 } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 
@@ -11,12 +11,16 @@ type Subscription = { key: string; agentId: null };
 
 function createSubscriptionState(options?: {
   previous?: Subscription;
-  subscribeMessages?: ReturnType<typeof vi.fn>;
-  unsubscribeMessages?: ReturnType<typeof vi.fn>;
+  subscribeMessages?: ReturnType<typeof vi.fn<SessionCapability["subscribeMessages"]>>;
+  unsubscribeMessages?: ReturnType<typeof vi.fn<SessionCapability["unsubscribeMessages"]>>;
 }) {
   const selected = { key: "agent:main:selected", agentId: null } satisfies Subscription;
-  const subscribeMessages = options?.subscribeMessages ?? vi.fn(async () => selected);
-  const unsubscribeMessages = options?.unsubscribeMessages ?? vi.fn(async () => undefined);
+  const subscribeMessages =
+    options?.subscribeMessages ??
+    vi.fn<SessionCapability["subscribeMessages"]>(async () => selected);
+  const unsubscribeMessages =
+    options?.unsubscribeMessages ??
+    vi.fn<SessionCapability["unsubscribeMessages"]>(async () => undefined);
   const state = {
     ...makeChatHost({ requestHandlers: {}, sessionKey: selected.key }),
     connectionEpoch: 1,
@@ -26,7 +30,7 @@ function createSubscriptionState(options?: {
     chatSessionMessageSubscription: options?.previous ?? null,
     sessions: { subscribeMessages, unsubscribeMessages },
     requestUpdate: vi.fn(),
-  } satisfies ChatState;
+  } satisfies Parameters<typeof syncSelectedSessionMessageSubscription>[0];
 
   return { selected, state, subscribeMessages, unsubscribeMessages };
 }
@@ -34,7 +38,9 @@ function createSubscriptionState(options?: {
 describe("visible chat message subscription failures", () => {
   it("shows a failed initial subscription in the existing chat error surface", async () => {
     const { state } = createSubscriptionState({
-      subscribeMessages: vi.fn().mockRejectedValue(new Error("Live messages unavailable")),
+      subscribeMessages: vi
+        .fn<SessionCapability["subscribeMessages"]>()
+        .mockRejectedValue(new Error("Live messages unavailable")),
     });
 
     await syncSelectedSessionMessageSubscription(state);
@@ -49,7 +55,7 @@ describe("visible chat message subscription failures", () => {
   it("shows a failed previous subscription release without losing its owned lease", async () => {
     const previous = { key: "agent:main:previous", agentId: null } satisfies Subscription;
     const unsubscribeMessages = vi
-      .fn()
+      .fn<SessionCapability["unsubscribeMessages"]>()
       .mockRejectedValueOnce(new Error("Previous observer release failed"))
       .mockResolvedValueOnce(undefined);
     const { state } = createSubscriptionState({ previous, unsubscribeMessages });
@@ -65,7 +71,7 @@ describe("visible chat message subscription failures", () => {
   it("keeps a dual-release warning until its exact previous lease is released", async () => {
     const previous = { key: "agent:main:previous", agentId: null } satisfies Subscription;
     const unsubscribeMessages = vi
-      .fn()
+      .fn<SessionCapability["unsubscribeMessages"]>()
       .mockRejectedValueOnce(new Error("Previous observer release failed"))
       .mockRejectedValueOnce(new Error("Replacement observer release failed"))
       .mockRejectedValueOnce(new Error("Previous observer still unavailable"))
@@ -97,7 +103,7 @@ describe("visible chat message subscription failures", () => {
   it("clears its own visible warning after the selected subscription recovers", async () => {
     const selected = { key: "agent:main:selected", agentId: null } satisfies Subscription;
     const subscribeMessages = vi
-      .fn()
+      .fn<SessionCapability["subscribeMessages"]>()
       .mockRejectedValueOnce(new Error("Live messages unavailable"))
       .mockResolvedValueOnce(selected);
     const { state } = createSubscriptionState({ subscribeMessages });
@@ -116,7 +122,7 @@ describe("visible chat message subscription failures", () => {
   it("never clears an unrelated chat failure published before subscription recovery", async () => {
     const selected = { key: "agent:main:selected", agentId: null } satisfies Subscription;
     const subscribeMessages = vi
-      .fn()
+      .fn<SessionCapability["subscribeMessages"]>()
       .mockRejectedValueOnce(new Error("Live messages unavailable"))
       .mockResolvedValueOnce(selected);
     const { state } = createSubscriptionState({ subscribeMessages });
@@ -139,7 +145,7 @@ describe("visible chat message subscription failures", () => {
       rejectSubscription = reject;
     });
     const { state } = createSubscriptionState({
-      subscribeMessages: vi.fn().mockReturnValue(pending),
+      subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>().mockReturnValue(pending),
     });
 
     const sync = syncSelectedSessionMessageSubscription(state);
@@ -159,7 +165,7 @@ describe("visible chat message subscription failures", () => {
       rejectSubscription = reject;
     });
     const { state } = createSubscriptionState({
-      subscribeMessages: vi.fn().mockReturnValue(pending),
+      subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>().mockReturnValue(pending),
     });
 
     const sync = syncSelectedSessionMessageSubscription(state);
