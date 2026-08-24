@@ -539,9 +539,8 @@ describe("method scope resolution", () => {
       { parentSessionKey: incognitoKey, succeedsParent: false, emitCommandHooks: true },
       { agentId: "main", toolOverrides: { skills: { release: false } } },
     ]) {
-      expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params)).toEqual([
-        "operator.admin",
-      ]);
+      const required = resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", params);
+      expect(required).toEqual(["operator.admin"]);
       expect(
         authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params),
       ).toEqual({ allowed: false, missingScope: "operator.admin" });

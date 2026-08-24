@@ -19,12 +19,11 @@ import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence.ts";
 import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import type { NewSessionCapabilityController } from "./capability-controller.ts";
+import { NewSessionCapabilityController } from "./capability-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionComposerTextareaController } from "./composer.ts";
 import {
   buildDraftSessionCreateParams as assembleDraftSessionCreateParams,
-  canStartSessionAsDraft,
   type NewSessionVisibility,
 } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -66,14 +65,16 @@ export class DraftSubmissionFlow {
   readonly attachmentDraft: NewSessionAttachmentDraft;
   readonly composerTextarea = new NewSessionComposerTextareaController();
   readonly draftPersistence: NewSessionDraftPersistence;
+  readonly capabilities: NewSessionCapabilityController;
 
   constructor(
     private readonly gateway: DraftGatewayState,
     private readonly place: DraftPlaceState,
-    private readonly capabilities: NewSessionCapabilityController,
     private readonly read: () => DraftSubmissionSnapshot,
     private readonly callbacks: DraftSubmissionCallbacks,
   ) {
+    this.capabilities = new NewSessionCapabilityController(callbacks.requestUpdate);
+    this.capabilities.setMutationCallback(() => (this.startedSession.current = null));
     this.sessionStartup = new DraftSessionStartup(gateway);
     this.draftPersistence = new NewSessionDraftPersistence(
       () => ({
@@ -159,8 +160,6 @@ export class DraftSubmissionFlow {
     this.draftPersistence.transitionIncognito(wasIncognito, visibility === "incognito", publish);
   }
 
-  retireStartedSession = () => (this.startedSession.current = null);
-
   setError(error: string | null) {
     if (error === null && this.error === t("newSession.cloudRecoveryUnavailable")) {
       this.error = null;
@@ -200,15 +199,6 @@ export class DraftSubmissionFlow {
       return undefined;
     }
     return PAGE_RENDERED_GATES.has(block.gate) ? undefined : block.reason;
-  }
-
-  canStartAsDraft(): boolean {
-    return canStartSessionAsDraft({
-      allowedVisibilities:
-        this.read().context?.gateway.snapshot.hello?.policy?.allowedSessionVisibilities,
-      hasMultipleIdentities:
-        this.read().context?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities,
-    });
   }
 
   showStartInTerminal(): boolean {
@@ -499,7 +489,8 @@ export class DraftSubmissionFlow {
         this.buildDraftSessionCreateParams({
           message: placementTarget ? "" : message,
           visibility:
-            this.visibilityValue === "draft" && !this.canStartAsDraft()
+            this.visibilityValue === "draft" &&
+            !this.capabilities.canStartAsDraft(this.read().context)
               ? "normal"
               : this.visibilityValue,
           attachments: placementTarget ? undefined : draftAttachments,

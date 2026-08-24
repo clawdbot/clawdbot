@@ -9,6 +9,7 @@ import {
   ComposerSkillCatalog,
   composerWebSearchBaseEnabled,
 } from "../chat/composer-capability-catalog.ts";
+import { canStartSessionAsDraft } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 
 export class NewSessionCapabilityController {
@@ -46,6 +47,14 @@ export class NewSessionCapabilityController {
     if (toolOverrides !== undefined) {
       this.setToolOverrides(toolOverrides);
     }
+  }
+
+  canStartAsDraft(context: ApplicationContext | undefined): boolean {
+    return canStartSessionAsDraft({
+      allowedVisibilities: context?.gateway.snapshot.hello?.policy?.allowedSessionVisibilities,
+      hasMultipleIdentities:
+        context?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities,
+    });
   }
 
   composerProps(

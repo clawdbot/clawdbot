@@ -20,7 +20,6 @@ import "../../styles/chat.css";
 import "../../styles/new-session.css";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
-import { NewSessionCapabilityController } from "./capability-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
 import { renderConnectMachineDialog } from "./connect-machine-dialog.ts";
@@ -74,7 +73,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private readonly browser: DraftPlaceBrowser;
   private readonly place: DraftPlaceState;
   private readonly submission: DraftSubmissionFlow;
-  private readonly capabilities: NewSessionCapabilityController;
   private readonly subscriptions: SubscriptionsController;
   private readonly flushDraft = () => this.submission.draftPersistence.persistNow();
 
@@ -88,7 +86,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         data: this.data,
         isConnected: this.isConnected,
         isAdmin: this.place?.isAdmin() ?? false,
-        canStartAsDraft: this.submission?.canStartAsDraft() ?? false,
+        canStartAsDraft: this.submission?.capabilities.canStartAsDraft(this.context) ?? false,
         visibility: this.submission?.visibility ?? "normal",
         cloudProfileId: this.place?.cloudProfileId ?? "",
         pendingPlacement: this.submission?.pendingPlacement ?? {
@@ -149,18 +147,15 @@ export class NewSessionPage extends OpenClawLightDomElement {
         onClearError: (error) => this.submission.clearErrorIf(error),
       },
     );
-    this.capabilities = new NewSessionCapabilityController(() => this.requestUpdate());
     this.submission = new DraftSubmissionFlow(
       this.gateway,
       this.place,
-      this.capabilities,
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
         requestUpdate: () => this.requestUpdate(),
         closeTransientUi: () => closeSessionMenus(this),
       },
     );
-    this.capabilities.setMutationCallback(this.submission.retireStartedSession);
     this.subscriptions = new SubscriptionsController(this)
       .watch(
         () => this.context?.gateway,
@@ -582,6 +577,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private renderDraftBlock() {
     const worktreeNameInvalid =
       this.place.worktree && !isWorktreeNameValid(this.place.worktreeName);
+    const capabilities = this.submission.capabilities;
     return html`
       <div class="new-session-page__draft" aria-busy=${String(this.submission.submitting)}>
         ${this.renderTargetBar()}
@@ -607,8 +603,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
           isCatalogTarget: catalog.isTarget(this.data),
           message: this.submission.message,
           visibility: this.submission.visibility,
-          draftAvailable: this.submission.canStartAsDraft(),
-          ...this.capabilities.composerProps(this.context, this.gateway, this.place.agentId),
+          draftAvailable: capabilities.canStartAsDraft(this.context),
+          ...capabilities.composerProps(this.context, this.gateway, this.place.agentId),
           modelControl: this.place.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           requestUpdate: () => this.requestUpdate(),

@@ -6,6 +6,11 @@ import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  openNewSessionPlusMenu,
+  replaceGatewayClient,
+  selectNewSessionDraft,
+} from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session ownership",
@@ -169,33 +174,6 @@ async function openSidebarSortMenu(targetPage: Page) {
   const menu = targetPage.locator(".sidebar-session-sort-menu");
   await menu.waitFor();
   return menu;
-}
-
-async function replaceGatewayClient(targetPage: Page) {
-  await targetPage.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { gateway: { connect: () => void } } };
-    };
-    if (!app.runtime) {
-      throw new Error("OpenClaw application runtime is unavailable");
-    }
-    app.runtime.context.gateway.connect();
-  });
-}
-
-async function openNewSessionPlusMenu(targetPage: Page) {
-  const composer = targetPage.locator(".new-session-page__composer");
-  const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
-  await composer.getByRole("button", { name: "Add attachment" }).click();
-  await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
-  return menu;
-}
-
-async function selectNewSessionDraft(targetPage: Page) {
-  const menu = await openNewSessionPlusMenu(targetPage);
-  await menu.getByRole("menuitem", { name: "Draft" }).click();
-  await targetPage.keyboard.press("Escape");
-  await targetPage.getByRole("button", { name: "Draft", exact: true }).waitFor();
 }
 
 suite.define(() => {
