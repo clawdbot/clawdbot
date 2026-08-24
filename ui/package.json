@@ -55,6 +55,7 @@
     "openclaw": "workspace:*",
     "pako": "3.0.1",
     "playwright": "1.62.1",
+    "postcss": "8.5.26",
     "vite": "8.2.1",
     "vitest": "4.1.10"
   }

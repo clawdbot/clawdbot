@@ -77,8 +77,8 @@ importers:
         specifier: 1.2.0-beta.15
         version: 1.2.0-beta.15
       '@mistralai/mistralai':
-        specifier: 2.6.3
-        version: 2.6.3(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.10.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.10.0(@opentelemetry/api@1.9.1))
+        specifier: 2.5.0
+        version: 2.5.0(@opentelemetry/api@1.9.1)
       '@modelcontextprotocol/sdk':
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
@@ -347,9 +347,12 @@ importers:
       playwright:
         specifier: 1.62.1
         version: 1.62.1
+      postcss:
+        specifier: 8.5.26
+        version: 8.5.26
       postcss-lit:
         specifier: 1.4.1
-        version: 1.4.1(jiti@2.7.0)(postcss@8.5.23)(supports-color@10.2.2)(tsx@4.23.12)(yaml@2.9.0)
+        version: 1.4.1(jiti@2.7.0)(postcss@8.5.26)(supports-color@10.2.2)(tsx@4.23.12)(yaml@2.9.0)
       shiki:
         specifier: 4.4.3
         version: 4.4.3
@@ -2444,6 +2447,9 @@ importers:
       playwright:
         specifier: 1.62.1
         version: 1.62.1
+      postcss:
+        specifier: 8.5.26
+        version: 8.5.26
       vite:
         specifier: 8.2.1
         version: 8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
@@ -4002,6 +4008,14 @@ packages:
   '@microsoft/teams.graph@2.0.15':
     resolution: {integrity: sha512-f0OUHEGVOZS/zRlKQQa2YqQ6BWun0yYMhjzum2fiIgz+drE/OhwZ/Z3QCgqVppvaXxThdbH9lvXA4DBczBeVng==}
     engines: {node: '>=20'}
+
+  '@mistralai/mistralai@2.5.0':
+    resolution: {integrity: sha512-S/r6tkiUHblaDJGsb84WS0ePTF2YHVta2EoTi1NJqHNt5mfRRS2uE4v7hCYV134+an+fk6WgG3+aFfinJbQBjQ==}
+    peerDependencies:
+      '@opentelemetry/api': ^1.9.0
+    peerDependenciesMeta:
+      '@opentelemetry/api':
+        optional: true
 
   '@mistralai/mistralai@2.6.3':
     resolution: {integrity: sha512-4nOSDZTJXnmfsDtPFZEX4tAaJwIP2xyZwka9XK7ueNmOX0DuVhu2Ph2uWEeBMaNjpXbnVgmXLZ2Q58vFd8gsgg==}
@@ -9613,7 +9627,7 @@ snapshots:
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
       '@smithy/credential-provider-imds': 4.5.2
-      '@smithy/types': 4.16.1
+      '@smithy/types': 4.17.2
       tslib: 2.8.1
 
   '@aws-sdk/credential-provider-process@3.972.61':
@@ -11184,6 +11198,18 @@ snapshots:
       - debug
       - supports-color
 
+  '@mistralai/mistralai@2.5.0(@opentelemetry/api@1.9.1)':
+    dependencies:
+      '@opentelemetry/semantic-conventions': 1.43.0
+      ws: 8.21.3
+      zod: 4.4.3
+      zod-to-json-schema: 3.25.2(zod@4.4.3)
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.1
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
   '@mistralai/mistralai@2.6.3(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.10.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.10.0(@opentelemetry/api@1.9.1))':
     dependencies:
       '@opentelemetry/semantic-conventions': 1.43.0
@@ -12177,7 +12203,7 @@ snapshots:
 
   '@smithy/hash-node@4.4.14':
     dependencies:
-      '@smithy/core': 3.30.0
+      '@smithy/core': 3.33.3
       tslib: 2.8.1
 
   '@smithy/invalid-dependency@4.4.14':
@@ -12685,7 +12711,7 @@ snapshots:
       sirv: 3.0.2
       tinyrainbow: 3.1.0
       vitest: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.2.0)(@vitest/browser-playwright@4.1.10)(@vitest/coverage-v8@4.1.10)(jsdom@30.0.1(@noble/hashes@2.3.0))(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
-      ws: 8.21.1
+      ws: 8.21.3
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -15450,26 +15476,26 @@ snapshots:
 
   pngjs@7.0.0: {}
 
-  postcss-lit@1.4.1(jiti@2.7.0)(postcss@8.5.23)(supports-color@10.2.2)(tsx@4.23.12)(yaml@2.9.0):
+  postcss-lit@1.4.1(jiti@2.7.0)(postcss@8.5.26)(supports-color@10.2.2)(tsx@4.23.12)(yaml@2.9.0):
     dependencies:
       '@babel/generator': 7.29.7
       '@babel/parser': 7.29.7
       '@babel/traverse': 7.29.7(supports-color@10.2.2)
       lilconfig: 3.1.3
-      postcss: 8.5.23
-      postcss-load-config: 6.0.1(jiti@2.7.0)(postcss@8.5.23)(tsx@4.23.12)(yaml@2.9.0)
+      postcss: 8.5.26
+      postcss-load-config: 6.0.1(jiti@2.7.0)(postcss@8.5.26)(tsx@4.23.12)(yaml@2.9.0)
     transitivePeerDependencies:
       - jiti
       - supports-color
       - tsx
       - yaml
 
-  postcss-load-config@6.0.1(jiti@2.7.0)(postcss@8.5.23)(tsx@4.23.12)(yaml@2.9.0):
+  postcss-load-config@6.0.1(jiti@2.7.0)(postcss@8.5.26)(tsx@4.23.12)(yaml@2.9.0):
     dependencies:
       lilconfig: 3.1.3
     optionalDependencies:
       jiti: 2.7.0
-      postcss: 8.5.23
+      postcss: 8.5.26
       tsx: 4.23.12
       yaml: 2.9.0
 
