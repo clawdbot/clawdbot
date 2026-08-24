@@ -45,6 +45,7 @@ import {
   countCrabboxProvisionSetupPhases,
   CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
+  CRABBOX_MACHINE0_READY_WAIT_TIMEOUT,
   CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS,
   CRABBOX_SETUP_TIMEOUT_MS,
   CRABBOX_WARMUP_TIMEOUT_MS,
@@ -156,17 +157,22 @@ async function inspectWithContext(params: {
   id: string;
   runCommand: CrabboxCommandRunner;
   timeoutMs?: number;
+  waitForReady?: boolean;
 }): Promise<InspectCommandResult> {
+  const action = params.waitForReady ? "status" : "inspect";
   const result = await runCrabboxCommand({
-    action: "inspect",
+    action,
     args: [
-      "inspect",
+      action,
       "--provider",
       params.context.provider,
       "--network",
       "public",
       "--id",
       params.id,
+      ...(params.waitForReady
+        ? ["--wait", "--wait-timeout", CRABBOX_MACHINE0_READY_WAIT_TIMEOUT]
+        : []),
       "--json",
     ],
     binary: params.context.binary,
@@ -192,7 +198,7 @@ async function inspectWithContext(params: {
   if (result.termination === "exit" && isAuthoritativeLeaseAbsence(result, params.id)) {
     return { status: "unknown" };
   }
-  throw crabboxCommandError("inspect", result);
+  throw crabboxCommandError(action, result);
 }
 
 function remainingProvisionTimeout(deadline: number, maximum: number): number {
@@ -259,6 +265,7 @@ async function waitForProvisionReady(
         params.deadline,
         resolveCrabboxLifecycleTimeoutMs(params.provider),
       ),
+      waitForReady: params.provider === "machine0",
     });
     if (replay.status === "unknown") {
       throw new Error("Crabbox operation lease disappeared while waiting for SSH readiness");
@@ -579,6 +586,7 @@ export function createCrabboxWorkerProvider(
             deadline,
             resolveCrabboxLifecycleTimeoutMs(parsed.provider),
           ),
+          waitForReady: parsed.provider === "machine0",
         });
       } catch (error) {
         // Transport failure after warmup is indeterminate; preserve the lease for durable replay.

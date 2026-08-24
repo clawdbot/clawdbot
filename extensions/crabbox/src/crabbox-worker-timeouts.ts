@@ -31,6 +31,9 @@ const CRABBOX_MACHINE0_LIFECYCLE_TIMEOUT_MS = 5 * 60_000;
 export const CRABBOX_SETUP_TIMEOUT_MS = 15 * 60_000;
 export const CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS = 15 * 60_000;
 
+// Leave one minute inside the lifecycle cap for process startup and cleanup handoff.
+export const CRABBOX_MACHINE0_READY_WAIT_TIMEOUT = "4m";
+
 // Match Machine0's provider-read cadence; fast re-inspection can exhaust its hourly API budget.
 export function resolveCrabboxReadyPollIntervalMs(provider: string): number {
   return provider === "machine0" ? 60_000 : 2_000;
