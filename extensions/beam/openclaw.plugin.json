@@ -4,6 +4,25 @@
     "onStartup": false,
     "onConfigPaths": ["plugins.entries.beam"]
   },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "mirror.token",
+          "expected": "string",
+          "ownerKind": "capability",
+          "ownerId": "beam-mirror",
+          "ownerContractFields": [
+            "endpoint",
+            "token",
+            "catalogs",
+            "pollSeconds",
+            "activeWindowMinutes"
+          ]
+        }
+      ]
+    }
+  },
   "uiHints": {
     "mirror.endpoint": {
       "label": "Mirror Endpoint",
@@ -18,6 +37,55 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
+    "$defs": {
+      "secretRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": { "enum": ["env", "file", "exec", "store"] },
+          "provider": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+          "id": { "type": "string" }
+        },
+        "required": ["source", "provider", "id"],
+        "allOf": [
+          {
+            "if": { "properties": { "source": { "enum": ["env", "store"] } } },
+            "then": { "properties": { "id": { "pattern": "^[A-Z][A-Z0-9_]{0,127}$" } } }
+          },
+          {
+            "if": { "properties": { "source": { "const": "file" } } },
+            "then": {
+              "properties": {
+                "id": {
+                  "anyOf": [
+                    { "const": "value" },
+                    {
+                      "allOf": [
+                        { "pattern": "^/" },
+                        { "not": { "pattern": "~(?:[^01]|$)" } }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": { "properties": { "source": { "const": "exec" } } },
+            "then": {
+              "properties": {
+                "id": {
+                  "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "secretInput": {
+        "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
+      }
+    },
     "properties": {
       "mirror": {
         "type": "object",
@@ -27,9 +95,7 @@
           "endpoint": {
             "type": "string"
           },
-          "token": {
-            "type": ["string", "object"]
-          },
+          "token": { "$ref": "#/$defs/secretInput" },
           "catalogs": {
             "type": "array",
             "items": {

@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   SessionCatalogHost,
@@ -7,11 +12,13 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import type { ActiveSessionCatalog } from "openclaw/plugin-sdk/session-catalog-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   beamMirrorId,
   buildBeamMirrorItems,
   createBeamMirrorRunner,
+  createBeamMirrorService,
   fitBeamMirrorUpload,
   parseBeamMirrorConfig,
   type BeamMirrorUpload,
@@ -19,6 +26,13 @@ import {
 import { BEAM_MAX_ITEMS, parseBeamUpload } from "./types.js";
 
 const NOW = Date.parse("2026-07-27T12:00:00.000Z");
+const UNRESOLVED_TOKEN_DIAGNOSTIC =
+  "plugins.entries.beam.config.mirror.token must be a resolved non-empty string";
+const beamManifest = JSON.parse(
+  readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+) as {
+  configSchema: JsonSchemaObject;
+};
 
 function mirrorConfig(overrides: Record<string, unknown> = {}): unknown {
   return {
@@ -145,6 +159,96 @@ async function readRequestBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+describe("Beam mirror manifest SecretInput contract", () => {
+  it.each([
+    { label: "optional token", token: undefined },
+    { label: "inline string", token: "prepared-token" },
+    { label: "env reference", token: { source: "env", provider: "default", id: "BEAM_TOKEN" } },
+    {
+      label: "file reference",
+      token: { source: "file", provider: "mounted-json", id: "/beam/token" },
+    },
+    {
+      label: "single-value file reference",
+      token: { source: "file", provider: "mounted-json", id: "value" },
+    },
+    {
+      label: "exec reference",
+      token: { source: "exec", provider: "team-vault", id: "beam/team-token" },
+    },
+    {
+      label: "store reference",
+      token: { source: "store", provider: "default", id: "BEAM_TOKEN" },
+    },
+  ])("accepts a canonical $label", ({ token }) => {
+    const result = validateJsonSchemaValue({
+      cacheKey: "beam.manifest.mirror-token",
+      schema: beamManifest.configSchema,
+      value: {
+        mirror: {
+          endpoint: "https://team.example/api/v1/beam/sessions",
+          catalogs: ["claude"],
+          ...(token === undefined ? {} : { token }),
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it.each([
+    { label: "missing source", token: { provider: "default", id: "BEAM_TOKEN" } },
+    { label: "missing provider", token: { source: "env", id: "BEAM_TOKEN" } },
+    { label: "missing id", token: { source: "env", provider: "default" } },
+    {
+      label: "unsupported source",
+      token: { source: "ambient", provider: "default", id: "BEAM_TOKEN" },
+    },
+    {
+      label: "invalid provider alias",
+      token: { source: "env", provider: "Invalid Provider", id: "BEAM_TOKEN" },
+    },
+    {
+      label: "invalid env id",
+      token: { source: "env", provider: "default", id: "lowercase" },
+    },
+    {
+      label: "invalid store id",
+      token: { source: "store", provider: "default", id: "beam/token" },
+    },
+    {
+      label: "relative file pointer",
+      token: { source: "file", provider: "default", id: "beam/token" },
+    },
+    {
+      label: "invalid file pointer escape",
+      token: { source: "file", provider: "default", id: "/beam/~2token" },
+    },
+    {
+      label: "exec traversal",
+      token: { source: "exec", provider: "default", id: "beam/../token" },
+    },
+    {
+      label: "extra field",
+      token: { source: "env", provider: "default", id: "BEAM_TOKEN", fallback: "unsafe" },
+    },
+  ])("rejects a malformed SecretRef with $label", ({ token }) => {
+    const result = validateJsonSchemaValue({
+      cacheKey: "beam.manifest.mirror-token",
+      schema: beamManifest.configSchema,
+      value: {
+        mirror: {
+          endpoint: "https://team.example/api/v1/beam/sessions",
+          catalogs: ["claude"],
+          token,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+});
+
 describe("parseBeamMirrorConfig", () => {
   it("returns undefined without mirror config", () => {
     expect(parseBeamMirrorConfig({ plugins: { entries: { beam: { enabled: true } } } })).toBe(
@@ -195,6 +299,28 @@ describe("parseBeamMirrorConfig", () => {
       mirrorConfig({ pollSeconds: 1, activeWindowMinutes: 999_999 }),
     );
     expect(parsed).toMatchObject({ pollSeconds: 10, activeWindowMinutes: 10_080 });
+  });
+
+  it("accepts optional and normalized prepared token strings", () => {
+    expect(parseBeamMirrorConfig(mirrorConfig())).not.toHaveProperty("token");
+    expect(parseBeamMirrorConfig(mirrorConfig({ token: "  prepared-token  " }))).toMatchObject({
+      token: "prepared-token",
+    });
+  });
+
+  it.each([
+    {
+      label: "an unresolved reference",
+      token: { source: "env", provider: "private-vault", id: "PRIVATE_BEAM_TOKEN" },
+    },
+    { label: "an empty token", token: "" },
+    { label: "a whitespace token", token: "   " },
+  ])("rejects $label with one redacted diagnostic", ({ token }) => {
+    const result = parseBeamMirrorConfig(mirrorConfig({ token }));
+
+    expect(result).toBe(UNRESOLVED_TOKEN_DIAGNOSTIC);
+    expect(result).not.toContain("private-vault");
+    expect(result).not.toContain("PRIVATE_BEAM_TOKEN");
   });
 });
 
@@ -675,21 +801,92 @@ describe("createBeamMirrorRunner", () => {
     expect(cancel).toHaveBeenCalledTimes(2);
   });
 
-  it("skips ticks when a configured token cannot be resolved", async () => {
-    const sent: SentRequest[] = [];
-    const runner = createBeamMirrorRunner({
-      runtime: fakeRuntime(
-        mirrorConfig({ token: { source: "env", provider: "default", id: "BEAM_MISSING_TOKEN" } }),
-      ),
-      logger: silentLogger,
-      env: {},
-      fetchFn: captureFetch(sent),
-      now: () => NOW,
-      listCatalogs: () => [
+  it("never falls back to ambient credentials or leaks unresolved reference details", async () => {
+    await withEnvAsync({ BEAM_AMBIENT_FALLBACK: "ambient-secret-value" }, async () => {
+      const sent: SentRequest[] = [];
+      const warnings: string[] = [];
+      const listCatalogs = vi.fn(() => [
         fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
-      ],
+      ]);
+      const runner = createBeamMirrorRunner({
+        runtime: fakeRuntime(
+          mirrorConfig({
+            token: { source: "env", provider: "default", id: "BEAM_AMBIENT_FALLBACK" },
+          }),
+        ),
+        logger: { warn: (message) => warnings.push(message), info: () => {} },
+        fetchFn: captureFetch(sent),
+        now: () => NOW,
+        listCatalogs,
+      });
+
+      await runner.tick();
+
+      expect(sent).toEqual([]);
+      expect(listCatalogs).not.toHaveBeenCalled();
+      expect(warnings).toEqual([`beam mirror disabled: ${UNRESOLVED_TOKEN_DIAGNOSTIC}`]);
+      expect(warnings.join(" ")).not.toMatch(/default|BEAM_AMBIENT_FALLBACK|ambient-secret-value/);
     });
-    await runner.tick();
-    expect(sent).toHaveLength(0);
+  });
+});
+
+describe("createBeamMirrorService", () => {
+  it("never starts polling or announces an unresolved mirror as active", () => {
+    const intervalSpy = vi.spyOn(globalThis, "setInterval");
+    const warnings: string[] = [];
+    const announcements: string[] = [];
+    const service = createBeamMirrorService({
+      runtime: fakeRuntime(
+        mirrorConfig({
+          token: { source: "env", provider: "private-vault", id: "PRIVATE_BEAM_TOKEN" },
+        }),
+      ),
+    });
+
+    try {
+      service.start({
+        logger: {
+          warn: (message) => warnings.push(message),
+          info: (message) => announcements.push(message),
+        },
+      });
+
+      expect(intervalSpy).not.toHaveBeenCalled();
+      expect(announcements).toEqual([]);
+      expect(warnings).toEqual([`beam mirror disabled: ${UNRESOLVED_TOKEN_DIAGNOSTIC}`]);
+      expect(warnings.join(" ")).not.toMatch(/private-vault|PRIVATE_BEAM_TOKEN/);
+    } finally {
+      service.stop();
+      intervalSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    { label: "token-optional", token: undefined },
+    { label: "prepared-token", token: "prepared-token" },
+  ])("announces only a usable $label mirror", ({ token }) => {
+    const intervalSpy = vi.spyOn(globalThis, "setInterval");
+    const logger = { warn: vi.fn(), info: vi.fn() };
+    const service = createBeamMirrorService({
+      runtime: fakeRuntime(
+        mirrorConfig({
+          catalogs: ["beam-unmatched-fixture"],
+          ...(token === undefined ? {} : { token }),
+        }),
+      ),
+    });
+
+    try {
+      service.start({ logger });
+
+      expect(intervalSpy).toHaveBeenCalledOnce();
+      expect(logger.info).toHaveBeenCalledWith(
+        "beam mirror active: beam-unmatched-fixture -> https://team.example/api/v1/beam/sessions",
+      );
+      expect(logger.warn).not.toHaveBeenCalled();
+    } finally {
+      service.stop();
+      intervalSpy.mockRestore();
+    }
   });
 });

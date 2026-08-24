@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import type {
   SessionCatalogHost,
   SessionCatalogTranscriptItem,
@@ -21,7 +20,6 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { BEAM_MAX_BODY_BYTES, BEAM_MAX_ITEM_CHARS, BEAM_MAX_ITEMS } from "./types.js";
 
 const MIRROR_CONFIG_PATH = "plugins.entries.beam.config.mirror";
-const MIRROR_TOKEN_PATH = `${MIRROR_CONFIG_PATH}.token`;
 const DEFAULT_POLL_SECONDS = 30;
 const DEFAULT_ACTIVE_WINDOW_MINUTES = 180;
 const MIRROR_LIST_LIMIT = 100;
@@ -39,7 +37,7 @@ const MIRROR_UPLOAD_TIMEOUT_MS = 15_000;
 
 type BeamMirrorConfig = {
   endpoint: string;
-  token?: unknown;
+  token?: string;
   catalogs: string[];
   pollSeconds: number;
   activeWindowMinutes: number;
@@ -81,6 +79,10 @@ export function parseBeamMirrorConfig(config: unknown): BeamMirrorConfig | undef
   if (!isRecord(mirror) || !Object.keys(mirror).every((key) => MIRROR_KEYS.has(key))) {
     return `${MIRROR_CONFIG_PATH} must be a closed object with endpoint/token/catalogs/pollSeconds/activeWindowMinutes`;
   }
+  const token = mirror.token;
+  if (token !== undefined && (typeof token !== "string" || token.trim().length === 0)) {
+    return `${MIRROR_CONFIG_PATH}.token must be a resolved non-empty string`;
+  }
   const endpoint = typeof mirror.endpoint === "string" ? mirror.endpoint.trim() : "";
   let parsedEndpoint: URL;
   try {
@@ -109,7 +111,7 @@ export function parseBeamMirrorConfig(config: unknown): BeamMirrorConfig | undef
   const catalogs = mirror.catalogs.map((id) => (id as string).trim().toLowerCase());
   return {
     endpoint,
-    ...(mirror.token !== undefined ? { token: mirror.token } : {}),
+    ...(token !== undefined ? { token: token.trim() } : {}),
     catalogs,
     pollSeconds: boundedNumber(mirror.pollSeconds, DEFAULT_POLL_SECONDS, 10, 3_600),
     activeWindowMinutes: boundedNumber(
@@ -268,12 +270,10 @@ type BeamMirrorRunner = {
 export function createBeamMirrorRunner(params: {
   runtime: PluginRuntime;
   logger: { warn: (message: string) => void; info: (message: string) => void };
-  env?: NodeJS.ProcessEnv;
   fetchFn?: typeof fetch;
   now?: () => number;
   listCatalogs?: () => ActiveSessionCatalog[];
 }): BeamMirrorRunner {
-  const env = params.env ?? process.env;
   const now = params.now ?? Date.now;
   const listCatalogs = params.listCatalogs ?? listActiveSessionCatalogs;
   const tracked = new Map<string, TrackedMirrorSession>();
@@ -407,23 +407,6 @@ export function createBeamMirrorRunner(params: {
         warnThrottled(`beam mirror disabled: ${String(error)}`);
         return;
       }
-      let token: string | undefined;
-      if (mirror.token !== undefined) {
-        const resolved = await resolveConfiguredSecretInputString({
-          // The resolver only reads; the plugin runtime exposes a DeepReadonly view.
-          config: config as OpenClawConfig,
-          env,
-          value: mirror.token,
-          path: MIRROR_TOKEN_PATH,
-        });
-        if (!resolved.value) {
-          warnThrottled(
-            `beam mirror token unresolved${resolved.unresolvedRefReason ? `: ${resolved.unresolvedRefReason}` : ""}`,
-          );
-          return;
-        }
-        token = resolved.value;
-      }
       const activeSinceMs = now() - mirror.activeWindowMinutes * 60_000;
       const catalogs = listCatalogs().filter(
         (catalog) =>
@@ -457,7 +440,7 @@ export function createBeamMirrorRunner(params: {
           if (tracked.get(key)?.fingerprint === fingerprint) {
             continue;
           }
-          if (await upload(mirror.endpoint, token, payload)) {
+          if (await upload(mirror.endpoint, mirror.token, payload)) {
             tracked.set(key, { candidate, fingerprint });
           }
         } catch (error) {
@@ -477,7 +460,7 @@ export function createBeamMirrorRunner(params: {
         }
         try {
           const payload = await buildUpload(agentId, catalog, entry.candidate, true);
-          await upload(mirror.endpoint, token, payload);
+          await upload(mirror.endpoint, mirror.token, payload);
         } catch {
           // The session store may already be gone; the receiver TTL cleans up.
         }

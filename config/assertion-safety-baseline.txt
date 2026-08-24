@@ -40,7 +40,7 @@ extensions/anthropic/session-catalog.ts	3
 extensions/anthropic/stream-wrappers.ts	6
 extensions/baseten/models.ts	3
 extensions/beam/index.ts	1
-extensions/beam/src/mirror.ts	3
+extensions/beam/src/mirror.ts	2
 extensions/beam/src/session-catalog.ts	6
 extensions/beam/src/types.ts	2
 extensions/bonjour/src/advertiser.ts	2

@@ -1,5 +1,9 @@
 import http from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import plugin from "../index.js";
 import { createBeamRequestHandler } from "./http.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
 import type { BeamStore } from "./store.js";
@@ -94,6 +98,73 @@ async function serve(handler: ReturnType<typeof createBeamRequestHandler>): Prom
   }
   return `http://127.0.0.1:${address.port}/api/v1/beam/sessions`;
 }
+
+describe("Beam plugin registration", () => {
+  it("keeps the receiver and catalog available when only the mirror token is unresolved", async () => {
+    const config = {
+      plugins: {
+        entries: {
+          beam: {
+            enabled: true,
+            config: {
+              mirror: {
+                endpoint: "https://team.example/api/v1/beam/sessions",
+                catalogs: ["claude"],
+                token: { source: "env", provider: "private-vault", id: "PRIVATE_BEAM_TOKEN" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const store = memoryStore();
+    const registerSessionCatalog = vi.fn<(catalog: SessionCatalogProvider) => void>();
+    const registerHttpRoute = vi.fn();
+    const registerService = vi.fn<(service: OpenClawPluginService) => void>();
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+
+    plugin.register(
+      createTestPluginApi({
+        id: "beam",
+        config,
+        runtime: {
+          config: { current: () => config },
+          state: {
+            openKeyedStore: () => ({
+              register: async (_key: string, session: BeamStoredSession) => store.put(session),
+              lookup: store.get,
+              entries: async () =>
+                (await store.list()).map((value) => ({ key: value.beamId, value })),
+            }),
+          },
+        } as never,
+        registerSessionCatalog,
+        registerHttpRoute,
+        registerService,
+      }),
+    );
+
+    expect(registerHttpRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/api/v1/beam/sessions", auth: "gateway" }),
+    );
+    const catalog = registerSessionCatalog.mock.calls[0]?.[0];
+    expect(catalog?.id).toBe("beam");
+    expect(await catalog?.list({ agentId: "main" })).toMatchObject([
+      { hostId: "gateway", sessions: [] },
+    ]);
+
+    const service = registerService.mock.calls[0]?.[0];
+    expect(service?.id).toBe("beam-mirror");
+    await service?.start({ config, stateDir: "/tmp/openclaw-beam-test", logger });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "beam mirror disabled: plugins.entries.beam.config.mirror.token must be a resolved non-empty string",
+    );
+    expect(logger.info).not.toHaveBeenCalled();
+    expect(logger.warn.mock.calls.join(" ")).not.toMatch(/private-vault|PRIVATE_BEAM_TOKEN/);
+    await service?.stop?.({ config, stateDir: "/tmp/openclaw-beam-test", logger });
+  });
+});
 
 describe("Beam payload validation", () => {
   it("accepts the closed normalized payload", () => {
