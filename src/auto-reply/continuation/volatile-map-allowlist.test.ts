@@ -95,7 +95,7 @@ const ALLOWLIST = [
       "Lost on process restart; pending continuation work remains in TaskFlow and restart recovery/normal scheduling can re-arm recovery or hedge timers from durable rows.",
   },
   {
-    file: "src/auto-reply/continuation/work-dispatch-claims.ts",
+    file: "src/auto-reply/continuation/continuation-dispatch-claims.ts",
     symbol: "activeWorkDispatchControllers",
     owner: "continuation work dispatch claim registry",
     purpose:

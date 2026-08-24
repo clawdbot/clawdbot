@@ -55,6 +55,7 @@ import type {
   SpawnSubagentParams as BaseSpawnSubagentParams,
   SpawnSubagentResult as BaseSpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
+import { SpawnSubagentAdmissionCancelledError } from "./subagent-spawn-contract.js";
 import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
 import {
   buildSubagentExecutionSessionSpawnContext,
@@ -194,6 +195,7 @@ export async function spawnSubagentDirect(
       swarmGroupId,
       collect: params.collect === true,
       outputSchema: params.outputSchema,
+      continuationDelegateAdmission: ctx.continuationDelegateAdmission,
     });
     if (initialSession.status === "error") {
       return {
@@ -378,20 +380,8 @@ export async function spawnSubagentDirect(
     if (params.traceparent) {
       childLaunch.request.traceparent = params.traceparent;
     }
-    if (initialSession.entry) {
-      recordSessionCreated({
-        sessionKey: childSessionKey,
-        agentId: targetAgentId,
-        entry: initialSession.entry,
-      });
-    }
-    recordSubagentSpawned({
-      childSessionKey,
-      childRunId,
-      requesterSessionKey: requesterInternalKey,
-      agentId: targetAgentId,
-    });
     const launchChildRun = async () => {
+      ctx.continuationDelegateAdmission?.assertCurrent("gateway-dispatch");
       registerSubagentTraceparentHandoff({
         idempotencyKey: childIdem,
         sessionKey: childSessionKey,
@@ -484,7 +474,7 @@ export async function spawnSubagentDirect(
         });
         return { runId: acceptedChildRunId };
       },
-      async cleanupOnFailure({ phase, state }) {
+      async cleanupOnFailure({ phase, state, error }) {
         if (phase === "initialize") {
           await cleanupFailedSpawn();
           return;
@@ -493,7 +483,12 @@ export async function spawnSubagentDirect(
         // the run's row, and registration is what delivers it. A register failure
         // means no owner ever recorded the run, so abort the run the gateway
         // already accepted instead of leaving it executing unrecorded.
-        if (phase === "register" && acceptedChildRunId && taskRowOwnership === "required") {
+        const admissionCancelled = error instanceof SpawnSubagentAdmissionCancelledError;
+        if (
+          phase === "register" &&
+          acceptedChildRunId &&
+          (taskRowOwnership === "required" || admissionCancelled)
+        ) {
           await terminateAcceptedCollectorRun({
             childSessionKey,
             gatewayRunId: acceptedChildRunId,
@@ -608,6 +603,30 @@ export async function spawnSubagentDirect(
           ...(params.traceparent ? { traceparent: params.traceparent } : {}),
         };
       },
+      assertRegistrationAdmission: () =>
+        ctx.continuationDelegateAdmission?.assertCurrent("registry-acceptance"),
+      publishRegistration: () => {
+        ctx.continuationDelegateAdmission?.assertCurrent("lifecycle-publication");
+        if (initialSession.entry) {
+          recordSessionCreated({
+            sessionKey: childSessionKey,
+            agentId: targetAgentId,
+            entry: initialSession.entry,
+          });
+        }
+        recordSubagentSpawned({
+          childSessionKey,
+          childRunId,
+          requesterSessionKey: requesterInternalKey,
+          agentId: targetAgentId,
+        });
+        emitSessionLifecycleEvent({
+          sessionKey: childSessionKey,
+          reason: "create",
+          parentSessionKey: requesterInternalKey,
+          label: label || undefined,
+        });
+      },
     });
     if (!pipelineResult.ok) {
       const runId = pipelineResult.runId ?? childIdem;
@@ -616,7 +635,12 @@ export async function spawnSubagentDirect(
           ? (pipelineResult.error as { spawnStatus?: unknown }).spawnStatus
           : undefined;
       return {
-        status: spawnStatus === "forbidden" ? "forbidden" : "error",
+        status:
+          pipelineResult.error instanceof SpawnSubagentAdmissionCancelledError
+            ? "cancelled"
+            : spawnStatus === "forbidden"
+              ? "forbidden"
+              : "error",
         error:
           pipelineResult.phase === "register" && spawnStatus !== "forbidden"
             ? `Failed to register subagent run: ${summarizeSpawnError(pipelineResult.error)}`
@@ -650,14 +674,6 @@ export async function spawnSubagentDirect(
       await emitSpawnLifecycleHooks(childRunId);
     }
 
-    // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
-    emitSessionLifecycleEvent({
-      sessionKey: childSessionKey,
-      reason: "create",
-      parentSessionKey: requesterInternalKey,
-      label: label || undefined,
-    });
-
     const acceptedNote = resolveSubagentSpawnAcceptedNote({
       spawnMode,
       agentSessionKey: ctx.agentSessionKey,
@@ -676,6 +692,11 @@ export async function spawnSubagentDirect(
       modelApplied: resolvedModel ? modelApplied : undefined,
       attachments: attachmentsReceipt,
     };
+  } catch (error) {
+    if (error instanceof SpawnSubagentAdmissionCancelledError) {
+      return { status: "cancelled", error: error.message };
+    }
+    throw error;
   } finally {
     admissionReservation?.release();
     if (swarmReservationPending) {

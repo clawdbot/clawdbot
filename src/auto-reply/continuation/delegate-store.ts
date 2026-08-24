@@ -36,6 +36,8 @@ export function scrubCancellationRequestedDelegateFlows(
   }
 }
 
+export type DelegateSpawnFenceController = "pending" | "post-compaction";
+
 export type DelegateSpawnFenceResult =
   | { allowed: true }
   | { allowed: false; reason: "cancelled" | "stale"; summary: string };
@@ -47,7 +49,7 @@ export type DelegateSpawnFenceResult =
  */
 export function revalidatePendingDelegateForSpawn(
   delegate: Pick<PendingContinuationDelegate, "flowId" | "expectedRevision" | "task">,
-  controller: "pending" | "post-compaction",
+  controller: DelegateSpawnFenceController,
 ): DelegateSpawnFenceResult {
   const { flowId, expectedRevision } = delegate;
   if ((flowId === undefined) !== (expectedRevision === undefined)) {

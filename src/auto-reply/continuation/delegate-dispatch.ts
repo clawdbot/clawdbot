@@ -48,6 +48,10 @@ import {
 } from "./delegate-dispatch-hedge.js";
 import { partitionManagedDelegatesForRuntime } from "./delegate-dispatch-managed-gates.js";
 import {
+  createContinuationOwnerSessionLoader,
+  registerContinuationDelegateDispatchClaim,
+} from "./delegate-spawn-authority.js";
+import {
   annotateQueuedDelegatesInheritedPolicy,
   clearRecoverableDelegatesChainTokensFold,
   consumePendingDelegates,
@@ -484,6 +488,12 @@ export async function dispatchToolDelegates(
 
     let dispatchSpan: ReturnType<typeof startContinuationDelegateSpan> | undefined;
     let spawnAttempted = false;
+    const activeDispatch = registerContinuationDelegateDispatchClaim({
+      controller: "pending",
+      delegate,
+      loadOwnerSessionEntry: createContinuationOwnerSessionLoader(sessionKey),
+      ownerSessionKey: sessionKey,
+    });
     try {
       if (delegateDelivery === "timer") {
         emitContinuationDelegateFireSpan({
@@ -582,7 +592,10 @@ export async function dispatchToolDelegates(
           ...(delegate.fanoutMode ? { continuationFanoutMode: delegate.fanoutMode } : {}),
           ...(spawnTraceparent ? { traceparent: spawnTraceparent } : {}),
         },
-        spawnCtx,
+        {
+          ...spawnCtx,
+          continuationDelegateAdmission: activeDispatch.authority,
+        },
       );
 
       if (result.status === "accepted") {
@@ -619,6 +632,10 @@ export async function dispatchToolDelegates(
         }
         dispatchSpan.setStatus("OK");
         commitPlannedChainState(dispatchChainId);
+      } else if (result.status === "cancelled") {
+        removeRejectedArtifactPolicy(delegate);
+        dispatchSpan.setStatus("ERROR", result.error ?? "delegate admission cancelled");
+        rejected++;
       } else {
         const reasonText = result.error ?? "delegation was not accepted.";
         const summary = `DELEGATE spawn ${result.status}: ${reasonText}`;
@@ -713,6 +730,7 @@ export async function dispatchToolDelegates(
       );
       rejected++;
     } finally {
+      activeDispatch.release();
       dispatchSpan?.end();
     }
   }

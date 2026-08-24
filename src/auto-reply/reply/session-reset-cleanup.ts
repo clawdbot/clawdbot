@@ -5,6 +5,7 @@ import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
 } from "../../infra/system-events.js";
+import { abortContinuationDispatchClaims } from "../continuation/continuation-dispatch-claims.js";
 import { clearDelegateDispatchHedge } from "../continuation/delegate-dispatch-hedge.js";
 import { cancelSessionContinuations } from "../continuation/session-reset.js";
 import { clearTrackedContinuationTimers } from "../continuation/state.js";
@@ -50,6 +51,7 @@ export function clearSessionResetRuntimeState(
 
   for (const key of cleared.keys) {
     if (interruptContinuations) {
+      abortContinuationDispatchClaims(key);
       clearContinuationWorkDispatch(key);
       clearDelegateDispatchHedge(key);
       clearTrackedContinuationTimers(key);

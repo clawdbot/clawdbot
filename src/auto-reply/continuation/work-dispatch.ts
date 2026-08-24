@@ -7,13 +7,13 @@ import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { clampDelayMs, resolveContinuationRuntimeConfig } from "./config.js";
+import {
+  abortContinuationDispatchClaims,
+  registerContinuationDispatchClaim,
+  resetContinuationDispatchClaimsForTests,
+} from "./continuation-dispatch-claims.js";
 import { checkContinuationBudget } from "./scheduler.js";
 import type { ChainState, ContinuationRuntimeConfig, ContinueWorkRequest } from "./types.js";
-import {
-  abortContinuationWorkDispatchClaims,
-  registerContinuationWorkDispatchClaim,
-  resetContinuationWorkDispatchClaimsForTests,
-} from "./work-dispatch-claims.js";
 import {
   commitFoldedContinuationWork,
   executePendingContinuationWork,
@@ -107,7 +107,7 @@ export function clearContinuationWorkDispatch(sessionKey: string): void {
     idleRetryControllers.get(key)?.abort();
     idleRetryControllers.delete(key);
   }
-  abortContinuationWorkDispatchClaims(sessionKey);
+  abortContinuationDispatchClaims(sessionKey);
 }
 
 function armWorkTimer(
@@ -182,7 +182,7 @@ export function resetContinuationWorkDispatchForTests(): void {
   }
   idleRetryFailureTimers.clear();
   clearIdleRetryControllersForTests();
-  resetContinuationWorkDispatchClaimsForTests();
+  resetContinuationDispatchClaimsForTests();
 }
 
 /**
@@ -600,7 +600,10 @@ export async function dispatchPendingContinuationWork(
   }
   for (const work of worksToGrant) {
     clearIdleRetryForWork(work);
-    const activeDispatch = registerContinuationWorkDispatchClaim(work.sessionKey);
+    const activeDispatch = registerContinuationDispatchClaim({
+      sessionKey: work.sessionKey,
+      ...(work.flowId ? { flowId: work.flowId } : {}),
+    });
     let directive: ContinuationWorkExecutionDirective;
     try {
       directive = await executePendingContinuationWork(

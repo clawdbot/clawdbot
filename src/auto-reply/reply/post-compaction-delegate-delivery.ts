@@ -34,6 +34,7 @@ import {
 import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
+import { registerContinuationDelegateDispatchClaim } from "../continuation/delegate-spawn-authority.js";
 import {
   markPendingDelegateSpawnAccepted,
   revalidatePendingDelegateForSpawn,
@@ -639,115 +640,137 @@ export async function deliverQueuedPostCompactionDelegate(
     assertDelegateArtifactPolicyPrepared(artifactFlowId);
   }
 
-  const spawnFence = deps.revalidatePendingDelegateForSpawn(
-    {
+  const activeDispatch = registerContinuationDelegateDispatchClaim({
+    controller: "post-compaction",
+    delegate: {
       flowId: params.entry.sourceFlowId,
       expectedRevision: params.entry.sourceExpectedRevision,
       task: params.entry.task,
     },
-    "post-compaction",
-  );
-  if (!spawnFence.allowed) {
-    removeRejectedArtifactPolicy();
-    deps.log(
-      `[continuation:post-compaction-spawn-fenced] reason=${spawnFence.reason} flowId=${params.entry.sourceFlowId ?? "unknown"} entryId=${params.entry.id}`,
-    );
-    throw new SessionDeliveryDeadLetteredError(spawnFence.summary);
-  }
-
-  const spawnResult = await deps.spawnSubagentDirect(
-    {
-      task:
-        `[continuation:post-compaction] ` +
-        `[continuation:chain-hop:${nextCompactionChainCount}] ` +
-        `Compaction just completed. Carry this working state to the post-compaction session: ${params.entry.task}` +
-        formatDelegateArtifactTaskInstruction(params.entry),
-      ...(delegateSilentAnnounce ? { silentAnnounce: true } : {}),
-      ...(delegateWakeOnReturn ? { silentAnnounce: true, wakeOnReturn: true } : {}),
-      ...(params.entry.targetSessionKey
-        ? { continuationTargetSessionKey: params.entry.targetSessionKey }
-        : {}),
-      ...(params.entry.targetSessionKeys && params.entry.targetSessionKeys.length > 0
-        ? { continuationTargetSessionKeys: params.entry.targetSessionKeys }
-        : {}),
-      ...(params.entry.fanoutMode ? { continuationFanoutMode: params.entry.fanoutMode } : {}),
-      drainsContinuationDelegateQueue: true,
-      continuationDelegateFlowId: resolveQueuedPostCompactionContinuationFlowId(params.entry),
-      continuationChainState: {
-        count: nextCompactionChainCount,
-        startedAt: compactionChainStartedAt,
-        tokens: compactionChainTokens,
-        chainId: compactionChainId,
-      },
-      ...(params.entry.model ? { model: params.entry.model } : {}),
-      ...(params.entry.attachments ? { attachments: params.entry.attachments } : {}),
-      ...(params.entry.attachAs?.mountPath
-        ? { attachMountPath: params.entry.attachAs.mountPath }
-        : {}),
-      ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
-    },
-    {
-      agentSessionKey: params.entry.sessionKey,
-      agentChannel: params.entry.deliveryContext?.channel,
-      agentAccountId: params.entry.deliveryContext?.accountId,
-      agentTo: params.entry.deliveryContext?.to,
-      agentThreadId: params.entry.deliveryContext?.threadId,
-    },
-  );
-  if (spawnResult.status !== "accepted") {
-    if (
-      spawnResult.status === "forbidden" &&
-      params.entry.sourceFlowId &&
-      params.entry.sourceExpectedRevision !== undefined
-    ) {
-      failSourceBackedPostCompactionDelivery(
-        deps,
-        params.entry,
-        `Post-compaction delegate spawn forbidden: ${spawnResult.error ?? "delegation was not accepted"}.`,
-      );
-      removeRejectedArtifactPolicy();
-      return;
-    }
-    throw new Error(`post-compaction delegate spawn ${spawnResult.status}`);
-  }
-  // Charge the chain only now that a child is actually accepted. Everything
-  // above this line — artifact policy, spawn fence, attachment materialization,
-  // spawn rejection — leaves the persisted depth untouched, so a retry after any
-  // of those failures still has its full budget.
-  const { expectedRevision: acceptedRevision } = await commitAcceptedPostCompactionChainCharge({
-    deps,
-    entry: params.entry,
-    plannedChainState: {
-      currentChainCount: nextCompactionChainCount,
-      chainStartedAt: compactionChainStartedAt,
-      accumulatedChainTokens: compactionChainTokens,
-      chainId: compactionChainId,
-    },
-    ...(sessionEntry ? { sessionEntry } : {}),
-    storePath,
+    loadOwnerSessionEntry: () =>
+      deps.loadSessionEntry({ storePath, sessionKey: params.entry.sessionKey }),
+    ownerSessionKey: params.entry.sessionKey,
   });
-  if (params.entry.sourceFlowId && params.entry.sourceExpectedRevision !== undefined) {
-    const spawnedChildSessionKey = spawnResult.childSessionKey ?? acceptedChildSessionKey;
-    const committed = deps.markPendingDelegateSpawnAccepted(
+  try {
+    const spawnFence = deps.revalidatePendingDelegateForSpawn(
       {
         flowId: params.entry.sourceFlowId,
-        expectedRevision: acceptedRevision ?? params.entry.sourceExpectedRevision,
+        expectedRevision: params.entry.sourceExpectedRevision,
         task: params.entry.task,
       },
-      spawnedChildSessionKey,
+      "post-compaction",
     );
-    if (!committed) {
-      throw new Error(
-        `[continuation:post-compaction-source-accept-not-committed] flowId=${params.entry.sourceFlowId}`,
+    if (!spawnFence.allowed) {
+      removeRejectedArtifactPolicy();
+      deps.log(
+        `[continuation:post-compaction-spawn-fenced] reason=${spawnFence.reason} flowId=${params.entry.sourceFlowId ?? "unknown"} entryId=${params.entry.id}`,
+      );
+      throw new SessionDeliveryDeadLetteredError(spawnFence.summary);
+    }
+
+    const spawnResult = await deps.spawnSubagentDirect(
+      {
+        task:
+          `[continuation:post-compaction] ` +
+          `[continuation:chain-hop:${nextCompactionChainCount}] ` +
+          `Compaction just completed. Carry this working state to the post-compaction session: ${params.entry.task}` +
+          formatDelegateArtifactTaskInstruction(params.entry),
+        ...(delegateSilentAnnounce ? { silentAnnounce: true } : {}),
+        ...(delegateWakeOnReturn ? { silentAnnounce: true, wakeOnReturn: true } : {}),
+        ...(params.entry.targetSessionKey
+          ? { continuationTargetSessionKey: params.entry.targetSessionKey }
+          : {}),
+        ...(params.entry.targetSessionKeys && params.entry.targetSessionKeys.length > 0
+          ? { continuationTargetSessionKeys: params.entry.targetSessionKeys }
+          : {}),
+        ...(params.entry.fanoutMode ? { continuationFanoutMode: params.entry.fanoutMode } : {}),
+        drainsContinuationDelegateQueue: true,
+        continuationDelegateFlowId: resolveQueuedPostCompactionContinuationFlowId(params.entry),
+        continuationChainState: {
+          count: nextCompactionChainCount,
+          startedAt: compactionChainStartedAt,
+          tokens: compactionChainTokens,
+          chainId: compactionChainId,
+        },
+        ...(params.entry.model ? { model: params.entry.model } : {}),
+        ...(params.entry.attachments ? { attachments: params.entry.attachments } : {}),
+        ...(params.entry.attachAs?.mountPath
+          ? { attachMountPath: params.entry.attachAs.mountPath }
+          : {}),
+        ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
+      },
+      {
+        agentSessionKey: params.entry.sessionKey,
+        agentChannel: params.entry.deliveryContext?.channel,
+        agentAccountId: params.entry.deliveryContext?.accountId,
+        agentTo: params.entry.deliveryContext?.to,
+        agentThreadId: params.entry.deliveryContext?.threadId,
+        continuationDelegateAdmission: activeDispatch.authority,
+      },
+    );
+    if (spawnResult.status === "cancelled") {
+      removeRejectedArtifactPolicy();
+      throw new SessionDeliveryDeadLetteredError(
+        spawnResult.error ?? "Continuation delegate admission cancelled.",
       );
     }
-  }
+    if (spawnResult.status !== "accepted") {
+      if (
+        spawnResult.status === "forbidden" &&
+        params.entry.sourceFlowId &&
+        params.entry.sourceExpectedRevision !== undefined
+      ) {
+        failSourceBackedPostCompactionDelivery(
+          deps,
+          params.entry,
+          `Post-compaction delegate spawn forbidden: ${spawnResult.error ?? "delegation was not accepted"}.`,
+        );
+        removeRejectedArtifactPolicy();
+        return;
+      }
+      throw new Error(`post-compaction delegate spawn ${spawnResult.status}`);
+    }
+    // Charge the chain only now that a child is actually accepted. Everything
+    // above this line — artifact policy, spawn fence, attachment materialization,
+    // spawn rejection — leaves the persisted depth untouched, so a retry after any
+    // of those failures still has its full budget.
+    const { expectedRevision: acceptedRevision } = await commitAcceptedPostCompactionChainCharge({
+      deps,
+      entry: params.entry,
+      plannedChainState: {
+        currentChainCount: nextCompactionChainCount,
+        chainStartedAt: compactionChainStartedAt,
+        accumulatedChainTokens: compactionChainTokens,
+        chainId: compactionChainId,
+      },
+      ...(sessionEntry ? { sessionEntry } : {}),
+      storePath,
+    });
+    if (params.entry.sourceFlowId && params.entry.sourceExpectedRevision !== undefined) {
+      const spawnedChildSessionKey = spawnResult.childSessionKey ?? acceptedChildSessionKey;
+      const committed = deps.markPendingDelegateSpawnAccepted(
+        {
+          flowId: params.entry.sourceFlowId,
+          expectedRevision: acceptedRevision ?? params.entry.sourceExpectedRevision,
+          task: params.entry.task,
+        },
+        spawnedChildSessionKey,
+      );
+      if (!committed) {
+        throw new Error(
+          `[continuation:post-compaction-source-accept-not-committed] flowId=${params.entry.sourceFlowId}`,
+        );
+      }
+    }
 
-  deps.enqueueSystemEvent(
-    `[continuation:compaction-delegate-spawned] Post-compaction shard dispatched: ${params.entry.task}`,
-    {
-      sessionKey: params.entry.sessionKey,
-      ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
-    },
-  );
+    deps.enqueueSystemEvent(
+      `[continuation:compaction-delegate-spawned] Post-compaction shard dispatched: ${params.entry.task}`,
+      {
+        sessionKey: params.entry.sessionKey,
+        ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
+      },
+    );
+  } finally {
+    activeDispatch.release();
+  }
 }

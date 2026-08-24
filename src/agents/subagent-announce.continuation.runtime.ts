@@ -1,4 +1,8 @@
 import { dispatchToolDelegates } from "../auto-reply/continuation/delegate-dispatch.js";
+import {
+  createContinuationOwnerSessionLoader,
+  registerContinuationDelegateDispatchClaim,
+} from "../auto-reply/continuation/delegate-spawn-authority.js";
 import { stagePostCompactionDelegate } from "../auto-reply/continuation/delegate-store-post-compaction.js";
 import {
   clearQueuedDelegatesChainTokensFold,
@@ -514,6 +518,12 @@ export async function coordinateSubagentContinuation(params: {
       const mode = delegate.mode ?? "normal";
       const toolSilent = mode === "silent" || mode === "silent-wake" || parentWasSilent;
       const toolWake = mode === "silent-wake" || (parentWasSilent && params.wakeOnReturn === true);
+      const activeDispatch = registerContinuationDelegateDispatchClaim({
+        controller: "pending",
+        delegate,
+        loadOwnerSessionEntry: createContinuationOwnerSessionLoader(params.childSessionKey),
+        ownerSessionKey: params.childSessionKey,
+      });
       try {
         if (
           await rejectCrossSessionTargeting({
@@ -584,6 +594,7 @@ export async function coordinateSubagentContinuation(params: {
             agentAccountId: params.targetRequesterOrigin?.accountId ?? undefined,
             agentTo: params.targetRequesterOrigin?.to ?? undefined,
             agentThreadId: params.targetRequesterOrigin?.threadId ?? undefined,
+            continuationDelegateAdmission: activeDispatch.authority,
           },
         );
         if (spawnResult.status === "accepted") {
@@ -598,7 +609,7 @@ export async function coordinateSubagentContinuation(params: {
             );
           }
           toolHopBase = nextHop;
-        } else {
+        } else if (spawnResult.status !== "cancelled") {
           const reason = spawnResult.error ?? "delegation was not accepted.";
           markPendingDelegateFailed(
             delegate,
@@ -614,6 +625,8 @@ export async function coordinateSubagentContinuation(params: {
         defaultRuntime.log(
           `[subagent-chain-hop] Tool delegate spawn failed from ${params.childSessionKey}: ${String(error)}`,
         );
+      } finally {
+        activeDispatch.release();
       }
     }
     if (deferInitialDrain) {

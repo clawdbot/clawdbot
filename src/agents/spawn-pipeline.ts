@@ -45,6 +45,8 @@ type SpawnPipelineParams<TState> = {
       purpose: native passes the controller-side requester key, ACP its
       historical completion-owner key; do not collapse them. */
   progressSessionKey: string;
+  assertRegistrationAdmission?: () => void;
+  publishRegistration?: (registration: RegisterSubagentRunInput) => void;
 };
 
 export async function runSpawnPipeline<TState>(
@@ -81,7 +83,9 @@ async function executeSpawnPipeline<TState>(
     // Keep construction and registration in one synchronous section so callers
     // can revalidate shared admission state without an interleaving await.
     registration = params.buildRegistration(state, runId);
+    params.assertRegistrationAdmission?.();
     registerSubagentRun(registration);
+    params.publishRegistration?.(registration);
     // Registry insertion takes ownership synchronously; keeping the slot would double-count it.
     params.admissionReservation?.release();
   } catch (error) {

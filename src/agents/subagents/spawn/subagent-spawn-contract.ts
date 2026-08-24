@@ -5,6 +5,29 @@ import type {
   SpawnSubagentSandboxMode,
 } from "./subagent-spawn.types.js";
 
+export type SpawnSubagentAdmissionBoundary =
+  | "child-session"
+  | "gateway-dispatch"
+  | "registry-acceptance"
+  | "lifecycle-publication";
+
+export type SpawnSubagentAdmissionAuthority = {
+  signal: AbortSignal;
+  source: {
+    ownerSessionKey: string;
+    flowId: string;
+    expectedRevision: number;
+  };
+  assertCurrent(boundary: SpawnSubagentAdmissionBoundary): void;
+};
+
+export class SpawnSubagentAdmissionCancelledError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SpawnSubagentAdmissionCancelledError";
+  }
+}
+
 export type SpawnSubagentParams = {
   task: string;
   label?: string;
@@ -60,10 +83,11 @@ export type SpawnSubagentContext = {
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   requesterRunId?: string;
+  continuationDelegateAdmission?: SpawnSubagentAdmissionAuthority;
 };
 
 export type SpawnSubagentResult = {
-  status: "accepted" | "forbidden" | "error";
+  status: "accepted" | "cancelled" | "forbidden" | "error";
   childSessionKey?: string;
   sessionKey?: string;
   runId?: string;

@@ -18,6 +18,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { InlineAttachment, InlineAttachmentMount } from "../../shared/inline-attachments.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import { partitionKnownAcceptedDelegateChildren } from "./delegate-dispatch-accepted-children.js";
+import {
+  createContinuationOwnerSessionLoader,
+  registerContinuationDelegateDispatchClaim,
+} from "./delegate-spawn-authority.js";
 import { requeueReleasedPostCompactionTaskFlowDelegate } from "./delegate-store-post-compaction.js";
 import { revalidatePendingDelegateForSpawn } from "./delegate-store.js";
 import {
@@ -313,6 +317,12 @@ export async function dispatchStagedPostCompactionDelegates(
       continue;
     }
 
+    const activeDispatch = registerContinuationDelegateDispatchClaim({
+      controller: "post-compaction",
+      delegate,
+      loadOwnerSessionEntry: createContinuationOwnerSessionLoader(sessionKey),
+      ownerSessionKey: sessionKey,
+    });
     try {
       const spawnTraceparent = resolveContinuationTraceparent(delegate.traceparent);
       if (
@@ -369,7 +379,10 @@ export async function dispatchStagedPostCompactionDelegates(
           ...(delegate.fanoutMode ? { continuationFanoutMode: delegate.fanoutMode } : {}),
           ...(spawnTraceparent ? { traceparent: spawnTraceparent } : {}),
         },
-        spawnCtx,
+        {
+          ...spawnCtx,
+          continuationDelegateAdmission: activeDispatch.authority,
+        },
       );
       if (spawnResult.status === "accepted") {
         currentChainCount = nextHop;
@@ -377,6 +390,13 @@ export async function dispatchStagedPostCompactionDelegates(
         dispatched++;
         if (delegate.flowId) {
           dispatchedFlowIds.push(delegate.flowId);
+        }
+        continue;
+      }
+      if (spawnResult.status === "cancelled") {
+        failed++;
+        if (delegate.flowId) {
+          terminalRejectedFlowIds.push(delegate.flowId);
         }
         continue;
       }
@@ -411,6 +431,8 @@ export async function dispatchStagedPostCompactionDelegates(
         { sessionKey, trusted: true },
       );
       noteTransientFailure(delegate);
+    } finally {
+      activeDispatch.release();
     }
   }
 
