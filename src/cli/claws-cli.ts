@@ -48,6 +48,11 @@ export type ClawsRemoveOptions = {
 };
 export type ClawsExportOptions = { out: string; bootstrap?: string; json?: boolean };
 export type ClawsGcOptions = { yes?: boolean; json?: boolean };
+export type ClawsReconcileOptions = {
+  keepLocal?: boolean;
+  paths?: string[];
+  json?: boolean;
+};
 
 function collectOption(value: string, previous: string[]): string[] {
   return [...previous, value];
@@ -127,6 +132,18 @@ export function registerClawsCli(program: Command) {
     .action(async (source: string, opts: ClawsAddOptions) => {
       const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
       await runClawsAddCommand(source, opts);
+    });
+
+  claws
+    .command("reconcile")
+    .description("Adopt locally modified managed state as the owned content")
+    .argument("<claw-or-agent>", "Installed package name or final agent id")
+    .option("--keep-local", "Re-record on-disk content digests as the owned state", false)
+    .option("--paths <path>", "Limit adoption to these workspace paths (repeatable)", collectOption)
+    .option("--json", "Print JSON", false)
+    .action(async (target: string, opts: ClawsReconcileOptions) => {
+      const { runClawsReconcileCommand } = await import("./claws-reconcile-command.js");
+      await runClawsReconcileCommand(target, opts);
     });
 
   claws
