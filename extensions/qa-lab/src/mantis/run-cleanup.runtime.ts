@@ -501,17 +501,20 @@ export async function removeLegacyMantisWorktrees(params: {
     worktreeDir: legacyRoot,
   });
   for (const lane of ["baseline", "candidate"] as const) {
+    // Share the absolute expiry while attributing any timeout to the lane that
+    // was active when the remaining budget ran out.
+    const laneDeadline = { ...deadline, lane };
     const worktreeDir = path.join(legacyRoot, lane);
     if (!registeredPaths.includes(path.join(normalizedLegacyRoot, lane))) {
       continue;
     }
-    if (!(await pathExistsBeforeDeadline(worktreeDir, deadline))) {
+    if (!(await pathExistsBeforeDeadline(worktreeDir, laneDeadline))) {
       throw new Error(`${lane} legacy worktree cleanup left registered path ${worktreeDir}`, {
         cause: new Error("the historical Mantis worktree path is missing"),
       });
     }
     const ownership = await runBeforeMantisCleanupDeadline(
-      deadline,
+      laneDeadline,
       "capturing a legacy worktree identity",
       async () =>
         await captureMantisDirectoryOwnership({
@@ -528,7 +531,7 @@ export async function removeLegacyMantisWorktrees(params: {
         runner: params.runner,
         worktreeDir,
       },
-      deadline,
+      laneDeadline,
     );
   }
 }

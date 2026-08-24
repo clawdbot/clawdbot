@@ -33,6 +33,7 @@ import {
   type MantisComparison,
   type MantisScenarioConfig,
 } from "./run-evidence.runtime.js";
+import { attachMantisFailureArtifact } from "./run-failure.runtime.js";
 
 export type MantisBeforeAfterOptions = {
   allowFailures?: boolean;
@@ -125,15 +126,6 @@ function formatMantisFailure(error: unknown): string {
   };
   append(error, []);
   return lines.join("\n");
-}
-
-function attachMantisFailureArtifact(error: unknown, errorPath: string): Error {
-  const artifactLine = `Mantis error details: ${errorPath}`;
-  if (error instanceof Error) {
-    error.message = `${error.message}\n${artifactLine}`;
-    return error;
-  }
-  return new Error(`${formatErrorMessage(error)}\n${artifactLine}`, { cause: error });
 }
 
 function createMantisFailureArtifactWriteError(params: {

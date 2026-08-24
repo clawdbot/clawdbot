@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { MANTIS_WORKTREE_CLEANUP_TIMEOUT_MS } from "./run-command.constants.js";
+import { findMantisFailureArtifactPath } from "./run-failure.runtime.js";
 
 type MantisCliInterrupt = "SIGINT" | "SIGTERM";
 
@@ -108,7 +109,12 @@ export async function runWithMantisCliInterrupts(
     if (!interruptedBy) {
       throw error;
     }
-    if (!interruptReason || !isExpectedMantisInterrupt(error, interruptReason)) {
+    if (interruptReason && isExpectedMantisInterrupt(error, interruptReason)) {
+      const errorPath = findMantisFailureArtifactPath(error);
+      if (errorPath) {
+        process.stderr.write(`Mantis ${interruptedBy} error details: ${errorPath}\n`);
+      }
+    } else {
       process.stderr.write(
         `Mantis ${interruptedBy} cleanup failed:\n${formatUnexpectedMantisInterruptError(error, interruptReason ?? new MantisCliInterruptError(interruptedBy))}\n`,
       );

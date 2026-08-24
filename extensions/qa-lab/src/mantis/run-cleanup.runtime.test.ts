@@ -205,6 +205,47 @@ describe("Mantis worktree cleanup", () => {
     }
   });
 
+  it("attributes a shared legacy deadline expiry to the active candidate lane", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "legacy-candidate-deadline");
+    const legacyRoot = path.join(outputDir, "worktrees");
+    const baselineDir = path.join(legacyRoot, "baseline");
+    const candidateDir = path.join(legacyRoot, "candidate");
+    await Promise.all([
+      fs.mkdir(baselineDir, { recursive: true }),
+      fs.mkdir(candidateDir, { recursive: true }),
+    ]);
+    const registeredPaths = new Set([baselineDir, candidateDir]);
+    let nowMs = 0;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const runner = vi.fn(async (_command: string, args: readonly string[], execution) => {
+      if (args[1] === "list") {
+        return successfulCommandResult(
+          [...registeredPaths].map((entry) => worktreeListOutput(entry)).join(""),
+        );
+      }
+      if (args[1] === "remove") {
+        nowMs += 60;
+        registeredPaths.delete(execution.cwd);
+        await fs.rm(execution.cwd, { force: true, recursive: true });
+        return successfulCommandResult();
+      }
+      throw new Error(`unexpected git command: ${args.join(" ")}`);
+    });
+
+    try {
+      await expect(
+        removeLegacyMantisWorktrees({
+          commandTimeouts: { ...commandTimeouts, "worktree-cleanup": 100 },
+          outputDir,
+          repoRoot,
+          runner,
+        }),
+      ).rejects.toThrow("candidate worktree cleanup exceeded its total 100ms deadline");
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("keeps high file identities exact", () => {
     const first = { dev: 1n, ino: 9_007_199_254_740_992n };
     const second = { dev: 1n, ino: 9_007_199_254_740_993n };

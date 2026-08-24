@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { expect, it, vi } from "vitest";
+import { attachMantisFailureArtifact } from "./run-failure.runtime.js";
 import type { MantisBeforeAfterOptions } from "./run.runtime.js";
 
 const { runMantisBeforeAfterCommand } = vi.hoisted(() => ({
@@ -74,6 +75,7 @@ it.each([
       INTERRUPT_SIGNALS.map((name) => [name, new Set(process.listeners(name))]),
     );
     const previousExitCode = process.exitCode;
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     let cleanupComplete = false;
     let resolveStarted: ((value: AbortSignal) => void) | undefined;
     const started = new Promise<AbortSignal>((resolve) => {
@@ -89,7 +91,10 @@ it.each([
         runtimeSignal.addEventListener("abort", () => resolve(), { once: true });
       });
       cleanupComplete = true;
-      throw runtimeSignal.reason;
+      throw attachMantisFailureArtifact(
+        new Error("Mantis artifact processing aborted", { cause: runtimeSignal.reason }),
+        "/tmp/mantis/.mantis-generations/generation-interrupted/error.txt",
+      );
     });
 
     process.exitCode = undefined;
@@ -120,11 +125,14 @@ it.each([
 
       expect(runtimeSignal.aborted).toBe(true);
       expect(cleanupComplete).toBe(true);
+      const stderr = stderrWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(stderr).toContain("/tmp/mantis/.mantis-generations/generation-interrupted/error.txt");
       expect(process.exitCode).toBe(exitCode);
       for (const name of INTERRUPT_SIGNALS) {
         expect(new Set(process.listeners(name))).toEqual(listenersBefore.get(name));
       }
     } finally {
+      stderrWrite.mockRestore();
       process.exitCode = previousExitCode;
     }
   },

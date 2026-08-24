@@ -361,13 +361,14 @@ If `git worktree add` fails before registration, Mantis can leave its empty,
 uniquely named prepared directory instead of deleting through a pathname that
 could have been replaced.
 
-Each failed attempt writes `error.txt` inside its own immutable generation, and
-the thrown error reports that exact path. Successful publication only atomically
-replaces `mantis-current.json`; it does not erase earlier failure diagnostics. A
-failure or crash before publication therefore leaves the pointer on the previous
-complete generation. Mantis does not recursively delete a worktree after Git no
-longer owns its registration: if cleanup fails, inspect the retained unique
-directory under `<output-dir>.worktrees/` together with the reported generation
+Each failed attempt writes `error.txt` inside its own immutable generation. The
+thrown error, or the concise stderr diagnostic for an expected CLI interrupt,
+reports that exact path. Successful publication only atomically replaces
+`mantis-current.json`; it does not erase earlier failure diagnostics. A failure
+or crash before publication therefore leaves the pointer on the previous complete
+generation. Mantis does not recursively delete a worktree after Git no longer
+owns its registration: if cleanup fails, inspect the retained unique directory
+under `<output-dir>.worktrees/` together with the reported generation
 `error.txt`, then remove it through Git after resolving the failure. If an owned
 path disappears while its Git registration remains, cleanup fails closed instead
 of recreating the path. At startup, Mantis also checks the exact historical
