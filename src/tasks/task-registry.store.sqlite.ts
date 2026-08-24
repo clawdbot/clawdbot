@@ -504,9 +504,13 @@ export function bindTaskRunExecution(params: {
       const kysely = getTaskRegistryKysely(db);
       const current = executeSqliteQueryTakeFirstSync(
         db,
-        kysely.selectFrom("task_runs").select("task_id").where("task_id", "=", params.taskId),
+        kysely
+          .selectFrom("task_runs")
+          .select(["task_id", "status", "ended_at"])
+          .where("task_id", "=", params.taskId),
       );
-      if (!current) {
+      const status = current ? parseTaskStatus(current.status) : undefined;
+      if (!current || (status !== "queued" && status !== "running") || current.ended_at !== null) {
         return "missing";
       }
       return bindExecutionOwnerLifecycleMetadata({

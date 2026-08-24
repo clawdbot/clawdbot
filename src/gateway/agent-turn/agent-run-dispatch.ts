@@ -16,7 +16,10 @@ import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { normalizeAgentRunTimeoutPhase } from "../../agents/run-timeout-attribution.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
-import { createExecutionStartedOwnerBinding } from "../../audit/execution-owner-binding.js";
+import {
+  createExecutionStartedOwnerBinding,
+  isRetainedExecutionOwnerBinding,
+} from "../../audit/execution-owner-binding.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
@@ -200,7 +203,9 @@ export function dispatchAgentRunFromGateway(params: {
           try {
             const taskResult = bindTaskRunExecution({ admitted, taskId: trackedTask.taskId });
             const flowResult = trackedTask.parentFlowId
-              ? bindTaskFlowExecution({ admitted, flowId: trackedTask.parentFlowId })
+              ? isRetainedExecutionOwnerBinding(taskResult)
+                ? bindTaskFlowExecution({ admitted, flowId: trackedTask.parentFlowId })
+                : taskResult
               : undefined;
             if (
               [taskResult, flowResult].some(

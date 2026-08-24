@@ -8,15 +8,28 @@ import {
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
+import { createManagedTaskFlow } from "../../tasks/task-flow-registry.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { saveCronStore } from "../store.js";
+import {
+  claimCronRunReceiptInDatabase,
+  finishCronRunReceipt,
+  prepareCronRunReceiptClaim,
+} from "../store/run-receipt-store.js";
 import { run } from "./ops-run.js";
 import { createCronServiceState } from "./state.js";
+import {
+  createCronOwnerExecutionIdentityAdmission,
+  tryCreateCronTaskRunHandle,
+} from "./task-runs.js";
 
 const fixtures = setupCronRegressionFixtures({
   prefix: "cron-service-execution-binding-",
@@ -114,6 +127,104 @@ describe("cron run execution binding", () => {
           context_id: "context-exact",
           execution_id: "execution-exact",
           status: "succeeded",
+        });
+      },
+    );
+  });
+
+  it("does not partially bind task or flow rows after the cron owner is replaced", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-cron-stale-execution-binding-" },
+      async () => {
+        resetTaskRegistryForTests();
+        resetTaskFlowRegistryForTests();
+        const store = fixtures.makeStorePath();
+        const dueAt = Date.parse("2026-02-06T10:06:06.525Z");
+        const job = {
+          ...createDueIsolatedJob({
+            id: "stale-owner-binding",
+            nowMs: dueAt,
+            nextRunAtMs: dueAt,
+          }),
+          agentId: "main",
+        };
+        await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+        const state = createCronServiceState({
+          cronEnabled: true,
+          storePath: store.storePath,
+          log: noopLogger,
+          nowMs: () => dueAt,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(),
+        });
+        const prepared = prepareCronRunReceiptClaim({
+          storePath: store.storePath,
+          job,
+          agentId: job.agentId!,
+          startedAtMs: dueAt,
+        });
+        const initial = runOpenClawStateWriteTransaction(({ db }) =>
+          claimCronRunReceiptInDatabase({
+            database: db,
+            prepared,
+            resolveAgentId: (current) => current.agentId!,
+          }),
+        );
+        const task = tryCreateCronTaskRunHandle({ state, job, startedAt: dueAt });
+        expect(task).toBeDefined();
+        const flow = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/stale-owner-binding",
+          goal: "Reject partial stale-owner provenance",
+          status: "running",
+        });
+        expect(flow).not.toBeNull();
+        if (!task || !flow) {
+          throw new Error("expected live task and flow owners");
+        }
+        const executionIdentity = createCronOwnerExecutionIdentityAdmission({
+          state,
+          runReceipt: initial,
+          taskId: task.taskId,
+          flowId: flow.flowId,
+        });
+        const admitted = {
+          operationalRunInstance: { instanceId: "instance-stale", runId: "run-stale" },
+          executionIdentityToken: createExecutionIdentityAdmissionToken("run-stale", {
+            contextId: "context-stale",
+            executionId: "execution-stale",
+            now: dueAt,
+          }),
+        } satisfies AdmittedRunContext;
+        executionIdentity.onPostAdmission?.(admitted);
+        const db = openOpenClawStateDatabase().db;
+        db.prepare("UPDATE cron_run_receipts SET owner_pid = ? WHERE receipt_id = ?").run(
+          2_147_483_647,
+          initial.receiptId,
+        );
+        const replacementPrepared = prepareCronRunReceiptClaim({
+          storePath: store.storePath,
+          job,
+          agentId: job.agentId!,
+          startedAtMs: dueAt + 1,
+        });
+        const replacement = runOpenClawStateWriteTransaction(({ db: transactionDb }) =>
+          claimCronRunReceiptInDatabase({
+            database: transactionDb,
+            prepared: replacementPrepared,
+            resolveAgentId: (current) => current.agentId!,
+          }),
+        );
+
+        executionIdentity.onExecutionStarted?.();
+        expect(
+          tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
+        ).toBe(false);
+        finishCronRunReceipt({
+          handle: replacement,
+          status: "skipped",
+          finishedAtMs: dueAt + 2,
         });
       },
     );

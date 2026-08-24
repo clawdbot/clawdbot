@@ -199,22 +199,18 @@ export function bindCronRunReceiptExecution(params: {
     "cron.run-receipt.execution-binding",
     params.options ?? {},
     (database) => {
-      const current = executeSqliteQueryTakeFirstSync(
-        database,
-        query(database)
-          .selectFrom("cron_run_receipts")
-          .select("receipt_id")
-          .where("receipt_id", "=", params.handle.receiptId)
-          .where("store_key", "=", params.handle.storeKey)
-          .where("job_id", "=", params.handle.jobId),
-      );
-      if (!current) {
+      try {
+        assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle });
+      } catch (error) {
+        if (!(error instanceof CronRunReceiptRevisionError)) {
+          throw error;
+        }
         return "missing";
       }
       return bindExecutionOwnerLifecycleMetadata({
         db: database,
         ownerKind: "cron",
-        ownerId: current.receipt_id,
+        ownerId: params.handle.receiptId,
         binding,
       });
     },

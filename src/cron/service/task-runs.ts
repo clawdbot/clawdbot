@@ -2,7 +2,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { createExecutionStartedOwnerBinding } from "../../audit/execution-owner-binding.js";
+import {
+  createExecutionStartedOwnerBinding,
+  isRetainedExecutionOwnerBinding,
+} from "../../audit/execution-owner-binding.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import {
@@ -87,10 +90,16 @@ export function createCronOwnerExecutionIdentityAdmission(params: {
         handle: params.runReceipt,
       });
       const taskResult = params.taskId
-        ? bindTaskRunExecution({ admitted, taskId: params.taskId })
-        : "missing";
+        ? isRetainedExecutionOwnerBinding(receiptResult)
+          ? bindTaskRunExecution({ admitted, taskId: params.taskId })
+          : receiptResult
+        : undefined;
+      const flowParentResult = params.taskId ? taskResult : receiptResult;
       const flowResult = params.flowId
-        ? bindTaskFlowExecution({ admitted, flowId: params.flowId })
+        ? isRetainedExecutionOwnerBinding(receiptResult) &&
+          isRetainedExecutionOwnerBinding(flowParentResult)
+          ? bindTaskFlowExecution({ admitted, flowId: params.flowId })
+          : flowParentResult
         : undefined;
       if (
         [receiptResult, taskResult, flowResult].some(

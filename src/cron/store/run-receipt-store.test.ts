@@ -130,6 +130,38 @@ describe("cron run receipt store", () => {
     ]);
   });
 
+  it("rejects a delayed binding after a successor replaces its exact owner", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeJob("stale-binding");
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const abandoned = claim(storePath, job, 230);
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE cron_run_receipts SET owner_pid = ? WHERE receipt_id = ?")
+      .run(2_147_483_647, abandoned.receiptId);
+    const replacement = claim(storePath, job, 240);
+    const admitted: AdmittedRunContext = {
+      operationalRunInstance: { instanceId: "instance-stale", runId: "run-stale" },
+      executionIdentityToken: createExecutionIdentityAdmissionToken("run-stale", {
+        contextId: "context-stale",
+        executionId: "execution-stale",
+      }),
+    };
+
+    expect(bindCronRunReceiptExecution({ admitted, handle: abandoned })).toBe("missing");
+    expect(bindCronRunReceiptExecution({ admitted, handle: replacement })).toBe("bound");
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare(
+          `SELECT owner_id
+           FROM execution_owner_lifecycle_bindings
+           WHERE owner_kind = 'cron'`,
+        )
+        .all(),
+    ).toEqual([{ owner_id: replacement.receiptId }]);
+
+    finishCronRunReceipt({ handle: replacement, status: "ok", finishedAtMs: 250 });
+  });
+
   it("prunes old terminal receipts while preserving the active and 64 newest rows", async () => {
     const { storePath } = await makeStorePath();
     const job = makeJob("retention");
@@ -175,12 +207,13 @@ describe("cron run receipt store", () => {
     expect(
       openOpenClawStateDatabase()
         .db.prepare(
-          `SELECT owner_id
-           FROM execution_owner_lifecycle_bindings
-           WHERE owner_kind = 'cron'
+          `SELECT binding.owner_id
+           FROM execution_owner_lifecycle_bindings AS binding
+           JOIN cron_run_receipts AS receipt ON receipt.receipt_id = binding.owner_id
+           WHERE binding.owner_kind = 'cron' AND receipt.job_id = ?
            ORDER BY owner_id`,
         )
-        .all(),
+        .all(job.id),
     ).toEqual(
       [active.receiptId, finishedReceiptIds.at(-1)]
         .toSorted((left, right) => (left ?? "").localeCompare(right ?? ""))

@@ -57,13 +57,39 @@ function serializeJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
 
-function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
+function resolveFlowSyncMode(row: {
+  sync_mode: string | null;
+  shape: string | null;
+}): TaskFlowSyncMode {
   // Older single_task rows did not persist sync_mode; preserve their mirrored semantics.
   const syncMode = parseOptionalTaskFlowSyncMode(row.sync_mode);
   if (syncMode) {
     return syncMode;
   }
   return row.shape === "single_task" ? "task_mirrored" : "managed";
+}
+
+function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
+  return resolveFlowSyncMode(row);
+}
+
+function isFlowExecutionOwnerActive(row: {
+  sync_mode: string | null;
+  shape: string | null;
+  status: string;
+  cancel_requested_at: number | null;
+  ended_at: number | null;
+}): boolean {
+  const syncMode = resolveFlowSyncMode(row);
+  const status = parseTaskFlowStatus(row.status);
+  if (row.cancel_requested_at !== null || row.ended_at !== null) {
+    return false;
+  }
+  // Mirrored `blocked` is derived from a terminal task; managed `blocked`
+  // remains live while its controller waits for the blocking task.
+  return syncMode === "task_mirrored"
+    ? status === "queued" || status === "running"
+    : status === "queued" || status === "running" || status === "waiting" || status === "blocked";
 }
 
 function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
@@ -280,9 +306,12 @@ export function bindTaskFlowExecution(params: {
       const kysely = getFlowRegistryKysely(db);
       const current = executeSqliteQueryTakeFirstSync(
         db,
-        kysely.selectFrom("flow_runs").select("flow_id").where("flow_id", "=", params.flowId),
+        kysely
+          .selectFrom("flow_runs")
+          .select(["flow_id", "sync_mode", "shape", "status", "cancel_requested_at", "ended_at"])
+          .where("flow_id", "=", params.flowId),
       );
-      if (!current) {
+      if (!current || !isFlowExecutionOwnerActive(current)) {
         return "missing";
       }
       return bindExecutionOwnerLifecycleMetadata({

@@ -52,7 +52,7 @@ function createOldOwnerDatabase() {
          status, owner_pid, started_at_ms, finished_at_ms
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run("cron-1", "default", "job-1", "revision-1", "main", "run-1", "ok", 1, 60, 70);
+    .run("cron-1", "default", "job-1", "revision-1", "main", "run-1", "running", 1, 60, null);
   oldReader
     .prepare(
       `INSERT INTO task_runs (
@@ -66,7 +66,7 @@ function createOldOwnerDatabase() {
       "owner-1",
       "system",
       "private",
-      "succeeded",
+      "running",
       "not_applicable",
       "silent",
       61,
@@ -77,7 +77,7 @@ function createOldOwnerDatabase() {
          flow_id, owner_key, status, notify_policy, goal, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run("flow-1", "owner-1", "succeeded", "silent", "private", 62, 70);
+    .run("flow-1", "owner-1", "running", "silent", "private", 62, 62);
   oldReader.close();
   return { path: pathname };
 }
@@ -154,6 +154,9 @@ describe("owner-native execution lifecycle receipts", () => {
         options,
       }),
     ).toBe("mismatch");
+    current.prepare("UPDATE cron_run_receipts SET status = 'ok', finished_at_ms = 70").run();
+    current.prepare("UPDATE task_runs SET status = 'succeeded'").run();
+    current.prepare("UPDATE flow_runs SET status = 'succeeded', ended_at = 70").run();
 
     closeOpenClawStateDatabaseForTest();
     const oldReader = new DatabaseSync(options.path);
@@ -220,6 +223,9 @@ describe("owner-native execution lifecycle receipts", () => {
     bindTaskRunExecution({ admitted: admitted(), taskId: "task-1", options });
     bindTaskFlowExecution({ admitted: admitted(), flowId: "flow-1", options });
     const db = openOpenClawStateDatabase(options).db;
+    db.prepare("UPDATE cron_run_receipts SET status = 'ok', finished_at_ms = 70").run();
+    db.prepare("UPDATE task_runs SET status = 'succeeded'").run();
+    db.prepare("UPDATE flow_runs SET status = 'succeeded', ended_at = 70").run();
     db.prepare(
       `INSERT INTO cron_run_receipts (
          receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
@@ -345,10 +351,9 @@ describe("owner-native execution lifecycle receipts", () => {
     const db = openOpenClawStateDatabase(options).db;
 
     for (const status of ["ok", "error", "skipped", "interrupted", "superseded"]) {
-      db.prepare("UPDATE cron_run_receipts SET status = ? WHERE receipt_id = ?").run(
-        status,
-        "cron-1",
-      );
+      db.prepare(
+        "UPDATE cron_run_receipts SET status = ?, finished_at_ms = 70 WHERE receipt_id = ?",
+      ).run(status, "cron-1");
       expect(
         pageOwnerLifecycleReceipts({ stage: "cron", context, limit: 1, options }).entries[0]
           ?.receipt.decision,

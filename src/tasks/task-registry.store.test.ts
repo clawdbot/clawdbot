@@ -16,6 +16,7 @@ import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -1283,6 +1284,71 @@ describe("task-registry store runtime", () => {
             )
             .all(),
         ).toEqual([{ owner_id: "task-large-1199" }]);
+      },
+    );
+  });
+
+  it("binds only live task owners and retains their metadata after terminalization", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-binding-owner-" },
+      async () => {
+        const active = { ...createStoredTask(), taskId: "task-binding-active" };
+        const terminal: TaskRecord = {
+          ...createStoredTask(),
+          taskId: "task-binding-terminal",
+          status: "succeeded",
+          endedAt: 200,
+        };
+        const stale: TaskRecord = {
+          ...createStoredTask(),
+          taskId: "task-binding-stale",
+          endedAt: 199,
+        };
+        saveTaskRegistryStateToSqlite({
+          tasks: new Map([
+            [active.taskId, active],
+            [terminal.taskId, terminal],
+            [stale.taskId, stale],
+          ]),
+          deliveryStates: new Map(),
+        });
+        const admitted: AdmittedRunContext = {
+          operationalRunInstance: { instanceId: "instance-task-owner", runId: "run-task-owner" },
+          executionIdentityToken: createExecutionIdentityAdmissionToken("run-task-owner", {
+            contextId: "context-task-owner",
+            executionId: "execution-task-owner",
+          }),
+        };
+
+        expect(
+          tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
+        ).toBe(false);
+        expect(bindTaskRunExecution({ admitted, taskId: terminal.taskId })).toBe("missing");
+        expect(bindTaskRunExecution({ admitted, taskId: stale.taskId })).toBe("missing");
+        expect(
+          tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
+        ).toBe(false);
+        expect(bindTaskRunExecution({ admitted, taskId: active.taskId })).toBe("bound");
+
+        const finished = { ...active, status: "succeeded" as const, endedAt: 210 };
+        saveTaskRegistryStateToSqlite({
+          tasks: new Map([
+            [finished.taskId, finished],
+            [terminal.taskId, terminal],
+            [stale.taskId, stale],
+          ]),
+          deliveryStates: new Map(),
+        });
+        expect(bindTaskRunExecution({ admitted, taskId: finished.taskId })).toBe("missing");
+        expect(
+          openOpenClawStateDatabase()
+            .db.prepare(
+              `SELECT owner_id
+               FROM execution_owner_lifecycle_bindings
+               WHERE owner_kind = 'task'`,
+            )
+            .all(),
+        ).toEqual([{ owner_id: active.taskId }]);
       },
     );
   });
