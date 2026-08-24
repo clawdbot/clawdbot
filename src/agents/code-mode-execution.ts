@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  observeAgentRunApprovalWait,
+  type AgentRunApprovalWait,
+} from "./agent-run-approval-wait.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import {
   createCodeModeCatalogProjection,
@@ -112,6 +116,7 @@ export async function runCodeModeExec(params: {
     reservedNames: namespaceRuntime.descriptors.map((descriptor) => descriptor.globalName),
   });
   const apiFiles = createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled);
+  const approvalWait = observeAgentRunApprovalWait(params.ctx);
   try {
     const source = await awaitCodeModeDeadline({
       operation: () => prepareSource({ code: params.code, language: params.language, config }),
@@ -153,6 +158,7 @@ export async function runCodeModeExec(params: {
       catalogProjection,
       namespaceRuntime,
       bridgeDispatch,
+      approvalWait,
       signal: params.signal,
       onUpdate: params.onUpdate,
     });
@@ -172,6 +178,8 @@ export async function runCodeModeExec(params: {
       replaySafe: params.restartSafe,
       telemetry: telemetry(runtime),
     };
+  } finally {
+    approvalWait.dispose();
   }
 }
 
@@ -188,6 +196,7 @@ async function waitForPending(
   pending: readonly PendingBridgeState[],
   settlementMode: CodeModeSettlementMode,
   timeoutMs: number,
+  approvalWait: AgentRunApprovalWait,
   signal?: AbortSignal,
 ): Promise<boolean> {
   // Abort wins even over already-settled requests: callers treat `false` as
@@ -210,7 +219,24 @@ async function waitForPending(
     return await Promise.race([
       bridgeReady,
       new Promise<boolean>((resolve) => {
-        timer = setTimeout(() => resolve(false), timeoutMs);
+        let remainingMs = timeoutMs;
+        let resumedAtMs = Date.now();
+        const arm = () => {
+          resumedAtMs = Date.now();
+          timer = setTimeout(() => resolve(false), Math.max(1, remainingMs));
+        };
+        approvalWait.onChange = (approvalPending) => {
+          if (approvalPending) {
+            // Preserve the unused guest budget while its owning approval remains inline.
+            clearTimeout(timer);
+            remainingMs = Math.max(1, remainingMs - (Date.now() - resumedAtMs));
+          } else {
+            arm();
+          }
+        };
+        if (!approvalWait.pending) {
+          arm();
+        }
       }),
       ...(signal
         ? [
@@ -228,6 +254,7 @@ async function waitForPending(
     if (signal && onAbort) {
       signal.removeEventListener("abort", onAbort);
     }
+    approvalWait.onChange = undefined;
   }
 }
 
@@ -248,6 +275,7 @@ async function settleCodeModeResult(params: {
   activeRunId?: string;
   reservedActiveRunSlot?: boolean;
   bridgeDispatch: CodeModeBridgeDispatchState;
+  approvalWait: AgentRunApprovalWait;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }) {
@@ -265,7 +293,7 @@ async function settleCodeModeResult(params: {
   // produced them. The deadline is also the only bound on sequential drain
   // rounds; maxPendingToolCalls stays a per-batch concurrency cap enforced in
   // the worker.
-  const settleDeadline = params.deadlineMs;
+  const settleDeadline = () => params.deadlineMs + params.approvalWait.pausedMs;
   const abortedResult = () => ({
     status: "failed" as const,
     error: "code mode execution aborted",
@@ -305,7 +333,7 @@ async function settleCodeModeResult(params: {
       }
       break;
     }
-    const remainingMs = settleDeadline - Date.now();
+    const remainingMs = settleDeadline() - Date.now();
     if (remainingMs <= 0) {
       break;
     }
@@ -335,7 +363,7 @@ async function settleCodeModeResult(params: {
           namespaceRuntime: params.namespaceRuntime,
           parentToolCallId: params.parentToolCallId,
           codeModeRunId: params.codeModeReplayId,
-          deadlineMs: settleDeadline,
+          deadlineMs: settleDeadline(),
           activeRunId,
           ctx: params.ctx,
           signal: params.signal,
@@ -347,10 +375,11 @@ async function settleCodeModeResult(params: {
         pending,
         result.settlementMode,
         remainingMs,
+        params.approvalWait,
         params.signal,
       );
       const resumeBudgetMs = ready
-        ? usableResumeBudgetMs(settleDeadline, params.config)
+        ? usableResumeBudgetMs(settleDeadline(), params.config)
         : undefined;
       if (!ready || resumeBudgetMs === undefined) {
         // Abort drops the run instead of parking it: a suspended snapshot for a
@@ -470,7 +499,7 @@ async function settleCodeModeResult(params: {
             namespaceRuntime: params.namespaceRuntime,
             parentToolCallId: params.parentToolCallId,
             codeModeRunId: params.codeModeReplayId,
-            deadlineMs: settleDeadline,
+            deadlineMs: settleDeadline(),
             activeRunId,
             ctx: params.ctx,
             signal: params.signal,
@@ -513,7 +542,7 @@ async function settleCodeModeResult(params: {
       catalogProjection: params.catalogProjection,
       namespaceRuntime: params.namespaceRuntime,
       output,
-      deadlineMs: settleDeadline,
+      deadlineMs: settleDeadline(),
       deliveredOutputCount,
       reservedActiveRunSlot: params.reservedActiveRunSlot,
       replaySafe: params.replaySafe,
@@ -581,15 +610,19 @@ export async function runWait(params: {
   // One wait call shares a single wall-clock deadline across draining the prior
   // pending calls, the resume worker, and the inline settle phase.
   const deadlineMs = Date.now() + state.config.timeoutMs;
+  const approvalWait = observeAgentRunApprovalWait(state.ctx);
   let releaseActiveRunSlot: (() => void) | undefined;
   try {
     const ready = await waitForPending(
       state.pending,
       state.settlementMode,
       Math.max(1, deadlineMs - Date.now()),
+      approvalWait,
       params.signal,
     );
-    const resumeBudgetMs = ready ? usableResumeBudgetMs(deadlineMs, state.config) : undefined;
+    const resumeBudgetMs = ready
+      ? usableResumeBudgetMs(deadlineMs + approvalWait.pausedMs, state.config)
+      : undefined;
     if (!ready || resumeBudgetMs === undefined) {
       // An aborted wait drops the suspended run: nothing will resume it, and
       // parking it would pin a process-global active-run slot until TTL expiry.
@@ -662,6 +695,7 @@ export async function runWait(params: {
       catalogProjection: state.catalogProjection,
       namespaceRuntime: state.namespaceRuntime,
       bridgeDispatch: state.bridgeDispatch,
+      approvalWait,
       deliveredOutputCount: outputTruncated ? 0 : state.deliveredOutputCount,
       pending,
       activeRunId: state.runId,
@@ -686,6 +720,7 @@ export async function runWait(params: {
       telemetry: telemetry(state.runtime),
     };
   } finally {
+    approvalWait.dispose();
     releaseActiveRunSlot?.();
     resumingRunIds.delete(state.runId);
   }

@@ -10,7 +10,6 @@ import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chun
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveDiscordAccount } from "./accounts.js";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
 import { renderDiscordMarkdown } from "./markdown.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
@@ -159,12 +158,17 @@ function toDiscordSendResult(
 async function resolveDiscordSendTarget(
   to: string,
   opts: DiscordSendOpts,
-): Promise<{ rest: RequestClient; request: DiscordClientRequest; channelId: string }> {
+): Promise<{
+  rest: RequestClient;
+  request: DiscordClientRequest;
+  channelId: string;
+  account: ReturnType<typeof createDiscordClient>["account"];
+}> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord send target resolution");
-  const { rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
+  const { rest, request, account } = createDiscordClient({ ...opts, cfg });
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, account.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
-  return { rest, request, channelId };
+  return { rest, request, channelId, account };
 }
 
 export async function sendMessageDiscord(
@@ -173,10 +177,7 @@ export async function sendMessageDiscord(
   opts: DiscordSendOpts,
 ): Promise<DiscordSendResult> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord send");
-  const accountInfo = resolveDiscordAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
+  const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "discord",
@@ -202,8 +203,7 @@ export async function sendMessageDiscord(
     accountId: accountInfo.accountId,
     mentionAliases: accountInfo.config.mentionAliases,
   });
-  const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   // Forum/Media channels reject POST /messages; auto-create a thread post instead.
@@ -242,10 +242,10 @@ export async function sendMessageDiscord(
     });
     let threadRes: { id: string; message?: { id: string; channel_id: string } };
     try {
-      await opts.onPlatformSendDispatch?.();
       threadRes = (await request(
-        () =>
-          createThread<{ id: string; message?: { id: string; channel_id: string } }>(
+        async () => {
+          await opts.onPlatformSendDispatch?.();
+          return createThread<{ id: string; message?: { id: string; channel_id: string } }>(
             rest,
             channelId,
             {
@@ -259,7 +259,8 @@ export async function sendMessageDiscord(
                 message: starterBody,
               },
             },
-          ),
+          );
+        },
         "forum-thread",
         { safety: "non-idempotent-create" },
       )) as { id: string; message?: { id: string; channel_id: string } };
@@ -490,12 +491,13 @@ async function resolveDiscordStructuredSendContext(
   rewrittenContent?: string;
   suppressEmbeds: boolean;
 }> {
-  const cfg = requireRuntimeConfig(opts.cfg, "Discord structured send");
-  const accountInfo = resolveDiscordAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
+  requireRuntimeConfig(opts.cfg, "Discord structured send");
+  const {
+    rest,
+    request,
+    channelId,
+    account: accountInfo,
+  } = await resolveDiscordSendTarget(to, opts);
   const content = opts.content?.trim();
   const rewrittenContent = content
     ? rewriteDiscordKnownMentions(content, {
@@ -505,9 +507,13 @@ async function resolveDiscordStructuredSendContext(
     : undefined;
   return {
     send: async (kind, body) => {
-      await opts.onPlatformSendDispatch?.();
       const result = (await request(
-        () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+        async () => {
+          await opts.onPlatformSendDispatch?.();
+          return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
+            body,
+          });
+        },
         kind,
         { safety: "nonce-protected-create" },
       )) as { id: string; channel_id: string };

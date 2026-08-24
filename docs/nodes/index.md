@@ -324,7 +324,7 @@ Or per session:
 
 Once set, any `exec` call with `host=node` runs on the node host (subject to the node allowlist/approvals).
 
-`host=auto` will not implicitly choose the node on its own, but an explicit per-call `host=node` request is allowed from `auto`. If you want node exec to be the default for the session, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
+`host=auto` will not implicitly choose the node on its own. An explicit per-call `host=node` request is allowed from `auto` only when no sandbox runtime is active; while a sandbox runtime is active, `auto` rejects it. To run on a node from a sandboxed session, or to make node exec the session default, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
 
 Related:
 
@@ -471,9 +471,10 @@ while its receipt still matches the Gateway's current build.
 
 You can also enroll and enable a service host in one step with
 `openclaw connect --service --session-host`. In Control UI New Session, a
-write-scoped operator selects a Gateway project or folder and then the paired
-device. OpenClaw creates a session-owned managed worktree on the Gateway,
-dispatches it with the exact `deviceId`, and sends the first turn only after the
+write-scoped operator selects a Gateway project or folder and then either a
+specific paired device or **Any available node**. OpenClaw creates a
+session-owned managed worktree on the Gateway, dispatches it with the exact
+`deviceId` or `autoDevice: true`, and sends the first turn only after the chosen
 device placement becomes active. New Session does not bind `execNode` or browse
 the device filesystem.
 
@@ -491,10 +492,11 @@ Gateway does not fall back to the node's local OpenClaw package or an older
 supervisor dialect.
 
 This setting enables supervised session turns on the paired device, including
-Gateway-owned workspace transfer and result reconciliation. Each node runs at
-most two worker processes by default. A third launch waits up to 10 seconds for
-a durable slot; while both slots are occupied, the node remains available for
-status and cancellation but is not selected for a new session turn.
+Gateway-owned workspace transfer and result reconciliation. By default, each
+node has one worker slot per available CPU core. Configure the slot count with
+`nodeHost.workerRuns.capacity`. Launches beyond capacity wait up to 10 seconds
+for a durable slot; while all slots are occupied, the node remains available
+for status and cancellation but is not selected for a new session turn.
 
 The picker derives every device row from `environments.list`. Every selected
 runtime requires an available, connected paired session host. OpenClaw worker
@@ -509,6 +511,17 @@ visible but disabled with an actionable reason. Enable hosting with
 `openclaw connect --service --session-host` or the `nodeHost.workerRuns`
 setting, then restart the node host. Update-required hosts must be upgraded and
 restarted before selection.
+
+Choose **Any available node** to let the Gateway select an eligible paired,
+connected session host. For OpenClaw worker turns, it selects the host with the
+most available worker slots and breaks ties by device ID. Runtimes that do not
+consume worker slots choose the eligible host with the lowest device ID instead.
+If a selected host disconnects, reaches capacity, or otherwise becomes
+ineligible before dispatch finishes, the Gateway tries the next ranked host, up
+to three hosts total. Other dispatch failures are returned immediately. If no
+host is eligible, the error explains whether no session hosts are paired, hosts
+are disconnected or at capacity, a host needs an update, or the selected runtime
+is unsupported. The dispatch response identifies the device that was selected.
 
 When a known session host disconnects, its paired-device record preserves only
 the last accepted current-v6 hosting consent. The offline row remains visible

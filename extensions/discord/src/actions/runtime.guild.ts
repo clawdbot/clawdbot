@@ -7,6 +7,7 @@ import {
   type ActionGate,
   jsonResult,
   readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
   type DiscordActionConfig,
@@ -376,11 +377,23 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("reactions")) {
         throw new Error("Discord reactions are disabled.");
       }
-      const guildId = readStringParam(params, "guildId", {
-        required: true,
-      });
+      const guildId = await resolveGuildIdForGuildAdminAction({ values: params, accountId, cfg });
+      if (!guildId) {
+        throw new Error("Discord emoji listing requires guildId or a server channel.");
+      }
       await assertGuildMetadataReadAllowed(guildId);
-      const emojis = await discordGuildActionRuntime.listGuildEmojisDiscord(guildId, withOpts());
+      const limit = Math.min(readPositiveIntegerParam(params, "limit") ?? 100, 100);
+      const emojis = (await discordGuildActionRuntime.listGuildEmojisDiscord(guildId, withOpts()))
+        .flatMap(({ name, id, animated }) =>
+          name && id
+            ? [{ name, identifier: `${name}:${id}`, ...(animated ? { animated } : {}) }]
+            : [],
+        )
+        .toSorted(
+          (left, right) =>
+            left.name.localeCompare(right.name) || left.identifier.localeCompare(right.identifier),
+        )
+        .slice(0, limit);
       return jsonResult({ ok: true, emojis });
     }
     case "emojiUpload": {

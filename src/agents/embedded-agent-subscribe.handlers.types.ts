@@ -212,6 +212,7 @@ export type EmbeddedAgentSubscribeState = {
   /** Per-URL local-media trust; keys are normalized pending media URLs. */
   pendingToolMediaTrustByUrl: Map<string, boolean>;
   pendingToolAudioAsVoice: boolean;
+  pendingToolMediaDeliveryFailed: boolean;
   hasToolMediaBlockReply: boolean;
   visibleBlockReplyCount: number;
   pendingAssistantReplyDirectives?: Pick<
@@ -334,6 +335,7 @@ type ToolHandlerParams = Pick<
   | "sessionKey"
   | "currentChannelId"
   | "currentMessagingTarget"
+  | "currentAccountId"
   | "currentThreadId"
   | "currentMessageId"
   | "replyToMode"

@@ -26,6 +26,7 @@ type GatewayStartedRuntime = GatewayKernelRuntime & GatewayHttpTransport;
 export async function finishGatewayStartup(params: {
   kernelRuntime: GatewayStartedRuntime;
   port: number;
+  bootId: string;
   opts: GatewayStartedRuntime["opts"];
   log: GatewayLogger;
   logHealth: GatewayLogger;
@@ -42,6 +43,7 @@ export async function finishGatewayStartup(params: {
   const {
     kernelRuntime: runtime,
     port,
+    bootId,
     opts,
     log,
     logHealth,
@@ -148,6 +150,7 @@ export async function finishGatewayStartup(params: {
     attachGatewayWsHandlers({
       wss,
       clients,
+      bootId,
       preauthConnectionBudget,
       port,
       gatewayHost: bindHost ?? undefined,

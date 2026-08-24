@@ -635,11 +635,13 @@ describe("attachGatewayWsConnectionHandler", () => {
   it.each([1001, 1006])(
     "demotes local app startup abort code %i before the first frame",
     async (closeCode) => {
+      let startupPending = true;
       const { socket, logWsControl } = await connectTestWs({
         headers: { "user-agent": "OpenClaw/2607000290 CFNetwork/3860 Darwin/25" },
-        options: { isStartupPending: () => true },
+        options: { isStartupPending: () => startupPending },
       });
 
+      startupPending = false;
       socket.emit("close", closeCode, Buffer.alloc(0));
 
       expect(logWsControl.debug).toHaveBeenCalledWith(

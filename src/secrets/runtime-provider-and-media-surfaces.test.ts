@@ -674,6 +674,77 @@ describe("secrets runtime provider and media surfaces", () => {
     );
   });
 
+  it.each([
+    ["bare shorthand", "$MEMORY_REMOTE_KEY", "resolved-memory-key"],
+    ["braced shorthand", "${MEMORY_REMOTE_KEY}", "resolved-memory-key"],
+    ["missing bare shorthand", "$MISSING_MEMORY_KEY", envTokenRef("MISSING_MEMORY_KEY")],
+    ["missing braced shorthand", "${MISSING_MEMORY_KEY}", envTokenRef("MISSING_MEMORY_KEY")],
+    ["retired marker", "secretref-env:MEMORY_REMOTE_KEY", "secretref-env:MEMORY_REMOTE_KEY"],
+  ] as const)(
+    "materializes memory %s through its canonical Gateway snapshot",
+    async (_, apiKey, expected) => {
+      const usesConfiguredProvider = apiKey.startsWith("$") && typeof expected === "string";
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          ...(usesConfiguredProvider
+            ? {
+                secrets: {
+                  providers: { memoryenv: { source: "env", allowlist: ["MEMORY_REMOTE_KEY"] } },
+                  defaults: { env: "memoryenv" },
+                },
+              }
+            : {}),
+          memory: { search: { remote: { apiKey } } },
+        }),
+        env: { MEMORY_REMOTE_KEY: "resolved-memory-key" },
+        includeAuthStoreRefs: false,
+        allowUnavailableSecretOwners: true,
+      });
+
+      expect(snapshot.config.memory?.search?.remote?.apiKey).toEqual(expected);
+      if (typeof expected !== "string") {
+        expect(snapshot.degradedOwners).toMatchObject([
+          { ownerKind: "capability", ownerId: "memory-provider:main", degradationState: "cold" },
+        ]);
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "an unknown provider",
+      ref: { source: "env", provider: "missing", id: "MEMORY_REMOTE_KEY" },
+      secrets: undefined,
+      code: "SECRET_PROVIDER_NOT_CONFIGURED",
+    },
+    {
+      name: "a source-mismatched provider",
+      ref: { source: "env", provider: "memorystore", id: "MEMORY_REMOTE_KEY" },
+      secrets: { providers: { memorystore: { source: "store" } } },
+      code: "SECRET_PROVIDER_INVALID",
+    },
+    {
+      name: "a denied env allowlist",
+      ref: { source: "env", provider: "memoryenv", id: "MEMORY_REMOTE_KEY" },
+      secrets: {
+        providers: { memoryenv: { source: "env", allowlist: ["OTHER_MEMORY_KEY"] } },
+      },
+      code: "SECRET_REF_POLICY_DENIED",
+    },
+  ])("rejects memory refs using $name before materialization", async ({ ref, secrets, code }) => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          ...(secrets ? { secrets } : {}),
+          memory: { search: { remote: { apiKey: ref } } },
+        }),
+        env: { MEMORY_REMOTE_KEY: "ambient-memory-key" },
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toMatchObject({ code });
+  });
+
   it("isolates an inherited memory ref to its exact agent owner", async () => {
     const missingRef = envTokenRef("MISSING_TEST_VALUE");
     const healthyValue = "test-token-placeholder";

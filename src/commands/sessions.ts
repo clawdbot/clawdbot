@@ -20,6 +20,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveFreshSessionTotalTokens, resolveSessionTotalTokens } from "../config/sessions.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
@@ -341,18 +342,16 @@ export async function sessionsCommand(
   if (opts.active !== undefined) {
     const parsed = parseStrictPositiveInteger(opts.active);
     if (parsed === undefined) {
-      runtime.error("--active must be a positive number of minutes, for example --active 30.");
-      runtime.exit(1);
-      return;
+      const message = "--active must be a positive number of minutes, for example --active 30.";
+      throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
     }
     activeMinutes = parsed;
   }
 
   const limit = parseSessionsLimit(opts.limit);
   if (limit === null) {
-    runtime.error('--limit must be a positive integer or "all", for example --limit 25.');
-    runtime.exit(1);
-    return;
+    const message = '--limit must be a positive integer or "all", for example --limit 25.';
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
 
   const classifyCliProvider = prepareCliProviderClassifier(cfg);

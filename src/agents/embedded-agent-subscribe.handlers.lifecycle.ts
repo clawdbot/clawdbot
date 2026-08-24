@@ -22,8 +22,8 @@ import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/he
 import { isIncompleteTerminalAssistantTurn } from "./embedded-agent-runner/run/incomplete-turn-classification.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
-  consumePendingToolMediaReply,
   hasAssistantVisibleReply,
+  readPendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
@@ -271,14 +271,10 @@ export function handleAgentEnd(
   };
 
   const flushPendingMediaAndChannel = () => {
-    if (ctx.params.onBlockReply) {
-      const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
+    if (ctx.params.onBlockReply && !ctx.state.pendingToolMediaDeliveryFailed) {
+      const pendingToolMediaReply = readPendingToolMediaReply(ctx.state);
       if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
-        const visibleReplyCountBefore = ctx.state.visibleBlockReplyCount;
         ctx.emitBlockReply(pendingToolMediaReply);
-        if (ctx.state.visibleBlockReplyCount > visibleReplyCountBefore) {
-          ctx.state.hasToolMediaBlockReply = true;
-        }
       }
     }
 

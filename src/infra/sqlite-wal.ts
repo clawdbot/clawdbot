@@ -2,6 +2,7 @@
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -127,12 +128,6 @@ function findExistingVolumePaths(
   }
 }
 
-function decodeMountPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_match, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
-}
-
 function parseProcMountInfoEntries(contents: string): MountEntry[] {
   const entries: MountEntry[] = [];
   for (const line of contents.split("\n")) {
@@ -146,9 +141,9 @@ function parseProcMountInfoEntries(contents: string): MountEntry[] {
     const fsType = suffixFields[0];
     if (mountPoint && fsType) {
       entries.push({
-        mountPoint: decodeMountPath(mountPoint),
+        mountPoint: decodeMountInfoPath(mountPoint),
         fsType,
-        ...(suffixFields[1] ? { source: decodeMountPath(suffixFields[1]) } : {}),
+        ...(suffixFields[1] ? { source: decodeMountInfoPath(suffixFields[1]) } : {}),
       });
     }
   }

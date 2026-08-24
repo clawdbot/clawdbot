@@ -95,6 +95,32 @@ describe("projects vitest config", () => {
     expect(gatewayFallback.exclude).toContain("server.sessions.compaction-read-errors.test.ts");
   });
 
+  it("limits isolated Gateway include files to the project's owned tests", () => {
+    const unrelatedTest = "src/gateway/worker-environments/workspace-sync-scripts.test.ts";
+    const mixedIncludeFile = patternFiles.writePatternFile("mixed-include.json", [
+      ...gatewayServerIsolatedTestFiles,
+      unrelatedTest,
+    ]);
+    const unrelatedIncludeFile = patternFiles.writePatternFile("unrelated-include.json", [
+      unrelatedTest,
+    ]);
+
+    expect(
+      requireTestConfig(
+        createGatewayServerIsolatedVitestConfig({
+          OPENCLAW_VITEST_INCLUDE_FILE: mixedIncludeFile,
+        }),
+      ).include,
+    ).toEqual(gatewayServerIsolatedTestFiles);
+    expect(
+      requireTestConfig(
+        createGatewayServerIsolatedVitestConfig({
+          OPENCLAW_VITEST_INCLUDE_FILE: unrelatedIncludeFile,
+        }),
+      ).include,
+    ).toEqual([]);
+  });
+
   it("covers each normal full-suite test file exactly once after configs cached filtered includes", async () => {
     const contractTestConfigs = [
       contractChannelSurfaceConfig,

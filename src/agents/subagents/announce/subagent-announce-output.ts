@@ -352,10 +352,24 @@ export function applySubagentWaitOutcome(params: {
   // primary normalizers, so apply the canonical classification here instead
   // of re-enumerating reason groups.
   if (terminalOutcome) {
+    // Keep main's subagent-specific classifier: it preserves explicit
+    // restart/aborted stop reasons as cancellation while still letting real
+    // provider timeouts through (openclaw#125407).
     switch (classifySubagentTerminalOutcome(terminalOutcome)) {
-      case "timeout":
-        outcome = { status: "timeout" };
+      case "timeout": {
+        // A run that failed inside the lifecycle error retry grace window is
+        // surfaced to waiters as a timeout carrying the failure text and
+        // `pendingError: true` (see createPendingErrorTimeoutSnapshot). Keep
+        // that cause so the announce can report why the child died instead of
+        // a bare "timed out". Genuine budget timeouts have no pendingError and
+        // stay unchanged.
+        const pendingErrorText =
+          params.wait?.pendingError === true ? (terminalOutcome.error ?? waitError) : undefined;
+        outcome = pendingErrorText
+          ? { status: "timeout", error: pendingErrorText }
+          : { status: "timeout" };
         break;
+      }
       case "cancellation":
         outcome = { status: "error", error: "subagent run terminated" };
         break;

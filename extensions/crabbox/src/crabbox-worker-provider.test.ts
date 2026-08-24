@@ -2097,6 +2097,39 @@ describe("Crabbox worker provider", () => {
     }
   });
 
+  it("reports the measured heartbeat duration when the command times out", async () => {
+    vi.useFakeTimers();
+    const warnings: string[] = [];
+    const provider = providerWithRunner(
+      async (argv) => {
+        if (argv[1] === "inspect") {
+          return commandResult({ stdout: inspectJson() });
+        }
+        if (argv[1] === "heartbeat") {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 60_012);
+          });
+          return commandResult({ code: null, killed: true, termination: "timeout" });
+        }
+        return commandResult();
+      },
+      (message) => warnings.push(message),
+    );
+    const lease = lifecycleLease();
+
+    try {
+      await expect(provider.inspect(lease)).resolves.toStrictEqual({ status: "active" });
+      await vi.advanceTimersByTimeAsync(60_012);
+
+      expect(warnings).toEqual([
+        "Crabbox heartbeat did not exit normally (timeout after 60012 ms); cloud worker machines may be reaped after 60m of coordinator-idle time",
+      ]);
+    } finally {
+      await provider.destroy(lease);
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps heartbeat transport failures out of lifecycle operations and retries", async () => {
     vi.useFakeTimers();
     let heartbeatAttempts = 0;

@@ -17,6 +17,11 @@ import {
 import { ISSUE_TABS, issueTabLabel, type IssueTab } from "./sidebar-issues-tabs.ts";
 import "./menu-surface.ts";
 
+export type SidebarAttentionPanelPosition = { left: number } & (
+  | { anchor: "top"; top: number }
+  | { anchor: "bottom"; bottom: number }
+);
+
 type SidebarAttentionPanelParams = {
   approvalQueue: readonly ExecApprovalRequest[];
   context: ApplicationContext;
@@ -24,7 +29,7 @@ type SidebarAttentionPanelParams = {
   onApprovalDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
   onClose: (restoreFocus: boolean) => void;
   onDismiss: (item: SidebarAttentionItem) => void;
-  onDismissUpdate: () => void;
+  onDismissUpdate?: () => void;
   onKeydown: (event: KeyboardEvent) => void;
   onNavigate: (routeId: NavigationRouteId) => void;
   onOpen: (item: SidebarAttentionItem) => void;
@@ -32,13 +37,17 @@ type SidebarAttentionPanelParams = {
   onSelectTab: (tab: IssueTab) => void;
   overflowAbove: boolean;
   overflowBelow: boolean;
-  panelPosition: { left: number; bottom: number };
+  panelPosition: SidebarAttentionPanelPosition;
   selectedTab: IssueTab;
   updateSurface: boolean;
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
 };
 
 export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams): TemplateResult {
+  const { anchor } = params.panelPosition;
+  const panelOffset =
+    params.panelPosition.anchor === "top" ? params.panelPosition.top : params.panelPosition.bottom;
+  const panelStyle = `left:${params.panelPosition.left}px;${anchor}:${panelOffset}px;--sidebar-issues-panel-${anchor}:${panelOffset}px`;
   const automationItems = params.items.filter(
     (item) => item.kind === "cronFailed" || item.kind === "cronOverdue",
   );
@@ -106,7 +115,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
         class="sidebar-issues-panel"
         role="dialog"
         aria-labelledby="sidebar-issues-panel-heading"
-        style=${`left:${params.panelPosition.left}px;bottom:${params.panelPosition.bottom}px;--sidebar-issues-panel-bottom:${params.panelPosition.bottom}px`}
+        style=${panelStyle}
         @keydown=${params.onKeydown}
       >
         <div class="sidebar-issues-panel__grabber" aria-hidden="true"></div>

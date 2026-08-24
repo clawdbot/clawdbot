@@ -53,6 +53,7 @@ function renderPicker(isAdmin: boolean) {
       onPopoverHide: vi.fn(),
       onPopoverAfterHide: vi.fn(),
       onSelectDevice: vi.fn(),
+      onSelectAutoDevice: vi.fn(),
       onSelectCloudProfile: vi.fn(),
       onConnectMachine: vi.fn(),
     }),
@@ -86,6 +87,9 @@ describe("Where chip", () => {
 
   it("renders devices for writers while cloud and Connect remain admin-only", () => {
     const writer = renderPicker(false);
+    expect(writer.querySelector('[data-value="auto-device"]')?.textContent).toContain(
+      "Any available node",
+    );
     expect(writer.querySelector('[data-value="device:runner"]')).not.toBeNull();
     expect(writer.querySelector('[data-value="device:runner"] .session-menu__sub')).toBeNull();
     expect(
@@ -138,6 +142,7 @@ describe("Where chip", () => {
         onPopoverHide: () => undefined,
         onPopoverAfterHide: () => undefined,
         onSelectDevice: () => undefined,
+        onSelectAutoDevice: () => undefined,
         onSelectCloudProfile: () => undefined,
         onConnectMachine: () => undefined,
       }),
@@ -148,6 +153,85 @@ describe("Where chip", () => {
     expect(device?.disabled).toBe(true);
     expect(device?.textContent).toContain("This runtime does not support paired devices");
     expect(device?.title).toBe("This runtime does not support paired devices");
+  });
+
+  it("omits the devices section entirely when no devices are paired", () => {
+    const state = resolveWhereChip({
+      environments: [],
+      cloudProfiles: [],
+      cloudProfileId: "",
+      deviceId: "",
+    });
+    const emptyContainer = document.createElement("div");
+    render(
+      renderWhereChip({
+        state,
+        gatewayName: "",
+        cloudProfileId: "",
+        deviceId: "",
+        worktreeAvailable: true,
+        submitting: false,
+        pendingPlacement: false,
+        popoverOpen: true,
+        popoverHiding: false,
+        isAdmin: false,
+        onGuardTransition: vi.fn(),
+        onPopoverShow: vi.fn(),
+        onPopoverHide: vi.fn(),
+        onPopoverAfterHide: vi.fn(),
+        onSelectDevice: vi.fn(),
+        onSelectAutoDevice: vi.fn(),
+        onSelectCloudProfile: vi.fn(),
+        onConnectMachine: vi.fn(),
+      }),
+      emptyContainer,
+    );
+    expect(emptyContainer.querySelector('[data-value="auto-device"]')).toBeNull();
+  });
+
+  it("disables automatic selection with an actionable reason when no paired device hosts sessions", () => {
+    const state = resolveWhereChip({
+      environments: [
+        {
+          id: "node:macbook",
+          type: "node",
+          label: "MacBook",
+          status: "available",
+          sessionHost: false,
+        },
+      ],
+      cloudProfiles: [],
+      cloudProfileId: "",
+      deviceId: "",
+    });
+    const container = document.createElement("div");
+    render(
+      renderWhereChip({
+        state,
+        gatewayName: "",
+        cloudProfileId: "",
+        deviceId: "",
+        worktreeAvailable: true,
+        submitting: false,
+        pendingPlacement: false,
+        popoverOpen: true,
+        popoverHiding: false,
+        isAdmin: false,
+        onGuardTransition: vi.fn(),
+        onPopoverShow: vi.fn(),
+        onPopoverHide: vi.fn(),
+        onPopoverAfterHide: vi.fn(),
+        onSelectDevice: vi.fn(),
+        onSelectAutoDevice: vi.fn(),
+        onSelectCloudProfile: vi.fn(),
+        onConnectMachine: vi.fn(),
+      }),
+      container,
+    );
+
+    const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
+    expect(automatic?.disabled).toBe(true);
+    expect(automatic?.title).toMatch(/no session hosts are paired/i);
   });
 
   it.each([
@@ -219,6 +303,7 @@ describe("Where chip", () => {
           onPopoverHide: vi.fn(),
           onPopoverAfterHide: vi.fn(),
           onSelectDevice: vi.fn(),
+          onSelectAutoDevice: vi.fn(),
           onSelectCloudProfile: vi.fn(),
           onConnectMachine: vi.fn(),
         }),

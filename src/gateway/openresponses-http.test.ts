@@ -2831,6 +2831,24 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     const events = parseSseEvents(text);
+    const commentaryDeltas = events.filter((event) => event.event === "response.output_text.delta");
+    expect(
+      commentaryDeltas.map((event) => (parseSseData(event) as { delta?: string }).delta),
+    ).toEqual(["Let me check that."]);
+    expect(
+      collectSseEventTypes(events).filter((event) =>
+        [
+          "response.output_text.delta",
+          "response.output_text.done",
+          "response.output_item.done",
+        ].includes(event),
+      ),
+    ).toEqual([
+      "response.output_text.delta",
+      "response.output_text.done",
+      "response.output_item.done",
+      "response.output_item.done",
+    ]);
     const outputTextDone = findSseEvent(events, "response.output_text.done");
     expect((parseSseData(outputTextDone) as { text?: string }).text).toBe("Let me check that.");
 

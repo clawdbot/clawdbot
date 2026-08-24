@@ -117,6 +117,7 @@ export function attachGatewayWsForTest(params: {
   params.attach({
     wss,
     clients: clients as never,
+    bootId: "ws-test-boot",
     preauthConnectionBudget: { release: vi.fn() } as never,
     port: 19001,
     getResolvedAuth: () => createResolvedGatewayTokenAuth("token"),

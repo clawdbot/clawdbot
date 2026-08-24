@@ -502,6 +502,79 @@ describe("sendMessageDiscord", () => {
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["msg1"]);
   });
 
+  it("rechecks delivery authority before media caption follow-up chunks", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      const authorityRevoked = new Error("delivery authority revoked");
+      let authorityActive = true;
+      const onPlatformSendDispatch = vi.fn(async () => {
+        if (!authorityActive) {
+          throw authorityRevoked;
+        }
+      });
+      const onDeliveryResult = vi.fn(async () => {
+        authorityActive = false;
+      });
+
+      await expect(
+        sendMessageDiscord("channel:789", "a".repeat(2_500), {
+          rest: loopback.rest,
+          token: "test-token",
+          cfg: DISCORD_TEST_CFG,
+          mediaUrl: "file:///tmp/photo.jpg",
+          onDeliveryResult,
+          onPlatformSendDispatch,
+        }),
+      ).rejects.toBe(authorityRevoked);
+
+      expect(onDeliveryResult).toHaveBeenCalledOnce();
+      expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+      const messageRequests = loopback.requests.filter((request) => request.method === "POST");
+      expect(messageRequests).toHaveLength(1);
+      expect(messageRequests[0]?.path).toContain("/channels/789/messages");
+      expect(messageRequests[0]?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+    } finally {
+      await loopback.close();
+    }
+  });
+
+  it("rechecks delivery authority before each retried text post", async () => {
+    let authorityActive = true;
+    const loopback = await createDiscordLoopbackRest({
+      status: (request) => {
+        if (request.method === "POST") {
+          authorityActive = false;
+          return 503;
+        }
+        return 200;
+      },
+    });
+    try {
+      const authorityRevoked = new Error("delivery authority revoked");
+      const onPlatformSendDispatch = vi.fn(async () => {
+        if (!authorityActive) {
+          throw authorityRevoked;
+        }
+      });
+
+      await expect(
+        sendMessageDiscord("channel:789", "retry once", {
+          rest: loopback.rest,
+          token: "test-token",
+          cfg: DISCORD_TEST_CFG,
+          retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+          onPlatformSendDispatch,
+        }),
+      ).rejects.toBe(authorityRevoked);
+
+      expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+      const messageRequests = loopback.requests.filter((request) => request.method === "POST");
+      expect(messageRequests).toHaveLength(1);
+    } finally {
+      await loopback.close();
+    }
+  });
+
   it("allows Discord link embeds when suppressEmbeds is disabled", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });

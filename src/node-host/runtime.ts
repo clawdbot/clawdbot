@@ -335,6 +335,7 @@ export async function prepareNodeHostRuntime(params?: {
       const workerSupervisor = workerRunsEnabled
         ? createNodeWorkerSupervisor({
             env,
+            capacity: config.nodeHost?.workerRuns?.capacity,
             onCapacityChanged: onRunnerCapacityChanged,
             workspace: workerWorkspace,
           })

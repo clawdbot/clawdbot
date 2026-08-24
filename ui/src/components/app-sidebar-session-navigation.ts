@@ -237,7 +237,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
         session.childSessionKeys.length > 0 &&
         this.isSessionChildrenExpanded(session) &&
         !this.sessionData.loadedChildSessionKeys.has(session.key) &&
-        !this.sessionData.failedChildSessionKeys.has(session.key) &&
+        !this.sessionData.childSessionErrorsByParent.has(session.key) &&
         !this.sessionData.loadingChildSessionKeys.has(session.key)
       ) {
         void this.sessionData.loadChildSessions(session.key);
@@ -248,7 +248,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       mainRow &&
       (mainRow.childSessions?.length ?? 0) > 0 &&
       !this.sessionData.loadedChildSessionKeys.has(mainRow.key) &&
-      !this.sessionData.failedChildSessionKeys.has(mainRow.key) &&
+      !this.sessionData.childSessionErrorsByParent.has(mainRow.key) &&
       !this.sessionData.loadingChildSessionKeys.has(mainRow.key)
     ) {
       void this.sessionData.loadChildSessions(mainRow.key);
