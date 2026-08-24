@@ -205,23 +205,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
     }
-    const adoptedCampaign = gatewayUpdateCampaign.adopt();
-    const adoptedCampaignId = adoptedCampaign?.campaignId;
-    const adoptedDevTarget =
-      adoptedCampaign?.target.kind === "git"
-        ? devUpdateTargetFromGitTarget(adoptedCampaign.target)
-        : undefined;
-    const adoptedPackageTargetVersion =
-      adoptedCampaign?.target.kind === "package"
-        ? adoptedCampaign.target.version.trim() || undefined
-        : undefined;
     const actor = resolveControlPlaneActor(client);
-    if (adoptedCampaign) {
-      context?.logGateway?.info(
-        `update.run adopted campaign ${adoptedCampaign.campaignId} ${formatControlPlaneActor(actor)}`,
-        { target: adoptedCampaign.target },
-      );
-    }
     const {
       sessionKey,
       deliveryContext: requestedDeliveryContext,
@@ -249,6 +233,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       | null = null;
     let managedHandoffRestart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
     let ownsManagedServiceHandoff = true;
+    let adoptedCampaignId: string | undefined;
     const sentinelMeta: UpdateRestartSentinelMeta = {
       ...(sessionKey ? { sessionKey } : {}),
       ...(deliveryContext ? { deliveryContext } : {}),
@@ -285,19 +270,36 @@ export const updateHandlers: GatewayRequestHandlers = {
               upstreamSha: requestedTarget.upstreamSha,
             })
           : undefined;
-      const targetFailureReason =
+      let targetFailureReason =
         requestedTarget !== undefined && !explicitDevTarget
           ? "invalid-update-target"
           : explicitDevTarget && (installSurface.kind !== "git" || effectiveChannel !== "dev")
             ? "unsupported-update-target"
             : explicitDevTarget && explicitDevTarget.upstreamRef !== status.git?.upstream
               ? "update-target-upstream-mismatch"
-              : explicitDevTarget &&
-                  adoptedCampaign &&
-                  (adoptedDevTarget?.upstreamRef !== explicitDevTarget.upstreamRef ||
-                    adoptedDevTarget.upstreamSha !== explicitDevTarget.upstreamSha)
-                ? "update-target-campaign-mismatch"
-                : undefined;
+              : undefined;
+      const adoption = targetFailureReason
+        ? undefined
+        : gatewayUpdateCampaign.adopt(explicitDevTarget);
+      if (adoption?.status === "mismatch") {
+        targetFailureReason = "update-target-campaign-mismatch";
+      }
+      const adoptedCampaign = adoption?.status === "adopted" ? adoption : undefined;
+      adoptedCampaignId = adoptedCampaign?.campaignId;
+      const adoptedDevTarget =
+        adoptedCampaign?.target.kind === "git"
+          ? devUpdateTargetFromGitTarget(adoptedCampaign.target)
+          : undefined;
+      const adoptedPackageTargetVersion =
+        adoptedCampaign?.target.kind === "package"
+          ? adoptedCampaign.target.version.trim() || undefined
+          : undefined;
+      if (adoptedCampaign) {
+        context?.logGateway?.info(
+          `update.run adopted campaign ${adoptedCampaign.campaignId} ${formatControlPlaneActor(actor)}`,
+          { target: adoptedCampaign.target },
+        );
+      }
       const devTarget = explicitDevTarget ?? adoptedDevTarget;
       const supervisor = detectRespawnSupervisor(process.env, process.platform, {
         includeLinuxOpenClawGatewayServiceMarker: true,

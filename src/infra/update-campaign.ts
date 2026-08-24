@@ -5,6 +5,7 @@ import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkInspectors,
 } from "./gateway-active-work.js";
+import type { TrackedDevUpdateTarget } from "./update-dev-target.js";
 
 const CAMPAIGN_FORCE_DELAY_MS = 15 * 60_000;
 const CAMPAIGN_COUNTDOWN_MS = 60_000;
@@ -14,10 +15,10 @@ const CAMPAIGN_POLL_MS = 5_000;
 type UpdateCampaignState = NonNullable<UpdateScheduleState["campaign"]>;
 type UpdateCampaignTarget = NonNullable<UpdateScheduleState["target"]>;
 
-type UpdateCampaignAdoption = {
-  campaignId: string;
-  target: UpdateCampaignTarget;
-};
+type UpdateCampaignAdoptionResult =
+  | { status: "absent" }
+  | { status: "mismatch" }
+  | { status: "adopted"; campaignId: string; target: UpdateCampaignTarget };
 
 type UpdateCampaignAnnouncement = {
   target: UpdateCampaignTarget;
@@ -102,14 +103,22 @@ export class UpdateCampaignController {
     }
   }
 
-  adopt(): UpdateCampaignAdoption | undefined {
+  adopt(expectedTarget?: TrackedDevUpdateTarget): UpdateCampaignAdoptionResult {
     const campaign = this.campaign;
     const target = this.target;
     if (!campaign || !target || campaign.state === "applying") {
-      return undefined;
+      return { status: "absent" };
+    }
+    if (
+      expectedTarget &&
+      (target.kind !== "git" ||
+        target.upstreamRef !== expectedTarget.upstreamRef ||
+        target.upstreamSha !== expectedTarget.upstreamSha)
+    ) {
+      return { status: "mismatch" };
     }
     this.beginApplying(false, false);
-    return { campaignId: campaign.id, target: { ...target } };
+    return { status: "adopted", campaignId: campaign.id, target: { ...target } };
   }
 
   hold(durationMs = CAMPAIGN_HOLD_MS): boolean {

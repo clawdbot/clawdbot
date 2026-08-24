@@ -154,6 +154,7 @@ describe("UpdateCampaignController", () => {
     const controller = createController();
     const apply = vi.fn(async () => "applied" as const);
 
+    expect(controller.adopt()).toEqual({ status: "absent" });
     controller.announce({
       target: { kind: "package", version: "2.0.0" },
       inspect: createInspectors(() => 0),
@@ -161,6 +162,7 @@ describe("UpdateCampaignController", () => {
       onChange: vi.fn(),
     });
     expect(controller.adopt()).toEqual({
+      status: "adopted",
       campaignId: "campaign-1",
       target: { kind: "package", version: "2.0.0" },
     });
@@ -168,6 +170,74 @@ describe("UpdateCampaignController", () => {
     expect(controller.hold()).toBe(false);
     await vi.advanceTimersByTimeAsync(15 * 60_000);
     expect(apply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "a different Git commit",
+      target: {
+        kind: "git" as const,
+        upstreamRef: "origin/main",
+        upstreamSha: "frozen-sha",
+        commitsBehind: 3,
+      },
+      requested: {
+        mode: "tracked" as const,
+        upstreamRef: "origin/main",
+        upstreamSha: "different-sha",
+      },
+      matching: {
+        mode: "tracked" as const,
+        upstreamRef: "origin/main",
+        upstreamSha: "frozen-sha",
+      },
+    },
+    {
+      name: "a different Git upstream",
+      target: {
+        kind: "git" as const,
+        upstreamRef: "origin/main",
+        upstreamSha: "frozen-sha",
+        commitsBehind: 3,
+      },
+      requested: {
+        mode: "tracked" as const,
+        upstreamRef: "upstream/main",
+        upstreamSha: "frozen-sha",
+      },
+      matching: {
+        mode: "tracked" as const,
+        upstreamRef: "origin/main",
+        upstreamSha: "frozen-sha",
+      },
+    },
+    {
+      name: "a package campaign",
+      target: { kind: "package" as const, version: "2.0.0" },
+      requested: {
+        mode: "tracked" as const,
+        upstreamRef: "origin/main",
+        upstreamSha: "frozen-sha",
+      },
+      matching: undefined,
+    },
+  ])("keeps $name waiting after mismatched adoption", ({ target, requested, matching }) => {
+    const controller = createController();
+    const apply = vi.fn(async () => "applied" as const);
+    const onChange = vi.fn();
+    controller.announce({ target, inspect: createInspectors(() => 1), apply, onChange });
+
+    expect(controller.adopt(requested)).toEqual({ status: "mismatch" });
+    expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "waiting-for-idle" });
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(apply).not.toHaveBeenCalled();
+
+    expect(controller.adopt(matching)).toMatchObject({
+      status: "adopted",
+      campaignId: "campaign-1",
+      target,
+    });
+    expect(controller.getState()?.state).toBe("applying");
   });
 
   it("holds a waiting campaign once and shifts its hard deadline", async () => {
@@ -228,6 +298,7 @@ describe("UpdateCampaignController", () => {
     expect(apply).not.toHaveBeenCalled();
 
     expect(controller.adopt()).toMatchObject({
+      status: "adopted",
       campaignId: "campaign-1",
       target: { kind: "package", version: "2.0.0" },
     });
