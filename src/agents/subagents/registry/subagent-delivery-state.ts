@@ -59,6 +59,30 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
       expectedLifecycleRevision: expectedLifecycleRevision || undefined,
     };
   }
+  const acceptedSpawnRollback = entry.acceptedSpawnRollback;
+  const acceptedSpawnGatewayRunId =
+    typeof acceptedSpawnRollback?.gatewayRunId === "string"
+      ? acceptedSpawnRollback.gatewayRunId.trim()
+      : "";
+  if (
+    !acceptedSpawnGatewayRunId ||
+    !Number.isFinite(acceptedSpawnRollback?.requestedAt) ||
+    typeof acceptedSpawnRollback?.reason !== "string" ||
+    !acceptedSpawnRollback.reason.trim()
+  ) {
+    delete entry.acceptedSpawnRollback;
+  } else {
+    entry.acceptedSpawnRollback = {
+      gatewayRunId: acceptedSpawnGatewayRunId,
+      requestedAt: acceptedSpawnRollback.requestedAt,
+      reason: acceptedSpawnRollback.reason.trim(),
+      expectedSessionId: acceptedSpawnRollback.expectedSessionId?.trim() || undefined,
+      expectedLifecycleRevision:
+        acceptedSpawnRollback.expectedLifecycleRevision?.trim() || undefined,
+    };
+    entry.suppressCompletionDelivery = true;
+    entry.execution.suppressSessionEffects = true;
+  }
   if (entry.completion) {
     entry.completion.terminalReply = normalizeAgentRunTerminalReplySnapshot(
       entry.completion.terminalReply,

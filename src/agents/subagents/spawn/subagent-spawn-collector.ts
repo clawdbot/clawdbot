@@ -10,6 +10,7 @@ import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import {
   completeCollectorLaunchCleanup,
   getSubagentRunByRunId,
+  recordAcceptedSubagentSpawnRollback,
   settleFailedQueuedSubagentLaunch,
   startQueuedSubagentRun,
 } from "../registry/subagent-registry.js";
@@ -40,6 +41,8 @@ export function activateCollectorSubagentRun(params: {
 }): void {
   let launchAcceptanceObserved = false;
   let launchTerminationConfirmed = false;
+  let acceptedGatewayRunId: string | undefined;
+  let acceptedLaunchError: unknown;
   activateSwarmRun({
     groupId: params.swarmSchedulerGroupKey,
     runId: params.childRunId,
@@ -48,11 +51,26 @@ export function activateCollectorSubagentRun(params: {
       // response on a retry cannot prove the previously accepted run stopped.
       launchTerminationConfirmed = false;
       await runWithGatewayIndependentRootWorkContinuation(async () => {
+        if (acceptedGatewayRunId) {
+          launchTerminationConfirmed = await terminateAcceptedCollectorRun({
+            childSessionKey: params.childSessionKey,
+            gatewayRunId: acceptedGatewayRunId,
+            ...params.provisionalSessionIdentity,
+            retry: false,
+          });
+          if (!launchTerminationConfirmed) {
+            throw new Error(
+              `Accepted child termination was not confirmed: ${acceptedGatewayRunId}`,
+            );
+          }
+          throw acceptedLaunchError;
+        }
         const launch = await params.launchChildRun();
         launchAcceptanceObserved = true;
         // Queued registration already owns the task row before either dispatch route starts.
         // Out-of-process Gateway tracking finds that exact runId and suppresses its CLI row.
         const gatewayRunId = readGatewayRunId(launch.response) ?? params.childRunId;
+        acceptedGatewayRunId = gatewayRunId;
         recordSessionParticipantBestEffort({
           actor: { type: "agent", id: params.requesterAgentId },
           agentId: params.targetAgentId,
@@ -75,11 +93,43 @@ export function activateCollectorSubagentRun(params: {
             throw new Error("collector registry row could not transition from queued to running");
           }
         } catch (error) {
-          launchTerminationConfirmed = await terminateAcceptedCollectorRun({
+          acceptedLaunchError = error;
+          const rollbackOwner = recordAcceptedSubagentSpawnRollback({
+            runId: params.childRunId,
             childSessionKey: params.childSessionKey,
             gatewayRunId,
+            reason: summarizeSpawnError(error),
             ...params.provisionalSessionIdentity,
           });
+          const rollbackFailures: unknown[] = [];
+          if (rollbackOwner.status === "rejected") {
+            rollbackFailures.push(
+              new Error(`Accepted collector rollback owner was rejected: ${params.childRunId}`),
+            );
+          } else if (rollbackOwner.status === "pending-persistence") {
+            rollbackFailures.push(rollbackOwner.error);
+          }
+          try {
+            launchTerminationConfirmed = await terminateAcceptedCollectorRun({
+              childSessionKey: params.childSessionKey,
+              gatewayRunId,
+              ...params.provisionalSessionIdentity,
+              retry: false,
+            });
+            if (!launchTerminationConfirmed) {
+              throw new Error(`Accepted child termination was not confirmed: ${gatewayRunId}`);
+            }
+          } catch (terminationError) {
+            rollbackFailures.push(terminationError);
+          }
+          if (rollbackFailures.length > 0) {
+            const aggregate = new AggregateError(
+              [error, ...rollbackFailures],
+              `Accepted collector rollback incomplete: ${params.childRunId}`,
+            );
+            aggregate.cause = error;
+            throw aggregate;
+          }
           throw error;
         }
         await params.emitSpawnLifecycleHooks(gatewayRunId);

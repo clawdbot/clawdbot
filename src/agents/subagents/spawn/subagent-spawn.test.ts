@@ -33,6 +33,7 @@ const hoisted = vi.hoisted(() => ({
   resolveProviderRefOwnershipMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
+  recordAcceptedSubagentSpawnRollbackMock: vi.fn(),
   rollbackSubagentRunRegistrationMock: vi.fn(),
   getSubagentRunByRunIdMock: vi.fn(),
   startQueuedSubagentRunMock: vi.fn(),
@@ -223,6 +224,7 @@ describe("spawnSubagentDirect seam flow", () => {
       resolveProviderRefOwnershipMock: hoisted.resolveProviderRefOwnershipMock,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
+      recordAcceptedSubagentSpawnRollbackMock: hoisted.recordAcceptedSubagentSpawnRollbackMock,
       rollbackSubagentRunRegistrationMock: hoisted.rollbackSubagentRunRegistrationMock,
       getSubagentRunByRunIdMock: hoisted.getSubagentRunByRunIdMock,
       startQueuedSubagentRunMock: hoisted.startQueuedSubagentRunMock,
@@ -252,6 +254,9 @@ describe("spawnSubagentDirect seam flow", () => {
     });
     hoisted.updateSessionStoreMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
+    hoisted.recordAcceptedSubagentSpawnRollbackMock
+      .mockReset()
+      .mockReturnValue({ status: "persisted" });
     hoisted.rollbackSubagentRunRegistrationMock.mockReset().mockReturnValue(true);
     hoisted.getSubagentRunByRunIdMock
       .mockReset()
@@ -418,6 +423,78 @@ describe("spawnSubagentDirect seam flow", () => {
       "lifecycle-publication",
       "final-acceptance",
     ]);
+  });
+
+  it("terminates after rollback-owner persistence fails and preserves cancellation", async () => {
+    const admission = createDelegateAdmissionAuthority();
+    hoisted.emitSessionLifecycleEventMock.mockImplementationOnce(() => {
+      admission.controller.abort("session-reset");
+    });
+    hoisted.recordAcceptedSubagentSpawnRollbackMock.mockReturnValueOnce({
+      status: "pending-persistence",
+      error: new Error("rollback owner disk full"),
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "cancel after rollback persistence failure" },
+      {
+        agentSessionKey: "agent:main:main",
+        continuationDelegateAdmission: admission.authority,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "cancelled",
+      runId: "run-1",
+      error: expect.stringContaining("post-registration rollback incomplete"),
+    });
+    expect(gatewayRequestRecords()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          method: "chat.abort",
+          params: expect.objectContaining({ runId: "run-1" }),
+        }),
+      ]),
+    );
+    expect(hoisted.rollbackSubagentRunRegistrationMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps exact rollback ownership when persistence and termination both fail", async () => {
+    const admission = createDelegateAdmissionAuthority();
+    hoisted.updateSessionStoreMock.mockImplementation(async () => ({}));
+    hoisted.emitSessionLifecycleEventMock.mockImplementationOnce(() => {
+      admission.controller.abort("session-reset");
+    });
+    hoisted.recordAcceptedSubagentSpawnRollbackMock.mockReturnValueOnce({
+      status: "pending-persistence",
+      error: new Error("rollback owner disk full"),
+    });
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        return { runId: "run-rollback-incomplete" };
+      }
+      if (request.method === "chat.abort") {
+        return { aborted: true, runIds: ["different-run"] };
+      }
+      return {};
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "retain rollback retry owner" },
+      {
+        agentSessionKey: "agent:main:main",
+        continuationDelegateAdmission: admission.authority,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "cancelled",
+      runId: "run-rollback-incomplete",
+      error: expect.stringContaining("post-registration rollback incomplete"),
+    });
+    expect(hoisted.recordAcceptedSubagentSpawnRollbackMock).toHaveBeenCalledOnce();
+    expect(hoisted.rollbackSubagentRunRegistrationMock).not.toHaveBeenCalled();
+    expect(gatewayRequestRecords().map((request) => request.method)).toContain("chat.abort");
   });
 
   it("rejects direct swarm parameters while tools.swarm is disabled", async () => {
@@ -1068,7 +1145,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.settleFailedQueuedSubagentLaunchMock).toHaveBeenCalledOnce();
   });
 
-  it("releases the collector slot only once an unconfirmed accepted launch loses its queued row", async () => {
+  it("retries only exact termination for an unconfirmed accepted collector", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     hoisted.configOverride = createConfigOverride({
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
@@ -1078,6 +1155,7 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.updateSessionStoreMock.mockImplementation(async () => ({}));
     hoisted.startQueuedSubagentRunMock.mockReturnValue(false);
     const launchedTasks: string[] = [];
+    let abortAttempts = 0;
     hoisted.callGatewayMock.mockImplementation(
       async (request: { method?: string; params?: unknown }) => {
         if (request.method === "agent") {
@@ -1085,6 +1163,7 @@ describe("spawnSubagentDirect seam flow", () => {
           return { runId: "gateway-unowned" };
         }
         if (request.method === "chat.abort") {
+          abortAttempts += 1;
           return { aborted: true, runIds: ["a-different-run"] };
         }
         return {};
@@ -1100,12 +1179,8 @@ describe("spawnSubagentDirect seam flow", () => {
       { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
     );
 
-    // A still-owned queued row keeps its slot across repeated durable failures.
-    await vi.waitFor(() =>
-      expect(launchedTasks.filter((task) => task.includes("unowned-first")).length).toBeGreaterThan(
-        1,
-      ),
-    );
+    await vi.waitFor(() => expect(abortAttempts).toBeGreaterThan(1));
+    expect(launchedTasks.filter((task) => task.includes("unowned-first"))).toHaveLength(1);
     expect(launchedTasks.some((task) => task.includes("unowned-second"))).toBe(false);
     expect(hoisted.settleFailedQueuedSubagentLaunchMock).not.toHaveBeenCalled();
 
@@ -1115,7 +1190,7 @@ describe("spawnSubagentDirect seam flow", () => {
     );
   });
 
-  it("keeps accepted ownership when a retry fails before returning", async () => {
+  it("does not redispatch an accepted collector while termination is incomplete", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     hoisted.configOverride = createConfigOverride({
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
@@ -1125,6 +1200,7 @@ describe("spawnSubagentDirect seam flow", () => {
       (_runId: string, gatewayRunId: string) => gatewayRunId === "gateway-next",
     );
     let firstAttempts = 0;
+    let abortAttempts = 0;
     const launchedTasks: string[] = [];
     hoisted.callGatewayMock.mockImplementation(
       async (request: { method?: string; params?: unknown }) => {
@@ -1141,6 +1217,7 @@ describe("spawnSubagentDirect seam flow", () => {
           return { runId: "gateway-next" };
         }
         if (request.method === "chat.abort") {
+          abortAttempts += 1;
           return { aborted: true, runIds: ["another-run"] };
         }
         return {};
@@ -1156,7 +1233,8 @@ describe("spawnSubagentDirect seam flow", () => {
       { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
     );
 
-    await vi.waitFor(() => expect(firstAttempts).toBeGreaterThanOrEqual(2));
+    await vi.waitFor(() => expect(abortAttempts).toBeGreaterThanOrEqual(2));
+    expect(firstAttempts).toBe(1);
     expect(launchedTasks.some((task) => task.includes("attempt-local-next"))).toBe(false);
     expect(hoisted.settleFailedQueuedSubagentLaunchMock).not.toHaveBeenCalled();
 

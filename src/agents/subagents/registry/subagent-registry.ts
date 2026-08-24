@@ -291,6 +291,11 @@ export function resumeSubagentRun(runId: string) {
     scheduleSubagentRegistrySweep({ delayMs: 1_000 });
     return;
   }
+  if (entry.acceptedSpawnRollback) {
+    resumedRuns.add(runId);
+    scheduleSubagentRegistrySweep({ delayMs: 1_000 });
+    return;
+  }
   const yieldedWakeWaitingForDelivery =
     entry.requesterSettleWake?.requesterYieldBatch === true &&
     (entry.delivery?.status === "pending" ||
@@ -404,7 +409,10 @@ const subagentRestorer = createSubagentRegistryRestorer({
       expectedLifecycleRevision,
       timeoutMs,
       callGateway: subagentRegistryDeps.callGateway,
+      retry: false,
     }),
+  recordAcceptedSubagentSpawnRollback: (params) =>
+    subagentRunManager.recordAcceptedSubagentSpawnRollback(params),
   cleanupCollectorLaunchResources: contextCleanup.cleanupCollectorLaunchResources,
   settleFailedQueuedSubagentLaunch: (runId, error) =>
     subagentRunManager.settleFailedQueuedSubagentLaunch(runId, error),
@@ -448,6 +456,12 @@ const subagentSweeper = createSubagentRegistrySweeper({
       acceptedDispatch,
       requirePersistence,
     ),
+  recordAcceptedSubagentSpawnRollback: (params) =>
+    subagentRunManager.recordAcceptedSubagentSpawnRollback(params),
+  rollbackSubagentRunRegistration: (params) =>
+    subagentRunManager.rollbackSubagentRunRegistration(params),
+  settleFailedQueuedSubagentLaunch: (runId, error) =>
+    subagentRunManager.settleFailedQueuedSubagentLaunch(runId, error),
   getGatewayRecoveryRuntime: () => activeGatewayContextResolver?.()?.recoveryRuntime,
   abandonSubagentRestartRecoveryLaunch: (params) =>
     subagentRunManager.abandonSubagentRestartRecoveryLaunch(params),
@@ -541,6 +555,8 @@ export const replaceSubagentRunAfterSteerCore = subagentRunManager.replaceSubage
 export const claimSubagentRunKill = subagentRunManager.claimSubagentRunKill;
 export const releaseSubagentRunKillClaim = subagentRunManager.releaseSubagentRunKillClaim;
 export const rollbackSubagentRunRegistration = subagentRunManager.rollbackSubagentRunRegistration;
+export const recordAcceptedSubagentSpawnRollback =
+  subagentRunManager.recordAcceptedSubagentSpawnRollback;
 export const registerSubagentRun: (params: RegisterSubagentRunParams) => void =
   subagentRunManager.registerSubagentRun;
 export const startQueuedSubagentRun = subagentRunManager.startQueuedSubagentRun;

@@ -33,6 +33,48 @@ export { markSubagentRunPausedAfterYield } from "./subagent-registry-run-wait.js
 const log = createSubsystemLogger("agents/subagent-registry");
 
 class SubagentRunManager extends SubagentLaunchManager {
+  readonly recordAcceptedSubagentSpawnRollback = (params: {
+    runId: string;
+    childSessionKey: string;
+    gatewayRunId: string;
+    reason: string;
+    expectedSessionId?: string;
+    expectedLifecycleRevision?: string;
+  }):
+    | { status: "persisted" }
+    | { status: "pending-persistence"; error: unknown }
+    | { status: "rejected" } => {
+    const runId = params.runId.trim();
+    const gatewayRunId = params.gatewayRunId.trim();
+    const entry = this.options.runs.get(runId);
+    if (!entry || entry.childSessionKey !== params.childSessionKey || !gatewayRunId) {
+      return { status: "rejected" };
+    }
+    const existing = entry.acceptedSpawnRollback;
+    if (existing && existing.gatewayRunId !== gatewayRunId) {
+      return { status: "rejected" };
+    }
+    entry.acceptedSpawnRollback = existing ?? {
+      gatewayRunId,
+      requestedAt: Date.now(),
+      reason: params.reason,
+      expectedSessionId: params.expectedSessionId?.trim() || undefined,
+      expectedLifecycleRevision: params.expectedLifecycleRevision?.trim() || undefined,
+    };
+    entry.suppressCompletionDelivery = true;
+    entry.execution = { ...entry.execution, suppressSessionEffects: true };
+    try {
+      this.options.persistOrThrow(runId);
+      return { status: "persisted" };
+    } catch (error) {
+      // Accepted authority already exists. Keep the in-memory tombstone so no
+      // completion or replay can outrun a transient persistence failure.
+      this.options.startSweeper();
+      this.options.scheduleSweep({ delayMs: 1_000 });
+      return { status: "pending-persistence", error };
+    }
+  };
+
   readonly rollbackSubagentRunRegistration = (params: {
     runId: string;
     childSessionKey: string;

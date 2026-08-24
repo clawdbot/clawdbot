@@ -224,6 +224,14 @@ export type SubagentAcceptedSteerDispatch = {
   expectedLifecycleRevision?: string;
 };
 
+export type SubagentAcceptedSpawnRollback = {
+  gatewayRunId: string;
+  requestedAt: number;
+  reason: string;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+};
+
 export type SubagentRunRecord = {
   runId: string;
   /** Detached task owner; steer/restart changes runId but continues the same task. */
@@ -263,6 +271,8 @@ export type SubagentRunRecord = {
   suppressAnnounceReason?: "steer-restart" | "killed";
   /** Accepted steer run awaiting remap or exact termination confirmation. */
   acceptedSteerDispatch?: SubagentAcceptedSteerDispatch;
+  /** Accepted child awaiting exact termination before failed spawn ownership can retire. */
+  acceptedSpawnRollback?: SubagentAcceptedSpawnRollback;
   /** Sticky owner while restart recovery replays this exact terminal run. */
   terminalOwner?: "interrupted-recovery";
   /** Present only while a current-version killed run awaits bounded reconciliation. */

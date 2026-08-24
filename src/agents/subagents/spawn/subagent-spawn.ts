@@ -31,7 +31,10 @@ import {
   persistInitialChildRuntimeState,
   type ContinuationSpawnParams,
 } from "../announce/subagent-announce.runtime.js";
-import { rollbackSubagentRunRegistration } from "../registry/subagent-registry.js";
+import {
+  recordAcceptedSubagentSpawnRollback,
+  rollbackSubagentRunRegistration,
+} from "../registry/subagent-registry.js";
 import { removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import {
@@ -485,18 +488,38 @@ export async function spawnSubagentDirect(
         // means no owner ever recorded the run, so abort the run the gateway
         // already accepted instead of leaving it executing unrecorded.
         const admissionCancelled = isSpawnSubagentAdmissionCancelledError(error);
+        const cleanupFailures: unknown[] = [];
         if (
           phase === "register" &&
           acceptedChildRunId &&
           (taskRowOwnership === "required" || admissionCancelled)
         ) {
-          await terminateAcceptedCollectorRun({
-            childSessionKey,
-            gatewayRunId: acceptedChildRunId,
-            ...provisionalSessionIdentity,
-          });
+          try {
+            const terminated = await terminateAcceptedCollectorRun({
+              childSessionKey,
+              gatewayRunId: acceptedChildRunId,
+              ...provisionalSessionIdentity,
+              retry: false,
+            });
+            if (!terminated) {
+              throw new Error(
+                `Accepted child termination was not confirmed: ${acceptedChildRunId}`,
+              );
+            }
+          } catch (terminationError) {
+            cleanupFailures.push(terminationError);
+          }
         }
-        await rollbackPreparedContextEngine(state?.contextEnginePreparation);
+        try {
+          const contextRolledBack = await rollbackPreparedContextEngine(
+            state?.contextEnginePreparation,
+          );
+          if (!contextRolledBack) {
+            throw new Error("Prepared context rollback was not confirmed");
+          }
+        } catch (contextError) {
+          cleanupFailures.push(contextError);
+        }
         if (attachmentAbsDir) {
           try {
             await fs.rm(attachmentAbsDir, { recursive: true, force: true });
@@ -533,7 +556,19 @@ export async function spawnSubagentDirect(
           }
           emitLifecycleHooks = !endedHookEmitted;
         }
-        await cleanupCreatedSession(emitLifecycleHooks);
+        try {
+          await cleanupCreatedSession(emitLifecycleHooks);
+        } catch (sessionError) {
+          cleanupFailures.push(sessionError);
+        }
+        if (cleanupFailures.length > 0) {
+          const aggregate = new AggregateError(
+            cleanupFailures,
+            `Subagent spawn cleanup incomplete: ${acceptedChildRunId ?? childIdem}`,
+          );
+          aggregate.cause = cleanupFailures[0];
+          throw aggregate;
+        }
       },
     };
     const pipelineResult = await runSpawnPipeline({
@@ -634,6 +669,14 @@ export async function spawnSubagentDirect(
         ? undefined
         : (_state, runId) => emitSpawnLifecycleHooks(runId),
       rollbackRegistration: rollbackSubagentRunRegistration,
+      recordAcceptedRollback: (registration, error) =>
+        recordAcceptedSubagentSpawnRollback({
+          runId: registration.runId,
+          childSessionKey: registration.childSessionKey,
+          gatewayRunId: acceptedChildRunId ?? registration.runId,
+          reason: error instanceof Error ? error.message : String(error),
+          ...provisionalSessionIdentity,
+        }),
     });
     if (!pipelineResult.ok) {
       const runId = pipelineResult.runId ?? childIdem;

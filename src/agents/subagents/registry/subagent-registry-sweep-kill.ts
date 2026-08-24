@@ -564,6 +564,71 @@ export async function reconcileAcceptedSteerDispatch(params: {
   return true;
 }
 
+export async function reconcileAcceptedSpawnRollback(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  runs: Map<string, SubagentRunRecord>;
+  callGateway: typeof callGateway;
+  recordAcceptedSubagentSpawnRollback: (params: {
+    runId: string;
+    childSessionKey: string;
+    gatewayRunId: string;
+    reason: string;
+    expectedSessionId?: string;
+    expectedLifecycleRevision?: string;
+  }) =>
+    | { status: "persisted" }
+    | { status: "pending-persistence"; error: unknown }
+    | { status: "rejected" };
+  rollbackSubagentRunRegistration: (params: { runId: string; childSessionKey: string }) => boolean;
+  settleFailedQueuedSubagentLaunch: (runId: string, error: string) => boolean;
+  warn: (message: string, meta?: Record<string, unknown>) => void;
+}): Promise<boolean> {
+  const rollback = params.entry.acceptedSpawnRollback;
+  if (!rollback || params.runs.get(params.runId) !== params.entry) {
+    return false;
+  }
+  const record = params.recordAcceptedSubagentSpawnRollback({
+    runId: params.runId,
+    childSessionKey: params.entry.childSessionKey,
+    gatewayRunId: rollback.gatewayRunId,
+    reason: rollback.reason,
+    expectedSessionId: rollback.expectedSessionId,
+    expectedLifecycleRevision: rollback.expectedLifecycleRevision,
+  });
+  if (record.status === "pending-persistence") {
+    params.warn("failed to persist accepted spawn rollback owner", {
+      runId: params.runId,
+      childSessionKey: params.entry.childSessionKey,
+      error: record.error,
+    });
+  }
+  const terminated = await terminateAcceptedCollectorRun({
+    childSessionKey: params.entry.childSessionKey,
+    gatewayRunId: rollback.gatewayRunId,
+    expectedSessionId: rollback.expectedSessionId,
+    expectedLifecycleRevision: rollback.expectedLifecycleRevision,
+    callGateway: params.callGateway,
+    retry: false,
+  });
+  if (
+    !terminated ||
+    params.runs.get(params.runId) !== params.entry ||
+    params.entry.acceptedSpawnRollback !== rollback
+  ) {
+    return true;
+  }
+  if (params.entry.collect) {
+    params.settleFailedQueuedSubagentLaunch(params.runId, rollback.reason);
+  } else {
+    params.rollbackSubagentRunRegistration({
+      runId: params.runId,
+      childSessionKey: params.entry.childSessionKey,
+    });
+  }
+  return true;
+}
+
 export function selectNextAcceptedSteerCandidate<T extends { runId: string }>(
   candidates: readonly T[],
   previousRunId?: string,

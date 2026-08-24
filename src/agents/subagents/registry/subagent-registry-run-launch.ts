@@ -392,6 +392,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     }
     entry.swarmLaunchPending = false;
     entry.queuedLaunch = undefined;
+    entry.acceptedSpawnRollback = undefined;
     let persistedRunning = false;
     try {
       this.options.persistOrThrow(previousRunId, nextRunId);
@@ -448,6 +449,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       outcome: { status: "error", error, endedAt },
     };
     entry.queuedLaunch = undefined;
+    entry.acceptedSpawnRollback = undefined;
     entry.collectorLaunchCleanupPending = true;
     entry.completion = { required: false, resultText: error, capturedAt: endedAt };
     updateSwarmCollectorCompletion(entry, this.options.getRuntimeConfig());
@@ -494,6 +496,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     entry.swarmLaunchPending = false;
     entry.collectorLaunchCleanupPending = true;
     entry.queuedLaunch = undefined;
+    entry.acceptedSpawnRollback = undefined;
     entry.execution = {
       ...entry.execution,
       status: "terminal",

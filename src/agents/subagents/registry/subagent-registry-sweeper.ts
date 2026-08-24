@@ -26,6 +26,7 @@ import {
 } from "./subagent-registry-suspended-delivery.js";
 import {
   reconcileAcceptedSteerDispatch,
+  reconcileAcceptedSpawnRollback,
   reconcileDurableSubagentKillIntent,
   reconcileProvisionalSubagentKill,
   selectNextAcceptedSteerCandidate,
@@ -67,6 +68,9 @@ export function createSubagentRegistrySweeper(params: {
     source: string,
   ) => Promise<void>;
   clearSubagentRunSteerRestart: SubagentRunManager["clearSubagentRunSteerRestart"];
+  recordAcceptedSubagentSpawnRollback: SubagentRunManager["recordAcceptedSubagentSpawnRollback"];
+  rollbackSubagentRunRegistration: SubagentRunManager["rollbackSubagentRunRegistration"];
+  settleFailedQueuedSubagentLaunch: SubagentRunManager["settleFailedQueuedSubagentLaunch"];
   getGatewayRecoveryRuntime: () => GatewayRecoveryRuntime | undefined;
   abandonSubagentRestartRecoveryLaunch: SubagentRunManager["abandonSubagentRestartRecoveryLaunch"];
   clearAcceptedSubagentRestartRecovery: SubagentRunManager["clearAcceptedSubagentRestartRecovery"];
@@ -206,6 +210,10 @@ export function createSubagentRegistrySweeper(params: {
         { requesterSessionKey: string; groupId: string }
       >();
       const acceptedSteerCandidates: Array<{ runId: string; entry: SubagentRunRecord }> = [];
+      const acceptedSpawnRollbackCandidates: Array<{
+        runId: string;
+        entry: SubagentRunRecord;
+      }> = [];
       const phase = ([runId, entry]: [string, SubagentRunRecord]) =>
         entry.requesterSettleWake
           ? 0
@@ -249,6 +257,10 @@ export function createSubagentRegistrySweeper(params: {
         }
         if (entry.acceptedSteerDispatch) {
           acceptedSteerCandidates.push({ runId, entry });
+          continue;
+        }
+        if (entry.acceptedSpawnRollback) {
+          acceptedSpawnRollbackCandidates.push({ runId, entry });
           continue;
         }
         if (entry.requesterSettleWake) {
@@ -669,6 +681,23 @@ export function createSubagentRegistrySweeper(params: {
           callGateway: params.callGateway,
           persistOrThrow: params.persistOrThrow,
           clearSubagentRunSteerRestart: params.clearSubagentRunSteerRestart,
+          warn: params.warn,
+        });
+        schedule({ delayMs: 1_000 });
+      }
+      const acceptedSpawnRollbackCandidate = selectNextAcceptedSteerCandidate(
+        acceptedSpawnRollbackCandidates,
+        acceptedSteerCursor,
+      );
+      if (acceptedSpawnRollbackCandidate) {
+        acceptedSteerCursor = acceptedSpawnRollbackCandidate.runId;
+        await reconcileAcceptedSpawnRollback({
+          ...acceptedSpawnRollbackCandidate,
+          runs,
+          callGateway: params.callGateway,
+          recordAcceptedSubagentSpawnRollback: params.recordAcceptedSubagentSpawnRollback,
+          rollbackSubagentRunRegistration: params.rollbackSubagentRunRegistration,
+          settleFailedQueuedSubagentLaunch: params.settleFailedQueuedSubagentLaunch,
           warn: params.warn,
         });
         schedule({ delayMs: 1_000 });

@@ -1819,7 +1819,7 @@ describe("subagent registry seam flow", () => {
     await waitForFast(() => expect(agentCalls).toBe(2));
   });
 
-  it("retries an unconfirmed restored collector under the same idempotency key", async () => {
+  it("retries exact termination without redispatching an unconfirmed restored collector", async () => {
     vi.useRealTimers();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     const now = Date.now();
@@ -1866,6 +1866,7 @@ describe("subagent registry seam flow", () => {
       throw new Error("sqlite unavailable after Gateway acceptance");
     });
     const launchedIds: string[] = [];
+    let abortAttempts = 0;
     mocks.callGateway.mockImplementation(
       async (request: { method?: string; params?: Record<string, unknown> }) => {
         if (request.method === "agent") {
@@ -1878,6 +1879,7 @@ describe("subagent registry seam flow", () => {
           return { runId: "gateway-unconfirmed-one" };
         }
         if (request.method === "chat.abort") {
+          abortAttempts += 1;
           return { aborted: true, runIds: ["different-run"] };
         }
         return request.method === "agent.wait" ? { status: "pending" } : {};
@@ -1886,19 +1888,20 @@ describe("subagent registry seam flow", () => {
 
     hydrateAndActivateRegistry();
 
-    await waitForFast(() =>
-      expect(launchedIds).toEqual(["run-unconfirmed-one", "run-unconfirmed-one"]),
-    );
+    await waitForFast(() => expect(abortAttempts).toBeGreaterThan(1));
+    expect(launchedIds).toEqual(["run-unconfirmed-one"]);
     expect(launchedIds).not.toContain("run-unconfirmed-two");
-    expect(mod.getSubagentRunByRunId("gateway-unconfirmed-one")).toMatchObject({
-      execution: { status: "running" },
+    expect(mod.getSubagentRunByRunId("run-unconfirmed-one")).toMatchObject({
+      execution: { status: "queued", suppressSessionEffects: true },
+      acceptedSpawnRollback: { gatewayRunId: "gateway-unconfirmed-one" },
+      suppressCompletionDelivery: true,
     });
     expect(mocks.callGateway).not.toHaveBeenCalledWith(
       expect.objectContaining({ method: "sessions.delete" }),
     );
   });
 
-  it("keeps restored accepted ownership when a retry fails before returning", async () => {
+  it("keeps restored accepted ownership without replaying its launch", async () => {
     vi.useRealTimers();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     const now = Date.now();
@@ -1955,11 +1958,12 @@ describe("subagent registry seam flow", () => {
 
     hydrateAndActivateRegistry();
 
-    await waitForFast(() => {
+    await waitForFast(() =>
       expect(
-        launchedIds.filter((runId) => runId === "run-attempt-first").length,
-      ).toBeGreaterThanOrEqual(2);
-    });
+        mocks.callGateway.mock.calls.filter(([request]) => request.method === "chat.abort").length,
+      ).toBeGreaterThanOrEqual(2),
+    );
+    expect(launchedIds.filter((runId) => runId === "run-attempt-first")).toHaveLength(1);
     expect(launchedIds).not.toContain("run-attempt-next");
     expect(mod.getSubagentRunByRunId("run-attempt-first")).toMatchObject({
       execution: { status: "queued" },
@@ -1972,7 +1976,7 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("releases a restored FIFO slot once a durably failing accepted launch loses its queued row", async () => {
+  it("releases a restored FIFO slot only after exact accepted termination succeeds", async () => {
     vi.useRealTimers();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     const now = Date.now();
@@ -2007,22 +2011,21 @@ describe("subagent registry seam flow", () => {
       "agent:main:subagent:run-durable-two": { sessionId: "two", updatedAt: now },
     });
     const launchedIds: string[] = [];
-    let releaseSecondLaunch: (() => void) | undefined;
+    let abortAttempts = 0;
     mocks.callGateway.mockImplementation(
       async (request: { method?: string; params?: Record<string, unknown> }) => {
         if (request.method === "agent") {
           launchedIds.push(String(request.params?.idempotencyKey));
-          if (launchedIds.length === 2) {
-            await new Promise<void>((resolve) => {
-              releaseSecondLaunch = resolve;
-            });
-          }
           // A Gateway run id already owned by the sibling row is a durable
           // post-acceptance refusal: the queued row can never transition.
           return { runId: "run-durable-two" };
         }
         if (request.method === "chat.abort") {
-          return { aborted: true, runIds: ["unrelated-run"] };
+          abortAttempts += 1;
+          return {
+            aborted: true,
+            runIds: [abortAttempts === 1 ? "unrelated-run" : String(request.params?.runId)],
+          };
         }
         return request.method === "agent.wait" ? { status: "pending" } : {};
       },
@@ -2030,21 +2033,12 @@ describe("subagent registry seam flow", () => {
 
     hydrateAndActivateRegistry();
 
-    // The first durable failure keeps FIFO ownership and replays the same key.
-    await waitForFast(() => expect(launchedIds).toEqual(["run-durable-one", "run-durable-one"]));
-    expect(releaseSecondLaunch).toBeTypeOf("function");
-    expect(launchedIds).not.toContain("run-durable-two");
-    expect(mocks.callGateway).not.toHaveBeenCalledWith(
-      expect.objectContaining({ method: "sessions.delete" }),
-    );
-
-    // Kill reconciliation takes the row while the second attempt is in flight.
-    expect(mod.markSubagentRunTerminated({ runId: "run-durable-one", reason: "killed" })).toBe(1);
-    releaseSecondLaunch?.();
-
-    await waitForFast(() =>
-      expect(launchedIds).toEqual(["run-durable-one", "run-durable-one", "run-durable-two"]),
-    );
+    await waitForFast(() => expect(launchedIds).toEqual(["run-durable-one", "run-durable-two"]));
+    expect(abortAttempts).toBe(2);
+    expect(mod.getSubagentRunByRunId("run-durable-one")).toMatchObject({
+      execution: { status: "terminal" },
+      collectorCompletion: { status: "failed" },
+    });
   });
 
   it("holds a restored FIFO slot while an indeterminate launch session is deleted", async () => {
@@ -5767,6 +5761,47 @@ describe("subagent registry seam flow", () => {
 
     expect(findRequesterRun(runId)).toBeUndefined();
     expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "cancelled" });
+  });
+
+  it("retains and retries an accepted rollback tombstone after persistence and abort faults", async () => {
+    const runId = "run-registration-rollback-retry";
+    const childSessionKey = "agent:main:subagent:handoff-rollback-retry";
+    mod.registerSubagentRun({
+      runId,
+      childSessionKey,
+      task: "retry exact accepted rollback",
+    });
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+      throw new Error("rollback owner disk full");
+    });
+
+    expect(
+      mod.recordAcceptedSubagentSpawnRollback({
+        runId,
+        childSessionKey,
+        gatewayRunId: "gateway-rollback-retry",
+        reason: "source acceptance stale",
+      }),
+    ).toMatchObject({
+      status: "pending-persistence",
+      error: expect.objectContaining({ message: "rollback owner disk full" }),
+    });
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      acceptedSpawnRollback: { gatewayRunId: "gateway-rollback-retry" },
+      suppressCompletionDelivery: true,
+      execution: { suppressSessionEffects: true },
+    });
+
+    mocks.callGateway
+      .mockResolvedValueOnce({ aborted: true, runIds: ["different-run"] })
+      .mockResolvedValueOnce({ aborted: true, runIds: ["gateway-rollback-retry"] });
+    await mod.testing.sweepOnceForTests();
+    expect(mod.getSubagentRunByRunId(runId)).toBeDefined();
+    await mod.testing.sweepOnceForTests();
+    expect(mod.getSubagentRunByRunId(runId)).toBeUndefined();
+    expect(
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "chat.abort"),
+    ).toHaveLength(2);
   });
 
   it("rolls back a killed tombstone when its durable registry write fails", () => {
