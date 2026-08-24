@@ -22,6 +22,23 @@ type ArchivedConversationStore = {
   state: MSTeamsLegacyConversationStoreData;
 };
 
+function isUsableStoredConversationReference(value: unknown): value is StoredConversationReference {
+  if (!isRecord(value) || typeof value.serviceUrl !== "string" || !value.serviceUrl.trim()) {
+    return false;
+  }
+  const agent = isRecord(value.agent) ? value.agent : null;
+  const bot = isRecord(value.bot) ? value.bot : null;
+  const user = isRecord(value.user) ? value.user : null;
+  // Proactive sends require a Connector endpoint plus user and bot identities. Drop
+  // unusable archive rows before retention so they cannot crowd out valid references.
+  return (
+    typeof user?.id === "string" &&
+    Boolean(user.id.trim()) &&
+    ((typeof agent?.id === "string" && Boolean(agent.id.trim())) ||
+      (typeof bot?.id === "string" && Boolean(bot.id.trim())))
+  );
+}
+
 function parseLegacyConversationStore(value: unknown): MSTeamsLegacyConversationStoreData | null {
   if (!isRecord(value) || value.version !== 1 || !isRecord(value.conversations)) {
     return null;
@@ -117,6 +134,9 @@ export async function resolveLegacyConversationMigrationSource(
     for (const [rawConversationId, reference] of Object.entries(
       archivedStore.state.conversations,
     )) {
+      if (!isUsableStoredConversationReference(reference)) {
+        continue;
+      }
       const conversationId = resolveLegacyConversationId(rawConversationId, reference);
       if (conversationId) {
         // Archives are newest-first. Collapse aliases at the canonical key before

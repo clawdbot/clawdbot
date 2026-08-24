@@ -233,6 +233,7 @@ describe("msteams doctor state migration", () => {
       conversation: { id: conversationId, conversationType: "personal" },
       channelId: "msteams",
       serviceUrl: "https://service.example.com",
+      bot: { id: "bot-archived-recovery" },
       user: { id: "user-archived-recovery" },
     };
     await fs.writeFile(
@@ -335,6 +336,7 @@ describe("msteams doctor state migration", () => {
       conversation: { id: conversationId, conversationType: "personal" },
       channelId: "msteams",
       serviceUrl: "https://newest-service.example.com",
+      bot: { id: "bot-canonical-collision" },
       user: { id: "newest-user" },
     };
     const fillerConversations = Object.fromEntries(
@@ -369,7 +371,13 @@ describe("msteams doctor state migration", () => {
       rotatedArchivedPath,
       `${JSON.stringify({
         version: 1,
-        conversations: { "z-newer-alias": baseRef },
+        conversations: {
+          "z-invalid-record": {
+            serviceUrl: "https://invalid-service.example.com",
+            user: { id: "invalid-user" },
+          },
+          "z-newer-alias": baseRef,
+        },
       } satisfies MSTeamsLegacyConversationStoreData)}\n`,
     );
 
@@ -409,6 +417,7 @@ describe("msteams doctor state migration", () => {
       conversation: { id: conversationId, conversationType: "personal" },
       channelId: "msteams",
       serviceUrl: "https://service.example.com",
+      bot: { id: "bot-valid-sibling" },
       user: { id: "valid-user" },
     };
     await fs.writeFile(
