@@ -21,7 +21,11 @@ import {
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
-import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
+import {
+  isValidGeminiEmbeddingValues,
+  type GeminiEmbeddingClient,
+  type GeminiTextEmbeddingRequest,
+} from "./embedding-provider.js";
 import { parseGeminiAuth } from "./gemini-auth.js";
 
 type GeminiBatchRequest = {
@@ -45,13 +49,13 @@ type GeminiBatchOperation = {
 type GeminiBatchState = "pending" | "succeeded" | "failed" | "cancelled" | "expired" | "unknown";
 
 type GeminiBatchOutputLine = {
-  // Alternate ids and direct embeddings are shipped compatible-endpoint shapes.
+  // Preserve shipped output aliases; provider JSON remains unknown until validated.
   key?: string;
   custom_id?: string;
   request_id?: string;
-  embedding?: { values?: number[] };
+  embedding?: { values?: unknown };
   response?: {
-    embedding?: { values?: number[] };
+    embedding?: { values?: unknown };
     error?: { message?: string };
   };
   error?: { message?: string };
@@ -301,14 +305,14 @@ function applyGeminiBatchOutputLine(params: {
     params.errors.push(`${customId}: ${error}`);
     return;
   }
-  const embedding = sanitizeAndNormalizeEmbedding(
-    params.line.embedding?.values ?? params.line.response?.embedding?.values ?? [],
-  );
-  if (embedding.length === 0) {
-    params.errors.push(`${customId}: empty embedding`);
+  const values = params.line.embedding?.values ?? params.line.response?.embedding?.values;
+  if (!isValidGeminiEmbeddingValues(values)) {
+    const reason =
+      values == null || (Array.isArray(values) && values.length === 0) ? "empty" : "invalid";
+    params.errors.push(`${customId}: ${reason} embedding`);
     return;
   }
-  params.byCustomId.set(customId, embedding);
+  params.byCustomId.set(customId, sanitizeAndNormalizeEmbedding(values));
 }
 
 async function fetchGeminiBatchOutput(params: {

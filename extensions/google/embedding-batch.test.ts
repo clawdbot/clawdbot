@@ -323,7 +323,10 @@ describe("Google embedding-batch bounded JSON reads", () => {
     );
   });
 
-  it("runs the complete batch lifecycle over loopback HTTP", async () => {
+  it.each([
+    { label: "a valid vector", values: [1, 0, 0], expectedError: undefined },
+    { label: "a corrupt vector", values: [1, null], expectedError: "r0: invalid embedding" },
+  ])("runs loopback HTTP with $label", async ({ values, expectedError }) => {
     let createBody: unknown;
     const authHeaders: Array<string | undefined> = [];
     const server = createServer((request, response) => {
@@ -370,7 +373,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
           response.writeHead(200, { "content-type": "application/jsonl" });
           const line = JSON.stringify({
             key: "r0",
-            response: { embedding: { values: [1, 0, 0] } },
+            response: { embedding: { values } },
           });
           response.write(line.slice(0, 17));
           response.end(line.slice(17));
@@ -384,17 +387,38 @@ describe("Google embedding-batch bounded JSON reads", () => {
     const port = await listenLoopbackServer(server);
 
     try {
-      const result = await runBatch(
-        singleRequest(),
-        makeGeminiClient(`http://127.0.0.1:${port}/v1beta`),
-      );
+      const result = runBatch(singleRequest(), makeGeminiClient(`http://127.0.0.1:${port}/v1beta`));
 
-      expect(result).toEqual(new Map([["r0", [1, 0, 0]]]));
-      expect(createBody).toMatchObject({ batch: { inputConfig: { file_name: "files/input-0" } } });
+      if (expectedError) {
+        await expect(result).rejects.toThrow(expectedError);
+      } else {
+        await expect(result).resolves.toEqual(new Map([["r0", [1, 0, 0]]]));
+      }
+      expect(createBody).toMatchObject({
+        batch: { inputConfig: { file_name: "files/input-0" } },
+      });
       expect(authHeaders).toEqual(["test-key", "test-key", "test-key", "test-key"]);
     } finally {
       await closeServer(server);
     }
+  });
+
+  it.each([
+    { label: "a missing vector", values: undefined, message: "r0: empty embedding" },
+    { label: "an empty vector", values: [], message: "r0: empty embedding" },
+    { label: "a non-array vector", values: "bad", message: "r0: invalid embedding" },
+    { label: "an array-like vector", values: { length: 1 }, message: "r0: invalid embedding" },
+    { label: "a null coordinate", values: [null], message: "r0: invalid embedding" },
+    { label: "a string coordinate", values: ["bad"], message: "r0: invalid embedding" },
+    { label: "a mixed coordinate", values: [1, null], message: "r0: invalid embedding" },
+  ])("rejects downloaded Gemini batch output with $label", async ({ values, message }) => {
+    stubBatchFetch((stage) =>
+      stage === "download"
+        ? new Response(JSON.stringify({ key: "r0", response: { embedding: { values } } }))
+        : undefined,
+    );
+
+    await expect(runBatch()).rejects.toThrow(message);
   });
 
   it("honors terminal LRO fields when metadata is stale", async () => {

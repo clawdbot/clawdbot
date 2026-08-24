@@ -1,4 +1,5 @@
 // Google tests cover embedding provider plugin behavior.
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => {
@@ -288,6 +289,62 @@ describe("Gemini embedding provider", () => {
       "gemini embeddings failed: malformed JSON response",
     );
   });
+
+  it.each([
+    { operation: "query", response: { embedding: { values: [] } } },
+    { operation: "batch", response: { embeddings: [{ values: [] }] } },
+    { operation: "structured batch", response: { embeddings: [{ values: [] }] } },
+  ])(
+    "rejects empty provider vectors from a non-empty $operation",
+    async ({ operation, response }) => {
+      const server = createServer((_request, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(response));
+      });
+      const port = await new Promise<number>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.off("error", reject);
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            reject(new Error("expected loopback TCP address"));
+            return;
+          }
+          resolve(address.port);
+        });
+      });
+
+      try {
+        const { provider } = await createGeminiEmbeddingProvider({
+          config: {} as never,
+          provider: "gemini",
+          remote: { apiKey: "test-key", baseUrl: `http://127.0.0.1:${port}/v1beta` },
+          model: "gemini-embedding-001",
+          fallback: "none",
+        });
+
+        const embedding =
+          operation === "query"
+            ? provider.embedQuery("test query")
+            : operation === "batch"
+              ? provider.embedBatch(["one"])
+              : (provider.embedBatchInputs?.([
+                  {
+                    text: "Image file: diagram.png",
+                    parts: [{ type: "text", text: "Image file: diagram.png" }],
+                  },
+                ]) ?? Promise.reject(new Error("expected structured embedding support")));
+
+        await expect(embedding).rejects.toThrow(
+          "gemini embeddings failed: malformed JSON response",
+        );
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it("rejects batch embedding count mismatches", async () => {
     installFetchMock(() => ({ embeddings: [{ values: [1, 2] }] }));
