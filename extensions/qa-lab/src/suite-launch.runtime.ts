@@ -828,25 +828,28 @@ async function runUnifiedQaSuite(params: {
           factory.matches({ channelId, driver: "live" }),
         ),
       );
+      const channelDriverFlowRequiresExclusiveWorkers =
+        Boolean(channelGroup.channelDriverSelection || usesContributedChannelDriver) &&
+        !channelGroup.isolatesAdapterInstances;
+      const flowExclusiveKey = channelDriverFlowRequiresExclusiveWorkers
+        ? `channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
+        : undefined;
       // Isolated adapters may use the caller's full suite budget; every partition
       // still has weight one in the global scheduler below.
       // A rejected worker cannot return its completed prefix or active scenario.
       // Single-scenario fail-fast tasks keep retries and failure evidence attributable.
       const sharedFlowPartitions = failFast
         ? sharedFlowScenarios.map((scenario) => [scenario])
-        : partitionSharedFlowScenarios(
-            sharedFlowScenarios,
-            usesContributedChannelDriver && !channelGroup.isolatesAdapterInstances
-              ? 1
-              : concurrency,
-            channelGroup.isolatesAdapterInstances ? concurrency : MAX_SHARED_FLOW_PARTITIONS,
-          );
+        : flowExclusiveKey
+          ? [sharedFlowScenarios]
+          : partitionSharedFlowScenarios(
+              sharedFlowScenarios,
+              concurrency,
+              channelGroup.isolatesAdapterInstances ? concurrency : MAX_SHARED_FLOW_PARTITIONS,
+            );
       // Channel-driver flow workers each launch a gateway plus transport harness.
       // Serializing their isolated workers keeps state-mutating smoke checks from
       // flaking under concurrent child gateways while preserving non-driver speed.
-      const channelDriverFlowRequiresExclusiveWorkers =
-        Boolean(channelGroup.channelDriverSelection || usesContributedChannelDriver) &&
-        !channelGroup.isolatesAdapterInstances;
       const isolatedFlowConcurrencyLimit = channelDriverFlowRequiresExclusiveWorkers
         ? 1
         : MAX_ISOLATED_FLOW_CONCURRENCY;
@@ -941,9 +944,7 @@ async function runUnifiedQaSuite(params: {
           channelId: taskChannelId,
           // One channel's credential and Gateway state stay serial unless each adapter create()
           // owns an isolated runtime. Distinct channels may always run together.
-          exclusiveKey: channelDriverFlowRequiresExclusiveWorkers
-            ? `channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
-            : undefined,
+          exclusiveKey: flowExclusiveKey,
           scenarios: partition.scenarios,
           weight: partition.concurrency,
           run: async () => {

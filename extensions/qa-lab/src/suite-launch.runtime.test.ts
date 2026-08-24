@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createQaSmokeCiPart } from "./ci-smoke-plan.js";
 import { QaSuiteInfraError } from "./errors.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
@@ -1478,46 +1479,17 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
   });
 
-  it("serializes channel-driver isolated flow workers under explicit concurrency", async () => {
+  it("shares exclusive profile flows while retaining isolated singleton results", async () => {
     const repoRoot = await makeTempRepo("qa-suite-crabline-isolated-");
-    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
-    if (!defaultFlowImplementation) {
-      throw new Error("expected default QA flow suite mock implementation");
+    const maxActive = trackMaxActiveFlowRuns();
+    const scenarioIds = createQaSmokeCiPart("profile-2").runs.find(
+      (run) => run.slug === "primary",
+    )?.scenario_ids;
+    if (!scenarioIds) {
+      throw new Error("expected profile-2 primary smoke run");
     }
-    const isolatedScenarioIds = new Set([
-      "runtime-tool-image-generate",
-      "runtime-inventory-drift-check",
-      "session-memory-ranking",
-    ]);
-    let activeIsolatedWorkers = 0;
-    let maxActiveIsolatedWorkers = 0;
-    runQaFlowSuite.mockImplementation(
-      async (
-        params:
-          | { outputDir?: string; scenarioIds?: string[]; writeEvidenceFile?: boolean }
-          | undefined,
-      ) => {
-        const scenarioIds = params?.scenarioIds ?? [];
-        const isolatedWorker = scenarioIds.some((scenarioId) =>
-          isolatedScenarioIds.has(scenarioId),
-        );
-        if (!isolatedWorker) {
-          return await defaultFlowImplementation(params);
-        }
-        activeIsolatedWorkers += 1;
-        maxActiveIsolatedWorkers = Math.max(maxActiveIsolatedWorkers, activeIsolatedWorkers);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 1);
-        });
-        try {
-          return await defaultFlowImplementation(params);
-        } finally {
-          activeIsolatedWorkers -= 1;
-        }
-      },
-    );
 
-    await runQaSuite({
+    const result = await runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/crabline-isolated",
       channelDriverSelection: {
@@ -1526,14 +1498,8 @@ describe("qa suite runtime launcher", () => {
         channelDriver: "crabline",
         providerReadinessArtifactPath: "crabline-provider-readiness.json",
       },
-      concurrency: 8,
-      scenarioIds: [
-        "dm-chat-baseline",
-        "runtime-tool-image-generate",
-        "runtime-inventory-drift-check",
-        "session-memory-ranking",
-        "control-ui-chat-flow-playwright",
-      ],
+      concurrency: 10,
+      scenarioIds,
     });
 
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "crabline-isolated");
@@ -1543,13 +1509,17 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow", "shared"),
         concurrency: 1,
-        scenarioIds: ["dm-chat-baseline"],
+        scenarioIds: [
+          "personal-task-followthrough-status",
+          "telegram-help-command",
+          "telegram-tools-compact-command",
+        ],
       }),
     );
     for (const [index, scenarioId] of [
-      "runtime-tool-image-generate",
-      "runtime-inventory-drift-check",
-      "session-memory-ranking",
+      "group-visible-reply-tool",
+      "memory-dreaming-sweep",
+      "subagent-completion-direct-fallback",
     ].entries()) {
       expect(runQaFlowSuite).toHaveBeenNthCalledWith(
         index + 2,
@@ -1560,8 +1530,16 @@ describe("qa suite runtime launcher", () => {
         }),
       );
     }
-    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
-    expect(maxActiveIsolatedWorkers).toBe(1);
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(result.result.scenarios).toHaveLength(6);
+    expect(result.result.scenarios.map((scenario) => scenario.status)).toEqual(
+      scenarioIds.map(() => "pass"),
+    );
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+    expect(maxActive()).toBe(1);
   });
 
   it("respects serial concurrency across unified suite partitions", async () => {

@@ -51,6 +51,8 @@ function estimateScenarioCost(scenario: QaSmokeCiScenario) {
   if (scenario.execution.kind === "playwright") {
     return 6;
   }
+  // CI balancing estimates duration, not worker ownership. Implicit runtime
+  // isolation must not reshuffle the stable smoke profile parts.
   return scenario.execution.kind === "flow" && scenario.execution.isolationReason ? 4 : 1;
 }
 
