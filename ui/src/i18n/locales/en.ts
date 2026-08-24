@@ -1844,6 +1844,9 @@ export const en: TranslationMap = {
         "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
+      assistantMessageSurface: "Assistant message surface",
+      assistantMessageSurfaceThemeDefault: "Theme default",
+      assistantMessageSurfaceWhite: "White",
     },
     sidebarPrefs: {
       title: "Sidebar",

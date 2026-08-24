@@ -79,6 +79,7 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   // Carapace CSS (openclaw/carapace) selects on [data-theme-resolved]; keep it
   // in lockstep with data-theme-mode so its stylesheets work unmodified here.
   root.dataset.themeResolved = root.dataset.themeMode;
+  root.dataset.assistantMessageSurface = settings.assistantMessageSurface ?? "theme-default";
   root.classList.toggle("wa-light", root.dataset.themeMode === "light");
   root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;

@@ -5,7 +5,7 @@ import { renderSettingsRow } from "../../components/settings-ui.ts";
 export function renderSettingsSelectRow<T extends string>(params: {
   title: string;
   value: T;
-  setting: "send-shortcut" | "follow-up-mode" | "catalog-open-target";
+  setting: "send-shortcut" | "follow-up-mode" | "catalog-open-target" | "assistant-message-surface";
   options: ReadonlyArray<{ value: T; label: string }>;
   onChange: (value: string) => void;
   description?: unknown;
@@ -21,6 +21,7 @@ export function renderSettingsSelectRow<T extends string>(params: {
         ?data-settings-send-shortcut=${params.setting === "send-shortcut"}
         ?data-settings-follow-up-mode=${params.setting === "follow-up-mode"}
         ?data-settings-catalog-open-target=${params.setting === "catalog-open-target"}
+        ?data-settings-assistant-message-surface=${params.setting === "assistant-message-surface"}
         aria-label=${params.title}
         .value=${params.value}
         @change=${(event: Event) =>

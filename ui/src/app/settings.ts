@@ -133,6 +133,14 @@ function normalizeChoice<T extends string>(
 
 export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
 
+const ASSISTANT_MESSAGE_SURFACES = ["theme-default", "white"] as const;
+export type AssistantMessageSurface = (typeof ASSISTANT_MESSAGE_SURFACES)[number];
+
+export const normalizeAssistantMessageSurface = normalizeChoice(
+  ASSISTANT_MESSAGE_SURFACES,
+  "theme-default",
+);
+
 const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
 export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
 
@@ -176,6 +184,7 @@ export const UI_APPEARANCE_DEFAULTS = {
   textScale: 100,
   sidebarLiveActivity: true,
   chatMessageMaxWidth: "48rem",
+  assistantMessageSurface: "theme-default",
   chatSendShortcut: "enter",
   catalogOpenTarget: "viewer",
   composerHoldToRecord: true,
@@ -212,6 +221,7 @@ export type UiSettings = {
   sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
+  assistantMessageSurface?: AssistantMessageSurface; // Browser-local assistant bubble surface
   showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
   pinnedAgentIds?: string[]; // Agents surfaced first in the agent-chip quick switcher
   textScale?: TextScaleStop; // Browser-local text scale percentage
@@ -446,6 +456,7 @@ export function loadSettings(): UiSettings {
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
     sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
+    assistantMessageSurface: UI_APPEARANCE_DEFAULTS.assistantMessageSurface,
     showAdvancedSettings: false,
     pinnedAgentIds: [],
     composerHoldToRecord: UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
@@ -546,6 +557,7 @@ export function loadSettings(): UiSettings {
           ? parsed.sidebarLiveActivity
           : defaults.sidebarLiveActivity,
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
+      assistantMessageSurface: normalizeAssistantMessageSurface(parsed.assistantMessageSurface),
       showAdvancedSettings:
         typeof parsed.showAdvancedSettings === "boolean"
           ? parsed.showAdvancedSettings
@@ -690,6 +702,9 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
     ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)
       ? { chatMessageMaxWidth: normalizeChatMessageMaxWidth(next.chatMessageMaxWidth) }
+      : {}),
+    ...(normalizeAssistantMessageSurface(next.assistantMessageSurface) === "white"
+      ? { assistantMessageSurface: "white" as const }
       : {}),
     ...(next.showAdvancedSettings === true ? { showAdvancedSettings: true } : {}),
     // Empty pin list is the default; only real pins persist.

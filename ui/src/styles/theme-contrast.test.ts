@@ -100,6 +100,27 @@ describe("Control UI theme contrast", () => {
   const chatLayoutCss = readFileSync(path.join(here, "chat", "layout.css"), "utf8");
   const layoutCss = readFileSync(path.join(here, "layout.css"), "utf8");
 
+  it("keeps default dark muted text tokens at WCAG AA on declared surfaces", () => {
+    const dark = readCssVarBlock(baseCss, ":root");
+    const backgrounds = [
+      requireCssColor(dark, "bg"),
+      requireCssColor(dark, "bg-elevated"),
+      requireCssColor(dark, "bg-muted"),
+      requireCssColor(dark, "card"),
+    ];
+    const foregrounds = [
+      requireCssColor(dark, "muted"),
+      requireCssColor(dark, "muted-strong"),
+      requireCssColor(dark, "muted-foreground"),
+    ];
+
+    for (const foreground of foregrounds) {
+      for (const background of backgrounds) {
+        expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
   it("keeps chat timestamps and slash-arg hints AA without opacity dimming", () => {
     const dark = readCssVarBlock(baseCss, ":root");
     const muted = requireCssColor(dark, "muted");
@@ -152,5 +173,20 @@ describe("Control UI theme contrast", () => {
         expect(contrastRatio(muted, requireCssColor(theme, surface))).toBeGreaterThanOrEqual(4.5);
       }
     }
+  });
+
+  it("limits the white assistant surface to contrast-safe light completed message bubbles", () => {
+    expect(groupedCss).toMatch(
+      /:root\[data-theme-mode="light"\]\s*:not\(\s*\[data-theme="custom-light"\]\s*\)\s*\[data-assistant-message-surface="white"\][^{}]*\.chat-group\.assistant[^{}]*\.chat-bubble--assistant-surface\s*\{[^{}]*background:\s*#fff;/u,
+    );
+    expect(groupedCss).not.toMatch(
+      /data-assistant-message-surface="white"[^{}]*\.chat-bubble:not/u,
+    );
+    expect(groupedCss).not.toContain(
+      ':root[data-theme-mode="dark"][data-assistant-message-surface="white"]',
+    );
+    expect(groupedCss).not.toMatch(
+      /:root\[data-theme="custom-light"\][^{}]*data-assistant-message-surface="white"/u,
+    );
   });
 });

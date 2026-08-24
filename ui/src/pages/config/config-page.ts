@@ -27,6 +27,7 @@ import {
 } from "../../app/server-prefs.ts";
 import {
   loadSettings,
+  normalizeAssistantMessageSurface,
   normalizeCatalogOpenTarget,
   normalizeTextScale,
   normalizeChatSendShortcut,
@@ -100,6 +101,7 @@ type ConfigPageSetting =
   | "textScale"
   | "sidebarLiveActivity"
   | "chatMessageMaxWidth"
+  | "assistantMessageSurface"
   | "showAdvancedSettings"
   | "chatSendShortcut"
   | "chatFollowUpMode"
@@ -1257,6 +1259,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
+      assistantMessageSurface: this.settings.assistantMessageSurface ?? "theme-default",
+      setAssistantMessageSurface: (value) =>
+        this.setSetting("assistantMessageSurface", normalizeAssistantMessageSurface(value)),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
       setShowAdvancedSettings: (enabled) => this.setSetting("showAdvancedSettings", enabled),
       forceShowAdvanced: this.pageId === "advanced",

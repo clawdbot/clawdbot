@@ -90,6 +90,8 @@ describe("config view", () => {
     setSessionCatalogHidden: vi.fn(),
     chatMessageMaxWidth: undefined,
     setChatMessageMaxWidth: vi.fn(),
+    assistantMessageSurface: "theme-default" as const,
+    setAssistantMessageSurface: vi.fn(),
     showAdvancedSettings: false,
     setShowAdvancedSettings: vi.fn(),
     chatSendShortcut: "enter" as const,
@@ -1994,6 +1996,17 @@ describe("config view", () => {
       HTMLSelectElement,
     );
     expect(shortcutSelect.getAttribute("aria-label")).toBe("Send shortcut");
+    const surfaceSelect = queryRequired(
+      container,
+      "[data-settings-assistant-message-surface]",
+      HTMLSelectElement,
+    );
+    expect(surfaceSelect.getAttribute("aria-label")).toBe("Assistant message surface");
+    expect(surfaceSelect.value).toBe("theme-default");
+    expect(Array.from(surfaceSelect.options, (option) => option.value)).toEqual([
+      "theme-default",
+      "white",
+    ]);
     const followUpSelect = queryRequired(
       container,
       "[data-settings-follow-up-mode]",
@@ -2027,6 +2040,28 @@ describe("config view", () => {
     cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
     expect(onMicrophoneRefresh).not.toHaveBeenCalled();
     expect(onCameraRefresh).not.toHaveBeenCalled();
+  });
+
+  it("updates the assistant message surface preference", () => {
+    const setAssistantMessageSurface = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      setAssistantMessageSurface,
+    });
+    const select = queryRequired(
+      container,
+      "[data-settings-assistant-message-surface]",
+      HTMLSelectElement,
+    );
+
+    select.value = "white";
+    select.dispatchEvent(new Event("change"));
+    expect(setAssistantMessageSurface).toHaveBeenCalledWith("white");
+
+    select.value = "theme-default";
+    select.dispatchEvent(new Event("change"));
+    expect(setAssistantMessageSurface).toHaveBeenLastCalledWith("theme-default");
   });
 
   it("requests media access for each native picker opening gesture", () => {

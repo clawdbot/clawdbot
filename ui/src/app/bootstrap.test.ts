@@ -22,6 +22,28 @@ import { normalizeLegacyTerminalViewLocation } from "./startup-settings.ts";
 // under a loaded CI runner that budget expires before startup reaches the step.
 const STARTUP_STEP_WAIT = { timeout: 15_000 };
 
+describe("appearance presentation", () => {
+  it("applies and resets the assistant message surface live", () => {
+    const previousSettings = loadSettings();
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+
+    try {
+      expect(document.documentElement.dataset.assistantMessageSurface).toBe("theme-default");
+      saveSettings({ ...loadSettings(), assistantMessageSurface: "white" });
+      runtime.context.theme.refresh();
+      expect(document.documentElement.dataset.assistantMessageSurface).toBe("white");
+
+      saveSettings({ ...loadSettings(), assistantMessageSurface: "theme-default" });
+      runtime.context.theme.refresh();
+      expect(document.documentElement.dataset.assistantMessageSurface).toBe("theme-default");
+    } finally {
+      runtime.stop();
+      saveSettings(previousSettings);
+      runtime.context.theme.refresh();
+    }
+  });
+});
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {

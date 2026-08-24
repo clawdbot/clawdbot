@@ -1648,6 +1648,7 @@ describe("grouped chat rendering", () => {
 
     const bubble = container.querySelector(".chat-bubble");
     expect(bubble?.classList.contains("streaming")).toBe(false);
+    expect(bubble?.classList.contains("chat-bubble--assistant-surface")).toBe(true);
   });
 
   it("renders streaming text through the streaming markdown renderer", () => {
@@ -1685,6 +1686,9 @@ describe("grouped chat rendering", () => {
     );
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");
+    expect(container.querySelector(".chat-bubble")?.classList).not.toContain(
+      "chat-bubble--assistant-surface",
+    );
   });
 
   it("renders a reading-indicator-only run without avatar or footer", () => {
@@ -2883,7 +2887,8 @@ describe("grouped chat rendering", () => {
       isToolExpanded: () => false,
     });
 
-    expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
+    const toolBubble = expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
+    expect(toolBubble.classList).not.toContain("chat-bubble--assistant-surface");
     const summary = container.querySelector<HTMLElement>(".chat-tool-msg-summary");
     expect(summary?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Sub-agent");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();

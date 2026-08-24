@@ -308,9 +308,13 @@ export function renderGroupedMessage(
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
+  const hasAssistantToolSurface = hasToolCards || assistantViewBlocks.length > 0;
+  const isCompletedAssistantMessage =
+    normalizedRole === "assistant" && !opts.isStreaming && !hasAssistantToolSurface;
   const bubbleClasses = [
     "chat-bubble",
     isToolShell ? "chat-bubble--tool-shell" : "",
+    isCompletedAssistantMessage ? "chat-bubble--assistant-surface" : "",
     opts.isStreaming ? "streaming" : "",
     opts.entryAnimated ? "chat-bubble--user-turn-enter" : "",
   ]
