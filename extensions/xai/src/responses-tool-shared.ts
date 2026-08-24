@@ -57,7 +57,7 @@ export function resolveXaiResponsesEndpoint(baseUrl?: unknown): string {
   return `${(trimString(baseUrl) ?? XAI_RESPONSES_BASE_URL).replace(/\/+$/, "")}/responses`;
 }
 
-export function buildXaiResponsesToolBody(params: {
+function buildXaiResponsesToolBody(params: {
   model: string;
   inputText: string;
   tools: Array<Record<string, unknown>>;
