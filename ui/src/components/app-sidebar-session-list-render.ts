@@ -8,6 +8,7 @@ import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.t
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import {
+  renderChildSessionLoadError,
   renderRecentSession,
   renderSessionTree,
   type SessionListHost,
@@ -21,7 +22,6 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import { renderPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 
 type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   totalRowCount: number;
@@ -37,7 +37,6 @@ type SidebarSessionListHost = SessionListHost & {
 
 type SessionCatalogRenderSnapshot = {
   catalogs: readonly SessionCatalog[];
-  refreshStatus: PanelRefreshStatus;
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
@@ -353,6 +352,7 @@ function renderSessionCatalog(params: {
       terminalAvailable: snapshot.terminalAvailable,
       onOpenTerminal: openCatalogSessionInTerminal,
       onOpenMenu: (request, x, y, trigger) => host.openCatalogMenu(request, x, y, trigger),
+      isMenuOpen: (key) => host.sidebarMenus.catalogMenu.isOpenFor(key),
     })}
   `;
 }
@@ -365,34 +365,21 @@ function renderSessionListBody(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
-  const catalogsVisible = host.sessionsStatusFilter !== "archived";
   const catalogsBySectionId = new Map(
     params.catalogs.catalogs.map((catalog) => [`catalog:${catalog.id}`, catalog]),
   );
-  const firstCatalogSectionIndex = catalogsVisible
-    ? params.sections.findIndex((section) => section.id.startsWith("catalog:"))
-    : -1;
-  const catalogStatus = catalogsVisible
-    ? renderPanelRefreshStatus({
-        status: params.catalogs.refreshStatus,
-        onRetry: () => void host.sessionData.refreshSessionCatalogs(),
-        className: "sidebar-session-error sidebar-session-catalog-error",
-      })
-    : nothing;
   return html`
-    ${params.sections.map((section, index) => {
+    ${params.sections.map((section) => {
       if (section.id.startsWith("catalog:")) {
         const catalog = catalogsBySectionId.get(section.id);
-        return html`${index === firstCatalogSectionIndex ? catalogStatus : nothing}${catalog
-          ? params.catalogRenderer
-            ? renderSessionCatalog({
-                host,
-                snapshot: params.catalogs,
-                catalog,
-                renderer: params.catalogRenderer,
-              })
-            : nothing
-          : nothing}`;
+        return catalog && params.catalogRenderer
+          ? renderSessionCatalog({
+              host,
+              snapshot: params.catalogs,
+              catalog,
+              renderer: params.catalogRenderer,
+            })
+          : nothing;
       }
       if (section.id === "work") {
         if (section.totalRowCount === 0) {
@@ -417,7 +404,6 @@ function renderSessionListBody(params: {
         nativeSessionsHaveMore: params.nativeSessionsHaveMore,
       });
     })}
-    ${firstCatalogSectionIndex < 0 ? catalogStatus : nothing}
   `;
 }
 
@@ -466,6 +452,7 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
+  const hiddenMainSessionKey = host.mainSessionRow()?.key;
   return html`
     <section
       class="sidebar-sessions ${host.sessionOrganizer.sessionListRemovalDrop
@@ -476,6 +463,7 @@ export function renderSessionList(params: {
       @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
     >
       ${renderSessionListToolbar(host)}
+      ${hiddenMainSessionKey ? renderChildSessionLoadError(host, hiddenMainSessionKey) : nothing}
       ${host.sessionData.sessionMutationError
         ? html`
             <div

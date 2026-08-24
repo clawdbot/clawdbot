@@ -77,6 +77,42 @@ test("sessions.preview returns transcript previews", async () => {
   ]);
 });
 
+test("sessions.preview honors maxChars up to the shared cap", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "sess-preview-explicit-budget";
+  const maxChars = 800;
+
+  await writeSessionStore({
+    entries: {
+      "agent:main:main": sessionStoreEntry(sessionId),
+    },
+  });
+  await seedSessionTranscript({
+    sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+    messages: [{ role: "assistant", content: "a".repeat(maxChars + 20) }],
+  });
+
+  const preview = await directSessionReq<{
+    previews: Array<{ items: Array<{ role: string; text: string }> }>;
+  }>("sessions.preview", { keys: ["main"], limit: 1, maxChars });
+
+  expect(preview.ok).toBe(true);
+  expect(preview.payload?.previews[0]?.items).toEqual([
+    { role: "assistant", text: `${"a".repeat(maxChars - 3)}...` },
+  ]);
+
+  const capped = await directSessionReq<{
+    previews: Array<{ items: Array<{ role: string; text: string }> }>;
+  }>("sessions.preview", { keys: ["main"], limit: 1, maxChars: Number.MAX_SAFE_INTEGER });
+
+  expect(capped.ok).toBe(true);
+  expect(capped.payload?.previews[0]?.items).toEqual([
+    { role: "assistant", text: `${"a".repeat(maxChars - 3)}...` },
+  ]);
+});
+
 test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
   await createSessionStoreDir();
   const now = Date.now();

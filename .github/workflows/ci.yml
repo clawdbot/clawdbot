@@ -141,7 +141,7 @@ jobs:
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
       - name: Checkout trusted CI harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-harness
@@ -500,7 +500,7 @@ jobs:
           fi
 
       - name: Setup manifest TypeScript runtime
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -860,6 +860,7 @@ jobs:
                 configs: shard.configs,
                 env: shard.env,
                 includePatterns: shard.includePatterns,
+                pretest_build_mode: shard.pretestBuildMode,
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
@@ -1040,7 +1041,7 @@ jobs:
     steps:
       - name: Checkout
         if: github.event_name != 'workflow_dispatch' || inputs.target_ref == ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -1094,7 +1095,7 @@ jobs:
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Checkout trusted CI harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-harness
@@ -1155,11 +1156,11 @@ jobs:
 
       - name: Scan pull request for leaked credentials
         if: github.event_name == 'pull_request'
-        uses: trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55 # v3.95.9
+        uses: trufflesecurity/trufflehog@bcfcf73aaf4759d4dadc2783177c245a02792318 # v3.97.0
         with:
           base: ${{ steps.diff_base.outputs.sha }}
           head: ${{ github.sha }}
-          version: "3.95.9@sha256:59b244249d1a1aef4baa24fe73d3c931616264482580d806d77f6c74d26b3e42"
+          version: "3.97.0@sha256:ff4c95e9df7d645daf2140e3ca1039031c63106268d5fbb25feb43ceca1bcc33"
           extra_args: --results=verified,unknown --fail-on-scan-errors
 
       - name: Prepare trusted pre-commit config
@@ -1196,7 +1197,7 @@ jobs:
           echo "python-version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Install pre-commit
-        run: python3 -m pip install --disable-pip-version-check pre-commit==4.2.0
+        run: python3 -m pip install --disable-pip-version-check pre-commit==4.6.2
 
       - name: Detect committed private keys
         run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
@@ -1351,7 +1352,7 @@ jobs:
 
       - name: Restore build-all step cache
         if: needs.preflight.outputs.cache_mode != 'off'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .artifacts/build-all-cache
           key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mts', 'scripts/runtime-postbuild.mjs', 'scripts/runtime-postbuild.mts', 'scripts/lib/tsx-cli-shim.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
@@ -1361,7 +1362,7 @@ jobs:
       - name: Restore dist build cache
         id: dist_build_cache
         if: needs.preflight.outputs.cache_mode != 'off'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             dist/
@@ -1703,7 +1704,7 @@ jobs:
       - &cache_playwright_chromium
         name: Cache Playwright Chromium
         if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.compatibility_target != 'true'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
@@ -2335,7 +2336,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
-          node-version: "22.22.3"
+          node-version: "22.23.2"
           install-bun: "false"
           build-all-cache-scope: full
 
@@ -2385,9 +2386,9 @@ jobs:
         if: matrix.requires_go == true
         # The current workflow validates frozen targets whose go.mod may predate this patch pin.
         # Keep the runner toolchain owned by the workflow; cache publication is gated separately.
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25.12"
+          go-version: "1.26.6"
           cache: false
 
       - name: Resolve docs i18n Go cache
@@ -2414,14 +2415,14 @@ jobs:
       - name: Restore docs i18n Go cache
         id: docs-i18n-go-cache
         if: matrix.requires_go == true && needs.preflight.outputs.cache_mode != 'off'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.docs-i18n-go-cache-key.outputs.paths }}
           key: ${{ steps.docs-i18n-go-cache-key.outputs.key }}
 
       - name: Verify docs i18n Go toolchain
         if: matrix.requires_go == true
-        run: test "$(go env GOVERSION)" = "go1.25.12"
+        run: test "$(go env GOVERSION)" = "go1.26.6"
 
       - name: Configure Node test resources
         # Scale the in-process Vitest worker budget with the cores the job
@@ -2453,7 +2454,7 @@ jobs:
         # Keep its implementation pinned to this workflow revision, while tests
         # continue to run against the checked-out candidate.
         if: ${{ hashFiles('scripts/ci-run-node-test-shard.mts') == '' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-workflow
@@ -2463,6 +2464,17 @@ jobs:
             scripts/lib/local-check-runtime.mts
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      # A few real-CLI E2E tests need a current dist tree. Build it before
+      # Vitest starts so the shard's worker processes cannot consume the
+      # cgroup memory that the build admission check must reserve.
+      - name: Build Node test runtime
+        if: matrix.pretest_build_mode != null
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_BUILD_PRIVATE_QA: ${{ matrix.pretest_build_mode == 'private-qa' && '1' || '0' }}
+          VITEST: "1"
+        run: pnpm build
 
       - name: Run Node test shard
         env:
@@ -2492,7 +2504,7 @@ jobs:
 
       - name: Save docs i18n Go cache
         if: always() && matrix.requires_go == true && needs.preflight.outputs.cache_write_allowed == 'true' && steps.docs-i18n-go-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.docs-i18n-go-cache-key.outputs.paths }}
           key: ${{ steps.docs-i18n-go-cache.outputs.cache-primary-key }}
@@ -2560,7 +2572,7 @@ jobs:
 
       - name: Cache extension package boundary artifacts for hosted lint
         if: needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             dist/plugin-sdk
@@ -2577,7 +2589,7 @@ jobs:
       # protected boundary lane may publish this repository-global snapshot.
       - name: Mount extension boundary sticky disk
         if: matrix.task == 'lint' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
+        uses: useblacksmith/stickydisk@35ba2e331a80056a42af053ee54968511de2b7c7 # v1.5.0
         with:
           # One stable disk for the whole repository. The v1 per-PR/per-config
           # keys minted a new backing disk for every PR and toolchain change
@@ -3008,7 +3020,7 @@ jobs:
       # repository-global snapshots, so they keep the GitHub cache path.
       - name: Mount extension boundary sticky disk
         if: matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
+        uses: useblacksmith/stickydisk@35ba2e331a80056a42af053ee54968511de2b7c7 # v1.5.0
         with:
           # One stable disk for the whole repository. The v1 per-PR/per-config
           # keys minted a new backing disk for every PR and toolchain change
@@ -3058,7 +3070,7 @@ jobs:
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
         if: needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             dist/plugin-sdk
@@ -3358,7 +3370,7 @@ jobs:
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -3654,7 +3666,7 @@ jobs:
       - name: Restore SwiftPM cache
         id: swiftpm-cache
         if: needs.preflight.outputs.cache_mode != 'off'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
@@ -3664,7 +3676,7 @@ jobs:
       - name: Restore Swift build directory cache
         id: swift-build-cache
         if: needs.preflight.outputs.cache_mode != 'off'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build
           key: ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
@@ -3800,14 +3812,14 @@ jobs:
 
       - name: Save SwiftPM cache
         if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
 
       - name: Save Swift build directory cache
         if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build
           key: ${{ steps.swift-build-cache.outputs.cache-primary-key }}
@@ -3828,7 +3840,7 @@ jobs:
       - name: Select Xcode 26
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.5.app /Applications/Xcode-26.5.0.app; do
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
             if [ -d "$xcode_app/Contents/Developer" ]; then
               sudo xcode-select -s "$xcode_app/Contents/Developer"
               break
@@ -3836,8 +3848,8 @@ jobs:
           done
           xcodebuild -version
           xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.* ]]; then
-            echo "error: expected Xcode 26.x, got $xcode_version" >&2
+          if [[ "$xcode_version" != 26.6* ]]; then
+            echo "error: expected Xcode 26.6, got $xcode_version" >&2
             exit 1
           fi
           swift --version
@@ -4052,7 +4064,7 @@ jobs:
           exit 1
 
       - name: Checkout CI Android toolchain action
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-harness
@@ -4082,7 +4094,7 @@ jobs:
       # runs-on already selects non-Blacksmith ubuntu-24.04 runners).
       - name: Mount Gradle sticky disk
         if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
-        uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
+        uses: useblacksmith/stickydisk@35ba2e331a80056a42af053ee54968511de2b7c7 # v1.5.0
         with:
           # One stable disk per matrix task. The v1 per-PR/per-dependency-hash
           # keys minted a new backing disk for every PR and dependency bump

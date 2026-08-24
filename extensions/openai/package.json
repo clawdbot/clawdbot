@@ -6,8 +6,8 @@
   "type": "module",
   "dependencies": {
     "libopus-wasm": "0.2.0",
-    "werift": "0.24.1",
-    "ws": "8.21.1",
+    "werift": "0.24.4",
+    "ws": "8.21.3",
     "zod": "4.4.3"
   },
   "devDependencies": {

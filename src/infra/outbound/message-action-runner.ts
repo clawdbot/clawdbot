@@ -315,6 +315,7 @@ async function handleInternalSourceReplySendAction(
       agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
       payload: sourceReplyPayload,
       idempotencyKey,
+      runId: input.runId,
       sourceReplyFinal: input.sourceReplyFinal,
       toolCallId: input.sourceReplyToolCallId,
       sourceTurnId: input.messageActionAuthorization?.toolContext?.currentSourceTurnId,

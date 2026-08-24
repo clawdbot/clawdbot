@@ -77,7 +77,7 @@ type CommandHandlerContext = {
   refreshSessionInfo: () => Promise<void>;
   loadHistory: () => Promise<unknown>;
   setSession: (key: string) => Promise<void>;
-  refreshAgents: () => Promise<Result<void, string>>;
+  refreshAgents: (ownsRefresh?: () => boolean) => Promise<Result<void, string>>;
   abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
@@ -152,6 +152,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     boundary: null as "new" | "reset" | null,
     epoch: 0,
   };
+  let pickerRequest: { overlay?: OverlayHandle } | null = null;
 
   // Hold one owner through the full identity transition so later input cannot
   // target the session being retired while create/reset awaits the backend.
@@ -223,7 +224,18 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     chatLog.addSystem(`agent set to ${state.currentAgentId}; use /openclaw to return`);
   };
 
+  const beginPickerRequest = (): { overlay?: OverlayHandle } => {
+    if (pickerRequest?.overlay) {
+      closeOverlayAndRender(pickerRequest.overlay);
+    }
+    return (pickerRequest = {});
+  };
+
   const closeOverlayAndRender = (handle: OverlayHandle) => {
+    if (pickerRequest?.overlay !== handle) {
+      return;
+    }
+    pickerRequest = null;
     closeOverlay(handle);
     tui.requestRender();
   };
@@ -301,6 +313,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       onCancel?: () => void;
     },
     onSelect: (value: string) => Promise<void>,
+    request: { overlay?: OverlayHandle },
   ) => {
     selector.onSelect = (item) => {
       void (async () => {
@@ -315,17 +328,18 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       })();
     };
     selector.onCancel = () => closeOverlayAndRender(overlayHandle);
-    const overlayHandle: OverlayHandle = openOverlay(selector as Component);
+    const overlayHandle = (request.overlay = openOverlay(selector as Component));
     tui.requestRender();
   };
 
   const openModelSelector = async () => {
+    const request = beginPickerRequest();
     const selection = captureSessionSelection();
     try {
       chatLog.addSystem("loading models...");
       tui.requestRender();
       const models = await client.listModels({ agentId: selection.agentId });
-      if (!isCurrentSessionSelection(selection)) {
+      if (request !== pickerRequest || !isCurrentSessionSelection(selection)) {
         return;
       }
       if (models.length === 0) {
@@ -341,12 +355,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           description: model.name && model.name !== model.id ? model.name : "",
         };
       });
-      const selector = createSearchableSelectList(items, 9);
-      openSelector(selector, async (value) => {
-        await applySessionSetting({ model: value }, `model set to ${value}`, "model set failed");
-      });
+      openSelector(
+        createSearchableSelectList(items, 9),
+        (value) =>
+          applySessionSetting({ model: value }, `model set to ${value}`, "model set failed"),
+        request,
+      );
     } catch (err) {
-      if (!isCurrentSessionSelection(selection)) {
+      if (request !== pickerRequest || !isCurrentSessionSelection(selection)) {
         return;
       }
       chatLog.addSystem(`model list failed: ${formatTuiErrorMessage(err)}`);
@@ -355,7 +371,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openAgentSelector = async () => {
-    const refreshResult = await refreshAgents();
+    const request = beginPickerRequest();
+    const refreshResult = await refreshAgents(() => request === pickerRequest);
+    if (request !== pickerRequest) {
+      return;
+    }
     if (!refreshResult.ok) {
       tui.requestRender();
       return;
@@ -371,50 +391,32 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       label: agent.name ? `${agent.id} (${agent.name})` : agent.id,
       description: agent.id === state.agentDefaultId ? "default" : "",
     }));
-    const selector = createSearchableSelectList(items, 9);
-    openSelector(selector, async (value) => {
-      await setAgent(value);
-    });
+    openSelector(createSearchableSelectList(items, 9), setAgent, request);
   };
 
   const openContextModeSelector = () => {
+    const request = beginPickerRequest();
     const items = [
-      {
-        value: "list",
-        label: "list",
-        description: "Short context breakdown",
-      },
-      {
-        value: "detail",
-        label: "detail",
-        description: "Per-file, per-tool, per-skill, and system prompt size",
-      },
-      {
-        value: "json",
-        label: "json",
-        description: "Machine-readable context report",
-      },
-    ];
+      ["list", "Short context breakdown"] as const,
+      ["detail", "Per-file, per-tool, per-skill, and system prompt size"] as const,
+      ["json", "Machine-readable context report"] as const,
+    ].map(([value, description]) => ({ value, label: value, description }));
     const selector = createSearchableSelectList(items, 9);
-    openSelector(selector, async (value) => {
-      await sendMessage(`/context ${value}`);
-    });
+    openSelector(selector, (value) => sendMessage(`/context ${value}`), request);
   };
 
   const openSessionSelector = async () => {
+    const request = beginPickerRequest();
     const selection = captureSessionSelection();
     try {
       const sessions = await loadRecentSessions(client, { agentId: selection.agentId });
-      if (!isCurrentSessionSelection(selection)) {
+      if (request !== pickerRequest || !isCurrentSessionSelection(selection)) {
         return;
       }
-      const items = buildSessionChoices(sessions);
-      const selector = createFilterableSelectList(items, 9);
-      openSelector(selector, async (value) => {
-        await setSession(value);
-      });
+      const selector = createFilterableSelectList(buildSessionChoices(sessions), 9);
+      openSelector(selector, setSession, request);
     } catch (err) {
-      if (!isCurrentSessionSelection(selection)) {
+      if (request !== pickerRequest || !isCurrentSessionSelection(selection)) {
         return;
       }
       chatLog.addSystem(`sessions list failed: ${formatTuiErrorMessage(err)}`);
@@ -423,6 +425,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openSettings = () => {
+    const request = beginPickerRequest();
     const items = [
       {
         id: "tools",
@@ -450,12 +453,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         tui.requestRender();
       },
-      () => {
-        closeOverlay(overlayHandle);
-        tui.requestRender();
-      },
+      () => closeOverlayAndRender(overlayHandle),
     );
-    const overlayHandle: OverlayHandle = openOverlay(settings);
+    const overlayHandle = (request.overlay = openOverlay(settings));
     tui.requestRender();
   };
 

@@ -1944,6 +1944,38 @@ describe("native hook relay registry", () => {
     expect(testing.getNativeHookRelayBridgeRecordForTests(liveRelayId)).toBeDefined();
   });
 
+  it("treats direct bridge records with a dead owning pid as absent", async () => {
+    const relayId = await writeForeignNativeHookRelayBridgeRecordForTests(
+      uniqueNativeHookRelayIdForTests("codex-dead-pid-bridge"),
+      {
+        pid: 9_999_996,
+        expiresAtMs: Date.now() + 60_000,
+      },
+    );
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid === 9_999_996) {
+        throw Object.assign(new Error("missing process"), { code: "ESRCH" });
+      }
+      return true;
+    });
+
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId,
+        event: "pre_tool_use",
+        registrationTimeoutMs: 1,
+        timeoutMs: 50,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge not found");
+    expect(kill).toHaveBeenCalledWith(9_999_996, 0);
+  });
+
   it("accepts only loopback direct bridge records", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",

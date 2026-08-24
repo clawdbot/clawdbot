@@ -19,10 +19,13 @@ import {
 } from "./telegram-desktop-recorder-contract.ts";
 import {
   destroyMantisSut,
+  execMantisSut,
   type MantisSutRecovery,
   preserveMantisSutRuntimeArtifacts,
+  restartMantisSut,
   startMantisSut,
   stopMantisSut,
+  waitForLogAfter,
 } from "./telegram-mantis-sut.ts";
 
 const execFileAsync = promisify(execFile);
@@ -121,6 +124,9 @@ const invocationSchema = z.object({
   at: z.string(),
   command: z.string(),
   cursor: z.number().int().nonnegative().optional(),
+  exitCode: z.number().int().optional(),
+  stderrBytes: z.number().int().nonnegative().optional(),
+  stdoutBytes: z.number().int().nonnegative().optional(),
 });
 const recorderArtifactsSchema = z.object({
   artifacts: z.record(z.string(), z.string()),
@@ -166,7 +172,9 @@ type ObserverResponse = {
 } & Record<string, unknown>;
 type DesktopRecorderFailureBudget = z.infer<typeof desktopRecorderFailureBudgetSchema>;
 
-const MAX_SENDS = 12;
+// Shared-QA-bot flood-safety ceiling; this is not a scenario or feasibility bound.
+const MAX_SENDS = 40;
+const MAX_EXEC_COMMAND_BYTES = 64 * 1024;
 const MAX_RPC_BYTES = 4 * 1024 * 1024;
 const commandOptions: Record<string, readonly string[]> = {
   abort: ["--lane"],
@@ -176,6 +184,7 @@ const commandOptions: Record<string, readonly string[]> = {
   "botapi-requests": ["--lane", "--method", "--limit"],
   delete: ["--lane", "--message-id"],
   desktop: ["--lane", "--actions-file", "--timeout-seconds"],
+  exec: ["--lane", "--timeout-seconds", "--command", "--command-file"],
   finish: ["--lane", "--focus-message-id"],
   mock: [
     "--lane",
@@ -195,6 +204,7 @@ const commandOptions: Record<string, readonly string[]> = {
   ],
   press: ["--lane", "--message-id", "--button"],
   requests: ["--lane"],
+  restart: ["--lane", "--ready-timeout-seconds"],
   screenshot: ["--lane"],
   send: ["--lane", "--text", "--text-file", "--media", "--reply-to"],
   start: ["--lane", "--repo-root", "--config"],
@@ -447,12 +457,20 @@ function readPublicFile(
   maxBytes: number,
 ): { relative: string; resolved: string; text: string } {
   const resolved = fs.realpathSync(input);
+  const expected = fs.lstatSync(resolved);
   const descriptor = fs.openSync(resolved, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
-    // Containment is checked after the open so the descriptor being read is the file the
-    // check accepted, not one a concurrent swap redirected it to.
-    const relative = publicRelativePath(root, resolved, label);
     const stat = fs.fstatSync(descriptor);
+    // Bind the read to the path inspected before open so a concurrent swap cannot redirect it.
+    if (stat.dev !== expected.dev || stat.ino !== expected.ino) {
+      throw new Error(`${label} must be inside the Mantis output directory.`);
+    }
+    // Linux pins the opened path directly; other platforms reject pre-open inode swaps.
+    const opened =
+      process.platform === "linux"
+        ? fs.realpathSync(`/proc/self/fd/${descriptor}`)
+        : fs.realpathSync(resolved);
+    const relative = publicRelativePath(root, opened, label);
     if (!stat.isFile() || stat.size > maxBytes) {
       throw new Error(`${label} must be a regular file no larger than ${maxBytes} bytes.`);
     }
@@ -543,12 +561,14 @@ function appendInvocation(
   command: string,
   args: Record<string, unknown>,
   cursor?: number,
+  result?: { exitCode: number; stderrBytes: number; stdoutBytes: number },
 ): void {
   state.invocations.push({
     args,
     at: new Date().toISOString(),
     command,
     ...(cursor === undefined ? {} : { cursor }),
+    ...result,
   });
   if (cursor !== undefined) {
     state.lastCursor = cursor;
@@ -682,21 +702,19 @@ function redact(value: unknown, secret: string): unknown {
   return value;
 }
 
+function redactSutValue(value: unknown, sutToken: string): unknown {
+  const botId = sutToken.split(":", 1)[0] ?? "";
+  const aliasToken = botId ? `${botId}:${"A".repeat(35)}` : "";
+  return redact(redact(value, sutToken), aliasToken);
+}
+
 function providerRequests(state: ActiveSession, secret: string): unknown[] {
-  if (!fs.existsSync(state.sut.requestLog)) {
-    return [];
-  }
-  return fs
-    .readFileSync(state.sut.requestLog, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .slice(0, 100)
-    .map((line, index) =>
-      Object.assign(
-        { index: index + 1 },
-        redact(JSON.parse(line), secret) as Record<string, unknown>,
-      ),
-    );
+  // Tail window, like botApiRequests: a long session must surface its newest
+  // provider turns. Entries carry a producer-stamped `seq` ordinal, so the
+  // window keeps absolute order without rereading the whole file.
+  return boundedNdjson(state.sut.requestLog, 128).map(
+    (entry) => redact(entry, secret) as Record<string, unknown>,
+  );
 }
 
 function boundedNdjson(file: string, limit: number): unknown[] {
@@ -1540,6 +1558,85 @@ async function runDesktopActions(
   return { ...result, actionsSha256 };
 }
 
+function readExecCommand(values: Map<string, string>, outputRoot: string): string {
+  const direct = values.get("--command");
+  const commandFile = values.get("--command-file");
+  if ((direct === undefined) === (commandFile === undefined)) {
+    throw new Error("exec needs exactly one of --command or --command-file.");
+  }
+  const command =
+    commandFile !== undefined
+      ? readPublicFile(outputRoot, commandFile, "--command-file", MAX_EXEC_COMMAND_BYTES).text
+      : (direct ?? "");
+  const bytes = Buffer.byteLength(command);
+  if (bytes < 1 || bytes > MAX_EXEC_COMMAND_BYTES) {
+    throw new Error(`exec command must contain 1 to ${MAX_EXEC_COMMAND_BYTES} bytes.`);
+  }
+  return command;
+}
+
+async function runSutExec(
+  state: ActiveSession,
+  values: Map<string, string>,
+  roots: Roots,
+  sutToken: string,
+): Promise<Record<string, unknown>> {
+  const command = readExecCommand(values, roots.outputRoot);
+  const timeoutSeconds = values.has("--timeout-seconds")
+    ? numberOption(values, "--timeout-seconds", 1_800, 1)
+    : 120;
+  const result = await execMantisSut(state.sut, command, timeoutSeconds);
+  const redactedCommand = redactSutValue(command, sutToken) as string;
+  appendInvocation(state, "exec", { command: redactedCommand, timeoutSeconds }, undefined, {
+    exitCode: result.exitCode,
+    stderrBytes: result.stderrBytes,
+    stdoutBytes: result.stdoutBytes,
+  });
+  return redactSutValue(
+    {
+      exitCode: result.exitCode,
+      stderr: result.stderr,
+      stdout: result.stdout,
+      truncated: result.truncated,
+    },
+    sutToken,
+  ) as Record<string, unknown>;
+}
+
+async function restartSutGateway(
+  state: ActiveSession,
+  values: Map<string, string>,
+  roots: Roots,
+): Promise<Record<string, unknown>> {
+  const readyTimeoutSeconds = values.has("--ready-timeout-seconds")
+    ? numberOption(values, "--ready-timeout-seconds", 300, 1)
+    : 60;
+  const logOffset = fs.statSync(state.sut.gatewayLog).size;
+  const restartedAt = new Date().toISOString();
+  const startedAt = Date.now();
+  try {
+    restartMantisSut(state.sut);
+    await waitForLogAfter(
+      state.sut.gatewayLog,
+      logOffset,
+      /\[gateway\] ready/u,
+      "restarted gateway",
+      readyTimeoutSeconds * 1_000,
+    );
+  } catch (error) {
+    appendInvocation(state, "restart", {
+      readyAfterMs: Date.now() - startedAt,
+      readyTimeoutSeconds,
+      status: "failed",
+    });
+    saveActive(roots.sessionRoot, state);
+    throw error;
+  }
+  const readyAfterMs = Date.now() - startedAt;
+  appendInvocation(state, "restart", { readyAfterMs, readyTimeoutSeconds });
+  return { readyAfterMs, restartedAt, status: "ready" };
+}
+
 async function focusMessage(state: ActiveSession, messageId: string): Promise<void> {
   if (!/^\d+$/u.test(messageId) || BigInt(messageId) < 1n) {
     throw new Error("--message-id must be a positive Telegram server message id.");
@@ -1695,11 +1792,13 @@ async function stopActiveLane(
   }
   // Recorder export and SUT teardown are independent; start export before the
   // synchronous container calls so both cleanup paths make progress together.
+  const finalSendAt = state.invocations.findLast((invocation) => invocation.command === "send")?.at;
   const recorderStop = runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
     "stop",
     "--session",
     recorderRelativePath(state.recorderSession),
     ...(crop ? ["--crop", "telegram-window"] : []),
+    ...(crop && finalSendAt ? ["--since", finalSendAt] : []),
   ]);
   cleanupErrors.push(...teardownSut(state.sut, state.privateDir));
   try {
@@ -1983,6 +2082,10 @@ async function main(): Promise<void> {
       outputJson({ count: requests.length, requests });
     } else if (cli.command === "desktop") {
       outputJson(await runDesktopActions(state, cli.values, roots));
+    } else if (cli.command === "exec") {
+      outputJson(await runSutExec(state, cli.values, roots, credential.sutToken));
+    } else if (cli.command === "restart") {
+      outputJson(await restartSutGateway(state, cli.values, roots));
     } else if (cli.command === "send") {
       const sent = await sendVisibleMessage(state, cli.values, roots, credential.sutToken);
       outputJson({ ...sent.response, revealedMessageId: sent.revealedMessageId });

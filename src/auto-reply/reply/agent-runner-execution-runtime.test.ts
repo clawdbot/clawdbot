@@ -343,6 +343,7 @@ describe("executeAgentTurn: runtime selection", () => {
       provider: "anthropic",
       model: "claude-opus-4-6",
       trigger: "heartbeat",
+      lane: "cron-nested",
       agentHarnessId: "codex",
       agentHarnessRuntimeOverride: "codex",
     });

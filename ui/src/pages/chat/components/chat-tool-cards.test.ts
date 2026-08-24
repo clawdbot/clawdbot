@@ -956,7 +956,7 @@ describe("tool-cards", () => {
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
 
-  it("does not add a full-message request for ambiguous tool details", () => {
+  it("opens ambiguous tool details with the same sidebar output", () => {
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn();
     render(
@@ -983,7 +983,10 @@ describe("tool-cards", () => {
     sidebarButton!.click();
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
-    expect(sidebar.kind).toBe("markdown");
-    expect(sidebar.fullMessageRequest).toBeUndefined();
+    expect(sidebar).toEqual({
+      kind: "markdown",
+      content: "## Browser.open\n\n**Tool:** `browser.open`\n\n### Tool output\nOpened page",
+      rawText: "Opened page",
+    });
   });
 });

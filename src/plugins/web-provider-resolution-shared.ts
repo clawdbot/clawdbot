@@ -15,39 +15,6 @@ type WebProviderCandidateResolution = {
   manifestRecords?: readonly PluginManifestRecord[];
 };
 
-type WebProviderSortEntry = {
-  id: string;
-  pluginId: string;
-  autoDetectOrder?: number;
-};
-
-function comparePluginProvidersAlphabetically(
-  left: Pick<WebProviderSortEntry, "id" | "pluginId">,
-  right: Pick<WebProviderSortEntry, "id" | "pluginId">,
-): number {
-  return left.id.localeCompare(right.id) || left.pluginId.localeCompare(right.pluginId);
-}
-
-export function sortPluginProviders<T extends Pick<WebProviderSortEntry, "id" | "pluginId">>(
-  providers: T[],
-): T[] {
-  return providers.toSorted(comparePluginProvidersAlphabetically);
-}
-
-/** Sorts provider candidates for auto-detect while keeping equal priorities deterministic. */
-export function sortPluginProvidersForAutoDetect<T extends WebProviderSortEntry>(
-  providers: T[],
-): T[] {
-  return providers.toSorted((left, right) => {
-    const leftOrder = left.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-    const rightOrder = right.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-    if (leftOrder !== rightOrder) {
-      return leftOrder - rightOrder;
-    }
-    return comparePluginProvidersAlphabetically(left, right);
-  });
-}
-
 function pluginManifestDeclaresProviderConfig(
   record: PluginManifestRecord,
   configKey: WebProviderConfigKey,

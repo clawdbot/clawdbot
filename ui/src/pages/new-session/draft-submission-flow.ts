@@ -218,6 +218,7 @@ export class DraftSubmissionFlow {
       agentId: this.place.agentId,
       message: options.message ?? "",
       model: this.place.modelControl.selected,
+      contextWindow: this.place.modelControl.contextWindow,
       thinkingLevel: this.place.modelControl.thinkingLevel,
       visibility: options.visibility ?? this.visibilityValue,
       attachments: options.attachments,
@@ -332,7 +333,7 @@ export class DraftSubmissionFlow {
     return requiresChatModelSetup({
       catalog:
         catalog.isTarget(this.read().data) ||
-        Boolean(this.place.cloudProfileId || this.place.deviceId) ||
+        this.place.remotePlacement ||
         Boolean(this.pendingPlacement.sessionKey),
       connected: this.gateway.connected,
       agentsLoaded: this.read().context?.agents.state.agentsList !== null,

@@ -394,6 +394,25 @@ describe("realtime voice bridge session runtime", () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it("forwards the close disposition to the provider bridge", () => {
+    const close = vi.fn();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: () => makeBridge({ close }),
+    };
+    const session = createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn() },
+    });
+
+    session.close({ disposition: "detach" });
+
+    expect(close).toHaveBeenCalledWith({ disposition: "detach" });
+  });
+
   it("permanently closes once while preserving synchronous transcript flush", async () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const close = vi.fn(() => {

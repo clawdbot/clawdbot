@@ -405,6 +405,7 @@ final class NodeAppModel {
 
     private var mainSessionBaseKey: String = "main"
     private var gatewaySessionScope: String?
+    var gatewayAccentColorHex: String?
     private var focusedChatSessionKey: String?
     // Two-part unread guard mirroring Android: the opened key survives read
     // confirmations so later unread episodes on the same open chat re-acknowledge;
@@ -1570,12 +1571,14 @@ final class NodeAppModel {
             let session = config["session"] as? [String: Any]
             let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
             let scope = (session?["scope"] as? String) ?? "per-sender"
+            let accentHex = ColorHexSupport.gatewayUserAccentHex(configUI: config["ui"] as? [String: Any])
             guard shouldApply(),
                   GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
             else { return }
             await MainActor.run {
                 self.mainSessionBaseKey = mainKey
                 self.gatewaySessionScope = scope
+                self.gatewayAccentColorHex = accentHex
                 self.synchronizeTalkSessionKey()
             }
         } catch {
@@ -1721,6 +1724,11 @@ final class NodeAppModel {
     {
         guard shouldContinue(), let payload = evt.payload else { return }
         switch evt.event {
+        case "config.changed":
+            // Persisted config writes (accent, session routing) must reach an
+            // already-connected app; the protocol directs clients to re-read via
+            // config.get, which the guarded branding refresh already does.
+            await self.refreshBrandingFromGateway(shouldApply: shouldContinue)
         case "voicewake.changed":
             struct Payload: Decodable { var triggers: [String] }
             guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { return }
@@ -3843,6 +3851,7 @@ extension NodeAppModel {
         LiveActivityManager.shared.endActivity(reason: "new_gateway_connect")
         self.mainSessionBaseKey = "main"
         self.gatewaySessionScope = nil
+        self.gatewayAccentColorHex = nil
         self.gatewayDefaultAgentId = nil
         self.gatewayAgents = []
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
@@ -5108,6 +5117,7 @@ extension NodeAppModel {
     private func configureLocalGatewayFixtureSession(agents: [AgentSummary]) {
         self.mainSessionBaseKey = "main"
         self.gatewaySessionScope = "per-sender"
+        self.gatewayAccentColorHex = nil
         self.selectedAgentId = nil
         self.gatewayDefaultAgentId = "main"
         self.gatewayAgents = agents

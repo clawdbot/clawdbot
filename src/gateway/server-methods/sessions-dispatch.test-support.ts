@@ -154,6 +154,30 @@ export function makeDispatchTestContext(
         },
       },
     }),
+    // Dispatch replies project runner state through the canonical fenced
+    // reader; the default stub mirrors the placement's bound device as live.
+    workerPlacementRunnerAvailabilityReader: {
+      read: (placement: { state?: string; environmentId?: string | null }) => {
+        if (placement.state !== "active" && placement.state !== "draining") {
+          return undefined;
+        }
+        const environmentId =
+          typeof placement.environmentId === "string" ? placement.environmentId : "";
+        const service = workerEnvironmentService as {
+          get?: (environmentId: string) => { nodeDeviceId?: string } | undefined;
+        };
+        const deviceId =
+          service.get?.(environmentId)?.nodeDeviceId ??
+          (environmentId.startsWith("device-environment-")
+            ? environmentId.slice("device-environment-".length)
+            : undefined);
+        return {
+          kind: "device",
+          status: "available",
+          ...(deviceId ? { deviceId } : {}),
+        };
+      },
+    },
     ...overrides,
     workerEnvironmentService: workerEnvironmentService as never,
   } as unknown as GatewayRequestContext;
@@ -161,7 +185,7 @@ export function makeDispatchTestContext(
 
 export async function invokeSessionDispatch(
   context: GatewayRequestContext,
-  target: { profileId?: string; machineClass?: string; deviceId?: string } = {
+  target: { profileId?: string; machineClass?: string; deviceId?: string; autoDevice?: true } = {
     profileId: "test",
   },
   sessionMutationAuthorization?: SessionMutationAuthorization,

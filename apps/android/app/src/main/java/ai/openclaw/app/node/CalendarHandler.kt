@@ -402,15 +402,15 @@ class CalendarHandler private constructor(
     val isAllDay = (params["isAllDay"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false
     val addRange = normalizeAddRange(start, end, isAllDay)
     return CalendarAddRequest(
-      title = (params["title"] as? JsonPrimitive)?.content?.trim().orEmpty(),
+      title = parseJsonString(params, "title")?.trim().orEmpty(),
       startMs = addRange.start.toEpochMilli(),
       endMs = addRange.end.toEpochMilli(),
       isAllDay = isAllDay,
       timeZoneId = if (isAllDay) "UTC" else TimeZone.getDefault().id,
-      location = (params["location"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
-      notes = (params["notes"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
+      location = parseJsonString(params, "location")?.trim()?.ifEmpty { null },
+      notes = parseJsonString(params, "notes")?.trim()?.ifEmpty { null },
       calendarId = (params["calendarId"] as? JsonPrimitive)?.content?.toLongOrNull(),
-      calendarTitle = (params["calendarTitle"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
+      calendarTitle = parseJsonString(params, "calendarTitle")?.trim()?.ifEmpty { null },
     )
   }
 

@@ -546,6 +546,7 @@ suite.define(() => {
         await page.mouse.move(1, 1);
         await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
 
+        await page.keyboard.press("Tab");
         await messagesHint.focus();
         await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
         await page.getByRole("button", { name: "Cost", exact: true }).focus();
@@ -558,6 +559,7 @@ suite.define(() => {
           .toContain("Total user and assistant messages in range.");
         await page.getByRole("button", { name: "Cost", exact: true }).click();
         await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await page.keyboard.press("Tab");
         await messagesHint.focus();
         await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
         await messagesHint.press("Escape");

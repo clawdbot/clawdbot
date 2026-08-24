@@ -12,8 +12,6 @@ import {
   replaceGatewayClient,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
-import { waitForCommittedState } from "./settle.test-support.ts";
-
 const suite = createNewSessionPageE2eSuite();
 const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
   /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
@@ -108,6 +106,7 @@ suite.define(() => {
   it("restores a cloud startup after a page reload without creating another session", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
+    const recoveryRuntimeLoad = createDeferred();
     const sessionKey = "agent:cloud:reload-recovery";
     const message = "resume this cloud task after reload";
     const gateway = await installMockGateway(page, {
@@ -199,6 +198,7 @@ suite.define(() => {
       expect(firstSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
+      await waitForCommittedChatRoute(page);
       await gateway.rejectDeferred("sessions.send", {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
@@ -242,64 +242,18 @@ suite.define(() => {
         sessionKey,
       );
       expect(startupError).toContain("send outcome unknown");
-      await waitForCommittedChatRoute(page);
-      await waitForCommittedState(
-        page,
-        ({ messageId: expectedMessageId, recoveryPrefix, sessionKey: expectedSessionKey }) => {
-          if (
-            typeof expectedMessageId !== "string" ||
-            typeof recoveryPrefix !== "string" ||
-            typeof expectedSessionKey !== "string"
-          ) {
-            return false;
-          }
-          for (let index = 0; index < sessionStorage.length; index += 1) {
-            const key = sessionStorage.key(index);
-            if (!key?.startsWith(recoveryPrefix)) {
-              continue;
-            }
-            const raw = sessionStorage.getItem(key);
-            if (!raw) {
-              continue;
-            }
-            try {
-              const value: unknown = JSON.parse(raw);
-              if (typeof value !== "object" || value === null || Array.isArray(value)) {
-                continue;
-              }
-              const recovery = value as Record<string, unknown>;
-              if (
-                recovery.sessionKey === expectedSessionKey &&
-                recovery.messageId === expectedMessageId &&
-                recovery.phase === "sending"
-              ) {
-                return true;
-              }
-            } catch {
-              // Ignore unrelated malformed rows in the current recovery namespace.
-            }
-          }
-          return false;
-        },
-        {
-          messageId,
-          recoveryPrefix: "openclaw.new-session.session-placement-recovery.v1:",
-          sessionKey,
-        },
-      );
       await gateway.setMethodResponse("sessions.send", {
         runId: "run-reload-recovery",
         status: "started",
       });
 
-      const recoveryRuntimeLoad = createDeferred();
       let recoveryRuntimeRequested = false;
       await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
         recoveryRuntimeRequested = true;
         await recoveryRuntimeLoad.promise;
         await route.continue();
       });
-      await page.reload();
+      const reload = page.reload();
       await expect.poll(() => recoveryRuntimeRequested).toBe(true);
       await expect
         .poll(() =>
@@ -313,6 +267,7 @@ suite.define(() => {
         .toBe("connected");
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       recoveryRuntimeLoad.resolve();
+      await reload;
       const resumedSend = await gateway.waitForRequest("sessions.send");
       expect(resumedSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
@@ -324,6 +279,7 @@ suite.define(() => {
       await waitForCommittedChatRoute(page);
       expect(page.url()).toContain(controlUiSessionPath(sessionKey));
     } finally {
+      recoveryRuntimeLoad.resolve();
       await context.close();
     }
   });

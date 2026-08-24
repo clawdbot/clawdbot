@@ -810,6 +810,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     const result = await performGatewaySessionReset({
       key,
+      operatorRoleActor: { kind: "system" },
       ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       reason: reason === "new" ? "new" : "reset",
       commandSource: "tui:embedded",
@@ -829,6 +830,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const cfg = getRuntimeConfig();
     const result = await createGatewaySession({
       cfg,
+      operatorRoleActor: { kind: "system" },
       ...opts,
       creation: { via: "operator", actor: { type: "human" } },
       armSessionDiffBaselineCapture: true,
@@ -926,8 +928,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       defaultProvider: DEFAULT_PROVIDER,
       agentId: opts?.agentId,
     });
-    const entries = allowedCatalog.length > 0 ? allowedCatalog : catalog;
-    return entries.map((entry) => ({
+    return allowedCatalog.map((entry) => ({
       id: entry.id,
       name: entry.name ?? entry.id,
       provider: entry.provider,

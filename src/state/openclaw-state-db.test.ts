@@ -1480,6 +1480,39 @@ afterEach(() => {
 });
 
 describe("openclaw state database", () => {
+  it.runIf(process.platform === "linux")(
+    "evicts a detached WAL family before reopening the shared state database",
+    () => {
+      vi.useFakeTimers();
+      try {
+        const stateDir = createTempStateDir();
+        const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+        const opened = openOpenClawStateDatabase(options);
+        expect(opened.walMaintenance.checkpoint()).toBe(true);
+        fs.unlinkSync(`${opened.path}-wal`);
+        fs.unlinkSync(`${opened.path}-shm`);
+
+        vi.advanceTimersByTime(30 * 60 * 1000);
+
+        expect(opened.db.isOpen).toBe(false);
+        expect(() => opened.db.prepare("PRAGMA schema_version").get()).toThrow();
+        const reopened = openOpenClawStateDatabase(options);
+        expect(reopened).not.toBe(opened);
+        expect(reopened.db.isOpen).toBe(true);
+        expect(() =>
+          reopened.db
+            .prepare(
+              "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'",
+            )
+            .run(),
+        ).not.toThrow();
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("resolves under the shared state database directory", () => {
     const stateDir = createTempStateDir();
 
@@ -6217,6 +6250,65 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
           .orderBy("event_key"),
       ).rows.map((row) => row.event_key),
     ).toEqual(["outer"]);
+  });
+
+  it("reads ownership once inside each cached-owner transaction", () => {
+    const options = { env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
+    const database = openOpenClawStateDatabase(options);
+    const { constants } = requireNodeSqlite();
+    let ownershipSelects = 0;
+    let schemaReads = 0;
+    database.db.setAuthorizer((actionCode, tableName) => {
+      if (actionCode === constants.SQLITE_SELECT) {
+        ownershipSelects += 1;
+      }
+      if (actionCode === constants.SQLITE_READ && tableName === "sqlite_master") {
+        schemaReads += 1;
+      }
+      return constants.SQLITE_OK;
+    });
+
+    try {
+      for (let index = 0; index < 12; index += 1) {
+        runOpenClawStateWriteTransaction(() => undefined, options);
+      }
+    } finally {
+      database.db.setAuthorizer(null);
+    }
+
+    expect(ownershipSelects).toBe(12);
+    expect(schemaReads).toBe(0);
+  });
+
+  it("discovers the ownership table for an injected handle at transaction admission", () => {
+    const options = { env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
+    const pathname = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+    const { constants, DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(pathname);
+    let schemaReads = 0;
+    db.setAuthorizer((actionCode, tableName) => {
+      if (actionCode === constants.SQLITE_READ && tableName === "sqlite_master") {
+        schemaReads += 1;
+      }
+      return constants.SQLITE_OK;
+    });
+
+    try {
+      runOpenClawStateWriteTransaction(() => undefined, {
+        ...options,
+        database: {
+          db,
+          path: pathname,
+          walMaintenance: { checkpoint: () => false, close: () => false },
+        },
+      });
+    } finally {
+      db.setAuthorizer(null);
+      db.close();
+    }
+
+    expect(schemaReads).toBe(4);
   });
 
   it("rejects Promise-returning write transactions", () => {

@@ -620,11 +620,21 @@ print_log_tail "$LOG_PATH"
     expect(liveBuild).not.toContain('docker image inspect "$LIVE_IMAGE_NAME"');
     expect(liveBuild).not.toContain('docker pull "$LIVE_IMAGE_NAME"');
     expect(liveBuild).toContain("Live-test image not available; building");
-    expect(readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8")).toContain(
+    const openWebUi = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
+    expect(openWebUi).toContain(
+      'OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228}"',
+    );
+    expect(openWebUi).toContain(
       'DOCKER_COMMAND_TIMEOUT="$DOCKER_PULL_TIMEOUT" docker_e2e_docker_cmd pull "$OPENWEBUI_IMAGE"',
     );
-    expect(readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8")).not.toContain(
+    expect(openWebUi).toContain(
+      "node scripts/e2e/lib/openwebui/http-probe.mjs 'http://$OW_NAME:$WEBUI_PORT/health' 200",
+    );
+    expect(openWebUi).not.toContain(
       'timeout "$DOCKER_PULL_TIMEOUT" docker pull "$OPENWEBUI_IMAGE"',
+    );
+    expect(openWebUi).not.toContain(
+      "node scripts/e2e/lib/openwebui/http-probe.mjs 'http://$OW_NAME:$WEBUI_PORT/' lt500",
     );
     expect(liveCliBackend).toContain(
       'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"',
@@ -2436,7 +2446,7 @@ docker_e2e_docker_run_cmd run demo
       'openclaw_e2e_install_package "$ARTIFACTS/install-a.log" "OpenClaw package under node-A prefix" "$NPM_PREFIX_A"',
     );
     expectTextToIncludeAll(updateChannel, [
-      'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit',
+      'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=dev --no-fund --no-audit',
       'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$pkg_tgz_path"',
       "openclaw_e2e_print_log /tmp/openclaw-git-install.log",
       'openclaw_e2e_print_log "$package_install_log"',
@@ -2444,12 +2454,11 @@ docker_e2e_docker_run_cmd run demo
 
     expect(updateChannel).not.toContain("cat /tmp/openclaw-git-install.log");
     expect(updateChannel).not.toContain('cat "$package_install_log"');
-    expect(doctorSwitch).toContain(
-      'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit',
-    );
-    expect(doctorSwitch).toContain(
+    expectTextToIncludeAll(doctorSwitch, [
+      'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=dev --no-fund --no-audit',
       'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$package_tgz"',
-    );
+      "openclaw_e2e_print_log /tmp/openclaw-git-install.log",
+    ]);
     for (const script of [releaseUpgrade, upgradeSurvivor, pluginCorrupt]) {
       expect(script).toContain(
         'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g',
@@ -4497,6 +4506,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
     expectTextToIncludeAll(packageRunner, [
       "npm install -g --prefix /tmp/openclaw-proof",
+      "corepack prepare pnpm@11.22.0 --activate",
       "pnpm add --global --allow-build=openclaw",
       "bun@1.3.14",
       'test "$(command -v openclaw)" = "/tmp/openclaw-proof/bin/openclaw"',
@@ -4518,7 +4528,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       "bash /tmp/openclaw-source/scripts/install-cli.sh",
       "--install-method git",
       "--prefix /tmp/openclaw-prefix",
-      "--node-version 24.15.0",
+      "--node-version 24.19.0",
       "apt-get install -y --no-install-recommends curl",
       "command -v curl >/dev/null",
       'chmod 0555 "$SOURCE_PROOF_SCRIPT"',

@@ -12,7 +12,7 @@ import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
-import { extractStoredAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
+import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
@@ -117,21 +117,6 @@ export function withSubagentOutcomeTiming(
   return { ...outcome, ...nextTiming };
 }
 
-function extractSubagentAssistantText(message: unknown): string {
-  if (!message || typeof message !== "object") {
-    return "";
-  }
-  const role = (message as { role?: unknown }).role;
-  if (role !== "assistant") {
-    return "";
-  }
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return sanitizeTextContent(content);
-  }
-  return extractStoredAssistantText(message) ?? "";
-}
-
 function countAssistantToolCalls(message: unknown): number {
   if (!message || typeof message !== "object") {
     return 0;
@@ -196,7 +181,7 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
         previousAssistantCalledYield = false;
         continue;
       }
-      const text = extractSubagentAssistantText(message).trim();
+      const text = extractStoredAssistantText(message)?.trim();
       if (!text) {
         snapshot.waitingForContinuation = false;
         previousAssistantCalledYield = false;
@@ -352,10 +337,24 @@ export function applySubagentWaitOutcome(params: {
   // primary normalizers, so apply the canonical classification here instead
   // of re-enumerating reason groups.
   if (terminalOutcome) {
+    // Keep main's subagent-specific classifier: it preserves explicit
+    // restart/aborted stop reasons as cancellation while still letting real
+    // provider timeouts through (openclaw#125407).
     switch (classifySubagentTerminalOutcome(terminalOutcome)) {
-      case "timeout":
-        outcome = { status: "timeout" };
+      case "timeout": {
+        // A run that failed inside the lifecycle error retry grace window is
+        // surfaced to waiters as a timeout carrying the failure text and
+        // `pendingError: true` (see createPendingErrorTimeoutSnapshot). Keep
+        // that cause so the announce can report why the child died instead of
+        // a bare "timed out". Genuine budget timeouts have no pendingError and
+        // stay unchanged.
+        const pendingErrorText =
+          params.wait?.pendingError === true ? (terminalOutcome.error ?? waitError) : undefined;
+        outcome = pendingErrorText
+          ? { status: "timeout", error: pendingErrorText }
+          : { status: "timeout" };
         break;
+      }
       case "cancellation":
         outcome = { status: "error", error: "subagent run terminated" };
         break;
@@ -408,19 +407,12 @@ function describeSubagentOutcome(outcome?: SubagentRunOutcome): string {
 }
 
 function formatChildResultData(resultText?: string | null): string {
-  const text = resultText?.trim() || "(no output)";
-  const boundedText =
-    text.length > MAX_CHILD_COMPLETION_RESULT_CHARS
-      ? `${truncateUtf16Safe(
-          text,
-          MAX_CHILD_COMPLETION_RESULT_CHARS - CHILD_RESULT_TRUNCATION_NOTICE.length,
-        )}${CHILD_RESULT_TRUNCATION_NOTICE}`
-      : text;
   return (
     wrapPromptDataBlock({
       label: "Child result",
-      text: boundedText,
-      maxChars: MAX_CHILD_COMPLETION_RESULT_CHARS,
+      text: resultText?.trim() || "(no output)",
+      maxEscapedChars: MAX_CHILD_COMPLETION_RESULT_CHARS,
+      truncationMarker: CHILD_RESULT_TRUNCATION_NOTICE,
     }) || "Child result: (no output)"
   );
 }
@@ -640,11 +632,11 @@ export async function buildCompactAnnounceStatsLine(params: {
   let entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
-    const hasTokenData =
+    if (
       typeof entry?.inputTokens === "number" ||
       typeof entry?.outputTokens === "number" ||
-      resolveFreshSessionTotalTokens(entry) !== undefined;
-    if (hasTokenData) {
+      resolveFreshSessionTotalTokens(entry) !== undefined
+    ) {
       break;
     }
     if (!isFastTestMode()) {
@@ -655,9 +647,10 @@ export async function buildCompactAnnounceStatsLine(params: {
     entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   }
 
-  const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;
-  const output = typeof entry?.outputTokens === "number" ? entry.outputTokens : 0;
-  const ioTotal = input + output;
+  const input = entry?.inputTokens;
+  const output = entry?.outputTokens;
+  const hasDirectionalUsage = typeof input === "number" || typeof output === "number";
+  const ioTotal = (input ?? 0) + (output ?? 0);
   const promptCache = resolveFreshSessionTotalTokens(entry);
   const runtimeMs =
     typeof params.startedAt === "number" && typeof params.endedAt === "number"
@@ -666,9 +659,13 @@ export async function buildCompactAnnounceStatsLine(params: {
 
   const parts = [
     `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
-    `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`,
+    hasDirectionalUsage
+      ? `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
+      : promptCache === undefined
+        ? "tokens unknown"
+        : `tokens ${formatTokenCount(promptCache)} prompt/cache`,
   ];
-  if (typeof promptCache === "number" && promptCache > ioTotal) {
+  if (hasDirectionalUsage && typeof promptCache === "number" && promptCache > ioTotal) {
     parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
   }
   return `Stats: ${parts.join(" • ")}`;

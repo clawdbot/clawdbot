@@ -28,6 +28,50 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
+it("does not create a missing configured agent database during startup maintenance", async () => {
+  const root = fs.realpathSync.native(tempDirs.make("openclaw-startup-missing-agent-db-"));
+  const stateDir = path.join(root, "state");
+  const storePath = path.join(stateDir, "agents", "idle", "sessions", "sessions.json");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const cfg: OpenClawConfig = {
+    agents: { entries: { idle: { default: true } } },
+    session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
+  };
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: "idle",
+    env,
+  }).path;
+  const migrateManagedWorktreeCanonicalWorkspaces = vi.fn(async () => 0);
+  const sweepOrphanSessionStoreTemps = vi.fn(async () => 0);
+
+  await runSessionStartupMigration({
+    cfg,
+    env,
+    log: { info: vi.fn(), warn: vi.fn() },
+    deps: {
+      migrateLegacyMainSessionKeys: vi.fn(async () => ({
+        armed: false,
+        changes: [],
+        complete: false,
+        ledgerComplete: false,
+        legacyAgentId: "main",
+        mainKey: "main",
+        outcomes: [{ kind: "not-armed" as const }],
+        warnings: [],
+      })),
+      migrateManagedWorktreeCanonicalWorkspaces,
+      migrateOrphanedSessionKeys: vi.fn(async () => ({ changes: [], warnings: [] })),
+      prepareLegacySessionSurfaces: () => EMPTY_LEGACY_SESSION_SURFACES,
+      resolveAllAgentSessionStoreTargetsSync: () => [{ agentId: "idle", storePath }],
+      sweepOrphanSessionStoreTemps,
+    },
+  });
+
+  expect(fs.existsSync(sqlitePath)).toBe(false);
+  expect(migrateManagedWorktreeCanonicalWorkspaces).not.toHaveBeenCalled();
+  expect(sweepOrphanSessionStoreTemps).toHaveBeenCalledWith({ storePath });
+});
+
 it("re-registers durable lineage children before configured-only runtime reads", async () => {
   const root = fs.realpathSync.native(tempDirs.make("openclaw-startup-registry-recovery-"));
   const stateDir = path.join(root, "state");

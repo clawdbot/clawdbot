@@ -43,6 +43,9 @@ import {
 import { scheduleChatScroll } from "./scroll.ts";
 
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
+  private deferredSessionHydrationActive = false;
+  private pendingDeferredSessionHydration: (() => void) | null = null;
+
   protected async refreshSessionPullRequests(options: { refresh?: boolean } = {}): Promise<void> {
     if (!this.presented) {
       sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
@@ -174,9 +177,17 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     if (!state) {
       return;
     }
+    this.deferredSessionHydrationActive = true;
+    this.pendingDeferredSessionHydration = null;
     const requestVersion = ++this.deferredSessionHydrationRequestVersion;
     const connectionGeneration = this.connectionGeneration;
     const client = state.client;
+    const retireIfCurrent = () => {
+      if (this.deferredSessionHydrationRequestVersion === requestVersion) {
+        this.deferredSessionHydrationActive = false;
+        this.pendingDeferredSessionHydration = null;
+      }
+    };
     const isCurrent = () =>
       this.deferredSessionHydrationRequestVersion === requestVersion &&
       this.connectionGeneration === connectionGeneration &&
@@ -184,23 +195,47 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       state.connected &&
       state.client === client &&
       state.sessionKey === sessionKey;
-    const scheduleAfterTranscript = () => {
+    const scheduleHydration = () => {
       if (!isCurrent()) {
+        retireIfCurrent();
         return;
       }
+      if (!this.presented) {
+        this.pendingDeferredSessionHydration = scheduleHydration;
+        return;
+      }
+      this.pendingDeferredSessionHydration = null;
       // These affordances do not shape the transcript. Start them together only
       // after the authoritative history has committed so they cannot delay chat paint.
       state.renderLifecycle.afterCommit((complete) => {
-        if (isCurrent()) {
+        if (isCurrent() && this.presented) {
+          this.deferredSessionHydrationActive = false;
           void loadChatBranches(state);
           void this.probeSessionDiscussion(sessionKey);
           this.hydrateSessionCompanion(sessionKey);
           void this.refreshSessionPullRequests();
+        } else if (isCurrent()) {
+          this.pendingDeferredSessionHydration = scheduleHydration;
+        } else {
+          retireIfCurrent();
         }
         complete();
       });
     };
-    void transcriptLoad.then(scheduleAfterTranscript, scheduleAfterTranscript);
+    void transcriptLoad.then(scheduleHydration, scheduleHydration);
+  }
+
+  protected resumeDeferredSessionHydration(): boolean {
+    const resume = this.pendingDeferredSessionHydration;
+    this.pendingDeferredSessionHydration = null;
+    resume?.();
+    return this.deferredSessionHydrationActive;
+  }
+
+  protected retireDeferredSessionHydration(): void {
+    this.deferredSessionHydrationRequestVersion += 1;
+    this.deferredSessionHydrationActive = false;
+    this.pendingDeferredSessionHydration = null;
   }
 
   protected markSessionRead(row: GatewaySessionRow | undefined) {

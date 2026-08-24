@@ -97,6 +97,7 @@ describe("worker placement recovery session events", () => {
           throw new Error("worker placement runtime did not start");
         }
 
+        await vi.dynamicImportSettled();
         await vi.advanceTimersByTimeAsync(60_000);
         expect(context.broadcastToConnIds).not.toHaveBeenCalled();
         expect(readSessionsMutationVersion(context)).toBe(initialMutationVersion);

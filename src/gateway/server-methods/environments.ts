@@ -146,7 +146,9 @@ export function summarizeWorkerEnvironment(
     },
   };
 }
-async function listEnvironments(context: GatewayRequestContext): Promise<EnvironmentSummary[]> {
+export async function listGatewayEnvironments(
+  context: GatewayRequestContext,
+): Promise<EnvironmentSummary[]> {
   const [devices, nodes] = await Promise.all([listDevicePairing(), listNodePairing()]);
   const managedCloudNodeIds = new Set(
     listWorkerEnvironments(context).flatMap((environment) =>
@@ -467,7 +469,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       return rejectInvalid(respond, "environments.list", validateEnvironmentsListParams);
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const environments = await listEnvironments(context);
+      const environments = await listGatewayEnvironments(context);
       const workers = listWorkerEnvironments(context);
       const summarizedAtMs = Date.now();
       environments.push(
@@ -482,7 +484,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       return rejectInvalid(respond, "environments.status", validateEnvironmentsStatusParams);
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const environment = (await listEnvironments(context)).find(
+      const environment = (await listGatewayEnvironments(context)).find(
         (entry) => entry.id === params.environmentId,
       );
       if (environment) {

@@ -7,6 +7,8 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
+// This test owns shell panel routing, not lazy sidebar loading; settle that module at setup.
+import "../components/app-sidebar.ts";
 import "./app-host.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -104,7 +106,6 @@ describe("OpenClaw shell dock suppression", () => {
           approvalQueue: [],
           approvalBusy: false,
           approvalErrors: new Map(),
-          approvalNowMs: 0,
           devicePairSetupOpen: false,
           devicePairSetupLifecycle: { phase: "selection", access: "full" },
           devicePairPendingCount: 0,

@@ -1814,5 +1814,17 @@
   {
     "source": "macOS widget panel",
     "target": "macOS 小组件面板"
+  },
+  {
+    "source": "Geolocation plugin",
+    "target": "地理位置插件"
+  },
+  {
+    "source": "Trusted proxy auth",
+    "target": "受信任代理认证"
+  },
+  {
+    "source": "geolocation",
+    "target": "geolocation"
   }
 ]

@@ -24,6 +24,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
+  root,
   seedActivePlacement,
   sessionTarget,
   setupWorkerTurnLauncherTest,
@@ -132,6 +133,61 @@ describe("worker turn launcher local placement", () => {
 
     expect(runLocal).toHaveBeenCalledOnce();
     expect(placements.list()).toEqual([]);
+  });
+
+  it.each([
+    ["agent id", { agentId: "other", sessionKey: SESSION_KEY }],
+    ["session key", { agentId: "main", sessionKey: "agent:main:other" }],
+    ["blank agent id", { agentId: " ", sessionKey: SESSION_KEY }],
+    ["blank session key", { agentId: "main", sessionKey: " " }],
+  ])(
+    "rejects a conflicting supplied placement %s before workspace access",
+    async (_label, identity) => {
+      seedActivePlacement();
+      const resolveWorkspacePath = vi.fn(async () => root);
+      const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments: unusedEnvironments(),
+        placements,
+        resolveWorkspacePath,
+      });
+
+      await expect(
+        provider.executeTurn(
+          { sessionId: SESSION_ID, ...identity, runId: `run-conflict-${_label}` },
+          turn(`run-conflict-${_label}`),
+          runLocal,
+        ),
+      ).rejects.toThrow(/Worker turn (agent id|session key) (?:is required|does not match)/u);
+      expect(resolveWorkspacePath).not.toHaveBeenCalled();
+      expect(runLocal).not.toHaveBeenCalled();
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    },
+  );
+
+  it("inherits omitted placement identity before workspace access", async () => {
+    seedActivePlacement();
+    const resolveWorkspacePath = vi.fn(async () => {
+      throw new Error("workspace reached");
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+      resolveWorkspacePath,
+    });
+
+    await expect(
+      provider.executeTurn(
+        { sessionId: SESSION_ID, runId: "run-inherited-identity" },
+        turn("run-inherited-identity"),
+        vi.fn(),
+      ),
+    ).rejects.toThrow("workspace reached");
+    expect(resolveWorkspacePath).toHaveBeenCalledWith({
+      sessionId: SESSION_ID,
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+    });
   });
 
   it("holds a local placement claim around CLI execution", async () => {

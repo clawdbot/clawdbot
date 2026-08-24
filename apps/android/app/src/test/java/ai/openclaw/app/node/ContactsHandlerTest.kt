@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -70,6 +71,18 @@ class ContactsHandlerTest : NodeHandlerRobolectricTest() {
   }
 
   @Test
+  fun handleContactsSearch_preservesExplicitJsonNullQuery() {
+    val source = FakeContactsDataSource(canRead = true)
+    val handler = ContactsHandler.forTesting(appContext(), source)
+
+    val result = handler.handleContactsSearch("""{"query":null}""")
+
+    assertTrue(result.ok)
+    assertEquals("null", source.searchedRequest?.query)
+    assertEquals(25, source.searchedRequest?.limit)
+  }
+
+  @Test
   fun handleContactsAdd_returnsAddedContact() {
     val added =
       ContactRecord(
@@ -95,6 +108,58 @@ class ContactsHandlerTest : NodeHandlerRobolectricTest() {
     assertEquals("Grace Hopper", contact.getValue("displayName").jsonPrimitive.content)
     assertEquals(1, source.addCalls)
   }
+
+  @Test
+  fun handleContactsAdd_omitsExplicitJsonNullFields() {
+    val source = FakeContactsDataSource(canRead = true, canWrite = true)
+    val handler = ContactsHandler.forTesting(appContext(), source)
+
+    val result =
+      handler.handleContactsAdd(
+        """
+        {"givenName":"Grace","familyName":null,"organizationName":null,"displayName":null,
+         "phoneNumbers":[null,"+15550100"],"emails":[null]}
+        """.trimIndent(),
+      )
+
+    assertTrue(result.ok)
+    val request = source.addedRequest ?: error("missing add request")
+    assertEquals("Grace", request.givenName)
+    assertNull(request.familyName)
+    assertNull(request.organizationName)
+    assertNull(request.displayName)
+    assertEquals(listOf("+15550100"), request.phoneNumbers)
+    assertTrue(request.emails.isEmpty())
+  }
+
+  @Test
+  fun handleContactsAdd_rejectsOnlyExplicitJsonNullFields() {
+    val source = FakeContactsDataSource(canRead = true, canWrite = true)
+    val handler = ContactsHandler.forTesting(appContext(), source)
+
+    val result =
+      handler.handleContactsAdd(
+        """{"givenName":null,"familyName":null,"organizationName":null,"phoneNumbers":[null],"emails":[null]}""",
+      )
+
+    assertFalse(result.ok)
+    assertEquals("CONTACTS_INVALID", result.error?.code)
+    assertEquals(0, source.addCalls)
+    assertNull(source.addedRequest)
+  }
+
+  @Test
+  fun handleContactsAdd_preservesLiteralNullStrings() {
+    val source = FakeContactsDataSource(canRead = true, canWrite = true)
+    val handler = ContactsHandler.forTesting(appContext(), source)
+
+    val result = handler.handleContactsAdd("""{"givenName":"null","phoneNumbers":["null"]}""")
+
+    assertTrue(result.ok)
+    val request = source.addedRequest ?: error("missing add request")
+    assertEquals("null", request.givenName)
+    assertEquals(listOf("null"), request.phoneNumbers)
+  }
 }
 
 private class FakeContactsDataSource(
@@ -115,6 +180,12 @@ private class FakeContactsDataSource(
   var addCalls: Int = 0
     private set
 
+  var searchedRequest: ContactsSearchRequest? = null
+    private set
+
+  var addedRequest: ContactsAddRequest? = null
+    private set
+
   override fun hasReadPermission(context: Context): Boolean = canRead
 
   override fun hasWritePermission(context: Context): Boolean = canWrite
@@ -122,13 +193,17 @@ private class FakeContactsDataSource(
   override fun search(
     context: Context,
     request: ContactsSearchRequest,
-  ): List<ContactRecord> = searchResults
+  ): List<ContactRecord> {
+    searchedRequest = request
+    return searchResults
+  }
 
   override fun add(
     context: Context,
     request: ContactsAddRequest,
   ): ContactRecord {
     addCalls += 1
+    addedRequest = request
     return addResult
   }
 }

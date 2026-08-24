@@ -451,10 +451,10 @@ class ContactsHandler private constructor(
         null
       } ?: return null
     return ContactsAddRequest(
-      givenName = (params["givenName"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
-      familyName = (params["familyName"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
-      organizationName = (params["organizationName"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
-      displayName = (params["displayName"] as? JsonPrimitive)?.content?.trim()?.ifEmpty { null },
+      givenName = parseJsonString(params, "givenName")?.trim()?.ifEmpty { null },
+      familyName = parseJsonString(params, "familyName")?.trim()?.ifEmpty { null },
+      organizationName = parseJsonString(params, "organizationName")?.trim()?.ifEmpty { null },
+      displayName = parseJsonString(params, "displayName")?.trim()?.ifEmpty { null },
       phoneNumbers = stringArray(params["phoneNumbers"] as? JsonArray),
       // Store emails case-normalized so repeated model calls do not create casing-only duplicates.
       emails = stringArray(params["emails"] as? JsonArray).map { it.lowercase() },
@@ -464,7 +464,7 @@ class ContactsHandler private constructor(
   private fun stringArray(array: JsonArray?): List<String> {
     if (array == null) return emptyList()
     return array.mapNotNull { element ->
-      (element as? JsonPrimitive)?.content?.trim()?.ifEmpty { null }
+      element.asStringOrNull()?.trim()?.ifEmpty { null }
     }
   }
 

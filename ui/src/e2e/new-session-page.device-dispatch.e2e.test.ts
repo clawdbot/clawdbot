@@ -8,13 +8,18 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const deviceTargets = [
+  { name: "selected", value: "device:paired-runner", target: { deviceId: "paired-runner" } },
+  { name: "automatic", value: "auto-device", target: { autoDevice: true } },
+];
 
 suite.define(() => {
-  it("creates a managed session, dispatches the selected device, then sends the first turn", async () => {
+  it.each(deviceTargets)("dispatches the $name device", async ({ value, target }) => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const sessionKey = "agent:main:device-dispatch";
     const gateway = await installMockGateway(page, {
+      operatorScopes: ["operator.read", "operator.write"],
       workspace: WORKSPACE,
       workspaceGit: true,
       methodResponses: {
@@ -57,10 +62,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
-      await page
-        .locator("wa-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "Paired runner" })
-        .click();
+      await page.locator(`[data-value="${value}"]`).click();
       await page.locator(".new-session-page__message").fill("run on the paired device");
       expect(await page.locator('wa-dropdown-item[value="start-terminal"]').count()).toBe(0);
       await page.getByRole("button", { name: "Start session" }).click();
@@ -78,7 +80,7 @@ suite.define(() => {
       expect(dispatch.params).toEqual({
         key: sessionKey,
         agentId: "main",
-        deviceId: "paired-runner",
+        ...target,
       });
       const send = await gateway.waitForRequest("sessions.send");
       expect(send.params).toMatchObject({

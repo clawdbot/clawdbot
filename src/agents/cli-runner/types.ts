@@ -27,7 +27,11 @@ import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-po
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import type { CliBackendConfig, CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
+import type {
+  CliBackendConfig,
+  CliBackendExecute,
+  CliBackendExecutionMode,
+} from "../../plugins/cli-backend.types.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -132,6 +136,8 @@ export type RunCliAgentParams = {
   modelContextWindow?: number;
   /** Effective context cap resolved by the run owner from its prepared model catalog. */
   modelContextTokens?: number;
+  /** Session-selected context-window option id carried by the run owner. */
+  contextWindow?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
@@ -288,6 +294,10 @@ type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Transfer process-owned native skill artifacts without claiming turn-scoped MCP/auth state. */
+  claimLiveSessionResources?: () => (() => Promise<void>) | undefined;
+  /** Plugin-owned transport bound to this exact prepared local run. */
+  execute?: CliBackendExecute;
   /** Private child-only credential transport; never serialized into env or public plugin state. */
   secretInput?: CliSecretInput;
   /** Gateway-owned capture fence for this prepared bundle-MCP client. */
@@ -345,7 +355,7 @@ export type PreparedCliRunContext = {
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
-  claudeSkillsPluginArgs?: string[] | undefined;
+  claudeSkillsPluginArgs: string[];
   bootstrapPromptWarningLines: string[];
   openClawHistoryPrompt?: string;
   heartbeatPrompt?: string;

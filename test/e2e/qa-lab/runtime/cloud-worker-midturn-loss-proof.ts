@@ -48,6 +48,13 @@ type Gateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
 type GatewayEvent = { event: string; payload?: unknown };
 type GatewayRunResult = { runId?: string; status?: string; summary?: string };
 type ChatHistory = { messages?: unknown[] };
+type SessionsList = { sessions?: unknown[] };
+type WorkerDiskSpaceProjection = {
+  availableBytes: number;
+  observedAtMs: number;
+  status: string;
+  totalBytes: number;
+};
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -143,6 +150,63 @@ function markerCounts(messages: readonly unknown[]) {
   return Object.fromEntries(
     COMMITTED_MARKERS.map((marker) => [marker, text.split(marker).length - 1]),
   );
+}
+
+function readActiveWorkerDiskSpace(payload: SessionsList): WorkerDiskSpaceProjection | undefined {
+  const session = payload.sessions?.find((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      return false;
+    }
+    return (candidate as Record<string, unknown>).key === SESSION_KEY;
+  });
+  if (!session) {
+    return undefined;
+  }
+  const placementValue = requireRecord(session, "listed session").placement;
+  if (!placementValue || typeof placementValue !== "object" || Array.isArray(placementValue)) {
+    return undefined;
+  }
+  const placement = placementValue as Record<string, unknown>;
+  if (placement.state !== "active") {
+    return undefined;
+  }
+  const diskSpaceValue = placement.diskSpace;
+  if (!diskSpaceValue || typeof diskSpaceValue !== "object" || Array.isArray(diskSpaceValue)) {
+    return undefined;
+  }
+  const diskSpace = diskSpaceValue as Record<string, unknown>;
+  if (
+    typeof diskSpace.status !== "string" ||
+    typeof diskSpace.availableBytes !== "number" ||
+    typeof diskSpace.totalBytes !== "number" ||
+    typeof diskSpace.observedAtMs !== "number"
+  ) {
+    throw new Error(`invalid active worker disk-space projection: ${JSON.stringify(diskSpace)}`);
+  }
+  return {
+    status: diskSpace.status,
+    availableBytes: diskSpace.availableBytes,
+    totalBytes: diskSpace.totalBytes,
+    observedAtMs: diskSpace.observedAtMs,
+  };
+}
+
+function isReclaimedWithoutDiskSpace(payload: SessionsList): boolean {
+  const session = payload.sessions?.find((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      return false;
+    }
+    return (candidate as Record<string, unknown>).key === SESSION_KEY;
+  });
+  if (!session) {
+    return false;
+  }
+  const placementValue = requireRecord(session, "listed session").placement;
+  if (!placementValue || typeof placementValue !== "object" || Array.isArray(placementValue)) {
+    return false;
+  }
+  const placement = placementValue as Record<string, unknown>;
+  return placement.state === "reclaimed" && !("diskSpace" in placement);
 }
 
 async function waitForOutbound(
@@ -381,6 +445,27 @@ async function runProof(options: ProducerOptions) {
       );
     }
 
+    const qaOperator = operator;
+    if (!qaOperator) {
+      throw new Error("operator was unavailable after recovery");
+    }
+    const activeDiskSpace = await waitFor(
+      "real static-SSH worker disk-space projection",
+      async () =>
+        readActiveWorkerDiskSpace(await qaOperator.request<SessionsList>("sessions.list", {})),
+    );
+    const reclaimed = requireRecord(
+      await operator.request("sessions.reclaim", { key: SESSION_KEY }),
+      "sessions.reclaim",
+    );
+    if (requireRecord(reclaimed.placement, "reclaimed placement").state !== "reclaimed") {
+      throw new Error(`sessions.reclaim did not reclaim the worker: ${JSON.stringify(reclaimed)}`);
+    }
+    await waitFor("retired worker disk-space projection eviction", async () => {
+      const listed = await qaOperator.request<SessionsList>("sessions.list", {});
+      return isReclaimedWithoutDiskSpace(listed) ? true : undefined;
+    });
+
     verdict = {
       status: "pass",
       providerMode: "mock-openai",
@@ -416,6 +501,10 @@ async function runProof(options: ProducerOptions) {
         reply: CONTEXT_REPLY,
         turnStatus: recoveryResult.status,
         markerCounts: recoveryCounts,
+      },
+      diskSpaceProjection: {
+        active: activeDiskSpace,
+        reclaimedProjectionAbsent: true,
       },
       providerRequestCount: provider.requestCount,
       historyMessageCountBeforeKill: committedBeforeKill.length,
@@ -473,6 +562,8 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
         "src/worker/embedded-agent-transcript.runtime.ts",
         "src/gateway/worker-environments/transcript-commit.ts",
         "src/gateway/worker-environments/worker-turn-launcher.ts",
+        "src/gateway/worker-environments/placement-disk-space.ts",
+        "src/gateway/server-methods/sessions-list-cache.ts",
       ],
     },
   });

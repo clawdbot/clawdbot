@@ -1,4 +1,6 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { property } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import type {
   ExecApprovalDecision,
@@ -7,6 +9,10 @@ import type {
 } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
 import { formatCountdown } from "../lib/format.ts";
+import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { PollController } from "../lit/poll-controller.ts";
+import { icons } from "./icons.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
@@ -19,16 +25,62 @@ type ExecApprovalCardProps = {
   busy: boolean;
   canGrant: boolean;
   error: string | null;
-  nowMs: number;
   variant: "inline" | "modal";
   queueCount?: number;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
+};
+
+type SidebarApprovalRowProps = {
+  approval: ExecApprovalRequest;
+  busy: boolean;
+  canGrant: boolean;
+  error: string | null;
+  openSessionHref?: string;
+  sessionTitle?: string | null;
+  onDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
+  onOpenSession?: (event: MouseEvent) => void;
 };
 
 export function approvalRemainingLabel(expiresAtMs: number, nowMs: number): string {
   return expiresAtMs > nowMs
     ? t("execApproval.expiresIn", { time: formatCountdown(expiresAtMs, nowMs, true) })
     : t("execApproval.expired");
+}
+
+class ApprovalCountdown extends OpenClawLightDomContentsElement {
+  @property({ type: Number }) expiresAtMs = 0;
+  @property({ type: Boolean }) compact = false;
+
+  private readonly polling = new PollController(
+    this,
+    1_000,
+    () => {
+      this.requestUpdate();
+      if (!this.compact) {
+        this.closest("openclaw-modal-dialog")?.setAttribute(
+          "description",
+          approvalRemainingLabel(this.expiresAtMs, Date.now()),
+        );
+      }
+    },
+    false,
+  );
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.polling.start();
+  }
+
+  override render() {
+    const nowMs = Date.now();
+    return html`${this.compact
+      ? formatCountdown(this.expiresAtMs, nowMs, true)
+      : approvalRemainingLabel(this.expiresAtMs, nowMs)}`;
+  }
+}
+
+if (!customElements.get("openclaw-approval-countdown")) {
+  customElements.define("openclaw-approval-countdown", ApprovalCountdown);
 }
 
 function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {
@@ -124,7 +176,12 @@ function renderPluginBody(active: ExecApprovalRequest, variant: ExecApprovalCard
     : nothing}`;
 }
 
-function decisionLabel(decision: ExecApprovalDecision) {
+export function compactApprovalCommand(command: string): string {
+  const singleLine = command.replace(/\s+/g, " ").trim();
+  return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
+}
+
+function approvalDecisionLabel(decision: ExecApprovalDecision) {
   return t(
     decision === "allow-once"
       ? "execApproval.allowOnce"
@@ -163,6 +220,92 @@ export function approvalTitle(active: ExecApprovalRequest): string {
     : t("execApproval.execApprovalNeeded");
 }
 
+export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
+  const approval = props.approval;
+  const nowMs = Date.now();
+  const expired = approval.expiresAtMs <= nowMs;
+  const command = compactApprovalCommand(approval.request.command);
+  const sessionKey = approval.request.sessionKey?.trim();
+  const sessionTitle =
+    props.sessionTitle ??
+    (sessionKey ? resolveSessionDisplayName(sessionKey) : approvalTitle(approval));
+  const expiryUrgent = expired || approval.expiresAtMs - nowMs < 2 * 60_000;
+  const expiryLabel = approvalRemainingLabel(approval.expiresAtMs, nowMs);
+  const reviewOnlyMessage = t("execApproval.reviewOnly");
+  const grantError = !props.canGrant && props.error === reviewOnlyMessage;
+  return html`<article
+    class="sidebar-approval-row sidebar-issues-panel__details--warning"
+    data-attention-kind="pendingApproval"
+    data-approval-id=${approval.id}
+  >
+    <span class="sidebar-issues-panel__icon sidebar-approval-row__icon" aria-hidden="true"
+      >${icons.shieldQuestion}</span
+    >
+    <div class="sidebar-approval-row__content">
+      <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
+        <span class="sidebar-issues-panel__entity" title=${sessionTitle}>${sessionTitle}</span>
+        <openclaw-approval-countdown
+          class="sidebar-approval-row__timer ${expiryUrgent
+            ? "sidebar-approval-row__timer--urgent"
+            : ""}"
+          role="timer"
+          aria-label=${expiryLabel}
+          title=${expiryLabel}
+          .expiresAtMs=${approval.expiresAtMs}
+          .compact=${true}
+        ></openclaw-approval-countdown>
+      </div>
+      <div class="sidebar-approval-row__command mono" title=${approval.request.command}>
+        <span aria-hidden="true">$ </span>${command}
+      </div>
+      <div
+        class="sidebar-approval-row__actions"
+        role="group"
+        aria-label=${t("approvalPage.actionsLabel")}
+      >
+        ${resolveApprovalDecisions(approval).map((decision) => {
+          const label = approvalDecisionLabel(decision);
+          return html`<button
+            type="button"
+            class="btn btn--xs ${decision === "deny"
+              ? "btn--ghost"
+              : ""} sidebar-approval-row__action sidebar-approval-row__action--${decision}"
+            aria-label=${t("execApproval.decisionRequest", { decision: label, command })}
+            ?disabled=${props.busy || !props.canGrant || expired}
+            @click=${(event: Event) => props.onDecision(event, approval.id, decision)}
+          >
+            ${label}
+          </button>`;
+        })}
+        ${props.openSessionHref && props.onOpenSession
+          ? html`<a
+              class="sidebar-approval-row__open-session"
+              href=${props.openSessionHref}
+              aria-label=${t("sessionsView.openSession")}
+              title=${t("sessionsView.openSession")}
+              @click=${props.onOpenSession}
+            >
+              ${icons.arrowUpRight}
+            </a>`
+          : nothing}
+      </div>
+      ${!props.canGrant
+        ? html`<div class="sidebar-approval-row__message" role=${grantError ? "alert" : "note"}>
+            ${reviewOnlyMessage}
+          </div>`
+        : nothing}
+      ${props.error && !grantError
+        ? html`<div
+            class="sidebar-approval-row__message sidebar-approval-row__message--error"
+            role="alert"
+          >
+            ${props.error}
+          </div>`
+        : nothing}
+    </div>
+  </article>`;
+}
+
 export function renderExecApprovalCard(props: ExecApprovalCardProps) {
   const active = props.approval;
   const decisions = resolveApprovalDecisions(active);
@@ -189,9 +332,11 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
               ${renderChip("plugin", pluginId)} ${renderChip("agent", agentId)}
             </div>`
           : nothing}
-        <div class="exec-approval-sub exec-approval-countdown" role="timer">
-          ${approvalRemainingLabel(active.expiresAtMs, props.nowMs)}
-        </div>
+        <openclaw-approval-countdown
+          class="exec-approval-sub exec-approval-countdown"
+          role="timer"
+          .expiresAtMs=${active.expiresAtMs}
+        ></openclaw-approval-countdown>
       </div>
       ${(props.queueCount ?? 0) > 1
         ? html`<div class="exec-approval-queue">
@@ -218,7 +363,7 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
       : nothing}
     <div class="exec-approval-actions">
       ${decisions.map((decision) => {
-        const label = decisionLabel(decision);
+        const label = approvalDecisionLabel(decision);
         return html`<button
           class=${decisionClass(decision)}
           type="button"

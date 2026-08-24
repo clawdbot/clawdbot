@@ -1,4 +1,11 @@
-import { HTML_TAG_RE } from "markdown-it/lib/common/html_re.mjs";
+// markdown-it 15 keeps its quote-aware HTML grammar private; both parser consumers share its exact grammar here.
+const MARKDOWN_HTML_TAG_RE =
+  // oxlint-disable-next-line eslint/no-control-regex -- Preserve markdown-it's exact ASCII control-byte exclusion.
+  /^(?:<[A-Za-z][A-Za-z0-9-]*(?:\s+[a-zA-Z_:][a-zA-Z0-9:._-]*(?:\s*=\s*(?:[^"'=<>`\x00-\x20]+|'[^']*'|"[^"]*"))?)*\s*\/?>|<\/[A-Za-z][A-Za-z0-9-]*\s*>|<!---?>|<!--(?:[^-]|-[^-]|--[^>])*-->|<\?[\s\S]*?\?>|<![A-Za-z][^>]*>|<!\[CDATA\[[\s\S]*?\]\]>)/;
+
+export function matchMarkdownHtmlTag(source: string): string | undefined {
+  return MARKDOWN_HTML_TAG_RE.exec(source)?.[0];
+}
 
 type HtmlTagToken = {
   raw: string;
@@ -31,12 +38,11 @@ export function* tokenizeHtmlTags(html: string): Generator<HtmlTagToken> {
     if (start < 0) {
       return;
     }
-    const match = HTML_TAG_RE.exec(html.slice(start));
-    if (!match) {
+    const raw = matchMarkdownHtmlTag(html.slice(start));
+    if (!raw) {
       cursor = start + 1;
       continue;
     }
-    const raw = match[0];
     const closing = raw.startsWith("</");
     const end = start + raw.length;
     const name = htmlTagName(raw, closing);

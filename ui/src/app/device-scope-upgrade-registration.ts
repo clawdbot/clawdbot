@@ -11,10 +11,12 @@ import {
   readScopeUpgradeAvailability,
   type ScopeUpgradeState,
 } from "./device-scope-upgrade-availability.ts";
-import { SCOPE_UPGRADE_DETAILS_EVENT } from "./device-scope-upgrade.ts";
+import {
+  SCOPE_UPGRADE_DETAILS_EVENT,
+  SCOPE_UPGRADE_TRIGGER_ID,
+  renderScopeUpgradeTrigger,
+} from "./device-scope-upgrade.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-
-const SCOPE_UPGRADE_TRIGGER_ID = "scope-upgrade-trigger";
 
 type UpgradeOperation = {
   client: GatewayBrowserClient;
@@ -156,9 +158,34 @@ class ScopeUpgradeSurface extends OpenClawLightDomContentsElement {
       this.reopenAfterClose = true;
       return;
     }
+    void this.openDetails();
+  };
+
+  private async openDetails(): Promise<void> {
+    if (!this.props?.mobile) {
+      await this.ensureDetailsPopoverAnchored();
+    }
     this.detailsOpen = true;
     this.requestUpdate();
-  };
+  }
+
+  private async ensureDetailsPopoverAnchored(): Promise<void> {
+    const popover = this.querySelector<
+      HTMLElement & { anchor?: Element | null; for?: string; updateComplete?: Promise<unknown> }
+    >("wa-popover.scope-upgrade-details-popover");
+    if (!popover || popover.anchor?.isConnected) {
+      return;
+    }
+    // wa-popover resolves `for` only when the property changes and never
+    // re-resolves a missing or replaced anchor. The trigger with this id can
+    // render after the popover's first update (the header trigger ships with
+    // the lazy chat chunk), which would leave the opened popover permanently
+    // invisible. Re-arm the watcher so it re-runs the id lookup now.
+    popover.for = "";
+    await popover.updateComplete;
+    popover.for = SCOPE_UPGRADE_TRIGGER_ID;
+    await popover.updateComplete;
+  }
 
   private readonly showDetailsFromTrigger = (event: Event) => {
     if (!this.props?.mobile) {
@@ -281,16 +308,10 @@ class ScopeUpgradeSurface extends OpenClawLightDomContentsElement {
       </button>
     </div>`;
     const trigger = props.showTrigger
-      ? html`<button
-          id=${SCOPE_UPGRADE_TRIGGER_ID}
-          type="button"
-          class="shell-chrome-controls__button scope-upgrade-shell-status scope-upgrade-status-trigger"
-          aria-label=${t("connection.scopeUpgrade.showDetails")}
-          aria-haspopup="dialog"
-          @click=${this.showDetailsFromTrigger}
-        >
-          ${icons.shieldQuestion}
-        </button>`
+      ? renderScopeUpgradeTrigger(
+          "shell-chrome-controls__button scope-upgrade-shell-status scope-upgrade-status-trigger",
+          this.showDetailsFromTrigger,
+        )
       : nothing;
     if (props.mobile) {
       return html`${trigger}${this.detailsOpen

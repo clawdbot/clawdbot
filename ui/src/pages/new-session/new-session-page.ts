@@ -375,6 +375,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       cloudProfileId: this.place.cloudProfileId,
       machineClass: this.place.machineClass,
       deviceId: this.place.deviceId,
+      autoDevice: this.place.autoDevice,
       devicePlacement: this.place.devicePlacementRequirement(),
       deviceDisabledReason: this.place.modelControl.devicePlacementUnsupportedReason(),
     });
@@ -388,7 +389,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       projectQuery: this.browser.projectQuery,
     });
     const detailState = resolveDetailChip({
-      destination: this.place.deviceId || this.place.cloudProfileId ? "remote" : "local",
+      destination: this.place.remotePlacement ? "remote" : "local",
       worktree: this.place.worktree,
       worktreeAvailable: this.place.worktreeAvailable(),
     });
@@ -403,6 +404,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       cloudProfileId: this.place.cloudProfileId,
       machineClass: this.place.machineClass,
       deviceId: this.place.deviceId,
+      autoDevice: this.place.autoDevice,
       worktreeAvailable: this.place.worktreeAvailable(),
       cloudDisabledReason: this.submission.cloudDisabledReason(),
       cloudProfileDisabledReason: (profile) =>
@@ -412,6 +414,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       isAdmin: this.place.isAdmin(),
       ...this.browser.popoverCallbacks("where"),
       onSelectDevice: (deviceId) => this.place.selectDevice(deviceId),
+      onSelectAutoDevice: () => this.place.selectDevice("", true),
       onSelectCloudProfile: (profileId) => this.place.selectCloudProfile(profileId),
       onSelectCloudMachine: (machineId) =>
         this.place.cloudMachines.select(
@@ -448,7 +451,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       projectSearchError: this.browser.projectSearchError,
       projectId: this.browser.projectId,
       gatewayLabel,
-      remotePlacement: Boolean(this.place.deviceId || this.place.cloudProfileId),
+      remotePlacement: this.place.remotePlacement,
       branches,
       branchesLoading: this.place.repository.kind === "checking",
       baseRef: this.place.baseRef,

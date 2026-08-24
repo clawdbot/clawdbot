@@ -1,5 +1,6 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -907,7 +908,12 @@ describe("canonical session message recovery", () => {
     expect(state.chatStream).toBe("Current partial reply");
   });
 
-  it("renders distinct live peers immediately and coalesces their stale history", async () => {
+  it("coalesces distinct live peers into one frame and their stale history into one load", async () => {
+    let renderFrame: FrameRequestCallback | undefined;
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      renderFrame = callback;
+      return 1;
+    });
     let resolveHistory!: (result: {
       messages: unknown[];
       sessionId: string;
@@ -944,8 +950,10 @@ describe("canonical session message recovery", () => {
       });
 
       expect(state.chatMessages).toHaveLength(index + 1);
-      expect(state.requestUpdate).toHaveBeenCalledTimes(index + 1);
+      expect(state.requestUpdate).not.toHaveBeenCalled();
     }
+    renderFrame?.(0);
+    expect(state.requestUpdate).toHaveBeenCalledOnce();
 
     expect(request).toHaveBeenCalledOnce();
     resolveHistory({
@@ -1216,6 +1224,72 @@ describe("canonical session message recovery", () => {
     await Promise.resolve();
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("defers branch hydration when a session reconciliation finishes after the pane hides", async () => {
+    const refreshFinished = createDeferred();
+    let presented = true;
+    const listBranches = vi.fn().mockResolvedValue([]);
+    const { request, state } = createSessionEventState({
+      chatRunId: "run-1",
+      chatStream: "Finishing",
+      sessionsResult: {
+        ts: 1,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      },
+    });
+    state.sessions = {
+      ...state.sessions,
+      listBranches,
+      reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
+      refresh: vi.fn(async () => {
+        await refreshFinished.promise;
+        state.sessionsResult = {
+          ts: 2,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: state.sessionKey,
+              kind: "direct",
+              hasActiveRun: false,
+              status: "done",
+              updatedAt: 2,
+            },
+          ],
+        };
+      }),
+    };
+
+    handlePageGatewayEvent(
+      state,
+      {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId: "run-1",
+          messageId: "terminal-message",
+          messageSeq: 2,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Finished" }],
+            __openclaw: { id: "terminal-message", seq: 2 },
+          },
+        },
+      },
+      () => presented,
+    );
+    presented = false;
+    refreshFinished.resolve();
+
+    await vi.waitFor(() => expect(state.chatRunId).toBeNull());
+    await vi.waitFor(() => expect(request).toHaveBeenCalled());
+    expect(listBranches).not.toHaveBeenCalled();
+  });
 });
 
 describe("ChatStateController render lifecycle", () => {
@@ -1304,7 +1378,7 @@ describe("ChatStateController render lifecycle", () => {
     return {
       agents: {
         state: { agentsList: null },
-        adoptList: vi.fn(),
+        ensureList: vi.fn(async () => null),
       },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
@@ -1679,7 +1753,10 @@ describe("ChatStateController render lifecycle", () => {
     expect(state.waitingApprovalStatuses.size).toBe(0);
   });
 
-  it("skips no-op assistant invalidation while tool changes render immediately", () => {
+  it("skips no-op assistant invalidation while tool changes render on the next frame", () => {
+    const requestAnimationFrame = vi
+      .spyOn(globalThis, "requestAnimationFrame")
+      .mockImplementation(() => 1);
     const requestUpdate = vi.fn();
     const state = createStreamEventState({
       requestUpdate,
@@ -1701,7 +1778,9 @@ describe("ChatStateController render lifecycle", () => {
     expect(requestUpdate).not.toHaveBeenCalled();
 
     emitAgent(2, "tool", { phase: "start", name: "read", toolCallId: "tool-1" });
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    emitAgent(3, "tool", { phase: "update", name: "read", toolCallId: "tool-1" });
+    expect(requestAnimationFrame).toHaveBeenCalledOnce();
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 
   it("coalesces stream invalidations into one animation frame", () => {
@@ -1747,9 +1826,11 @@ describe("ChatStateController render lifecycle", () => {
       event: "session.operation",
       payload: {},
     });
+    expect(frames.size).toBe(1);
+    expect(requestUpdate).toHaveBeenCalledOnce();
     staleFrame?.(0);
 
-    expect(cancelFrame).toHaveBeenCalledWith(2);
+    expect(cancelFrame).not.toHaveBeenCalledWith(2);
     expect(requestUpdate).toHaveBeenCalledTimes(2);
     expect(state.chatStreamRenderFrame).toBeNull();
   });
@@ -2196,7 +2277,7 @@ describe("image lightbox lifecycle", () => {
     const context = {
       agents: {
         state: { agentsList: null },
-        adoptList: vi.fn(),
+        ensureList: vi.fn(async () => null),
       },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
@@ -2257,7 +2338,7 @@ describe("loadPageAssistantIdentity", () => {
     }));
     const client = { request } as unknown as GatewayBrowserClient;
     const context = {
-      agents: { state: { agentsList: null }, adoptList: vi.fn() },
+      agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
       config: {
@@ -2329,7 +2410,7 @@ describe("refreshChatMetadata", () => {
     const refreshSessions = vi.fn().mockResolvedValue(undefined);
     const request = vi.fn(async (method: string, params?: unknown) => {
       expect(method).toBe("models.list");
-      expect(params).toEqual({ view: "configured", agentId: "work" });
+      expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
       return {
         models: [
           {

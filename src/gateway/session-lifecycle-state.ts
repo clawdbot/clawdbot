@@ -25,6 +25,7 @@ type LifecyclePhase = "start" | "end" | "error";
 
 type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
   runId?: string;
+  clientRunId?: string;
   lifecycleGeneration?: string;
   data?: {
     phase?: unknown;
@@ -43,7 +44,14 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
 
 type LifecycleSessionShape = Pick<
   GatewaySessionRow,
-  "updatedAt" | "status" | "lastRunError" | "startedAt" | "endedAt" | "runtimeMs" | "abortedLastRun"
+  | "updatedAt"
+  | "status"
+  | "lastRunError"
+  | "lastRunId"
+  | "startedAt"
+  | "endedAt"
+  | "runtimeMs"
+  | "abortedLastRun"
 >;
 
 type PersistedLifecycleSessionShape = Pick<
@@ -51,6 +59,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "updatedAt"
   | "status"
   | "lastRunError"
+  | "lastRunId"
   | "startedAt"
   | "endedAt"
   | "runtimeMs"
@@ -222,14 +231,15 @@ function derivePersistedSessionLifecyclePatch(params: {
   }
   const phase = resolveLifecyclePhase(params.event);
   const runId = normalizeLifecycleRunId(params.event.runId);
+  const clientRunId = normalizeLifecycleRunId(params.event.clientRunId) ?? runId;
   // Run ownership follows the durable running projection. Terminal settlement
   // releases it; yielded parents retain it for their continuation lifecycle.
   return {
     ...projection.patch,
     ...(phase === "start"
-      ? { lifecycleRunId: runId }
+      ? { lifecycleRunId: runId, lastRunId: undefined }
       : projection.patch.status && projection.patch.status !== "running"
-        ? { lifecycleRunId: undefined }
+        ? { lifecycleRunId: undefined, lastRunId: clientRunId }
         : {}),
   };
 }

@@ -527,6 +527,7 @@ async function activateSetupInferenceUnredacted(
     }
     let committedConfig: OpenClawConfig | undefined;
     let autoLocalModelLeanApplied = false;
+    let gatewayRestartRequired = false;
     if (!needsPersistence) {
       const latestSnapshot = await readSnapshot();
       const latestRuntime =
@@ -571,6 +572,7 @@ async function activateSetupInferenceUnredacted(
         committedConfig,
         autoLocalModelLeanApplied,
         codexInstallOwnership,
+        gatewayRestartRequired,
       };
       const persistenceFailure = await persistActivatedSetupInference({
         params,
@@ -597,7 +599,12 @@ async function activateSetupInferenceUnredacted(
       if (persistenceFailure) {
         return persistenceFailure;
       }
-      ({ committedConfig, autoLocalModelLeanApplied, codexInstallOwnership } = persistenceState);
+      ({
+        committedConfig,
+        autoLocalModelLeanApplied,
+        codexInstallOwnership,
+        gatewayRestartRequired,
+      } = persistenceState);
     }
     if (codexRegistryNeedsReload && committedConfig) {
       const reloadedRuntimeConfig = await reloadCodexRegistryAfterActivation({
@@ -663,6 +670,9 @@ async function activateSetupInferenceUnredacted(
       modelRef: plan.modelRef,
       latencyMs: test.latencyMs,
       lines,
+      ...(params.surface === "gateway" && gatewayRestartRequired
+        ? { gatewayRestartRequired: true as const }
+        : {}),
     };
   } finally {
     let codexCleanupError: SetupInferenceActivationIndeterminateError | undefined;
