@@ -40,6 +40,11 @@ export type MSTeamsActivityHandler = {
   ) => Promise<MSTeamsIngressDispatchResult | void>;
 };
 
+function asMSTeamsTurnContext(context: unknown): MSTeamsTurnContext {
+  // SAFETY: Teams ActivityHandler callbacks supply the turn-context contract used here.
+  return context as MSTeamsTurnContext;
+}
+
 async function isInvokeAuthorized(params: {
   context: MSTeamsTurnContext;
   deps: MSTeamsMessageHandlerDeps;
@@ -257,9 +262,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
 
   handler.onMembersRemoved(async (context, next) => {
     try {
-      // SAFETY: This callback is registered on the Teams ActivityHandler, which supplies
-      // the MSTeams turn-context shape consumed by the lifecycle handler.
-      await handleMSTeamsLifecycleRemove(context as MSTeamsTurnContext, deps);
+      await handleMSTeamsLifecycleRemove(asMSTeamsTurnContext(context), deps);
     } catch (err) {
       deps.runtime.error(`msteams lifecycle handler failed: ${formatUnknownError(err)}`);
     }
@@ -268,9 +271,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
 
   handler.onInstallationUpdate(async (context, next) => {
     try {
-      // SAFETY: This callback is registered on the Teams ActivityHandler, which supplies
-      // the MSTeams turn-context shape consumed by the lifecycle handler.
-      await handleMSTeamsLifecycleRemove(context as MSTeamsTurnContext, deps);
+      await handleMSTeamsLifecycleRemove(asMSTeamsTurnContext(context), deps);
     } catch (err) {
       deps.runtime.error(`msteams lifecycle handler failed: ${formatUnknownError(err)}`);
     }

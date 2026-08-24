@@ -17,8 +17,8 @@ import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
 import { runMSTeamsFileConsentInvokeHandler } from "./file-consent-invoke.js";
-import { buildMSTeamsActivityHandler } from "./monitor-activity-handler.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
+import { buildMSTeamsActivityHandler } from "./monitor-activity-handler.js";
 import {
   isCardActionInvokeAuthorized,
   isSigninInvokeAuthorized,

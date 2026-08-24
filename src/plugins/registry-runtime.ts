@@ -792,12 +792,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 });
               }),
           } satisfies PluginRuntime["channel"]["session"];
-          const scopedChannel = Object.create(
+          const scopedChannel: PluginRuntime["channel"] = Object.create(
             Object.getPrototypeOf(channel),
             Object.getOwnPropertyDescriptors(channel),
-            // SAFETY: Object.create preserves the complete channel runtime prototype and
-            // own-property descriptors before the session capability is replaced below.
-          ) as PluginRuntime["channel"];
+          );
           Object.defineProperty(scopedChannel, "session", {
             configurable: true,
             enumerable: true,
