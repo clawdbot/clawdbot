@@ -16,32 +16,45 @@ It owns exactly one thing: address to place. It does not decide which addresses 
 The plugin is bundled and active by default. To see it work, open **Activity**, pick a person, and look at their device row. A remote client shows its address and the resolved city:
 
 ```
-openclaw-control-ui  MacIntel · 203.0.113.7 · Europe/Vienna  Vienna, Vienna ⓘ
+openclaw-control-ui  MacIntel · 8.8.8.8 · Europe/Vienna  Mountain View, California ⓘ
 ```
 
-Nothing appears the first time if the database is still downloading; reload after a few seconds. To check the plugin directly:
+The first view after a fresh install shows no city while the database downloads; the row fills itself in once it is ready, without a reload. To check the plugin directly:
 
 ```bash
-curl -s "http://127.0.0.1:18789/plugins/geolocation/lookup?ip=203.0.113.7" -H "Authorization: Bearer <GATEWAY_TOKEN>"
+curl -s "http://127.0.0.1:18789/plugins/geolocation/lookup?ip=8.8.8.8" -H "Authorization: Bearer <GATEWAY_TOKEN>"
 ```
 
 ```json
 {
   "found": true,
-  "city": "Vienna",
-  "region": "Vienna",
-  "country": "Austria",
-  "countryCode": "AT",
+  "city": "Mountain View",
+  "region": "California",
+  "country": "United States",
+  "countryCode": "US",
   "attribution": { "text": "IP Geolocation by DB-IP", "url": "https://db-ip.com" }
 }
 ```
+
+Use an address that is actually routable. Reserved ranges such as `203.0.113.0/24`
+are absent from the database and answer `{"found": false}`:
+
+```json
+{
+  "found": false,
+  "attribution": { "text": "IP Geolocation by DB-IP", "url": "https://db-ip.com" }
+}
+```
+
+The first call also downloads the database, so expect it to take up to a minute
+while later calls answer from the local copy.
 
 ## Why some clients never show a location
 
 A location only appears when the Gateway recorded a usable public address for that client, and often it did not:
 
 - Connect handling omits `ip` entirely for loopback clients, so anything reaching the Gateway over an SSH tunnel or local port forward has no address to resolve.
-- Tailscale and other CGNAT clients sit in `100.64/10`, which the Gateway classifies as private. There is nothing to look up.
+- Tailscale clients arrive on a `100.64/10` carrier-grade-NAT address and LAN clients on a private one. Both are recorded and displayed, but no geolocation database contains them, so the plugin answers `found: false` for these ranges without loading the database at all. A tailnet-only or LAN-only Gateway therefore never downloads one.
 - Mobile carriers, VPNs, and corporate egress resolve to the operator's exit point, not the person. The answer is confidently wrong rather than missing.
 
 This is why the device row also carries the client-reported time zone. A browser knows its own zone regardless of how it reached the Gateway, so `Europe/Vienna` keeps working exactly where the address stops being informative. Treat the city as a hint and the zone as the more reliable signal. See [Presence](/concepts/presence) for how both fields are produced.
@@ -105,17 +118,20 @@ Expect city-level accuracy in the 55-80% range, and worse for the mobile, VPN, a
 
 ## How the database is managed
 
-The download is lazy: an installation nobody queries never fetches anything. On the first lookup the plugin fetches the database into `<state-dir>/geolocation/`, parses it before publishing it, and keeps it until it ages past `refreshDays`.
+The download is lazy and demand-driven. It happens on the first lookup of a **public** address, which in practice requires all of the following: an authenticated identity exists, an operator opened that person's Activity view, and that client connected from a routable address. A Gateway nobody inspects — or one reached only over loopback, a tunnel, a LAN, or a tailnet — never downloads anything.
 
-Three behaviors are worth knowing because they decide what you see during a failure:
+On that first qualifying lookup the plugin fetches the database into `<state-dir>/geolocation/`, parses it before publishing it, and keeps it until it ages past `refreshDays`.
 
+Four behaviors are worth knowing because they decide what you see during a failure:
+
+- The response is read against a compressed ceiling and inflated against an on-disk ceiling, both enforced while reading. A replaced source cannot allocate an unbounded body, and a compression bomb cannot inflate past the limit.
 - A body that does not parse as an MMDB is discarded without replacing a working database. A rate-limit page or truncated download cannot break a Gateway that was working a minute ago.
 - A failed refresh serves the cached copy and logs a warning. Stale data beats no data.
 - Concurrent first lookups share one download rather than each starting their own.
 
 ## Troubleshooting
 
-**No location on any device row.** Check whether the Gateway recorded an address at all: a row showing only a platform and time zone has no `ip`, which is expected for loopback, tunneled, and Tailscale clients. Nothing is broken.
+**No location on any device row.** Either the Gateway recorded no address — a row showing only a platform and time zone has no `ip`, which is expected for loopback and tunneled clients — or every address present is private or carrier-grade NAT, which the plugin answers without consulting the database. Nothing is broken in either case.
 
 **Every lookup returns 503.** The database is unavailable — still downloading, or every candidate URL failed. Check the Gateway log for `geolocation: downloaded` or a `geolocation database download failed` line naming each URL it tried. A Gateway with no outbound network access cannot fetch the database; point `databaseUrl` at an internal mirror instead.
 

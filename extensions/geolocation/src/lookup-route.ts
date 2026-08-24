@@ -1,6 +1,7 @@
 /** HTTP surface: `GET /plugins/geolocation/lookup?ip=<address>`. */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
+import { isPrivateOrLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { GeolocationSettings } from "./config.js";
 import type { GeolocationDatabase } from "./database-store.js";
 import { projectGeolocationRecord } from "./lookup.js";
@@ -29,6 +30,13 @@ export function createGeolocationLookupHandler(deps: RouteDeps) {
     const ip = url.searchParams.get("ip")?.trim() ?? "";
     if (!net.isIP(ip)) {
       sendJson(res, 400, { error: "ip must be a valid IPv4 or IPv6 address" });
+      return true;
+    }
+    // Private, loopback, link-local, and carrier-grade-NAT addresses are absent
+    // from every geolocation database, so answering them here keeps a tailnet or
+    // LAN-only deployment from ever downloading one.
+    if (isPrivateOrLoopbackHost(ip)) {
+      sendJson(res, 200, { found: false, attribution: deps.settings.attribution });
       return true;
     }
     try {

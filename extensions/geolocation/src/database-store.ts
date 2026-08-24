@@ -12,8 +12,42 @@ import { expandDatabaseUrls, type GeolocationSettings } from "./config.js";
 
 const gunzipAsync = promisify(gunzip);
 
-// A city-level MMDB is ~125 MB today; the ceiling stops a redirected or
-// replaced URL from streaming an unbounded body into the state directory.
+/**
+ * Reads the body chunk by chunk and fails as soon as the running total passes
+ * the cap, so an oversized response is rejected mid-flight instead of after it
+ * has already been allocated in full.
+ */
+async function readBoundedBody(response: Response, limit: number): Promise<Buffer> {
+  const body = response.body;
+  if (!body) {
+    throw new Error("response had no body");
+  }
+  const reader = body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      total += value.byteLength;
+      if (total > limit) {
+        throw new Error(`response exceeded the ${limit} byte cap`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks);
+}
+
+// A city-level MMDB is ~125 MB today and its gzip is ~20 MB. Both ceilings are
+// enforced while reading, not after: a replaced or compromised source must not
+// be able to allocate an unbounded body, and a compression bomb must not be able
+// to inflate past the on-disk ceiling either.
+const MAX_COMPRESSED_BYTES = 256 * 1024 * 1024;
 const MAX_DATABASE_BYTES = 512 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 
@@ -60,12 +94,12 @@ async function downloadDatabase(deps: StoreDeps, target: string): Promise<Reader
         failures.push(`${url} -> HTTP ${response.status}`);
         continue;
       }
-      const raw = Buffer.from(await response.arrayBuffer());
-      if (raw.byteLength > MAX_DATABASE_BYTES) {
-        failures.push(`${url} -> ${raw.byteLength} bytes exceeds the ${MAX_DATABASE_BYTES} cap`);
-        continue;
-      }
-      const body = url.endsWith(".gz") ? await gunzipAsync(raw) : raw;
+      const raw = await readBoundedBody(response, MAX_COMPRESSED_BYTES);
+      // maxOutputLength makes zlib stop inflating at the ceiling rather than
+      // allocating whatever the compressed stream claims to expand into.
+      const body = url.endsWith(".gz")
+        ? await gunzipAsync(raw, { maxOutputLength: MAX_DATABASE_BYTES })
+        : raw;
       // Parse before publishing so a truncated or HTML error body never replaces
       // a working database on disk. The reader is returned so the caller does
       // not read and parse the same bytes a second time.

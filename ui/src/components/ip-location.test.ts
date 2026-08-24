@@ -7,10 +7,16 @@ function jsonResponse(body: unknown) {
   return { ok: true, status: 200, json: async () => body } as Response;
 }
 
-async function settle(element: HTMLElement & { updateComplete?: Promise<unknown> }) {
-  await element.updateComplete;
-  await Promise.resolve();
-  await element.updateComplete;
+// The element resolves through its own fetch, so wait for the asserted text
+// rather than a fixed number of update cycles.
+async function settleUntil(
+  element: HTMLElement & { updateComplete?: Promise<unknown> },
+  predicate: () => boolean,
+) {
+  await vi.waitFor(async () => {
+    await element.updateComplete;
+    expect(predicate()).toBe(true);
+  });
 }
 
 beforeEach(() => {
@@ -38,9 +44,8 @@ describe("openclaw-ip-location", () => {
     element.ip = "203.0.113.20";
     document.body.append(element);
 
-    await settle(element);
+    await settleUntil(element, () => (element.textContent ?? "").includes("Vienna, Vienna"));
 
-    expect(element.textContent).toContain("Vienna, Vienna");
     expect(element.querySelector("a")?.getAttribute("href")).toBe("https://db-ip.com");
   });
 
@@ -53,8 +58,11 @@ describe("openclaw-ip-location", () => {
     element.ip = "203.0.113.21";
     document.body.append(element);
 
-    await settle(element);
-
+    await settleUntil(
+      element,
+      () => (fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length > 0,
+    );
+    await element.updateComplete;
     expect(element.textContent?.trim()).toBe("");
   });
 
@@ -64,8 +72,7 @@ describe("openclaw-ip-location", () => {
     const element = document.createElement("openclaw-ip-location");
     document.body.append(element);
 
-    await settle(element);
-
+    await element.updateComplete;
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

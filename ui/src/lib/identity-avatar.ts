@@ -18,10 +18,13 @@ const ORIGIN_PROBE = "https://origin-probe.invalid";
 let appGatewayOrigin: string | null = null;
 let appGatewayResourceBasePath = "";
 let appGatewayAuthHeader: string | null = null;
-let resetAvatarGatewayContext: (() => void) | undefined;
+// More than one cache is keyed by the Gateway HTTP context (avatars,
+// geolocation), so every subscriber must be notified on a switch. A single slot
+// would silently drop whichever registered first.
+const gatewayContextResets = new Set<() => void>();
 
 export function registerAvatarGatewayReset(reset: () => void): void {
-  resetAvatarGatewayContext = reset;
+  gatewayContextResets.add(reset);
 }
 
 export function readAvatarGatewayContext() {
@@ -62,7 +65,9 @@ export function setAvatarGatewayOrigin(
     appGatewayResourceBasePath !== nextResourceBasePath ||
     appGatewayAuthHeader !== nextAuthHeader
   ) {
-    resetAvatarGatewayContext?.();
+    for (const reset of gatewayContextResets) {
+      reset();
+    }
   }
   appGatewayOrigin = nextOrigin;
   appGatewayResourceBasePath = nextResourceBasePath;

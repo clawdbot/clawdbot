@@ -960,6 +960,9 @@ importers:
 
   extensions/geolocation:
     dependencies:
+      '@openclaw/net-policy':
+        specifier: workspace:*
+        version: link:../../packages/net-policy
       maxmind:
         specifier: 5.0.7
         version: 5.0.7

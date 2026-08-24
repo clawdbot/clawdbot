@@ -100,4 +100,31 @@ describe("geolocation lookup route", () => {
     expect(out.status).toBe(400);
     expect(lookup).not.toHaveBeenCalled();
   });
+
+  it("answers unresolvable ranges without consulting the database", async () => {
+    // A tailnet or LAN-only deployment must never trigger the download: CGNAT,
+    // private, loopback, and link-local addresses are absent from every
+    // geolocation database, so there is nothing to load.
+    const loadDatabase = vi.fn();
+    const handler = createGeolocationLookupHandler({ settings, loadDatabase } as never);
+
+    for (const ip of ["100.64.1.5", "192.168.1.20", "10.0.0.4", "127.0.0.1", "169.254.1.1"]) {
+      const out = fakeResponse();
+      await handler({ url: `/plugins/geolocation/lookup?ip=${ip}` } as never, out.res);
+      expect(out.status, ip).toBe(200);
+      expect(out.body.found, ip).toBe(false);
+    }
+
+    expect(loadDatabase).not.toHaveBeenCalled();
+  });
+
+  it("still consults the database for a routable address", async () => {
+    const loadDatabase = vi.fn(async () => ({ lookup: () => null }));
+    const handler = createGeolocationLookupHandler({ settings, loadDatabase } as never);
+    const out = fakeResponse();
+
+    await handler({ url: "/plugins/geolocation/lookup?ip=8.8.8.8" } as never, out.res);
+
+    expect(loadDatabase).toHaveBeenCalledOnce();
+  });
 });
