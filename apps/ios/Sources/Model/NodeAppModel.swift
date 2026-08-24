@@ -405,6 +405,7 @@ final class NodeAppModel {
 
     private var mainSessionBaseKey: String = "main"
     private var gatewaySessionScope: String?
+    var gatewayAccentColorHex: String?
     private var focusedChatSessionKey: String?
     // Two-part unread guard mirroring Android: the opened key survives read
     // confirmations so later unread episodes on the same open chat re-acknowledge;
@@ -1570,12 +1571,14 @@ final class NodeAppModel {
             let session = config["session"] as? [String: Any]
             let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
             let scope = (session?["scope"] as? String) ?? "per-sender"
+            let accentHex = ColorHexSupport.gatewayUserAccentHex(configUI: config["ui"] as? [String: Any])
             guard shouldApply(),
                   GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
             else { return }
             await MainActor.run {
                 self.mainSessionBaseKey = mainKey
                 self.gatewaySessionScope = scope
+                self.gatewayAccentColorHex = accentHex
                 self.synchronizeTalkSessionKey()
             }
         } catch {
@@ -3843,6 +3846,7 @@ extension NodeAppModel {
         LiveActivityManager.shared.endActivity(reason: "new_gateway_connect")
         self.mainSessionBaseKey = "main"
         self.gatewaySessionScope = nil
+        self.gatewayAccentColorHex = nil
         self.gatewayDefaultAgentId = nil
         self.gatewayAgents = []
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
@@ -5108,6 +5112,7 @@ extension NodeAppModel {
     private func configureLocalGatewayFixtureSession(agents: [AgentSummary]) {
         self.mainSessionBaseKey = "main"
         self.gatewaySessionScope = "per-sender"
+        self.gatewayAccentColorHex = nil
         self.selectedAgentId = nil
         self.gatewayDefaultAgentId = "main"
         self.gatewayAgents = agents
