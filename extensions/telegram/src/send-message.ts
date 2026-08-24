@@ -7,6 +7,7 @@ import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/cha
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { telegramCaptionDeliveryMetadata } from "./caption.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import {
@@ -349,14 +350,16 @@ async function sendMessageTelegramWithContext(
     let mediaPromptRecorded = false;
     const reportMediaDelivery = async (hasInlineKeyboard: boolean) => {
       try {
+        const meta = {
+          ...(deliveredCaption ? { telegramDeliveredText: deliveredCaption } : {}),
+          telegramHasInlineKeyboard: hasInlineKeyboard,
+        };
+        telegramCaptionDeliveryMetadata.add(meta);
         mediaDeliveryResult = await reportDelivery(
           mediaMessageId,
           resolvedChatId,
           result,
-          {
-            ...(deliveredCaption ? { telegramDeliveredText: deliveredCaption } : {}),
-            telegramHasInlineKeyboard: hasInlineKeyboard,
-          },
+          meta,
           "media",
           (delivery) => {
             mediaDeliveryResult = delivery;
@@ -444,15 +447,12 @@ async function sendMessageTelegramWithContext(
             messageId: String(mediaMessageId),
             chatId: resolvedChatId,
           };
-          return hasInlineKeyboard
-            ? {
-                ...finalMediaResult,
-                meta: {
-                  ...finalMediaResult.meta,
-                  telegramHasInlineKeyboard: true,
-                },
-              }
-            : finalMediaResult;
+          if (!hasInlineKeyboard) {
+            return finalMediaResult;
+          }
+          const meta = { ...finalMediaResult.meta, telegramHasInlineKeyboard: true };
+          telegramCaptionDeliveryMetadata.add(meta);
+          return { ...finalMediaResult, meta };
         }
         await recordMediaPromptContext(false);
         const textMessageIds = isChannelPartialDeliveryError(error)
@@ -490,13 +490,13 @@ async function sendMessageTelegramWithContext(
       };
     }
 
-    return mediaDeliveryResult?.receipt
-      ? {
-          messageId: mediaDeliveryResult.messageId,
-          chatId: mediaDeliveryResult.chatId,
-          receipt: mediaDeliveryResult.receipt,
-        }
-      : { messageId: String(mediaMessageId), chatId: resolvedChatId };
+    return mediaDeliveryResult?.meta?.telegramHasInlineKeyboard
+      ? mediaDeliveryResult
+      : {
+          messageId: String(mediaMessageId),
+          chatId: resolvedChatId,
+          ...(mediaDeliveryResult?.receipt ? { receipt: mediaDeliveryResult.receipt } : {}),
+        };
   }
 
   if (!text || !text.trim()) {
