@@ -65,6 +65,7 @@ export async function executeParallelFreeWebSearchProviderTool(
     provider: "parallel-free",
     objective,
     searchQueries,
+    count,
     response,
     start,
   });

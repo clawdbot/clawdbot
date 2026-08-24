@@ -445,6 +445,40 @@ describe("parallel web search provider", () => {
     const body = readBody() as { advanced_settings?: { max_results?: number } };
     expect(body.advanced_settings?.max_results).toBe(5);
   });
+  it("caps returned and cached results when paid Parallel exceeds the requested count", async () => {
+    enqueueJson({
+      search_id: "parallel-result-cap",
+      session_id: "parallel-cap-session",
+      results: [
+        { url: "https://example.com/first", title: "First", excerpts: ["first"] },
+        { url: "https://example.com/second", title: "Second", excerpts: ["second"] },
+        { url: "https://example.com/third", title: "Third", excerpts: ["third"] },
+      ],
+      warnings: ["provider warning"],
+      usage: [{ count: 1 }],
+    });
+    const tool = paidTool();
+    const args = {
+      search_queries: ["parallel result count owner"],
+      session_id: "parallel-cap-session",
+      count: 1,
+    };
+
+    const first = await tool.execute(args);
+    const cached = await tool.execute(args);
+
+    expect(endpointMockState.calls).toHaveLength(1);
+    expect(readBody()).toMatchObject({ advanced_settings: { max_results: 1 } });
+    expect(first).toMatchObject({
+      count: 1,
+      searchId: "parallel-result-cap",
+      sessionId: "parallel-cap-session",
+      warnings: ["provider warning"],
+      usage: [{ count: 1 }],
+    });
+    expect(first.results).toHaveLength(1);
+    expect(cached).toEqual({ ...first, cached: true });
+  });
   it("bounds Parallel API error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"parallel upstream unavailable ".repeat(1024)}tail`, {
       status: 503,

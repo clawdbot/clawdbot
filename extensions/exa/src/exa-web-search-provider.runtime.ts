@@ -431,7 +431,7 @@ async function runExaSearch(params: {
         const detail = await readExaErrorDetail(res);
         throw new Error(`Exa API error (${res.status}): ${detail || res.statusText}`);
       }
-      return readExaSearchResults(res);
+      return (await readExaSearchResults(res)).slice(0, params.count);
     },
   );
 }

@@ -332,7 +332,7 @@ async function runBraveWebSearch(params: {
     "Brave Search API error",
   );
   const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
-  return results.map((entry) => {
+  return results.slice(0, params.count).map((entry) => {
     const description = entry.description ?? "";
     const title = entry.title ?? "";
     const url = entry.url ?? "";

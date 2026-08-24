@@ -176,8 +176,9 @@ export function normalizeParallelResults(payload: unknown): ParallelSearchResult
 }
 
 /** Maps a Parallel v1 response into wrapped `web_search` result entries. */
-function mapParallelResults(response: ParallelSearchResponse): Record<string, unknown>[] {
-  return normalizeParallelResults(response).map((entry) => {
+function mapParallelResults(response: ParallelSearchResponse, count: number) {
+  const results = normalizeParallelResults(response).slice(0, count);
+  return results.map((entry) => {
     const title = typeof entry.title === "string" ? entry.title : "";
     const url = typeof entry.url === "string" ? entry.url : "";
     const published =
@@ -205,10 +206,11 @@ export function buildParallelSearchPayload(params: {
   provider: "parallel" | "parallel-free";
   objective?: string;
   searchQueries: readonly string[];
+  count: number;
   response: ParallelSearchResponse;
   start: number;
 }): Record<string, unknown> {
-  const results = mapParallelResults(params.response);
+  const results = mapParallelResults(params.response, params.count);
   const payload: Record<string, unknown> = {
     ...(params.objective ? { objective: params.objective } : {}),
     searchQueries: params.searchQueries,

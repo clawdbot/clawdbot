@@ -253,7 +253,7 @@ async function runPerplexitySearchApi(params: {
         res,
         "Perplexity Search",
       );
-      return (data.results ?? []).map((entry) => ({
+      return (data.results ?? []).slice(0, params.count).map((entry) => ({
         title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
         url: entry.url ?? "",
         description: entry.snippet ? wrapWebContent(entry.snippet, "web_search") : "",

@@ -241,6 +241,7 @@ export async function executeParallelWebSearchProviderTool(
     provider: "parallel",
     objective,
     searchQueries,
+    count,
     response,
     start,
   });

@@ -117,6 +117,29 @@ describe("perplexity web search provider", () => {
     expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledTimes(2);
   });
 
+  it("caps returned and cached results when the Perplexity Search API exceeds the requested count", async () => {
+    withTrustedWebSearchEndpointMock.mockReset();
+    mockPerplexityResponseOnce({
+      results: [
+        { url: "https://example.com/first", title: "First", snippet: "first" },
+        { url: "https://example.com/second", title: "Second", snippet: "second" },
+        { url: "https://example.com/third", title: "Third", snippet: "third" },
+      ],
+    });
+    const tool = createConfiguredPerplexityTool(true);
+    const args = { query: "perplexity result count owner", count: 1 };
+
+    const first = await tool.execute(args);
+    const cached = await tool.execute(args);
+
+    expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce();
+    const [request] = withTrustedWebSearchEndpointMock.mock.calls[0] as [{ init: RequestInit }];
+    expect(JSON.parse(request.init.body as string)).toMatchObject({ max_results: 1 });
+    expect(first).toMatchObject({ provider: "perplexity", count: 1 });
+    expect(first.results).toHaveLength(1);
+    expect(cached).toEqual({ ...first, cached: true });
+  });
+
   it.each([
     { name: "chat completions", structured: false, expectedRequests: 1 },
     { name: "native Search API", structured: true, expectedRequests: 2 },
