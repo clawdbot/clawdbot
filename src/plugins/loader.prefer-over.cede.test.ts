@@ -543,6 +543,154 @@ describe("plugin loader preferOver cede", () => {
     ]);
   });
 
+  // The P1 shape (comment 3840887960): one channel, two INDEPENDENT declarations (A replaces B,
+  // C replaces D). The displaced ids are only B and D, so ceding just those let A and C race:
+  // registration order picked the runtime owner while schema ownership named its one winner, and
+  // the Control UI could describe C's strict schema for a channel served by A. Every active
+  // claimant that is not the winner cedes, so only the winner registers.
+  it("cedes the second independent declarer so one claimant serves the channel", () => {
+    const root = makePluginLoaderTempDir();
+    const pairADir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-pair-a",
+      channelIds: ["zzalpha"],
+      toolName: "zz_pair_a_tool",
+      preferOver: { zzalpha: ["zz-pair-b"] },
+    });
+    // Both displaced fallbacks claim a second, uncontested channel so auto-enable keeps them
+    // enabled and their records carry the cede.
+    const pairBDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-pair-b",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_pair_b_tool",
+    });
+    const pairCDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-pair-c",
+      channelIds: ["zzalpha"],
+      toolName: "zz_pair_c_tool",
+      preferOver: { zzalpha: ["zz-pair-d"] },
+    });
+    const pairDDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-pair-d",
+      channelIds: ["zzalpha", "zzgamma"],
+      toolName: "zz_pair_d_tool",
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: {
+        zzalpha: { token: "alpha" },
+        zzbeta: { token: "beta" },
+        zzgamma: { token: "gamma" },
+      },
+      plugins: { load: { paths: [pairADir, pairBDir, pairCDir, pairDDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    const owner = (channelId: string) =>
+      registry.channels.find((entry) => entry.plugin.id === channelId)?.pluginId;
+    const ceded = (pluginId: string) =>
+      registry.plugins.find((plugin) => plugin.id === pluginId)?.cededChannelIds;
+    // The first registrant of the settled set — the same claimant the schema plane names.
+    expect(owner("zzalpha")).toBe("zz-pair-a");
+    expect(owner("zzbeta")).toBe("zz-pair-b");
+    expect(owner("zzgamma")).toBe("zz-pair-d");
+    expect(ceded("zz-pair-b")).toEqual(["zzalpha"]);
+    // The other declarer cedes too, instead of racing the winner at registration time.
+    expect(ceded("zz-pair-c")).toEqual(["zzalpha"]);
+    expect(ceded("zz-pair-d")).toEqual(["zzalpha"]);
+    expect(ceded("zz-pair-a")).toBeUndefined();
+    expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(
+      "channel already registered",
+    );
+  });
+
+  // A claimant whose declaration with the winner was set aside — here the operator explicitly
+  // selected it — must keep registering: a set-aside declaration displaces nobody, and the
+  // registered co-claimant is what keeps the channel alive when the winner fails during register.
+  // Ceding every non-winner without that exemption leaves the channel dead in exactly this case.
+  it("keeps a suppressed co-claimant registered when the winner fails during register", () => {
+    const root = makePluginLoaderTempDir();
+    const winnerDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-winner",
+      channelIds: ["zzalpha"],
+      toolName: "zz_winner_tool",
+      preferOver: { zzalpha: ["zz-selected"] },
+      throwOnRegister: true,
+    });
+    const selectedDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-selected",
+      channelIds: ["zzalpha"],
+      toolName: "zz_selected_tool",
+    });
+    // The independent contest is what puts zzalpha in the displaced set at all; without it no
+    // claimant cedes and the exemption is never exercised.
+    const indieDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-indie",
+      channelIds: ["zzalpha"],
+      toolName: "zz_indie_tool",
+      preferOver: { zzalpha: ["zz-decoy"] },
+    });
+    const decoyDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-decoy",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_decoy_tool",
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: { zzalpha: { token: "alpha" }, zzbeta: { token: "beta" } },
+      plugins: {
+        entries: { "zz-selected": { enabled: true } },
+        load: { paths: [winnerDir, selectedDir, indieDir, decoyDir] },
+      },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    expect(registry.plugins.find((plugin) => plugin.id === "zz-winner")?.status).toBe("error");
+    // The failed winner's registrations roll back; the operator's pick — never ceded because its
+    // declaration with the winner was set aside — still serves the channel.
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId).toBe(
+      "zz-selected",
+    );
+    expect(
+      registry.plugins.find((plugin) => plugin.id === "zz-selected")?.cededChannelIds,
+    ).toBeUndefined();
+    expect(registry.plugins.find((plugin) => plugin.id === "zz-indie")?.cededChannelIds).toEqual([
+      "zzalpha",
+    ]);
+    expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(
+      "ceded channel has no registered owner",
+    );
+  });
+
   // A channel nobody declared anything about keeps its fallback. Both planes settle an undeclared
   // pair on the first registrant, and the loser stays registerable so a winner that fails during
   // register does not take the channel down with it. Ceding every claimant the activation plan

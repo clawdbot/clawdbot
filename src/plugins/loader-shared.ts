@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { collectRuntimeDisplacedChannelOwners } from "../config/channel-config-metadata.js";
+import { collectRuntimeChannelOwnership } from "../config/channel-config-metadata.js";
 import { createConfiguredChannelOwnershipPolicy } from "../config/channel-ownership-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activateContextEngineRegistrations } from "../context-engine/registry.js";
@@ -295,12 +295,12 @@ export function pushPluginValidationError(params: {
  * Which channels each plugin has ceded to a preferred replacement, keyed by plugin id, plus the
  * claimant each ceded channel went to, keyed by canonical channel id.
  *
- * Displacement here is the rule channel schema ownership applies — declared replacement wins, a
- * hand-selected claimant is never displaced — read over the runtime claimant set, where a bare
- * `record.channels` claim serves a channel with or without a schema descriptor. Sharing the rule
- * is what keeps the runtime owner and the validated schema the same plugin by construction; a
- * second registration-time answer would leave the two free to disagree, which is the defect this
- * whole path exists to close.
+ * Displacement and the per-channel winner here are the rule channel schema ownership applies —
+ * declared replacement wins, a hand-selected claimant is never displaced — read over the runtime
+ * claimant set, where a bare `record.channels` claim serves a channel with or without a schema
+ * descriptor. Sharing the rule is what keeps the runtime owner and the validated schema the same
+ * plugin by construction; a second registration-time answer would leave the two free to disagree,
+ * which is the defect this whole path exists to close.
  *
  * A cede only stands when a claimant it yields to is part of this load. Schema ownership is
  * computed from the whole manifest registry, but a scoped load can contain the ceding plugin
@@ -328,7 +328,10 @@ export function collectCededChannelIdsByPlugin(params: {
     registry: params.registry,
     env: params.env,
   });
-  const displaced = collectRuntimeDisplacedChannelOwners(params.registry, policy);
+  const { displaced, winners, isPairSuppressed } = collectRuntimeChannelOwnership(
+    params.registry,
+    policy,
+  );
   const claimantsByChannel = new Map<string, string[]>();
   for (const record of params.registry.plugins) {
     for (const channelId of record.channels) {
@@ -342,42 +345,49 @@ export function collectCededChannelIdsByPlugin(params: {
   const cededChannelOwners = new Map<string, string>();
   for (const [channelId, pluginIds] of displaced) {
     const claimedId = normalizeCededChannelId(channelId);
-    // Only an active claimant can take the channel. Claimants are read from every manifest, so
-    // "not displaced" alone would let a denied or entry-disabled plugin hold the cede in place for
-    // a channel it will never register — the same dead channel the scope check above exists to
-    // prevent. Activity is read from the policy that decided the displacement, so the loader and
-    // the config layer answer this the same way.
-    const cededTo = claimantsByChannel.get(claimedId)?.find(
-      (claimantId) =>
-        !pluginIds.has(claimantId) &&
-        policy.isPluginActive(claimantId, claimedId) &&
-        matchesScopedPluginOrDreamingSidecar({
-          onlyPluginIdSet: params.onlyPluginIdSet,
-          pluginId: claimantId,
-          sidecar: params.dreamingSidecar,
-        }),
-    );
+    // The channel goes to the winner schema ownership computed — the same claimant validation and
+    // the Control UI name — and only when this load can register it. The winner is inactive only
+    // in the all-claimants-inactive state, where nothing registers and no cede should stand; a
+    // winner outside a scoped load must not collect cedes either, or the load strands the channel
+    // with no runtime owner instead of the fallback that served it.
+    const winner = winners.get(channelId);
+    const cededTo =
+      winner !== undefined &&
+      policy.isPluginActive(winner, claimedId) &&
+      matchesScopedPluginOrDreamingSidecar({
+        onlyPluginIdSet: params.onlyPluginIdSet,
+        pluginId: winner,
+        sidecar: params.dreamingSidecar,
+      })
+        ? winner
+        : undefined;
     if (cededTo === undefined) {
       continue;
     }
     cededChannelOwners.set(claimedId, cededTo);
-    // Every claimant the activation plan excludes cedes here, not only the ids the declaration
-    // displaced. A declared contest narrows auto-enable's candidate set to the declaring pair, so
-    // a third claimant of the same channel is inactive there without any preference naming it;
-    // ceding only the displaced ids let such a claimant — kept enabled through another configured
-    // channel and discovered first — take the channel at runtime while schema ownership validated
-    // the winner, the exact two-plane split this map exists to close. A claimant the policy keeps
-    // active — the operator's explicit pick — still registers and settles by registration order,
-    // which for a pair whose declaration was set aside is the same first registrant the schema
-    // plane's keep-current rule retains. The winner passes the same activity check above, so
-    // neither can join the set. The displaced ids stay ceded unconditionally because the pair's
-    // named target remains an activation candidate, and reading activity alone would hand it back
-    // the very channel the declaration takes away.
+    // Every claimant that is not the winner cedes here, not only the ids the declaration
+    // displaced. Independent declarations (A replaces B, C replaces D) leave two active,
+    // undisplaced claimants; ceding only the displaced ids let registration order pick between
+    // them while schema ownership named its one winner, the exact two-plane split this map exists
+    // to close. The displaced ids stay ceded unconditionally because the pair's named target
+    // remains an activation candidate, and reading activity alone would hand it back the very
+    // channel the declaration takes away. One exemption: a claimant whose declaration with the
+    // winner was set aside — a preferOver cycle member or a pair whose target the operator
+    // selected — must keep registering, because a set-aside declaration displaces nobody: every
+    // member registers and the first registrant keeps the channel. Ceding it would displace the
+    // very claimant the suppression exists to protect.
     const cedingPluginIds = new Set(pluginIds);
     for (const claimantId of claimantsByChannel.get(claimedId) ?? []) {
-      if (!policy.isPluginActive(claimantId, claimedId)) {
-        cedingPluginIds.add(claimantId);
+      if (claimantId === cededTo) {
+        continue;
       }
+      if (
+        policy.isPluginActive(claimantId, claimedId) &&
+        isPairSuppressed(channelId, cededTo, claimantId)
+      ) {
+        continue;
+      }
+      cedingPluginIds.add(claimantId);
     }
     for (const pluginId of cedingPluginIds) {
       const channels = cededChannelIdsByPlugin.get(pluginId) ?? [];

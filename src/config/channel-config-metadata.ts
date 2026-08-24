@@ -384,6 +384,49 @@ function collectDisplacedOwnersForClaimants(
 }
 
 /**
+ * The one claimant both planes hand each contested channel to. The runtime facade keeps the first
+ * registrant (`registry-registrars-network.ts:370` rejects the rest), and the loader cedes every
+ * active claimant that is not this winner, so the scan mirrors that: walk claimants in registry
+ * (= registration) order, skip the displaced — and the inactive, while any claimant is active —
+ * and keep the earliest. Ties separate the way the schema comparison separates them: a
+ * closer-origin claimant overtakes, except across a set-aside declaration, where both claimants
+ * register and the facade keeps the first registrant whatever its origin. With no active claimant
+ * the winner answers what the operator would get once plugins come back, like the displacement
+ * walk above; the loader ignores it then because nothing registers.
+ */
+function resolveRuntimeChannelWinners(
+  claimantsByChannel: ReadonlyMap<string, PluginManifestRecord[]>,
+  displaced: DisplacedChannelOwners,
+  suppressed: SuppressedChannelDeclarations,
+  policy: ChannelOwnershipPolicy,
+): Map<string, string> {
+  const winners = new Map<string, string>();
+  for (const [claimedId, claimants] of claimantsByChannel) {
+    const activeClaimants = claimants.filter((record) =>
+      policy.isPluginActive(record.id, claimedId),
+    );
+    const base = activeClaimants.length > 0 ? activeClaimants : claimants;
+    let leader: PluginManifestRecord | undefined;
+    for (const record of base) {
+      if (isDisplacedChannelOwner(displaced, claimedId, record.id)) {
+        continue;
+      }
+      if (
+        leader === undefined ||
+        (!hasSuppressedChannelDeclaration(suppressed, claimedId, leader.id, record.id) &&
+          resolveOriginRank(record.origin) < resolveOriginRank(leader.origin))
+      ) {
+        leader = record;
+      }
+    }
+    if (leader !== undefined) {
+      winners.set(claimedId, leader.id);
+    }
+  }
+  return winners;
+}
+
+/**
  * Displacement over the claimant set, shared by both planes: a channel counts as contested once
  * two records claim it in `record.channels`, descriptors or not. A bare claim serves a channel —
  * `channelConfigs` is optional, and a channel declared without one still registers — so the
@@ -396,26 +439,47 @@ function collectDisplacedOwnersForClaimants(
 function collectDisplacedChannelOwners(
   registry: PluginManifestRegistry,
   policy: ChannelOwnershipPolicy,
-): { displaced: DisplacedChannelOwners; suppressed: SuppressedChannelDeclarations } {
+): {
+  displaced: DisplacedChannelOwners;
+  suppressed: SuppressedChannelDeclarations;
+  winners: Map<string, string>;
+} {
   const claimantsByChannel = collectChannelClaimants(registry);
   for (const [claimedId, claimants] of claimantsByChannel) {
     if (claimants.length < 2) {
       claimantsByChannel.delete(claimedId);
     }
   }
-  return collectDisplacedOwnersForClaimants(claimantsByChannel, policy);
+  const { displaced, suppressed } = collectDisplacedOwnersForClaimants(claimantsByChannel, policy);
+  return {
+    displaced,
+    suppressed,
+    winners: resolveRuntimeChannelWinners(claimantsByChannel, displaced, suppressed, policy),
+  };
 }
 
 /**
- * Runtime-plane displacement, read by the loader to decide which claimants cede a channel. It is
- * the same contest as the schema plane on purpose: the two planes counting differently is exactly
- * what let one plane keep a plugin the other had already ruled out.
+ * Runtime-plane ownership, read by the loader to decide which claimants cede a channel: the
+ * displacement graph, the winner both planes name per contested channel, and whether a pair's
+ * declaration was set aside (the claimants that must keep registering alongside the winner). One
+ * computation on purpose: the two planes deciding from different data is exactly what let one
+ * plane keep a plugin the other had already ruled out.
  */
-export function collectRuntimeDisplacedChannelOwners(
+export function collectRuntimeChannelOwnership(
   registry: PluginManifestRegistry,
   policy: ChannelOwnershipPolicy,
-): DisplacedChannelOwners {
-  return collectDisplacedChannelOwners(registry, policy).displaced;
+): {
+  displaced: DisplacedChannelOwners;
+  winners: ReadonlyMap<string, string>;
+  isPairSuppressed: (channelId: string, pluginId: string, otherPluginId: string) => boolean;
+} {
+  const { displaced, suppressed, winners } = collectDisplacedChannelOwners(registry, policy);
+  return {
+    displaced,
+    winners,
+    isPairSuppressed: (channelId, pluginId, otherPluginId) =>
+      hasSuppressedChannelDeclaration(suppressed, channelId, pluginId, otherPluginId),
+  };
 }
 
 /**
@@ -431,6 +495,8 @@ function decideChannelSchemaOwnership(params: {
   incomingDisplaced: boolean;
   currentOriginRank: number;
   incomingOriginRank: number;
+  currentIsRuntimeWinner: boolean;
+  incomingIsRuntimeWinner: boolean;
   pairDeclarationSuppressed: boolean;
 }): "keepCurrent" | "takeChannel" {
   if (params.currentActive !== params.incomingActive) {
@@ -443,13 +509,17 @@ function decideChannelSchemaOwnership(params: {
     return params.currentOriginRank < params.incomingOriginRank ? "keepCurrent" : "takeChannel";
   }
   // Nothing separates the pair as compared here — and a suppressed pair arrives tied even across
-  // origins, because the entry adopts the nearer record's rank before the comparison. How the tie
-  // arose decides. A set-aside declaration — the operator selected its target, or the pair named
-  // each other and neither replaces the other — leaves both claimants active, and the runtime
-  // facade then rejects the later registration regardless of origin
-  // (`registry-registrars-network.ts` keeps the first registrant), so the schema must stay with
-  // the first claimant too. A pair with no declaration between them at all stays on the
-  // long-standing last-writer answer.
+  // origins, because the entry adopts the nearer record's rank before the comparison. The runtime
+  // winner decides the tie: the facade keeps the first registrant
+  // (`registry-registrars-network.ts:370` rejects the rest), so a tied pair the schema settled by
+  // last writer split the planes — the config was validated against one plugin's schema while the
+  // facade served the claimant registered first. When the winner sits outside the pair, how the
+  // tie arose still decides: a set-aside declaration keeps the first claimant, matching the
+  // registration-order answer its co-registrants get, and a pair with no declaration between them
+  // stays on the long-standing last-writer answer.
+  if (params.currentIsRuntimeWinner !== params.incomingIsRuntimeWinner) {
+    return params.incomingIsRuntimeWinner ? "takeChannel" : "keepCurrent";
+  }
   return params.pairDeclarationSuppressed ? "keepCurrent" : "takeChannel";
 }
 
@@ -501,8 +571,11 @@ export function collectChannelSchemaMetadataWithOwnership(
   policy: ChannelOwnershipPolicy = MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY,
 ): ChannelSchemaMetadataWithOwnership[] {
   const byChannelId = new Map<string, ChannelMetadataRecord>();
-  const { displaced: displacedOwners, suppressed: suppressedDeclarations } =
-    collectDisplacedChannelOwners(registry, policy);
+  const {
+    displaced: displacedOwners,
+    suppressed: suppressedDeclarations,
+    winners: runtimeWinners,
+  } = collectDisplacedChannelOwners(registry, policy);
   // Who claims each channel, for the two descriptor gates below: a descriptor is read only from a
   // record that claims the channel, and a displaced claimant may not seed an empty channel while
   // an active claimant that beat it serves the channel.
@@ -551,6 +624,8 @@ export function collectChannelSchemaMetadataWithOwnership(
             incomingDisplaced: isDisplacedChannelOwner(displacedOwners, claimedId, record.id),
             currentOriginRank: originRank,
             incomingOriginRank: originRank,
+            currentIsRuntimeWinner: runtimeWinners.get(claimedId) === ownerId,
+            incomingIsRuntimeWinner: runtimeWinners.get(claimedId) === record.id,
             pairDeclarationSuppressed: hasSuppressedChannelDeclaration(
               suppressedDeclarations,
               claimedId,
@@ -643,6 +718,9 @@ export function collectChannelSchemaMetadataWithOwnership(
           // still shields the schema it adopted from farther records.
           currentOriginRank: current.originRank,
           incomingOriginRank: originRank,
+          currentIsRuntimeWinner:
+            ownerId !== undefined && runtimeWinners.get(claimedId) === ownerId,
+          incomingIsRuntimeWinner: runtimeWinners.get(claimedId) === record.id,
           pairDeclarationSuppressed:
             ownerId !== undefined &&
             hasSuppressedChannelDeclaration(suppressedDeclarations, claimedId, ownerId, record.id),

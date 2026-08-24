@@ -93,16 +93,21 @@ function makeClaimantRecord(params: { id: string; preferOver?: string[] }): Plug
 
 /**
  * Three claimants of one channel, in registry order. While the channel is unconfigured every
- * claimant stays active and the legacy record wins the schema as the last undeclared writer.
- * Configuring the channel narrows activation's candidate set to the declaring pair, which moves
- * the selected owner to the replacement — the ownership flip a `channels.<id>` hot edit causes.
+ * claimant stays active and the legacy record wins the schema as the first undeclared registrant,
+ * the same claimant the runtime facade keeps. Configuring the channel narrows activation's
+ * candidate set to the declaring pair, which moves the selected owner to the replacement on both
+ * planes at once — the ownership flip a `channels.<id>` hot edit causes.
+ *
+ * Legacy-first on purpose: ordering it last made the flip depend on the schema plane's old
+ * last-writer tie-break disagreeing with the facade's first-registrant rule, so the fixture was
+ * manufacturing its move out of the divergence this branch removes.
  */
 function makeClaimantRegistry(): PluginManifestRegistry {
   return {
     plugins: [
-      makeClaimantRecord({ id: REPLACEMENT_PLUGIN_ID, preferOver: [DISPLACED_PLUGIN_ID] }),
-      makeClaimantRecord({ id: DISPLACED_PLUGIN_ID }),
       makeClaimantRecord({ id: LEGACY_PLUGIN_ID }),
+      makeClaimantRecord({ id: DISPLACED_PLUGIN_ID }),
+      makeClaimantRecord({ id: REPLACEMENT_PLUGIN_ID, preferOver: [DISPLACED_PLUGIN_ID] }),
     ],
     diagnostics: [],
   };

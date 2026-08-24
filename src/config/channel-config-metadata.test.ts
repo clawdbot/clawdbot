@@ -4,7 +4,7 @@ import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   collectChannelSchemaMetadataWithOwnership,
-  collectRuntimeDisplacedChannelOwners,
+  collectRuntimeChannelOwnership,
   type ChannelOwnershipPolicy,
 } from "./channel-config-metadata.js";
 
@@ -292,13 +292,15 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
 
   // Codex review P2 on #123209: a manifest that names itself declares nothing. Candidate discovery
   // skips the self comparison, so a self-edge would strand ownership on another claimant while the
-  // self-naming plugin stays active.
+  // self-naming plugin stays active. Applying the edge would displace the self-namer and hand the
+  // channel to the other claimant in both orders; ignored, the pair settles like any undeclared
+  // pair — on the first claimant.
   it("ignores a claimant that declares itself in preferOver", () => {
     const core = claimant({ id: "clickclack-core" });
     const confused = claimant({ id: "clickclack-plus", preferOver: ["clickclack-plus"] });
 
-    expect(ownerOf([confused, core])).toBe("clickclack-core");
-    expect(ownerOf([core, confused])).toBe("clickclack-plus");
+    expect(ownerOf([confused, core])).toBe("clickclack-plus");
+    expect(ownerOf([core, confused])).toBe("clickclack-core");
   });
 
   // Codex review P2 on #123209: auto-enable leaves an explicitly selected plugin enabled even when
@@ -399,7 +401,10 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
   });
 
   // Codex review P2 on #123209: channelCatalogMeta describes exactly one channel, so its
-  // preference must not let the plugin claim a different channel it also ships.
+  // preference must not let the plugin claim a different channel it also ships. With the core
+  // claimant first, a leaked preference would displace it and hand otherchat to the catalog
+  // plugin in both orders; correctly scoped, otherchat is an undeclared pair and stays with the
+  // first claimant.
   it("does not apply a catalog preference to the plugin's other channels", () => {
     const core = {
       id: "multi-core",
@@ -417,7 +422,7 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     };
 
     const owner = entryFor(
-      [wideClaimant, core] as unknown as ReturnType<typeof claimant>[],
+      [core, wideClaimant] as unknown as ReturnType<typeof claimant>[],
       "otherchat",
     )?.schemaPluginId;
 
@@ -443,23 +448,59 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     expect(entry?.description).toBe("the replacement");
   });
 
-  it("leaves undeclared same-origin claimants on the existing last-writer behavior", () => {
+  // P1 (comment 3840887960): the schema plane settled an undeclared active pair on the LAST
+  // claimant while the runtime facade keeps the FIRST registrant
+  // (`registry-registrars-network.ts:370` rejects the later registration), so runtime served one
+  // plugin while validation and the Control UI described the other's schema. The tie-break now
+  // follows the runtime winner, so both planes name the first claimant in either order.
+  it("settles undeclared same-origin claimants on the first claimant, like the runtime facade", () => {
     const first = claimant({ id: "clickclack-core" });
     const second = claimant({ id: "clickclack-plus" });
 
-    expect(ownerOf([first, second])).toBe("clickclack-plus");
-    expect(ownerOf([second, first])).toBe("clickclack-core");
+    expect(ownerOf([first, second])).toBe("clickclack-core");
+    expect(ownerOf([second, first])).toBe("clickclack-plus");
   });
+
+  // P1 (comment 3840887960), the reported shape: one channel, two INDEPENDENT declarations
+  // (A replaces B, C replaces D), all four claimants active. The displaced set is {B, D}, leaving
+  // A and C as an undeclared active pair: the runtime facade keeps the first registrant while the
+  // schema tie-break picked the last claimant, so runtime served A while validation and the
+  // Control UI enforced C's strict schema. Both planes must name the first registrant, whichever
+  // pair sits first.
+  it.each([
+    { order: ["pair-a", "pair-b", "pair-c", "pair-d"], winner: "pair-a" },
+    { order: ["pair-c", "pair-d", "pair-a", "pair-b"], winner: "pair-c" },
+  ])(
+    "hands a channel with independent declarations to the first registrant ($order)",
+    ({ order, winner }) => {
+      const byId = {
+        "pair-a": claimant({ id: "pair-a", preferOver: ["pair-b"] }),
+        "pair-b": claimant({ id: "pair-b" }),
+        "pair-c": claimant({ id: "pair-c", preferOver: ["pair-d"] }),
+        "pair-d": claimant({ id: "pair-d" }),
+      };
+      const plugins = order.map((id) => byId[id as keyof typeof byId]);
+
+      expect(ownerOf(plugins)).toBe(winner);
+      const registry = { plugins, diagnostics: [] } as unknown as PluginManifestRegistry;
+      const runtime = collectRuntimeChannelOwnership(registry, policyFor({}));
+      expect(runtime.winners.get("clickclack")).toBe(winner);
+      expect([...(runtime.displaced.get("clickclack") ?? [])].toSorted()).toEqual([
+        "pair-b",
+        "pair-d",
+      ]);
+    },
+  );
 });
 
 // The loader consumes this displacement graph to decide which claimants cede a channel, so the
 // runtime plane must read a ring exactly as the schema plane does: no member displaces any other,
 // every member registers, and the first registrant keeps the channel. Displacing all of them
 // instead silently disabled every ring member but the auto-enable survivor.
-describe("collectRuntimeDisplacedChannelOwners on preference rings", () => {
+describe("collectRuntimeChannelOwnership on preference rings", () => {
   function displacedFor(plugins: ReturnType<typeof claimant>[]) {
     const registry = { plugins, diagnostics: [] } as unknown as PluginManifestRegistry;
-    return collectRuntimeDisplacedChannelOwners(registry, policyFor({}));
+    return collectRuntimeChannelOwnership(registry, policyFor({})).displaced;
   }
 
   const ringOfThree = () => [
@@ -492,6 +533,53 @@ describe("collectRuntimeDisplacedChannelOwners on preference rings", () => {
     ];
 
     expect([...(displacedFor(plugins).get("clickclack") ?? [])]).toEqual(["clickclack-a"]);
+  });
+});
+
+// The loader cedes every active claimant that is not the winner, EXCEPT claimants whose
+// declaration with the winner was set aside — those register alongside it and the facade keeps
+// the first registrant. These pin the two facts that exemption reads: the winner is the first
+// claimant of the settled set, and the set-aside relation covers every pair of a cycle component.
+describe("collectRuntimeChannelOwnership", () => {
+  function ownershipFor(plugins: ReturnType<typeof claimant>[]) {
+    const registry = { plugins, diagnostics: [] } as unknown as PluginManifestRegistry;
+    return collectRuntimeChannelOwnership(registry, policyFor({}));
+  }
+
+  it("names the ring's first claimant the winner and keeps its pairs suppressed", () => {
+    const runtime = ownershipFor([
+      claimant({ id: "clickclack-a", preferOver: ["clickclack-b"] }),
+      claimant({ id: "clickclack-b", preferOver: ["clickclack-c"] }),
+      claimant({ id: "clickclack-c", preferOver: ["clickclack-a"] }),
+    ]);
+
+    expect(runtime.winners.get("clickclack")).toBe("clickclack-a");
+    // All pairs of the component, declared edge or not: ceding an exempt member would displace a
+    // claimant the stand-off says nobody displaces.
+    expect(runtime.isPairSuppressed("clickclack", "clickclack-a", "clickclack-c")).toBe(true);
+    expect(runtime.isPairSuppressed("clickclack", "clickclack-b", "clickclack-a")).toBe(true);
+  });
+
+  it("does not suppress an undeclared pair", () => {
+    const runtime = ownershipFor([
+      claimant({ id: "clickclack-core" }),
+      claimant({ id: "clickclack-plus" }),
+    ]);
+
+    expect(runtime.isPairSuppressed("clickclack", "clickclack-core", "clickclack-plus")).toBe(
+      false,
+    );
+  });
+
+  // An undeclared cross-origin pair separates on origin rank before the tie-break, so the winner
+  // scan must answer with the same claimant or the loader would cede the plugin whose schema the
+  // config plane keeps surfacing.
+  it("lets a closer origin overtake an earlier claimant, matching the schema plane", () => {
+    const bundled = claimant({ id: "clickclack-plus", origin: "bundled" });
+    const workspace = claimant({ id: "clickclack-core", origin: "workspace" });
+
+    expect(ownershipFor([bundled, workspace]).winners.get("clickclack")).toBe("clickclack-core");
+    expect(ownerOf([bundled, workspace])).toBe("clickclack-core");
   });
 });
 
