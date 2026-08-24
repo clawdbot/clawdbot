@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
 import { resolveLaunchAgentLabel } from "../daemon/launchd-label.js";
@@ -21,7 +21,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { resolveNodeSqliteLocation } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveNodeSqliteLocation } from "./node-sqlite.js";
 import type { GatewayRestartIntent } from "./restart-intent.js";
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
@@ -1475,7 +1475,7 @@ function readManagedServiceUpdateHandoffLease(
 ): { owner: string; pid: number; startIdentity: string } | null | undefined {
   let db: DatabaseSync | undefined;
   try {
-    db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath(), { readOnly: !stale });
+    db = openNodeSqliteDatabase(resolveManagedUpdateLeaseDatabasePath(), { readOnly: !stale });
     const lease = getNodeSqliteKysely<{
       managed_update_handoffs: { install_root: string; owner: string; payload_json: string };
     }>(db);
