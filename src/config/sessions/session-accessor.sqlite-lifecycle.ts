@@ -176,6 +176,8 @@ export async function cleanupSessionLifecycleArtifactsCore(
 export async function resetSessionEntryLifecycle(
   params: ResetSessionEntryLifecycleParams,
 ): Promise<ResetSessionEntryLifecycleResult> {
+  // The public accessor contract intentionally omits the final-write authority check.
+  // SAFETY: Only the lifecycle wrapper supplies this internal callback.
   const internalParams = params as ResetSessionEntryLifecycleParams & {
     beforeEntryMutation?: () => void;
   };

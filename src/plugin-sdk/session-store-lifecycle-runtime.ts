@@ -117,6 +117,8 @@ export async function resetSessionEntryLifecycleImpl(
     options?: { agentId?: string; sessionsDir?: string },
   ) => string,
 ): Promise<SessionEntry | null> {
+  // The exported Plugin Runtime contract intentionally omits the authority callback.
+  // SAFETY: Only owner-scoped registry wrappers add this internal callback.
   const internalParams = params as InternalResetSessionEntryLifecycleParams;
   const storePath =
     params.storePath ??
