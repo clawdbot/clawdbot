@@ -1,4 +1,5 @@
 // Feishu tests cover send plugin behavior.
+import type { HttpInstance, HttpRequestOptions } from "@larksuiteoapi/node-sdk";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
@@ -867,34 +868,33 @@ describe("editMessageFeishu", () => {
 
   it("routes card and rich-post edits through their distinct Feishu SDK HTTP methods", async () => {
     const Lark = await import("@larksuiteoapi/node-sdk");
-    const edit = editMessageFeishu ?? (await import("./send.js")).editMessageFeishu;
     const requests: Array<{
       method: string;
       url: string;
       data: { content?: string; msg_type?: string };
     }> = [];
-    const transport = Object.create(Lark.defaultHttpInstance) as Lark.HttpInstance;
-    const tokenRequest = vi.fn(() => {
-      throw new Error("Feishu SDK tenant authentication must remain disabled in this test");
-    });
+    const tokenRequest = vi.fn().mockRejectedValue(new Error("Unexpected Feishu authentication"));
+    const transport: HttpInstance = Lark.defaultHttpInstance.create();
     Object.defineProperty(transport, "post", { value: tokenRequest });
-    transport.request = async (options) => {
-      const method = options.method ?? "GET";
-      const data = options.data as { content?: string; msg_type?: string };
-      requests.push({ method, url: options.url ?? "", data });
-      const content = JSON.parse(data.content ?? "{}") as {
-        schema?: string;
-        zh_cn?: unknown;
-      };
+    Object.defineProperty(transport, "request", {
+      value: async (options: HttpRequestOptions<{ content?: string; msg_type?: string }>) => {
+        const method = options.method ?? "GET";
+        const data = options.data ?? {};
+        requests.push({ method, url: options.url ?? "", data });
+        const content = JSON.parse(data.content ?? "{}") as {
+          schema?: string;
+          zh_cn?: unknown;
+        };
 
-      if (content.schema && method !== "PATCH") {
-        return { code: 230020, msg: "interactive cards require PATCH" };
-      }
-      if (content.zh_cn && (method !== "PUT" || data.msg_type !== "post")) {
-        return { code: 230020, msg: "rich-post messages require PUT and msg_type post" };
-      }
-      return { code: 0, msg: "success" };
-    };
+        if (content.schema && method !== "PATCH") {
+          return Response.json({ code: 230020, msg: "interactive cards require PATCH" }).json();
+        }
+        if (content.zh_cn && (method !== "PUT" || data.msg_type !== "post")) {
+          return Response.json({ code: 230020, msg: "rich posts require PUT" }).json();
+        }
+        return Response.json({ code: 0, msg: "success" }).json();
+      },
+    });
     mockCreateFeishuClient.mockReturnValue(
       new Lark.Client({
         appId: "cli_edit_contract",
@@ -907,14 +907,14 @@ describe("editMessageFeishu", () => {
     );
 
     await expect(
-      edit({
+      editMessageFeishu({
         cfg: {} as ClawdbotConfig,
         messageId: "om_card_contract",
         card: { schema: "2.0" },
       }),
     ).resolves.toEqual({ messageId: "om_card_contract", contentType: "interactive" });
     await expect(
-      edit({
+      editMessageFeishu({
         cfg: {} as ClawdbotConfig,
         messageId: "om_post_contract",
         text: "updated rich-post body",
