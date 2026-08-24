@@ -8,9 +8,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
-/** Default canvas seam color used when gateway/user params omit a hex color. */
-const val DEFAULT_SEAM_COLOR_ARGB: Long = 0xFF4F7A9A
-
 fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
 /** Parses invoke params into a JSON object, returning null for absent/malformed input. */
@@ -76,6 +73,16 @@ fun parseHexColorArgb(raw: String?): Long? {
   if (hex.length != 6) return null
   val rgb = hex.toLongOrNull(16) ?: return null
   return 0xFF000000L or rgb
+}
+
+fun resolveGatewayAccentArgb(config: JsonObject?): Long? {
+  val ui = config?.get("ui").asObjectOrNull()
+  val prefs = ui?.get("prefs").asObjectOrNull()
+  // Match Control UI precedence: a present string user accent wins, even when invalid.
+  val accent =
+    readJsonPrimitive(prefs, "accent")?.takeIf { it.isString }?.contentOrNull
+      ?: readJsonPrimitive(ui, "seamColor")?.takeIf { it.isString }?.contentOrNull
+  return parseHexColorArgb(accent)
 }
 
 /** Converts gateway invocation throwables into protocol code/message pairs. */
