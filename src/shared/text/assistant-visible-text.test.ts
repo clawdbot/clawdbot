@@ -860,6 +860,12 @@ describe("stripMinimaxToolCallXml", () => {
       ].join("\n"),
     );
   });
+
+  it("preserves standalone encoded Minimax delimiters", () => {
+    const input = "The literal ]<]minimax[>[ delimiter is not a tool call.";
+
+    expect(stripMinimaxToolCallXml(input)).toBe(input);
+  });
 });
 
 describe("sanitizeAssistantVisibleText", () => {
@@ -883,6 +889,12 @@ describe("sanitizeAssistantVisibleText", () => {
 
     expect(sanitizeAssistantVisibleText(inline)).toBe(inline);
     expect(sanitizeAssistantVisibleText(fenced)).toBe(fenced);
+  });
+
+  it("preserves standalone encoded Minimax delimiters in visible text", () => {
+    const input = "The literal ]<]minimax[>[ delimiter is not a tool call.";
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
 
   it("does not preserve reasoning inside unequal backtick runs", () => {
