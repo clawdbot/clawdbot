@@ -12,7 +12,6 @@ import {
   replaceGatewayClient,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
-
 const suite = createNewSessionPageE2eSuite();
 const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
   /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
@@ -107,6 +106,7 @@ suite.define(() => {
   it("restores a cloud startup after a page reload without creating another session", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
+    const recoveryRuntimeLoad = createDeferred();
     const sessionKey = "agent:cloud:reload-recovery";
     const message = "resume this cloud task after reload";
     const gateway = await installMockGateway(page, {
@@ -194,9 +194,11 @@ suite.define(() => {
       await pastePng(page.locator(".new-session-page__message"));
       await page.getByRole("button", { name: "Start session" }).click();
       const firstSend = await gateway.waitForRequest("sessions.send");
+      const messageId = (firstSend.params as { idempotencyKey: string }).idempotencyKey;
       expect(firstSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
+      await waitForCommittedChatRoute(page);
       await gateway.rejectDeferred("sessions.send", {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
@@ -240,20 +242,18 @@ suite.define(() => {
         sessionKey,
       );
       expect(startupError).toContain("send outcome unknown");
-      await waitForCommittedChatRoute(page);
       await gateway.setMethodResponse("sessions.send", {
         runId: "run-reload-recovery",
         status: "started",
       });
 
-      const recoveryRuntimeLoad = createDeferred();
       let recoveryRuntimeRequested = false;
       await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
         recoveryRuntimeRequested = true;
         await recoveryRuntimeLoad.promise;
         await route.continue();
       });
-      await page.reload();
+      const reload = page.reload();
       await expect.poll(() => recoveryRuntimeRequested).toBe(true);
       await expect
         .poll(() =>
@@ -267,10 +267,11 @@ suite.define(() => {
         .toBe("connected");
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       recoveryRuntimeLoad.resolve();
+      await reload;
       const resumedSend = await gateway.waitForRequest("sessions.send");
       expect(resumedSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
-        idempotencyKey: (firstSend.params as { idempotencyKey: string }).idempotencyKey,
+        idempotencyKey: messageId,
         key: sessionKey,
         message,
       });
@@ -278,6 +279,7 @@ suite.define(() => {
       await waitForCommittedChatRoute(page);
       expect(page.url()).toContain(controlUiSessionPath(sessionKey));
     } finally {
+      recoveryRuntimeLoad.resolve();
       await context.close();
     }
   });

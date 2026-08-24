@@ -287,6 +287,25 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     }
   });
 
+  it("keeps same-timestamp process references newest-first in compaction context", () => {
+    for (const id of ["z-oldest", "a-middle", "m-newest"]) {
+      const session = createProcessSessionFixture({ id, startedAt: 1_000, backgrounded: true });
+      session.scopeKey = "agent:main:thread:1";
+      addSession(session);
+    }
+
+    const result = buildEmbeddedCompactionRuntimeContext({
+      sessionKey: "agent:main:thread:1",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(result.activeProcessSessions?.map(({ sessionId }) => sessionId)).toEqual([
+      "m-newest",
+      "a-middle",
+      "z-oldest",
+    ]);
+  });
+
   it("omits active process session references when no safe scope is available", () => {
     const active = createProcessSessionFixture({
       id: "sess-active",

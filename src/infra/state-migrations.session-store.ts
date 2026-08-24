@@ -599,17 +599,17 @@ export async function migrateOrphanedSessionKeys(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   additionalAgentIds?: readonly string[];
-  legacySessionSurfaces: PreparedLegacySessionSurfaces;
+  legacySessionSurfaces: PreparedLegacySessionSurfaces | (() => PreparedLegacySessionSurfaces);
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
-  if (params.legacySessionSurfaces.failures.length > 0) {
-    return {
-      changes,
-      warnings: [...params.legacySessionSurfaces.failures],
-    };
-  }
+  let preparedLegacySessionSurfaces: PreparedLegacySessionSurfaces | undefined;
+  const resolveLegacySessionSurfaces = () =>
+    (preparedLegacySessionSurfaces ??=
+      typeof params.legacySessionSurfaces === "function"
+        ? params.legacySessionSurfaces()
+        : params.legacySessionSurfaces);
   const stateDir = resolveStateDir(env);
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
@@ -721,6 +721,10 @@ export async function migrateOrphanedSessionKeys(params: {
     ) {
       continue;
     }
+    const legacySessionSurfaces = resolveLegacySessionSurfaces();
+    if (legacySessionSurfaces.failures.length > 0) {
+      return { changes, warnings: [...warnings, ...legacySessionSurfaces.failures] };
+    }
     // A physical store can have several owners. Canonicalize valid scoped rows
     // within their declared owner on every pass so iteration order cannot move
     // one agent's history into another namespace.
@@ -768,7 +772,7 @@ export async function migrateOrphanedSessionKeys(params: {
         preserveCanonicalAgentOwner: true,
         preserveAmbiguousKeys,
         preserveForeignMainAliases: pluginForeignMainAliasRisk,
-        legacySessionSurfaces: params.legacySessionSurfaces.surfaces,
+        legacySessionSurfaces: legacySessionSurfaces.surfaces,
       });
       working = canonicalized;
       // Each pass only counts keys it changed from the current working store, so

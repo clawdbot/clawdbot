@@ -1,4 +1,8 @@
 import { property, state } from "lit/decorators.js";
+import {
+  localEditorFilePath,
+  observeNativeGateway,
+} from "../../../app/native-editor-locality.runtime.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { t } from "../../../i18n/index.ts";
@@ -7,16 +11,14 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
   buildRawContent,
   handleSidebarClick,
   handleSidebarKeydown,
   renderSidebarPanel,
-  upgradeSidebarMessage,
 } from "./chat-sidebar-content.ts";
 import {
-  absoluteFilePath,
   computeFileMatches,
   emptyCopyFeedback,
   readFileDraft,
@@ -30,7 +32,7 @@ type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailPanelContent | null = null;
-  @property({ attribute: false }) loadFullMessage?: SidebarFullMessageLoader | null = null;
+  @property({ attribute: false }) execNode: string | null = null;
   @property() basePath = "";
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
@@ -61,7 +63,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     | { kind: "error"; message: string }
     | null = null;
 
-  private requestVersion = 0;
   private fileOperationVersion = 0;
   private showingRawText = false;
   private fileEditor: FileEditorViewHandle | null = null;
@@ -74,6 +75,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     FileCopyAction,
     ReturnType<typeof globalThis.setTimeout>
   >();
+
+  constructor() {
+    super();
+    observeNativeGateway(this);
+  }
 
   override connectedCallback() {
     super.connectedCallback();
@@ -92,7 +98,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (!changed.has("content")) {
       return;
     }
-    this.requestVersion += 1;
     this.visibleContent = this.content;
     this.error = null;
     this.showingRawText = false;
@@ -149,23 +154,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         }
       });
     }
-    if (!changed.has("content") && !changed.has("loadFullMessage")) {
-      return;
-    }
-    const content = this.content;
-    if (!content || this.showingRawText) {
-      return;
-    }
-    const version = ++this.requestVersion;
-    void upgradeSidebarMessage(content, this.loadFullMessage).then((result) => {
-      if (!result || version !== this.requestVersion || this.content !== content) {
-        return;
-      }
-      if ("content" in result) {
-        this.visibleContent = result.content;
-      }
-      this.error = result.error;
-    });
   }
 
   private scrollToFileLine(content: FileSidebarContent) {
@@ -339,7 +327,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (content?.kind !== "file") {
       return;
     }
-    const absPath = absoluteFilePath(content);
+    const absPath = localEditorFilePath(content, this.execNode);
     if (!absPath) {
       return;
     }
@@ -589,7 +577,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (!rawContent) {
       return;
     }
-    this.requestVersion += 1;
     this.showingRawText = true;
     this.visibleContent = rawContent;
     this.error = null;
@@ -615,6 +602,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         copyFeedback: this.fileCopyFeedback,
         currentMatchIndex,
         dirty: this.fileDirty,
+        execNode: this.execNode,
         editorMenuOpen: this.fileEditorMenuOpen,
         editing: this.fileEditing,
         loadingEditor: this.fileEditorLoading,

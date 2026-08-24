@@ -20,7 +20,7 @@ import {
   setPreparedModelRuntimeAuthLoader,
   setPreparedModelRuntimeAuthStore,
 } from "./prepared-model-runtime-auth.js";
-import { isPreparedModelCatalogFull } from "./prepared-model-runtime.facts.js";
+import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -40,6 +40,7 @@ import {
   hasResolvedThinkingCatalogEntry,
   normalizeThinkingCatalogProviders,
 } from "./thinking-runtime.js";
+import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 export type LoadPreparedModelCatalogParams = {
   agentId?: string;
@@ -350,8 +351,8 @@ async function loadScopedReadOnlyModelCatalog(
 }
 
 /**
- * Turn-path capability reads (thinking levels and similar per-model facts) must stay off the
- * full live catalog build: manifest metadata first, then a provider-scoped read-only catalog,
+ * Turn-path capability reads (thinking levels and similar per-model facts) must stay off a new
+ * full catalog build: reuse the published generation, then manifest/scoped read-only metadata,
  * then scoped live discovery only for providers whose models exist solely at runtime.
  */
 export async function loadProviderScopedThinkingCatalog(params: {
@@ -379,22 +380,43 @@ export async function loadProviderScopedThinkingCatalog(params: {
   } satisfies LoadPreparedModelCatalogParams;
   const entryResolved = (catalog: readonly ModelCatalogEntry[]) =>
     hasResolvedThinkingCatalogEntry({ catalog, provider: params.provider, model: params.model });
+  const augmentHarnessCatalog = async (snapshot: ModelCatalogSnapshot) => {
+    const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
+    const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
+    const augmented = await augmentModelCatalogWithAgentHarness({
+      cfg: params.config,
+      agentId,
+      agentDir: params.agentDir ?? resolveAgentDir(params.config, agentId),
+      workspaceDir:
+        params.workspaceDir ??
+        resolveAgentWorkspaceDir(params.config, agentId) ??
+        resolveDefaultAgentWorkspaceDir(),
+      defaultProvider: params.provider,
+      defaultModel: `${params.provider}/${params.model}`,
+      snapshot,
+    });
+    return normalizeThinkingCatalogProviders(augmented.entries);
+  };
+  const publishedCatalog = getPreparedModelCatalogSnapshot(scopedParams);
+  if (publishedCatalog && entryResolved(publishedCatalog.entries)) {
+    return await augmentHarnessCatalog(publishedCatalog);
+  }
   if (entryResolved(manifestCatalog)) {
-    return manifestCatalog;
+    return await augmentHarnessCatalog({
+      entries: manifestCatalog,
+      routeVariants: manifestCatalog,
+      staticEntries: manifestCatalog,
+    });
   }
-  const scopedStatic = normalizeThinkingCatalogProviders(
-    (await loadPreparedModelCatalogSnapshot(scopedParams)).entries,
-  );
-  if (entryResolved(scopedStatic)) {
-    return scopedStatic;
+  const scopedStatic = await loadPreparedModelCatalogSnapshot(scopedParams);
+  if (entryResolved(scopedStatic.entries)) {
+    return await augmentHarnessCatalog(scopedStatic);
   }
-  return normalizeThinkingCatalogProviders(
-    (
-      await loadPreparedModelCatalogSnapshot({
-        ...scopedParams,
-        scopedLiveProviderDiscovery: true,
-      })
-    ).entries,
+  return await augmentHarnessCatalog(
+    await loadPreparedModelCatalogSnapshot({
+      ...scopedParams,
+      scopedLiveProviderDiscovery: true,
+    }),
   );
 }
 

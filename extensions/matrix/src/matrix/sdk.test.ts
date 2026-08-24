@@ -16,8 +16,15 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
+import type { CoreConfig } from "../types.js";
 import { readMatrixRecoveryKeyStateForPath } from "./crypto-state-store.js";
 import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
+
+const createSharedMatrixClientMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./client/create-client.js", () => ({
+  createMatrixClient: createSharedMatrixClientMock,
+}));
 
 const requireMatrixJsSdkPackage = createRequire(import.meta.url);
 
@@ -1572,6 +1579,131 @@ describe("MatrixClient request hardening", () => {
       expect(matrixJsClient.classicSyncStop).toHaveBeenCalledTimes(1);
       expect(matrixJsClient.stopClient).toHaveBeenCalledTimes(1);
       expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each([SyncState.Error, SyncState.Reconnecting])(
+    "does not replace a poisoned %s generation until late transient work really releases",
+    async (syncState) => {
+      vi.useFakeTimers();
+      const accountId = `sdk-retirement-${syncState.toLowerCase()}`;
+      const cfg = {
+        channels: {
+          matrix: {
+            defaultAccount: accountId,
+            accounts: {
+              [accountId]: {
+                homeserver: "https://matrix.example.org",
+                userId: "@bot:example.org",
+                accessToken: "token",
+                deviceId: "DEVICE123",
+                encryption: false,
+              },
+            },
+          },
+        },
+      } satisfies CoreConfig;
+      const { resolveMatrixAuth } = await import("./client/config.js");
+      const auth = await resolveMatrixAuth({ cfg, accountId });
+      const gate = createDeferred<string>();
+      const entered = createDeferred<void>();
+      const firstClient = new MatrixClient(auth.homeserver, auth.accessToken);
+      const firstSdkClient = matrixJsClient;
+      let replacementClient: InstanceType<typeof MatrixClient> | undefined;
+      let operationOutcome:
+        | Promise<{ ok: true; value: string } | { ok: false; error: unknown }>
+        | undefined;
+      const { acquireSharedMatrixClient, stopSharedClientForAccount } =
+        await import("./client/shared.js");
+      const { withResolvedRuntimeMatrixClient } = await import("./client-bootstrap.js");
+      let replacementLease: Awaited<ReturnType<typeof acquireSharedMatrixClient>> | undefined;
+
+      createSharedMatrixClientMock.mockReset();
+      createSharedMatrixClientMock
+        .mockResolvedValueOnce(firstClient)
+        .mockImplementationOnce(async () => {
+          matrixJsClient = createMatrixJsClientStub();
+          replacementClient = new MatrixClient(auth.homeserver, auth.accessToken);
+          return replacementClient;
+        });
+
+      const keepalive = createDeferred<boolean>();
+      const keepaliveOutcome = keepalive.promise.then(
+        () => "resolved",
+        (error: unknown) => error,
+      );
+      const syncInternals = requireMatrixSyncApiTestInternals(firstSdkClient.syncApi);
+
+      try {
+        const monitor = await acquireSharedMatrixClient({ auth, role: "monitor" });
+        monitor.registerMonitorRetirement({
+          closeTaskAdmission: () => {},
+          detachListeners: () => {},
+          waitForTasks: async () => {},
+          cleanup: async () => {},
+        });
+        vi.spyOn(firstSdkClient.syncApi, "getSyncState").mockReturnValue(syncState);
+        syncInternals.connectionReturnedResolvers = keepalive;
+        firstSdkClient.classicSyncStop.mockImplementation(() => {});
+
+        let borrowedClient: unknown;
+        let borrowedSignal: AbortSignal | undefined;
+        const operation = withResolvedRuntimeMatrixClient(
+          { cfg, accountId: auth.accountId, readiness: "none" },
+          async (client, abortSignal) => {
+            borrowedClient = client;
+            borrowedSignal = abortSignal;
+            entered.resolve();
+            return await gate.promise;
+          },
+          "persist",
+        );
+        operationOutcome = operation.then(
+          (value) => ({ ok: true as const, value }),
+          (error: unknown) => ({ ok: false as const, error }),
+        );
+        await entered.promise;
+        expect(borrowedClient).toBe(firstClient);
+
+        const monitorOutcome = monitor.release({ mode: "persist" }).then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, error }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(firstSdkClient.classicSyncStop).toHaveBeenCalledOnce();
+        expect(borrowedSignal?.aborted).toBe(true);
+        await expect(keepaliveOutcome).resolves.toBe("SyncApi.stop() was called");
+        expect(syncInternals.connectionReturnedResolvers).toBeUndefined();
+
+        expect(createSharedMatrixClientMock).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(5_000);
+        await expect(monitorOutcome).resolves.toMatchObject({
+          ok: false,
+          error: { message: "Matrix transient leases did not drain within 5000ms" },
+        });
+        await expect(acquireSharedMatrixClient({ auth, startClient: false })).rejects.toThrow(
+          "Matrix transient leases did not drain within 5000ms",
+        );
+        expect(createSharedMatrixClientMock).toHaveBeenCalledOnce();
+
+        gate.resolve("late-result");
+        await expect(operationOutcome).resolves.toEqual({ ok: true, value: "late-result" });
+        replacementLease = await acquireSharedMatrixClient({ auth, startClient: false });
+        expect(replacementLease.client).toBe(replacementClient);
+        expect(replacementLease.client).not.toBe(firstClient);
+        expect(createSharedMatrixClientMock).toHaveBeenCalledTimes(2);
+      } finally {
+        syncInternals.connectionReturnedResolvers = undefined;
+        keepalive.resolve(false);
+        gate.resolve("cleanup");
+        await operationOutcome?.catch(() => undefined);
+        if (replacementLease) {
+          clearMatrixSyncApiForNeverStartedClient();
+        }
+        await replacementLease?.release({ mode: "discard" }).catch(() => undefined);
+        await stopSharedClientForAccount(auth).catch(() => undefined);
+        createSharedMatrixClientMock.mockReset();
+      }
     },
   );
 

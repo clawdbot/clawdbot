@@ -393,6 +393,7 @@ describe("worker environment node desktop observe integration", () => {
     });
     const transport: NodeWorkerSupervisorTransport = {
       listCurrentNodes: async () => [proof],
+      hasCurrentRunner: (nodeId) => nodeId === proof.nodeId,
       isCurrent: (candidate) =>
         candidate.nodeId === proof.nodeId &&
         candidate.connId === proof.connId &&

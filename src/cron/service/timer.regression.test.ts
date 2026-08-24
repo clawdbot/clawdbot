@@ -138,30 +138,6 @@ describe("cron service timer regressions", () => {
     timeoutSpy.mockRestore();
   });
 
-  it("re-arms timer without hot-looping when a run is already in progress", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const store = timerRegressionFixtures.makeStorePath();
-    const now = Date.parse("2026-02-06T10:05:00.000Z");
-    const state = createRunningCronServiceState({
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => now,
-      jobs: [createDueIsolatedJob({ id: "due", nowMs: now, nextRunAtMs: now - 1 })],
-    });
-
-    await onTimer(state);
-
-    expect(timeoutSpy).toHaveBeenCalled();
-    if (state.timer == null) {
-      throw new Error("Expected cron timer to be re-armed");
-    }
-    const delays = timeoutSpy.mock.calls
-      .map(([, delay]) => delay)
-      .filter((d): d is number => typeof d === "number");
-    expect(delays).toContain(60_000);
-    timeoutSpy.mockRestore();
-  });
-
   it("#24355: one-shot job retries then succeeds", async () => {
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
 
@@ -1901,7 +1877,7 @@ describe("cron service timer regressions", () => {
     expect(startedAtEvents).toEqual([dueAt, dueAt + 50]);
   });
 
-  it("keeps queued scheduled reservations out of stuck-marker cleanup", async () => {
+  it("keeps capacity-blocked scheduled work unreserved until a slot opens", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:01.250Z");
     const first = createDueIsolatedJob({
@@ -1941,12 +1917,11 @@ describe("cron service timer regressions", () => {
 
     const timerRun = onTimer(state);
     await firstStarted.promise;
-    await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBe(dueAt);
-    });
+    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBeUndefined();
+    expect(state.queuedRunReservationsByJobId.has(second.id)).toBe(false);
     now += 2 * 60 * 60 * 1000 + 1;
     recomputeNextRunsForMaintenance(state);
-    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBe(dueAt);
+    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBeUndefined();
 
     releaseFirst.resolve({ status: "ok", summary: "first" });
     await secondStarted.promise;
@@ -2689,10 +2664,12 @@ describe("cron service timer regressions", () => {
 
       finishFirstScheduled.resolve();
       await timerRun;
+      await vi.waitFor(() => {
+        expect(secondScheduledStarted).toHaveBeenCalledWith(secondScheduledJob.id);
+      });
 
       const second = requireJob(state, secondScheduledJob.id);
       expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
-      expect(secondScheduledStarted).toHaveBeenCalledWith(secondScheduledJob.id);
       expect(second.state.runningAtMs).toBeUndefined();
     } finally {
       vi.useRealTimers();

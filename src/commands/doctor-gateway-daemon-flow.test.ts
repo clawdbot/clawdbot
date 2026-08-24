@@ -152,7 +152,7 @@ vi.mock("./health-format.js", () => ({
 }));
 
 vi.mock("./health.js", () => ({
-  healthCommand,
+  healthCommandNonExiting: healthCommand,
 }));
 
 describe("maybeRepairGatewayDaemon", () => {

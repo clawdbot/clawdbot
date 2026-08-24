@@ -34,7 +34,7 @@ import {
   setPreparedModelRuntimeAuthLoader,
 } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
-import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.facts.js";
+import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 const PROVIDER_ID = "worker-catalog-fixture";
@@ -795,6 +795,7 @@ describe("prepared model catalog worker boundary", () => {
         providerIds: [PROVIDER_ID],
         configuredModelRefs: [],
         configuredRuntimeModels: [],
+        runtimeCapabilityModels: [],
         configuredGeneratedCatalogPluginIds: [],
         templateAuthStorage: AuthStorage.inMemory({}),
       } satisfies PreparedModelRuntimeAgentFacts,

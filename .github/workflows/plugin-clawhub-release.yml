@@ -76,7 +76,7 @@ jobs:
           TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
             +refs/heads/main:refs/remotes/origin/main \
             '+refs/heads/release/*:refs/remotes/origin/release/*'
           if [[ -n "${TARGET_REF}" ]]; then
@@ -125,7 +125,7 @@ jobs:
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
           if [[ "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             alpha_branch="${TRUSTED_PUBLISH_BRANCH}"
-            git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
             if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
               exit 0
             fi
@@ -136,6 +136,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -335,6 +336,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           install-deps: "true"
@@ -436,10 +438,10 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
           install-deps: "false"
-          use-actions-cache: "false"
 
       - name: Download published package input
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

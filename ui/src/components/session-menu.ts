@@ -40,6 +40,8 @@ type SessionMenuData = {
  * Worktree-session extras resolved lazily by the menu host after open; null
  * hides the block entirely (plain chat sessions), loading keeps the items
  * rendered-but-disabled so the menu layout never shifts under the pointer.
+ * A resolved null `worktreePath` drops the editor row for good — see
+ * `native-editor-locality.runtime.ts` for which checkouts ever get one.
  */
 export type SessionMenuWork = {
   loading: boolean;
@@ -223,6 +225,10 @@ class SessionMenu extends OpenClawLightDomElement {
     }
     const pullRequestUrl = work.pullRequestUrl;
     const worktreePath = work.worktreePath;
+    // Hold the row while the path resolves so the menu does not shift under the
+    // pointer, then drop it once we know the checkout is unreachable from this
+    // browser: a disabled row would only advertise a handoff that cannot run.
+    const showEditorEntry = work.loading || Boolean(worktreePath);
     return html`
       <wa-dropdown-item
         class="session-menu__item"
@@ -238,25 +244,28 @@ class SessionMenu extends OpenClawLightDomElement {
         <span class="session-menu__text">${t("sessionsView.openPullRequest")}</span>
         ${menuShortcutHint("g")}
       </wa-dropdown-item>
-      ${this.compact
-        ? renderCompactSessionMenuNavigationItem({
-            view: "open-in",
-            label: t("sessionsView.openInEditorMenu"),
-            icon: icons.externalLink,
-            disabled: this.disabled || !worktreePath,
-          })
-        : html`<wa-dropdown-item
-            class="session-menu__item"
-            ?disabled=${this.disabled || !worktreePath}
-          >
-            <span slot="icon" class="session-menu__icon" aria-hidden="true"
-              >${icons.externalLink}</span
-            >
-            <span class="session-menu__text">${t("sessionsView.openInEditorMenu")}</span>
-            ${worktreePath ? this.renderEditorSubmenu() : nothing}
-          </wa-dropdown-item>`}
+      ${showEditorEntry ? this.renderEditorEntry(worktreePath) : nothing}
       <div class="session-menu__separator" role="separator"></div>
     `;
+  }
+
+  private renderEditorEntry(worktreePath: string | null) {
+    if (this.compact) {
+      return renderCompactSessionMenuNavigationItem({
+        view: "open-in",
+        label: t("sessionsView.openInEditorMenu"),
+        icon: icons.externalLink,
+        disabled: this.disabled || !worktreePath,
+      });
+    }
+    return html`<wa-dropdown-item
+      class="session-menu__item"
+      ?disabled=${this.disabled || !worktreePath}
+    >
+      <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.externalLink}</span>
+      <span class="session-menu__text">${t("sessionsView.openInEditorMenu")}</span>
+      ${worktreePath ? this.renderEditorSubmenu() : nothing}
+    </wa-dropdown-item>`;
   }
 
   private renderEditorSubmenu(inline = false) {

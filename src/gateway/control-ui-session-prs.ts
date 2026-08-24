@@ -540,7 +540,9 @@ async function fetchBranchPullRequests(
     }
   }
   const capped = items.slice(0, MAX_PULL_REQUESTS);
-  const mergedHeads = mergedHeadsOf(capped);
+  // Landing detection needs every fetched merged head, not just the displayed
+  // slice: a squash-merged PR sorted past the cap still proves the tip landed.
+  const mergedHeads = mergedHeadsOf(items);
   try {
     const pullRequests = await Promise.all(
       capped.map((item) => finishPullRequest(item, context.branch, fetchImpl, token)),

@@ -31,7 +31,8 @@ import type {
   GatewayPluginEventScope,
 } from "./server-broadcast-types.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
-import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
@@ -218,6 +219,8 @@ export function createGatewayBroadcaster(params: {
 }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
+  const indexedClients =
+    params.clients instanceof GatewayClientRegistry ? params.clients : undefined;
 
   const broadcastInternal = (
     event: string,
@@ -265,11 +268,19 @@ export function createGatewayBroadcaster(params: {
     const sessionSubscriptionVerified =
       (opts as { sessionSubscriptionVerified?: boolean } | undefined)
         ?.sessionSubscriptionVerified === true;
-    for (const c of params.clients) {
-      if (c.invalidated === true) {
+    const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
+    const sessionMessageSubscribers = params.sessionMessageSubscribers;
+    let sessionSubscriberConnIdsByKey: Array<ReadonlySet<string> | undefined> | undefined;
+    const recipients =
+      targetConnIds && indexedClients
+        ? indexedClients.getByConnectionIds(targetConnIds)
+        : params.clients;
+    for (const c of recipients) {
+      // Closing nodes remain discoverable until their owner drains admitted lifecycle work.
+      if (c.invalidated === true || c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
         continue;
       }
-      if (targetConnIds && !targetConnIds.has(c.connId)) {
+      if (targetConnIds && !indexedClients && !targetConnIds.has(c.connId)) {
         continue;
       }
       if (!hasEventScope(c, event, explicitPluginScope)) {
@@ -286,18 +297,30 @@ export function createGatewayBroadcaster(params: {
         event === "session.typing" ||
         ((isBrowserCopilotClient(c.connect.client) ||
           hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS)) &&
-          SESSION_SUBSCRIPTION_EVENTS.has(event));
-      if (
-        requiresSessionSubscription &&
-        !(isTargeted && sessionSubscriptionVerified) &&
-        (!sessionKeys.length ||
-          !sessionKeys.some((sessionKey) =>
-            params.sessionMessageSubscribers?.get(sessionKey).has(c.connId),
-          ))
-      ) {
-        // Scoped clients opt out of cross-session fanout, including critical observer announces.
-        // The registry is authoritative; for cap-gated events, unscoped Control UI clients keep full fanout.
-        continue;
+          isSessionSubscriptionEvent);
+      if (requiresSessionSubscription && !(isTargeted && sessionSubscriptionVerified)) {
+        if (!sessionKeys.length || !sessionMessageSubscribers) {
+          continue;
+        }
+        // Resolve keys lazily to preserve short-circuit order, then reuse their live sets across clients.
+        // This avoids repeated normalization and map lookups without snapshotting recipients.
+        sessionSubscriberConnIdsByKey ??= [];
+        let subscribed = false;
+        let sessionKeyIndex = 0;
+        for (const sessionKey of sessionKeys) {
+          const subscriberConnIds = (sessionSubscriberConnIdsByKey[sessionKeyIndex] ??=
+            sessionMessageSubscribers.get(sessionKey));
+          if (subscriberConnIds.has(c.connId)) {
+            subscribed = true;
+            break;
+          }
+          sessionKeyIndex += 1;
+        }
+        if (!subscribed) {
+          // Scoped clients opt out of cross-session fanout, including critical observer announces.
+          // The registry is authoritative; for cap-gated events, unscoped Control UI clients keep full fanout.
+          continue;
+        }
       }
       if (!outboundEventLogged) {
         outboundEventLogged = true;
@@ -377,6 +400,9 @@ export function createGatewayBroadcaster(params: {
   };
 
   const getBufferedAmount: GatewayBufferedAmountFn = (connId) => {
+    if (indexedClients) {
+      return indexedClients.getByConnectionId(connId)?.socket.bufferedAmount;
+    }
     for (const client of params.clients) {
       if (client.connId === connId) {
         return client.socket.bufferedAmount;

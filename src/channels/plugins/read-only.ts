@@ -31,6 +31,7 @@ import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/p
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
+  clearPluginModuleLoaderLifecycleCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
@@ -53,6 +54,7 @@ import { listChannelPlugins } from "./registry.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 const moduleLoaders: PluginModuleLoaderCache = new Map();
+const moduleRoots = new Map<string, string>();
 const log = createSubsystemLogger("channels");
 
 type ReadOnlyChannelPluginOptions = {
@@ -87,6 +89,7 @@ let nextReadOnlyChannelPluginObjectId = 1;
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
   readOnlyChannelPluginResolutionCache.clear();
+  clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots });
 });
 
 function cloneReadOnlyChannelPluginResolution(
@@ -432,6 +435,7 @@ function loadSetupChannelPluginFromManifestRecord(params: {
     return {};
   }
   try {
+    moduleRoots.set(params.record.setupSource, params.record.rootDir);
     const moduleLoader = getCachedPluginModuleLoader({
       cache: moduleLoaders,
       modulePath: params.record.setupSource,

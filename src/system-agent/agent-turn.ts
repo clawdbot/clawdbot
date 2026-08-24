@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import { extractAgentRunText, type AgentRunResultView } from "../agents/agent-run-result.js";
 import { resolveCliBackendConfig, type ResolvedCliBackend } from "../agents/cli-backends.js";
 import { normalizeCliModel } from "../agents/cli-runner/helpers.js";
 import { SessionManager } from "../agents/sessions/index.js";
@@ -102,28 +103,14 @@ type SystemAgentTurnDeps = SystemAgentVerifiedInferenceDeps & {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
 };
 
-type EmbeddedRunResult = {
-  payloads?: Array<{ text?: string }>;
+type EmbeddedRunResult = AgentRunResultView & {
   meta?: {
-    finalAssistantVisibleText?: string;
-    finalAssistantRawText?: string;
     agentMeta?: {
       cliSessionBinding?: CliSessionBinding;
       clearCliSessionBinding?: boolean;
     };
   };
 };
-
-function extractRunText(result: EmbeddedRunResult): string | undefined {
-  return (
-    result.meta?.finalAssistantVisibleText ??
-    result.meta?.finalAssistantRawText ??
-    result.payloads
-      ?.map((payload) => payload.text?.trim())
-      .filter(Boolean)
-      .join("\n")
-  );
-}
 
 async function ensureSystemAgentDirs(): Promise<{ workspaceDir: string }> {
   const base = path.join(resolveStateDir(), "openclaw");
@@ -430,7 +417,7 @@ async function runSystemAgentTurnWithDeps(
     if (!currentRoute) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }
-    const text = extractRunText(result)?.trim();
+    const text = extractAgentRunText(result)?.trim();
     if (!text) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }

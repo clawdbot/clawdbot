@@ -1012,6 +1012,11 @@ CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
   ON node_worker_launches(completed_at_ms, launch_id)
   WHERE completed_at_ms IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
+  launch_id TEXT PRIMARY KEY,
+  container_json TEXT
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS voicewake_triggers (
   config_key TEXT NOT NULL,
   position INTEGER NOT NULL,
@@ -2290,6 +2295,9 @@ CREATE TABLE IF NOT EXISTS worker_session_placement_moves (
   -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the
   -- same shape as fresh databases; placement-move code validates its value.
   target_machine_class TEXT,
+  -- Explicit source abandonment is a durable operator decision. Keep the bit
+  -- bare and nullable so same-version older readers can safely omit it.
+  abandon_source INTEGER,
   last_error TEXT,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,

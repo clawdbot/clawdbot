@@ -34,21 +34,25 @@ function withMatrixChannel(result: Awaited<ReturnType<MatrixSendFn>>) {
 
 export const matrixOutboundForQueueTest: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  sendText: async ({ cfg, to, text, accountId, deps }) =>
-    withMatrixChannel(
+  sendText: async ({ cfg, to, text, accountId, deps, onPlatformSendDispatch }) => {
+    await onPlatformSendDispatch?.();
+    return withMatrixChannel(
       await resolveMatrixSender(deps)(to, text, {
         cfg,
         accountId: accountId ?? undefined,
       }),
-    ),
-  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) =>
-    withMatrixChannel(
+    );
+  },
+  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps, onPlatformSendDispatch }) => {
+    await onPlatformSendDispatch?.();
+    return withMatrixChannel(
       await resolveMatrixSender(deps)(to, text ?? "", {
         cfg,
         accountId: accountId ?? undefined,
         mediaUrl,
       }),
-    ),
+    );
+  },
 };
 
 export async function drainMatrixReconnect(opts: {

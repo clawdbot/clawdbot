@@ -16,6 +16,11 @@ import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-suppor
 
 type GatewayCall = NonNullable<Parameters<typeof createAskUserTool>[0]["gatewayCall"]>;
 
+const replyDispatchOutcomeModuleUrl = new URL(
+  "../../auto-reply/reply/reply-dispatch-outcome.ts",
+  import.meta.url,
+).href;
+
 const validArgs = {
   questions: [
     {
@@ -569,7 +574,7 @@ describe("ask_user execution", () => {
     );
   });
 
-  it("terminates after a visible prompt fails to attach its controls", async () => {
+  it("terminates when a separately loaded dispatcher reports visible control failure", async () => {
     const sessionKey = "agent:main:delivery-failure";
     const reservation = reserveAskUserPromptDelivery({
       toolCallId: "call-delivery-failure",
@@ -601,10 +606,12 @@ describe("ask_user execution", () => {
     );
     await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
 
-    settleAskUserPromptDelivery(
-      reservation.questionId,
-      new ReplyDispatchDeliveryError("failed-deliver"),
-    );
+    const foreignModule = (await import(
+      `${replyDispatchOutcomeModuleUrl}?instance=ask-user-foreign`
+    )) as typeof import("../../auto-reply/reply/reply-dispatch-outcome.js");
+    const deliveryError = new foreignModule.ReplyDispatchDeliveryError("failed-deliver");
+    expect(deliveryError).not.toBeInstanceOf(ReplyDispatchDeliveryError);
+    settleAskUserPromptDelivery(reservation.questionId, deliveryError);
 
     await expect(pending).resolves.toMatchObject({
       terminate: true,

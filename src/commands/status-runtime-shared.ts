@@ -2,7 +2,10 @@
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
 import type { Result } from "@openclaw/normalization-core/result";
-import { listAgentIds, resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import {
+  resolveAmbientOwnerAgentId,
+  resolveConfiguredAgentId,
+} from "../agents/agent-scope-config.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
@@ -126,10 +129,8 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     throw new Error("--agent must not be blank");
   }
   const agentId = rawAgentId ? normalizeAgentId(rawAgentId) : undefined;
-  if (agentId && !listAgentIds(params.config).includes(agentId)) {
-    throw new Error(
-      `Unknown agent id "${agentId}". Run \`openclaw agents list\` to see configured agents.`,
-    );
+  if (agentId) {
+    resolveConfiguredAgentId(params.config, agentId);
   }
   let resolvedAgentId = agentId;
   let agentDir = params.agentDir;

@@ -8,6 +8,7 @@ import {
   readAuthProfilesForAgent,
   setupAuthTestEnv,
 } from "../../test/helpers/auth-wizard.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { OAuthCredentials } from "../llm/utils/oauth/types.js";
 import {
   applyAuthProfileConfig,
@@ -60,6 +61,13 @@ function expectFields(value: unknown, expected: Record<string, unknown>, label =
     expect(record[key], key).toEqual(expectedValue);
   }
   return record;
+}
+
+function readEffectiveAuthProfiles(agentDir: string) {
+  return ensureAuthProfileStore(agentDir, {
+    readOnly: true,
+    syncExternalCli: false,
+  });
 }
 
 describe("writeOAuthCredentials", () => {
@@ -125,19 +133,23 @@ describe("writeOAuthCredentials", () => {
     });
 
     for (const dir of [mainAgentDir, kidAgentDir]) {
-      const persistedStore = await readAuthProfilesForAgent<{
-        profiles?: Record<string, OAuthCredentials & { type?: string }>;
-      }>(dir);
-      expectFields(persistedStore.profiles?.["openai:default"], {
+      const effectiveStore = readEffectiveAuthProfiles(dir);
+      expectFields(effectiveStore.profiles?.["openai:default"], {
         refresh: "refresh-sync",
         access: "access-sync",
         type: "oauth",
       });
     }
-    const inheritedSiblingStore = await readAuthProfilesForAgent<{
+    const inheritedSiblingStore = readEffectiveAuthProfiles(workerAgentDir);
+    expectFields(inheritedSiblingStore.profiles?.["openai:default"], {
+      refresh: "refresh-sync",
+      access: "access-sync",
+      type: "oauth",
+    });
+    const persistedSiblingStore = await readAuthProfilesForAgent<{
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     }>(workerAgentDir);
-    expect(inheritedSiblingStore.profiles).toEqual({});
+    expect(persistedSiblingStore.profiles).toEqual({});
   });
 
   it("writes OAuth credentials only to target dir by default", async () => {
@@ -160,9 +172,7 @@ describe("writeOAuthCredentials", () => {
 
     await writeOAuthCredentials("openai", creds, kidAgentDir);
 
-    const kidParsed = await readAuthProfilesForAgent<{
-      profiles?: Record<string, OAuthCredentials & { type?: string }>;
-    }>(kidAgentDir);
+    const kidParsed = readEffectiveAuthProfiles(kidAgentDir);
     expectFields(kidParsed.profiles?.["openai:default"], {
       access: "access-kid",
       type: "oauth",
@@ -239,16 +249,20 @@ describe("upsertApiKeyProfile secret refs", () => {
     agentDir: string,
     profileId: string,
   ): Promise<AuthProfileEntry | undefined> {
-    const parsed = await readAuthProfilesForAgent<{
-      profiles?: Record<string, AuthProfileEntry>;
-    }>(agentDir);
-    return parsed.profiles?.[profileId];
+    const parsed = readEffectiveAuthProfiles(agentDir);
+    const profile = parsed.profiles[profileId];
+    if (!profile || profile.type !== "api_key") {
+      return undefined;
+    }
+    return {
+      ...(profile.key !== undefined ? { key: profile.key } : {}),
+      ...(profile.keyRef !== undefined ? { keyRef: profile.keyRef } : {}),
+      ...(profile.metadata !== undefined ? { metadata: profile.metadata } : {}),
+    };
   }
 
   async function readProfileIds(agentDir: string): Promise<string[]> {
-    const parsed = await readAuthProfilesForAgent<{
-      profiles?: Record<string, AuthProfileEntry>;
-    }>(agentDir);
+    const parsed = readEffectiveAuthProfiles(agentDir);
     return Object.keys(parsed.profiles ?? {}).toSorted();
   }
 

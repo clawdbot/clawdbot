@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_SUPERVISOR_STATUS_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
@@ -10,7 +9,7 @@ import {
   collectNodeWorkerBundleStatusByNodeId,
   collectNodeWorkerCapacityByNodeId,
   createNodeRegistryRuntime,
-  setNodeRunnerInventoryChangedListener,
+  setNodeRunnerStateChangedListener,
 } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
@@ -31,11 +30,7 @@ vi.mock("../../infra/device-pairing-node-facts.js", async (importOriginal) => ({
   updatePairedNodeSessionHost: updatePairedNodeSessionHostMock,
 }));
 
-const LEGACY_WORKER_RUNS = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.8.1",
-  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-};
+const RETIRED_WORKER_RUNS = { retired: true } as const;
 const AVAILABLE_CAPACITY = { total: 2, available: 2 } as const;
 const FULL_CAPACITY = { total: 2, available: 0 } as const;
 
@@ -94,7 +89,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
   it("publishes explicit runner consent and launch capacity for the authenticated node", async () => {
     const inventoryChanged = vi.fn();
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
+    setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
     const client = createWorkerSupervisorNodeClient();
     runtime.nodeRegistry.register(client, {
       pairingIdentity: "identity-1",
@@ -116,7 +111,10 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         expectedPairingGeneration: { nodeId: "node-1", key: "generation-1" },
       }),
     );
-    expect(inventoryChanged).toHaveBeenCalledWith("node-1");
+    expect(inventoryChanged).toHaveBeenCalledWith("node-1", {
+      inventoryChanged: true,
+      availabilityChanged: true,
+    });
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({
         nodeId: "node-1",
@@ -270,7 +268,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
   it("does not notify for an identical inventory publication", async () => {
     const inventoryChanged = vi.fn();
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
+    setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
     const client = createWorkerSupervisorNodeClient();
     runtime.nodeRegistry.register(client, {
       pairingIdentity: "identity-1",
@@ -436,10 +434,10 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     runtime.nodeRegistry.unregister("conn-replacement");
   });
 
-  it("keeps exact v1 inventory diagnostic-only until disconnect and v5 reconnect", async () => {
+  it("keeps retired v1 inventory diagnostic-only until disconnect and v6 reconnect", async () => {
     const inventoryChanged = vi.fn();
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    setNodeRunnerInventoryChangedListener(runtime.nodeRegistry, inventoryChanged);
+    setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
     const legacyClient = createWorkerSupervisorNodeClient("conn-v1");
     runtime.nodeRegistry.register(legacyClient, {
       pairingIdentity: "identity-1",
@@ -450,7 +448,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       client: legacyClient,
       declaration: {
         protocolFeatures: ["node-worker-supervisor-v1"],
-        workerRuns: LEGACY_WORKER_RUNS,
+        workerRuns: RETIRED_WORKER_RUNS,
       },
     });
 
@@ -464,7 +462,10 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         message: expect.stringContaining("openclaw update"),
       }),
     );
-    expect(inventoryChanged).toHaveBeenLastCalledWith("node-1");
+    expect(inventoryChanged).toHaveBeenLastCalledWith("node-1", {
+      inventoryChanged: true,
+      availabilityChanged: false,
+    });
     expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toEqual(
       NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
     );
@@ -494,7 +495,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toBeUndefined();
     expect(inventoryChanged).toHaveBeenCalledTimes(2);
 
-    const currentClient = createWorkerSupervisorNodeClient("conn-v2");
+    const currentClient = createWorkerSupervisorNodeClient("conn-v6");
     runtime.nodeRegistry.register(currentClient, {
       pairingIdentity: "identity-1",
       pairingGeneration: "generation-1",
@@ -510,43 +511,44 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
       expect.objectContaining({
         nodeId: "node-1",
-        connId: "conn-v2",
+        connId: "conn-v6",
         workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 1 },
       }),
     ]);
-    runtime.nodeRegistry.unregister("conn-v2");
+    runtime.nodeRegistry.unregister("conn-v6");
   });
 
   it.each([
     [
-      "v2 build-shaped",
+      "v1 with an opaque workerRuns value",
+      {
+        protocolFeatures: ["node-worker-supervisor-v1"],
+        workerRuns: RETIRED_WORKER_RUNS,
+      },
+    ],
+    [
+      "v2 with an opaque workerHost value",
       {
         protocolFeatures: ["node-worker-supervisor-v2"],
-        workerRuns: { ...LEGACY_WORKER_RUNS, bundlePrewarm: 1 },
+        workerHost: null,
       },
     ],
+    ["v3 marker without a payload", { protocolFeatures: ["node-worker-supervisor-v3"] }],
     [
-      "v3 execution-context",
-      {
-        protocolFeatures: ["node-worker-supervisor-v3"],
-        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
-      },
-    ],
-    [
-      "v4 binary-capacity",
+      "v4 with an opaque workerRuns value",
       {
         protocolFeatures: ["node-worker-supervisor-v4"],
-        workerHost: { enabled: true, capacity: "full", bundlePrewarm: 1 },
+        workerRuns: "retired payload",
       },
     ],
     [
-      "v5 exact-capacity",
+      "v5 with an opaque workerHost value",
       {
         protocolFeatures: ["node-worker-supervisor-v5"],
-        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundlePrewarm: 1 },
+        workerHost: { enabled: "retired" },
       },
     ],
-  ] as const)("routes the shipped %s inventory to update recovery", async (_name, declaration) => {
+  ] as const)("routes the retired %s inventory to update recovery", async (_name, declaration) => {
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
     const client = createWorkerSupervisorNodeClient();
     runtime.nodeRegistry.register(client, {
@@ -588,6 +590,25 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       },
     },
     { name: "wrong dialect", params: { protocolFeatures: ["node-worker-supervisor-v0"] } },
+    { name: "unknown future dialect", params: { protocolFeatures: ["node-worker-supervisor-v7"] } },
+    {
+      name: "mixed retired and current dialects",
+      params: {
+        protocolFeatures: ["node-worker-supervisor-v5", NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      },
+    },
+    {
+      name: "retired dialect with an extra key",
+      params: { protocolFeatures: ["node-worker-supervisor-v1"], extra: true },
+    },
+    {
+      name: "retired dialect with both legacy payload keys",
+      params: {
+        protocolFeatures: ["node-worker-supervisor-v5"],
+        workerRuns: RETIRED_WORKER_RUNS,
+        workerHost: { enabled: true },
+      },
+    },
     {
       name: "missing current worker host",
       params: { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
@@ -596,7 +617,7 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       name: "legacy build on current dialect",
       params: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerRuns: LEGACY_WORKER_RUNS,
+        workerRuns: RETIRED_WORKER_RUNS,
       },
     },
     {
@@ -689,6 +710,8 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
+    expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toBeUndefined();
+    expect(updatePairedNodeSessionHostMock).not.toHaveBeenCalled();
     await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
     runtime.nodeRegistry.unregister("conn-1");
   });

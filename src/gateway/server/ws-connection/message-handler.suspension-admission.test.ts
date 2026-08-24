@@ -57,7 +57,7 @@ function createLogger() {
   };
 }
 
-function attachHarness(params: { deferSocketSend?: boolean } = {}) {
+function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boolean } = {}) {
   let onMessage: ((data: string) => void) | undefined;
   let finishSocketSend: (() => void) | undefined;
   let client: unknown = null;
@@ -88,6 +88,7 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
 
   attachGatewayWsMessageHandler({
     socket,
+    bootId: "suspension-admission-test-boot",
     upgradeReq: {
       headers: { host: "127.0.0.1:19001" },
       socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
@@ -106,6 +107,7 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
     requestHost: "127.0.0.1:19001",
     connectNonce: "suspension-connect-nonce",
     getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
+    isStartupPending: () => params.startupPending === true,
     gatewayMethods: [],
     events: [],
     extraHandlers: {},
@@ -186,6 +188,36 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
           id: "worker-connect",
           method: "connect",
           params: { role: "worker" },
+        }),
+      ),
+    sendStartupNodeConnect: () =>
+      onMessage?.(
+        JSON.stringify({
+          type: "req",
+          id: "startup-node-connect",
+          method: "connect",
+          params: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: "node-host",
+              version: "dev",
+              platform: "linux",
+              mode: "node",
+            },
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            auth: { bootstrapToken: "startup-bootstrap-token" },
+            device: {
+              id: "startup-node-device",
+              publicKey: "startup-node-public-key",
+              signature: "startup-node-signature",
+              signedAt: Date.now(),
+              nonce: "suspension-connect-nonce",
+            },
+          },
         }),
       ),
     send,
@@ -302,6 +334,34 @@ describe("WebSocket connect suspension admission", () => {
     await vi.waitFor(() => {
       expect(harness.close).toHaveBeenCalledWith(1013, "gateway restart in progress");
     });
+  });
+
+  it("keeps the old draining server closed to an exact startup node shape", async () => {
+    markGatewayRestartDraining();
+    const harness = attachHarness({ startupPending: false });
+
+    harness.sendStartupNodeConnect();
+
+    await vi.waitFor(() => expect(harness.socketSend).toHaveBeenCalledOnce());
+    expect(harness.setClient).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(harness.close).toHaveBeenCalledWith(1013, "gateway restart in progress");
+    });
+  });
+
+  it("keeps suspension closed to an exact startup node shape", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness({ startupPending: true });
+
+    harness.sendStartupNodeConnect();
+
+    await vi.waitFor(() => expect(harness.socketSend).toHaveBeenCalledOnce());
+    expect(harness.setClient).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(harness.close).toHaveBeenCalledWith(1013, "gateway suspension in progress");
+    });
+    suspension?.release();
   });
 
   it("keeps an accepted handshake visible as root work until hello is sent", async () => {

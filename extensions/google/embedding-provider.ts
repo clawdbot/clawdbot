@@ -2,6 +2,8 @@
 import {
   buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
+  embeddingProviderOwnsDestination,
+  resolveEmbeddingEndpointUrl,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
   type EmbeddingInput,
@@ -181,17 +183,10 @@ function resolveGeminiOutputDimensionality(model: string, requested?: number): n
   return requested;
 }
 function resolveRemoteApiKey(remoteApiKey: unknown): string | undefined {
-  const trimmed = resolveMemorySecretInputString({
+  return resolveMemorySecretInputString({
     value: remoteApiKey,
     path: "memory.search.remote.apiKey",
   });
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed === "GOOGLE_API_KEY" || trimmed === "GEMINI_API_KEY") {
-    return process.env[trimmed]?.trim();
-  }
-  return trimmed;
 }
 
 function normalizeGeminiModel(model: string): string {
@@ -249,7 +244,10 @@ function normalizeGeminiBaseUrl(raw: string): string {
   const trimmed = raw.replace(/\/+$/, "");
   const openAiIndex = trimmed.indexOf("/openai");
   if (openAiIndex > -1) {
-    return normalizeGoogleApiBaseUrl(trimmed.slice(0, openAiIndex));
+    const queryIndex = trimmed.indexOf("?", openAiIndex);
+    return normalizeGoogleApiBaseUrl(
+      `${trimmed.slice(0, openAiIndex)}${queryIndex < 0 ? "" : trimmed.slice(queryIndex)}`,
+    );
   }
   return normalizeGoogleApiBaseUrl(trimmed);
 }
@@ -266,7 +264,6 @@ function normalizeGoogleApiBaseUrl(baseUrl: string): string {
   try {
     const url = new URL(trimmed);
     url.hash = "";
-    url.search = "";
     if (
       url.origin.toLowerCase() === "https://generativelanguage.googleapis.com" &&
       url.pathname.replace(/\/+$/, "") === ""
@@ -283,9 +280,11 @@ export async function createGeminiEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: GeminiEmbeddingClient }> {
   const client = await resolveGeminiEmbeddingClient(options);
-  const baseUrl = client.baseUrl.replace(/\/$/, "");
-  const embedUrl = `${baseUrl}/${client.modelPath}:embedContent`;
-  const batchUrl = `${baseUrl}/${client.modelPath}:batchEmbedContents`;
+  const embedUrl = resolveEmbeddingEndpointUrl(client.baseUrl, `${client.modelPath}:embedContent`);
+  const batchUrl = resolveEmbeddingEndpointUrl(
+    client.baseUrl,
+    `${client.modelPath}:batchEmbedContents`,
+  );
   const isV2 = isGeminiEmbedding2Model(client.model);
   const outputDimensionality = client.outputDimensionality;
 
@@ -366,26 +365,40 @@ async function resolveGeminiEmbeddingClient(
   const remote = options.remote;
   const remoteApiKey = resolveRemoteApiKey(remote?.apiKey);
   const remoteBaseUrl = remote?.baseUrl?.trim();
-
+  const providerConfig = options.config.models?.providers?.google;
+  const providerBaseUrl = normalizeGeminiBaseUrl(
+    normalizeOptionalString(providerConfig?.baseUrl) || DEFAULT_GOOGLE_API_BASE_URL,
+  );
+  const rawBaseUrl = remoteBaseUrl || providerBaseUrl;
+  const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
+  const providerOwnsDestination = embeddingProviderOwnsDestination({
+    baseUrl,
+    providerBaseUrl,
+  });
   const apiKey = remoteApiKey
     ? remoteApiKey
-    : requireApiKey(
-        await resolveApiKeyForProvider({
-          provider: "google",
-          cfg: options.config,
-          agentDir: options.agentDir,
-        }),
-        "google",
-      );
+    : providerOwnsDestination
+      ? requireApiKey(
+          await resolveApiKeyForProvider({
+            provider: "google",
+            cfg: options.config,
+            agentDir: options.agentDir,
+          }),
+          "google",
+        )
+      : undefined;
+  if (!apiKey) {
+    throw new Error(
+      `Google embedding credentials are not configured for ${baseUrl}. Set memory.search.remote.apiKey for this destination.`,
+    );
+  }
 
-  const providerConfig = options.config.models?.providers?.google;
-  const rawBaseUrl =
-    remoteBaseUrl ||
-    normalizeOptionalString(providerConfig?.baseUrl) ||
-    DEFAULT_GOOGLE_API_BASE_URL;
-  const baseUrl = normalizeGeminiBaseUrl(rawBaseUrl);
   const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
-  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
+  const headerOverrides = Object.assign(
+    {},
+    providerOwnsDestination ? providerConfig?.headers : undefined,
+    remote?.headers,
+  );
   const headers: Record<string, string> = {
     ...headerOverrides,
     ...resolveGoogleApiClientHeaders({
@@ -395,10 +408,12 @@ async function resolveGeminiEmbeddingClient(
       transport: "http",
     }),
   };
-  const apiKeys = collectProviderApiKeysForExecution({
-    provider: "google",
-    primaryApiKey: apiKey,
-  });
+  const apiKeys = remoteApiKey
+    ? [apiKey]
+    : collectProviderApiKeysForExecution({
+        provider: "google",
+        primaryApiKey: apiKey,
+      });
   const model = normalizeGeminiModel(options.model);
   const modelPath = buildGeminiModelPath(model);
   const outputDimensionality = resolveGeminiOutputDimensionality(
@@ -411,8 +426,8 @@ async function resolveGeminiEmbeddingClient(
     model,
     modelPath,
     outputDimensionality,
-    embedEndpoint: `${baseUrl}/${modelPath}:embedContent`,
-    batchEndpoint: `${baseUrl}/${modelPath}:batchEmbedContents`,
+    embedEndpoint: resolveEmbeddingEndpointUrl(baseUrl, `${modelPath}:embedContent`),
+    batchEndpoint: resolveEmbeddingEndpointUrl(baseUrl, `${modelPath}:batchEmbedContents`),
   });
   return { baseUrl, headers, ssrfPolicy, model, modelPath, apiKeys, outputDimensionality };
 }

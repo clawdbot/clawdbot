@@ -14,6 +14,7 @@ describe("buildEmptyInteractiveReplyPayload", () => {
     hasPendingContinuation: false,
     hasExplicitSilentReply: false,
     hasCommittedDelivery: false,
+    hasIntentionalTerminalCompletion: false,
     sessionCtx: {
       Provider: "discord",
       Surface: "discord",

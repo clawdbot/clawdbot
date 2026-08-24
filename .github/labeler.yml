@@ -405,10 +405,6 @@
       - any-glob-to-any-file:
           - "extensions/policy/**"
           - "docs/cli/policy.md"
-"extensions: open-prose":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/open-prose/**"
 "extensions: tokenjuice":
   - changed-files:
       - any-glob-to-any-file:

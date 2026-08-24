@@ -5,7 +5,6 @@ import { buildTraceToolSummary, normalizeEmbeddedRunAttemptResult } from "./run-
 function completeResult(params?: {
   successfulNestedToolNames?: string[];
   latestMcpAppChannelView?: { viewId: string };
-  lastToolRecovery?: { toolName: string };
   clientToolCallSlots?: Array<{
     toolCallId: string;
     name: string;
@@ -48,7 +47,6 @@ function completeResult(params?: {
       getLastAssistantTextMessageIndex: () => undefined,
       getLastCompactionTokensAfter: () => undefined,
       getLastToolError: () => undefined,
-      getLastToolRecovery: () => params?.lastToolRecovery,
       getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
       getLatestMcpConnectAction: () => undefined,
       getMessagingToolSentMediaUrls: () => [],
@@ -88,12 +86,6 @@ function completeResult(params?: {
 }
 
 describe("attempt result projection", () => {
-  it("projects the last recovered tool", () => {
-    expect(completeResult({ lastToolRecovery: { toolName: "write" } }).lastToolRecovery).toEqual({
-      toolName: "write",
-    });
-  });
-
   it("carries the explicit yield acknowledgment separately from continuation context", () => {
     expect(
       completeResult({

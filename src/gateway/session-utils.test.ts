@@ -9,7 +9,7 @@ import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-au
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import {
   appendTranscriptMessageSync,
   listSessionChildEntriesReadOnly,
@@ -31,7 +31,11 @@ import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 import { listSessionsFromStore, listSessionsFromStoreAsync } from "./session-utils-list.js";
-import { getSessionDefaults, resolveGatewayModelSupportsImages } from "./session-utils-model.js";
+import {
+  getSessionDefaults,
+  projectSessionPatchResult,
+  resolveGatewayModelSupportsImages,
+} from "./session-utils-model.js";
 import {
   buildSessionListRowContext,
   buildSingleRowStoreChildSessionsByKey,
@@ -811,6 +815,65 @@ describe("gateway session utils", () => {
     expect(row.thinkingDefault).toBe("medium");
   });
 
+  test("session defaults and rows use the concrete runtime thinking policy", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push(
+      {
+        pluginId: "anthropic",
+        source: "test",
+        provider: {
+          id: "anthropic",
+          label: "Anthropic",
+          auth: [],
+          resolveThinkingProfile: () => ({
+            levels: [{ id: "minimal" }, { id: "medium" }, { id: "adaptive" }],
+            defaultLevel: "adaptive",
+            preserveWhenCatalogReasoningFalse: true,
+          }),
+        },
+      },
+      {
+        pluginId: "anthropic",
+        source: "test",
+        provider: {
+          id: "claude-cli",
+          label: "Claude CLI",
+          auth: [],
+          resolveThinkingProfile: () => ({
+            levels: [{ id: "off" }],
+            defaultLevel: "off",
+          }),
+        },
+      },
+    );
+    setTestActivePluginRegistry(registry);
+
+    const cfg = createModelDefaultsConfig({ primary: "anthropic/claude-mythos-5" });
+    const catalog = [
+      {
+        provider: "anthropic",
+        id: "claude-mythos-5",
+        name: "Claude Mythos 5",
+        reasoning: false,
+        thinkingPolicyProvider: "claude-cli",
+      },
+    ];
+
+    const defaults = getSessionDefaults(cfg, catalog);
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "main",
+      modelCatalog: catalog,
+    });
+
+    expect(defaults.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+    expect(row.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+    expect(defaults.thinkingDefault).toBe("off");
+    expect(row.thinkingDefault).toBe("off");
+  });
+
   test("session defaults and rows use dynamic catalog context limits with authored caps", () => {
     const catalog = [
       {
@@ -854,6 +917,37 @@ describe("gateway session utils", () => {
         modelCatalog: catalog,
       }).contextTokens,
     ).toBe(128_000);
+  });
+
+  test("session rows project the selected catalog context window", () => {
+    const catalog = [
+      {
+        provider: "claude-cli",
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        contextWindow: 1_000_000,
+        contextWindows: [
+          { id: "200k", label: "200K", contextWindow: 200_000 },
+          { id: "1m", label: "1M", contextWindow: 1_000_000 },
+        ],
+        contextWindowDefault: "1m",
+      },
+    ];
+    const cfg = createModelDefaultsConfig({ primary: "claude-cli/claude-fable-5" });
+
+    const defaults = getSessionDefaults(cfg, catalog);
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: { sessionId: "ctx", contextWindow: "200k" } as SessionEntry,
+      modelCatalog: catalog,
+    });
+
+    expect(defaults).toMatchObject({ contextWindow: "1m", contextTokens: 1_000_000 });
+    expect(row).toMatchObject({ contextWindow: "200k", contextTokens: 200_000 });
+    expect(row.contextWindows).toEqual(catalog[0]?.contextWindows);
   });
 
   test("session rows project automation bindings and event fields forward them", () => {
@@ -913,6 +1007,29 @@ describe("gateway session utils", () => {
 
     const cleared = { ...failed, status: "running" as const, lastRunError: undefined };
     expect(buildGatewaySessionEventFields({ sessionRow: cleared }).lastRunError).toBeNull();
+  });
+
+  test("session rows and update events project the exact settled run identity", () => {
+    const settled = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:settled",
+      lightweightListRow: true,
+      skipTranscriptUsageFallback: true,
+      entry: {
+        sessionId: "session-settled",
+        updatedAt: 1,
+        status: "done",
+        lastRunId: "run-settled",
+      },
+    });
+
+    expect(settled.lastRunId).toBe("run-settled");
+    expect(buildGatewaySessionEventFields({ sessionRow: settled }).lastRunId).toBe("run-settled");
+
+    const running = { ...settled, status: "running" as const, lastRunId: undefined };
+    expect(buildGatewaySessionEventFields({ sessionRow: running }).lastRunId).toBeNull();
   });
 
   test("session rows ignore malformed compaction checkpoints", () => {
@@ -1128,76 +1245,91 @@ describe("gateway session utils", () => {
     );
   });
 
-  test("preserves persisted Ultra while projecting picker levels without a catalog", () => {
+  test("keeps stored thinking text without a catalog and clamps it when one is present", () => {
     providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
-      resolveThinkingProfile: ({ modelId, agentRuntime }) => ({
-        levels: [
-          { id: "off" },
-          { id: "high" },
-          { id: "xhigh" },
-          { id: "max" },
-          ...(modelId.startsWith("gpt-5.6") &&
-          (agentRuntime === "openclaw" || !modelId.startsWith("gpt-5.6-luna"))
-            ? [{ id: "ultra" as const }]
-            : []),
-        ],
+      resolveThinkingProfile: () => ({
+        levels: [{ id: "off" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
       }),
     });
     const cfg = {
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-luna" },
+          model: { primary: "openai/gpt-5.6-sol" },
           models: {
-            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
           },
         },
       },
     } as OpenClawConfig;
-    const defaults = getSessionDefaults(cfg);
-    const row = (entry: SessionEntry) =>
+    const row = (entry: SessionEntry, withCatalog: boolean) =>
       buildGatewaySessionRow({
         cfg,
         storePath: "",
         store: {},
         key: "agent:main:main",
         entry,
+        ...(withCatalog
+          ? {
+              modelCatalog: [
+                {
+                  provider: "openai",
+                  id: "gpt-5.6-sol",
+                  name: "GPT-5.6 Sol (API route)",
+                },
+              ],
+            }
+          : {}),
       });
 
-    const codex = row({ sessionId: "codex", thinkingLevel: "ultra" } as SessionEntry);
-    const openClawOverride = row({
-      sessionId: "openclaw",
-      thinkingLevel: "ultra",
-      agentRuntimeOverride: "openclaw",
-    } as SessionEntry);
-    const legacyObservedOpenClaw = row({
-      sessionId: "legacy-observed-openclaw",
-      thinkingLevel: "ultra",
-      agentHarnessId: "openclaw",
-    } as SessionEntry);
-    const lockedCodex = row({
-      sessionId: "locked-codex",
-      thinkingLevel: "ultra",
-      agentHarnessId: "codex",
-      agentRuntimeOverride: "openclaw",
-      modelSelectionLocked: true,
-    } as SessionEntry);
+    const stored = { sessionId: "stored", thinkingLevel: "ultra" } as SessionEntry;
 
-    expect(defaults.agentRuntime?.id).toBe("codex");
-    expect(codex.thinkingLevel).toBe("ultra");
-    expect(codex.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
-    expect(openClawOverride.thinkingLevel).toBe("ultra");
-    expect(openClawOverride.agentRuntime?.id).toBe("openclaw");
-    expect(legacyObservedOpenClaw.thinkingLevel).toBe("ultra");
-    expect(legacyObservedOpenClaw.agentRuntime?.id).toBe("codex");
-    expect(legacyObservedOpenClaw.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
-    expect(lockedCodex.thinkingLevel).toBe("ultra");
-    expect(lockedCodex.agentRuntime).toEqual({
-      id: "codex",
-      cloudPlacementSupported: false,
-      devicePlacementSupported: false,
-      source: "session",
+    expect(row(stored, false).thinkingLevel).toBe("ultra");
+    expect(row(stored, true).thinkingLevel).toBe("high");
+  });
+
+  test("strips retired thinking provenance from Gateway patch results", async () => {
+    const entry = {
+      sessionId: "private-fallback",
+      updatedAt: 1,
+      thinkingLevelSelection: { retired: true },
+      modelFallback: {
+        prevModel: "gpt-5.6-sol",
+        prevProvider: "openai",
+        prevThinkingLevelSelection: { retired: true },
+        source: "agent-patch",
+        ts: 1,
+      },
+    } as unknown as InternalSessionEntry;
+    const result = await projectSessionPatchResult({
+      canonicalKey: "agent:main:main",
+      cfg: {
+        agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+      } as OpenClawConfig,
+      entry,
+      modelCatalogByAgent: new Map([
+        [
+          "main",
+          Promise.resolve([
+            {
+              provider: "openai",
+              id: "gpt-5.6-sol",
+              name: "GPT 5.6 Sol",
+              reasoning: true,
+            },
+          ]),
+        ],
+      ]),
+      storePath: "/tmp/openclaw-sessions.json",
+      targetAgentId: "main",
     });
-    expect(lockedCodex.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
+
+    expect(result.entry.modelFallback).toEqual({
+      prevModel: "gpt-5.6-sol",
+      prevProvider: "openai",
+      source: "agent-patch",
+      ts: 1,
+    });
+    expect(JSON.stringify(result.entry)).not.toContain("thinkingLevelSelection");
   });
 
   test("reports observed locked runtime from agentHarnessId instead of configured intent", () => {

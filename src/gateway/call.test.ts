@@ -2027,6 +2027,8 @@ describe("callGateway error details", () => {
         error = caught;
       });
       expect(isGatewayTransportError(error)).toBe(true);
+      expect(error).toMatchObject({ kind: "closed" });
+      expect(error).not.toHaveProperty("code");
       const message = (error as Error).message;
       expect(message).toContain(`Gateway not reachable at ws://127.0.0.1:18789 (${code}).`);
       expect(message).toContain(

@@ -23,6 +23,7 @@ import {
 } from "./transcript-history-projection.js";
 import {
   attachCodexMirrorAttestation,
+  attachCodexMirrorRunId,
   fingerprintCodexMirrorSourceMessage,
   readCodexMirrorSourceFingerprint,
 } from "./transcript-mirror-attestation.js";
@@ -134,6 +135,12 @@ async function mirrorBestEffort(params: {
       // identity (not via the scope). Dropping `turnId` from the scope here is
       // what lets a re-emitted prior-turn entry collide with its existing key.
       idempotencyScope: `codex-app-server:${params.threadId}`,
+      runId: params.params.runId,
+      runMirrorIdentityPrefix: `${params.turnId}:`,
+      terminalAssistantOwner: {
+        mirrorIdentity: `${params.turnId}:assistant`,
+        runId: params.params.runId,
+      },
       config: params.params.config,
     });
     for (const receipt of mirrorResult.userMessageReceipts) {
@@ -162,11 +169,13 @@ async function mirrorBestEffort(params: {
       );
     });
     const assistantMirrorIdentity = `${params.turnId}:assistant`;
-    const assistantTranscriptOwned =
-      mirrorResult.assistantMirrorIdentitiesOwned.includes(assistantMirrorIdentity);
-    const assistantTranscriptMessage = assistantTranscriptOwned
-      ? mirroredMessages.find((message) => readMirrorIdentity(message) === assistantMirrorIdentity)
-      : undefined;
+    const assistantTranscriptMessage = mirroredMessages.find(
+      (message) => readMirrorIdentity(message) === assistantMirrorIdentity,
+    );
+    const assistantTranscriptOwned = Boolean(
+      assistantTranscriptMessage &&
+      mirrorResult.assistantMirrorIdentitiesOwned.includes(assistantMirrorIdentity),
+    );
     const assistantTranscriptIdempotencyKey = normalizeOptionalString(
       (assistantTranscriptMessage as { idempotencyKey?: unknown } | undefined)?.idempotencyKey,
     );
@@ -279,6 +288,8 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
         cwd: params.cwd,
         messages: [userPromptMessage],
         idempotencyScope: `codex-app-server:${params.threadId}`,
+        runId: params.params.runId,
+        runMirrorIdentityPrefix: `${params.turnId}:`,
         config: params.params.config,
       });
       for (const receipt of mirrorResult.userMessageReceipts) {
@@ -323,6 +334,9 @@ async function mirror(params: {
   storePath?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
+  runId?: string;
+  runMirrorIdentityPrefix?: string;
+  terminalAssistantOwner?: { mirrorIdentity: string; runId: string };
   config?: SessionTranscriptWriteLockParams["config"];
   skipBeforeMessageWriteHooks?: boolean;
 }): Promise<CodexAppServerTranscriptMirrorResult> {
@@ -372,8 +386,22 @@ async function mirror(params: {
         idempotencyKeys: candidateIdempotencyKeys,
       });
       for (const { dedupeIdentity, idempotencyKey, message, sourceFingerprint } of candidates) {
+        const mirrorIdentity = readMirrorIdentity(message);
+        const ownsRun = Boolean(
+          params.runId &&
+          (!params.runMirrorIdentityPrefix ||
+            mirrorIdentity?.startsWith(params.runMirrorIdentityPrefix)),
+        );
+        const terminalOwner = params.terminalAssistantOwner;
+        const ownsTerminal = Boolean(
+          ownsRun && terminalOwner && mirrorIdentity === terminalOwner.mirrorIdentity,
+        );
+        const ownedMessage =
+          ownsRun && params.runId
+            ? attachCodexMirrorRunId(message, params.runId, ownsTerminal)
+            : message;
         const transcriptMessage = {
-          ...attachCodexMirrorAttestation(message, sourceFingerprint),
+          ...attachCodexMirrorAttestation(ownedMessage, sourceFingerprint),
           ...(idempotencyKey ? { idempotencyKey } : {}),
         } as AgentMessage;
         if (idempotencyKey && mirrorFacts.existingIdempotencyKeys.has(idempotencyKey)) {
@@ -423,11 +451,13 @@ async function mirror(params: {
               }
             : attachCodexMirrorAttestation(nextMessage, sourceFingerprint)
         ) as AgentMessage;
-        const mirrorIdentity = readMirrorIdentity(message);
         if (mirrorIdentity) {
           // Hooks may replace the whole message. Restore the provider-owned
           // identity so retries cannot turn a stale idempotency hit into evidence.
           messageToAppend = attachCodexMirrorIdentity(messageToAppend, mirrorIdentity);
+        }
+        if (ownsRun && params.runId) {
+          messageToAppend = attachCodexMirrorRunId(messageToAppend, params.runId, ownsTerminal);
         }
         messageToAppend = projectAgentHarnessTranscriptMessageForDisplay({
           hidden: (message as { display?: boolean }).display === false,
@@ -498,6 +528,14 @@ async function mirror(params: {
 
   for (const update of appendedUpdates) {
     try {
+      // Commentary and tool rows share the Codex turn but cannot claim terminal run ownership.
+      const terminalOwner = params.terminalAssistantOwner;
+      const terminalRunId =
+        update.message.role === "assistant" &&
+        terminalOwner &&
+        readMirrorIdentity(update.message) === terminalOwner.mirrorIdentity
+          ? terminalOwner.runId
+          : undefined;
       await publishSessionTranscriptUpdateByIdentity({
         ...transcriptTarget,
         update: {
@@ -505,6 +543,7 @@ async function mirror(params: {
           message: update.message,
           messageId: update.messageId,
           ...(update.messageSeq !== undefined ? { messageSeq: update.messageSeq } : {}),
+          ...(terminalRunId ? { runId: terminalRunId } : {}),
           sessionKey: transcriptTarget.sessionKey,
         },
       });

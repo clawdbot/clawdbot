@@ -2,6 +2,7 @@
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
+import { projectTelemetryFieldMetadata } from "./zod-schema.telemetry.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
   "channels.discord.activities":
@@ -78,9 +79,12 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "update.channel":
     'Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). Extended-stable is package-only: installation is foreground-only, with optional read-only startup hints.',
   "update.checkOnStart":
-    "Check for npm updates when the gateway starts, including read-only extended-stable hints (default: true).",
+    "Checks the OpenClaw update endpoint when the gateway starts, including read-only extended-stable hints (default: true). Set false to disable update checks and anonymous update pings.",
   "update.auto.enabled":
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
+  telemetry:
+    "Explicit consent for anonymous feature statistics attached to the daily update check. Feature statistics are disabled by default and never include messages, credentials, or identifiers.",
+  ...projectTelemetryFieldMetadata("help"),
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   ...CLOUD_WORKER_FIELD_HELP,

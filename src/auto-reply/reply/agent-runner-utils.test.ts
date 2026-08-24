@@ -148,6 +148,7 @@ describe("agent-runner-utils", () => {
       enforceFinalTag: true,
       cwd: "/tmp/task-repo",
       taskSuggestionDeliveryMode: "gateway",
+      terminalReplyExpectation: "optional",
       trustedInternalHandoff: {
         kind: "subagent-completion",
         sourceSessionKey: "agent:child",
@@ -202,6 +203,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.runId).toBe("run-1");
     expect(resolved.promptCacheKey).toBe("webchat-cache-key");
     expect(resolved.taskSuggestionDeliveryMode).toBe("gateway");
+    expect(resolved.terminalReplyExpectation).toBe("optional");
   });
 
   it("threads prompt cache affinity through embedded execution params", () => {

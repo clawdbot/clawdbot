@@ -62,19 +62,14 @@ async function releaseReplyRecoveryOwner(
   if (!lease) {
     return undefined;
   }
-  let settleDeferredRelease: (
-    pending: MainSessionRecoveryPendingTarget | undefined,
-  ) => void = () => {};
-  const deferredRelease = new Promise<MainSessionRecoveryPendingTarget | undefined>((resolve) => {
-    settleDeferredRelease = resolve;
-  });
   try {
-    return await releaseMainSessionRecoveryOwner(lease, {
-      onDeferredSuccess: settleDeferredRelease,
-    });
+    return await releaseMainSessionRecoveryOwner(lease);
   } catch (error) {
     log.warn(`failed to release main-session recovery reply owner: ${formatErrorMessage(error)}`);
-    return await deferredRelease;
+    // The durable owner schedules exact-token retries. A completed reply must
+    // not keep its successor barrier and lifecycle admission until that
+    // background repair wins a contested SQLite write.
+    return undefined;
   }
 }
 

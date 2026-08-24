@@ -2,6 +2,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { WorkerExecutionModeSchema } from "./environments.js";
 import { NonEmptyString } from "./primitives.js";
 import { GitHubSetupHandleSchema } from "./secrets.js";
 
@@ -19,6 +20,16 @@ const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
   cloudPlacementSupported: Type.Optional(Type.Boolean()),
+  cloudPlacementExecutionMode: Type.Optional(WorkerExecutionModeSchema),
+  devicePlacement: Type.Optional(
+    closedObject({
+      requiredNodeCommands: Type.Array(Type.String({ minLength: 1, maxLength: 128 }), {
+        maxItems: 32,
+        uniqueItems: true,
+      }),
+      consumesWorkerSlot: Type.Boolean(),
+    }),
+  ),
   devicePlacementSupported: Type.Optional(Type.Boolean()),
   source: Type.Union([
     Type.Literal("env"),
@@ -37,6 +48,12 @@ const GatewayThinkingLevelOptionSchema = closedObject({
   label: NonEmptyString,
 });
 
+const GatewayContextWindowOptionSchema = closedObject({
+  id: NonEmptyString,
+  label: NonEmptyString,
+  contextWindow: Type.Integer({ minimum: 1 }),
+});
+
 export const ModelChoiceSchema = closedObject({
   id: NonEmptyString,
   name: NonEmptyString,
@@ -45,6 +62,8 @@ export const ModelChoiceSchema = closedObject({
   tags: Type.Optional(Type.Array(NonEmptyString)),
   available: Type.Optional(Type.Boolean()),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
+  contextWindows: Type.Optional(Type.Array(GatewayContextWindowOptionSchema)),
+  contextWindowDefault: Type.Optional(NonEmptyString),
   reasoning: Type.Optional(Type.Boolean()),
   thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingDefault: Type.Optional(NonEmptyString),
@@ -442,6 +461,7 @@ export const SkillsUpdateParamsSchema = Type.Union([
     source: Type.Literal("clawhub"),
     slug: Type.Optional(NonEmptyString),
     all: Type.Optional(Type.Boolean()),
+    force: Type.Optional(Type.Boolean()),
     acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
   }),
 ]);

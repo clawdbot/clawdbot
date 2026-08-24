@@ -1,3 +1,4 @@
+import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import {
   isCurrentActiveWorkerEnvironment,
   isUnavailableEnvironment,
@@ -120,8 +121,17 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     }
   };
 
-  const reconcile = async (): Promise<void> => {
-    await environments.reconcileOnce();
+  const reconcile = async (mode?: "startup"): Promise<void> => {
+    if (mode === "startup") {
+      // Readiness fences live owners; unowned teardown remains in the service-owned sweep.
+      for (const { environmentId, state } of placements.listForReconcile()) {
+        if (environmentId && state !== "failed" && state !== "reclaimed") {
+          await environments.reconcileEnvironment(environmentId);
+        }
+      }
+    } else {
+      await environments.reconcileOnce();
+    }
     const pendingResultOwners = await recoverPendingWorkspaceResults(deps, true);
     const journalOwners = blockingWorkspaceJournalSessions(placements);
     const moveOwners = (await deps.recoverPlacementMoves?.()) ?? new Set<string>();
@@ -136,12 +146,45 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       if (placement.state === "local" || placement.state === "reclaimed") {
         continue;
       }
+      if (placement.state === "provisioning") {
+        const environment = placement.environmentId
+          ? environments.get(placement.environmentId)
+          : undefined;
+        const exactEnvironment =
+          environment?.environmentId === placement.environmentId ? environment : undefined;
+        if (
+          exactEnvironment &&
+          exactEnvironment.destroyRequestedAtMs === null &&
+          (exactEnvironment.state === "requested" ||
+            exactEnvironment.state === "provisioning" ||
+            exactEnvironment.state === "bootstrapping" ||
+            ((exactEnvironment.state === "ready" || exactEnvironment.state === "idle") &&
+              supportsWorkerExecutionContextLaunch(exactEnvironment.bootstrapReceipt)))
+        ) {
+          // Transient provider or node-enrollment failure retains its exact durable operation.
+          continue;
+        }
+        await failure.teardownEnvironment({
+          placement,
+          environmentId: exactEnvironment?.environmentId ?? null,
+          ownerEpoch: exactEnvironment?.ownerEpoch ?? null,
+          primaryError: new Error(
+            exactEnvironment
+              ? `Provisioning worker environment cannot be recovered from ${exactEnvironment.state}`
+              : "Provisioning worker environment record is missing",
+          ),
+        });
+        continue;
+      }
       if (placement.state === "active") {
         await adoptActive(placement);
         continue;
       }
       if (isFailedPlacement(placement)) {
-        await failure.retryFailedTeardown(placement);
+        // Terminal cleanup never gates readiness; tracked post-start owners resume it safely.
+        if (mode !== "startup") {
+          await failure.retryFailedTeardown(placement);
+        }
         continue;
       }
       const error = new Error(`Worker dispatch interrupted in ${placement.state}`);

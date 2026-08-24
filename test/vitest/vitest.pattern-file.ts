@@ -219,6 +219,9 @@ export function intersectIncludePatterns(
     return null;
   }
 
+  const literalIncludes = includePatterns.every(isPlainRepoRelativePath)
+    ? new Set(includePatterns)
+    : null;
   const result: string[] = [];
   for (const candidate of candidatePatterns) {
     if (!isPlainRepoRelativePath(candidate)) {
@@ -231,7 +234,11 @@ export function intersectIncludePatterns(
       result.push(...intersection);
       continue;
     }
-    if (includePatterns.some((include) => path.matchesGlob(candidate, include))) {
+    if (
+      literalIncludes
+        ? literalIncludes.has(candidate)
+        : includePatterns.some((include) => path.matchesGlob(candidate, include))
+    ) {
       result.push(candidate);
     }
   }

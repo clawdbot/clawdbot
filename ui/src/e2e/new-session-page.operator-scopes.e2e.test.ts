@@ -267,7 +267,7 @@ suite.define(() => {
       await pollLocatorText(
         page.locator(".new-session-page__browser .new-session-page__error"),
       ).toContain(
-        "To browse outside agent workspaces, request admin in the access banner, then approve in Devices.",
+        "To browse outside agent workspaces, open the access status, request admin, then approve in Devices.",
       );
     } finally {
       await context.close();

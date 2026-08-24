@@ -61,6 +61,8 @@ type LazyCustomElementRequest = LazyCustomElementRequestState & {
 export class LazyCustomElementRequestController {
   private current: LazyCustomElementRequest | undefined;
   private readonly preloads = new Set<string>();
+  private active: OptionalCustomElement | undefined;
+  private activeDismissed = false;
 
   constructor(
     private readonly host: UpdatingHost,
@@ -72,7 +74,7 @@ export class LazyCustomElementRequestController {
     return this.current;
   }
 
-  preload(element: OptionalCustomElement): void {
+  preload(element: OptionalCustomElement, options?: { reportError?: boolean }): void {
     if (isOptionalElementDefined(element) || this.preloads.has(element.tagName)) {
       return;
     }
@@ -80,7 +82,17 @@ export class LazyCustomElementRequestController {
     void ensureCustomElementDefined(element.tagName, element.loadModule)
       .then(
         () => this.host.requestUpdate(),
-        () => undefined,
+        (error: unknown) => {
+          if (options?.reportError && !this.current) {
+            this.current = {
+              element,
+              error,
+              stale: isStaleChunkImportError(error),
+              status: "error",
+            };
+            this.host.requestUpdate();
+          }
+        },
       )
       .finally(() => this.preloads.delete(element.tagName));
   }
@@ -94,6 +106,23 @@ export class LazyCustomElementRequestController {
     this.current = request;
     this.host.requestUpdate();
     this.load(request);
+  }
+
+  requestWhileActive(element: OptionalCustomElement, active: boolean): void {
+    if (active) {
+      if (this.active !== element) {
+        this.active = element;
+        this.activeDismissed = false;
+      }
+    } else if (this.active === element) {
+      this.active = undefined;
+      this.activeDismissed = false;
+    }
+    if (!active && this.current?.element === element) {
+      this.abandon();
+    } else {
+      this.pumpActive();
+    }
   }
 
   retry(): void {
@@ -117,6 +146,9 @@ export class LazyCustomElementRequestController {
 
   close(): void {
     if (this.current) {
+      if (this.current.element === this.active) {
+        this.activeDismissed = true;
+      }
       this.onClose?.();
       this.abandon();
     }
@@ -126,6 +158,18 @@ export class LazyCustomElementRequestController {
     if (this.current) {
       this.current = undefined;
       this.host.requestUpdate();
+      this.pumpActive();
+    }
+  }
+
+  private pumpActive(): void {
+    if (
+      this.active &&
+      !this.activeDismissed &&
+      !this.current &&
+      !isOptionalElementDefined(this.active)
+    ) {
+      this.request(this.active);
     }
   }
 
@@ -173,6 +217,14 @@ export const DEBUG_OVERLAY_ELEMENT = {
   tagName: DEBUG_OVERLAY_TAG,
   label: DEBUG_OVERLAY_TAG,
   loadModule: () => import("../pages/debug/debug-overlay.ts"),
+} satisfies OptionalCustomElement;
+
+const KEYBOARD_SHORTCUTS_TAG = "openclaw-keyboard-shortcuts-dialog";
+
+export const KEYBOARD_SHORTCUTS_ELEMENT = {
+  tagName: KEYBOARD_SHORTCUTS_TAG,
+  label: KEYBOARD_SHORTCUTS_TAG,
+  loadModule: () => import("../components/keyboard-shortcuts-dialog.ts"),
 } satisfies OptionalCustomElement;
 
 export const TERMINAL_PANEL_ELEMENT = {

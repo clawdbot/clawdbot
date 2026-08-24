@@ -1,11 +1,9 @@
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import {
   listSessionEntryKeysReadOnly,
   rewriteDoctorSessionEntries,
 } from "../config/sessions/session-accessor.js";
 import { publishSessionEntryCacheInvalidation } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
-import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   executeSqliteQuerySync,
@@ -35,7 +33,7 @@ import {
   type ReservedKeyRename,
   writeRepairJournal,
 } from "./doctor-session-incognito-key-repair-state.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+import { listExistingAgentDatabaseTargets } from "./doctor-session-sqlite-readers.js";
 
 export type ReservedIncognitoKeyRepairReport = {
   found: number;
@@ -151,21 +149,6 @@ export function repairReservedIncognitoSessionKeys(params: {
     { operationLabel: "doctor.complete-reserved-incognito-session-keys" },
   );
   return { found: pendingKeys.size, repaired: renames.length };
-}
-
-function listExistingAgentDatabaseTargets(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Array<{ agentId: string; sqlitePath: string; storePath: string }> {
-  const seenPaths = new Set<string>();
-  return resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }).flatMap((target) => {
-    const sqlitePath = resolveTargetSqlitePath(target);
-    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
-      return [];
-    }
-    seenPaths.add(sqlitePath);
-    return [{ agentId: target.agentId, sqlitePath, storePath: target.storePath }];
-  });
 }
 
 function planReservedIncognitoKeyRenames(

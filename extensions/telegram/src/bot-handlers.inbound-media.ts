@@ -159,8 +159,6 @@ export function createTelegramInboundMedia({
       runtimeCfg: authorization.authorizationCfg,
     });
     const activationOverride = resolveGroupActivation({
-      chatId,
-      messageThreadId: resolvedThreadId,
       sessionKey: sessionState.sessionKey,
       agentId: sessionState.agentId,
       cfg: authorization.authorizationCfg,

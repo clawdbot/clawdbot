@@ -350,13 +350,6 @@ small JSON files under the Lobster state directory (`~/.lobster/state` by
 default, override with `LOBSTER_STATE_DIR`); the token itself only encodes a
 pointer to that state, not the full pipeline state.
 
-## OpenProse
-
-OpenProse pairs well with Lobster: use `/prose` to orchestrate multi-agent
-prep, then run a Lobster pipeline for deterministic approvals. If a Prose
-program needs Lobster, allow the `lobster` tool for sub-agents via
-`tools.subagents.tools`. See [OpenProse](/prose).
-
 ## Safety
 
 - **Local in-process only** - workflows execute inside the gateway process; no

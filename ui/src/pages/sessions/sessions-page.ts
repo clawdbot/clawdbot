@@ -1369,15 +1369,15 @@ class SessionsPage extends OpenClawLightDomElement {
     );
     void fetchSessionMenuWork({
       client: scope.client,
-      pullRequestsAvailable:
+      loadPullRequests:
         isGatewayMethodAdvertised(
           scope.context.gateway.snapshot,
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        ) === true,
-      sessionKey: row.key,
-      agentId: this.sessionAgentId(row.key, scope.context),
-      loadPullRequests: () => store.load(this, pullRequestKey),
+        ) === true
+          ? () => store.load(this, pullRequestKey)
+          : undefined,
       worktreeId: row.worktree.id,
+      execNode: row.execNode,
     }).then((work) => {
       if (version === this.sessionMenuWorkVersion) {
         this.sessionMenuWork = { loading: false, ...work };
@@ -1510,6 +1510,8 @@ class SessionsPage extends OpenClawLightDomElement {
 
   override render() {
     const context = this.context;
+    const personGroupingAvailable =
+      context?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true;
     if (!context) {
       return html``;
     }
@@ -1559,7 +1561,10 @@ class SessionsPage extends OpenClawLightDomElement {
           ),
           sortColumn: this.sortColumn,
           sortDir: this.sortDir,
-          groupBy: this.groupBy,
+          // Same reconnect resilience as the sidebar: the stored Person
+          // preference survives a temporarily hidden identity capability.
+          groupBy: personGroupingAvailable || this.groupBy !== "person" ? this.groupBy : "none",
+          personGroupingAvailable,
           knownCategories: this.knownCategories(),
           page: this.page,
           pageSize: this.pageSize,

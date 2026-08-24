@@ -1,9 +1,11 @@
 /** Resolves configured agent ids, directories, workspaces, and merged agent defaults. */
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { formatCliCommand } from "../cli/command-format.js";
 import { getRetainedLegacyDefaultAgentId } from "../config/legacy.default-agent-owner-state.js";
 import { hasExplicitModelPolicyAllow } from "../config/model-policy-allowlist-migration.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -93,17 +95,12 @@ function stripNullBytes(s: string): string {
 /** Lists valid configured agent entries from config. */
 export function listAgentEntriesWithSource(cfg: OpenClawConfig): ListedAgentEntry[] {
   const roster = readAgentRosterProperty(cfg);
-  if (
-    roster?.kind === "entries" &&
-    roster.value &&
-    typeof roster.value === "object" &&
-    !Array.isArray(roster.value)
-  ) {
+  if (roster?.kind === "entries" && isRecord(roster.value)) {
     return Object.entries(roster.value).flatMap(([id, entry]) =>
-      entry !== null && typeof entry === "object" && !Array.isArray(entry)
+      isRecord(entry)
         ? [
             {
-              entry: { ...(entry as Omit<AgentEntry, "id">), id },
+              entry: { ...entry, id },
               source: { kind: "entries" as const, key: id },
             },
           ]
@@ -180,6 +177,18 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
   return ids;
 }
 
+/** Returns a configured agent id or throws the canonical CLI selection error. */
+export function resolveConfiguredAgentId(cfg: OpenClawConfig, agentId: string): string {
+  if (!listAgentIds(cfg).includes(agentId)) {
+    // formatCliCommand, not a literal: under a profile or container the bare command is wrong,
+    // so a hint that cannot be pasted back is worse than none.
+    throw new Error(
+      `Unknown agent id "${agentId}". Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
+    );
+  }
+  return agentId;
+}
+
 export function tryResolveSoleAgentId(cfg: OpenClawConfig): string | undefined {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
@@ -242,6 +251,18 @@ export function resolveAmbientOwnerAgentId(
   return tryResolveAmbientOwnerAgentId(cfg, requestedAgentId) ?? resolveSoleAgentId(cfg, context);
 }
 
+/** Resolves a CLI operation owner while preserving legacy default markers outside explicit fleets. */
+export function resolveAgentOperationAgentId(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+  context?: AgentSelectionContext,
+): string {
+  if (requestedAgentId !== undefined || cfg.agents?.ownership === "explicit") {
+    return resolveAmbientOwnerAgentId(cfg, requestedAgentId, context);
+  }
+  return tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg, context);
+}
+
 /**
  * @deprecated Ambient system work uses resolveAmbientOwnerAgentId so the configured
  * system agent is honored; explicit-selection surfaces use resolveSoleAgentId. This
@@ -261,7 +282,28 @@ export function tryResolveDefaultAgentId(cfg: OpenClawConfig): string | undefine
 
 export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
   const id = normalizeAgentId(agentId);
-  return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
+  // Point lookups are hot; the public list helper must clone every keyed entry.
+  // Traverse the roster directly so a match does not project unrelated agents.
+  const roster = readAgentRosterProperty(cfg);
+  if (roster?.kind === "entries" && isRecord(roster.value)) {
+    const entries = roster.value;
+    for (const key in entries) {
+      if (!Object.hasOwn(entries, key)) {
+        continue;
+      }
+      const entry = entries[key];
+      if (isRecord(entry) && normalizeAgentId(key) === id) {
+        return { ...entry, id: key };
+      }
+    }
+    return undefined;
+  }
+  if (roster?.kind === "list" && Array.isArray(roster.value)) {
+    return (roster.value as AgentEntry[]).find(
+      (entry) => entry !== null && typeof entry === "object" && normalizeAgentId(entry.id) === id,
+    );
+  }
+  return undefined;
 }
 
 /** Resolves the authored entry object for in-place canonical config mutations. */

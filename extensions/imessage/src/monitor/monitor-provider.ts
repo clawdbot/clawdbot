@@ -21,6 +21,7 @@ import {
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
+  ensureConfiguredBindingRouteReady,
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -913,6 +914,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
+    if (decision.bindingResolution) {
+      const readiness = await ensureConfiguredBindingRouteReady({
+        cfg,
+        bindingResolution: decision.bindingResolution,
+      });
+      if (!readiness.ok) {
+        runtime.error?.(
+          `imessage: dropped inbound message; configured ACP binding unavailable for ${decision.bindingResolution.record.conversation.conversationId}: ${readiness.error}`,
+        );
+        return;
+      }
+    }
+
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
@@ -1045,8 +1059,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             logVerbose,
           })
         : undefined;
+    // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
+    const pluginChannelRuntime = opts.channelRuntime as PluginRuntime["channel"] | undefined;
     const { ctxPayload, chatTarget, imessageTo } = await buildIMessageInboundContext({
       cfg,
+      accountService: imessageCfg.service,
       decision: contextDecision,
       message,
       previousTimestamp,
@@ -1054,8 +1071,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       historyLimit,
       groupHistories,
       dmHistory,
-      buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-        .buildContext,
+      buildContext: pluginChannelRuntime?.inbound.buildContext,
       media: {
         facts: mediaAttachments,
       },
@@ -1254,6 +1270,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             sessionKey: decision.route.sessionKey,
           },
           ctxPayload,
+          // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+          dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
           record: {
             updateLastRoute:
               !decision.isGroup && updateTarget

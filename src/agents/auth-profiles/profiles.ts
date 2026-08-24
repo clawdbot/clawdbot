@@ -198,6 +198,7 @@ export function upsertAuthProfile(params: {
   store.profiles[params.profileId] = credential;
   saveAuthProfileStore(store, params.agentDir, {
     filterExternalAuthProfiles: false,
+    sharedStoreWrite: true,
     syncExternalCli: false,
   });
 }

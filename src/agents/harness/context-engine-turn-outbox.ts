@@ -75,6 +75,12 @@ function oldestOutboxEnqueueSequence() {
   return /* kysely-allow-raw: Aggregate the closed implicit-rowid expression used for enqueue order. */ sql<number>`MIN(context_engine_turn_outbox.rowid)`;
 }
 
+function outboxPayloadRequiresAdvancement() {
+  // Blocked rows are terminal audit evidence, not retryable work. Keep them
+  // inspectable without letting them hold later same-session turns behind them.
+  return /* kysely-allow-raw: Payload state is owned by the closed outbox union above. */ sql<boolean>`json_extract(context_engine_turn_outbox.payload_json, '$.state') IS NOT 'blocked'`;
+}
+
 export function isRetryableContextEngineTurnReadFailure(
   kind: ContextEngineTurnReadFailureKind,
 ): kind is "projection-unavailable" {
@@ -356,7 +362,8 @@ export async function drainContextEngineTurnOutbox(params: {
     // Use it instead of wall-clock timestamps, which can collide.
     .select(oldestOutboxEnqueueSequence().as("oldest_enqueue_sequence"))
     .where("engine_id", "=", params.engineId)
-    .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null);
+    .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null)
+    .where(outboxPayloadRequiresAdvancement());
   if (params.sessionId) {
     pendingSessionsQuery = pendingSessionsQuery.where("session_id", "=", params.sessionId);
   }
@@ -382,6 +389,7 @@ export async function drainContextEngineTurnOutbox(params: {
           .where("engine_id", "=", params.engineId)
           .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null)
           .where("session_id", "=", sessionId)
+          .where(outboxPayloadRequiresAdvancement())
           .orderBy(outboxEnqueueSequence(), "asc")
           .limit(1),
       );
@@ -409,7 +417,8 @@ function hasPendingContextEngineTurn(
     .selectFrom("context_engine_turn_outbox")
     .select("advancement_key")
     .where("engine_id", "=", params.engineId)
-    .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null);
+    .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null)
+    .where(outboxPayloadRequiresAdvancement());
   if (params.sessionId) {
     query = query.where("session_id", "=", params.sessionId);
   }

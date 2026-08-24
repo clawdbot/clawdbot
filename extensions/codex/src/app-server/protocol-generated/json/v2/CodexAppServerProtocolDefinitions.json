@@ -299,6 +299,7 @@
             "usageLimitExceeded",
             "serverOverloaded",
             "cyberPolicy",
+            "misalignmentPolicyViolation",
             "internalServerError",
             "unauthorized",
             "badRequest",
@@ -623,6 +624,37 @@
       ],
       "type": "string"
     },
+    "ImageGenerationFailure": {
+      "oneOf": [
+        {
+          "properties": {
+            "limitId": {
+              "type": "string"
+            },
+            "resetsAt": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "usageLimitExceeded"
+              ],
+              "title": "UsageLimitExceededImageGenerationFailureType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "limitId",
+            "type"
+          ],
+          "title": "UsageLimitExceededImageGenerationFailure",
+          "type": "object"
+        }
+      ]
+    },
     "InputModality": {
       "description": "Canonical user-input modality tags advertised by a model.",
       "oneOf": [
@@ -853,6 +885,17 @@
             "null"
           ]
         },
+        "multiAgentVersion": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MultiAgentVersion"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Multi-agent runtime declared by this model, when available."
+        },
         "serviceTiers": {
           "default": [],
           "items": {
@@ -946,6 +989,14 @@
             "null"
           ]
         },
+        "retirementAt": {
+          "description": "Informational Unix timestamp for this upgrade's scheduled retirement, if known.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "upgradeCopy": {
           "type": [
             "string",
@@ -982,6 +1033,15 @@
           "type": "string"
         }
       ]
+    },
+    "MultiAgentVersion": {
+      "description": "Multi-agent runtime supported by a model.",
+      "enum": [
+        "disabled",
+        "v1",
+        "v2"
+      ],
+      "type": "string"
     },
     "NetworkAccess": {
       "enum": [
@@ -2236,6 +2296,17 @@
         },
         {
           "properties": {
+            "failure": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageGenerationFailure"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "id": {
               "type": "string"
             },
@@ -2358,6 +2429,18 @@
     "ThreadSection": {
       "description": "An independently persisted, user-visible thread section.",
       "properties": {
+        "appearance": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadSectionAppearance"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional appearance synchronized across clients."
+        },
         "id": {
           "description": "Opaque UUIDv7 identity that remains stable when the section is renamed.",
           "type": "string"
@@ -2371,6 +2454,24 @@
         "id",
         "name"
       ],
+      "type": "object"
+    },
+    "ThreadSectionAppearance": {
+      "description": "Extensible visual presentation for a custom thread section.",
+      "properties": {
+        "color": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "ThreadSource": {

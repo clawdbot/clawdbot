@@ -90,4 +90,38 @@ describe("worker node enrollment", () => {
     }
     expect(decodePairingSetupCode(enrollment.setupCode, { nowMs: 0 }).url).toBe(expectedUrl);
   });
+
+  it("aborts pending enrollment waits idempotently and rejects enrollment after shutdown", async () => {
+    const intent = store.createIntent({
+      environmentId: "worker-enrollment-stop",
+      providerId: "fake-provider",
+      profileId: "test-profile",
+      profileSnapshot: { settings: {} },
+      provisionOperationId: "provision:worker-enrollment-stop",
+    });
+    const record = store.transition({
+      environmentId: intent.environmentId,
+      from: "requested",
+      to: "provisioning",
+      patch: { nodeDeviceId: "device-pending" },
+    });
+    const manager = createWorkerNodeEnrollmentManager({
+      store,
+      getConfig: () => createConfig(),
+      resolveAvailability: async () => ({ available: false }),
+    });
+    expect(manager).toHaveProperty("stop");
+    const enrollment = await manager.begin(record);
+    const waiting = enrollment.waitForDeviceId();
+    const waitRejected = expect(waiting).rejects.toMatchObject({ name: "AbortError" });
+
+    manager.stop();
+    manager.stop();
+
+    await waitRejected;
+    expect(enrollment.signal?.aborted).toBe(true);
+    const ensureEnrollment = vi.spyOn(store, "ensureNodeEnrollment");
+    await expect(manager.begin(record)).rejects.toMatchObject({ name: "AbortError" });
+    expect(ensureEnrollment).not.toHaveBeenCalled();
+  });
 });

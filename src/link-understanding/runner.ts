@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 // Link-understanding runner fetches allowed URLs and invokes configured commands with bounded content.
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "../media-understanding/defaults.js";
 import { resolveTimeoutMs } from "../media-understanding/resolve.js";
@@ -102,6 +102,8 @@ async function fetchLinkContent(params: {
   });
   try {
     if (!response.ok) {
+      // Do not await: a debug-capture tee settles only after its sibling branch cancels.
+      void cancelUnreadResponseBody(response);
       throw new Error(`Link fetch failed with HTTP ${response.status}`);
     }
     const buffer = await readResponseWithLimit(response, CLI_OUTPUT_MAX_BUFFER);

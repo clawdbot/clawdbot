@@ -23,8 +23,8 @@ working.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports version `0.147.0` or newer. The official plugin
-  still ships `@openai/codex` `0.147.0`; accepted external versions remain
-  subject to normal startup and capability validation.
+  ships `@openai/codex` `0.148.0`; accepted external versions remain subject to
+  normal startup and capability validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
 - Migration supports only `openai-curated` plugins that it observed as

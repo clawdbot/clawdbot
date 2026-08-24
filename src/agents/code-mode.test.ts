@@ -78,7 +78,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const result = await expectDefined(tools[0], "exec tool").execute("exec-terminal", {
-      code: 'return await tools.call("terminal_action", {});',
+      code: "return await terminal_action({});",
     });
 
     expect(result.details).toMatchObject({ status: "completed" });
@@ -196,7 +196,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const execTool = compacted.tools.find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
-    expect(execTool?.description).toContain("Use `return` to pass the final value back");
+    expect(execTool?.description).toContain("Return the final value");
   });
 
   it("hides normal tools when only the active agent enables code mode", () => {
@@ -256,26 +256,24 @@ describe("Code Mode catalog and model-visible surface", () => {
 
     expect(execTool.description).toContain("Node.js modules");
     expect(execTool.description).toContain("`require`/`import` are NOT available");
-    expect(execTool.description).toContain("process them in the first exec");
-    expect(execTool.description).toContain("do not spend another exec inspecting");
-    expect(execTool.description).toContain("dependent reads, checks, and follow-up calls in order");
+    expect(execTool.description).toContain("Enabled tools are async global functions");
+    expect(execTool.description).toContain("Await dependent calls in order");
+    expect(execTool.description).toContain("independent calls may run with Promise.all");
+    expect(execTool.description).toContain(
+      "Declared output fields may feed later calls in the same program",
+    );
+    expect(execTool.description).toContain(
+      'const [tool] = await catalog.search("..."); return await tool({...});',
+    );
     expect(execTool.description).toContain("normal tool policy and approvals");
-    expect(execTool.description).toContain("`ALL_TOOLS` is the complete compact catalog");
-    expect(execTool.description).toContain("`tools.search(query: string, options?)`");
-    expect(execTool.description).toContain("enabled catalog tools allowed by policy");
-    expect(execTool.description).toContain("`tools.describe(id: string)`");
-    expect(execTool.description).toContain("`tools.callValue(id: string, args?)`");
-    expect(execTool.description).toContain("`tools.call(id: string, args?)`");
-    expect(execTool.description).toContain("Never invent or transform a tool id");
-    expect(execTool.description).toContain("Quick-index arrows show trusted declared output hints");
-    expect(execTool.description).toContain("`-> ?` means never guess result field names");
-    expect(execTool.description).toContain("never guess result field names");
-    expect(execTool.description).toContain("return the raw tool value unchanged");
-    expect(execTool.description).toContain("final dependent call after declared-output calls");
-    expect(execTool.description).toContain("do not wrap it in the requested answer shape");
-    expect(execTool.description).toContain("filter or map it only in a later exec");
-    expect(execTool.description).toContain("returns its JSON value directly");
-    expect(execTool.description).toContain("const hit = ALL_TOOLS.find");
+    expect(execTool.description).toContain("`catalog.search(query)`");
+    expect(execTool.description).toContain("results are callable");
+    expect(execTool.description).toContain("`-> ?` means unknown output");
+    expect(execTool.description).toContain("do not feed it into guessed field-dependent logic");
+    expect(execTool.description).toContain("use a later `exec` for dependent composition");
+    expect(execTool.description).not.toContain("ALL_TOOLS");
+    expect(execTool.description).not.toContain("tools.call");
+    expect(execTool.description).not.toContain("exact id");
     expect(execTool.description).toContain('"javascript" or "typescript"');
     expect(execTool.description).toContain("never a shell command");
     expect(execTool.description).toContain("do not retry failed shell source");
@@ -288,25 +286,35 @@ describe("Code Mode catalog and model-visible surface", () => {
 
     expect(parameters.properties?.code?.description).toContain("no Python, shell");
     expect(parameters.properties?.code?.description).toContain(
-      "a trailing expression is discarded and yields `null`",
+      "a trailing expression yields `null`",
     );
     expect(parameters.properties?.code?.description).toContain(
-      'tools.callValue("openclaw:core:read", { path: "notes.txt" })',
-    );
-    expect(parameters.properties?.code?.description).toContain("Use `callValue`, not `call`");
-    expect(parameters.properties?.code?.description).toContain("return file.content");
-    expect(parameters.properties?.code?.description).toContain(
-      "return it first, then parse it in a later exec",
+      "Call enabled async globals directly",
     );
     expect(parameters.properties?.code?.description).toContain(
-      "exact ids from `ALL_TOOLS` or `tools.search(query)`",
+      "independent calls may use Promise.all",
     );
-    expect(parameters.properties?.code?.description).toContain("`ALL_TOOLS`");
-    expect(parameters.properties?.code?.description).toContain("`require`, `import`");
+    expect(parameters.properties?.code?.description).toContain(
+      "Declared output fields may feed later calls in the same program",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      'const [tool] = await catalog.search("..."); return await tool({...});',
+    );
+    expect(parameters.properties?.code?.description).toContain("`catalog.search(query)`");
+    expect(parameters.properties?.code?.description).toContain(
+      "cannot feed guessed dependent logic in the same program",
+    );
+    expect(parameters.properties?.code?.description).toContain("use a later `exec`");
+    expect(parameters.properties?.code?.description).not.toContain("ALL_TOOLS");
+    expect(parameters.properties?.code?.description).not.toContain("tools.call");
+    expect(parameters.properties?.code?.description).toContain("`require`, or `import`");
+    expect(parameters.properties?.restartSafe?.description).toContain("Do not set on a new exec");
     expect(parameters.properties?.restartSafe?.description).toContain(
-      "Leave unset for ordinary calls",
+      "only when OpenClaw explicitly requests replay after a gateway restart",
     );
-    expect(parameters.properties?.restartSafe?.description).toContain("not proven replay-safe");
+    expect(parameters.properties?.restartSafe?.description).toContain(
+      "never for write, edit, exec, or any mutation",
+    );
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );
@@ -353,7 +361,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     const codeDescription = parameters.properties?.code?.description;
 
     expect(execTool.description.length).toBeLessThan(2_400);
-    expect(execTool.description).toContain("parallelize independent work only");
+    expect(execTool.description).toContain("independent calls may run with Promise.all");
     expect(execTool.description).toContain("`setTimeout` and `clearTimeout`");
     expect(execTool.description).toContain("65536 bytes");
     expect(execTool.description).toContain("rerun with narrower args");
@@ -363,7 +371,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(codeDescription).not.toContain("`API` virtual declaration files");
   });
 
-  it("primes the exec schema with exact native tool ids and compact contracts", () => {
+  it("primes the exec schema with callable names and compact contracts", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const alpha = pluginTool("alpha_tool", "Another deferred description.");
     alpha.outputSchema = Type.Array(
@@ -380,11 +388,11 @@ describe("Code Mode catalog and model-visible surface", () => {
 
     const description = compacted.tools[0]?.description ?? "";
     expect(description).toContain("descriptions are intentionally deferred");
-    expect(description).toContain("OUTPUT DECLARED RULE");
     expect(description).toContain(
-      '- "openclaw:fake-code-mode:alpha_tool" { value?: string } -> Array<{ id: string; score: number }>',
+      "- alpha_tool { value?: string } -> Array<{ id: string; score: number }>",
     );
-    expect(description).toContain('- "openclaw:fake-code-mode:zeta_tool" { value?: string } -> ?');
+    expect(description).toContain("- zeta_tool { value?: string } -> ?");
+    expect(description).not.toContain("openclaw:fake-code-mode");
     expect(description.indexOf("alpha_tool")).toBeLessThan(description.indexOf("zeta_tool"));
     expect(description).not.toContain("Description stays deferred.");
     expect(description).not.toContain("Another deferred description.");
@@ -405,14 +413,14 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const description = compacted.tools[0]?.description ?? "";
-    expect(description).toContain('"openclaw:catalog-owner:tool_071"');
-    expect(description).not.toContain("additional OpenClaw/plugin tools omitted");
+    expect(description).toContain("tool_071");
+    expect(description).not.toContain("additional tools omitted");
   });
 
   it("keeps declared-output tools indexed when truncation drops unknown-output lines", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const pluginId = `fake-${"x".repeat(120)}`;
-    const catalogTools = Array.from({ length: 100 }, (_, index) =>
+    const catalogTools = Array.from({ length: 500 }, (_, index) =>
       pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
     );
     // Alphabetically last, but carries a declared output contract.
@@ -431,9 +439,9 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const description = compacted.tools[0]?.description ?? "";
-    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const indexStart = description.indexOf("Enabled async tool globals");
     const index = indexStart >= 0 ? description.slice(indexStart) : "";
-    expect(index).toContain("additional OpenClaw/plugin tools omitted");
+    expect(index).toContain("additional tools omitted");
     expect(index).toContain("zzz_contracted_tool");
     expect(index).toContain("-> { ok: boolean }");
   });
@@ -465,7 +473,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const description = compacted.tools[0]?.description ?? "";
-    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const indexStart = description.indexOf("Enabled async tool globals");
     const index = indexStart >= 0 ? description.slice(indexStart) : "";
     expect(index.length).toBeLessThanOrEqual(8_000);
     // The oversized line is skipped, but every short declared contract survives.
@@ -478,7 +486,7 @@ describe("Code Mode catalog and model-visible surface", () => {
   it("renders a deterministic truncated index across rebuilds", () => {
     const build = () => {
       const { config, catalogRef, tools } = createCodeModeHarness();
-      const catalogTools = Array.from({ length: 100 }, (_, index) =>
+      const catalogTools = Array.from({ length: 500 }, (_, index) =>
         pluginTool(
           `fake_${index.toString().padStart(3, "0")}`,
           "Deferred",
@@ -494,20 +502,20 @@ describe("Code Mode catalog and model-visible surface", () => {
         catalogRef,
       });
       const description = compacted.tools[0]?.description ?? "";
-      const start = description.indexOf("OpenClaw/plugin tool quick index");
+      const start = description.indexOf("Enabled async tool globals");
       return start >= 0 ? description.slice(start) : "";
     };
     const first = build();
     for (let i = 0; i < 5; i += 1) {
       expect(build()).toBe(first);
     }
-    expect(first).toContain("additional OpenClaw/plugin tools omitted");
+    expect(first).toContain("additional tools omitted");
   });
 
   it("bounds the model-visible native tool index", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const pluginId = `fake-${"x".repeat(120)}`;
-    const catalogTools = Array.from({ length: 100 }, (_, index) =>
+    const catalogTools = Array.from({ length: 500 }, (_, index) =>
       pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
     );
     const compacted = applyCodeModeCatalog({
@@ -520,11 +528,11 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const description = compacted.tools[0]?.description ?? "";
-    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const indexStart = description.indexOf("Enabled async tool globals");
     const index = indexStart >= 0 ? description.slice(indexStart) : "";
     expect(index.length).toBeLessThanOrEqual(8_000);
-    expect(index).toContain("additional OpenClaw/plugin tools omitted");
-    expect(index).not.toContain("fake_099");
+    expect(index).toContain("additional tools omitted");
+    expect(index).not.toContain("fake_499");
   });
 
   it("keeps a thousand-tool catalog index deterministic and within its character budget", () => {
@@ -542,13 +550,13 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
 
     const description = compacted.tools[0]?.description ?? "";
-    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const indexStart = description.indexOf("Enabled async tool globals");
     const index = indexStart >= 0 ? description.slice(indexStart) : "";
 
     expect(index.length).toBeLessThanOrEqual(8_000);
-    expect(index).toContain('"openclaw:catalog-owner:tool_0000"');
-    expect(index).toContain("additional OpenClaw/plugin tools omitted");
-    expect(index).not.toContain('"openclaw:catalog-owner:tool_1023"');
+    expect(index).toContain("tool_0000");
+    expect(index).toContain("additional tools omitted");
+    expect(index).not.toContain("tool_1023");
   });
 
   it("omits MCP and namespace guidance from the exec schema when the run catalog has neither", () => {
@@ -565,7 +573,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     const description = compacted.tools[0]?.description ?? "";
     // Base tool guidance always stays; MCP/API and namespace guidance drop out so
     // the model never probes an empty virtual API surface.
-    expect(description).toContain("`tools.search(query: string, options?)`");
+    expect(description).toContain("`catalog.search(query)`");
     expect(description).not.toContain("API.list");
     expect(description).not.toContain("MCP tools are available only through");
     expect(description).not.toContain("MCP namespace globals");
@@ -597,9 +605,54 @@ describe("Code Mode catalog and model-visible surface", () => {
     const description = compacted.tools[0]?.description ?? "";
     expect(description).toContain("API.list(prefix?)");
     expect(description).toContain("MCP tools are available only through");
-    expect(description).toContain('"openclaw:fake-code-mode:fake_noop"');
+    expect(description).toContain("- fake_noop ");
+    expect(description).not.toContain("openclaw:fake-code-mode");
     expect(description).not.toContain("github__create_issue");
     expect(description).not.toContain("malicious_prompt");
+  });
+
+  it("uses the canonical normalized callable names in the prompt index", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [
+        ...tools,
+        pluginTool("sessions_spawn", "Spawn a session"),
+        pluginTool("llm-task", "Run an LLM task"),
+        pluginTool("llm_task", "Run the exact-name task"),
+        pluginTool("catalog", "Collide with discovery"),
+        pluginTool("class", "Use a reserved word"),
+        pluginTool("9patch", "Start with a digit"),
+      ],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    expect(description).toContain("- sessions_spawn ");
+    expect(description).toContain("- llm_task ");
+    expect(description).toMatch(/- llm_task_[a-f0-9]{8} /u);
+    expect(description).toMatch(/- catalog_[a-f0-9]{8} /u);
+    expect(description).toMatch(/- class_[a-f0-9]{8} /u);
+    expect(description).toContain("- tool_9patch ");
+    expect(description).not.toContain("openclaw:fake-code-mode");
+  });
+
+  it("normalizes a lone llm-task tool to llm_task", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, pluginTool("llm-task", "Run an LLM task")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.tools[0]?.description).toContain("- llm_task ");
+    expect(compacted.tools[0]?.description).not.toMatch(/llm_task_[a-f0-9]{8}/u);
   });
 
   it("removes legacy Tool Search controls from the visible code mode surface", () => {

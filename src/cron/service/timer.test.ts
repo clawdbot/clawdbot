@@ -231,7 +231,7 @@ describe("cron service timer seam coverage", () => {
     expect(task.startedAt).toBe(now);
     expect(task.lastEventAt).toBe(now);
     expect(task.endedAt).toBe(now);
-    expect(task.cleanupAfter).toBeUndefined();
+    expect(task.cleanupAfter).toBe(now + 7 * 24 * 60 * 60_000);
 
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
