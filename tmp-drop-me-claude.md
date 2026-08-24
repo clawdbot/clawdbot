@@ -25,4 +25,36 @@
 - Canonical-19d Gate 2.7 examined 945 files while this journal is tracked: 639 GENUINE, 300 SAFE-NEW, the canonical six MIXED-CLOBBER rows, and zero FROZEN-STALE. Journal removal must return the terminal count to 944 files and 299 SAFE-NEW.
 - The six rows retain their reviewed dispositions: descendant-wake role-policy rehome (22), compaction-hook exact core (14), closed Code Mode trust rehome (2), nested lifecycle provenance rehome (1), message-tool `withTestDir` (2), and Telegram QA `withTestDir` (2). Latest upstream touched none.
 - Gate 2.5 enumerated 47 upstream-touched test/support paths and two candidate-feature intersections: install-sh and UI session-management groups. Both files passed, 152/152 tests.
-- Focused history, cron, HTTP, continuation reconciliation, commentary, and shutdown proof passed 276 tests. Five commentary stream-phase assertions failed identically on exact reviewed parent `9794b4a` in an isolated archive (20 pass, same five fail), and every local owner/dependency byte is unchanged by the third absorb; this is a proven pre-existing candidate baseline, not third-cycle drift.
+- Direct focused history, cron, HTTP, continuation reconciliation, commentary,
+  delivery, and shutdown proof passed 685 tests. The
+  `sessions-history-http.test.ts` E2E shard was blocked before collection by
+  the existing `TuiMainScreen` dependency export mismatch.
+- Five commentary stream-phase assertions failed identically on exact reviewed
+  parent `9794b4a` in a directly executed isolated archive (20 pass, same five
+  fail), and every local owner/dependency byte is unchanged by the third
+  absorb; this is a proven pre-existing candidate baseline, not third-cycle
+  drift.
+
+## §3 — direct static and dead-code proof
+
+- Production and test type checks directly reproduce the reviewed-candidate
+  dependency baseline: missing `FinishReason.TOO_MANY_TOOL_CALLS`, missing
+  named `markdown-it` types, missing `TuiMainScreen`, and their derived
+  implicit-any diagnostics. The targeted Oxlint wrapper reaches the same
+  plugin-SDK boundary failure before lint collection.
+- `check-changed` passed conflict-marker, max-lines, assertion-safety,
+  attribution, doctor-registry, extension/plugin-SDK export, duplicate,
+  coercion-helper, and dependency-pin guards. Its all-diff formatting spawn hit
+  OS `E2BIG`; targeted Oxfmt and direct Oxlint passed the affected owners.
+- `git diff --check`, exact upstream `src/skills`, zero candidate `r: skill`
+  label delta, merge-parent identity, local/tracking/server identity, and the
+  server savegame identity all pass directly.
+- Isolated Knip is exactly 6.8.0. Its first production-export scan found one
+  stale `ReadSessionMessagesAsyncOptions` re-export in
+  `src/gateway/session-transcript-readers.ts`; the type remains owned and
+  exported by `session-utils.fs.ts`, and no consumer used the redundant seam.
+  Removing that one export is a net-negative, behavior-neutral owner-local
+  cure.
+- After the cure, all five required isolated Knip 6.8.0 scans pass with zero
+  findings: production exports, full exports, script exports, production
+  unused files, and full unused files.
