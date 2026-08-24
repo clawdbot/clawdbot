@@ -1,6 +1,7 @@
 // Clickclack tests cover gateway plugin behavior.
 import { EventEmitter } from "node:events";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedClickClackAccount } from "./types.js";
 
@@ -431,7 +432,7 @@ describe("ClickClack gateway", () => {
   it("does not dispatch queued websocket events after the account stops", async () => {
     const socket = new FakeSocket();
     mocks.client.websocket.mockReturnValue(socket);
-    const firstDispatch = Promise.withResolvers<void>();
+    const firstDispatch = createDeferred<void>();
     mocks.handleClickClackInbound.mockImplementationOnce(() => firstDispatch.promise);
     const abort = new AbortController();
     const ctx = createGatewayContext(abort.signal);
@@ -462,8 +463,8 @@ describe("ClickClack gateway", () => {
     async (interruptedStep) => {
       const socket = new FakeSocket();
       mocks.client.websocket.mockReturnValue(socket);
-      const stepStarted = Promise.withResolvers<void>();
-      const releaseStep = Promise.withResolvers<void>();
+      const stepStarted = createDeferred<void>();
+      const releaseStep = createDeferred<void>();
       const waitForShutdown = async () => {
         stepStarted.resolve();
         await releaseStep.promise;
