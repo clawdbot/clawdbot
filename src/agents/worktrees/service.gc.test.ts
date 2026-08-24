@@ -111,7 +111,10 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect((await new ManagedWorktreeService({ env, now: () => now }).gc()).removed).toEqual([]);
   });
 
-  it("preserves an ignored nested foreign repository", async () => {
+  it.each([
+    ["an ignored nested foreign repository", true],
+    ["an empty ignored nested foreign repository", false],
+  ])("preserves %s", async (_description, hasLocalState) => {
     await fs.writeFile(path.join(repo, ".gitignore"), "vendor/\n");
     await git(repo, "add", ".gitignore");
     await git(repo, "commit", "-m", "ignore vendored repositories");
@@ -119,12 +122,22 @@ describe("ManagedWorktreeService garbage collection", () => {
     const created = await materializeRunOwnedFixture("ignored-foreign", "workboard");
     const nested = await initializeNestedRepository(created.path, "vendor/dependency");
     const localState = path.join(nested, "local.txt");
-    await fs.writeFile(localState, "keep foreign repository state\n");
+    if (hasLocalState) {
+      await fs.writeFile(localState, "keep foreign repository state\n");
+    } else {
+      expect(await fs.readdir(nested)).toEqual([".git"]);
+      expect(
+        await git(created.path, "ls-files", "--others", "--ignored", "--exclude-standard"),
+      ).toContain("vendor/dependency/");
+    }
     expect(await git(created.path, "ls-files", "--others", "--exclude-standard")).toBe("");
     now += IDLE_GC_MS + 1;
 
     expect((await service.gc()).removed).toEqual([]);
-    expect(await fs.readFile(localState, "utf8")).toBe("keep foreign repository state\n");
+    expect((await fs.stat(path.join(nested, ".git"))).isDirectory()).toBe(true);
+    if (hasLocalState) {
+      expect(await fs.readFile(localState, "utf8")).toBe("keep foreign repository state\n");
+    }
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
   });
 
