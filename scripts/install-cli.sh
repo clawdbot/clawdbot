@@ -198,7 +198,7 @@ quote_json_string() {
     char="${value:index:1}"
     case "$char" in
       '"') JSON_STRING+='\"' ;;
-      \\) JSON_STRING+='\\' ;;
+      \\) JSON_STRING+="\\\\" ;;
       *)
         printf -v code '%d' "'$char"
         if ((code < 32)); then
@@ -1775,7 +1775,7 @@ main() {
   commit_wrapper_backup
 
   refresh_gateway_service_if_loaded
-  emit_json done version "$installed_version"
+  emit_json "done" version "$installed_version"
   log "OpenClaw installed (${installed_version})."
 
   if [[ "$RUN_ONBOARD" -eq 1 ]]; then
