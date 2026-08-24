@@ -171,6 +171,32 @@ value into guessed field-dependent logic in the same program. Observe the raw
 value, then use a later `exec` for dependent composition. This costs an extra
 model turn, but prevents the model from guessing field names.
 
+### Recover from tool errors
+
+Nested tool failures are ordinary JavaScript errors. Guest code can catch them
+and return the information needed to choose the next action:
+
+```javascript
+try {
+  return await terminal({ action: "list" });
+} catch (error) {
+  return { status: "unavailable", error: error.message };
+}
+```
+
+JavaScript syntax errors, TypeScript transform errors, and tool failures proven
+to occur before execution become failed `exec` results that the model can read
+and correct across successive turns. A failed tool call does not automatically
+end the agent run when OpenClaw can prove that no nested action started.
+
+OpenClaw does not automatically replay a failed program. If earlier calls
+already ran or a failed call may have partially applied, OpenClaw first limits
+recovery to an authorized read-only inspection of the current state. It does
+not expose writes, sends, shell commands, or other mutations during that
+reconciliation. Cancellation, explicitly terminal tool outcomes, sandbox
+restrictions, approval requirements, and tool-policy denials retain their
+existing behavior.
+
 ### Verify the active surface
 
 To confirm the model payload shape while debugging, run the Gateway with
@@ -953,6 +979,15 @@ Nested calls project into the transcript as real tool calls so support
 bundles show what happened, with the projection identifying the parent
 code-mode tool call and the nested tool id.
 
+Nested tool failures cross into the guest as catchable JavaScript errors. If
+guest code does not catch an error, `exec` or `wait` returns a failed tool
+result. Proven no-start failures and guest-only errors allow ordinary model
+recovery; possible nested side effects require authorized read-only
+reconciliation before any further action. Network-controlled tool output and
+errors retain their existing untrusted-content wrapping and sanitization;
+recovering from a failure does not grant new permissions or replay completed
+side effects.
+
 Parallel nested calls are allowed up to `maxPendingToolCalls`.
 
 ## Run and snapshot lifecycle
@@ -1151,6 +1186,9 @@ Code mode coverage should prove:
 - Tool Search control tools are hidden from both the model surface and the
   hidden catalog
 - nested calls preserve approval and hook behavior
+- caught and uncaught nested failures remain recoverable without replaying
+  previously executed side effects
+- network-controlled failures retain untrusted-content wrapping and sanitization
 - shell `exec` is hidden from the model but callable as a guest global when
   allowed
 - recursive code-mode `exec` and `wait` are not callable from guest code

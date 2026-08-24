@@ -399,15 +399,15 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     );
     void fetchSessionMenuWork({
       client,
-      pullRequestsAvailable:
+      loadPullRequests:
         isGatewayMethodAdvertised(
           context.gateway.snapshot,
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        ) === true,
-      sessionKey: session.key,
-      agentId: parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
-      loadPullRequests: () => store.load(this, pullRequestKey),
+        ) === true
+          ? () => store.load(this, pullRequestKey)
+          : undefined,
       worktreeId: session.worktreeId,
+      execNode: session.execNode,
     }).then((work) => {
       if (version === this.sessionMenuWorkVersion) {
         this.updateState("sessionMenuWork", { loading: false, ...work });

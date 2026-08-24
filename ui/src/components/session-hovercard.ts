@@ -5,11 +5,15 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
-import { activityPersonLocation } from "../app-route-paths.ts";
 import { i18n, t } from "../i18n/index.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import {
+  personActivityLink,
+  renderPersonAvatarLink,
+  renderPersonName,
+  type PersonActivityRouting,
+} from "./person-activity-link.ts";
 import { sessionOwnerInitials, type SessionCreatedActor } from "./session-owner-chip.ts";
 import { renderSessionProgressCard } from "./session-progress-card.ts";
 import "./viewer-facepile.ts";
@@ -28,17 +32,11 @@ type SessionHovercardAvatarAuth = {
   authReady: boolean;
 };
 
-/** Opens the Activity feed for one identity; supplied by the hovercard host that owns routing. */
-export type SessionHovercardPersonActivity = {
-  basePath: string;
-  navigate: (personId: string) => void;
-};
-
 type SessionHovercardInput = {
   row?: SidebarSessionHovercardRow;
   selfUserId?: string;
   avatarAuth?: SessionHovercardAvatarAuth;
-  personActivity?: SessionHovercardPersonActivity;
+  personActivity?: PersonActivityRouting;
   pullRequests?: ControlUiSessionPullRequestSnapshot;
   progressCard?: ProgressCard | null;
 };
@@ -179,38 +177,6 @@ function renderHeader(row: SidebarSessionHovercardRow) {
   </header>`;
 }
 
-type PersonActivityLink = { href: string; open: (event: MouseEvent) => void };
-
-function personActivityLink(
-  personId: string,
-  personActivity: SessionHovercardPersonActivity | undefined,
-): PersonActivityLink | null {
-  if (!personActivity) {
-    return null;
-  }
-  return {
-    href: activityPersonLocation(personId, personActivity.basePath).href,
-    open: (event: MouseEvent) => {
-      if (!shouldHandleNavigationClick(event)) {
-        return;
-      }
-      event.preventDefault();
-      personActivity.navigate(personId);
-    },
-  };
-}
-
-function renderPersonName(label: string, link: PersonActivityLink | null, className: string) {
-  return link
-    ? html`<a
-        class="${className} session-hovercard__identity-link"
-        href=${link.href}
-        @click=${link.open}
-        >${label}</a
-      >`
-    : html`<span class=${className}>${label}</span>`;
-}
-
 /**
  * Keeps the locale's own "with {name}" phrasing and list separators while making each
  * name its own link. A translation that lost its placeholder falls back to plain text
@@ -219,7 +185,7 @@ function renderPersonName(label: string, link: PersonActivityLink | null, classN
 function renderParticipantNames(
   participants: readonly SessionCreatedActor[],
   formattedNames: string,
-  personActivity: SessionHovercardPersonActivity | undefined,
+  personActivity: PersonActivityRouting | undefined,
 ) {
   const [prefix, suffix] = t("sessionsView.withParticipant").split("{name}");
   if (suffix === undefined) {
@@ -334,17 +300,7 @@ function renderSessionContext({
           class="session-hovercard__context-row session-hovercard__identity-row"
           aria-label=${[creatorLabel, participantSummary].filter(Boolean).join(", ")}
         >
-          ${creatorActivity
-            ? // Decorative twin of the name link: the name below carries the accessible target.
-              html`<a
-                class="session-hovercard__identity-avatar-link"
-                href=${creatorActivity.href}
-                tabindex="-1"
-                aria-hidden="true"
-                @click=${creatorActivity.open}
-                >${creatorAvatar}</a
-              >`
-            : creatorAvatar}
+          ${renderPersonAvatarLink(creatorAvatar, creatorActivity)}
           <span class="session-hovercard__identity-copy">
             ${creatorLabel
               ? renderPersonName(creatorLabel, creatorActivity, "session-hovercard__identity-name")

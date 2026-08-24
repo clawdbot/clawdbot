@@ -374,9 +374,11 @@ async function sendDiscordText(params: DiscordTextSendParams) {
       flags,
       replyTo: chunkReplyTo,
     });
-    await onPlatformSendDispatch?.();
     const result = (await request(
-      () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+      async () => {
+        await onPlatformSendDispatch?.();
+        return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body });
+      },
       "text",
       { safety: "nonce-protected-create" },
     )) as { id: string; channel_id: string };
@@ -479,9 +481,11 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
   });
   let res: { id: string; channel_id: string };
   try {
-    await onPlatformSendDispatch?.();
     res = (await request(
-      () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+      async () => {
+        await onPlatformSendDispatch?.();
+        return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body });
+      },
       "media",
       { safety: "nonce-protected-create" },
     )) as { id: string; channel_id: string };
@@ -527,6 +531,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       allowedMentions,
       maxChars,
       onResult,
+      onPlatformSendDispatch,
     });
     for (const id of followup.platformMessageIds) {
       if (id) {

@@ -25,6 +25,11 @@ const DIFF_ARTIFACT_MAX_BYTES_PER_ENTRY = 32 * 1024 * 1024;
 const DIFF_ARTIFACT_MAX_BYTES_PER_NAMESPACE = 256 * 1024 * 1024;
 
 export function registerDiffsPlugin(api: OpenClawPluginApi): void {
+  // CLI metadata has no runtime state, and this plugin exposes no CLI commands.
+  if (api.registrationMode === "cli-metadata") {
+    return;
+  }
+
   const store = new DiffArtifactStore({
     rootDir: path.join(resolvePreferredOpenClawTmpDir(), "openclaw-diffs"),
     blobStore: api.runtime.state.openBlobStore<DiffArtifactBlobMetadata>({

@@ -1,7 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { ReactiveElement, render } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { activityPersonLocation } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -17,11 +16,9 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
-import {
-  renderSessionHovercard,
-  type SessionHovercardPersonActivity,
-} from "./session-hovercard.ts";
+import { renderSessionHovercard } from "./session-hovercard.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
 import {
   SESSION_MENU_OPEN_EVENT,
@@ -554,19 +551,10 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     ];
   }
 
-  private personActivity(): SessionHovercardPersonActivity | undefined {
+  private personActivity(): PersonActivityRouting | undefined {
     const context = this.applicationContext;
-    if (!context) {
-      return undefined;
-    }
-    return {
-      basePath: context.basePath,
-      navigate: (personId) => {
-        // The card outlives its trigger row after navigation, so close it with the same call.
-        this.close();
-        context.navigate("activity", activityPersonLocation(personId, context.basePath));
-      },
-    };
+    // The card outlives its trigger row after navigation, so close it on the way out.
+    return context ? personActivityRouting(context, () => this.close()) : undefined;
   }
 
   private close(animateExit = false): void {

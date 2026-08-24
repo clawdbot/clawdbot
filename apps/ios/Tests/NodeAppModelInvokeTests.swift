@@ -974,7 +974,47 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     }
 }
 
+@MainActor
+private final class BatteryMonitoringDevice: UIDevice {
+    private var monitoringEnabled: Bool
+    private(set) var monitoringStatesDuringBatteryReads: [Bool] = []
+
+    init(monitoringEnabled: Bool) {
+        self.monitoringEnabled = monitoringEnabled
+        super.init()
+    }
+
+    override var isBatteryMonitoringEnabled: Bool {
+        get { self.monitoringEnabled }
+        set { self.monitoringEnabled = newValue }
+    }
+
+    override var batteryLevel: Float {
+        self.monitoringStatesDuringBatteryReads.append(self.monitoringEnabled)
+        return 0.5
+    }
+
+    override var batteryState: UIDevice.BatteryState {
+        self.monitoringStatesDuringBatteryReads.append(self.monitoringEnabled)
+        return .charging
+    }
+}
+
 @Suite(.serialized) struct NodeAppModelInvokeTests {
+    @Test @MainActor func `device status battery snapshot preserves monitoring ownership`() {
+        for initial in [false, true] {
+            let device = BatteryMonitoringDevice(monitoringEnabled: initial)
+
+            let payload = DeviceStatusService.batteryStatus(device: device)
+
+            #expect(payload.level == 0.5)
+            #expect(payload.state == .charging)
+            #expect(!device.monitoringStatesDuringBatteryReads.isEmpty)
+            #expect(device.monitoringStatesDuringBatteryReads.allSatisfy { $0 })
+            #expect(device.isBatteryMonitoringEnabled == initial)
+        }
+    }
+
     @Test @MainActor func `health summary routes a fixed period to the health service`() async throws {
         let service = MockHealthSummaryService()
         let appModel = NodeAppModel(healthSummaryService: service)
@@ -7542,5 +7582,4 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             try await appModel.sendVoiceTranscript(text: "hello", sessionKey: "main")
         }
     }
-
 }

@@ -14,6 +14,7 @@ import type {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext } from "../../app/context.ts";
+import { observeNativeGateway } from "../../app/native-editor-locality.runtime.ts";
 import type {
   NativeGatewaysCapability,
   NativeGatewaysSnapshot,
@@ -450,6 +451,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
 
   constructor() {
     super();
+    observeNativeGateway(this);
     void new SubscriptionsController(this)
       .watch(
         () => this.context?.overlays,

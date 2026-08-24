@@ -3011,6 +3011,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       "activate_graph",
       "get_status",
     ]);
+    expect(response?.output?.slice(1)).toEqual(doneFunctionCalls.map(({ item }) => item));
     expect(events.map((event) => event.data)).toContain("[DONE]");
   });
 

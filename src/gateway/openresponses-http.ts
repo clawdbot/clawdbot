@@ -1337,7 +1337,7 @@ export async function handleOpenResponsesHttpRequest(
             output_index: nextStreamOutputIndex,
             item: completedFunctionCallItem,
           });
-          functionCallItems.push(functionCallItem);
+          functionCallItems.push(completedFunctionCallItem);
           nextStreamOutputIndex += 1;
         }
 

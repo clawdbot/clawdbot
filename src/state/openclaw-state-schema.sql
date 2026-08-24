@@ -1012,6 +1012,11 @@ CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
   ON node_worker_launches(completed_at_ms, launch_id)
   WHERE completed_at_ms IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
+  launch_id TEXT PRIMARY KEY,
+  container_json TEXT
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS voicewake_triggers (
   config_key TEXT NOT NULL,
   position INTEGER NOT NULL,

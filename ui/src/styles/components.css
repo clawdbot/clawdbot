@@ -576,19 +576,19 @@ openclaw-session-owner-chip {
   height: 8px;
   border-radius: var(--radius-full);
   background: var(--danger);
-  box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 50%, transparent);
   animation: pulse-subtle 2s ease-in-out infinite;
 }
 
 .statusDot.ok {
   background: var(--ok);
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 50%, transparent);
   animation: none;
 }
 
 .statusDot.warn {
   background: var(--warn);
-  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 50%, transparent);
   animation: none;
 }
 
@@ -702,7 +702,7 @@ openclaw-session-owner-chip {
 }
 
 .btn.danger:hover {
-  background: rgba(239, 68, 68, 0.15);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
 }
 
 .btn--sm {
@@ -1756,14 +1756,22 @@ select.input {
 }
 
 .callout.info {
-  border-color: rgba(59, 130, 246, 0.25);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.04) 100%);
+  border-color: color-mix(in srgb, var(--info) 25%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--info) 8%, transparent) 0%,
+    color-mix(in srgb, var(--info) 4%, transparent) 100%
+  );
   color: var(--info);
 }
 
 .callout.success {
-  border-color: rgba(34, 197, 94, 0.25);
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.08) 0%, rgba(34, 197, 94, 0.04) 100%);
+  border-color: color-mix(in srgb, var(--ok) 25%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--ok) 8%, transparent) 0%,
+    color-mix(in srgb, var(--ok) 4%, transparent) 100%
+  );
   color: var(--ok);
 }
 
@@ -1883,7 +1891,7 @@ select.input {
 
 .compaction-indicator--active {
   color: var(--info);
-  border-color: rgba(59, 130, 246, 0.35);
+  border-color: color-mix(in srgb, var(--info) 35%, transparent);
 }
 
 .compaction-indicator--active svg {
@@ -1892,17 +1900,17 @@ select.input {
 
 .compaction-indicator--complete {
   color: var(--ok);
-  border-color: rgba(34, 197, 94, 0.35);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 .compaction-indicator--fallback {
   color: var(--warn-strong);
-  border-color: rgba(217, 119, 6, 0.35);
+  border-color: color-mix(in srgb, var(--warn-strong) 35%, transparent);
 }
 
 .compaction-indicator--fallback-cleared {
   color: var(--ok);
-  border-color: rgba(34, 197, 94, 0.35);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 @keyframes compaction-spin {
@@ -2440,12 +2448,12 @@ openclaw-chat-session-rail {
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion {
   color: var(--hljs-deletion);
-  background: rgba(248, 81, 73, 0.12);
+  background: var(--danger-subtle);
 }
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition {
   color: var(--hljs-addition);
-  background: rgba(46, 160, 67, 0.12);
+  background: var(--ok-subtle);
 }
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-emphasis {
@@ -2707,19 +2715,19 @@ openclaw-chat-session-rail {
 
 .chip-ok {
   color: var(--ok);
-  border-color: rgba(34, 197, 94, 0.3);
+  border-color: color-mix(in srgb, var(--ok) 30%, transparent);
   background: var(--ok-subtle);
 }
 
 .chip-warn {
   color: var(--warn);
-  border-color: rgba(245, 158, 11, 0.3);
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
   background: var(--warn-subtle);
 }
 
 .chip-danger {
   color: var(--danger);
-  border-color: rgba(239, 68, 68, 0.3);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
   background: var(--danger-subtle);
 }
 
@@ -3035,7 +3043,7 @@ td.data-table-key-col {
 
 .log-level.info {
   color: var(--info);
-  border-color: rgba(59, 130, 246, 0.3);
+  border-color: color-mix(in srgb, var(--info) 30%, transparent);
 }
 
 .log-level.warn {
@@ -3056,7 +3064,7 @@ td.data-table-key-col {
 
 .log-chip.info {
   color: var(--info);
-  border-color: rgba(59, 130, 246, 0.3);
+  border-color: color-mix(in srgb, var(--info) 30%, transparent);
 }
 
 .log-chip.warn {
@@ -4433,7 +4441,11 @@ td.data-table-key-col {
   overscroll-behavior: contain;
   padding: clamp(18px, 3vw, 28px);
   background:
-    radial-gradient(circle at top right, rgba(255, 92, 92, 0.055), transparent 32%),
+    radial-gradient(
+      circle at top right,
+      color-mix(in srgb, var(--accent) 5.5%, transparent),
+      transparent 32%
+    ),
     radial-gradient(circle at bottom left, rgba(20, 184, 166, 0.045), transparent 28%),
     linear-gradient(
       180deg,
@@ -6274,4 +6286,19 @@ td.data-table-key-col {
   100% {
     transform: rotate(-10deg);
   }
+}
+
+/* Identity links (a name or avatar opening that person's Activity feed) stay neutral
+   until hover so identity chrome keeps its weight in dense surfaces. */
+.person-activity-link {
+  color: inherit;
+}
+
+.person-activity-link:not(:hover, :focus-visible) {
+  text-decoration: none;
+}
+
+.person-activity-avatar-link {
+  display: block;
+  line-height: 0;
 }

@@ -9,6 +9,7 @@ describe("irc outbound chunking", () => {
     expect(ircOutboundBaseAdapter.deliveryMode).toBe("direct");
     expect(ircOutboundBaseAdapter.chunkerMode).toBe("markdown");
     expect(ircOutboundBaseAdapter.textChunkLimit).toBe(350);
+    expect(ircPlugin.outbound?.sendFormattedText).toBeTypeOf("function");
   });
 });
 

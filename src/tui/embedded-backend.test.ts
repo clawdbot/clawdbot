@@ -751,6 +751,27 @@ describe("EmbeddedTuiBackend", () => {
     );
   });
 
+  it("preserves an empty restrictive model policy for the selected agent", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { modelPolicy: { allow: ["openai/*"] } },
+          work: { modelPolicy: { allow: ["openai/*"] } },
+        },
+      },
+    });
+    loadGatewayModelCatalogMock.mockReturnValue([
+      { id: "claude-sonnet", name: "Claude Sonnet", provider: "anthropic" },
+    ]);
+    buildAllowedModelSetMock.mockReturnValueOnce({ allowedCatalog: [] });
+
+    await expect(new EmbeddedTuiBackend().listModels({ agentId: "work" })).resolves.toEqual([]);
+    expect(buildAllowedModelSetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "work" }),
+    );
+  });
+
   it("patches wildcard replace-mode sessions against the same full catalog as model listing", async () => {
     getRuntimeConfigMock.mockReturnValue({
       agents: {

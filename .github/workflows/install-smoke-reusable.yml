@@ -683,6 +683,7 @@ jobs:
             -e CI=1 \
             -v "${RUNNER_TEMP}/candidate.tar.gz:/input/candidate.tar.gz:ro" \
             -v "${package_dir}:/output" \
+            -v "$PWD/.release-harness:/harness:ro" \
             openclaw-install-candidate-packager:local \
             -lc '
               set -euo pipefail
@@ -693,6 +694,11 @@ jobs:
                 --no-same-permissions \
                 -C "$source_dir"
               cd "$source_dir"
+              preflight_args=(--source-dir "$source_dir")
+              if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+                preflight_args+=(--allow-unreleased-changelog)
+              fi
+              node /harness/scripts/package-source-preflight.mjs "${preflight_args[@]}"
               mkdir -p /tmp/corepack
               corepack enable --install-directory /tmp/corepack
               export PATH="/tmp/corepack:$PATH"

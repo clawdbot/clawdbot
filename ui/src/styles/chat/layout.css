@@ -4146,7 +4146,20 @@ button.chat-pr__diff {
   }
 
   .agent-chat__input .agent-chat__composer-controls {
+    --chat-mobile-model-control-min-width: 144px;
+    --chat-mobile-picker-padding-end: 10px;
+    --chat-mobile-picker-padding-start: 10px;
     min-width: 187px;
+  }
+
+  .agent-chat__input
+    .agent-chat__composer-controls:has(
+      .agent-chat__composer-run-status,
+      .agent-chat__session-overrides-pill
+    ) {
+    --chat-mobile-model-control-min-width: 156px;
+    --chat-mobile-picker-padding-end: 6px;
+    --chat-mobile-picker-padding-start: 6px;
   }
 
   .agent-chat__input .agent-chat__composer-run-status,
@@ -4197,7 +4210,7 @@ button.chat-pr__diff {
      text yields before either picker does. */
   .agent-chat__input .agent-chat__composer-controls .chat-composer-model-control {
     flex: 0 1 auto;
-    min-width: 144px;
+    min-width: var(--chat-mobile-model-control-min-width);
   }
 
   .agent-chat__input .agent-chat__composer-controls .chat-controls__model-picker {
@@ -4219,7 +4232,14 @@ button.chat-pr__diff {
     height: 44px;
     min-height: 44px;
     gap: 4px;
-    padding: 0 2px 0 4px;
+    padding: 0 var(--chat-mobile-picker-padding-end, 2px) 0
+      var(--chat-mobile-picker-padding-start, 4px);
+  }
+
+  /* Shift two pixels toward the label edge to balance the leading zap icon. */
+  .agent-chat__input .agent-chat__composer-controls .chat-controls__effort-trigger--fast {
+    padding-inline: calc(var(--chat-mobile-picker-padding-start) - 1px)
+      calc(var(--chat-mobile-picker-padding-end) + 1px);
   }
 
   .agent-chat__input .chat-controls__model-menu,
@@ -5304,26 +5324,6 @@ button.chat-pr__diff {
   outline: none;
 }
 
-.chat-controls__model-reset {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 24px;
-  padding: 0 7px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.chat-controls__model-reset:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--border) 45%, transparent);
-  color: var(--text);
-}
-
 .chat-controls__reasoning-state {
   display: inline-flex;
   align-items: center;
@@ -5341,40 +5341,10 @@ button.chat-pr__diff {
   text-overflow: ellipsis;
 }
 
-/* Muted value = inherited model default; no reset shows because there is no
-   override to clear. */
+/* Muted value identifies the inherited model default. */
 .chat-controls__reasoning-value--inherit {
   color: var(--muted);
   font-weight: 500;
-}
-
-.chat-controls__reasoning-reset {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 3px;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: lowercase;
-}
-
-.chat-controls__reasoning-reset:hover:not(:disabled),
-.chat-controls__reasoning-reset:focus-visible {
-  background: var(--bg-hover);
-  color: var(--text);
-  outline: none;
-}
-
-.chat-controls__reasoning-reset:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 .chat-controls__effort-heading {

@@ -352,10 +352,24 @@ export function applySubagentWaitOutcome(params: {
   // primary normalizers, so apply the canonical classification here instead
   // of re-enumerating reason groups.
   if (terminalOutcome) {
+    // Keep main's subagent-specific classifier: it preserves explicit
+    // restart/aborted stop reasons as cancellation while still letting real
+    // provider timeouts through (openclaw#125407).
     switch (classifySubagentTerminalOutcome(terminalOutcome)) {
-      case "timeout":
-        outcome = { status: "timeout" };
+      case "timeout": {
+        // A run that failed inside the lifecycle error retry grace window is
+        // surfaced to waiters as a timeout carrying the failure text and
+        // `pendingError: true` (see createPendingErrorTimeoutSnapshot). Keep
+        // that cause so the announce can report why the child died instead of
+        // a bare "timed out". Genuine budget timeouts have no pendingError and
+        // stay unchanged.
+        const pendingErrorText =
+          params.wait?.pendingError === true ? (terminalOutcome.error ?? waitError) : undefined;
+        outcome = pendingErrorText
+          ? { status: "timeout", error: pendingErrorText }
+          : { status: "timeout" };
         break;
+      }
       case "cancellation":
         outcome = { status: "error", error: "subagent run terminated" };
         break;
@@ -408,19 +422,12 @@ function describeSubagentOutcome(outcome?: SubagentRunOutcome): string {
 }
 
 function formatChildResultData(resultText?: string | null): string {
-  const text = resultText?.trim() || "(no output)";
-  const boundedText =
-    text.length > MAX_CHILD_COMPLETION_RESULT_CHARS
-      ? `${truncateUtf16Safe(
-          text,
-          MAX_CHILD_COMPLETION_RESULT_CHARS - CHILD_RESULT_TRUNCATION_NOTICE.length,
-        )}${CHILD_RESULT_TRUNCATION_NOTICE}`
-      : text;
   return (
     wrapPromptDataBlock({
       label: "Child result",
-      text: boundedText,
-      maxChars: MAX_CHILD_COMPLETION_RESULT_CHARS,
+      text: resultText?.trim() || "(no output)",
+      maxEscapedChars: MAX_CHILD_COMPLETION_RESULT_CHARS,
+      truncationMarker: CHILD_RESULT_TRUNCATION_NOTICE,
     }) || "Child result: (no output)"
   );
 }
@@ -627,15 +634,6 @@ function formatTokenCount(value?: number) {
   return String(Math.round(value));
 }
 
-// Any token usage signal at all: absent usage is not the same fact as zero usage.
-function hasTokenUsageData(entry: ReturnType<typeof readSubagentSessionEntry>) {
-  return (
-    typeof entry?.inputTokens === "number" ||
-    typeof entry?.outputTokens === "number" ||
-    resolveFreshSessionTotalTokens(entry) !== undefined
-  );
-}
-
 export async function buildCompactAnnounceStatsLine(params: {
   sessionKey: string;
   startedAt?: number;
@@ -649,7 +647,11 @@ export async function buildCompactAnnounceStatsLine(params: {
   let entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
-    if (hasTokenUsageData(entry)) {
+    if (
+      typeof entry?.inputTokens === "number" ||
+      typeof entry?.outputTokens === "number" ||
+      resolveFreshSessionTotalTokens(entry) !== undefined
+    ) {
       break;
     }
     if (!isFastTestMode()) {
@@ -660,11 +662,10 @@ export async function buildCompactAnnounceStatsLine(params: {
     entry = subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, params.sessionKey);
   }
 
-  // Still absent after the wait budget: unknown, not a zero that reads as "did no work".
-  const tokenUsageKnown = hasTokenUsageData(entry);
-  const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;
-  const output = typeof entry?.outputTokens === "number" ? entry.outputTokens : 0;
-  const ioTotal = input + output;
+  const input = entry?.inputTokens;
+  const output = entry?.outputTokens;
+  const hasDirectionalUsage = typeof input === "number" || typeof output === "number";
+  const ioTotal = (input ?? 0) + (output ?? 0);
   const promptCache = resolveFreshSessionTotalTokens(entry);
   const runtimeMs =
     typeof params.startedAt === "number" && typeof params.endedAt === "number"
@@ -673,11 +674,13 @@ export async function buildCompactAnnounceStatsLine(params: {
 
   const parts = [
     `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
-    tokenUsageKnown
+    hasDirectionalUsage
       ? `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
-      : "tokens unknown",
+      : promptCache === undefined
+        ? "tokens unknown"
+        : `tokens ${formatTokenCount(promptCache)} prompt/cache`,
   ];
-  if (typeof promptCache === "number" && promptCache > ioTotal) {
+  if (hasDirectionalUsage && typeof promptCache === "number" && promptCache > ioTotal) {
     parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
   }
   return `Stats: ${parts.join(" • ")}`;

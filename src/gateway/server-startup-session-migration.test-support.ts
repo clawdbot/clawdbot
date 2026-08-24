@@ -56,7 +56,9 @@ function makeDeps(
       .mockResolvedValue(0),
     runDoctorSessionSqlite,
     reconcileSessionTranscriptIndexes,
-    sessionSqliteDatabaseExists: vi.fn<SessionSqliteDatabaseExists>().mockReturnValue(true),
+    sessionSqliteDatabaseExists: vi
+      .fn<SessionSqliteDatabaseExists>()
+      .mockImplementation((params) => params.path === undefined),
   };
 }
 

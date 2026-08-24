@@ -205,7 +205,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(resumed.terminate).toBe(true);
   });
 
-  it("discards retained terminal bridge evidence when a yielded run fails", async () => {
+  it("preserves retained terminal bridge evidence when a yielded run fails", async () => {
     const { config, catalogRef, tools } = createTerminalBridgeHarness();
     const terminal = pluginToolWithExecute("terminal_action", "Terminal action", async () => ({
       ...jsonResult({ terminal: true }),
@@ -250,7 +250,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       status: "failed",
       error: expect.stringContaining("resumed failure"),
     });
-    expect(resumed.terminate).toBeUndefined();
+    expect(resumed.terminate).toBe(true);
   });
 
   it("keeps a safe suspension clean and wraps network content after wait resumes it", async () => {

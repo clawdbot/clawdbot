@@ -29,7 +29,7 @@ vi.mock("../../plugins/manifest-registry.js", async () => {
     loadPluginManifestRegistryCore: (params: { workspaceDir?: string }) => {
       const extensionsRoot = pathLocal.join(params.workspaceDir ?? "", ".openclaw", "extensions");
       const plugins = [];
-      for (const id of ["open-prose", "browser"]) {
+      for (const id of ["workspace-skills", "browser"]) {
         const rootDir = pathLocal.join(extensionsRoot, id);
         const manifestPath = pathLocal.join(rootDir, "openclaw.plugin.json");
         if (!fsLocal.existsSync(manifestPath)) {
@@ -63,7 +63,7 @@ let workspaceCaseIndex = 0;
 function createWorkspacePluginRegistry(workspaceDir: string): PluginManifestRegistry {
   const extensionsRoot = path.join(workspaceDir, ".openclaw", "extensions");
   const plugins: PluginManifestRecord[] = [];
-  for (const id of ["open-prose", "browser"]) {
+  for (const id of ["workspace-skills", "browser"]) {
     const rootDir = path.join(extensionsRoot, id);
     const manifestPath = path.join(rootDir, "openclaw.plugin.json");
     if (!fsSync.existsSync(manifestPath)) {
@@ -210,15 +210,15 @@ afterAll(async () => {
   });
 });
 
-async function setupWorkspaceWithProsePlugin() {
+async function setupWorkspaceSkillPlugin() {
   const workspaceDir = await createTempWorkspaceDir();
   const managedDir = path.join(workspaceDir, ".managed");
-  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "open-prose");
+  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "workspace-skills");
 
   await writePluginWithSkill({
     pluginRoot,
-    pluginId: "open-prose",
-    skillId: "prose",
+    pluginId: "workspace-skills",
+    skillId: "drafting",
     skillDescription: "test",
   });
 
@@ -227,18 +227,18 @@ async function setupWorkspaceWithProsePlugin() {
 
 describe("loadWorkspaceSkills", () => {
   it("filters plugin-shipped skills through plugin config", async () => {
-    const { workspaceDir, managedDir } = await setupWorkspaceWithProsePlugin();
+    const { workspaceDir, managedDir } = await setupWorkspaceSkillPlugin();
 
     const enabledEntries = loadTestWorkspaceSkills(workspaceDir, {
       config: {
         plugins: {
-          entries: { "open-prose": { enabled: true } },
+          entries: { "workspace-skills": { enabled: true } },
         },
       },
       managedSkillsDir: managedDir,
     });
 
-    expect(enabledEntries.map((entry) => entry.skill.name)).toContain("prose");
+    expect(enabledEntries.map((entry) => entry.skill.name)).toContain("drafting");
 
     const blockedEntries = loadTestWorkspaceSkills(workspaceDir, {
       config: {
@@ -249,7 +249,7 @@ describe("loadWorkspaceSkills", () => {
       managedSkillsDir: managedDir,
     });
 
-    expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("prose");
+    expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("drafting");
   });
 
   it("loads the browser plugin automation skill when the bundled plugin is enabled", async () => {

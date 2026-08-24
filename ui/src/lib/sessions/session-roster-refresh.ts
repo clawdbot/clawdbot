@@ -552,8 +552,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return refresh({ ...options, force: true });
     },
     lastOptions: () => lastListOptions,
-    scheduleEvent(options: { agentId?: string | null } = {}) {
-      eventRefreshCoordinator.schedule();
+    // Gateway-owned membership filters require an authoritative list refresh.
+    canApplyPrimarySnapshot: () => isPrimarySessionListQuery(lastListOptions),
+    scheduleEvent(options: { agentId?: string | null; primarySnapshotApplied?: boolean } = {}) {
+      if (!options.primarySnapshotApplied) {
+        eventRefreshCoordinator.schedule();
+      }
       const agentId = options.agentId ? normalizeAgentId(options.agentId) : null;
       for (const entry of managedLists.values()) {
         const queryAgentId = managedSessionListAgentId(entry);

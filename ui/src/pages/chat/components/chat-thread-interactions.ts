@@ -8,6 +8,7 @@ import { copyMarkdownLabel } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
+import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -61,6 +62,8 @@ export type ReplyMessageAccess = {
 
 export type ChatThreadProps = {
   paneId: string;
+  /** Routing for peer sender names in a shared session. */
+  personActivity?: PersonActivityRouting;
   sessionKey: string;
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;

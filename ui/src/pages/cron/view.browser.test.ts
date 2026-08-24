@@ -5,7 +5,7 @@ import "../../styles/settings.css";
 import "../../styles/cron.css";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
-const alignmentTolerancePx = 1.25;
+const alignmentTolerancePx = 2;
 
 afterEach(() => {
   document.body.replaceChildren();

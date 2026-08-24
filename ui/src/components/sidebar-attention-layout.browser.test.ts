@@ -1,12 +1,67 @@
 import { afterEach, describe, expect, it } from "vitest";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
+import "../styles/sidebar-footer-update.css";
 import "../styles/sidebar-issues.css";
 import "./web-awesome-tabs.ts";
+// Upgrade the real element: the floating layout once regressed because a base
+// class stamped inline `display: contents`, which only a live upgrade reveals.
+import "./sidebar-attention.ts";
 
-afterEach(() => document.body.replaceChildren());
+afterEach(() => {
+  document.body.replaceChildren();
+  document.documentElement.classList.remove(
+    "openclaw-native-nav",
+    "openclaw-native-macos",
+    "openclaw-native-web-chrome",
+  );
+});
 
 describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
+  it("positions collapsed sidebar attention beyond chrome and access controls", () => {
+    const shell = document.createElement("div");
+    shell.className = "shell shell--nav-collapsed";
+    shell.innerHTML = `
+      <div class="shell-chrome-controls">
+        <button class="shell-chrome-controls__button"></button>
+        <button class="shell-chrome-controls__button"></button>
+        <button class="shell-chrome-controls__button"></button>
+        <button class="shell-chrome-controls__button shell-chrome-controls__custodian"></button>
+      </div>
+      <button class="shell-chrome-controls__button scope-upgrade-shell-status"></button>
+      <main class="content">
+        <openclaw-sidebar-attention class="sidebar-attention--floating">
+          <button class="sidebar-issues-button"></button>
+        </openclaw-sidebar-attention>
+      </main>
+    `;
+    document.body.append(shell);
+
+    const attention = shell.querySelector<HTMLElement>("openclaw-sidebar-attention")!;
+    const chrome = shell.querySelector<HTMLElement>(".shell-chrome-controls")!;
+    const access = shell.querySelector<HTMLElement>(".scope-upgrade-shell-status")!;
+    const inbox = attention.querySelector<HTMLElement>(".sidebar-issues-button")!;
+
+    expect(getComputedStyle(attention).position).toBe("fixed");
+    expect(getComputedStyle(attention).display).toBe("flex");
+    expect(attention.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+      Math.max(chrome.getBoundingClientRect().right, access.getBoundingClientRect().right) + 8,
+    );
+    expect(Number.parseFloat(getComputedStyle(inbox).borderTopWidth)).toBeGreaterThan(0);
+
+    document.documentElement.classList.add("openclaw-native-nav");
+    expect(getComputedStyle(attention).left).toBe("52px");
+    expect(attention.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+      access.getBoundingClientRect().right + 8,
+    );
+
+    document.documentElement.classList.add("openclaw-native-macos");
+    expect(getComputedStyle(attention).top).toBe("52px");
+
+    document.documentElement.classList.add("openclaw-native-web-chrome");
+    expect(getComputedStyle(attention).left).toBe("16px");
+  });
+
   it("keeps hub tabs compact and item rails flush with the scrollport", async () => {
     const fixture = document.createElement("section");
     fixture.className = "sidebar-issues-panel";

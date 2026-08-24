@@ -3,6 +3,7 @@ import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
+import { projectTelemetryFieldMetadata } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.activities": "Discord Activities",
@@ -48,6 +49,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "update.channel": "Update Channel",
   "update.checkOnStart": "Update Check on Start",
   "update.auto.enabled": "Auto Update Enabled",
+  telemetry: "Telemetry",
+  ...projectTelemetryFieldMetadata("label"),
   surfaces: "Surface Policies",
   "surfaces.*.silentReply": "Surface Silent Reply Policy",
   "diagnostics.enabled": "Diagnostics Enabled",
@@ -410,6 +413,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "nodeHost.workerRuns": "Node Worker Runs",
   "nodeHost.workerRuns.enabled": "Node Worker Runs Enabled",
   "nodeHost.workerRuns.capacity": "Node Worker Run Capacity",
+  "nodeHost.workerRuns.isolation": "Node Worker Run Isolation",
+  "nodeHost.workerRuns.containerImage": "Node Worker Run Container Image",
   "nodeHost.browserProxy": "Node Browser Proxy",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
@@ -711,6 +716,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "mcp.servers.*.codex.default_tools_approval_mode": "Codex MCP Tool Approval",
   ui: "UI",
   "ui.seamColor": "Accent Color",
+  "ui.prefs.accent": "User Accent Color",
   "ui.assistant": "Assistant Appearance",
   "ui.assistant.name": "Assistant Name",
   "ui.assistant.avatar": "Assistant Avatar",

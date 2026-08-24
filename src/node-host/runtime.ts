@@ -31,6 +31,7 @@ import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
+import { resolveNodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
@@ -59,6 +60,7 @@ export type NodeHostInventory = {
 type PreparedNodeHostRuntime = {
   manifest: NodeHostManifest;
   workerHostingEnabled: boolean;
+  workerHostingDisabledReason?: string;
   initialInventory: NodeHostInventory;
   start(params: {
     client: NodeHostClient;
@@ -288,9 +290,59 @@ export async function prepareNodeHostRuntime(params?: {
     params?.enableAgentRuns === true && config.nodeHost?.agentRuns?.claude?.enabled === true
       ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
-  const workerRunsEnabled =
+  let workerRunsEnabled =
     params?.enableWorkerRuns === true &&
     (params.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
+  let preparedContainerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
+  let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
+  let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
+  let publishContainerCapacity: ((capacity: NodeWorkerCapacitySnapshot) => void) | undefined;
+  let workerHostingDisabledReason: string | undefined;
+  if (workerRunsEnabled && config.nodeHost?.workerRuns?.isolation === "container") {
+    let engineResolved = false;
+    try {
+      if (platform === "win32") {
+        throw new Error(
+          'Container-isolated node workers are unsupported on Windows because native paths cannot be mounted at their container paths; run the node host on Linux or macOS, or set isolation to "none".',
+        );
+      }
+      const containerEngine = await resolveNodeWorkerContainerEngine({ env });
+      engineResolved = true;
+      preparedContainerWorkspace = new NodeWorkerWorkspaceRuntime({ env });
+      preparedContainerSupervisor = createNodeWorkerSupervisor({
+        env,
+        capacity: config.nodeHost?.workerRuns?.capacity,
+        workspace: preparedContainerWorkspace,
+        containerEngine,
+        ...(config.nodeHost?.workerRuns?.containerImage
+          ? { containerImage: config.nodeHost.workerRuns.containerImage }
+          : {}),
+        onCapacityChanged: (capacity) => {
+          preparedContainerCapacity = capacity;
+          publishContainerCapacity?.(capacity);
+        },
+      });
+      // Container ownership and orphan cleanup must succeed before any worker capacity is advertised.
+      await preparedContainerSupervisor.initialize();
+    } catch (error) {
+      let failure = error;
+      try {
+        await preparedContainerSupervisor?.close();
+      } catch (closeError) {
+        if (closeError !== error) {
+          failure = new Error(`${String(error)}; supervisor cleanup failed: ${String(closeError)}`);
+        }
+      }
+      workerRunsEnabled = false;
+      preparedContainerWorkspace = undefined;
+      preparedContainerSupervisor = undefined;
+      preparedContainerCapacity = undefined;
+      const detail = failure instanceof Error ? failure.message : String(failure);
+      workerHostingDisabledReason = engineResolved
+        ? `container worker reconciliation failed: ${detail}; inspect the container engine and worker launch journal before retrying`
+        : detail;
+    }
+  }
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [
@@ -323,24 +375,32 @@ export async function prepareNodeHostRuntime(params?: {
   return {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
+    ...(workerHostingDisabledReason ? { workerHostingDisabledReason } : {}),
     initialInventory,
     start({ client, onInventoryChanged, onManifestChanged, onRunnerCapacityChanged }) {
       const mcpAbort = new AbortController();
-      const workerWorkspace = workerRunsEnabled
-        ? new NodeWorkerWorkspaceRuntime({ env })
-        : undefined;
+      const workerWorkspace =
+        preparedContainerWorkspace ??
+        (workerRunsEnabled ? new NodeWorkerWorkspaceRuntime({ env }) : undefined);
       const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;
-      const workerSupervisor = workerRunsEnabled
-        ? createNodeWorkerSupervisor({
-            env,
-            capacity: config.nodeHost?.workerRuns?.capacity,
-            onCapacityChanged: onRunnerCapacityChanged,
-            workspace: workerWorkspace,
-          })
-        : undefined;
-      if (workerSupervisor) {
+      const workerSupervisor =
+        preparedContainerSupervisor ??
+        (workerRunsEnabled
+          ? createNodeWorkerSupervisor({
+              env,
+              capacity: config.nodeHost?.workerRuns?.capacity,
+              onCapacityChanged: onRunnerCapacityChanged,
+              workspace: workerWorkspace,
+            })
+          : undefined);
+      if (preparedContainerSupervisor) {
+        publishContainerCapacity = onRunnerCapacityChanged;
+        if (preparedContainerCapacity) {
+          onRunnerCapacityChanged?.(preparedContainerCapacity);
+        }
+      } else if (workerSupervisor) {
         void workerSupervisor.initialize().catch((error: unknown) => {
           logDebug(`node-host: worker capacity reconciliation failed: ${String(error)}`);
         });

@@ -34,9 +34,9 @@ openclaw hooks enable bootstrap-extra-files
 
 ### 📝 command-logger
 
-Logs all command events to a centralized audit file.
+Logs emitted command events to a centralized audit file. Current core actions are `/new`, `/reset`, and `/stop`.
 
-**Events**: `command` (all commands)
+**Events**: `command` (all emitted command actions)
 **What it does**: Appends JSONL entries to command log file.
 **Output**: `~/.openclaw/logs/commands.log`
 

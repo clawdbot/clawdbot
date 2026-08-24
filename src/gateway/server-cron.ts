@@ -260,7 +260,7 @@ async function finalizeCronCompletionAnnouncement(params: {
   const abortSignal = params.abortSignal ?? new AbortController().signal;
   let deliveryMayHaveReachedRecipient = false;
   try {
-    await retryTransientDirectCronDelivery({
+    const result = await retryTransientDirectCronDelivery({
       jobId: params.job.id,
       label: params.label,
       signal: abortSignal,
@@ -285,10 +285,12 @@ async function finalizeCronCompletionAnnouncement(params: {
           },
         }),
     });
+    const delivered =
+      result.status === "sent" ? true : deliveryMayHaveReachedRecipient ? undefined : false;
     return {
       deliveryAttempted: true,
-      delivered: true,
-      delivery: { ...delivery, delivered: true },
+      delivered,
+      delivery: { ...delivery, delivered },
     };
   } catch (err) {
     const deliveryError = formatErrorMessage(err);

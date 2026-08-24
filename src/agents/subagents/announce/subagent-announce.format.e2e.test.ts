@@ -5,13 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../../config/config.js";
 import * as configSessions from "../../../config/sessions.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
@@ -1529,6 +1529,15 @@ describe("subagent announce formatting", () => {
         replyText: "partial output",
         outcome: { status: "timeout" } as const,
         expectedStatus: "timed out",
+        spawnMode: undefined,
+      },
+      {
+        childSessionId: "child-session-direct-timeout-cause",
+        requesterSessionId: "requester-session-timeout-cause",
+        childRunId: "run-direct-completion-timeout-cause",
+        replyText: "partial output",
+        outcome: { status: "timeout", error: "child run failed before completing" } as const,
+        expectedStatus: "timed out: child run failed before completing",
         spawnMode: undefined,
       },
     ] as const;

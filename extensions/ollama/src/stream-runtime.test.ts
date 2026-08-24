@@ -802,6 +802,17 @@ describe("convertToOllamaMessages", () => {
     expect(result).toEqual([{ role: "tool", content: "file1.txt\nfile2.txt" }]);
   });
 
+  it("preserves significant boundary whitespace in tool results", () => {
+    const result = convertToOllamaMessages([
+      {
+        role: "toolResult",
+        toolCallId: "call_ws",
+        content: [{ type: "text", text: "  indented\n" }],
+      },
+    ]);
+    expect(result).toEqual([{ role: "tool", content: "  indented\n", tool_call_id: "call_ws" }]);
+  });
+
   it("converts SDK 'toolResult' role to Ollama 'tool' role", () => {
     const messages = [{ role: "toolResult", content: "command output here" }];
     const result = convertToOllamaMessages(messages);
@@ -3219,6 +3230,87 @@ describe("createOllamaStreamFn", () => {
     } finally {
       fetchWithSsrFGuardMock.mockReset();
     }
+  });
+
+  it("redacts a configured header prefix split by the 8 KiB error cap", async () => {
+    const configuredSecret = "stream-boundary-credential-secret";
+    const retainedPrefix = configuredSecret.slice(0, -5);
+    const safeMarker = "bounded stream diagnostic: ";
+    const tracked = cancelTrackedResponse(
+      `${safeMarker}${"x".repeat(8 * 1024 - safeMarker.length - retainedPrefix.length)}${configuredSecret} trailing text`,
+      { status: 503, statusText: "Service Unavailable" },
+    );
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: tracked.response,
+      release: vi.fn(async () => undefined),
+    });
+    try {
+      const stream = await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        defaultHeaders: { "X-Proxy-Auth": configuredSecret },
+      });
+      const events = await collectStreamEvents(stream);
+      const errorEvent = events.find((event) => event.type === "error") as
+        | { type: "error"; error: { errorMessage?: string } }
+        | undefined;
+      if (!errorEvent) {
+        throw new Error("expected Ollama stream error event");
+      }
+
+      const message = errorEvent.error.errorMessage ?? "";
+      expect(message).toMatch(/^503\b/);
+      expect(message).toContain(safeMarker);
+      expect(message).not.toContain(retainedPrefix);
+      expect(message).not.toContain(configuredSecret);
+      expect(tracked.wasCanceled()).toBe(true);
+    } finally {
+      fetchWithSsrFGuardMock.mockReset();
+    }
+  });
+
+  it("redacts reflected configured and bearer credentials from non-2xx response text", async () => {
+    const configuredSecret = "stream-configured-header-secret";
+    const staleAuthorization = "Bearer stale-stream-authorization";
+    const bearerCredential = "stream-bearer-credential-secret";
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          error: "rate limit exceeded",
+          configuredEcho: configuredSecret,
+          bearerEcho: bearerCredential,
+        }),
+        { status: 429, headers: { "Content-Type": "application/json" } },
+      ),
+      release: vi.fn(async () => undefined),
+    });
+
+    const stream = await createOllamaTestStream({
+      baseUrl: "http://ollama-host:11434",
+      defaultHeaders: {
+        "X-Proxy-Auth": configuredSecret,
+        Authorization: staleAuthorization,
+      },
+      options: { apiKey: bearerCredential },
+    });
+    const events = await collectStreamEvents(stream);
+    const errorEvent = events.find((event) => event.type === "error") as
+      | { type: "error"; error: { errorMessage?: string } }
+      | undefined;
+    if (!errorEvent) {
+      throw new Error("expected Ollama stream error event");
+    }
+
+    const message = errorEvent.error.errorMessage ?? "";
+    expect(message).toMatch(/^429\b/);
+    expect(message).toContain("rate limit exceeded");
+    expect(message).not.toContain(configuredSecret);
+    expect(message).not.toContain(bearerCredential);
+    expect(requireHeaders(getGuardedFetchCall(fetchWithSsrFGuardMock).init?.headers)).toMatchObject(
+      {
+        "X-Proxy-Auth": configuredSecret,
+        Authorization: `Bearer ${bearerCredential}`,
+      },
+    );
   });
 
   it("keeps thinking chunks when no final content is emitted", async () => {

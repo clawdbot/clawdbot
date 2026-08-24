@@ -926,8 +926,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       defaultProvider: DEFAULT_PROVIDER,
       agentId: opts?.agentId,
     });
-    const entries = allowedCatalog.length > 0 ? allowedCatalog : catalog;
-    return entries.map((entry) => ({
+    return allowedCatalog.map((entry) => ({
       id: entry.id,
       name: entry.name ?? entry.id,
       provider: entry.provider,
