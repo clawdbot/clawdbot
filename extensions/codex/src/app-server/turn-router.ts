@@ -39,6 +39,7 @@ type CodexThreadNotificationReceivedHandler = (
   receivedAtMs: number,
 ) => void;
 type CodexThreadRouteHandlers = {
+  onTurnStarted?: (turnId: string) => void;
   onNotificationReceived?: CodexThreadNotificationReceivedHandler;
   onNotification?: CodexThreadNotificationHandler;
   onRequest?: CodexThreadRequestHandler;
@@ -343,6 +344,9 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     if (route.gate !== "bound" && scope.turnId) {
       if (notification.method === "turn/started") {
         route.observedNativeTurn = { id: scope.turnId, completed: false };
+        if (route.gate === "armed") {
+          route.handlers?.onTurnStarted?.(scope.turnId);
+        }
       } else if (notification.method === "turn/completed") {
         route.completedNativeTurnIds.add(scope.turnId);
         if (

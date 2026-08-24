@@ -59,6 +59,7 @@ type NativeSubagentMonitorClient = Pick<
 type ParentOwner = {
   turnId?: string;
   claimDirectChild?: (threadId: string) => (() => void) | undefined;
+  renewDirectChild?: (threadId: string) => void;
   rejectPendingDirectChild?: (threadId: string, reason: string) => void;
   onDirectChildAccepted?: () => void;
 };
@@ -99,6 +100,7 @@ type ChildState = {
   deliveryOwnerKey?: string;
   settledWithoutCompletion: boolean;
   releaseDirectChild?: () => void;
+  renewDirectChild?: () => void;
 };
 
 type ChildAssistantMessages = {
@@ -196,6 +198,7 @@ function registerMonitor(params: {
   retainClient?: () => (() => void) | undefined;
   retainParentThread?: (threadId: string) => (() => void) | undefined;
   claimDirectChild?: (threadId: string) => (() => void) | undefined;
+  renewDirectChild?: (threadId: string) => void;
   rejectPendingDirectChild?: (threadId: string, reason: string) => void;
   onDirectChildAccepted?: () => void;
 }): { bindTurn: (turnId: string) => void; unregister: () => void } {
@@ -262,6 +265,7 @@ function registerMonitor(params: {
     taskRuntimeScope: params.taskRuntimeScope,
     agentId: params.agentId,
     claimDirectChild: params.claimDirectChild,
+    renewDirectChild: params.renewDirectChild,
     rejectPendingDirectChild: params.rejectPendingDirectChild,
     onDirectChildAccepted: params.onDirectChildAccepted,
   });
@@ -365,6 +369,7 @@ class Monitor {
     taskRuntimeScope?: AgentHarnessTaskRuntimeScope;
     agentId?: string;
     claimDirectChild?: (threadId: string) => (() => void) | undefined;
+    renewDirectChild?: (threadId: string) => void;
     rejectPendingDirectChild?: (threadId: string, reason: string) => void;
     onDirectChildAccepted?: () => void;
   }): { bindTurn: (turnId: string) => void; unregister: () => void } {
@@ -393,6 +398,7 @@ class Monitor {
     const owner = Symbol("codex-native-subagent-owner");
     state.owners.set(owner, {
       claimDirectChild: params.claimDirectChild,
+      renewDirectChild: params.renewDirectChild,
       rejectPendingDirectChild: params.rejectPendingDirectChild,
       onDirectChildAccepted: params.onDirectChildAccepted,
     });
@@ -1024,12 +1030,15 @@ class Monitor {
     if (!state) {
       return false;
     }
+    const renewDirectChild = childState.renewDirectChild;
     const statusRead = this.retainThreadStatusRevision(childState.childThreadId);
     try {
       const recovery = await this.readThreadRecovery(childState.childThreadId);
       // Notification handlers run concurrently. A later status transition wins
       // over this read so stale history cannot complete or re-arm the child.
       if (
+        this.disposed ||
+        this.parentStates.get(childState.parentThreadId) !== state ||
         !statusRead.isCurrent() ||
         this.childStates.get(childState.childThreadId) !== childState
       ) {
@@ -1044,7 +1053,16 @@ class Monitor {
         this.unregisterChild(childState);
         return false;
       }
-      if (recovery.threadState === "active") {
+      if (recovery.threadState === "active" && !recovery.resumable) {
+        if (
+          renewDirectChild &&
+          !childState.terminal &&
+          !childState.settledWithoutCompletion &&
+          childState.releaseDirectChild &&
+          childState.renewDirectChild === renewDirectChild
+        ) {
+          renewDirectChild();
+        }
         this.observeActiveChild(childState);
         return false;
       }
@@ -1319,6 +1337,7 @@ class Monitor {
     options: {
       agentPath?: string;
       claimDirectChild?: (threadId: string) => (() => void) | undefined;
+      renewDirectChild?: (threadId: string) => void;
     } = {},
   ): ChildState | undefined {
     const parentThreadId = state.parentThreadId;
@@ -1379,7 +1398,13 @@ class Monitor {
       !childState.settledWithoutCompletion &&
       !childState.releaseDirectChild
     ) {
-      childState.releaseDirectChild = options.claimDirectChild(childThreadId);
+      const releaseDirectChild = options.claimDirectChild(childThreadId);
+      if (releaseDirectChild) {
+        childState.releaseDirectChild = releaseDirectChild;
+        childState.renewDirectChild = options.renewDirectChild
+          ? () => options.renewDirectChild?.(childThreadId)
+          : undefined;
+      }
     }
     this.registerAgentPath(childState, childThreadId);
     state.mirror?.markAuthoritativeCompletionExpected(childThreadId);
@@ -1412,6 +1437,7 @@ class Monitor {
     const childState = this.registerChildThread(state, evidence.childThreadId, {
       ...(evidence.agentPath === undefined ? {} : { agentPath: evidence.agentPath }),
       ...(owner?.claimDirectChild ? { claimDirectChild: owner.claimDirectChild } : {}),
+      ...(owner?.renewDirectChild ? { renewDirectChild: owner.renewDirectChild } : {}),
     });
     if (!owner) {
       this.bufferPendingDirectSpawnEvidence(turnIdInput, evidence);
@@ -1463,6 +1489,7 @@ class Monitor {
         const childState = this.registerChildThread(state, evidence.childThreadId, {
           ...(evidence.agentPath === undefined ? {} : { agentPath: evidence.agentPath }),
           claimDirectChild: owner.claimDirectChild,
+          ...(owner.renewDirectChild ? { renewDirectChild: owner.renewDirectChild } : {}),
         });
         if (childState) {
           owner.onDirectChildAccepted?.();
@@ -1570,6 +1597,7 @@ class Monitor {
   private releaseDirectChild(childState: ChildState): void {
     const release = childState.releaseDirectChild;
     childState.releaseDirectChild = undefined;
+    childState.renewDirectChild = undefined;
     release?.();
   }
 

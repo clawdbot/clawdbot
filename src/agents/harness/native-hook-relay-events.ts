@@ -164,7 +164,8 @@ async function runNativeHookRelayPreToolUse(params: {
   if (outcome.deferredApproval) {
     if (
       !setNativeHookRelayPreToolUseApproval({
-        relayId: params.registration.relayId,
+        registration: params.registration,
+        turnId: params.invocation.turnId,
         toolUseId: params.invocation.toolUseId,
         deferredApproval: outcome.deferredApproval,
         originalParamsFingerprint: originalToolInputFingerprint,

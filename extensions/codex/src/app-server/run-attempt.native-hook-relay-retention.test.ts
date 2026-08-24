@@ -17,16 +17,359 @@ import {
   createParams,
   createCodexRuntimePlanFixture,
   createStartedThreadHarness,
+  extractGenerationFromThreadRequest,
   extractRelayIdFromThreadRequest,
   runCodexAppServerAttempt,
   setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
+  threadStartResult,
+  turnStartResult,
 } from "./run-attempt-test-harness.js";
 
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt native hook relay retention", () => {
+  it("binds foreground policy from turn/started before turn/start responds", async () => {
+    const sessionFile = path.join(tempDir, "early-turn-start-session.jsonl");
+    const workspaceDir = path.join(tempDir, "early-turn-start-workspace");
+    let resolveTurnStart!: (value: ReturnType<typeof turnStartResult>) => void;
+    const deferredTurnStart = new Promise<ReturnType<typeof turnStartResult>>((resolve) => {
+      resolveTurnStart = resolve;
+    });
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        return await deferredTurnStart;
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const fixture = await createAdmittedHostCapabilityTestFixture(params);
+    params.hostCapabilities = fixture.hostCapabilities;
+    const beforeToolCall = vi.fn(async () => ({
+      block: true,
+      blockReason: "early turn policy denied",
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+    });
+    try {
+      await harness.waitForMethod("turn/start");
+      const startRequest = harness.requests.find((request) => request.method === "thread/start");
+      const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+      await harness.notify({
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-early",
+          turn: { id: "turn-early", status: "inProgress" },
+        },
+      } as CodexServerNotification);
+
+      const earlyInvocation = await invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          turn_id: "turn-early",
+          cwd: workspaceDir,
+          tool_name: "Bash",
+          tool_use_id: "early-tool",
+          tool_input: { command: "echo early" },
+        },
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      resolveTurnStart(turnStartResult("turn-early"));
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-early" });
+      await run;
+      if ("error" in earlyInvocation) {
+        throw earlyInvocation.error;
+      }
+      expect(JSON.parse(earlyInvocation.value.stdout)).toMatchObject({
+        hookSpecificOutput: {
+          permissionDecision: "deny",
+          permissionDecisionReason: "early turn policy denied",
+        },
+      });
+      expect(beforeToolCall).toHaveBeenCalledOnce();
+    } finally {
+      resolveTurnStart(turnStartResult("turn-early"));
+      fixture.closeHost();
+      fixture.closeAdmission();
+    }
+  });
+
+  it("keeps child A on its origin policy when turn B starts a transient thread", async () => {
+    const childThreadId = "child-from-turn-a";
+    const sessionFile = path.join(tempDir, "two-turn-yield-session.jsonl");
+    const workspaceDir = path.join(tempDir, "two-turn-yield-workspace");
+    let turnStartCount = 0;
+    let threadStartCount = 0;
+    const harness = createStartedThreadHarness(async (method, requestParams) => {
+      if (method === "thread/start") {
+        threadStartCount += 1;
+        return threadStartResult(threadStartCount === 1 ? "thread-1" : "thread-transient");
+      }
+      if (method === "thread/read") {
+        return {
+          thread: {
+            id: childThreadId,
+            parentThreadId: "thread-1",
+            status: { type: "active" },
+            turns: [],
+          },
+        };
+      }
+      if (method === "thread/resume") {
+        return threadStartResult((requestParams as { threadId?: string })?.threadId ?? "thread-1");
+      }
+      if (method === "turn/start") {
+        turnStartCount += 1;
+        return turnStartResult(turnStartCount === 1 ? "turn-a" : "turn-b");
+      }
+      return undefined;
+    });
+    const beforeToolCall = vi.fn(async (event: unknown, context: unknown) => {
+      const command = (event as { params?: { command?: string } }).params?.command;
+      const runId = (context as { runId?: string }).runId;
+      return command === `deny-${runId}`
+        ? { block: true, blockReason: `${runId} policy denied` }
+        : undefined;
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+
+    const paramsA = createParams(sessionFile, workspaceDir, { runId: "run-a" });
+    paramsA.disableTools = false;
+    paramsA.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(paramsA, true);
+    const fixtureA = await createAdmittedHostCapabilityTestFixture(paramsA);
+    paramsA.hostCapabilities = fixtureA.hostCapabilities;
+    paramsA.agentHarnessTaskRuntimeScope = fixtureA.agentHarnessTaskRuntimeScope;
+
+    const runA = runCodexAppServerAttempt(paramsA, {
+      nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+    });
+    let fixtureB: Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>> | undefined;
+    try {
+      await harness.waitForMethod("turn/start");
+      const startRequest = harness.requests.find((request) => request.method === "thread/start");
+      const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+      const generationA = extractGenerationFromThreadRequest(startRequest?.params);
+      await harness.notify({
+        method: "thread/started",
+        params: {
+          thread: {
+            id: childThreadId,
+            parentThreadId: "thread-1",
+            source: {
+              subAgent: { thread_spawn: { parent_thread_id: "thread-1", depth: 1 } },
+            },
+          },
+        },
+      } as CodexServerNotification);
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-a",
+          item: {
+            type: "collabAgentToolCall",
+            tool: "spawnAgent",
+            status: "completed",
+            senderThreadId: "thread-1",
+            receiverThreadIds: [childThreadId],
+          },
+        },
+      } as unknown as CodexServerNotification);
+      await expect(
+        harness.handleServerRequest({
+          id: "request-sessions-yield-a",
+          method: "item/tool/call",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-a",
+            callId: "yield-a",
+            namespace: null,
+            tool: "sessions_yield",
+            arguments: { message: "Waiting for child A" },
+          },
+        }),
+      ).resolves.toMatchObject({ success: true });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-a" });
+      await runA;
+      fixtureA.closeHost();
+      fixtureA.closeAdmission();
+
+      const paramsB = createParams(sessionFile, workspaceDir, { runId: "run-b" });
+      paramsB.disableTools = true;
+      paramsB.runtimePlan = createCodexRuntimePlanFixture();
+      setCodexTestModelSupportsTools(paramsB, true);
+      fixtureB = await createAdmittedHostCapabilityTestFixture(paramsB);
+      paramsB.hostCapabilities = fixtureB.hostCapabilities;
+      paramsB.agentHarnessTaskRuntimeScope = fixtureB.agentHarnessTaskRuntimeScope;
+      const runB = runCodexAppServerAttempt(paramsB, {
+        nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+      });
+      await vi.waitFor(
+        () =>
+          expect(
+            harness.requests.filter((request) => request.method === "turn/start"),
+          ).toHaveLength(2),
+        { interval: 1 },
+      );
+      expect(harness.requests.filter((request) => request.method === "thread/start")).toHaveLength(
+        2,
+      );
+      await harness.notify({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-1",
+          item: {
+            type: "message",
+            role: "assistant",
+            phase: "commentary",
+            content: [
+              {
+                type: "output_text",
+                text: JSON.stringify({
+                  author: childThreadId,
+                  recipient: "/root",
+                  other_recipients: [],
+                  content:
+                    `<subagent_notification>{"agent_path":${JSON.stringify(childThreadId)},` +
+                    '"status":{"completed":null}}</subagent_notification>',
+                  trigger_turn: false,
+                }),
+              },
+            ],
+          },
+        },
+      } as unknown as CodexServerNotification);
+
+      nativeHookRelayUnregisterQueue.flush();
+      let childDenied: Awaited<ReturnType<typeof invokeNativeHookRelay>> | undefined;
+      let childError: unknown;
+      void invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        generation: generationA,
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          turn_id: "child-a-turn",
+          agent_id: childThreadId,
+          cwd: workspaceDir,
+          tool_name: "Bash",
+          tool_use_id: "child-a-tool",
+          tool_input: { command: "deny-run-a" },
+        },
+      }).then(
+        (response) => {
+          childDenied = response;
+        },
+        (error: unknown) => {
+          childError = error;
+        },
+      );
+      await vi.waitFor(() => {
+        expect(childDenied !== undefined || childError !== undefined).toBe(true);
+      });
+      if (childError !== undefined) {
+        throw childError instanceof Error
+          ? childError
+          : new Error("Child A hook failed", { cause: childError });
+      }
+      if (!childDenied) {
+        throw new Error("Expected child A hook response");
+      }
+      expect(childDenied.stdout).toContain("run-a policy denied");
+      expect(JSON.parse(childDenied.stdout)).toMatchObject({
+        hookSpecificOutput: {
+          permissionDecision: "deny",
+          permissionDecisionReason: "run-a policy denied",
+        },
+      });
+      const rootDenied = await invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        generation: generationA,
+        requireGeneration: true,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          turn_id: "turn-b",
+          cwd: workspaceDir,
+          tool_name: "Bash",
+          tool_use_id: "root-b-tool",
+          tool_input: { command: "deny-run-b" },
+        },
+      });
+      expect(JSON.parse(rootDenied.stdout)).toMatchObject({
+        hookSpecificOutput: {
+          permissionDecision: "deny",
+          permissionDecisionReason: "run-b policy denied",
+        },
+      });
+      expect(beforeToolCall.mock.calls.slice(-2).map(([, context]) => context)).toEqual([
+        expect.objectContaining({ runId: "run-a" }),
+        expect.objectContaining({ runId: "run-b" }),
+      ]);
+
+      await harness.notify({
+        method: "turn/completed",
+        params: {
+          threadId: childThreadId,
+          turn: { id: "child-a-turn", status: "completed" },
+        },
+      } as CodexServerNotification);
+      nativeHookRelayUnregisterQueue.flush();
+      await expect(
+        invokeNativeHookRelay({
+          provider: "codex",
+          relayId,
+          generation: generationA,
+          requireGeneration: true,
+          event: "pre_tool_use",
+          rawPayload: {
+            hook_event_name: "PreToolUse",
+            turn_id: "turn-b",
+            tool_name: "Bash",
+            tool_use_id: "root-b-after-child",
+            tool_input: { command: "allow-run-b" },
+          },
+        }),
+      ).resolves.toMatchObject({ exitCode: 0 });
+
+      await harness.completeTurn({ threadId: "thread-transient", turnId: "turn-b" });
+      await runB;
+      nativeHookRelayUnregisterQueue.flush();
+      expect(
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
+      ).toBeUndefined();
+    } finally {
+      fixtureA.closeHost();
+      fixtureA.closeAdmission();
+      fixtureB?.closeHost();
+      fixtureB?.closeAdmission();
+    }
+  });
+
   it.each([
     {
       name: "Codex multi-agent V1",

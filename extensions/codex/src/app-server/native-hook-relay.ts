@@ -61,9 +61,12 @@ export type CodexNativePreToolUseFailure = {
 };
 
 export type CodexNativeHookRelay = NativeHookRelayRegistrationHandle & {
+  activateForegroundBinding: () => void;
   authorizeRetentionAfterSuccessfulYield: () => void;
+  bindForegroundTurn: (turnId: string) => void;
   hasClaimedDirectChild: () => boolean;
   claimDirectChild: (threadId: string) => () => void;
+  renewDirectChild: (threadId: string) => void;
   rejectPendingDirectChild: (threadId: string, reason: string) => void;
 };
 
@@ -146,6 +149,7 @@ export function createCodexNativeHookRelay(params: {
     | undefined;
   generation?: string;
   generationMismatchGraceMs?: number;
+  composeWithExistingRoute?: boolean;
   events: readonly NativeHookRelayEvent[];
   agentId: string | undefined;
   sessionId: string;
@@ -185,6 +189,12 @@ export function createCodexNativeHookRelay(params: {
     }
     pendingDirectChildAdmissions.clear();
   };
+  const ttlMs = resolveCodexNativeHookRelayTtlMs({
+    explicitTtlMs: params.options?.ttlMs,
+    attemptTimeoutMs: params.attemptTimeoutMs,
+    startupTimeoutMs: params.startupTimeoutMs,
+    turnStartTimeoutMs: params.turnStartTimeoutMs,
+  });
   const relay = registerRetainedNativeHookRelayForBundledRuntime({
     provider: "codex",
     relayId: buildCodexNativeHookRelayId({
@@ -206,17 +216,14 @@ export function createCodexNativeHookRelay(params: {
     ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents: params.events,
     preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
-    ttlMs: resolveCodexNativeHookRelayTtlMs({
-      explicitTtlMs: params.options?.ttlMs,
-      attemptTimeoutMs: params.attemptTimeoutMs,
-      startupTimeoutMs: params.startupTimeoutMs,
-      turnStartTimeoutMs: params.turnStartTimeoutMs,
-    }),
+    ttlMs,
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
     assertActive: params.hostCapabilities.assertActive,
+    composeWithExistingRoute: params.composeWithExistingRoute,
     retention: {
       readClaim: readCodexNativeChildThreadId,
+      readForegroundSubject: readCodexNativeTurnId,
       // A child claim identifies the subject; successful parent finalization
       // separately authorizes its lifetime beyond foreground closure.
       shouldRetainAfterForegroundClose: () =>
@@ -268,10 +275,17 @@ export function createCodexNativeHookRelay(params: {
   return {
     ...relay,
     unregister,
+    activateForegroundBinding: relay.activateForegroundBinding,
     authorizeRetentionAfterSuccessfulYield: () => {
       successfulYieldRetentionAuthorized = true;
     },
+    bindForegroundTurn: relay.bindForegroundSubject,
     hasClaimedDirectChild: () => directChildClaims.size > 0,
+    renewDirectChild: (threadId) => {
+      if (params.options?.ttlMs === undefined && directChildClaims.has(threadId)) {
+        relay.renewRetainedSubject(threadId, ttlMs);
+      }
+    },
     rejectPendingDirectChild: (threadIdInput, reason) => {
       const threadId = threadIdInput.trim();
       const pending = threadId ? pendingDirectChildAdmissions.get(threadId) : undefined;
@@ -291,6 +305,7 @@ export function createCodexNativeHookRelay(params: {
         return () => undefined;
       }
       const claim = Symbol(threadId);
+      const releaseRetainedSubject = relay.bindRetainedSubject(threadId);
       directChildClaims.set(threadId, claim);
       const pending = pendingDirectChildAdmissions.get(threadId);
       pendingDirectChildAdmissions.delete(threadId);
@@ -305,6 +320,7 @@ export function createCodexNativeHookRelay(params: {
           return;
         }
         directChildClaims.delete(threadId);
+        releaseRetainedSubject();
         if (foregroundClosed && directChildClaims.size === 0) {
           relay.unregister();
         }
@@ -319,6 +335,14 @@ function readCodexNativeChildThreadId(rawPayload: unknown): string | undefined {
   }
   const threadId = rawPayload.agent_id.trim();
   return threadId || undefined;
+}
+
+function readCodexNativeTurnId(rawPayload: unknown): string | undefined {
+  if (!isJsonObject(rawPayload) || typeof rawPayload.turn_id !== "string") {
+    return undefined;
+  }
+  const turnId = rawPayload.turn_id.trim();
+  return turnId || undefined;
 }
 
 /** Selects the native hook events Codex should install for the current approval mode. */

@@ -1928,7 +1928,6 @@ src/agents/harness/lifecycle-hook-helpers.ts	1
 src/agents/harness/native-hook-relay-client.ts	2
 src/agents/harness/native-hook-relay-codec.ts	2
 src/agents/harness/native-hook-relay-state.ts	1
-src/agents/harness/native-hook-relay.ts	3
 src/agents/harness/selection.ts	6
 src/agents/harness/support.ts	1
 src/agents/harness/tool-result-middleware.ts	1

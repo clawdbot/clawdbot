@@ -405,7 +405,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
       nativeHookRelayGeneration: "generation-warm-next",
     });
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-    expect(buildFinalConfigPatch).toHaveBeenNthCalledWith(1, { action: "start" });
+    expect(buildFinalConfigPatch).toHaveBeenNthCalledWith(1, {
+      action: "start",
+      preserveExistingBinding: false,
+    });
     expect(buildFinalConfigPatch).toHaveBeenNthCalledWith(2, {
       action: "resume",
       binding: expect.objectContaining({ threadId: "thread-warm" }),

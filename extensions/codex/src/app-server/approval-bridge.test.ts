@@ -1730,11 +1730,13 @@ describe("Codex app-server approval bridge", () => {
     expect(mockHasNativeHookRelayInvocation).toHaveBeenNthCalledWith(1, {
       relayId: "relay-1",
       event: "pre_tool_use",
+      turnId: "turn-1",
       toolUseId: "execve-approval-1",
     });
     expect(mockHasNativeHookRelayInvocation).toHaveBeenNthCalledWith(2, {
       relayId: "relay-1",
       event: "pre_tool_use",
+      turnId: "turn-1",
       toolUseId: "execve-approval-2",
     });
   });
@@ -1772,6 +1774,7 @@ describe("Codex app-server approval bridge", () => {
     expect(mockInvokeNativeHookRelay).toHaveBeenCalledTimes(1);
     expect(mockResolveNativeHookRelayDeferredToolApproval).toHaveBeenCalledWith({
       relayId: "relay-1",
+      turnId: "turn-1",
       toolUseId: "cmd-native-relay-noop",
       signal: undefined,
     });
@@ -1818,10 +1821,12 @@ describe("Codex app-server approval bridge", () => {
     expect(mockHasNativeHookRelayInvocation).toHaveBeenCalledWith({
       relayId: "relay-1",
       event: "pre_tool_use",
+      turnId: "turn-1",
       toolUseId: "cmd-native-relay-observed",
     });
     expect(mockResolveNativeHookRelayDeferredToolApproval).toHaveBeenCalledWith({
       relayId: "relay-1",
+      turnId: "turn-1",
       toolUseId: "cmd-native-relay-observed",
       signal: undefined,
     });
