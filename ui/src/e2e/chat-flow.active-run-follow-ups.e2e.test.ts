@@ -1,4 +1,3 @@
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   chatSessionListResponse,
@@ -12,309 +11,7 @@ import {
 
 const suite = createChatFlowE2eSuite();
 
-async function expectChatBubbleAbove(page: Page, upperText: string, lowerText: string) {
-  const thread = page.locator(".chat-thread-inner");
-  await expect
-    .poll(() =>
-      thread.evaluate(
-        (element, texts) => {
-          const bubbles = Array.from(element.querySelectorAll<HTMLElement>(".chat-bubble"));
-          const matches = texts.map((text) =>
-            bubbles.filter((bubble) => bubble.textContent?.includes(text)),
-          );
-          const counts = matches.map((matchingBubbles) => matchingBubbles.length);
-          const upperBubble = matches[0]?.[0];
-          const lowerBubble = matches[1]?.[0];
-          if (counts.some((count) => count !== 1) || !upperBubble || !lowerBubble) {
-            return { counts, lowerTop: null, ordered: false, upperTop: null };
-          }
-          const upperTop = upperBubble.getBoundingClientRect().top;
-          const lowerTop = lowerBubble.getBoundingClientRect().top;
-          return { counts, lowerTop, ordered: upperTop < lowerTop, upperTop };
-        },
-        [upperText, lowerText],
-      ),
-    )
-    .toEqual({
-      counts: [1, 1],
-      lowerTop: expect.any(Number),
-      ordered: true,
-      upperTop: expect.any(Number),
-    });
-}
-
 suite.define(() => {
-  it("keeps cumulative assistant output ordered across a consumed steer", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const runtimeConfig = {
-      messages: { queue: { byChannel: { webchat: "steer" }, mode: "followup" } },
-    };
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "config.get": {
-          config: runtimeConfig,
-          hash: "queue-steer-config",
-          issues: [],
-          raw: JSON.stringify(runtimeConfig),
-          runtimeConfig,
-          valid: true,
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-
-      const originalPrompt = "keep this run active";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(originalPrompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-      const initialSend = await gateway.waitForRequest("chat.send");
-      const activeRunId = requireString(
-        requireRecord(initialSend.params).idempotencyKey,
-        "active chat run id",
-      );
-      await gateway.emitGatewayEvent("session.message", {
-        activeRunIds: [activeRunId],
-        clientRunId: activeRunId,
-        hasActiveRun: true,
-        message: {
-          __openclaw: {
-            id: "persisted-original-user",
-            idempotencyKey: `${activeRunId}:user`,
-            seq: 1,
-          },
-          content: [{ text: originalPrompt, type: "text" }],
-          role: "user",
-          timestamp: Date.now(),
-        },
-        messageId: "persisted-original-user",
-        messageSeq: 1,
-        session: {
-          activeRunIds: [activeRunId],
-          hasActiveRun: true,
-          key: "main",
-          kind: "direct",
-          status: "running",
-          updatedAt: Date.now(),
-        },
-        sessionKey: "main",
-      });
-      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
-
-      const preSteerReply = "Assistant output before the steer.";
-      await gateway.emitGatewayEvent("chat", {
-        deltaText: preSteerReply,
-        message: {
-          content: [{ text: preSteerReply, type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-        runId: activeRunId,
-        sessionKey: "main",
-        state: "delta",
-      });
-      await page.getByText(preSteerReply, { exact: true }).waitFor({ timeout: 10_000 });
-
-      const queuedFollowUp = "queued follow-up before steer";
-      await gateway.emitGatewayEvent("session.message", {
-        activeRunIds: [activeRunId],
-        clientRunId: "queued-run",
-        hasActiveRun: true,
-        message: {
-          __openclaw: {
-            id: "persisted-queued-user",
-            idempotencyKey: "queued-run:user",
-            seq: 3,
-          },
-          content: [{ text: queuedFollowUp, type: "text" }],
-          role: "user",
-          timestamp: Date.now(),
-        },
-        messageId: "persisted-queued-user",
-        messageSeq: 3,
-        session: {
-          activeRunIds: [activeRunId],
-          hasActiveRun: true,
-          key: "main",
-          kind: "direct",
-          status: "running",
-          updatedAt: Date.now(),
-        },
-        sessionKey: "main",
-      });
-      await page.getByText(queuedFollowUp, { exact: true }).waitFor({ timeout: 10_000 });
-      await expectChatBubbleAbove(page, preSteerReply, queuedFollowUp);
-
-      const followUp = "tighten the active plan";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(followUp);
-      await page.getByRole("button", { name: "Steer into the active run" }).click();
-
-      const sends = await waitForRequests(gateway, "chat.send", 2);
-      const steerParams = requireRecord(sends[1]?.params);
-      expect(steerParams).toMatchObject({
-        deliver: false,
-        message: followUp,
-        sessionKey: "main",
-      });
-      const steerRunId = requireString(steerParams.idempotencyKey, "steer run id");
-      const queue = page.locator(".chat-queue");
-      await queue.locator(".chat-queue__badge--steered", { hasText: "Steering" }).waitFor({
-        timeout: 10_000,
-      });
-      await queue.getByText(followUp).waitFor({ timeout: 10_000 });
-      await gateway.emitGatewayEvent("chat", {
-        runId: steerRunId,
-        sessionKey: "main",
-        state: "final",
-      });
-      await queue.getByText(followUp).waitFor({ state: "detached", timeout: 10_000 });
-      await expect
-        .poll(() => page.locator(".chat-thread .chat-group.user", { hasText: followUp }).count())
-        .toBe(1);
-      await expectChatBubbleAbove(page, originalPrompt, preSteerReply);
-      await expectChatBubbleAbove(page, preSteerReply, queuedFollowUp);
-      await expectChatBubbleAbove(page, queuedFollowUp, followUp);
-
-      await gateway.emitGatewayEvent("session.message", {
-        activeRunIds: [activeRunId],
-        clientRunId: activeRunId,
-        hasActiveRun: true,
-        message: {
-          __openclaw: {
-            id: "persisted-steer-user",
-            idempotencyKey: `${steerRunId}:user`,
-            seq: 4,
-            steerTargetRunId: activeRunId,
-          },
-          content: [{ text: followUp, type: "text" }],
-          role: "user",
-          timestamp: Date.now(),
-        },
-        messageId: "persisted-steer-user",
-        messageSeq: 4,
-        session: {
-          activeRunIds: [activeRunId],
-          hasActiveRun: true,
-          key: "main",
-          kind: "direct",
-          status: "running",
-          updatedAt: Date.now(),
-        },
-        sessionKey: "main",
-      });
-
-      await expect
-        .poll(() => page.locator(".chat-thread .chat-group.user", { hasText: followUp }).count())
-        .toBe(1);
-      const postSteerReply = "Assistant output after the steer.";
-      const cumulativeReply = `${preSteerReply} ${postSteerReply}`;
-      const terminalPostSteerReply = `${postSteerReply} Final unseen suffix.`;
-      const terminalReply = `${preSteerReply} ${terminalPostSteerReply}`;
-      await gateway.emitGatewayEvent("chat", {
-        deltaText: ` ${postSteerReply}`,
-        message: {
-          content: [{ text: cumulativeReply, type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-        runId: activeRunId,
-        sessionKey: "main",
-        state: "delta",
-      });
-      await page.locator(".chat-bubble", { hasText: postSteerReply }).waitFor({ timeout: 10_000 });
-      await expectChatBubbleAbove(page, originalPrompt, preSteerReply);
-      await expectChatBubbleAbove(page, preSteerReply, queuedFollowUp);
-      await expectChatBubbleAbove(page, queuedFollowUp, followUp);
-      await expectChatBubbleAbove(page, followUp, postSteerReply);
-      const authoritativeMessages = [
-        {
-          __openclaw: {
-            id: "persisted-original-user",
-            idempotencyKey: `${activeRunId}:user`,
-            seq: 1,
-          },
-          content: [{ text: originalPrompt, type: "text" }],
-          role: "user",
-          timestamp: 100,
-        },
-        {
-          __openclaw: { id: "persisted-pre-steer", idempotencyKey: activeRunId, seq: 2 },
-          content: [{ text: preSteerReply, type: "text" }],
-          role: "assistant",
-          timestamp: 200,
-        },
-        {
-          __openclaw: {
-            id: "persisted-queued-user",
-            idempotencyKey: "queued-run:user",
-            seq: 3,
-          },
-          content: [{ text: queuedFollowUp, type: "text" }],
-          role: "user",
-          timestamp: 250,
-        },
-        {
-          __openclaw: {
-            id: "persisted-steer-user",
-            idempotencyKey: `${steerRunId}:user`,
-            seq: 4,
-            steerTargetRunId: activeRunId,
-          },
-          content: [{ text: followUp, type: "text" }],
-          role: "user",
-          timestamp: 50,
-        },
-        {
-          __openclaw: { id: "persisted-post-steer", idempotencyKey: activeRunId, seq: 5 },
-          content: [{ text: terminalPostSteerReply, type: "text" }],
-          role: "assistant",
-          timestamp: 300,
-        },
-      ];
-      const terminalHistory = {
-        messages: authoritativeMessages,
-        sessionId: "control-ui-e2e-session",
-        sessionInfo: {
-          activeRunIds: [],
-          hasActiveRun: false,
-          key: "main",
-          kind: "direct",
-          status: "done",
-          updatedAt: Date.now(),
-        },
-        thinkingLevel: null,
-      };
-      await gateway.setMethodResponse("chat.history", terminalHistory);
-      await gateway.setMethodResponse("chat.startup", terminalHistory);
-      await gateway.emitChatFinal({ runId: activeRunId, text: terminalReply });
-      await page
-        .getByRole("button", { name: "Stop generating" })
-        .waitFor({ state: "detached", timeout: 10_000 });
-      await page
-        .locator(".chat-bubble", { hasText: terminalPostSteerReply })
-        .waitFor({ timeout: 10_000 });
-      await expectChatBubbleAbove(page, preSteerReply, queuedFollowUp);
-      await expectChatBubbleAbove(page, queuedFollowUp, followUp);
-      await expectChatBubbleAbove(page, followUp, postSteerReply);
-
-      await page.reload();
-      await page
-        .locator(".chat-bubble", { hasText: terminalPostSteerReply })
-        .waitFor({ timeout: 10_000 });
-      await expectChatBubbleAbove(page, originalPrompt, preSteerReply);
-      await expectChatBubbleAbove(page, preSteerReply, queuedFollowUp);
-      await expectChatBubbleAbove(page, queuedFollowUp, followUp);
-      await expectChatBubbleAbove(page, followUp, postSteerReply);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
   it("preserves a non-steer server default for active-run follow-ups", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -419,8 +116,7 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.fill("keep the first shortcut run active");
       await page.getByRole("button", { name: "Send message" }).click();
-      const firstSend = requireRecord((await gateway.waitForRequest("chat.send")).params);
-      const firstRunId = requireString(firstSend.idempotencyKey, "first active run id");
+      await gateway.waitForRequest("chat.send");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
       const steerText = "steer this keyboard follow-up now";
@@ -431,13 +127,275 @@ suite.define(() => {
       const steerParams = requireRecord(firstRunSends[1]?.params);
       expect(steerParams).toMatchObject({
         deliver: false,
-        expectedRunId: firstRunId,
         message: steerText,
         queueMode: "steer",
         sessionKey: "main",
       });
-      const steeredRow = page.locator(".chat-queue__item--steered", { hasText: steerText });
-      await steeredRow.waitFor({ timeout: 10_000 });
+      expect(steerParams).not.toHaveProperty("expectedRunId");
+      expect(steerParams).not.toHaveProperty("expectedLeafEntryId");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps the active run across a live steer operation", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const runId = "run-a";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "user",
+          content: "run the long command",
+          __openclaw: { id: "user-a", idempotencyKey: `${runId}:user`, seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "callExec", name: "exec", arguments: {} }],
+          __openclaw: { id: "exec-call", seq: 2 },
+        },
+        {
+          role: "toolResult",
+          toolCallId: "callExec",
+          toolName: "exec",
+          content: [{ type: "text", text: "process still running" }],
+          __openclaw: { id: "exec-result", seq: 3 },
+        },
+      ],
+      inFlightRun: { runId, text: "" },
+      sessionInfo: { activeRunIds: [runId], hasActiveRun: true, key: "main" },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      const configPatchesBefore = (await gateway.getRequests("config.patch")).length;
+      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+      await waitForRequests(gateway, "config.patch", configPatchesBefore + 1);
+      const shortcut = page.locator("[data-settings-send-shortcut]");
+      await shortcut.selectOption("enter");
+      expect(await shortcut.inputValue()).toBe("enter");
+      await page.goto(`${suite.server.baseUrl}chat`);
+
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await page.locator(".chat-tool-msg-summary", { hasText: "Exec" }).waitFor();
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      let agentSequence = 0;
+      const commentaryText = "The active commentary stays visible.";
+      await gateway.emitGatewayEvent("agent", {
+        data: {
+          kind: "preamble",
+          itemId: "active-commentary",
+          progressText: commentaryText,
+        },
+        runId,
+        seq: ++agentSequence,
+        sessionKey: "main",
+        stream: "item",
+        ts: Date.now(),
+      });
+      const transcript = page.locator(".chat-thread-inner");
+      await transcript.getByText(commentaryText, { exact: true }).waitFor();
+      const emitTool = (data: Record<string, unknown>) =>
+        gateway.emitGatewayEvent("agent", {
+          data,
+          runId,
+          seq: ++agentSequence,
+          sessionKey: "main",
+          stream: "tool",
+          ts: Date.now(),
+        });
+
+      const steerText = "steer while the process runs";
+      const sendsBeforeSteer = (await gateway.getRequests("chat.send")).length;
+      await gateway.deferNext("chat.send");
+      await composer.fill(steerText);
+      await composer.press("Control+Enter");
+      const steerSend = await gateway.waitForRequest("chat.send", { after: sendsBeforeSteer });
+      const steerParams = requireRecord(steerSend.params);
+      expect(steerParams).toMatchObject({
+        deliver: false,
+        message: steerText,
+        queueMode: "steer",
+        sessionKey: "main",
+      });
+      expect(steerParams).not.toHaveProperty("expectedRunId");
+      expect(steerParams).not.toHaveProperty("expectedLeafEntryId");
+      const steerRunId = requireString(
+        steerParams.idempotencyKey,
+        "steer chat send idempotency key",
+      );
+      await expect
+        .poll(() => transcript.getByText(commentaryText, { exact: true }).count())
+        .toBe(1);
+      await gateway.resolveDeferred("chat.send", { runId: steerRunId, status: "started" });
+      const steerUser = {
+        __openclaw: {
+          id: "ui4-steer-user",
+          idempotencyKey: `${steerRunId}:user`,
+          seq: 4,
+          steerTargetRunId: runId,
+        },
+        content: [{ text: steerText, type: "text" }],
+        role: "user",
+        timestamp: Date.now(),
+      };
+      await gateway.deferNext("chat.history");
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [runId],
+        clientRunId: steerRunId,
+        hasActiveRun: true,
+        message: steerUser,
+        messageId: "ui4-steer-user",
+        messageSeq: 4,
+        session: {
+          activeRunIds: [runId],
+          hasActiveRun: true,
+          key: "main",
+          kind: "direct",
+          status: "running",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await page.locator(".chat-group.user", { hasText: steerText }).waitFor();
+      await gateway.emitGatewayEvent("chat", {
+        runId: steerRunId,
+        sessionKey: "main",
+        state: "final",
+      });
+
+      await emitTool({
+        args: { action: "poll" },
+        name: "process",
+        phase: "start",
+        toolCallId: "callProcess",
+      });
+      await emitTool({
+        name: "process",
+        phase: "result",
+        result: "process complete",
+        toolCallId: "callProcess",
+      });
+      const workingRowKey = await page
+        .locator("[data-virtual-row-key^='agent-run:']")
+        .last()
+        .getAttribute("data-virtual-row-key");
+      const finalText = Array.from(
+        { length: 18 },
+        (_, index) =>
+          `Terminal response paragraph ${index + 1}. ` +
+          "The durable reply must replace every transient projection before the browser paints.",
+      ).join("\n\n");
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: finalText,
+        message: {
+          content: [{ text: finalText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      const streamingBubble = page.locator(".chat-bubble.streaming", {
+        hasText: "Terminal response paragraph 1.",
+      });
+      await streamingBubble.waitFor();
+      const streamingRow = streamingBubble.locator(
+        "xpath=ancestor::div[contains(@class, 'chat-virtual-row')]",
+      );
+      await streamingRow.waitFor();
+      expect(await streamingRow.getAttribute("data-virtual-row-key")).not.toBe(workingRowKey);
+      const steerBubble = page.locator(".chat-group.user", { hasText: steerText }).last();
+      const [steerBounds, streamingBounds] = await Promise.all([
+        steerBubble.boundingBox(),
+        streamingBubble.boundingBox(),
+      ]);
+      expect(steerBounds).not.toBeNull();
+      expect(streamingBounds).not.toBeNull();
+      expect(streamingBounds!.y).toBeGreaterThanOrEqual(steerBounds!.y + steerBounds!.height - 1);
+      const durableFinalMessage = {
+        role: "assistant",
+        content: [{ text: finalText, type: "text" }],
+        __openclaw: { id: "ui4-final", seq: 5 },
+      };
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [runId],
+        clientRunId: runId,
+        hasActiveRun: true,
+        message: durableFinalMessage,
+        messageId: "ui4-final",
+        messageSeq: 5,
+        runId,
+        sessionKey: "main",
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            let frames = 12;
+            const wait = () => {
+              frames -= 1;
+              if (frames <= 0) {
+                resolve();
+                return;
+              }
+              requestAnimationFrame(wait);
+            };
+            requestAnimationFrame(wait);
+          }),
+      );
+      await streamingBubble.waitFor({ state: "detached" });
+      expect(
+        await page.locator(".chat-thread-inner").getByText(finalText, { exact: true }).count(),
+      ).toBe(1);
+      const overlaps = await page.locator(".chat-thread").evaluate((thread) => {
+        const rows = Array.from(thread.querySelectorAll<HTMLElement>(".chat-virtual-row"))
+          .map((row) => {
+            const rect = row.getBoundingClientRect();
+            return {
+              bottom: rect.bottom,
+              key: row.dataset.virtualRowKey ?? "",
+              top: rect.top,
+            };
+          })
+          .filter((row) => row.bottom > row.top)
+          .toSorted((left, right) => left.top - right.top);
+        return rows.slice(1).flatMap((row, index) => {
+          const previous = rows[index];
+          return previous && row.key !== previous.key && row.top < previous.bottom - 1
+            ? [`${previous.key}->${row.key}`]
+            : [];
+        });
+      });
+      expect(overlaps).toEqual([]);
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [],
+        clientRunId: runId,
+        hasActiveRun: false,
+        message: durableFinalMessage,
+        messageId: "ui4-final",
+        messageSeq: 5,
+        runId,
+        sessionKey: "main",
+      });
+      await expect
+        .poll(() =>
+          page.locator("[data-virtual-row-key^='agent-run:'] .chat-bubble.streaming").count(),
+        )
+        .toBe(0);
+      await gateway.emitChatFinal({ runId, text: finalText });
+      await expect
+        .poll(() =>
+          page.locator(".chat-thread-inner").getByText(finalText, { exact: true }).count(),
+        )
+        .toBe(1);
+      await expect
+        .poll(() => page.locator(".chat-work-group", { hasText: "used process" }).count())
+        .toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -472,6 +430,87 @@ suite.define(() => {
       await queuedRow.waitFor({ timeout: 10_000 });
       await queuedRow.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
       await expectRequestCountStable(gateway, "chat.send", 1);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("sends a queued follow-up after an exact terminal session publication", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      sessionInfo: { hasActiveRun: false, status: "done" },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
+      await page.goto(`${suite.server.baseUrl}chat`);
+
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const initialText = "keep this run active until session state settles it";
+      await composer.fill(initialText);
+      await page.getByRole("button", { name: "Send message" }).click();
+      const initialSend = await gateway.waitForRequest("chat.send");
+      const initialSendParams = requireRecord(initialSend.params);
+      const activeRunId = requireString(initialSendParams.idempotencyKey, "active chat run id");
+      const activeSessionKey = requireString(initialSendParams.sessionKey, "active session key");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const followUp = "send after the missed terminal event";
+      await composer.fill(followUp);
+      await page.getByRole("button", { name: "Queue message" }).click();
+      const queuedRow = page.locator(".chat-queue__item", { hasText: followUp });
+      await queuedRow.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
+      await expectRequestCountStable(gateway, "chat.send", 1);
+
+      await gateway.setHistoryMessages([
+        {
+          __openclaw: {
+            idempotencyKey: `${activeRunId}:user`,
+          },
+          content: [{ text: initialText, type: "text" }],
+          role: "user",
+          timestamp: Date.now(),
+        },
+      ]);
+      const sessionListsBeforeTerminal = (await gateway.getRequests("sessions.list")).length;
+      await gateway.deferNext("sessions.list");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        activeRunIds: [activeRunId],
+        hasActiveRun: true,
+        key: activeSessionKey,
+        kind: "direct",
+        reason: "lifecycle",
+        status: "running",
+        updatedAt: Date.now(),
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(sessionListsBeforeTerminal);
+      await gateway.resolveDeferred(
+        "sessions.list",
+        chatSessionListResponse([
+          {
+            activeRunIds: [],
+            hasActiveRun: false,
+            key: activeSessionKey,
+            kind: "direct",
+            label: "Main",
+            lastRunId: activeRunId,
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        ]),
+      );
+
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      expect(requireRecord(sends[1]?.params)).toMatchObject({ message: followUp });
+      await queuedRow.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -542,7 +581,7 @@ suite.define(() => {
     }
   });
 
-  it("dismisses an informational steer notice when the steer request lands", async () => {
+  it("routes /redirect through one interrupt-mode chat.send", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -552,97 +591,21 @@ suite.define(() => {
     const gateway = await installMockGateway(page);
 
     try {
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
-      await page.goto(`${suite.server.baseUrl}chat?session=main`);
-
-      const originalPrompt = "keep this run active";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(originalPrompt);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page
+        .locator(".agent-chat__composer-combobox textarea")
+        .fill("/redirect start over cleanly");
       await page.getByRole("button", { name: "Send message" }).click();
-      const activeRequest = await gateway.waitForRequest("chat.send");
-      const activeRunId = requireString(
-        requireRecord(activeRequest.params).idempotencyKey,
-        "active run idempotency key",
-      );
-      await gateway.emitGatewayEvent("session.message", {
-        activeRunIds: [activeRunId],
-        clientRunId: activeRunId,
-        hasActiveRun: true,
-        message: {
-          __openclaw: {
-            id: "persisted-notice-original-user",
-            idempotencyKey: `${activeRunId}:user`,
-            seq: 1,
-          },
-          content: [{ text: originalPrompt, type: "text" }],
-          role: "user",
-          timestamp: Date.now(),
-        },
-        messageId: "persisted-notice-original-user",
-        messageSeq: 1,
-        session: {
-          activeRunIds: [activeRunId],
-          hasActiveRun: true,
-          key: "main",
-          kind: "direct",
-          status: "running",
-          updatedAt: Date.now(),
-        },
+
+      const request = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(request.params)).toMatchObject({
+        message: "start over cleanly",
+        queueMode: "interrupt",
         sessionKey: "main",
+        idempotencyKey: expect.any(String),
       });
-      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
-
-      const steerText = "route this into the active run";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(steerText);
-      await page.getByRole("button", { name: "Queue message" }).click();
-      const queue = page.locator(".chat-queue");
-      await queue.getByText(steerText).waitFor({ timeout: 10_000 });
-      await queue.getByRole("button", { name: "Steer" }).click();
-
-      const sends = await waitForRequests(gateway, "chat.send", 2);
-      const steerParams = requireRecord(sends[1]?.params);
-      expect(steerParams).toMatchObject({
-        expectedRunId: activeRunId,
-        message: steerText,
-        queueMode: "steer",
-      });
-      const steerRunId = requireString(steerParams.idempotencyKey, "steer idempotency key");
-      const row = queue.locator(".chat-queue__item--steered", { hasText: steerText });
-      await row.waitFor({ timeout: 10_000 });
-      const pendingPresentation = await row.evaluate((element) => {
-        const badge = element.querySelector<HTMLElement>(".chat-queue__badge--steered");
-        const icon = element.querySelector(".chat-queue__icon");
-        const probe = document.createElement("span");
-        probe.style.color = "var(--info)";
-        probe.style.background = "var(--info-subtle)";
-        document.body.append(probe);
-        const probeStyle = getComputedStyle(probe);
-        const infoColor = probeStyle.color;
-        const infoSubtle = probeStyle.backgroundColor;
-        probe.remove();
-        return {
-          badgeColor: badge ? getComputedStyle(badge).color : "",
-          backgroundColor: getComputedStyle(element).backgroundColor,
-          iconPoints: icon?.querySelector("polyline")?.getAttribute("points") ?? "",
-          infoColor,
-          infoSubtle,
-        };
-      });
-      await gateway.emitGatewayEvent("chat", {
-        runId: steerRunId,
-        sessionKey: "main",
-        state: "final",
-      });
-      await row.waitFor({ state: "detached", timeout: 10_000 });
-      await page.getByText(steerText, { exact: true }).waitFor({ timeout: 10_000 });
-      await expectChatBubbleAbove(page, "keep this run active", steerText);
-
-      expect(pendingPresentation).toMatchObject({
-        badgeColor: pendingPresentation.infoColor,
-        backgroundColor: pendingPresentation.infoSubtle,
-        iconPoints: "15 10 20 15 15 20",
-      });
-      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+      await page.getByText("Redirected.").waitFor({ timeout: 10_000 });
+      await expectRequestCountStable(gateway, "chat.send", 1);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -707,20 +670,12 @@ suite.define(() => {
       const steerParams = requireRecord(steerRequest.params);
       expect(steerParams).toMatchObject({
         deliver: false,
-        expectedLeafEntryId: "leaf-active",
-        expectedRunId: "active-run",
         message: queuedPrompt,
         queueMode: "steer",
         sessionKey: "main",
       });
-      await queue.locator(".chat-queue__badge--steered", { hasText: "Steering" }).waitFor({
-        timeout: 10_000,
-      });
-      await gateway.emitChatFinal({
-        runId: requireString(steerParams.idempotencyKey, "restored steer idempotency key"),
-        text: "Restored steer completed.",
-      });
-      await queue.getByText(queuedPrompt).waitFor({ state: "detached", timeout: 10_000 });
+      expect(steerParams).not.toHaveProperty("expectedRunId");
+      expect(steerParams).not.toHaveProperty("expectedLeafEntryId");
     } finally {
       await suite.closeBrowserContext(context);
     }

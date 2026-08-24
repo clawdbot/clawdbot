@@ -810,6 +810,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     }
     const result = await performGatewaySessionReset({
       key,
+      operatorRoleActor: { kind: "system" },
       ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       reason: reason === "new" ? "new" : "reset",
       commandSource: "tui:embedded",
@@ -829,6 +830,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const cfg = getRuntimeConfig();
     const result = await createGatewaySession({
       cfg,
+      operatorRoleActor: { kind: "system" },
       ...opts,
       creation: { via: "operator", actor: { type: "human" } },
       armSessionDiffBaselineCapture: true,
@@ -917,16 +919,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
     return { ok: this.pluginApprovalBroker.resolve(id, decision) };
   }
 
-  async listModels(): Promise<TuiModelChoice[]> {
+  async listModels(opts?: { agentId?: string }): Promise<TuiModelChoice[]> {
     const cfg = getRuntimeConfig();
     const catalog = await this.withRuntimePluginRegistry(() => loadEmbeddedTuiModelCatalog(cfg));
     const { allowedCatalog } = buildAllowedModelSet({
       cfg,
       catalog,
       defaultProvider: DEFAULT_PROVIDER,
+      agentId: opts?.agentId,
     });
-    const entries = allowedCatalog.length > 0 ? allowedCatalog : catalog;
-    return entries.map((entry) => ({
+    return allowedCatalog.map((entry) => ({
       id: entry.id,
       name: entry.name ?? entry.id,
       provider: entry.provider,
@@ -955,6 +957,25 @@ export class EmbeddedTuiBackend implements TuiBackend {
     return result.continuationPrompt
       ? { text: result.text, continuationPrompt: result.continuationPrompt }
       : { text: result.text };
+  }
+
+  async runUsageCostCommand(opts: Parameters<NonNullable<TuiBackend["runUsageCostCommand"]>>[0]) {
+    await this.ready;
+    const { cfg, canonicalKey, storePath, entry } = loadSessionEntry(
+      opts.sessionKey,
+      opts.agentId ? { agentId: opts.agentId } : undefined,
+    );
+    const { formatSessionUsageCostSummary } =
+      await import("../auto-reply/reply/commands-session-cost.runtime.js");
+    return {
+      text: await formatSessionUsageCostSummary({
+        cfg,
+        sessionKey: canonicalKey ?? opts.sessionKey,
+        agentId: opts.agentId,
+        sessionEntry: entry,
+        storePath,
+      }),
+    };
   }
 
   private enqueuePendingLocalMessage(params: {

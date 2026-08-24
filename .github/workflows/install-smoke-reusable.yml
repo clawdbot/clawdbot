@@ -47,43 +47,32 @@ jobs:
       run_bun_global_install_smoke: ${{ steps.manifest.outputs.run_bun_global_install_smoke }}
       target_sha: ${{ steps.manifest.outputs.target_sha }}
       dockerfile_image: ${{ steps.manifest.outputs.dockerfile_image }}
-      workflow_repository: ${{ steps.workflow.outputs.workflow_repository }}
-      workflow_sha: ${{ steps.workflow.outputs.workflow_sha }}
     steps:
-      # github.workflow_sha identifies the caller during workflow_call. Resolve the called
-      # workflow SHA from job context so trusted harness checkouts cannot drift to candidate code.
-      - name: Resolve job workflow identity
-        id: workflow
+      # The caller workflow SHA can differ during workflow_call. The job context identifies
+      # this reusable workflow, so trusted harness checkouts cannot drift to candidate code.
+      - name: Assert trusted workflow identity
         env:
+          EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
           JOB_CONTEXT: ${{ toJSON(job) }}
         shell: bash
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
-          import fs from "node:fs";
-
           const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
-          if (
-            typeof job.workflow_repository !== "string" ||
-            !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(job.workflow_repository)
-          ) {
-            throw new Error("job.workflow_repository must be an owner/repository slug");
+          const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
+          if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) {
+            throw new Error("github.repository must be an owner/repository slug");
+          }
+          if (job.workflow_repository !== repository) {
+            throw new Error("job.workflow_repository must exactly match github.repository");
           }
           if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
             throw new Error("job.workflow_sha must be a full lowercase commit SHA");
           }
-          const outputPath = process.env.GITHUB_OUTPUT;
-          if (!outputPath) {
-            throw new Error("GITHUB_OUTPUT is required");
-          }
-          fs.appendFileSync(
-            outputPath,
-            `workflow_repository=${job.workflow_repository}\nworkflow_sha=${job.workflow_sha}\n`,
-          );
           NODE
 
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 1
@@ -126,15 +115,15 @@ jobs:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: Dockerfile
 
       # Keep release smoke builds bounded and log-producing. The Blacksmith
       # build action can leave jobs in-progress without step logs when a remote
@@ -246,27 +235,114 @@ jobs:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
-      - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Download exact candidate source archive
+        env:
+          TARGET_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          candidate_dir="${RUNNER_TEMP}/root-dockerfile-candidate"
+          install -d -m 0750 "$candidate_dir"
+          curl --fail --location --silent --show-error \
+            --connect-timeout 15 \
+            --max-time 300 \
+            --retry 3 \
+            --output "${RUNNER_TEMP}/root-dockerfile-candidate.tar.gz" \
+            "https://codeload.github.com/${TARGET_REPOSITORY}/tar.gz/${TARGET_SHA}"
+          tar -xzf "${RUNNER_TEMP}/root-dockerfile-candidate.tar.gz" \
+            --strip-components=1 \
+            --no-same-owner \
+            --no-same-permissions \
+            -C "$candidate_dir"
+          test -f "$candidate_dir/Dockerfile"
+
+      # Start from a statically trusted checkout. The following step validates job context
+      # locally before restoring the exact called-workflow revision.
+      - &trusted_workflow_subdir_checkout_step
+        name: Checkout trusted release harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.target_sha }}
+          repository: openclaw/openclaw
+          ref: main
+          path: .release-harness
+          fetch-depth: 1
           persist-credentials: false
 
-      - name: Checkout trusted image artifact helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          repository: ${{ needs.preflight.outputs.workflow_repository }}
-          ref: ${{ needs.preflight.outputs.workflow_sha }}
-          path: .release-harness
-          persist-credentials: false
+      - &trusted_workflow_subdir_identity_step
+        name: Restore exact trusted workflow revision
+        id: workflow
+        env:
+          EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          HARNESS_PATH: .release-harness
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+
+          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+          const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
+          const harnessPath = process.env.HARNESS_PATH ?? "";
+          if (repository !== "openclaw/openclaw" || job.workflow_repository !== repository) {
+            throw new Error("job.workflow_repository must exactly match github.repository");
+          }
+          if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
+            throw new Error("job.workflow_sha must be a full lowercase commit SHA");
+          }
+          if (harnessPath !== ".release-harness") {
+            throw new Error("trusted harness path is invalid");
+          }
+          const git = (...args) =>
+            execFileSync("git", ["-C", harnessPath, ...args], {
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "inherit"],
+            }).trim();
+          const remote = git("remote", "get-url", "origin").replace(/\.git$/u, "");
+          if (remote !== `https://github.com/${repository}`) {
+            throw new Error("trusted harness remote does not match the workflow repository");
+          }
+          execFileSync(
+            "git",
+            [
+              "-C",
+              harnessPath,
+              "fetch",
+              "--no-tags",
+              "--no-recurse-submodules",
+              "--depth=1",
+              "origin",
+              job.workflow_sha,
+            ],
+            { stdio: "inherit" },
+          );
+          execFileSync("git", ["-C", harnessPath, "checkout", "--detach", job.workflow_sha], {
+            stdio: "inherit",
+          });
+          if (git("rev-parse", "HEAD") !== job.workflow_sha) {
+            throw new Error("trusted harness checkout did not resolve to job.workflow_sha");
+          }
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            throw new Error("GITHUB_OUTPUT is required");
+          }
+          appendFileSync(
+            outputPath,
+            `repository=${repository}\nsha=${job.workflow_sha}\n`,
+          );
+          NODE
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: Dockerfile
 
       - name: Build local root Dockerfile smoke image
         env:
+          CANDIDATE_DIR: ${{ runner.temp }}/root-dockerfile-candidate
           IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
         run: |
           timeout --kill-after=30s 45m docker buildx build \
@@ -274,15 +350,15 @@ jobs:
             --load \
             --build-arg OPENCLAW_EXTENSIONS=matrix \
             -t "$IMAGE_REF" \
-            -f ./Dockerfile \
-            .
+            -f "$CANDIDATE_DIR/Dockerfile" \
+            "$CANDIDATE_DIR"
 
       - name: Pack root Dockerfile image artifact
         id: image_artifact
         env:
           IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
-          WORKFLOW_SHA: ${{ needs.preflight.outputs.workflow_sha }}
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
         run: |
           set -euo pipefail
           artifact_dir="${RUNNER_TEMP}/install-smoke-root-image"
@@ -356,7 +432,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
@@ -374,19 +450,8 @@ jobs:
     env:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
-      - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.preflight.outputs.target_sha }}
-          persist-credentials: false
-
-      - name: Checkout trusted image artifact helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          repository: ${{ needs.preflight.outputs.workflow_repository }}
-          ref: ${{ needs.preflight.outputs.workflow_sha }}
-          path: .release-harness
-          persist-credentials: false
+      - *trusted_workflow_subdir_checkout_step
+      - *trusted_workflow_subdir_identity_step
 
       - name: Validate root Dockerfile image artifact binding
         env:
@@ -444,7 +509,7 @@ jobs:
           OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
           OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
-          WORKFLOW_SHA: ${{ needs.preflight.outputs.workflow_sha }}
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
         run: |
           set -euo pipefail
           bash .release-harness/scripts/docker/shared-image-artifact.sh \
@@ -481,13 +546,13 @@ jobs:
         env:
           OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD: "1"
-        run: bash scripts/e2e/agents-delete-shared-workspace-docker.sh
+        run: bash .release-harness/scripts/e2e/agents-delete-shared-workspace-docker.sh
 
       - name: Run Docker gateway network e2e
         env:
           OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1"
-        run: bash scripts/e2e/gateway-network-docker.sh
+        run: bash .release-harness/scripts/e2e/gateway-network-docker.sh
 
       - name: Smoke test Dockerfile with matrix extension build arg
         env:
@@ -536,138 +601,506 @@ jobs:
             "
           '
 
-  installer_smoke:
-    needs: [preflight, root_dockerfile_image, root_dockerfile_image_ready]
+  installer_smoke_candidate_payload:
+    needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 75
+    outputs:
+      artifact_digest: ${{ steps.payload_upload.outputs.artifact-digest }}
+      artifact_id: ${{ steps.payload_upload.outputs.artifact-id }}
+      artifact_name: ${{ steps.payload.outputs.artifact_name }}
+      artifact_run_attempt: ${{ steps.payload.outputs.run_attempt }}
+      artifact_run_id: ${{ steps.payload.outputs.run_id }}
+      harness_repository: ${{ steps.payload.outputs.harness_repository }}
+      harness_sha: ${{ steps.payload.outputs.harness_sha }}
+      manifest_sha256: ${{ steps.payload.outputs.manifest_sha256 }}
+      package_version: ${{ steps.payload.outputs.package_version }}
+      repository: ${{ steps.payload.outputs.repository }}
+      source_archive_sha256: ${{ steps.payload.outputs.source_archive_sha256 }}
+      target_sha: ${{ steps.payload.outputs.target_sha }}
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - *trusted_workflow_subdir_checkout_step
+      - *trusted_workflow_subdir_identity_step
+
+      - name: Require exact trusted installer harness
+        env:
+          EXPECTED_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          EXPECTED_SHA: ${{ steps.workflow.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "$EXPECTED_REPOSITORY" ]]
+          [[ "$(git -C .release-harness rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+
+      - name: Download exact candidate source archive
+        env:
+          TARGET_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          curl --fail --location --silent --show-error \
+            --connect-timeout 15 \
+            --max-time 300 \
+            --retry 3 \
+            --output "${RUNNER_TEMP}/candidate.tar.gz" \
+            "https://codeload.github.com/${TARGET_REPOSITORY}/tar.gz/${TARGET_SHA}"
+          test -s "${RUNNER_TEMP}/candidate.tar.gz"
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
+        with:
+          cache-key: scripts/docker/install-sh-smoke/Dockerfile
+
+      - name: Build pinned candidate packaging harness
+        run: |
+          timeout --kill-after=30s 20m docker buildx build \
+            --progress=plain \
+            --load \
+            -t openclaw-install-candidate-packager:local \
+            -f ./.release-harness/scripts/docker/install-sh-smoke/Dockerfile \
+            ./.release-harness/scripts/docker
+
+      - name: Package candidate only inside pinned harness
+        env:
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
+        run: |
+          set -euo pipefail
+          package_dir="${RUNNER_TEMP}/candidate-package"
+          mkdir -p "$package_dir"
+          chmod 0777 "$package_dir"
+          timeout --kill-after=30s 50m docker run --rm \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 1024 \
+            --user node \
+            --entrypoint /bin/bash \
+            -e ALLOW_UNRELEASED_CHANGELOG \
+            -e CI=1 \
+            -v "${RUNNER_TEMP}/candidate.tar.gz:/input/candidate.tar.gz:ro" \
+            -v "${package_dir}:/output" \
+            -v "$PWD/.release-harness:/harness:ro" \
+            openclaw-install-candidate-packager:local \
+            -lc '
+              set -euo pipefail
+              source_dir="$(mktemp -d)"
+              tar -xzf /input/candidate.tar.gz \
+                --strip-components=1 \
+                --no-same-owner \
+                --no-same-permissions \
+                -C "$source_dir"
+              cd "$source_dir"
+              preflight_args=(--source-dir "$source_dir")
+              if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+                preflight_args+=(--allow-unreleased-changelog)
+              fi
+              node /harness/scripts/package-source-preflight.mjs "${preflight_args[@]}"
+              mkdir -p /tmp/corepack
+              corepack enable --install-directory /tmp/corepack
+              export PATH="/tmp/corepack:$PATH"
+              pnpm install --frozen-lockfile
+              package_args=(
+                --source-dir "$source_dir"
+                --output-dir /output
+                --pack-json /output/pack.json
+              )
+              if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+                package_args+=(--allow-unreleased-changelog)
+              fi
+              node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
+            '
+
+      - name: Seal candidate payload in clean pinned harness
+        id: payload
+        env:
+          HARNESS_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          payload_dir="${RUNNER_TEMP}/install-smoke-candidate-payload"
+          install -d -m 0750 "$payload_dir"
+          docker run --rm \
+            --network none \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" \
+            --entrypoint node \
+            -v "$PWD/.release-harness:/harness:ro" \
+            -v "${RUNNER_TEMP}/candidate.tar.gz:/input/candidate.tar.gz:ro" \
+            -v "${RUNNER_TEMP}/candidate-package:/package:ro" \
+            -v "${payload_dir}:/payload" \
+            openclaw-install-candidate-packager:local \
+            /harness/scripts/install-smoke-candidate-payload.mts seal \
+              --archive /input/candidate.tar.gz \
+              --package-dir /package \
+              --output-dir /payload \
+              --repository "$TARGET_REPOSITORY" \
+              --target-sha "$TARGET_SHA" \
+              --harness-repository "$HARNESS_REPOSITORY" \
+              --harness-sha "$HARNESS_SHA" \
+              --run-id "$GITHUB_RUN_ID" \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            >"${RUNNER_TEMP}/candidate-payload-result.json"
+          manifest="${payload_dir}/install-smoke-candidate-payload.json"
+          artifact_name="install-smoke-candidate-payload-${TARGET_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          manifest_sha256="$(sha256sum "$manifest" | cut -d ' ' -f 1)"
+          package_version="$(jq -er '.packageVersion' "$manifest")"
+          source_archive_sha256="$(jq -er '.sourceArchiveSha256' "$manifest")"
+          {
+            echo "artifact_name=$artifact_name"
+            echo "artifact_path=$payload_dir"
+            echo "harness_repository=$HARNESS_REPOSITORY"
+            echo "harness_sha=$HARNESS_SHA"
+            echo "manifest_sha256=$manifest_sha256"
+            echo "package_version=$package_version"
+            echo "repository=$TARGET_REPOSITORY"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "source_archive_sha256=$source_archive_sha256"
+            echo "target_sha=$TARGET_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload candidate payload artifact
+        id: payload_upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.payload.outputs.artifact_name }}
+          path: ${{ steps.payload.outputs.artifact_path }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  installer_smoke_update_image:
+    needs: [preflight]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      archive_sha256: ${{ steps.image_artifact.outputs.archive_sha256 }}
+      artifact_digest: ${{ steps.image_artifact_upload.outputs.artifact-digest }}
+      artifact_id: ${{ steps.image_artifact_upload.outputs.artifact-id }}
+      artifact_name: ${{ steps.image_artifact.outputs.artifact_name }}
+      artifact_run_attempt: ${{ steps.image_artifact.outputs.run_attempt }}
+      artifact_run_id: ${{ steps.image_artifact.outputs.run_id }}
+      target_sha: ${{ steps.image_artifact.outputs.target_sha }}
+      workflow_sha: ${{ steps.image_artifact.outputs.workflow_sha }}
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - *trusted_workflow_subdir_checkout_step
+      - *trusted_workflow_subdir_identity_step
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
+        with:
+          cache-key: scripts/docker/install-sh-smoke/Dockerfile
+
+      - name: Build installer smoke image
+        env:
+          IMAGE_REF: openclaw-install-smoke:local
+        run: |
+          timeout --kill-after=30s 20m docker buildx build \
+            --progress=plain \
+            --load \
+            -t "$IMAGE_REF" \
+            -f ./.release-harness/scripts/docker/install-sh-smoke/Dockerfile \
+            ./.release-harness/scripts/docker
+
+      - name: Pack installer smoke image artifact
+        id: image_artifact
+        env:
+          IMAGE_REF: openclaw-install-smoke:local
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/install-smoke-update-image"
+          artifact_name="install-smoke-update-image-${TARGET_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            pack "$artifact_dir" install-smoke-update "$TARGET_SHA" "$WORKFLOW_SHA" "$IMAGE_REF"
+          archive_sha256="$(
+            jq -er '.archive.sha256 | select(type == "string" and test("^[a-f0-9]{64}$"))' \
+              "$artifact_dir/shared-image-artifact.json"
+          )"
+          {
+            echo "archive_sha256=$archive_sha256"
+            echo "artifact_name=$artifact_name"
+            echo "artifact_path=$artifact_dir"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "target_sha=$TARGET_SHA"
+            echo "workflow_sha=$WORKFLOW_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload installer smoke image artifact
+        id: image_artifact_upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.image_artifact.outputs.artifact_name }}
+          path: ${{ steps.image_artifact.outputs.artifact_path }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  installer_smoke_nonroot_image:
+    needs: [preflight]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      archive_sha256: ${{ steps.image_artifact.outputs.archive_sha256 }}
+      artifact_digest: ${{ steps.image_artifact_upload.outputs.artifact-digest }}
+      artifact_id: ${{ steps.image_artifact_upload.outputs.artifact-id }}
+      artifact_name: ${{ steps.image_artifact.outputs.artifact_name }}
+      artifact_run_attempt: ${{ steps.image_artifact.outputs.run_attempt }}
+      artifact_run_id: ${{ steps.image_artifact.outputs.run_id }}
+      target_sha: ${{ steps.image_artifact.outputs.target_sha }}
+      workflow_sha: ${{ steps.image_artifact.outputs.workflow_sha }}
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - *trusted_workflow_subdir_checkout_step
+      - *trusted_workflow_subdir_identity_step
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
+        with:
+          cache-key: scripts/docker/install-sh-nonroot/Dockerfile
+
+      - name: Build installer non-root image
+        env:
+          IMAGE_REF: openclaw-install-nonroot:local
+        run: |
+          timeout --kill-after=30s 20m docker buildx build \
+            --progress=plain \
+            --load \
+            -t "$IMAGE_REF" \
+            -f ./.release-harness/scripts/docker/install-sh-nonroot/Dockerfile \
+            ./.release-harness/scripts/docker
+
+      - name: Pack installer non-root image artifact
+        id: image_artifact
+        env:
+          IMAGE_REF: openclaw-install-nonroot:local
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/install-smoke-nonroot-image"
+          artifact_name="install-smoke-nonroot-image-${TARGET_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            pack "$artifact_dir" install-smoke-nonroot "$TARGET_SHA" "$WORKFLOW_SHA" "$IMAGE_REF"
+          archive_sha256="$(
+            jq -er '.archive.sha256 | select(type == "string" and test("^[a-f0-9]{64}$"))' \
+              "$artifact_dir/shared-image-artifact.json"
+          )"
+          {
+            echo "archive_sha256=$archive_sha256"
+            echo "artifact_name=$artifact_name"
+            echo "artifact_path=$artifact_dir"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "target_sha=$TARGET_SHA"
+            echo "workflow_sha=$WORKFLOW_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload installer non-root image artifact
+        id: image_artifact_upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.image_artifact.outputs.artifact_name }}
+          path: ${{ steps.image_artifact.outputs.artifact_path }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  installer_smoke_update:
+    needs: [preflight, installer_smoke_candidate_payload, installer_smoke_update_image]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
-      - name: Checkout trusted installer harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          repository: ${{ needs.preflight.outputs.workflow_repository }}
-          ref: ${{ needs.preflight.outputs.workflow_sha }}
-          persist-credentials: false
+      - *trusted_workflow_subdir_checkout_step
+      - *trusted_workflow_subdir_identity_step
 
-      - name: Checkout candidate CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.preflight.outputs.target_sha }}
-          path: candidate
-          persist-credentials: false
-
-      - name: Checkout trusted image artifact helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          repository: ${{ needs.preflight.outputs.workflow_repository }}
-          ref: ${{ needs.preflight.outputs.workflow_sha }}
-          path: .release-harness
-          persist-credentials: false
-
-      - name: Validate root Dockerfile image artifact binding
+      - name: Validate candidate payload artifact binding
         env:
-          ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
-          ARTIFACT_DIGEST: ${{ needs.root_dockerfile_image.outputs.artifact_digest }}
-          ARTIFACT_ID: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
-          ARTIFACT_NAME: ${{ needs.root_dockerfile_image.outputs.artifact_name }}
-          ARTIFACT_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
-          ARTIFACT_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          ARTIFACT_DIGEST: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}
+          ARTIFACT_HARNESS_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.harness_repository }}
+          ARTIFACT_HARNESS_SHA: ${{ needs.installer_smoke_candidate_payload.outputs.harness_sha }}
+          ARTIFACT_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.repository }}
+          ARTIFACT_TARGET_SHA: ${{ needs.installer_smoke_candidate_payload.outputs.target_sha }}
+          HARNESS_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
         run: |
           set -euo pipefail
           [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
-            echo "Root image artifact ID is missing or invalid." >&2
+            echo "Candidate payload artifact ID is missing or invalid." >&2
             exit 1
           }
           [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || {
-            echo "Root image artifact digest is missing or invalid." >&2
-            exit 1
-          }
-          [[ "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
-            echo "Root image archive SHA-256 is missing or invalid." >&2
+            echo "Candidate payload artifact digest is missing or invalid." >&2
             exit 1
           }
           [[ "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
-            echo "Root image artifact run ID is missing or invalid." >&2
+            echo "Candidate payload artifact run ID is missing or invalid." >&2
             exit 1
           }
           [[ "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
-            echo "Root image artifact run attempt is missing or invalid." >&2
+            echo "Candidate payload artifact run attempt is missing or invalid." >&2
             exit 1
           }
-          expected_artifact_name="install-smoke-root-image-${TARGET_SHA:0:12}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
+          [[ "$ARTIFACT_REPOSITORY" == "$GITHUB_REPOSITORY" ]]
+          [[ "$ARTIFACT_TARGET_SHA" == "$TARGET_SHA" ]]
+          [[ "$ARTIFACT_HARNESS_REPOSITORY" == "$HARNESS_REPOSITORY" ]]
+          [[ "$ARTIFACT_HARNESS_SHA" == "$HARNESS_SHA" ]]
+          expected_artifact_name="install-smoke-candidate-payload-${TARGET_SHA}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
           [[ "$ARTIFACT_NAME" == "$expected_artifact_name" ]] || {
-            echo "Root image artifact name does not match the target and producer run attempt." >&2
+            echo "Candidate payload artifact name does not match the producer tuple." >&2
             exit 1
           }
           bash .release-harness/scripts/docker/shared-image-artifact.sh \
-            verify-upload "Root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            verify-upload "Candidate payload" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
             "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
-      - name: Download root Dockerfile image artifact
+      - name: Download candidate payload artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          artifact-ids: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
-          path: ${{ runner.temp }}/install-smoke-root-image
-          run-id: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          artifact-ids: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_id }}
+          path: ${{ runner.temp }}/install-smoke-candidate-payload
+          run-id: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}
           github-token: ${{ github.token }}
 
-      - name: Verify and load root Dockerfile image artifact
+      - name: Validate installer update image artifact binding
         env:
-          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
-          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
-          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          ARCHIVE_SHA256: ${{ needs.installer_smoke_update_image.outputs.archive_sha256 }}
+          ARTIFACT_DIGEST: ${{ needs.installer_smoke_update_image.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.installer_smoke_update_image.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.installer_smoke_update_image.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.installer_smoke_update_image.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.installer_smoke_update_image.outputs.artifact_run_id }}
+          ARTIFACT_TARGET_SHA: ${{ needs.installer_smoke_update_image.outputs.target_sha }}
+          ARTIFACT_WORKFLOW_SHA: ${{ needs.installer_smoke_update_image.outputs.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
-          WORKFLOW_SHA: ${{ needs.preflight.outputs.workflow_sha }}
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Installer update image artifact ID is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Installer update image artifact digest is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Installer update image archive SHA-256 is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Installer update image artifact run ID is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Installer update image artifact run attempt is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_TARGET_SHA" == "$TARGET_SHA" ]] || {
+            echo "Installer update image target SHA does not match the selected candidate." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {
+            echo "Installer update image workflow SHA does not match the trusted harness." >&2
+            exit 1
+          }
+          expected_artifact_name="install-smoke-update-image-${TARGET_SHA}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
+          [[ "$ARTIFACT_NAME" == "$expected_artifact_name" ]] || {
+            echo "Installer update image artifact name does not match the producer tuple." >&2
+            exit 1
+          }
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Installer update image" "$ARTIFACT_ID" "$ARTIFACT_NAME" \
+            "$ARTIFACT_DIGEST" "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download installer update image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.installer_smoke_update_image.outputs.artifact_id }}
+          path: ${{ runner.temp }}/install-smoke-update-image
+          run-id: ${{ needs.installer_smoke_update_image.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and load installer update image artifact
+        env:
+          IMAGE_REF: openclaw-install-smoke:local
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: ${{ needs.installer_smoke_update_image.outputs.archive_sha256 }}
+          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.installer_smoke_update_image.outputs.artifact_run_attempt }}
+          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.installer_smoke_update_image.outputs.artifact_run_id }}
+          TARGET_SHA: ${{ needs.installer_smoke_update_image.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ needs.installer_smoke_update_image.outputs.workflow_sha }}
         run: |
           set -euo pipefail
           bash .release-harness/scripts/docker/shared-image-artifact.sh \
-            load "${RUNNER_TEMP}/install-smoke-root-image" install-smoke-root \
+            load "${RUNNER_TEMP}/install-smoke-update-image" install-smoke-update \
             "$TARGET_SHA" "$WORKFLOW_SHA" "$IMAGE_REF"
 
-      - name: Require local root Dockerfile image
+      - name: Require local installer update image
+        run: docker image inspect openclaw-install-smoke:local >/dev/null
+
+      - name: Verify candidate payload contents
         env:
-          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-        run: docker image inspect "$IMAGE_REF" >/dev/null
-
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
-        with:
-          max-cache-size-mb: 800000
-
-      - name: Build installer smoke image
+          HARNESS_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
+          MANIFEST_SHA256: ${{ needs.installer_smoke_candidate_payload.outputs.manifest_sha256 }}
+          PACKAGE_VERSION: ${{ needs.installer_smoke_candidate_payload.outputs.package_version }}
+          SOURCE_ARCHIVE_SHA256: ${{ needs.installer_smoke_candidate_payload.outputs.source_archive_sha256 }}
+          TARGET_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.repository }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
         run: |
-          timeout --kill-after=30s 20m docker buildx build \
-            --progress=plain \
-            --load \
-            -t openclaw-install-smoke:local \
-            -f ./scripts/docker/install-sh-smoke/Dockerfile \
-            ./scripts/docker
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --entrypoint node \
+            -v "$PWD/.release-harness:/harness:ro" \
+            -v "${RUNNER_TEMP}/install-smoke-candidate-payload:/payload:ro" \
+            openclaw-install-smoke:local \
+            /harness/scripts/install-smoke-candidate-payload.mts verify \
+              --payload-dir /payload \
+              --repository "$TARGET_REPOSITORY" \
+              --target-sha "$TARGET_SHA" \
+              --harness-repository "$HARNESS_REPOSITORY" \
+              --harness-sha "$HARNESS_SHA" \
+              --run-id "$GITHUB_RUN_ID" \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --package-version "$PACKAGE_VERSION" \
+              --manifest-sha256 "$MANIFEST_SHA256" \
+              --source-archive-sha256 "$SOURCE_ARCHIVE_SHA256"
 
-      - name: Build installer non-root image
-        run: |
-          timeout --kill-after=30s 20m docker buildx build \
-            --progress=plain \
-            --load \
-            -t openclaw-install-nonroot:local \
-            -f ./scripts/docker/install-sh-nonroot/Dockerfile \
-            ./scripts/docker
-
-      - name: Setup Node environment for installer smoke
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          install-deps: "true"
-
-      - name: Run installer docker tests
+      - name: Run installer update docker tests
         env:
-          OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
+          OPENCLAW_INSTALL_SMOKE_FROZEN_PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload
+          OPENCLAW_INSTALL_SMOKE_GROUP: update
           OPENCLAW_INSTALL_URL: file:///tmp/openclaw-install.sh
           OPENCLAW_INSTALL_CLI_URL: file:///tmp/openclaw-install-cli.sh
           OPENCLAW_NO_ONBOARD: "1"
@@ -678,132 +1111,351 @@ jobs:
           OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
           OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: ${{ inputs.update_baseline_version || 'latest' }}
-          OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-          OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"
-          OPENCLAW_INSTALL_SMOKE_SOURCE_DIR: ${{ github.workspace }}/candidate
-        run: bash scripts/test-install-sh-docker.sh
+          OPENCLAW_INSTALL_SMOKE_UPDATE_EXPECT_VERSION: ${{ needs.installer_smoke_candidate_payload.outputs.package_version }}
+        run: bash .release-harness/scripts/test-install-sh-docker.sh
 
       - name: Run Rocky Linux installer smoke
+        env:
+          PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload
         run: |
           timeout --kill-after=30s 20m docker run --rm \
             --platform linux/amd64 \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
-            -v "$PWD/candidate/scripts/install.sh:/tmp/install.sh:ro" \
+            -v "$PAYLOAD_DIR/install.sh:/tmp/install.sh:ro" \
             rockylinux:9@sha256:d644d203142cd5b54ad2a83a203e1dee68af2229f8fe32f52a30c6e1d3c3a9e0 \
             bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install.sh --install-method npm --version latest --no-onboard --no-prompt --verify && openclaw --version'
 
       - name: Run Rocky Linux CLI installer smoke
+        env:
+          PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload
         run: |
           timeout --kill-after=30s 20m docker run --rm \
             --platform linux/amd64 \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
-            -v "$PWD/candidate/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \
+            -v "$PAYLOAD_DIR/install-cli.sh:/tmp/install-cli.sh:ro" \
             rockylinux:9@sha256:d644d203142cd5b54ad2a83a203e1dee68af2229f8fe32f52a30c6e1d3c3a9e0 \
             bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install-cli.sh --prefix /tmp/openclaw-cli --version latest --no-onboard && /tmp/openclaw-cli/bin/openclaw --version'
 
-  bun_global_install_smoke:
-    needs: [preflight, root_dockerfile_image, root_dockerfile_image_ready]
-    if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'
+  installer_smoke_nonroot:
+    needs: [preflight, installer_smoke_candidate_payload, installer_smoke_nonroot_image]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
-      - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.preflight.outputs.target_sha }}
-          persist-credentials: false
+      - *trusted_workflow_subdir_checkout_step
+      - *trusted_workflow_subdir_identity_step
 
-      - name: Checkout trusted image artifact helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          repository: ${{ needs.preflight.outputs.workflow_repository }}
-          ref: ${{ needs.preflight.outputs.workflow_sha }}
-          path: .release-harness
-          persist-credentials: false
-
-      - name: Validate root Dockerfile image artifact binding
+      - name: Validate candidate payload artifact binding
         env:
-          ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
-          ARTIFACT_DIGEST: ${{ needs.root_dockerfile_image.outputs.artifact_digest }}
-          ARTIFACT_ID: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
-          ARTIFACT_NAME: ${{ needs.root_dockerfile_image.outputs.artifact_name }}
-          ARTIFACT_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
-          ARTIFACT_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          ARTIFACT_DIGEST: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}
+          ARTIFACT_HARNESS_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.harness_repository }}
+          ARTIFACT_HARNESS_SHA: ${{ needs.installer_smoke_candidate_payload.outputs.harness_sha }}
+          ARTIFACT_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.repository }}
+          ARTIFACT_TARGET_SHA: ${{ needs.installer_smoke_candidate_payload.outputs.target_sha }}
+          HARNESS_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ARTIFACT_REPOSITORY" == "$GITHUB_REPOSITORY" ]]
+          [[ "$ARTIFACT_TARGET_SHA" == "$TARGET_SHA" ]]
+          [[ "$ARTIFACT_HARNESS_REPOSITORY" == "$HARNESS_REPOSITORY" ]]
+          [[ "$ARTIFACT_HARNESS_SHA" == "$HARNESS_SHA" ]]
+          expected_artifact_name="install-smoke-candidate-payload-${TARGET_SHA}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
+          [[ "$ARTIFACT_NAME" == "$expected_artifact_name" ]]
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Candidate payload" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download candidate payload artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_id }}
+          path: ${{ runner.temp }}/install-smoke-candidate-payload
+          run-id: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate installer non-root image artifact binding
+        env:
+          ARCHIVE_SHA256: ${{ needs.installer_smoke_nonroot_image.outputs.archive_sha256 }}
+          ARTIFACT_DIGEST: ${{ needs.installer_smoke_nonroot_image.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.installer_smoke_nonroot_image.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.installer_smoke_nonroot_image.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.installer_smoke_nonroot_image.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.installer_smoke_nonroot_image.outputs.artifact_run_id }}
+          ARTIFACT_TARGET_SHA: ${{ needs.installer_smoke_nonroot_image.outputs.target_sha }}
+          ARTIFACT_WORKFLOW_SHA: ${{ needs.installer_smoke_nonroot_image.outputs.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ steps.workflow.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Installer non-root image artifact ID is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Installer non-root image artifact digest is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "Installer non-root image archive SHA-256 is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Installer non-root image artifact run ID is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Installer non-root image artifact run attempt is missing or invalid." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_TARGET_SHA" == "$TARGET_SHA" ]] || {
+            echo "Installer non-root image target SHA does not match the selected candidate." >&2
+            exit 1
+          }
+          [[ "$ARTIFACT_WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {
+            echo "Installer non-root image workflow SHA does not match the trusted harness." >&2
+            exit 1
+          }
+          expected_artifact_name="install-smoke-nonroot-image-${TARGET_SHA}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
+          [[ "$ARTIFACT_NAME" == "$expected_artifact_name" ]] || {
+            echo "Installer non-root image artifact name does not match the producer tuple." >&2
+            exit 1
+          }
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Installer non-root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" \
+            "$ARTIFACT_DIGEST" "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download installer non-root image artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.installer_smoke_nonroot_image.outputs.artifact_id }}
+          path: ${{ runner.temp }}/install-smoke-nonroot-image
+          run-id: ${{ needs.installer_smoke_nonroot_image.outputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify and load installer non-root image artifact
+        env:
+          IMAGE_REF: openclaw-install-nonroot:local
+          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: ${{ needs.installer_smoke_nonroot_image.outputs.archive_sha256 }}
+          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.installer_smoke_nonroot_image.outputs.artifact_run_attempt }}
+          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.installer_smoke_nonroot_image.outputs.artifact_run_id }}
+          TARGET_SHA: ${{ needs.installer_smoke_nonroot_image.outputs.target_sha }}
+          WORKFLOW_SHA: ${{ needs.installer_smoke_nonroot_image.outputs.workflow_sha }}
+        run: |
+          set -euo pipefail
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            load "${RUNNER_TEMP}/install-smoke-nonroot-image" install-smoke-nonroot \
+            "$TARGET_SHA" "$WORKFLOW_SHA" "$IMAGE_REF"
+
+      - name: Require local installer non-root image
+        run: docker image inspect openclaw-install-nonroot:local >/dev/null
+
+      - name: Verify candidate payload contents
+        env:
+          HARNESS_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
+          MANIFEST_SHA256: ${{ needs.installer_smoke_candidate_payload.outputs.manifest_sha256 }}
+          PACKAGE_VERSION: ${{ needs.installer_smoke_candidate_payload.outputs.package_version }}
+          SOURCE_ARCHIVE_SHA256: ${{ needs.installer_smoke_candidate_payload.outputs.source_archive_sha256 }}
+          TARGET_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.repository }}
+          TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --network none \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --entrypoint node \
+            -v "$PWD/.release-harness:/harness:ro" \
+            -v "${RUNNER_TEMP}/install-smoke-candidate-payload:/payload:ro" \
+            openclaw-install-nonroot:local \
+            /harness/scripts/install-smoke-candidate-payload.mts verify \
+              --payload-dir /payload \
+              --repository "$TARGET_REPOSITORY" \
+              --target-sha "$TARGET_SHA" \
+              --harness-repository "$HARNESS_REPOSITORY" \
+              --harness-sha "$HARNESS_SHA" \
+              --run-id "$GITHUB_RUN_ID" \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --package-version "$PACKAGE_VERSION" \
+              --manifest-sha256 "$MANIFEST_SHA256" \
+              --source-archive-sha256 "$SOURCE_ARCHIVE_SHA256"
+
+      - name: Run installer non-root docker tests
+        env:
+          OPENCLAW_INSTALL_SMOKE_FROZEN_PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload
+          OPENCLAW_INSTALL_SMOKE_GROUP: nonroot
+          OPENCLAW_INSTALL_URL: file:///tmp/openclaw-install.sh
+          OPENCLAW_INSTALL_CLI_URL: file:///tmp/openclaw-install-cli.sh
+          OPENCLAW_NO_ONBOARD: "1"
+          OPENCLAW_INSTALL_SMOKE_SKIP_CLI: "0"
+          OPENCLAW_INSTALL_SMOKE_SKIP_IMAGE_BUILD: "1"
+          OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD: "1"
+          OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: "0"
+          OPENCLAW_INSTALL_SMOKE_UPDATE_EXPECT_VERSION: ${{ needs.installer_smoke_candidate_payload.outputs.package_version }}
+        run: bash .release-harness/scripts/test-install-sh-docker.sh
+
+  installer_smoke:
+    needs:
+      [
+        preflight,
+        root_dockerfile_image,
+        root_dockerfile_image_ready,
+        installer_smoke_candidate_payload,
+        installer_smoke_update_image,
+        installer_smoke_update,
+        installer_smoke_nonroot_image,
+        installer_smoke_nonroot,
+      ]
+    if: always() && needs.preflight.result == 'success' && needs.preflight.outputs.run_full_install_smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify installer smoke groups
+        env:
+          CANDIDATE_PAYLOAD_RESULT: ${{ needs.installer_smoke_candidate_payload.result }}
+          NONROOT_CONSUMER_RESULT: ${{ needs.installer_smoke_nonroot.result }}
+          NONROOT_PRODUCER_RESULT: ${{ needs.installer_smoke_nonroot_image.result }}
+          ROOT_IMAGE_READY_RESULT: ${{ needs.root_dockerfile_image_ready.result }}
+          ROOT_IMAGE_RESULT: ${{ needs.root_dockerfile_image.result }}
+          UPDATE_CONSUMER_RESULT: ${{ needs.installer_smoke_update.result }}
+          UPDATE_PRODUCER_RESULT: ${{ needs.installer_smoke_update_image.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+          check_result() {
+            local name="$1"
+            local result="$2"
+            if [[ "$result" != "success" ]]; then
+              echo "::error::${name} ended with ${result}."
+              failed=1
+            fi
+          }
+          check_result "Root Dockerfile image producer" "$ROOT_IMAGE_RESULT"
+          check_result "Root Dockerfile image gate" "$ROOT_IMAGE_READY_RESULT"
+          check_result "Installer candidate payload producer" "$CANDIDATE_PAYLOAD_RESULT"
+          check_result "Installer update image producer" "$UPDATE_PRODUCER_RESULT"
+          check_result "Installer update consumer" "$UPDATE_CONSUMER_RESULT"
+          check_result "Installer non-root image producer" "$NONROOT_PRODUCER_RESULT"
+          check_result "Installer non-root consumer" "$NONROOT_CONSUMER_RESULT"
+          exit "$failed"
+
+  bun_global_install_smoke:
+    needs: [preflight, installer_smoke_candidate_payload]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - *trusted_workflow_subdir_checkout_step
+      - *trusted_workflow_subdir_identity_step
+
+      - name: Validate candidate payload artifact binding
+        env:
+          ARTIFACT_DIGEST: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_id }}
+          ARTIFACT_NAME: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}
+          ARTIFACT_HARNESS_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.harness_repository }}
+          ARTIFACT_HARNESS_SHA: ${{ needs.installer_smoke_candidate_payload.outputs.harness_sha }}
+          ARTIFACT_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.repository }}
+          ARTIFACT_TARGET_SHA: ${{ needs.installer_smoke_candidate_payload.outputs.target_sha }}
+          HARNESS_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
         run: |
           set -euo pipefail
           [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || {
-            echo "Root image artifact ID is missing or invalid." >&2
+            echo "Candidate payload artifact ID is missing or invalid." >&2
             exit 1
           }
           [[ "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || {
-            echo "Root image artifact digest is missing or invalid." >&2
-            exit 1
-          }
-          [[ "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
-            echo "Root image archive SHA-256 is missing or invalid." >&2
+            echo "Candidate payload artifact digest is missing or invalid." >&2
             exit 1
           }
           [[ "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
-            echo "Root image artifact run ID is missing or invalid." >&2
+            echo "Candidate payload artifact run ID is missing or invalid." >&2
             exit 1
           }
           [[ "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
-            echo "Root image artifact run attempt is missing or invalid." >&2
+            echo "Candidate payload artifact run attempt is missing or invalid." >&2
             exit 1
           }
-          expected_artifact_name="install-smoke-root-image-${TARGET_SHA:0:12}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
+          [[ "$ARTIFACT_REPOSITORY" == "$GITHUB_REPOSITORY" ]]
+          [[ "$ARTIFACT_TARGET_SHA" == "$TARGET_SHA" ]]
+          [[ "$ARTIFACT_HARNESS_REPOSITORY" == "$HARNESS_REPOSITORY" ]]
+          [[ "$ARTIFACT_HARNESS_SHA" == "$HARNESS_SHA" ]]
+          expected_artifact_name="install-smoke-candidate-payload-${TARGET_SHA}-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}"
           [[ "$ARTIFACT_NAME" == "$expected_artifact_name" ]] || {
-            echo "Root image artifact name does not match the target and producer run attempt." >&2
+            echo "Candidate payload artifact name does not match the producer tuple." >&2
             exit 1
           }
           bash .release-harness/scripts/docker/shared-image-artifact.sh \
-            verify-upload "Root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            verify-upload "Candidate payload" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
             "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
-      - name: Download root Dockerfile image artifact
+      - name: Download candidate payload artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          artifact-ids: ${{ needs.root_dockerfile_image.outputs.artifact_id }}
-          path: ${{ runner.temp }}/install-smoke-root-image
-          run-id: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          artifact-ids: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_id }}
+          path: ${{ runner.temp }}/install-smoke-candidate-payload
+          run-id: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}
           github-token: ${{ github.token }}
 
-      - name: Verify and load root Dockerfile image artifact
+      - name: Setup trusted release harness for Bun smoke
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: "24.x"
+
+      - name: Verify candidate payload contents
         env:
-          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-          OPENCLAW_SHARED_IMAGE_ARCHIVE_SHA256: ${{ needs.root_dockerfile_image.outputs.archive_sha256 }}
-          OPENCLAW_SHARED_IMAGE_RUN_ATTEMPT: ${{ needs.root_dockerfile_image.outputs.artifact_run_attempt }}
-          OPENCLAW_SHARED_IMAGE_RUN_ID: ${{ needs.root_dockerfile_image.outputs.artifact_run_id }}
+          HARNESS_REPOSITORY: ${{ steps.workflow.outputs.repository }}
+          HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
+          MANIFEST_SHA256: ${{ needs.installer_smoke_candidate_payload.outputs.manifest_sha256 }}
+          PACKAGE_VERSION: ${{ needs.installer_smoke_candidate_payload.outputs.package_version }}
+          PRODUCER_RUN_ATTEMPT: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_attempt }}
+          PRODUCER_RUN_ID: ${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}
+          SOURCE_ARCHIVE_SHA256: ${{ needs.installer_smoke_candidate_payload.outputs.source_archive_sha256 }}
+          TARGET_REPOSITORY: ${{ needs.installer_smoke_candidate_payload.outputs.repository }}
           TARGET_SHA: ${{ needs.preflight.outputs.target_sha }}
-          WORKFLOW_SHA: ${{ needs.preflight.outputs.workflow_sha }}
         run: |
           set -euo pipefail
-          bash .release-harness/scripts/docker/shared-image-artifact.sh \
-            load "${RUNNER_TEMP}/install-smoke-root-image" install-smoke-root \
-            "$TARGET_SHA" "$WORKFLOW_SHA" "$IMAGE_REF"
+          node .release-harness/scripts/install-smoke-candidate-payload.mts verify \
+            --payload-dir "${RUNNER_TEMP}/install-smoke-candidate-payload" \
+            --repository "$TARGET_REPOSITORY" \
+            --target-sha "$TARGET_SHA" \
+            --harness-repository "$HARNESS_REPOSITORY" \
+            --harness-sha "$HARNESS_SHA" \
+            --run-id "$PRODUCER_RUN_ID" \
+            --run-attempt "$PRODUCER_RUN_ATTEMPT" \
+            --package-version "$PACKAGE_VERSION" \
+            --manifest-sha256 "$MANIFEST_SHA256" \
+            --source-archive-sha256 "$SOURCE_ARCHIVE_SHA256"
 
-      - name: Require local root Dockerfile image
+      - name: Install Bun for global smoke
+        run: npm install -g bun@1.3.14
+
+      - name: Run Bun global install candidate-payload smoke
+        working-directory: .release-harness
         env:
-          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-        run: docker image inspect "$IMAGE_REF" >/dev/null
-
-      - name: Setup Node environment for Bun smoke
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "true"
-          install-deps: "true"
-
-      - name: Run Bun global install image-provider smoke
-        env:
-          OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
-          OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
+          OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ: ${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz
         run: bash scripts/e2e/bun-global-install-smoke.sh
 
   docker-e2e-fast:
@@ -816,18 +1468,19 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: scripts/e2e/Dockerfile
 
       - name: Setup Node environment for package smoke
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
           install-deps: "true"

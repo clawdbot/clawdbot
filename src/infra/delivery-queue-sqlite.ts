@@ -364,6 +364,27 @@ export function countFailedDeliveryQueueEntries(stateDir?: string): Array<{
   );
 }
 
+/** Count pending entries across an exact set of queue namespaces. */
+export function countPendingDeliveryQueueEntries(
+  queueNames: readonly string[],
+  stateDir?: string,
+): number {
+  if (queueNames.length === 0) {
+    return 0;
+  }
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const [row] = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select((eb) => eb.fn.countAll<number>().as("count"))
+      .where("queue_name", "in", queueNames)
+      .where("status", "=", "pending"),
+  ).rows;
+  return row?.count ?? 0;
+}
+
 /** Physically expire age-bounded delivery queue tombstones. */
 export function pruneExpiredDeliveryQueueTombstones(stateDir?: string): void {
   const database = openStateDatabase(stateDir);

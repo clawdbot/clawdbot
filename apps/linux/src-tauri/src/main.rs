@@ -1,5 +1,3 @@
-#[cfg(target_os = "linux")]
-mod canvas;
 mod cli;
 mod discovery;
 mod gateway;
@@ -30,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State, Url, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, Url, WebviewWindow};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_global_shortcut::{Code, Modifiers};
 
@@ -239,17 +237,50 @@ impl DesktopState {
             .lock()
             .map_err(|_| "Installer lock is unavailable.".to_string())?;
         installer::install(app, channel)?;
+        let cli = OpenClawCli::discover().map_err(|error| {
+            format!("OpenClaw is installed, but the CLI could not be found: {error}")
+        })?;
+        *self.inner.cli.lock().expect("CLI mutex poisoned") = Some(cli.clone());
+
+        // The installed CLI owns config/state migrations; repair before any
+        // Gateway readiness checks consume an outdated home.
+        let repair_error = match cli.output(["doctor", "--fix", "--non-interactive"]) {
+            Ok(output) if !output.status.success() => Some(
+                cli::output_tail(&output.stderr)
+                    .unwrap_or_else(|| format!("OpenClaw repair exited with {}", output.status)),
+            ),
+            Err(error) => Some(format!("OpenClaw repair could not start: {error}")),
+            _ => None,
+        };
+        if let Some(error) = repair_error {
+            for line in error.lines() {
+                let _ = app.emit_to(
+                    "main",
+                    "install-progress",
+                    serde_json::json!({ "stream": "stderr", "line": line }),
+                );
+            }
+        }
+
         self.inner
             .navigation
             .lock()
-            .map_err(|_| "Dashboard navigation lock is unavailable.".to_string())?
+            .map_err(|_| {
+                "OpenClaw is installed, but preparing the Gateway dashboard failed: \
+                 Dashboard navigation lock is unavailable."
+                    .to_string()
+            })?
             .mark_onboarding_pending();
-        let cli = OpenClawCli::discover().map_err(|error| error.to_string())?;
-        *self.inner.cli.lock().expect("CLI mutex poisoned") = Some(cli.clone());
-        let ready = gateway::ensure_ready(&cli)?;
+        let ready = gateway::ensure_ready(&cli).map_err(|error| {
+            format!("OpenClaw is installed, but connecting to the Gateway failed: {error}")
+        })?;
         app.state::<gateway_ws::GatewayClient>()
             .configure(app, ready.gateway_ws.clone());
-        let navigated = self.navigate_local(app, &ready.dashboard_url, false, None, true, true)?;
+        let navigated = self
+            .navigate_local(app, &ready.dashboard_url, false, None, true, true)
+            .map_err(|error| {
+                format!("OpenClaw is installed, but opening the Gateway dashboard failed: {error}")
+            })?;
         self.update_tray(&ready.snapshot);
         if navigated {
             self.start_watchdog(app.clone());
@@ -736,11 +767,9 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_denylist(&["canvas", quickchat::QUICKCHAT_LABEL])
+                .with_denylist(&[quickchat::QUICKCHAT_LABEL])
                 .build(),
         );
-    #[cfg(target_os = "linux")]
-    let builder = canvas::register_protocol(builder);
 
     let builder = builder.setup(move |app| {
         let window = app
@@ -788,44 +817,9 @@ fn main() {
         app.manage(discovery::GatewayDiscovery::default());
         app.manage(quickchat_state.clone());
         app.manage(updater::UpdaterState::default());
-        #[cfg(target_os = "linux")]
-        match canvas::CanvasBridge::start(app.handle().clone()) {
-            Ok(bridge) => {
-                app.manage(bridge);
-            }
-            Err(error) => eprintln!("Canvas bridge unavailable: {error}"),
-        }
         state.set_tray(tray::build(app, state.clone(), global_shortcuts_supported)?);
         Ok(())
     });
-    #[cfg(target_os = "linux")]
-    let builder = builder.invoke_handler(tauri::generate_handler![
-        bootstrap,
-        build_info,
-        canvas::canvas_a2ui_action,
-        updater::check_for_updates,
-        discovery::connect_discovered_gateway,
-        discovery::discover_gateways,
-        install_cli,
-        gateway_action,
-        quickchat::quickchat_activate,
-        quickchat::quickchat_agents,
-        quickchat::quickchat_hide,
-        quickchat::quickchat_identity,
-        quickchat::quickchat_ready,
-        quickchat::quickchat_select_agent,
-        quickchat::quickchat_send,
-        quickchat::quickchat_set_expanded,
-        quickchat::quickchat_set_shortcut,
-        quickchat::quickchat_shortcut,
-        quickchat::quickchat_show_dashboard,
-        quickchat_widgets::quickchat_refresh_widget_surface,
-        quickchat_widgets::quickchat_sync_widgets,
-        updater::open_release_page,
-        updater::relaunch,
-        updater::updater_ready
-    ]);
-    #[cfg(not(target_os = "linux"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         bootstrap,
         build_info,
@@ -885,9 +879,6 @@ fn main() {
         #[cfg(target_os = "linux")]
         if matches!(event, tauri::RunEvent::Exit) {
             if let Some(bridge) = app.try_state::<gateway_sleep_logind::SleepBridge>() {
-                bridge.shutdown();
-            }
-            if let Some(bridge) = app.try_state::<canvas::CanvasBridge>() {
                 bridge.shutdown();
             }
         }

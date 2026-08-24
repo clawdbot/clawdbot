@@ -240,14 +240,24 @@ function countProgressRows(db: DatabaseSync): number {
   return normalizeSqliteNumber(row?.count ?? null) ?? 0;
 }
 
+function deleteExpiredProgressRows(db: DatabaseSync, now: number, limit: number) {
+  const kysely = progressDb(db);
+  const expiredSequences = kysely
+    .selectFrom("outbound_message_progress")
+    .select("sequence")
+    .where("occurred_at", "<", now - OUTBOUND_MESSAGE_PROGRESS_RETENTION_MS)
+    .orderBy("occurred_at", "asc")
+    .orderBy("sequence", "asc")
+    .limit(limit);
+  return executeSqliteQuerySync(
+    db,
+    kysely.deleteFrom("outbound_message_progress").where("sequence", "in", expiredSequences),
+  );
+}
+
 function pruneProgressAfterInsert(db: DatabaseSync, now: number): void {
   const kysely = progressDb(db);
-  const expired = executeSqliteQuerySync(
-    db,
-    kysely
-      .deleteFrom("outbound_message_progress")
-      .where("occurred_at", "<", now - OUTBOUND_MESSAGE_PROGRESS_RETENTION_MS),
-  );
+  const expired = deleteExpiredProgressRows(db, now, OUTBOUND_MESSAGE_PROGRESS_PRUNE_BATCH_ROWS);
   const cachedCount = progressRowCounts.get(db);
   let rowCount =
     cachedCount === undefined
@@ -454,22 +464,18 @@ export function hasOutboundMessageProgressCursor(params: {
 /** Prune existing progress without creating its lazy table. */
 export function pruneExpiredOutboundMessageProgress(
   params: { now?: number; database?: OpenClawStateDatabaseOptions } = {},
-): void {
+): number {
   const database = openOpenClawStateDatabase(params.database);
   if (!tableExists(database.db, "outbound_message_progress")) {
-    return;
+    return 0;
   }
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const deleted = deleteExpiredProgressRows(
       db,
-      progressDb(db)
-        .deleteFrom("outbound_message_progress")
-        .where(
-          "occurred_at",
-          "<",
-          (params.now ?? Date.now()) - OUTBOUND_MESSAGE_PROGRESS_RETENTION_MS,
-        ),
+      params.now ?? Date.now(),
+      OUTBOUND_MESSAGE_PROGRESS_PRUNE_BATCH_ROWS,
     );
     progressRowCounts.delete(db);
+    return Number(deleted.numAffectedRows ?? 0n);
   }, params.database);
 }

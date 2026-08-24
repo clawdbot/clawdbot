@@ -29,6 +29,7 @@ export function buildDraftSessionCreateParams(draft: {
   agentId: string;
   message: string;
   model?: string;
+  contextWindow?: string;
   thinkingLevel?: string;
   visibility?: NewSessionVisibility;
   attachments?: unknown[];
@@ -38,16 +39,15 @@ export function buildDraftSessionCreateParams(draft: {
   worktreeName?: string;
   cwd?: string;
   workspace?: string;
-  execNode?: string;
   catalogId?: string;
   category?: string;
 }): Record<string, unknown> {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
-  const execNode = normalizeOptionalString(draft.execNode);
   const catalogId = normalizeOptionalString(draft.catalogId);
   const category = normalizeOptionalString(draft.category);
   const model = normalizeOptionalString(draft.model);
+  const contextWindow = normalizeOptionalString(draft.contextWindow);
   const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
   const projectId = normalizeOptionalString(draft.projectId);
   const customFolder = !projectId && cwd && cwd !== workspace ? cwd : undefined;
@@ -61,9 +61,10 @@ export function buildDraftSessionCreateParams(draft: {
     ...(catalogId ? { catalogId } : {}),
     ...(category ? { category } : {}),
     ...(!catalogId && model ? { model } : {}),
+    ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
     ...(projectId ? { projectId } : {}),
-    ...(customFolder && !execNode ? { cwd: customFolder } : {}),
+    ...(customFolder ? { cwd: customFolder } : {}),
     ...(draft.worktree
       ? {
           worktree: true,
@@ -76,6 +77,5 @@ export function buildDraftSessionCreateParams(draft: {
             : {}),
         }
       : {}),
-    ...(!projectId && execNode ? { execNode, ...(cwd ? { cwd } : {}) } : {}),
   };
 }

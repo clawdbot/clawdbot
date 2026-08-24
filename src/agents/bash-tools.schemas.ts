@@ -26,7 +26,8 @@ export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
   workdir: Type.Optional(
     Type.String({
-      description: "Working directory; omit for default. Blank/whitespace is invalid.",
+      description:
+        "Working directory; omit for default. An empty string means omitted; whitespace-only is invalid.",
     }),
   ),
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
@@ -71,6 +72,9 @@ export const execSchema = Type.Object({
     }),
   ),
 });
+
+/** Exec parameters when no process-control continuation is authorized. */
+export const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "background"]);
 
 /** Parameters exposed by node-only exec surfaces. */
 export const nodeExecSchema = Type.Object({

@@ -3,7 +3,6 @@
  *
  * Routes completion payloads through gateway/channel/session paths and records delivery evidence.
  */
-import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import {
@@ -14,9 +13,9 @@ import { defaultRuntime } from "../../../runtime.js";
 import { isAgentMediatedCompletionSourceTool } from "../../../sessions/input-provenance.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
-import { mediaUrlsFromGeneratedAttachments } from "../../generated-attachments.js";
 import { hasGeneratedMediaCompletionEvent } from "../../internal-event-contract.js";
 import {
+  collectAgentInternalEventMedia,
   formatAgentInternalEventsForPrompt,
   type AgentInternalEvent,
 } from "../../internal-events.js";
@@ -61,15 +60,18 @@ export function isInternalAnnounceRequesterSession(sessionKey: string | undefine
   return getSubagentDepthFromSessionStore(sessionKey) >= 1 || isCronSessionKey(sessionKey);
 }
 
-function collectExpectedMediaFromInternalEvents(
-  events: AgentInternalEvent[] | undefined,
-): string[] {
-  return normalizeUniqueTrimmedStringList(
-    events?.flatMap((event) => [
-      ...(Array.isArray(event.mediaUrls) ? event.mediaUrls : []),
-      ...mediaUrlsFromGeneratedAttachments(event.attachments),
-    ]),
+function collectExpectedMediaFromInternalEvents(events: AgentInternalEvent[] | undefined): {
+  expectedMediaUrls: string[];
+  expectedMediaAttachments?: Record<string, NonNullable<AgentInternalEvent["attachments"]>[number]>;
+} {
+  const { mediaUrls: expectedMediaUrls, attachments } = collectAgentInternalEventMedia(events);
+  const expectedMediaAttachments = Object.fromEntries(
+    expectedMediaUrls.map((mediaUrl, index) => [mediaUrl, attachments[index] ?? {}]),
   );
+  return {
+    expectedMediaUrls,
+    ...(expectedMediaUrls.length > 0 ? { expectedMediaAttachments } : {}),
+  };
 }
 
 export async function deliverSubagentAnnouncement(params: {
@@ -99,6 +101,7 @@ export async function deliverSubagentAnnouncement(params: {
   directIdempotencyKey: string;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   signal?: AbortSignal;
+  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceDeliveryResult> {
   const sourceOwnerChanged = () => params.isSourceSessionEffectsAllowed?.() === false;
   if (sourceOwnerChanged()) {
@@ -149,6 +152,7 @@ export async function deliverSubagentAnnouncement(params: {
               })
             ? "message_tool_only"
             : "automatic";
+      const expectedMedia = collectExpectedMediaFromInternalEvents(params.internalEvents);
       const queuePayload = {
         kind: "agentTurn",
         sessionKey: canonicalSessionKey,
@@ -163,7 +167,7 @@ export async function deliverSubagentAnnouncement(params: {
           sourceTool: params.sourceTool ?? "subagent_announce",
         },
         sourceReplyDeliveryMode,
-        expectedMediaUrls: collectExpectedMediaFromInternalEvents(params.internalEvents),
+        ...expectedMedia,
         idempotencyKey: `${params.directIdempotencyKey}:agent-loop`,
       } as const;
       const queued = params.sourceRunId
@@ -258,6 +262,7 @@ export async function deliverSubagentAnnouncement(params: {
         onDeliveryResult: params.onDeliveryResult,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
+        resolveGatewayContext: params.resolveGatewayContext,
       });
     },
   });

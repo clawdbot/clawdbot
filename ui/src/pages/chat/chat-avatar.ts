@@ -1,7 +1,7 @@
 // Control UI chat module implements chat avatar behavior.
 import { html } from "lit";
+import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import { normalizeBasePath } from "../../app-route-paths.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import {
   resolveLocalUserAvatarText,
@@ -23,7 +23,8 @@ import {
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
-import { resolveAvatarImageUrl, resolveAvatarInitials } from "../../lib/identity-avatar.ts";
+import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
@@ -35,7 +36,7 @@ export function renderChatAvatar(
   role: string,
   assistant?: Pick<AssistantIdentity, "name" | "avatar">,
   user?: { name?: string | null; avatar?: string | null },
-  basePath?: string,
+  resourceBasePath?: string,
   authToken?: string | null,
   sender?: SenderIdentity | null,
 ) {
@@ -48,7 +49,7 @@ export function renderChatAvatar(
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
   const assistantAvatarText = resolveAssistantTextAvatar(assistantAvatar);
-  const assistantFallbackAvatar = assistantAvatarFallbackUrl(basePath ?? "");
+  const assistantFallbackAvatar = assistantAvatarFallbackUrl(resourceBasePath ?? "");
   const userName = resolveLocalUserName(user);
   const userAvatarUrl = resolveLocalUserAvatarUrl(user);
   const userAvatarText = resolveLocalUserAvatarText(user);
@@ -189,7 +190,7 @@ function isAvatarUrl(value: string): boolean {
 type ChatAvatarHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null } | null;
-  basePath: string;
+  resourceBasePath: string;
   chatAvatarReason?: string | null;
   chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
@@ -271,10 +272,8 @@ function shouldApplyChatAvatarResult(
   );
 }
 
-function buildAvatarMetaUrl(basePath: string, agentId: string): string {
-  const base = normalizeBasePath(basePath);
-  const encoded = encodeURIComponent(agentId);
-  return base ? `${base}/avatar/${encoded}?meta=1` : `/avatar/${encoded}?meta=1`;
+function buildAvatarMetaUrl(resourceBasePath: string, agentId: string): string {
+  return `${buildControlUiResourcePath("agentAvatar", resourceBasePath, agentId)}?meta=1`;
 }
 
 function clearChatAvatarUrl(host: ChatAvatarHost) {
@@ -445,7 +444,7 @@ async function fetchChatAvatarSnapshot(
 ): Promise<ChatAvatarSnapshot | null> {
   const authHeader = resolveControlUiAuthHeader(host);
   const headers = buildControlUiAuthHeaders(authHeader);
-  const url = buildAvatarMetaUrl(host.basePath, agentId);
+  const url = buildAvatarMetaUrl(host.resourceBasePath, agentId);
   const metaController = new AbortController();
   const metaTimeout = scheduleChatAvatarFetchTimeout(metaController, "chat avatar metadata fetch");
   let data: {

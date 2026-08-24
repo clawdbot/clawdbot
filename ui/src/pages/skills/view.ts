@@ -12,6 +12,7 @@ import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../.
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
+import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import {
   renderSettingsEmpty,
@@ -166,48 +167,33 @@ function verdictForSkill(skill: SkillStatusEntry, verdicts: SkillsProps["clawhub
   );
 }
 
-function verdictLabel(verdict: ClawHubSkillSecurityVerdict | null | undefined): string {
+function verdictStatus(
+  verdict: ClawHubSkillSecurityVerdict | null | undefined,
+  loading: boolean,
+): { label: string; kind: "ok" | "warn" | "muted"; chipClass: string } {
   if (!verdict) {
-    return t("skillsPage.verdict.unavailable");
+    return loading
+      ? { label: t("skillsPage.refreshing"), kind: "muted", chipClass: "chip" }
+      : { label: t("skillsPage.verdict.unavailable"), kind: "warn", chipClass: "chip-warn" };
   }
   const status = verdict.securityStatus?.trim() || null;
   if (verdict.ok && verdict.decision === "pass") {
-    return status === "clean" || !status ? t("skillsPage.verdict.clean") : status;
+    return {
+      label: status === "clean" || !status ? t("skillsPage.verdict.clean") : status,
+      kind: "ok",
+      chipClass: "chip-ok",
+    };
   }
   if (status === "pending" || status === "not-run") {
-    return t("skillsPage.verdict.pending");
+    return { label: t("skillsPage.verdict.pending"), kind: "muted", chipClass: "chip" };
   }
-  if (status === "malicious") {
-    return t("skillsPage.verdict.blocked");
-  }
-  if (status === "suspicious") {
-    return t("skillsPage.verdict.review");
-  }
-  return t("skillsPage.verdict.unavailable");
-}
-
-function verdictChipClass(verdict: ClawHubSkillSecurityVerdict | null | undefined): string {
-  if (!verdict) {
-    return "chip-warn";
-  }
-  if (verdict.ok && verdict.decision === "pass") {
-    return "chip-ok";
-  }
-  const status = verdict.securityStatus?.trim() || null;
-  return status === "pending" || status === "not-run" ? "chip" : "chip-warn";
-}
-
-function verdictStatusKind(
-  verdict: ClawHubSkillSecurityVerdict | null | undefined,
-): "ok" | "warn" | "muted" {
-  if (!verdict) {
-    return "warn";
-  }
-  if (verdict.ok && verdict.decision === "pass") {
-    return "ok";
-  }
-  const status = verdict.securityStatus?.trim() || null;
-  return status === "pending" || status === "not-run" ? "muted" : "warn";
+  const label =
+    status === "malicious"
+      ? t("skillsPage.verdict.blocked")
+      : status === "suspicious"
+        ? t("skillsPage.verdict.review")
+        : t("skillsPage.verdict.unavailable");
+  return { label, kind: "warn", chipClass: "chip-warn" };
 }
 
 function skillControlsLocked(props: SkillsProps): boolean {
@@ -633,7 +619,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
       <div class="settings-row__control">
         ${skillAvailabilityStatus(skill)}
         ${skill.clawhub?.status === "linked"
-          ? renderSettingsStatus({ kind: verdictStatusKind(verdict), label: verdictLabel(verdict) })
+          ? renderSettingsStatus(verdictStatus(verdict, props.clawhubVerdictsLoading))
           : skill.clawhub?.status === "invalid"
             ? renderSettingsStatus({ kind: "warn", label: t("skillsPage.invalidLink") })
             : nothing}
@@ -855,6 +841,7 @@ function renderInstalledClawHubOverview(
   const reasonText = verdict?.reasons?.length
     ? formatUiExternalText(verdict.reasons.join(", "))
     : null;
+  const status = verdictStatus(verdict, props.clawhubVerdictsLoading);
   const installedRef = `${link.ownerHandle ? `@${link.ownerHandle}/` : ""}${link.slug}@${link.installedVersion}`;
   return html`
     <div
@@ -862,9 +849,9 @@ function renderInstalledClawHubOverview(
       style="display: grid; gap: 8px; border-color: var(--border); background: var(--panel-strong);"
     >
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-        <span class="chip ${verdictChipClass(verdict)}">${verdictLabel(verdict)}</span>
+        <span class="chip ${status.chipClass}">${status.label}</span>
         <span class="muted" style="font-size: 12px;">${installedRef}</span>
-        ${props.clawhubVerdictsLoading
+        ${props.clawhubVerdictsLoading && verdict
           ? html`<span class="muted">${t("skillsPage.refreshing")}</span>`
           : nothing}
       </div>
@@ -902,7 +889,11 @@ function renderInstalledSkillCard(skill: SkillStatusEntry, props: SkillsProps) {
     </div>`;
   }
   return html`
-    <article class="sidebar-markdown" style="max-width: 100%; overflow-wrap: anywhere;">
+    <article
+      class="sidebar-markdown"
+      style="max-width: 100%; overflow-wrap: anywhere;"
+      @click=${handleMarkdownCodeBlockClick}
+    >
       ${unsafeHTML(toSanitizedMarkdownHtml(content))}
     </article>
   `;

@@ -71,8 +71,9 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   sessionKey?: string;
   agentRuntime?: string | null;
 }): ThinkLevel {
+  const configuredLevel = params.config?.agents?.defaults?.compaction?.thinkingLevel;
   const requestedLevel =
-    params.config?.agents?.defaults?.compaction?.thinkingLevel ?? params.inheritedLevel;
+    configuredLevel === "inherit" ? params.inheritedLevel : (configuredLevel ?? "low");
   if (!requestedLevel) {
     return "off";
   }
@@ -346,6 +347,8 @@ export function buildEmbeddedCompactionRuntimeContext(
     modelSelectionLocked: params.modelSelectionLocked,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
     agentDir: params.agentDir,
     config: params.config,
     toolOverrides: params.toolOverrides,
@@ -358,6 +361,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     modelFallbacksOverride: params.modelFallbacksOverride,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
+    execOverrides: params.execOverrides,
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

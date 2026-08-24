@@ -7,11 +7,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
+type AssistantMessageContent = Extract<AppendMessageArg, { role: "assistant" }>["content"];
 
 /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
 type GatewayInjectedAbortMeta = {
   aborted: true;
-  origin: "rpc" | "stop-command";
+  origin: "rpc" | "stop-command" | "placement-abandon";
   runId: string;
 };
 
@@ -52,6 +53,13 @@ function resolveInjectedAssistantContent(params: {
     return [{ type: "text", text: labelPrefix.trim() }, ...params.content];
   }
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
+}
+
+/** Clone Gateway display blocks into the transcript's assistant-content boundary. */
+export function prepareGatewayInjectedAssistantContent(
+  content: readonly Record<string, unknown>[],
+): AssistantMessageContent {
+  return content.map((block) => Object.assign({}, block)) as unknown as AssistantMessageContent;
 }
 
 /** Append a gateway-authored assistant message while preserving transcript parent links. */
@@ -103,10 +111,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   const messageBody: AppendMessageArg & Record<string, unknown> = applyAssistantDeliveryDirectives({
     role: "assistant",
     // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
-    content: resolvedContent.map((block) => Object.assign({}, block)) as unknown as Extract<
-      AppendMessageArg,
-      { role: "assistant" }
-    >["content"],
+    content: prepareGatewayInjectedAssistantContent(resolvedContent),
     timestamp: now,
     // stopReason is a strict runner enum; this is not model output, but we still store it as a
     // normal assistant message so it participates in the session parentId chain.
@@ -146,6 +151,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       },
       {
         updateMode: "inline",
+        ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
         touchSessionEntry: Boolean(params.storePath && params.sessionId && params.sessionKey),
         ...(params.config ? { config: params.config } : {}),
         messages: [

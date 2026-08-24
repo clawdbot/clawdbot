@@ -1,3 +1,4 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -40,10 +41,16 @@ export const collectMSTeamsSecurityWarnings = createAllowlistProviderGroupPolicy
       return [];
     }
     const account = resolveMSTeamsAccount({ cfg, accountId });
+    const accounts = cfg.channels?.msteams?.accounts;
+    const rawAccountKey = accounts
+      ? Object.keys(accounts).find((key) => normalizeAccountId(key) === account.accountId)
+      : undefined;
+    const hasAccountPolicyOverride =
+      rawAccountKey !== undefined && accounts?.[rawAccountKey]?.groupPolicy !== undefined;
     const configPath =
-      account.accountId === DEFAULT_ACCOUNT_ID
+      account.accountId === DEFAULT_ACCOUNT_ID && !hasAccountPolicyOverride
         ? "channels.msteams"
-        : `channels.msteams.accounts.${account.accountId}`;
+        : `channels.msteams.accounts.${rawAccountKey ?? account.accountId}`;
     return [
       `- MS Teams[${account.accountId}] groups: groupPolicy="open" allows any member to trigger (mention-gated). Set ${configPath}.groupPolicy="allowlist" + ${configPath}.groupAllowFrom to restrict senders.`,
     ];
@@ -65,7 +72,11 @@ function deleteMSTeamsDefaultAccountIdentity(cfg: OpenClawConfig): OpenClawConfi
   } = msteams;
   const nextAccounts = accounts ? { ...accounts } : undefined;
   if (nextAccounts) {
-    delete nextAccounts[DEFAULT_ACCOUNT_ID];
+    for (const key of Object.keys(nextAccounts)) {
+      if (normalizeAccountId(key) === DEFAULT_ACCOUNT_ID) {
+        delete nextAccounts[key];
+      }
+    }
   }
   const nextWebhook = webhook ? { ...webhook } : undefined;
   if (nextWebhook) {
@@ -77,7 +88,9 @@ function deleteMSTeamsDefaultAccountIdentity(cfg: OpenClawConfig): OpenClawConfi
       ...cfg.channels,
       msteams: {
         ...rest,
-        ...(defaultAccount && defaultAccount !== DEFAULT_ACCOUNT_ID ? { defaultAccount } : {}),
+        ...(defaultAccount && normalizeAccountId(defaultAccount) !== DEFAULT_ACCOUNT_ID
+          ? { defaultAccount }
+          : {}),
         ...(nextAccounts && Object.keys(nextAccounts).length > 0 ? { accounts: nextAccounts } : {}),
         ...(nextWebhook && Object.keys(nextWebhook).length > 0 ? { webhook: nextWebhook } : {}),
       },

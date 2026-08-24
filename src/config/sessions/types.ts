@@ -18,7 +18,6 @@ import type {
 } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
-import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
@@ -35,6 +34,7 @@ import type {
   SessionParticipant,
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
+import type { SessionSkillSnapshot } from "./session-prompt-types.js";
 import type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
 import type { SessionToolOverrides } from "./session-tool-overrides.js";
 
@@ -55,6 +55,7 @@ export type SessionOrigin = {
   to?: string;
   nativeChannelId?: string;
   nativeDirectUserId?: string;
+  avatar?: string;
   accountId?: string;
   threadId?: string | number;
 };
@@ -374,7 +375,13 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * Managed worktree bound to this session; set with spawnedCwd at worktree
      * creation and cleared together when a plain New Chat detaches the checkout.
      */
-    worktree?: { id: string; branch: string; repoRoot: string };
+    worktree?: {
+      id: string;
+      branch: string;
+      repoRoot: string;
+      /** Durable skill workspace prepared when this session runs from a managed worktree. */
+      canonicalWorkspaceDir?: string;
+    };
     /** Project registry id selected when this logical session node was created. */
     projectId?: string;
     /** Explicit parent session linkage for dashboard-created child sessions. */
@@ -450,6 +457,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Epoch ms cutoff paired with abortCutoffMessageSid when available. */
     abortCutoffTimestamp?: number;
     chatType?: SessionChatType;
+    contextWindow?: string;
     thinkingLevel?: string;
     /**
      * Exact isolated-cron continuation policy. Only hidden `:run:` session rows
@@ -574,6 +582,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     agentHarnessId?: string;
     fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
+    /** Origin of the persisted context window; `resolved` is legacy/unverified. */
+    contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     compactionCheckpoints?: SessionCompactionCheckpoint[];
@@ -615,6 +625,8 @@ export interface SessionEntry extends SessionEntryCore {}
 export type InternalSessionEntryCore = SessionEntryCore & {
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Exact run that produced the latest terminal Gateway lifecycle projection. */
+  lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
@@ -853,31 +865,6 @@ export type GroupKeyResolution = {
   chatType?: SessionChatType;
 };
 
-export type SessionSkillPromptRef = {
-  version: 1;
-  algorithm: "sha256";
-  hash: string;
-  bytes: number;
-};
-
-export type SessionSkillSnapshot = {
-  prompt: string;
-  /** Persisted stores may replace large duplicate prompts with a content-addressed blob ref. */
-  promptRef?: SessionSkillPromptRef;
-  skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
-  /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
-  skillFilter?: string[];
-  /** Effective node-exec eligibility used to select connected node-hosted skills. */
-  nodeSkillsEligibility?: { canExec: boolean; node?: string };
-  /**
-   * Runtime-only, never persisted. Carries the full parsed Skill[] (including
-   * each SKILL.md body) so the embedded runner can skip a workspace skill
-   * scan within a turn. Persistence projections strip it before committing
-   * session state. On a cold session resume this is undefined and
-   * src/skills/runtime/embedded-run-entries.ts rebuilds it from disk.
-   */
-  resolvedSkills?: Skill[];
-  version?: number;
-};
+export type { SessionSkillPromptRef, SessionSkillSnapshot } from "./session-prompt-types.js";
 
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];

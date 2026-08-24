@@ -39,10 +39,17 @@ function activePlacementRecord(): Extract<WorkerSessionPlacementRecord, { state:
 describe("sessions.dispatch", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry(), "sessions-dispatch-test", "default");
-    const codexHarness: AgentHarness & { cloudPlacement: { mode: "remote-exec" } } = {
+    const codexHarness: AgentHarness = {
       id: "codex",
       label: "Codex",
-      cloudPlacement: { mode: "remote-exec" },
+      autoSelection: { providerIds: ["codex", "openai"] },
+      cloudPlacement: {
+        mode: "remote-exec",
+        devicePlacement: {
+          requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+          consumesWorkerSlot: false,
+        },
+      },
       supports: () => ({ supported: true, priority: 10 }),
       async runAttempt() {
         throw new Error("not used");
@@ -50,6 +57,11 @@ describe("sessions.dispatch", () => {
     };
     registerAgentHarness(codexHarness);
     vi.clearAllMocks();
+    mocks.runCommandWithTimeout.mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr: "",
+    });
     mocks.resolveTarget.mockReturnValue(targetWithEntry());
   });
 
@@ -105,6 +117,180 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({
         code: ErrorCodes.INVALID_REQUEST,
         message: "cloud worker profile is not configured: missing",
+      }),
+    );
+  });
+
+  it("prefers an explicit profile over the per-project default", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+      path: "/repo/worktree",
+    });
+    const dispatch = vi.fn().mockRejectedValue(new Error("explicit dispatch reached"));
+
+    await invoke(
+      makeContext({
+        getRuntimeConfig: () => ({
+          cloudWorkers: {
+            profiles: {
+              mapped: { provider: "fake" },
+              test: { provider: "fake" },
+            },
+            projectProfiles: { "github.com/acme/app": "mapped" },
+          },
+        }),
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+    );
+
+    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "test" }),
+      expect.any(Function),
+      undefined,
+    );
+  });
+
+  it("uses the per-project default when profileId is absent", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+      path: "/repo/worktree",
+    });
+    mocks.runCommandWithTimeout.mockResolvedValue({
+      code: 0,
+      stdout: "git@github.com:Acme/App.git\n",
+      stderr: "",
+    });
+    const dispatch = vi.fn().mockRejectedValue(new Error("mapped dispatch reached"));
+
+    await invoke(
+      makeContext({
+        getRuntimeConfig: () => ({
+          cloudWorkers: {
+            profiles: { mapped: { provider: "fake" } },
+            projectProfiles: { "github.com/acme/app": "mapped" },
+          },
+        }),
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      {},
+    );
+
+    expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(
+      ["git", "-C", "/repo/worktree", "config", "--get", "remote.origin.url"],
+      { timeoutMs: 4_000 },
+    );
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "mapped" }),
+      expect.any(Function),
+      undefined,
+    );
+  });
+
+  it("rejects a per-project mapping to an unknown profile as invalid", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+      path: "/repo/worktree",
+    });
+    mocks.runCommandWithTimeout.mockResolvedValue({
+      code: 0,
+      stdout: "https://github.com/acme/app.git\n",
+      stderr: "",
+    });
+    const dispatch = vi.fn();
+
+    const respond = await invoke(
+      makeContext({
+        getRuntimeConfig: () => ({
+          cloudWorkers: {
+            profiles: { test: { provider: "fake" } },
+            projectProfiles: { "github.com/acme/app": "missing" },
+          },
+        }),
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      {},
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          "cloudWorkers.projectProfiles mapping github.com/acme/app references unconfigured profile missing",
+      }),
+    );
+  });
+
+  it.each([
+    ["has no matching mapping", { code: 0, stdout: "https://github.com/acme/other.git\n" }],
+    ["has no origin remote", { code: 1, stdout: "" }],
+  ])("keeps explicit-profile behavior when the worktree %s", async (_label, gitResult) => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    mocks.findLiveByOwner.mockReturnValue({
+      id: "worktree-1",
+      ownerKind: "session",
+      ownerId: sessionKey,
+      path: "/repo/worktree",
+    });
+    mocks.runCommandWithTimeout.mockResolvedValue({ ...gitResult, stderr: "" });
+    const dispatch = vi.fn();
+
+    const respond = await invoke(
+      makeContext({
+        getRuntimeConfig: () => ({
+          cloudWorkers: {
+            profiles: { test: { provider: "fake" } },
+            projectProfiles: { "github.com/acme/app": "test" },
+          },
+        }),
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      {},
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "worker dispatch target is missing",
       }),
     );
   });
@@ -201,6 +387,9 @@ describe("sessions.dispatch", () => {
     const dispatch = vi.fn().mockRejectedValue(new Error("remote dispatch reached"));
     const respond = await invoke(
       makeContext({
+        workerEnvironmentService: {
+          supportsExecutionMode: () => true,
+        } as never,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: { getMany: () => new Map() },
       }),
@@ -209,6 +398,7 @@ describe("sessions.dispatch", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ executionMode: "remote-exec" }),
       expect.any(Function),
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -216,6 +406,38 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({
         code: ErrorCodes.UNAVAILABLE,
         message: "remote dispatch reached",
+      }),
+    );
+  });
+
+  it.each([
+    ["node-only", { supportsExecutionMode: () => false }],
+    ["undeclared", { supportsExecutionMode: undefined }],
+  ])("rejects remote-exec before allocation when the profile is %s", async (_name, service) => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        agentRuntimeOverride: "codex",
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        workerEnvironmentService: service as never,
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          "selected cloud worker provider does not support the remote-exec execution mode required by runtime codex; use an approved paired device or a provider that advertises remote-exec",
       }),
     );
   });
@@ -244,6 +466,7 @@ describe("sessions.dispatch", () => {
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: "test", machineClass: "large" }),
       expect.any(Function),
+      undefined,
     );
   });
 
@@ -274,7 +497,7 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("rejects explicit permission modes before cloud worker placement", async () => {
+  it("dispatches explicit permission modes through the worker capability gate", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
         sessionId,
@@ -288,7 +511,7 @@ describe("sessions.dispatch", () => {
       ownerKind: "session",
       ownerId: sessionKey,
     });
-    const dispatch = vi.fn();
+    const dispatch = vi.fn().mockResolvedValue(activePlacementRecord());
     const respond = await invoke(
       makeContext({
         workerPlacementDispatchService: { dispatch },
@@ -296,16 +519,14 @@ describe("sessions.dispatch", () => {
       }),
     );
 
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
+      true,
       expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringMatching(
-          /permissionMode.*run this session locally.*operator\.admin/su,
-        ),
+        ok: true,
+        placement: expect.objectContaining({ state: "active" }),
       }),
+      undefined,
     );
   });
 
@@ -343,6 +564,7 @@ describe("sessions.dispatch", () => {
         target: { kind: "gateway" },
       },
       expect.any(Function),
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -379,15 +601,16 @@ describe("sessions.dispatch", () => {
       }),
       {
         expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
-        target: { kind: "profile", profileId: "test" },
+        target: { kind: "profile", profileId: "test", machineClass: "beast" },
       },
     );
 
     expect(move).toHaveBeenCalledWith(
       expect.objectContaining({
-        target: { kind: "profile", profileId: "test" },
+        target: { kind: "profile", profileId: "test", machineClass: "beast" },
       }),
       expect.any(Function),
+      undefined,
     );
   });
 
@@ -471,6 +694,7 @@ describe("sessions.dispatch", () => {
         profileId: "test",
       }),
       expect.any(Function),
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -661,7 +885,7 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("classifies workspace preflight operational failures as unavailable", async () => {
+  it("surfaces an execution-context feature mismatch as unavailable", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
         sessionId,
@@ -675,7 +899,11 @@ describe("sessions.dispatch", () => {
     });
     const dispatch = vi
       .fn()
-      .mockRejectedValue(Object.assign(new Error("spawn failed"), { code: "ENOENT" }));
+      .mockRejectedValue(
+        new Error(
+          "Worker environment is not dispatchable with the current execution-context contract: ready",
+        ),
+      );
 
     const respond = await invoke(
       makeContext({
@@ -685,7 +913,10 @@ describe("sessions.dispatch", () => {
     );
 
     const error = vi.mocked(respond).mock.calls[0]?.[2];
-    expect(error).toMatchObject({ code: ErrorCodes.UNAVAILABLE, message: "spawn failed" });
+    expect(error).toMatchObject({
+      code: ErrorCodes.UNAVAILABLE,
+      message: expect.stringContaining("current execution-context contract"),
+    });
   });
 
   it("dispatches an existing managed-worktree session and projects placement", async () => {
@@ -757,6 +988,7 @@ describe("sessions.dispatch", () => {
         profileId: "test",
       }),
       expect.any(Function),
+      undefined,
     );
     expect(readSessionsMutationVersion(context)).toBe(priorMutationVersion + 5);
     expect(respond).toHaveBeenCalledWith(

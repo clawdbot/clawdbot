@@ -91,7 +91,7 @@ describe("google gemini cli backend auth bridge", () => {
       await expect(
         buildGoogleGeminiCliBackend().prepareExecution?.({
           ...buildGeminiOAuthPrepareContext(workspaceDir),
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
           isolatedCompletionModelId: "gemini-3.1-flash-preview",
           isolatedCompletionSystemPrompt: "Return only JSON.",
         } as GeminiPrepareContext),
@@ -109,7 +109,7 @@ describe("google gemini cli backend auth bridge", () => {
       await expect(
         buildGoogleGeminiCliBackend().prepareExecution?.({
           ...buildGeminiOAuthPrepareContext(workspaceDir),
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
         } as GeminiPrepareContext),
       ).rejects.toThrow("Code Assist auth can inject administrator-required tools");
     });
@@ -130,7 +130,7 @@ describe("google gemini cli backend auth bridge", () => {
           provider: "google-gemini-cli",
           modelId: "gemini-3.1-flash-preview",
           env: { GEMINI_CLI_HOME: ambientHome },
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
         } as GeminiPrepareContext),
       ).rejects.toThrow("Code Assist auth can inject administrator-required tools");
     });
@@ -147,7 +147,7 @@ describe("google gemini cli backend auth bridge", () => {
           provider: "google-gemini-cli",
           modelId: "gemini-3.1-pro-preview",
           env: { GEMINI_API_KEY: "prepared-key" },
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
         });
         expect(prepared?.env?.GEMINI_API_KEY).toBe("prepared-key");
         expect(prepared?.env?.GOOGLE_GENAI_USE_GCA).toBe("false");
@@ -185,7 +185,7 @@ describe("google gemini cli backend auth bridge", () => {
         workspaceDir,
         provider: "google-gemini-cli",
         modelId: "gemini-3.1-flash-preview",
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
         isolatedCompletionModelId: "gemini-3.1-flash-preview",
         isolatedCompletionSystemPrompt: "Return only JSON.",
       } as GeminiPrepareContext);
@@ -229,7 +229,7 @@ describe("google gemini cli backend auth bridge", () => {
         workspaceDir: projectDir,
         provider: "google-gemini-cli",
         modelId: "gemini-3.1-flash-preview",
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
         isolatedCompletionModelId: "gemini-3.1-flash-preview",
         isolatedCompletionSystemPrompt: "Return only JSON.",
       } as GeminiPrepareContext);
@@ -262,7 +262,7 @@ describe("google gemini cli backend auth bridge", () => {
         workspaceDir,
         provider: "google-gemini-cli",
         modelId: "gemini-3.1-flash-preview",
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
         isolatedCompletionModelId: "gemini-3.1-flash-preview",
         isolatedCompletionSystemPrompt: "Return only JSON.",
       } as GeminiPrepareContext);
@@ -297,7 +297,7 @@ describe("google gemini cli backend auth bridge", () => {
           workspaceDir,
           provider: "google-gemini-cli",
           modelId: "gemini-3.1-flash-preview",
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
           isolatedCompletionModelId: "gemini-3.1-flash-preview",
           isolatedCompletionSystemPrompt: "Return only JSON.",
         } as GeminiPrepareContext);
@@ -319,7 +319,7 @@ describe("google gemini cli backend auth bridge", () => {
         buildGoogleGeminiCliBackend().prepareExecution?.({
           ...buildGeminiApiKeyPrepareContext(workspaceDir),
           modelId: "auto",
-          toolAvailability: { native: [], openClaw: [], mcp: [] },
+          toolAvailability: { native: [], openClaw: [] },
           isolatedCompletionModelId: "auto",
           isolatedCompletionSystemPrompt: "Return only JSON.",
         } as GeminiPrepareContext),
@@ -388,7 +388,6 @@ describe("google gemini cli backend auth bridge", () => {
         context.toolAvailability = {
           native: [],
           openClaw: [...allowed],
-          mcp: allowed.map((toolName) => `mcp__openclaw__${toolName}`),
         };
         const prepared = await backend.prepareExecution?.(context);
         const preparedHome = prepared?.env?.GEMINI_CLI_HOME ?? "";
@@ -475,7 +474,7 @@ describe("google gemini cli backend auth bridge", () => {
             GEMINI_API_KEY: "ambient-key",
             GEMINI_CLI_SYSTEM_SETTINGS_PATH: inheritedSettingsPath,
           },
-          toolAvailability: { native: ["run_shell_command"], openClaw: [], mcp: [] },
+          toolAvailability: { native: ["run_shell_command"], openClaw: [] },
         }),
       ).rejects.toThrow("cannot expose backend-native tools");
     });
@@ -507,7 +506,7 @@ describe("google gemini cli backend auth bridge", () => {
           GEMINI_API_KEY: "ambient-key",
           GEMINI_CLI_SYSTEM_SETTINGS_PATH: inheritedSettingsPath,
         },
-        toolAvailability: { native: [], openClaw: [], mcp: [] },
+        toolAvailability: { native: [], openClaw: [] },
       });
       try {
         expect(prepared?.toolAvailabilityEnforced).toBe(true);
@@ -1021,7 +1020,7 @@ describe("google gemini cli backend auth bridge", () => {
     try {
       const context = buildGeminiApiKeyPrepareContext(workspaceDir);
       context.env = { GEMINI_CLI_HOME: ambientHome };
-      context.toolAvailability = { native: [], openClaw: [], mcp: [] };
+      context.toolAvailability = { native: [], openClaw: [] };
       mkdtempSpy.mockClear();
       const preparation = backend.prepareExecution?.(context);
       await expect(preparation).rejects.not.toBeInstanceOf(CliBackendAuthProfilePreparationError);

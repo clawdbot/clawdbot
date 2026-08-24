@@ -17,11 +17,9 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
   "../config/control-ui-startup-budget-baseline.json",
 );
 
-// This absorbs measured local-to-Linux gzip variance plus bounded Linux
-// build-to-build chunk-hash variance. Local zlib emits smaller streams than
-// CI's Linux builder, so baseline updates must use CI bytes via
-// --startup-js-bytes. The fixed JS baseline ceiling bounds cumulative creep.
-const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 1056;
+// Each landed change can consume this much ratchet tolerance, so small increases
+// may accumulate. The fixed startup JS ceiling bounds that cumulative creep.
+const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 512;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
@@ -35,7 +33,11 @@ const controlUiPerformanceBudgets = {
   // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
   startupCssGzipBytes: 45 * KIB,
   largestJsGzipBytes: 215 * KIB,
-  largestCssGzipBytes: 45 * KIB,
+  // Startup CSS stays at 45 KiB; the boot-group consolidation (2026-08,
+  // control-ui-boot chunking) merges boot-path component CSS into one file
+  // that lands just above it, trading ~1 KiB of ceiling for ~95 fewer boot
+  // requests on HTTP/1.1 gateways.
+  largestCssGzipBytes: 47 * KIB,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

@@ -132,12 +132,14 @@ function createSubscriptionMock(): SubscriptionMock {
     getLatestMcpAppChannelView: () => undefined,
     getLatestMcpConnectAction: () => undefined,
     toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
-    runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
-      await toolParams.execute(),
+    runToolLifecycle: async <T>(toolParams: {
+      execute: (onImplementationStart: () => void) => Promise<T>;
+    }) => await toolParams.execute(() => undefined),
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
     waitForPendingEvents: async () => {},
+    flushPartialAssistantText: () => {},
     getAcceptedSessionSpawns: () => [],
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
@@ -155,7 +157,6 @@ function createSubscriptionMock(): SubscriptionMock {
     didSendViaMessagingTool: () => false,
     didSendDeterministicApprovalPrompt: () => false,
     getLastToolError: () => undefined,
-    getLastToolRecovery: () => undefined,
     getUsageTotals: () => undefined,
     getLastAssistantUsage: () => undefined,
     getAssistantTurnCount: () => 0,
@@ -207,6 +208,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const resolveEmbeddedRunSkillEntriesMock = vi.fn(() => ({
     shouldLoadSkillEntries: false,
     skillEntries: [],
+    loadSkillEntries: vi.fn(() => []),
   }));
   const resolveSkillsPromptForRunMock = vi.fn(() => "");
   const supportsModelToolsMock = vi.fn<(model?: unknown) => boolean>(() => true);
@@ -748,9 +750,6 @@ vi.mock("../../tool-call-id.js", async (importOriginal) => {
 });
 
 vi.mock("../../tool-fs-policy.js", () => ({
-  createToolFsPolicy: (params: { workspaceOnly?: boolean }) => ({
-    workspaceOnly: params.workspaceOnly === true,
-  }),
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>
     ({ "read-only": "deny", guarded: "ask", workspace: "auto", full: "full" })[policy.mode],
   resolveEffectiveToolFsWorkspaceOnly: () => false,
@@ -1081,6 +1080,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.resolveEmbeddedRunSkillEntriesMock.mockReset().mockReturnValue({
     shouldLoadSkillEntries: false,
     skillEntries: [],
+    loadSkillEntries: vi.fn(() => []),
   });
   hoisted.resolveSkillsPromptForRunMock.mockReset().mockReturnValue("");
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);

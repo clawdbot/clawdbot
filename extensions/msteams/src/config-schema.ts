@@ -66,7 +66,7 @@ const MSTeamsAccountConfigBaseSchema = z
   .object({
     name: z.string().optional(),
     ...buildCommonChannelAccountShape({
-      useDefaults: true,
+      useDefaults: false,
       omit: ["name", "mentionPatterns", "replyToMode"],
       allowFrom: z.array(z.string()).optional(),
       groupAllowFrom: z.array(z.string()).optional(),

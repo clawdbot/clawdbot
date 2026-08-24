@@ -7,7 +7,7 @@ import {
   type OpenClawConfig,
   type PluginRuntime,
 } from "../runtime-api.js";
-import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccountConfig } from "./accounts.js";
+import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccount } from "./accounts.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import {
   describeBotFrameworkServiceUrlHost,
@@ -168,10 +168,18 @@ export async function resolveMSTeamsSendContext(params: {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultMSTeamsAccountId(params.cfg),
   );
-  const msteamsCfg = resolveMSTeamsAccountConfig(params.cfg, accountId);
+  const account = resolveMSTeamsAccount({ cfg: params.cfg, accountId });
+  const msteamsCfg = account.config;
 
-  if (!msteamsCfg || msteamsCfg.enabled === false) {
+  if (!account.enabled) {
     throw new Error("msteams provider is not enabled");
+  }
+
+  if (account.tokenStatus === "configured_unavailable") {
+    throw new Error("msteams credential file is configured but unavailable");
+  }
+  if (!account.configured) {
+    throw new Error("msteams credentials not configured");
   }
 
   const creds = resolveMSTeamsCredentials(msteamsCfg, {

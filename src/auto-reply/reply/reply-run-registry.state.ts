@@ -36,6 +36,7 @@ type ReplyRunState = {
   followupAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
   successorAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
   evictOperationByOperation?: WeakMap<ReplyOperation, () => void>;
+  executionStartedOperations?: WeakSet<ReplyOperation>;
 };
 
 const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.replyRunRegistry");
@@ -49,6 +50,7 @@ export const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STA
   followupAdmissionBarriersByKey: new Map<string, ReplyRunAdmissionBarrier>(),
   successorAdmissionBarriersByKey: new Map<string, ReplyRunAdmissionBarrier>(),
   evictOperationByOperation: new WeakMap<ReplyOperation, () => void>(),
+  executionStartedOperations: new WeakSet<ReplyOperation>(),
 }));
 replyRunState.followupAdmissionBarriersByKey ??= new Map();
 replyRunState.successorAdmissionBarriersByKey ??= new Map();
@@ -126,6 +128,15 @@ export function isReplyOperationPreBackendPhase(phase: ReplyOperationPhase): boo
 }
 
 export const attachedBackendByOperation = new WeakMap<ReplyOperation, ReplyBackendHandle>();
+const executionStartedOperations =
+  replyRunState.executionStartedOperations ??
+  (replyRunState.executionStartedOperations = new WeakSet<ReplyOperation>());
+export function markReplyOperationExecutionStarted(operation: ReplyOperation): void {
+  executionStartedOperations.add(operation);
+}
+export function hasReplyOperationExecutionStarted(operation: ReplyOperation): boolean {
+  return executionStartedOperations.has(operation);
+}
 export const abortFrozenOperations = new WeakSet<ReplyOperation>();
 export const operationsByUpstreamAbortSignal = new WeakMap<AbortSignal, ReplyOperation>();
 export const retainStateUntilCompleteOperations = new WeakSet<ReplyOperation>();

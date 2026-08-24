@@ -175,7 +175,7 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.finalMarker }).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint && (summary.completedToolCallCounts.wait ?? 0) < checkpoint ? summary : undefined).catch(() => undefined)"
+                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.finalMarker }).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0) ? summary : undefined).catch(() => undefined)"
                   - expr: liveTurnTimeoutMs(env, 180000)
                   - 50
               - call: readRawQaSessionStore

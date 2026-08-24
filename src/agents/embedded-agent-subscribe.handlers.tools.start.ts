@@ -205,23 +205,16 @@ export function buildToolCallSummary(
   ownerKey: string | undefined,
   structuredReplaySafe: boolean,
 ): ToolCallSummary {
-  const mutation = buildToolMutationState(
-    toolName,
-    args,
-    meta,
-    ownerKey ? { ownerKey } : undefined,
-  );
+  const mutation = buildToolMutationState(toolName, args, ownerKey ? { ownerKey } : undefined);
   return {
     meta,
     commandBearing: isCommandBearingToolCall(toolName, args),
     instanceReplaySafe,
     mutatingAction: mutation.mutatingAction,
-    ...(mutation.ownerKey ? { ownerKey: mutation.ownerKey } : {}),
+    ...(ownerKey ? { ownerKey } : {}),
     replaySafe:
       (instanceReplaySafe && !mutation.mutatingAction) ||
       (structuredReplaySafe && mutation.replaySafe),
-    actionFingerprint: mutation.actionFingerprint,
-    fileTarget: mutation.fileTarget,
   };
 }
 
@@ -327,6 +320,7 @@ export function handleToolExecutionStart(
     args: unknown;
     replaySafe?: boolean;
     hideFromChannelProgress?: boolean;
+    lifecycleProvenance?: "nested";
   },
 ): void | Promise<void> {
   const startToolName = normalizeToolPolicyName(evt.toolName);
@@ -623,7 +617,10 @@ export function handleToolExecutionStart(
     }
   };
 
-  // Flush pending block replies to preserve message boundaries before tool execution.
+  // Only the outer provider tool owns the block-reply presentation boundary.
+  if (evt.lifecycleProvenance === "nested") {
+    return continueToolExecutionStart();
+  }
   let flushBlockReplyBufferResult: void | Promise<void>;
   try {
     flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();

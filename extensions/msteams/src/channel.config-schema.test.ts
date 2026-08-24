@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
 import { msteamsPlugin } from "./channel.js";
 
@@ -144,6 +144,147 @@ describe("msteams config schema", () => {
     });
 
     expect(res.success).toBe(true);
+  });
+
+  it("validates named SSO after merging root and account settings", () => {
+    const inheritedConnection = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      sso: { connectionName: "graph" },
+      accounts: {
+        support: {
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          webhook: { port: 3979 },
+          sso: { enabled: true },
+        },
+      },
+    });
+    const invalidOverride = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      sso: { enabled: true, connectionName: "graph" },
+      accounts: {
+        support: {
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          webhook: { port: 3979 },
+          sso: { connectionName: "" },
+        },
+      },
+    });
+
+    expect(inheritedConnection.success).toBe(true);
+    expect(invalidOverride.success).toBe(false);
+  });
+
+  it("validates shared root settings only after merging named account overrides", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      dmPolicy: "open",
+      sso: { enabled: true },
+      cloud: "USGov",
+      accounts: {
+        support: {
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          webhook: { port: 3979 },
+          allowFrom: ["*"],
+          sso: { connectionName: "graph" },
+          serviceUrl: "https://smba.infra.gov.teams.microsoft.us/teams",
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("validates the effective default account allowlist", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      dmPolicy: "open",
+      accounts: {
+        default: {
+          appId: "primary-app-id",
+          appPassword: "primary-secret",
+          webhook: { port: 3978 },
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("ignores runtime refinements for disabled named accounts", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      dmPolicy: "open",
+      sso: { enabled: true },
+      cloud: "USGov",
+      accounts: {
+        retired: { enabled: false },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("does not reserve a partial environment default app ID", () => {
+    vi.stubEnv("MSTEAMS_APP_ID", "support-app-id");
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      accounts: {
+        support: {
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    });
+    vi.unstubAllEnvs();
+
+    expect(res.success).toBe(true);
+  });
+
+  it("honors a managed identity opt-out when detecting an environment default", () => {
+    vi.stubEnv("MSTEAMS_APP_ID", "support-app-id");
+    vi.stubEnv("MSTEAMS_TENANT_ID", "environment-tenant-id");
+    vi.stubEnv("MSTEAMS_AUTH_TYPE", "federated");
+    vi.stubEnv("MSTEAMS_USE_MANAGED_IDENTITY", "true");
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      useManagedIdentity: false,
+      accounts: {
+        support: {
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          webhook: { port: 3978 },
+        },
+      },
+    });
+    vi.unstubAllEnvs();
+
+    expect(res.success).toBe(true);
+  });
+
+  it("reserves an environment default completed by accounts.default auth settings", () => {
+    vi.stubEnv("MSTEAMS_APP_ID", "shared-app-id");
+    vi.stubEnv("MSTEAMS_TENANT_ID", "environment-tenant-id");
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      accounts: {
+        default: {
+          authType: "federated",
+          useManagedIdentity: true,
+        },
+        support: {
+          appId: "shared-app-id",
+          appPassword: "support-secret",
+          webhook: { port: 3978 },
+        },
+      },
+    });
+    vi.unstubAllEnvs();
+
+    expect(res.success).toBe(false);
   });
 
   it.each([
@@ -371,6 +512,40 @@ describe("msteams config schema", () => {
     expect(res.success).toBe(false);
   });
 
+  it("rejects named accounts that collide with an environment-backed default listener", () => {
+    vi.stubEnv("MSTEAMS_APP_ID", "env-default-app");
+    vi.stubEnv("MSTEAMS_APP_PASSWORD", "env-default-password");
+    vi.stubEnv("MSTEAMS_TENANT_ID", "env-tenant-id");
+    try {
+      const res = MSTeamsConfigSchema.safeParse({
+        tenantId: "shared-tenant-id",
+        accounts: {
+          secondary: {
+            appId: "secondary-app-id",
+            appPassword: "secondary-secret",
+            webhook: { port: 3978 },
+          },
+        },
+      });
+      const duplicateAppId = MSTeamsConfigSchema.safeParse({
+        tenantId: "shared-tenant-id",
+        webhook: { port: 3980 },
+        accounts: {
+          secondary: {
+            appId: "env-default-app",
+            appPassword: "secondary-secret",
+            webhook: { port: 3979 },
+          },
+        },
+      });
+
+      expect(res.success).toBe(false);
+      expect(duplicateAppId.success).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("rejects named accounts that collide with a metadata-only default account implicit port", () => {
     const res = MSTeamsConfigSchema.safeParse({
       appId: "primary-app-id",
@@ -409,6 +584,21 @@ describe("msteams config schema", () => {
     });
 
     expect(res.success).toBe(true);
+  });
+
+  it("rejects whitespace-only passwords for enabled named secret accounts", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      accounts: {
+        support: {
+          appId: "support-app-id",
+          appPassword: "   ",
+          webhook: { port: 3979 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
   });
 
   it("deletes the default account identity without leaving a root webhook port", () => {

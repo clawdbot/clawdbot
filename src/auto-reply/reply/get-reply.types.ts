@@ -4,6 +4,7 @@ import type { SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
+import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -37,6 +38,8 @@ type InternalReplySessionOptions = {
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
   replyOperation?: ReplyOperation;
   skillOverrides?: SessionToolOverrides["skills"];
+  /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
+  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &

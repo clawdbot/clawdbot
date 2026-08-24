@@ -1,6 +1,7 @@
 /** Linux systemd unit paths and environment-file parsing. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
@@ -11,11 +12,14 @@ import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
   GatewayServiceEnvironmentValueSource,
+  GatewayServiceReadOptions,
 } from "./service-types.js";
+import { execBusctlUser } from "./systemd-exec.js";
 import { parseSystemdEnvAssignments, parseSystemdExecStart } from "./systemd-unit.js";
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
+const SYSTEMD_MANAGER_QUERY_TIMEOUT_MS = 5_000;
 
 export function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
@@ -40,8 +44,57 @@ export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
 
 // Unit file parsing/rendering: see systemd-unit.ts
 
+async function readSystemdManagerExecStart(
+  env: GatewayServiceEnv,
+  opts?: GatewayServiceReadOptions,
+): Promise<string[] | null> {
+  const manager = "org.freedesktop.systemd1";
+  const timeoutMs =
+    opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : SYSTEMD_MANAGER_QUERY_TIMEOUT_MS;
+  const deadlineAt = Date.now() + timeoutMs;
+  // Both D-Bus calls share one deadline so every caller reaches the local fallback promptly.
+  const query = (args: string[]) =>
+    execBusctlUser(env, ["--json=short", ...args], Math.max(1, deadlineAt - Date.now()));
+  const loaded = await query([
+    "call",
+    manager,
+    "/org/freedesktop/systemd1",
+    `${manager}.Manager`,
+    "LoadUnit",
+    "s",
+    `${resolveSystemdServiceName(env)}.service`,
+  ]);
+  if (loaded.code !== 0) {
+    return null;
+  }
+  const unit = asOptionalRecord(JSON.parse(loaded.stdout));
+  const unitPath = Array.isArray(unit?.data) && unit.data.length === 1 ? unit.data[0] : null;
+  if (unit?.type !== "o" || typeof unitPath !== "string" || !unitPath) {
+    return null;
+  }
+  const propertyArgs = ["get-property", manager, unitPath, `${manager}.Service`, "ExecStart"];
+  const result = await query(propertyArgs);
+  if (result.code !== 0) {
+    return null;
+  }
+  const property = asOptionalRecord(JSON.parse(result.stdout));
+  if (
+    property?.type !== "a(sasbttttuii)" ||
+    !Array.isArray(property.data) ||
+    property.data.length !== 1
+  ) {
+    return null;
+  }
+  const execution = property.data[0];
+  const argv = Array.isArray(execution) ? execution[1] : null;
+  return Array.isArray(argv) && argv.length > 0 && argv.every((arg) => typeof arg === "string")
+    ? argv
+    : null;
+}
+
 export async function readSystemdServiceExecStart(
   env: GatewayServiceEnv,
+  opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceCommandConfig | null> {
   const unitPath = resolveSystemdUnitPath(env);
   try {
@@ -87,7 +140,10 @@ export async function readSystemdServiceExecStart(
       inlineEnvironment,
       environmentFromFiles.environment,
     );
-    const programArguments = parseSystemdExecStart(execStart);
+    // The loaded manager owns merged drop-ins; retain base-file metadata when D-Bus is offline.
+    const programArguments =
+      (await readSystemdManagerExecStart(env, opts).catch(() => null)) ??
+      parseSystemdExecStart(execStart);
     return {
       programArguments,
       ...(workingDirectory ? { workingDirectory } : {}),

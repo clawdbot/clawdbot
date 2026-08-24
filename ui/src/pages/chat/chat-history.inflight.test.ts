@@ -35,7 +35,6 @@ function createState(result: ChatHistoryResult): TestState {
     chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatStreamStartedAt: null,
-    planStatus: null,
     sessions,
     toolStreamById: host.toolStreamById ?? new Map<string, ToolStreamEntry>(),
     toolStreamOrder: host.toolStreamOrder ?? [],

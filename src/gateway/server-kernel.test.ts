@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -18,6 +19,66 @@ import { createGatewayKernel } from "./server-kernel.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 describe("createGatewayKernel", () => {
+  it("reports startup and readiness as draining during a direct close", async () => {
+    const port = 19_789;
+    const state = await createOpenClawTestState({
+      label: "gateway-kernel-direct-close-readiness",
+      layout: "home",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+        VITEST: "1",
+      },
+    });
+    const token = "gateway-kernel-direct-close-readiness-token";
+    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+    try {
+      await state.writeConfig({
+        gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
+      });
+      state.applyEnv();
+      kernel = await createGatewayKernel(port, {
+        auth: { mode: "token", token },
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      });
+      kernel.kernel.unlockStartupMethods();
+      kernel.kernel.markSidecarsReady();
+      const { getStartup, getReadiness } = kernel.createHttpTransportOptions();
+      expect(getStartup()).toMatchObject({ ok: true, status: "started" });
+      expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
+
+      const closeFirstStop = vi.fn(async () => {});
+      kernel.kernel.swapBonjourStop(closeFirstStop);
+      const configReloaderStop = createDeferred();
+      vi.spyOn(kernel.runtimeState.configReloader, "stop").mockReturnValue(
+        configReloaderStop.promise,
+      );
+      const closing = kernel.createCloseHandler()({ reason: "direct close readiness test" });
+
+      expect(getStartup()).toMatchObject({ ok: false, status: "draining" });
+      expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });
+      configReloaderStop.resolve();
+      await closing;
+      expect(closeFirstStop).toHaveBeenCalledOnce();
+      expect(kernel.runtimeState.bonjourStop).toBeNull();
+    } finally {
+      try {
+        await kernel?.closeOnStartupFailure();
+      } finally {
+        await state.cleanup();
+      }
+    }
+  });
+
   it("keeps startup readiness and sidecar shutdown at their lifecycle boundaries", async () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
@@ -364,6 +425,7 @@ describe("createGatewayKernel", () => {
         "runtime.subscriptions",
         "runtime.services",
         "gateway.handlers",
+        "gateway.config-revision-key",
         "gateway.request-context",
       ]);
     } finally {

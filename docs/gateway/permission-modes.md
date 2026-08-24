@@ -30,6 +30,6 @@ A new managed worktree session defaults to `workspace` when no mode is specified
 
 An explicit session mode takes precedence over the session's legacy `execSecurity` and `execAsk` overrides. When the mode is unset, those fields and the normal global or per-agent configuration continue to work as before.
 
-Host approval-file floors, sandbox restrictions, and tool allow/deny policy can only make the effective result stricter. A harness may also clamp an unsupported mode to a compatible safer policy tuple; it does not combine tuple fields into a less restrictive posture.
+An explicit `full` mode is the admin-authorized exception to host approval-file floors: its OpenClaw exec policy remains `full` with approvals off. Approval-file floors continue to tighten config-driven exec policy, legacy session overrides, unset modes, and every non-full session mode. Sandbox restrictions and tool allow/deny policy remain independent, and a harness may clamp an unsupported mode to a compatible safer policy tuple. Codex also continues to honor externally enforced `requirements.toml` constraints.
 
 For the independent sandbox, tool-policy, and elevated-exec controls, see [Sandbox vs tool policy vs elevated](/gateway/sandbox-vs-tool-policy-vs-elevated).

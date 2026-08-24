@@ -3,7 +3,10 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  waitForControlUiSettingsTakeover,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -155,11 +158,10 @@ suite.define(() => {
         // 650px even against the mock gateway's tiny config fixture; General
         // became short enough to fit once the host panel moved to Gateway.
         await page.goto(`${suite.server.baseUrl}settings/appearance`);
-        const settingsSidebar = page.locator(".settings-sidebar");
+        const { search: settingsSearch, sidebar: settingsSidebar } =
+          await waitForControlUiSettingsTakeover(page);
         const settingsTitle = settingsSidebar.locator(".settings-sidebar__title");
-        const settingsSearch = settingsSidebar.locator(".settings-sidebar__search-input");
         const content = page.locator(".content");
-        await settingsSidebar.waitFor();
         await expect
           .poll(() => content.evaluate((element) => element.scrollHeight))
           .toBeGreaterThan(await content.evaluate((element) => element.clientHeight));

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import { extractAgentRunText } from "../agents/agent-run-result.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
@@ -204,7 +205,7 @@ async function runConfiguredSystemAgentText(params: {
             cleanupBundleMcpOnRunEnd: true,
             ...(route.authProfileId ? { authProfileIdSource: "user" as const } : {}),
           });
-    text = extractPlannerResultText(result)?.trim();
+    text = extractAgentRunText(result)?.trim();
   } catch (error) {
     if (error instanceof SystemAgentInferenceUnavailableError) {
       throw error;
@@ -247,21 +248,4 @@ async function createTempPlannerDir(): Promise<string> {
 
 async function removeTempPlannerDir(dir: string): Promise<void> {
   await fs.rm(dir, { recursive: true, force: true });
-}
-
-function extractPlannerResultText(result: {
-  payloads?: Array<{ text?: string }>;
-  meta?: {
-    finalAssistantVisibleText?: string;
-    finalAssistantRawText?: string;
-  };
-}): string | undefined {
-  return (
-    result.meta?.finalAssistantVisibleText ??
-    result.meta?.finalAssistantRawText ??
-    result.payloads
-      ?.map((payload) => payload.text?.trim())
-      .filter(Boolean)
-      .join("\n")
-  );
 }

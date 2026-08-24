@@ -11,11 +11,9 @@ import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
-  DEFAULT_LLAMA_CPP_MODEL_ID,
   LLAMA_CPP_PROVIDER_ID,
   resolveLegacyLlamaCppModelCacheDir,
   resolveLlamaCppModelCacheDir,
-  resolveLlamaCppModelSource,
 } from "./defaults.js";
 import { selectLlamaServerAsset } from "./llama-server-install.js";
 import { resolveManagedLlamaCppProviderConfig } from "./managed-provider-config.js";
@@ -31,6 +29,11 @@ type LlamaCppLocalOptions = {
   modelCacheDir?: string;
 };
 
+type LlamaCppEmbeddingModel = {
+  source: string;
+  isDefault: boolean;
+};
+
 const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
 const preparedEmbeddingServers = new Map<string, Promise<void>>();
 
@@ -42,6 +45,14 @@ type LlamaCppModelIdentity = {
 
 function readLocalOptions(options: { local?: unknown }): LlamaCppLocalOptions {
   return (options.local as LlamaCppLocalOptions | undefined) ?? {};
+}
+
+function readIdentityLocalOptions(options: EmbeddingProviderCreateOptions): LlamaCppLocalOptions {
+  const local = readLocalOptions(options);
+  const provider = options.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  return provider?.localService
+    ? { ...local, modelCacheDir: resolveLlamaCppModelCacheDir(provider) }
+    : local;
 }
 
 function createCacheKeyData(model: string, dimensions?: number): Record<string, unknown> {
@@ -98,6 +109,16 @@ function resolveModelIdentity(
   };
 }
 
+function resolveLlamaCppEmbeddingModel(localValue?: unknown): LlamaCppEmbeddingModel {
+  const local = readLocalOptions({ local: localValue });
+  const source = normalizeOptionalString(local.modelPath) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
+  const identity = resolveModelIdentity(local, source);
+  return {
+    source,
+    isDefault: identity.model === DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+  };
+}
+
 function resolveConfiguredProvider(options: EmbeddingProviderCreateOptions): ModelProviderConfig {
   return resolveManagedLlamaCppProviderConfig(options.config);
 }
@@ -113,47 +134,21 @@ function resolveProviderPort(provider: ModelProviderConfig): number {
 async function prepareEmbeddingServer(
   options: EmbeddingProviderCreateOptions,
   embeddingSource: string,
+  embeddingModelIsDefault: boolean,
 ): Promise<void> {
   const provider = resolveConfiguredProvider(options);
-  const configuredPrimary = options.config.agents?.defaults?.model;
-  const primaryRef =
-    typeof configuredPrimary === "string" ? configuredPrimary : configuredPrimary?.primary;
-  const primaryId = primaryRef?.startsWith(`${LLAMA_CPP_PROVIDER_ID}/`)
-    ? primaryRef.slice(LLAMA_CPP_PROVIDER_ID.length + 1)
-    : undefined;
-  const chatModel =
-    provider.models.find((model) => model.id === primaryId) ??
-    provider.models.find((model) => model.id !== DEFAULT_LLAMA_CPP_MODEL_ID) ??
-    provider.models[0];
-  if (!chatModel) {
-    throw new Error("Managed llama.cpp provider has no chat model preset.");
-  }
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
-  const key = JSON.stringify([provider.baseUrl, chatModel.id, embeddingSource, cacheDir]);
+  const key = JSON.stringify([provider.baseUrl, embeddingSource, cacheDir]);
   const pending =
     preparedEmbeddingServers.get(key) ??
     (async () => {
-      const [chatModelPath, embeddingModelPath] = await Promise.all([
-        ensureLlamaCppModel({
-          source: resolveLlamaCppModelSource(chatModel),
-          cacheDir,
-          download: false,
-        }),
-        ensureLlamaCppModel({
-          source: embeddingSource,
-          cacheDir,
-          download: true,
-        }),
-      ]);
-      const configuredContext = chatModel.params?.contextSize;
+      const embeddingModelPath = await ensureLlamaCppModel({
+        source: embeddingSource,
+        cacheDir,
+        download: true,
+      });
       await prepareManagedLlamaServer({
-        chatModelId: chatModel.id,
-        chatModelPath,
-        contextSize:
-          typeof configuredContext === "number" && configuredContext > 0
-            ? Math.floor(configuredContext)
-            : chatModel.contextTokens,
-        maxTokens: chatModel.maxTokens,
+        embeddingModelIsDefault,
         embeddingModelPath,
         port: resolveProviderPort(provider),
       });
@@ -218,14 +213,15 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
   formatSetupError: (error) =>
     `Managed local embeddings are unavailable. Run \`openclaw configure\`, choose llama.cpp, and retry. ${error instanceof Error ? error.message : String(error)}`,
   resolveIndexIdentity: (options) => {
-    const local = readLocalOptions(options);
+    const local = readIdentityLocalOptions(options);
     const modelPath = normalizeOptionalString(local.modelPath) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
     return resolveModelIdentity(local, modelPath, options.dimensions);
   },
   create: async (options) => {
-    const local = readLocalOptions(options);
-    const modelPath = normalizeOptionalString(local.modelPath) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
-    await prepareEmbeddingServer(options, modelPath);
+    const local = readIdentityLocalOptions(options);
+    const embeddingModel = resolveLlamaCppEmbeddingModel(local);
+    const identity = resolveModelIdentity(local, embeddingModel.source, options.dimensions);
+    await prepareEmbeddingServer(options, embeddingModel.source, embeddingModel.isDefault);
     const genericAdapter = getEmbeddingProvider("openai-compatible", options.config);
     if (!genericAdapter) {
       throw new Error("OpenAI-compatible embedding transport is unavailable.");
@@ -239,7 +235,6 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
     if (!result.provider) {
       return result;
     }
-    const identity = resolveModelIdentity(local, modelPath, options.dimensions);
     return {
       provider: wrapProvider({
         provider: result.provider,

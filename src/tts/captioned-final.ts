@@ -1,6 +1,6 @@
 import {
   copyReplyPayloadMetadata,
-  isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
 import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabilities.js";
@@ -61,11 +61,7 @@ export function mergeDeferredFinalText(streamedText: string, finalText?: string)
 }
 
 export function isCaptionedFinalTextPayload(payload: ReplyPayload): boolean {
-  return (
-    payload.isReasoning !== true &&
-    payload.isCommentary !== true &&
-    !isReplyPayloadStatusNotice(payload)
-  );
+  return isReplyPayloadTerminalContent(payload);
 }
 
 export function cleanDeferredFinalText(text: string | undefined): string {

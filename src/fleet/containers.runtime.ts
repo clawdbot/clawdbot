@@ -521,7 +521,11 @@ const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
     };
     pipeWithBackpressure(child.stdout, process.stdout, stdout);
     pipeWithBackpressure(child.stderr, process.stderr, stderr);
-    child.once("error", reject);
+    child.on("error", (error) => {
+      if (child.pid === undefined) {
+        reject(error);
+      }
+    });
     child.once("close", (code, signal) => {
       stdout.flush();
       stderr.flush();

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
+import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -757,6 +758,83 @@ describe("collapseCompletedTurnWork", () => {
     expect(requireGroup(items[2]).role).toBe("assistant");
   });
 
+  it("keeps durable context compaction inside completed work instead of treating it as the reply", () => {
+    const items = collapsedItems({
+      messages: [
+        userMessage("do it", 1_000),
+        {
+          role: "custom",
+          customType: "openclaw.context-compaction",
+          content: "Context compacted",
+          display: true,
+          excludeFromContext: true,
+          details: { runId: "run-1" },
+          idempotencyKey: "codex-context-compaction:thread:turn:item",
+          timestamp: 2_000,
+        },
+        assistantMessage("All done.", 3_000),
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+    const work = requireWorkGroup(items[1]);
+    expect(work.groups).toHaveLength(1);
+    expect(work.groups[0]?.messages[0]?.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Context compacted" }],
+      runId: "run-1",
+      __openclaw: { runtimeActivityKind: "context_compaction" },
+    });
+    expect(work.groups[0]?.messages[0]?.message).not.toHaveProperty("idempotencyKey");
+    expect(requireGroup(items[2]).messages[0]?.message).toMatchObject({
+      content: "All done.",
+    });
+  });
+
+  it.each([
+    {
+      role: "assistant",
+      visualization: assistantMessage(
+        [
+          { type: "text", text: "Here is the chart." },
+          createAssistantCanvasBlock({ suffix: "completed_turn_assistant_visual" }),
+        ],
+        2_000,
+      ),
+      commentary: [],
+      workRoles: ["tool"],
+    },
+    {
+      role: "tool",
+      visualization: toolResultMessage(
+        "visualization",
+        "show_widget",
+        [createAssistantCanvasBlock({ suffix: "completed_turn_tool_visual" })],
+        2_000,
+      ),
+      commentary: [assistantMessage("Checking the details.", 2_500)],
+      workRoles: ["assistant", "tool"],
+    },
+  ])(
+    "keeps an earlier visualization visible while collapsing only tool work ($role)",
+    ({ visualization, commentary, workRoles }) => {
+      const items = collapsedItems({
+        messages: [
+          userMessage("show the result", 1_000),
+          visualization,
+          ...commentary,
+          toolResult("call-1", 3_000),
+          assistantMessage("All done.", 4_000),
+        ],
+      });
+
+      expect(items.map((item) => item.kind)).toEqual(["group", "group", "work-group", "group"]);
+      expect(canvasBlocksIn(requireGroup(items[1]))).toHaveLength(1);
+      expect(requireWorkGroup(items[2]).groups.map((group) => group.role)).toEqual(workRoles);
+      expect(messageRecord(requireGroup(items[3])).content).toBe("All done.");
+    },
+  );
+
   it.each([
     "agent:main:main",
     "agent:main:telegram:direct:42",
@@ -792,6 +870,43 @@ describe("collapseCompletedTurnWork", () => {
     );
 
     expect(items.some((item) => item.kind === "work-group")).toBe(false);
+  });
+
+  it("collapses completed pre-steer work before the steering message", () => {
+    const messages = [
+      userMessage("do it", 1_000, {
+        __openclaw: { idempotencyKey: "active-run:user", senderId: "operator" },
+      }),
+      assistantMessage("Checking…", 2_000),
+      toolResult("call-1", 3_000),
+      userMessage("queued follow-up", 3_500, {
+        __openclaw: { idempotencyKey: "queued-run:user", senderId: "peer" },
+      }),
+      userMessage("continue", 4_000, {
+        __openclaw: {
+          idempotencyKey: "steer-run:user",
+          senderId: "operator",
+          steerTargetRunId: "active-run",
+        },
+      }),
+      assistantMessage("All done.", 5_000),
+    ];
+
+    expect(
+      collapsedItems({ messages, runWorking: true }, true).some(
+        (item) => item.kind === "work-group",
+      ),
+    ).toBe(false);
+
+    const completed = collapsedItems({ messages });
+    expect(completed.map((item) => item.kind)).toEqual([
+      "group",
+      "work-group",
+      "group",
+      "group",
+      "group",
+    ]);
+    expect(requireWorkGroup(completed[1]).durationMs).toBe(4_000);
   });
 
   it("keeps reply-less turns expanded after the run finishes", () => {
@@ -1053,6 +1168,14 @@ describe("coalesceActivityRuns", () => {
 
     expect(initial.key).toBe(`activity:${groups[0]?.key}`);
     expect(appended.key).toBe(initial.key);
+  });
+
+  it("keeps adjacent tool activity from different runs separate", () => {
+    const groups = projectedToolGroups();
+    const first = { ...groups[0]!, runId: "run-1" };
+    const second = { ...groups[1]!, runId: "run-2" };
+
+    expect(coalesceActivityRuns([first, second])).toEqual([first, second]);
   });
 
   it("treats every non-tool item as a hard presentation boundary", () => {
@@ -1364,24 +1487,6 @@ describe("buildCachedChatItems working spark", () => {
     expect(hasReadingIndicator({ runWorking: true })).toBe(true);
   });
 
-  it("adds the plan to the active stream run and removes it when the run stops", () => {
-    const planStatus = {
-      steps: [{ step: "Inspect the route", status: "in_progress" as const }],
-    };
-    const activeItems = buildCachedChatItems(
-      createProps({ runActive: true, runWorking: true, planStatus }),
-    );
-
-    expect(coalesceStreamRuns(activeItems)).toMatchObject([
-      { kind: "stream-run", parts: [{ kind: "reading-indicator" }, { kind: "plan" }] },
-    ]);
-
-    const idleItems = buildCachedChatItems(
-      createProps({ runActive: false, runWorking: false, planStatus }),
-    );
-    expect(idleItems.some((item) => item.kind === "plan")).toBe(false);
-  });
-
   it("keeps the run start time on the working indicator", () => {
     const indicator = buildCachedChatItems(
       createProps({ runWorking: true, streamStartedAt: 42_000 }),
@@ -1470,6 +1575,12 @@ describe("buildCachedChatItems working spark", () => {
       coalesceStreamRuns(pendingItems).find((item) => item.kind === "stream-run"),
       "pending stream run",
     );
+    const pendingFrame = expectDefined(
+      coalesceAgentRunFrames(coalesceStreamRuns(pendingItems)).find(
+        (item) => item.kind === "agent-run-frame",
+      ),
+      "pending agent run frame",
+    );
 
     const acknowledgedItems = buildCachedChatItems(
       createProps({
@@ -1488,12 +1599,19 @@ describe("buildCachedChatItems working spark", () => {
       coalesceStreamRuns(acknowledgedItems).find((item) => item.kind === "stream-run"),
       "acknowledged stream run",
     );
+    const acknowledgedFrame = expectDefined(
+      coalesceAgentRunFrames(coalesceStreamRuns(acknowledgedItems)).find(
+        (item) => item.kind === "agent-run-frame",
+      ),
+      "acknowledged agent run frame",
+    );
 
     expect(acknowledgedIndicator).toMatchObject({
       key: pendingIndicator.key,
       startedAt: pendingIndicator.startedAt,
     });
     expect(acknowledgedRun.key).toBe(pendingRun.key);
+    expect(acknowledgedFrame.key).toBe(pendingFrame.key);
 
     const streamingItems = buildCachedChatItems(
       createProps({
@@ -1547,6 +1665,35 @@ describe("buildCachedChatItems working spark", () => {
 
     expect(nextRunIndicator.key).not.toBe(pendingIndicator.key);
     expect(otherSessionIndicator.key).not.toBe(pendingIndicator.key);
+  });
+
+  it("keeps a future queued send from replacing the active stream run identity", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        sessionKey: "agent:main:active-with-future-queue",
+        runWorking: true,
+        stream: "Current run output.",
+        streamSegments: [{ text: "", ts: 1_000, runId: "active-run", boundaryMarker: true }],
+        queue: [
+          {
+            id: "future-send",
+            text: "Run this next.",
+            createdAt: 2_000,
+            sendRunId: "future-run",
+            sendState: "waiting-reconnect",
+            sendSubmittedAtMs: 1,
+            sendAttempts: 1,
+          },
+        ],
+      }),
+    );
+
+    expect(items.find((item) => item.kind === "stream" && item.isStreaming)).toMatchObject({
+      runId: "active-run",
+    });
+    expect(items.find((item) => item.kind === "reading-indicator")).toMatchObject({
+      runId: "active-run",
+    });
   });
 
   it("keeps client and engine run identities separate", () => {
@@ -1682,6 +1829,7 @@ describe("buildCachedChatItems", () => {
       userMessage("before", 999),
       userMessage("[System] Continue the interrupted turn.", 1000, {
         provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+        __openclaw: { id: "restart-recovery", idempotencyKey: "run-recovered:user" },
       }),
       userMessage("[System] Gateway restarted during update 2026.8.2 -> 2026.8.3.", 1001, {
         provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
@@ -1706,6 +1854,7 @@ describe("buildCachedChatItems", () => {
       label: "System · restart recovery",
       text: "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
       timestamp: 1000,
+      boundaryId: "send:run-recovered",
     });
     // Summary-less kinds keep the producer's informative text under the label.
     expect(items[2]).toMatchObject({
@@ -2239,18 +2388,21 @@ describe("buildCachedChatItems", () => {
     expect(groupAt(groups, 0).messages).toHaveLength(1);
   });
 
-  it("collapses consecutive duplicate text messages into one rendered item with a count", () => {
+  it("collapses two distinct persisted rows with identical text into one rendered item", () => {
     const groups = messageGroups({
       messages: [
-        assistantMessage([{ type: "text", text: "Same update" }], 1),
-        assistantMessage([{ type: "text", text: "Same update" }], 2),
-        assistantMessage([{ type: "text", text: "Same update" }], 3),
+        assistantMessage([{ type: "text", text: "Same update" }], 1, {
+          __openclaw: { seq: 7 },
+        }),
+        assistantMessage([{ type: "text", text: "Same update" }], 2, {
+          __openclaw: { seq: 8 },
+        }),
       ],
     });
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBe(3);
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBe(2);
   });
 
   it.each([

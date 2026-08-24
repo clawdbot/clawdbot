@@ -5,6 +5,12 @@ import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "./channel-tool-metadata.js";
+import {
+  describeSessionsSearchTool,
+  describeSessionsSendTool,
+  describeSessionsSpawnTool,
+} from "./tool-description-presets.js";
+import { createConversationsSendTool } from "./tools/conversation-tools.js";
 
 function findToolDescription(toolName: string, includeCron: boolean) {
   const tools = applyToolAvailabilityDescriptions([
@@ -46,25 +52,55 @@ describe("createOpenClawCodingTools availability guidance", () => {
     );
   });
 
-  it("preserves ownership metadata when replacing process descriptions", () => {
-    const processTool = {
-      name: "process",
-      description: "plugin process",
-    } as AnyAgentTool;
-    setPluginToolMeta(processTool, { pluginId: "example", optional: false });
-    setChannelAgentToolMeta(processTool as never, { channelId: "example-channel" });
+  it.each([
+    { name: "process", description: "plugin process", available: [] },
+    {
+      name: "sessions_send",
+      description: describeSessionsSendTool(),
+      available: ["conversations_list", "conversations_send"],
+    },
+    {
+      name: "sessions_search",
+      description: describeSessionsSearchTool(),
+      available: ["sessions_history"],
+    },
+    {
+      name: "sessions_spawn",
+      description: describeSessionsSpawnTool(),
+      available: ["agents_list"],
+    },
+    {
+      name: "conversations_send",
+      description: createConversationsSendTool().description,
+      available: ["conversations_list"],
+    },
+  ])(
+    "preserves ownership metadata when replacing $name descriptions",
+    ({ name, description, available }) => {
+      const originalTool = {
+        name,
+        description,
+      } as AnyAgentTool;
+      setPluginToolMeta(originalTool, { pluginId: "example", optional: false });
+      setChannelAgentToolMeta(originalTool as never, { channelId: "example-channel" });
 
-    const [updated] = applyToolAvailabilityDescriptions([processTool]);
+      const [updated] = applyToolAvailabilityDescriptions([
+        originalTool,
+        ...available.map(
+          (toolName) => ({ name: toolName, description: "available" }) as AnyAgentTool,
+        ),
+      ]);
 
-    expect(updated).not.toBe(processTool);
-    expect(getPluginToolMeta(expectDefined(updated, "updated test invariant"))).toEqual({
-      pluginId: "example",
-      optional: false,
-    });
-    expect(getChannelAgentToolMeta(updated as never)).toEqual({
-      channelId: "example-channel",
-    });
-  });
+      expect(updated).not.toBe(originalTool);
+      expect(getPluginToolMeta(expectDefined(updated, "updated test invariant"))).toEqual({
+        pluginId: "example",
+        optional: false,
+      });
+      expect(getChannelAgentToolMeta(updated as never)).toEqual({
+        channelId: "example-channel",
+      });
+    },
+  );
 
   it("mentions sessions_spawn only when it survives tool filtering", () => {
     const withoutSpawn = applyToolAvailabilityDescriptions([
@@ -82,5 +118,154 @@ describe("createOpenClawCodingTools availability guidance", () => {
     for (const tool of withSpawn.filter((entry) => entry.name !== "sessions_spawn")) {
       expect(tool.description).toContain("sessions_spawn");
     }
+  });
+
+  it.each([
+    {
+      name: "sessions_send",
+      description: describeSessionsSendTool(),
+      unavailable: ["conversations_list", "conversations_send", "conversations_turn"],
+    },
+    {
+      name: "sessions_search",
+      description: describeSessionsSearchTool(),
+      unavailable: ["sessions_history"],
+    },
+    {
+      name: "sessions_spawn",
+      description: describeSessionsSpawnTool({ swarmEnabled: true }),
+      unavailable: ["agents_list", "agents_wait", "subagents", "sessions_history"],
+    },
+    {
+      name: "conversations_send",
+      description: createConversationsSendTool().description,
+      unavailable: ["conversations_list"],
+    },
+  ])(
+    "does not advertise unavailable follow-up tools from $name",
+    ({ name, description, unavailable }) => {
+      const [tool] = applyToolAvailabilityDescriptions([{ name, description } as AnyAgentTool]);
+
+      for (const unavailableTool of unavailable) {
+        expect(tool?.description).not.toContain(unavailableTool);
+      }
+    },
+  );
+
+  it.each([
+    { available: [], expected: [] },
+    { available: ["conversations_list"], expected: [] },
+    { available: ["conversations_send"], expected: [] },
+    {
+      available: ["conversations_list", "conversations_send"],
+      expected: ["conversations_list", "conversations_send"],
+    },
+    {
+      available: ["conversations_list", "conversations_turn"],
+      expected: ["conversations_list", "conversations_turn"],
+    },
+    {
+      available: ["conversations_list", "conversations_send", "conversations_turn"],
+      expected: ["conversations_list", "conversations_send", "conversations_turn"],
+    },
+  ])("describes only executable conversation routes: $available", ({ available, expected }) => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      { name: "sessions_send", description: describeSessionsSendTool() },
+      ...available.map((name) => ({ name, description: "available" })),
+    ] as AnyAgentTool[]);
+
+    for (const name of ["conversations_list", "conversations_send", "conversations_turn"]) {
+      expect(tool?.description.includes(name)).toBe(expected.includes(name));
+    }
+  });
+
+  it("preserves the existing fully authorized session-send description byte for byte", () => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      { name: "sessions_send", description: describeSessionsSendTool() },
+      { name: "conversations_list", description: "list" },
+      { name: "conversations_send", description: "send" },
+      { name: "conversations_turn", description: "turn" },
+    ] as AnyAgentTool[]);
+
+    expect(tool?.description).toBe(
+      [
+        "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
+        "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
+        "For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`.",
+        'Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status "no_reply" is terminal, so do not wait for an announcement.',
+        "watch:true: notice arrives when others later change target session.",
+      ].join(" "),
+    );
+  });
+
+  it("keeps authorized history guidance and the prepared session URL", () => {
+    const sessionLinkBase = "https://gateway.example/control";
+    const [tool] = applyToolAvailabilityDescriptions([
+      {
+        name: "sessions_search",
+        description: describeSessionsSearchTool({ sessionLinkBase }),
+      },
+      { name: "sessions_history", description: "history" },
+    ] as AnyAgentTool[]);
+
+    expect(tool?.description).toContain("sessions_history");
+    expect(tool?.description).toContain(`${sessionLinkBase}/chat/<agentId>`);
+    expect(tool?.description.indexOf("Follow up with sessions_history")).toBeLessThan(
+      tool?.description.indexOf("When pointing the user at a session") ?? Infinity,
+    );
+  });
+
+  it("restores conversation lookup guidance only when lookup is authorized", () => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      createConversationsSendTool(),
+      { name: "conversations_list", description: "lookup" } as AnyAgentTool,
+    ]);
+
+    expect(tool?.description).toBe(
+      "Send directly through a conversationRef from conversations_list. This performs channel delivery; it does not run the local agent in the backing session.",
+    );
+  });
+
+  it("keeps only authorized spawn follow-ups without losing prepared runtime facts", () => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      {
+        name: "sessions_spawn",
+        description: describeSessionsSpawnTool({
+          acpAvailable: false,
+          threadAvailable: true,
+          sessionToolsVisibility: "self",
+          swarmEnabled: true,
+        }),
+      },
+      { name: "agents_list", description: "agent lookup" },
+      { name: "sessions_history", description: "history" },
+    ] as AnyAgentTool[]);
+
+    expect(tool?.description).toContain("configured agent (see agents_list);");
+    expect(tool?.description).toContain("sessions_history");
+    expect(tool?.description).not.toContain("agents_wait");
+    expect(tool?.description).not.toContain("subagents");
+    expect(tool?.description).toContain("persistent/thread-bound");
+    expect(tool?.description).toContain("(self: current session only)");
+    expect(tool?.description).not.toContain('runtime="acp"');
+  });
+
+  it("preserves original inline spawn guidance when every follow-up remains available", () => {
+    const [tool] = applyToolAvailabilityDescriptions([
+      {
+        name: "sessions_spawn",
+        description: describeSessionsSpawnTool({ acpAvailable: false, swarmEnabled: true }),
+      },
+      ...["agents_list", "agents_wait", "subagents", "sessions_history"].map((name) => ({
+        name,
+        description: "available",
+      })),
+    ] as AnyAgentTool[]);
+
+    expect(tool?.description).toContain("configured agent (see agents_list);");
+    expect(tool?.description).toContain("`groupId` groups a batch; await with agents_wait.");
+    expect(tool?.description).toContain(
+      "No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn,",
+    );
   });
 });

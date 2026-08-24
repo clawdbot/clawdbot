@@ -42,6 +42,7 @@ type EmbeddedReplyRoute = Pick<
   | "originatingChatType"
   | "originatingThreadId"
   | "originatingReplyToId"
+  | "originatingReplyToMode"
 >;
 
 /** Selects the freshest runtime config usable by queued reply execution. */
@@ -135,6 +136,7 @@ export function buildThreadingToolContext(params: {
     return {
       currentMessageId,
       currentSourceTurnId,
+      replyToMode: sessionCtx.ReplyToMode,
     };
   }
   const rawProvider = normalizeOptionalLowercaseString(originProvider);
@@ -142,6 +144,7 @@ export function buildThreadingToolContext(params: {
     return {
       currentMessageId,
       currentSourceTurnId,
+      replyToMode: sessionCtx.ReplyToMode,
     };
   }
   const provider = normalizeChatChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
@@ -153,6 +156,7 @@ export function buildThreadingToolContext(params: {
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       currentMessageId,
       currentSourceTurnId,
+      replyToMode: sessionCtx.ReplyToMode,
       hasRepliedRef,
     };
   }
@@ -184,6 +188,7 @@ export function buildThreadingToolContext(params: {
     // `undefined` means the adapter rejected the generic message-id fallback.
     currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
     currentSourceTurnId,
+    replyToMode: context.replyToMode ?? sessionCtx.ReplyToMode,
   };
 }
 
@@ -262,6 +267,7 @@ function buildEmbeddedContextFromTemplate(params: {
       params.run.chatType,
     MessageThreadId: params.replyRoute?.originatingThreadId ?? params.sessionCtx.MessageThreadId,
     ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
+    ReplyToMode: params.replyRoute?.originatingReplyToMode ?? params.sessionCtx.ReplyToMode,
   };
   return {
     sessionId: params.run.sessionId,

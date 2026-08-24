@@ -37,6 +37,7 @@ import type {
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
+  GatewayServiceLoadState,
   GatewayServiceManageArgs,
   GatewayServiceReadOptions,
   GatewayServiceRestartResult,
@@ -86,7 +87,10 @@ export type GatewayService = {
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   isEnabled?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
-  readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
+  readCommand: (
+    env: GatewayServiceEnv,
+    opts?: GatewayServiceReadOptions,
+  ) => Promise<GatewayServiceCommandConfig | null>;
   readRuntime: (
     env: GatewayServiceEnv,
     opts?: GatewayServiceReadOptions,
@@ -125,7 +129,7 @@ function collectGatewayServiceStartRepairIssues(
   expectedPort?: number,
 ): GatewayServiceStartRepairIssue[] {
   const command = state.command;
-  if (!state.loaded || !command) {
+  if (state.loadState.status !== "loaded" || !command) {
     return [];
   }
   const issues: GatewayServiceStartRepairIssue[] = [];
@@ -175,22 +179,33 @@ export function formatGatewayServiceStartRepairIssues(
   return issues.map((issue) => issue.message).join("; ");
 }
 
+export async function readGatewayServiceLoadState(
+  service: GatewayService,
+  args: GatewayServiceEnvArgs = {},
+): Promise<GatewayServiceLoadState> {
+  try {
+    const loaded = await service.isLoaded(args);
+    return { status: loaded ? "loaded" : "not-loaded" };
+  } catch (error) {
+    return { status: "unknown", detail: String(error) };
+  }
+}
+
 export async function readGatewayServiceState(
   service: GatewayService,
   args: ReadGatewayServiceStateArgs = {},
 ): Promise<GatewayServiceState> {
   const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
-  const command = await service.readCommand(baseEnv).catch(() => null);
+  const { timeoutMs } = args;
+  // Keep command and status probes on the same fail-soft manager deadline.
+  const command = await service.readCommand(baseEnv, { timeoutMs }).catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
   // Callers that may mutate the selected service can reject persisted selector
   // drift before isLoaded/readRuntime invoke the native service manager.
   args.validateEnvBeforeStatusRead?.(env);
-  // Propagate the status read deadline so a wedged service manager fails soft
-  // instead of hanging both probes. readCommand parses local files and needs no
-  // bound; isLoaded/readRuntime can spawn service-manager subprocesses.
-  const [loaded, runtime] = await Promise.all([
-    service.isLoaded({ env, timeoutMs: args.timeoutMs }).catch(() => false),
-    service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(
+  const [loadState, runtime] = await Promise.all([
+    readGatewayServiceLoadState(service, { env, timeoutMs }),
+    service.readRuntime(env, { timeoutMs }).catch(
       (error: unknown) =>
         ({
           status: "unknown",
@@ -200,7 +215,7 @@ export async function readGatewayServiceState(
   ]);
   return {
     installed: command !== null,
-    loaded,
+    loadState,
     running: runtime?.status === "running",
     env,
     command,
@@ -218,14 +233,17 @@ export async function startGatewayService(
     { env: args.env },
     expectedPort,
   );
-  if (!state.loaded && !state.installed) {
+  if (state.loadState.status === "unknown") {
+    throw new Error(`Service status inspection failed: ${state.loadState.detail}`);
+  }
+  if (state.loadState.status === "not-loaded" && !state.installed) {
     return {
       outcome: "missing-install",
       state,
     };
   }
 
-  if (state.loaded && state.running) {
+  if (state.loadState.status === "loaded" && state.running) {
     return {
       outcome: "already-running",
       state,
@@ -256,6 +274,9 @@ export async function startGatewayService(
     throw err;
   }
 
+  if (nextState.loadState.status === "unknown") {
+    throw new Error(`Service status inspection failed after start: ${nextState.loadState.detail}`);
+  }
   const runtime = nextState.runtime;
   const failedState = normalizeLowercaseStringOrEmpty(runtime?.state) === "failed";
   const newFailedExit =

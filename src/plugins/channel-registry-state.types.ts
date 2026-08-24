@@ -8,6 +8,7 @@ export type ActiveChannelPluginRuntimeShape = {
   } | null;
   messaging?: {
     targetPrefixes?: readonly string[];
+    resolveConversationRouteOwner?: (...args: never[]) => unknown;
   } | null;
   capabilities?: {
     nativeCommands?: boolean;
@@ -15,6 +16,8 @@ export type ActiveChannelPluginRuntimeShape = {
   conversationBindings?: {
     supportsCurrentConversationBinding?: boolean;
     isCurrentConversationBindingSupported?: (params: { accountId: string }) => boolean;
+    bindingStore?: "adapter";
+    createManager?: unknown;
   } | null;
 };
 

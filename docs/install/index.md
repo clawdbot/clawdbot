@@ -1,7 +1,8 @@
 ---
-summary: "Install OpenClaw - installer script, npm/pnpm/bun, from source, Docker, and more"
+summary: "Install OpenClaw - desktop app downloads, installer script, npm/pnpm/bun, from source, Docker, and more"
 read_when:
   - You need an install method other than the Getting Started quickstart
+  - You want to download the Windows Hub or macOS desktop app instead of the CLI
   - You want to deploy to a cloud platform
   - You need to update, migrate, or uninstall
 title: "Install"
@@ -12,6 +13,18 @@ title: "Install"
 - **Node 22.22.3+, 24.15+, or 25.9+** - Node 26 is the recommended default; the installer script provisions it automatically when Node is missing.
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source.
+
+## Download the desktop app
+
+Prefer a normal app download over the CLI? OpenClaw ships desktop companions:
+
+- **Windows**: the [Windows Hub](/platforms/windows#recommended-windows-hub) companion app — a signed installer you download and run like any Windows app, with setup, tray status, chat, and node mode:
+  - [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw-windows-node/releases/latest/download/OpenClawCompanion-Setup-x64.exe)
+  - [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw-windows-node/releases/latest/download/OpenClawCompanion-Setup-arm64.exe)
+  - All Hub releases: [Windows Hub releases page](https://github.com/openclaw/openclaw-windows-node/releases/latest)
+- **macOS**: the [macOS menu bar app](/platforms/macos) — download the `OpenClaw-<version>.dmg` (preferred) or `.zip` asset from [OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases), then install and launch **OpenClaw.app**. See the [macOS app page](/platforms/macos) for details, including what to do when the newest release ships no macOS asset.
+
+Both desktop apps can provision a local Gateway during first-run setup, or connect to an existing remote Gateway.
 
 ## Recommended: installer script
 
@@ -82,9 +95,8 @@ If you already manage Node yourself:
     openclaw onboard --install-daemon
     ```
 
-    On npm 11.12 and earlier, use the same command without
-    `--allow-scripts=openclaw`. Do not use npm 11.13–11.15 for this install;
-    upgrade to npm 11.16+ first.
+    On npm 11.15 and earlier, use the same command without
+    `--allow-scripts=openclaw`.
 
     <Note>
     npm 12 blocks unapproved package lifecycle scripts by default. The
@@ -93,11 +105,9 @@ If you already manage Node yourself:
     they are not covered by allowScripts`.
 
     npm 11.16 accepts the option but otherwise only warns that the scripts are
-    `not yet covered by allowScripts` and still runs them. npm 11.12 and earlier
+    `not yet covered by allowScripts` and still runs them. npm 11.15 and earlier
     have neither the policy nor the option, so their command must be unflagged.
-    npm 11.13–11.15 also lack the option, but they are transitional upstream
-    releases outside this documented install contract; upgrade rather than
-    relying on their unflagged behavior. The `npm approve-scripts openclaw`
+    The `npm approve-scripts openclaw`
     command suggested by npm 11.16 does not work for a global install — it fails
     with `ENOMATCH  No installed packages match: openclaw`.
     </Note>

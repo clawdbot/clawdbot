@@ -266,6 +266,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => ({
 }));
 
 vi.mock("../secrets/target-registry-data.js", () => ({
+  buildSecretTargetRegistryFromPlugins: () => [],
   getCoreSecretTargetRegistry: () => [],
   getSecretTargetRegistry: () => [],
 }));

@@ -86,12 +86,13 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "", attachments });
   });
 
-  it("includes selected model and thinking overrides for a plain session", () => {
+  it("includes selected model, context-window, and thinking overrides for a plain session", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",
         message: "use the selected model",
         model: "anthropic/claude-sonnet-4-6",
+        contextWindow: "200k",
         thinkingLevel: "high",
         worktree: false,
       }),
@@ -99,6 +100,7 @@ describe("buildDraftSessionCreateParams", () => {
       agentId: "main",
       message: "use the selected model",
       model: "anthropic/claude-sonnet-4-6",
+      contextWindow: "200k",
       thinkingLevel: "high",
     });
   });
@@ -109,6 +111,7 @@ describe("buildDraftSessionCreateParams", () => {
         agentId: "main",
         message: "start coding",
         model: "openai/gpt-5.5",
+        contextWindow: "200k",
         thinkingLevel: "medium",
         worktree: false,
         catalogId: "claude",
@@ -199,7 +202,6 @@ describe("buildDraftSessionCreateParams", () => {
         worktree: true,
         cwd: "/recorded/openclaw",
         workspace: "/workspace",
-        execNode: "ignored-node",
       }),
     ).toEqual({
       agentId: "main",
@@ -225,42 +227,6 @@ describe("buildDraftSessionCreateParams", () => {
       cwd: "/other/repo",
       worktree: true,
       worktreeBaseRef: "main",
-    });
-  });
-
-  it("sends the selected folder and execNode for node sessions", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "remote work",
-        worktree: false,
-        cwd: "/other/repo",
-        workspace: "/workspace",
-        execNode: "macbook",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "remote work",
-      cwd: "/other/repo",
-      execNode: "macbook",
-    });
-  });
-
-  it("sends the selected node cwd even when it matches the Gateway workspace path", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "remote work",
-        worktree: false,
-        cwd: "/workspace",
-        workspace: "/workspace",
-        execNode: "macbook",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "remote work",
-      cwd: "/workspace",
-      execNode: "macbook",
     });
   });
 });

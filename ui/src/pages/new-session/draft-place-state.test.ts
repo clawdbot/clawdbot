@@ -41,12 +41,12 @@ describe("DraftPlaceState cloud machine selection", () => {
         context: undefined,
         data: undefined,
         submitting: false,
-        pendingCloudSessionKey: "",
+        pendingPlacementSessionKey: "",
       }),
       { requestUpdate, onError: vi.fn(), onClearError: vi.fn() },
     );
 
-    state.applyPendingCloud({ agentId: "main", profileId: "aws" });
+    state.applyPendingPlacement({ agentId: "main", profileId: "aws" });
     expect(state.machineClass).toBe("");
 
     state.cloudMachines.select("aws", "fast", gateway.cloudProfiles);
@@ -85,18 +85,68 @@ describe("DraftPlaceState cloud machine selection", () => {
         context: undefined,
         data: undefined,
         submitting: false,
-        pendingCloudSessionKey: "",
+        pendingPlacementSessionKey: "",
       }),
       { requestUpdate: vi.fn(), onError: vi.fn(), onClearError: vi.fn() },
     );
 
-    state.applyPendingCloud({ agentId: "main", profileId: "aws", machineClass: "fast" });
+    state.applyPendingPlacement({ agentId: "main", profileId: "aws", machineClass: "fast" });
     expect(state.machineClass).toBe("fast");
 
     cloudProfiles.splice(0, cloudProfiles.length, { id: "aws", providerId: "crabbox" });
     expect(state.machineClass).toBe("fast");
 
-    state.applyPendingCloud({ agentId: "main", profileId: "aws" });
+    state.applyPendingPlacement({ agentId: "main", profileId: "aws" });
     expect(state.machineClass).toBe("");
+  });
+
+  it("clears a selected cloud profile when the runtime switches to an incompatible mode", () => {
+    const persistPreference = vi.fn();
+    const cloudProfiles: DraftCloudProfile[] = [
+      { id: "aws", providerId: "crabbox", executionMode: "worker-turn" },
+    ];
+    const state = new DraftPlaceState(
+      { cloudProfiles, persistPreference } as unknown as DraftGatewayState,
+      {
+        clearProjectSelection: vi.fn(),
+        close: vi.fn(),
+        projectId: "",
+        remoteProject: null,
+        selectedProject: vi.fn(() => undefined),
+      } as unknown as DraftPlaceBrowser,
+      () => ({
+        context: undefined,
+        data: undefined,
+        submitting: false,
+        pendingPlacementSessionKey: "",
+      }),
+      { requestUpdate: vi.fn(), onError: vi.fn(), onClearError: vi.fn() },
+    );
+    const resolveRuntime = vi.spyOn(state.modelControl, "resolveAgentRuntime");
+    resolveRuntime.mockReturnValue({
+      id: "openclaw",
+      cloudPlacementSupported: true,
+      cloudPlacementExecutionMode: "worker-turn",
+      source: "model",
+    });
+    state.applyPendingPlacement({ agentId: "main", profileId: "aws" });
+    state.restorePreferenceSelections();
+    expect(state.cloudProfileId).toBe("aws");
+
+    resolveRuntime.mockReturnValue({
+      id: "codex",
+      cloudPlacementSupported: true,
+      cloudPlacementExecutionMode: "remote-exec",
+      source: "model",
+    });
+    state.restorePreferenceSelections();
+
+    expect(state.cloudProfileId).toBe("");
+    expect(state.worktree).toBe(false);
+    expect(persistPreference).toHaveBeenLastCalledWith(
+      "main",
+      "",
+      expect.objectContaining({ where: { kind: "local" }, worktree: false }),
+    );
   });
 });

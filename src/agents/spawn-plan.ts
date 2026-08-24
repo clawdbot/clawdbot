@@ -154,7 +154,7 @@ function buildThreadBindingUnavailableError(kind: SpawnBackendKind, mode: SpawnM
     return (
       'sessions_spawn(mode="session") is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). ' +
       "This request is not running on a channel that can bind a subagent thread. " +
-      'Use mode="run" for one-shot subagent work, or sessions_send(sessionKey=...) to keep talking to a persistent session without thread binding.'
+      'Use mode="run" for one-shot subagent work.'
     );
   }
   return (
@@ -354,7 +354,7 @@ export function resolveSpawnAdmission(params: {
     return {
       ok: false,
       error:
-        "sessions_spawn requires explicit agentId when requireAgentId is configured. Use agents_list to see allowed agent ids.",
+        "sessions_spawn requires explicit agentId when requireAgentId is configured. Provide an allowed configured agentId.",
     };
   }
   const targetPolicy = resolveSubagentTargetPolicy({

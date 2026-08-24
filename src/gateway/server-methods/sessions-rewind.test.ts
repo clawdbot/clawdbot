@@ -18,6 +18,7 @@ import {
 } from "../../process/command-queue.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import type { GatewayRequestContext, RespondFn, GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -161,6 +162,7 @@ async function invoke(
   entryId?: string,
   client: GatewayClient | null = null,
   active = false,
+  runtimeConfig?: GatewayRequestContext["getRuntimeConfig"],
 ) {
   const respond = vi.fn();
   await expectDefined(
@@ -177,7 +179,9 @@ async function invoke(
           : { entryId }),
     },
     respond: respond as unknown as RespondFn,
-    context: context(active),
+    context: runtimeConfig
+      ? { ...context(active), getRuntimeConfig: runtimeConfig }
+      : context(active),
     client,
     isWebchatConnect: () => false,
   });
@@ -278,6 +282,49 @@ function installUpstreamForkHarness(): void {
 }
 
 describe("session message-cut methods", () => {
+  it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
+    const profile = ensureProfileForEmail("restricted-fork-creator@example.com");
+    setUserProfileRole(profile.id, "guest");
+    const client = {
+      connect: { scopes: ["operator.write"] },
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      },
+    } as GatewayClient;
+    const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
+      agents: { list: [{ id: "main", default: true }] },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: {
+              sessions: { others: "view" },
+              agents: ["guest-only"],
+              scopes: ["operator.read", "operator.write"],
+            },
+          },
+        },
+      },
+    });
+
+    const fork = await invoke("sessions.fork", "user-entry", client, false, runtimeConfig);
+    expect(fork).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.FORBIDDEN,
+        message: expect.stringContaining('agent "main"'),
+      }),
+    );
+    expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(1);
+
+    const rewind = await invoke("sessions.rewind", "user-entry", client, false, runtimeConfig);
+    expect(rewind).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+  });
+
   it("returns an empty branch list for a not-yet-materialized session", async () => {
     const respond = vi.fn() as unknown as RespondFn;
     await expectDefined(

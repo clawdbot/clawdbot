@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CodexAppServerRuntimeOptions, CodexPluginConfig } from "./config.js";
 import {
   applyCodexSessionPermissionPolicy,
+  resolveCodexEffectiveSessionPermissionPolicy,
   resolveCodexSessionPermissionCwd,
 } from "./session-permission-policy.js";
 
@@ -98,33 +99,66 @@ describe("Codex session permission policy", () => {
     });
   });
 
-  it.each([
-    {
-      mode: "full" as const,
-      execMode: "ask" as const,
-      sandbox: "danger-full-access",
-    },
-    {
-      mode: "guarded" as const,
-      execMode: "deny" as const,
-      sandbox: "read-only",
-    },
-  ])("lets effective $execMode exec floors tighten a $mode tuple", (expected) => {
+  it("lets a deny exec floor tighten a guarded tuple", () => {
     const resolved = applyCodexSessionPermissionPolicy({
       appServer: appServer(),
-      permissionMode: expected.mode,
+      permissionMode: "guarded",
       sessionRoot: "/workspace/project",
       pluginConfig,
       canUseAutoReview: true,
-      execMode: expected.execMode,
+      execMode: "deny",
     });
 
     expect(resolved).toMatchObject({
-      sandbox: expected.sandbox,
+      sandbox: "read-only",
       approvalPolicy: "on-request",
       approvalsReviewer: "user",
     });
   });
+
+  it.each([
+    {
+      requested: "full" as const,
+      runtime: {
+        sandbox: "workspace-write" as const,
+        approvalPolicy: "on-request" as const,
+        approvalsReviewer: "auto_review" as const,
+      },
+      effective: "workspace",
+      execMode: "auto",
+    },
+    {
+      requested: "workspace" as const,
+      runtime: {
+        sandbox: "workspace-write" as const,
+        approvalPolicy: "on-request" as const,
+        approvalsReviewer: "user" as const,
+      },
+      effective: "guarded",
+      execMode: "ask",
+    },
+    {
+      requested: "read-only" as const,
+      runtime: {
+        sandbox: "danger-full-access" as const,
+        approvalPolicy: "never" as const,
+        approvalsReviewer: "user" as const,
+      },
+      effective: "read-only",
+      execMode: "deny",
+    },
+  ])(
+    "keeps dynamic authority at $effective when the requested $requested tuple changes",
+    ({ requested, runtime, effective, execMode }) => {
+      expect(
+        resolveCodexEffectiveSessionPermissionPolicy({
+          appServer: { ...appServer(), ...runtime },
+          permissionMode: requested,
+          sessionRoot: "/workspace/project",
+        }),
+      ).toEqual({ mode: effective, root: "/workspace/project", execMode });
+    },
+  );
 
   it("fails closed when requirements cannot provide mandatory user review", () => {
     expect(() =>

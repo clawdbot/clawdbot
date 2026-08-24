@@ -6,6 +6,7 @@ import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { tableExists, tableHasColumns } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -84,6 +85,17 @@ const TASK_RUN_SELECT_COLUMNS = [
   "terminal_outcome",
   "detail_json",
 ] as const;
+
+const TASK_DELIVERY_STATE_SELECT_COLUMNS = [
+  "task_id",
+  "requester_origin_json",
+  "last_notified_event_at",
+] as const;
+
+type TaskRegistryReadOnlyLoadResult = {
+  state: "ready" | "migration-required";
+  snapshot: TaskRegistryStoreSnapshot;
+};
 
 let cachedDatabase: TaskRegistryDatabase | null = null;
 
@@ -271,7 +283,7 @@ export function listTaskRecordsByRuntimeSourceIdInDatabase(
 function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {
   const query = getTaskRegistryKysely(db)
     .selectFrom("task_delivery_state")
-    .select(["task_id", "requester_origin_json", "last_notified_event_at"])
+    .select(TASK_DELIVERY_STATE_SELECT_COLUMNS)
     .orderBy("task_id", "asc");
   return executeSqliteQuerySync(db, query).rows;
 }
@@ -362,10 +374,30 @@ export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
 
 /** Loads task records without creating or migrating shared state. */
 export function loadTaskRegistryStateFromSqliteReadOnly(): TaskRegistryStoreSnapshot {
+  return loadTaskRegistryStateFromSqliteReadOnlyResult().snapshot;
+}
+
+/** Reads task state only when the existing database already has the canonical task shape. */
+export function loadTaskRegistryStateFromSqliteReadOnlyResult(): TaskRegistryReadOnlyLoadResult {
   return (
-    withExistingOpenClawStateDatabaseReadOnly(readTaskRegistrySnapshot) ?? {
-      tasks: new Map(),
-      deliveryStates: new Map(),
+    withExistingOpenClawStateDatabaseReadOnly(({ db, path }) => {
+      const hasReadableSchema =
+        tableExists(db, "task_runs") &&
+        tableExists(db, "task_delivery_state") &&
+        tableHasColumns(db, "task_runs", TASK_RUN_SELECT_COLUMNS) &&
+        tableHasColumns(db, "task_delivery_state", TASK_DELIVERY_STATE_SELECT_COLUMNS);
+      return hasReadableSchema
+        ? { state: "ready" as const, snapshot: readTaskRegistrySnapshot({ db, path }) }
+        : {
+            state: "migration-required" as const,
+            snapshot: { tasks: new Map(), deliveryStates: new Map() },
+          };
+    }) ?? {
+      state: "ready",
+      snapshot: {
+        tasks: new Map(),
+        deliveryStates: new Map(),
+      },
     }
   );
 }

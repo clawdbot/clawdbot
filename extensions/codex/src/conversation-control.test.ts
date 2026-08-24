@@ -19,6 +19,8 @@ import {
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import {
+  formatPermissionsMode,
+  parseCodexPermissionsModeArg,
   steerCodexConversationTurn,
   stopCodexConversationTurn,
   trackCodexConversationActiveTurn,
@@ -100,7 +102,12 @@ describe("codex conversation controls", () => {
       agentId: session.agentId,
       sessionKey: session.sessionKey,
       storePath,
-      entry: { sessionId: session.sessionId, updatedAt: Date.now(), permissionMode: "full" },
+      entry: {
+        sessionId: session.sessionId,
+        updatedAt: Date.now(),
+        permissionMode: "full",
+        sessionRoot: tempDir,
+      },
     });
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-1",
@@ -129,8 +136,8 @@ describe("codex conversation controls", () => {
         sessionKey: session.sessionKey,
         storePath,
         readConsistency: "latest",
-      })?.permissionMode,
-    ).toBeUndefined();
+      }),
+    ).toMatchObject({ permissionMode: "guarded", sessionRoot: tempDir });
 
     await expect(
       setCodexConversationPermissionsImpl({ session, mode: "yolo", config: {} }),
@@ -143,6 +150,44 @@ describe("codex conversation controls", () => {
         readConsistency: "latest",
       })?.permissionMode,
     ).toBe("full");
+  });
+
+  it.each([
+    { mode: "read-only" as const, display: "read-only" },
+    { mode: "guarded" as const, display: "guarded" },
+    { mode: "workspace" as const, display: "workspace" },
+    { mode: "full" as const, display: "full access" },
+  ])("reports the explicit $mode conversation permission mode", ({ mode, display }) => {
+    expect(formatPermissionsMode(mode)).toBe(display);
+  });
+
+  it.each(["default", "guardian", "guarded", "approve"])(
+    "recognizes %s as an explicit guarded conversation permission command",
+    (mode) => {
+      expect(parseCodexPermissionsModeArg(mode)).toBe("default");
+    },
+  );
+
+  it("refuses to persist a permission mode without its canonical session root", async () => {
+    const session = {
+      agentId: "main",
+      sessionId: "session-without-root",
+      sessionKey: "agent:main:session-without-root",
+    };
+    const storePath = resolveStorePath(undefined, { agentId: session.agentId });
+    await upsertSessionEntry({
+      agentId: session.agentId,
+      sessionKey: session.sessionKey,
+      storePath,
+      entry: { sessionId: session.sessionId, updatedAt: Date.now() },
+    });
+
+    await expect(
+      setCodexConversationPermissionsImpl({ session, mode: "default", config: {} }),
+    ).rejects.toThrow("requires a recorded session root");
+    expect(
+      getSessionEntry({ agentId: session.agentId, sessionKey: session.sessionKey, storePath }),
+    ).not.toHaveProperty("permissionMode");
   });
 
   it("routes supervised stop and steer requests through the native user-home connection", async () => {

@@ -194,7 +194,6 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     // Budget so small that even one compact skill can't fit
     const prompt = buildPrompt(skills, { maxChars: 10 });
     expect(prompt).toBe("");
-    expect(prompt.length).toBeLessThanOrEqual(10);
   });
 
   it.each([0, 1, 10, 64])("never exceeds a tiny configured prompt budget of %i", (maxChars) => {
@@ -231,21 +230,41 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).not.toContain("REMOTE_NOTE_");
   });
 
-  it("budgets the final rendered prompt including versions and limit notices", () => {
-    const skills = Array.from({ length: 24 }, (_, i) => ({
-      ...makeSkill(`skill-${i}`, "A".repeat(160)),
-      promptVersion: `sha256:${String(i).padStart(16, "0")}`,
-    }));
+  it("preserves the exact full-catalog bytes when a remote note fits", () => {
+    const skill = makeSkill("weather", "Get weather data");
+    const remoteNote = "Remote node skills are available.";
+    const catalog = formatSkillsForPromptCore([skill]);
+    const expected = [remoteNote, catalog].join("\n");
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [makeEntry(skill)],
+      config: {
+        skills: { limits: { maxSkillsPromptChars: expected.length } },
+      } satisfies OpenClawConfig,
+      eligibility: {
+        remote: {
+          platforms: ["linux"],
+          hasBin: () => false,
+          hasAnyBin: () => false,
+          note: remoteNote,
+        },
+      },
+    });
+
+    expect(prompt).toBe(expected);
+    expect(prompt.length).toBeLessThanOrEqual(expected.length);
+  });
+
+  it("budgets the final rendered prompt including limit notices", () => {
+    const skills = Array.from({ length: 24 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(160)));
     const budget = 2_200;
 
     const prompt = buildPrompt(skills, { maxChars: budget });
 
     expect(prompt.length).toBeLessThanOrEqual(budget);
-    expect(prompt).toContain("<version>sha256:");
     expect(prompt).toContain("included");
   });
 
-  it("keeps no-skill catalogs empty instead of emitting version guidance", () => {
+  it("keeps no-skill catalogs empty", () => {
     const prompt = buildWorkspaceSkillsPrompt("/fake", {
       entries: [],
     });

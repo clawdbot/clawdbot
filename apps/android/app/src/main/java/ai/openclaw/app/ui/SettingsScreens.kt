@@ -187,7 +187,6 @@ internal enum class SettingsRoute {
   NodesDevices,
   Channels,
   Dreaming,
-  Canvas,
   Terminal,
   Desktop,
   Notifications,
@@ -223,7 +222,6 @@ internal fun SettingsDetailScreen(
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Canvas -> CanvasSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Terminal -> TerminalSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Desktop -> DesktopScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -1277,7 +1275,6 @@ private fun PhoneCapabilitiesScreen(
   val locationMode by viewModel.locationMode.collectAsState()
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
   val preventSleep by viewModel.preventSleep.collectAsState()
-  val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
   val installedAppsSharingEnabled by viewModel.installedAppsSharingEnabled.collectAsState()
   val photosAvailable = remember { SensitiveFeatureConfig.photosEnabled }
   val backgroundLocationAvailable = remember { SensitiveFeatureConfig.backgroundLocationEnabled }
@@ -1490,7 +1487,6 @@ private fun PhoneCapabilitiesScreen(
             ::setInstalledAppsSharing,
           ),
           SettingsToggleRow(nativeString("Keep Awake"), nativeString("Keep the node available during active work."), Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
-          SettingsToggleRow(nativeString("Canvas Status"), nativeString("Show screen-sharing debug state."), Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
     )
     if (SensitiveFeatureConfig.accessibilityControlEnabled) {

@@ -18,7 +18,7 @@ export function renderPlaceBrowser(params: {
   onBack: () => void;
   onRegisterProject: (path: string) => void;
   onClose: () => void;
-  onApplyFolder: (path: string, nodeId: string) => void;
+  onApplyFolder: (path: string) => void;
 }) {
   const entries = params.listing?.entries ?? [];
   const registerProjectPath = params.registerProjectPath;
@@ -119,7 +119,7 @@ export function renderPlaceBrowser(params: {
           ?disabled=${params.usablePath === null || params.registeringProject}
           @click=${() => {
             if (params.usablePath !== null) {
-              params.onApplyFolder(params.usablePath, params.target.nodeId);
+              params.onApplyFolder(params.usablePath);
               params.onClose();
             }
           }}

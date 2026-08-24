@@ -1,5 +1,8 @@
 // Msteams tests cover channel plugin behavior.
+import fs from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
 import {
@@ -45,6 +48,7 @@ describe("msteamsPlugin", () => {
   afterEach(() => {
     probeMSTeamsMock.mockReset();
     monitorMSTeamsProviderMock.mockReset();
+    vi.unstubAllEnvs();
   });
 
   it("distinguishes users from channel and group conversations", () => {
@@ -89,6 +93,244 @@ describe("msteamsPlugin", () => {
       msteamsDirectoryContractPlugin.directory.listGroups,
     );
   });
+
+  it("declares its implemented group and reaction capabilities", () => {
+    expect(msteamsSetupPlugin.capabilities.chatTypes).toContain("group");
+    expect(msteamsSetupPlugin.capabilities.reactions).toBe(true);
+  });
+
+  it("preserves the default account and allowlist across runtime and setup", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          ...createConfiguredMSTeamsCfg().channels?.msteams,
+          allowFrom: ["OWNER", "  Team.Member  "],
+          defaultTo: "19:team@thread.tacv2",
+        },
+      },
+    };
+
+    for (const plugin of [msteamsPlugin, msteamsSetupPlugin]) {
+      expect(plugin.config.defaultAccountId?.(cfg)).toBe("default");
+      expect(plugin.config.resolveAccount(cfg, "default")).toMatchObject({
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        tokenStatus: "available",
+      });
+      expect(plugin.config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+        "OWNER",
+        "  Team.Member  ",
+      ]);
+      expect(
+        plugin.config.formatAllowFrom?.({
+          cfg,
+          accountId: "default",
+          allowFrom: ["OWNER", "  Team.Member  "],
+        }),
+      ).toEqual(["owner", "team.member"]);
+      expect(plugin.config.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe(
+        "19:team@thread.tacv2",
+      );
+    }
+  });
+
+  it.each([
+    {
+      label: "configured certificate",
+      configuredPath: "/private/msteams-unavailable-configured.pem",
+      envPath: undefined,
+      diagnosticPath: "channels.msteams.certificatePath",
+    },
+    {
+      label: "environment certificate",
+      configuredPath: "   ",
+      envPath: "/private/msteams-unavailable-env.pem",
+      diagnosticPath: "env.MSTEAMS_CERTIFICATE_PATH",
+    },
+  ])("degrades an unavailable $label without exposing its filesystem path", async (selection) => {
+    if (selection.envPath) {
+      vi.stubEnv("MSTEAMS_CERTIFICATE_PATH", selection.envPath);
+    }
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          appId: "app-id",
+          tenantId: "tenant-id",
+          authType: "federated",
+          certificatePath: selection.configuredPath,
+        },
+      },
+    };
+
+    for (const plugin of [msteamsPlugin, msteamsSetupPlugin]) {
+      const account = plugin.config.resolveAccount(cfg, "default");
+      expect(account).toMatchObject({
+        configured: true,
+        tokenStatus: "configured_unavailable",
+        credentialDiagnostics: [
+          {
+            code: "CREDENTIAL_FILE_UNAVAILABLE",
+            path: selection.diagnosticPath,
+            reason: "not-found",
+          },
+        ],
+      });
+      expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(
+        selection.envPath ?? selection.configuredPath,
+      );
+      expect(plugin.config.isConfigured?.(account, cfg)).toBe(true);
+      expect(plugin.config.describeAccount?.(account, cfg)).toMatchObject({
+        configured: true,
+        tokenStatus: "configured_unavailable",
+      });
+    }
+
+    const account = msteamsPlugin.config.resolveAccount(cfg, "default");
+    expect(await msteamsPlugin.status?.buildAccountSnapshot?.({ account, cfg })).toMatchObject({
+      configured: true,
+      tokenStatus: "configured_unavailable",
+    });
+  });
+
+  it("does not fall back from a selected unavailable configured certificate to an env file", async () => {
+    await withTempDir("msteams-certificate-precedence-", async (tempDir) => {
+      const envCertificate = path.join(tempDir, "env-cert.pem");
+      fs.writeFileSync(envCertificate, "available-certificate", "utf8");
+      vi.stubEnv("MSTEAMS_CERTIFICATE_PATH", envCertificate);
+      const cfg: OpenClawConfig = {
+        channels: {
+          msteams: {
+            appId: "app-id",
+            tenantId: "tenant-id",
+            authType: "federated",
+            certificatePath: "/private/msteams-selected-missing.pem",
+          },
+        },
+      };
+
+      expect(msteamsPlugin.config.resolveAccount(cfg, "default")).toMatchObject({
+        configured: true,
+        tokenStatus: "configured_unavailable",
+        credentialDiagnostics: [
+          { code: "CREDENTIAL_FILE_UNAVAILABLE", path: "channels.msteams.certificatePath" },
+        ],
+      });
+    });
+  });
+
+  it("reports the root path for an unavailable certificate inherited by a named account", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          authType: "federated",
+          certificatePath: "/private/msteams-inherited-missing.pem",
+          accounts: {
+            support: {
+              appId: "support-app-id",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    };
+
+    expect(msteamsPlugin.config.resolveAccount(cfg, "support")).toMatchObject({
+      configured: true,
+      tokenStatus: "configured_unavailable",
+      credentialDiagnostics: [
+        { code: "CREDENTIAL_FILE_UNAVAILABLE", path: "channels.msteams.certificatePath" },
+      ],
+    });
+  });
+
+  it("does not inspect an unavailable certificate when managed identity is selected", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          appId: "app-id",
+          tenantId: "tenant-id",
+          authType: "federated",
+          certificatePath: "/private/msteams-unused-missing-certificate.pem",
+          useManagedIdentity: true,
+        },
+      },
+    };
+
+    expect(msteamsPlugin.config.resolveAccount(cfg, "default")).toMatchObject({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      tokenStatus: "available",
+    });
+  });
+
+  it("reports unavailable named-account certificates without default-account fallback", () => {
+    vi.stubEnv("MSTEAMS_CERTIFICATE_PATH", "/private/msteams-default-env.pem");
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          accounts: {
+            support: {
+              appId: "support-app-id",
+              authType: "federated",
+              certificatePath: "/private/msteams-support-missing.pem",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = msteamsPlugin.config.resolveAccount(cfg, "support");
+    expect(account).toMatchObject({
+      accountId: "support",
+      configured: true,
+      tokenStatus: "configured_unavailable",
+      credentialDiagnostics: [
+        {
+          code: "CREDENTIAL_FILE_UNAVAILABLE",
+          path: "channels.msteams.accounts.support.certificatePath",
+          reason: "not-found",
+        },
+      ],
+    });
+    expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(
+      "/private/msteams-support-missing.pem",
+    );
+    expect(
+      msteamsPlugin.actions?.describeMessageTool?.({ cfg, accountId: "support" })?.actions,
+    ).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "preserves the existing symlink-friendly certificate file policy",
+    async () => {
+      await withTempDir("msteams-certificate-symlink-", async (tempDir) => {
+        const certificate = path.join(tempDir, "certificate.pem");
+        const symlink = path.join(tempDir, "certificate-link.pem");
+        fs.writeFileSync(certificate, "available-certificate", "utf8");
+        fs.symlinkSync(certificate, symlink);
+        const cfg: OpenClawConfig = {
+          channels: {
+            msteams: {
+              appId: "app-id",
+              tenantId: "tenant-id",
+              authType: "federated",
+              certificatePath: symlink,
+            },
+          },
+        };
+
+        expect(msteamsPlugin.config.resolveAccount(cfg, "default")).toMatchObject({
+          configured: true,
+          tokenStatus: "available",
+        });
+      });
+    },
+  );
 
   it("exposes approval auth through approvalCapability", () => {
     expect(msteamsPlugin.approvalCapability).toBe(msTeamsApprovalAuth);
@@ -224,6 +466,33 @@ describe("msteamsPlugin", () => {
         account: msteamsPlugin.config.resolveAccount(cfg, "default"),
       }),
     ).toEqual([]);
+
+    const defaultOverrideCfg = {
+      channels: {
+        msteams: {
+          accounts: {
+            Default: {
+              appId: "default-app-id",
+              appPassword: "default-secret",
+              tenantId: "tenant-id",
+              groupPolicy: "open",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const defaultFindings = await msteamsPlugin.security?.collectWarnings?.({
+      cfg: defaultOverrideCfg,
+      accountId: "default",
+      account: msteamsPlugin.config.resolveAccount(defaultOverrideCfg, "default"),
+    });
+    expect(defaultFindings).toEqual([
+      expect.objectContaining({
+        detail: expect.stringMatching(
+          /channels\.msteams\.accounts\.Default\.groupPolicy.*channels\.msteams\.accounts\.Default\.groupAllowFrom/,
+        ),
+      }),
+    ]);
   });
 
   it("does not advertise message tools for disabled or unconfigured named accounts", () => {
@@ -394,6 +663,14 @@ describe("msteams account config", () => {
         },
       });
     }
+    expect(resolveMSTeamsRuntimeAccount({ cfg })).toMatchObject({
+      accountId: "support-bot",
+      credentials: {
+        appId: "support-app-id",
+        appPassword: "support-secret",
+        tenantId: "tenant-id",
+      },
+    });
   });
 
   it("starts display-style account ids under their canonical runtime identity", async () => {

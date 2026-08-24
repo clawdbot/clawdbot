@@ -45,12 +45,14 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   @property({ type: Boolean }) available = false;
   /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
   @property({ type: Boolean }) suppressed = false;
-  /** Control UI base path, used for the authenticated media fetch. */
-  @property({ attribute: false }) basePath = "";
+  /** Gateway HTTP resource mount used for the authenticated media fetch. */
+  @property({ attribute: false }) resourceBasePath = "";
   /** Bearer credential for the assistant-media screenshot fetch. */
   @property({ attribute: false }) authToken: string | null = null;
   /** Hosted by the chat side panel, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;
+  /** This embedded instance is the active pane's visible Browser presenter. */
+  @property({ type: Boolean }) presented = false;
 
   private readonly browserPanelController = new BrowserPanelController(this);
   private readonly dockLayout = new DockLayoutController(this, {
@@ -59,16 +61,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     isAvailable: () => this.available,
   });
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
-  private embeddedRefreshTimer: number | null = null;
-  private readonly viewportResizeObserver = new ResizeObserver((entries) => {
-    const entry = entries[0];
-    if (entry) {
-      this.browserPanelController.handleViewportResize(
-        entry.contentRect.width,
-        entry.contentRect.height,
-      );
-    }
-  });
+  private viewportResizeObserver: ResizeObserver | null = null;
   private observedViewportElement: Element | null = null;
 
   static override styles = [
@@ -86,16 +79,16 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     // A settings takeover can already own the viewport when the panel mounts.
     // Suppress before the restored open state refreshes a dock nobody can see.
     this.dockLayout.setSuppressed(this.suppressed);
-    if (this.dockLayout.open) {
+    if (!this.embedded && this.dockLayout.open) {
       void this.browserPanelController.refreshAll();
     }
   }
 
   override disconnectedCallback(): void {
-    this.clearEmbeddedRefresh();
     super.disconnectedCallback();
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-    this.viewportResizeObserver.disconnect();
+    this.viewportResizeObserver?.disconnect();
+    this.viewportResizeObserver = null;
     this.observedViewportElement = null;
   }
 
@@ -107,18 +100,26 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
         window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
       }
     }
-    if (changed.has("suppressed") && this.dockLayout.setSuppressed(this.suppressed)) {
+    if (
+      changed.has("suppressed") &&
+      this.dockLayout.setSuppressed(this.suppressed) &&
+      this.browserPanelIsOpen()
+    ) {
       void this.browserPanelController.refreshAll();
     }
+    const gatewayAvailabilityChanged = changed.has("client") || changed.has("available");
+    const presentationChanged =
+      this.embedded && (changed.has("embedded") || changed.has("presented"));
     const refreshedForClientChange = this.browserPanelController.synchronizeHostProperties(changed);
-    if (
-      this.embedded &&
-      this.available &&
-      !refreshedForClientChange &&
-      (changed.has("embedded") || changed.has("client") || changed.has("available"))
-    ) {
-      this.scheduleEmbeddedRefresh();
-    } else if (changed.has("client") || changed.has("available")) {
+    if (this.embedded) {
+      if (!this.presented || !this.available || !this.client) {
+        if (presentationChanged || gatewayAvailabilityChanged) {
+          this.browserPanelController.resetBrowserState();
+        }
+      } else if (!refreshedForClientChange && (presentationChanged || gatewayAvailabilityChanged)) {
+        void this.browserPanelController.refreshAll();
+      }
+    } else if (gatewayAvailabilityChanged) {
       if (!this.available && this.dockLayout.open) {
         // Surface disappeared (disconnect/scope loss): hide without persisting
         // so the open preference survives a reconnect.
@@ -135,36 +136,25 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     const viewportElement = this.renderRoot.querySelector(".bp-viewport");
     if (viewportElement !== this.observedViewportElement) {
       // The viewport is transient while the dock opens, closes, or becomes unavailable.
-      this.viewportResizeObserver.disconnect();
+      this.viewportResizeObserver?.disconnect();
       this.observedViewportElement = viewportElement;
-      if (viewportElement) {
+      if (viewportElement && typeof ResizeObserver === "function") {
+        this.viewportResizeObserver ??= new ResizeObserver((entries) => {
+          const entry = entries[0];
+          if (entry) {
+            this.browserPanelController.handleViewportResize(
+              entry.contentRect.width,
+              entry.contentRect.height,
+            );
+          }
+        });
         this.viewportResizeObserver.observe(viewportElement);
       }
     }
   }
 
   browserPanelIsOpen(): boolean {
-    return this.embedded || this.dockLayout.open;
-  }
-
-  private scheduleEmbeddedRefresh(): void {
-    if (this.embeddedRefreshTimer !== null) {
-      return;
-    }
-    this.embeddedRefreshTimer = window.setTimeout(() => {
-      this.embeddedRefreshTimer = null;
-      if (this.isConnected && this.embedded && this.available) {
-        void this.browserPanelController.refreshAll();
-      }
-    }, 0);
-  }
-
-  private clearEmbeddedRefresh(): void {
-    if (this.embeddedRefreshTimer === null) {
-      return;
-    }
-    window.clearTimeout(this.embeddedRefreshTimer);
-    this.embeddedRefreshTimer = null;
+    return this.embedded ? this.presented : this.dockLayout.open;
   }
 
   toggle(): void {
@@ -180,13 +170,12 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   handleToggleRequest(event: Event): void {
-    this.clearEmbeddedRefresh();
     const detail =
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
         ? (event.detail as BrowserPanelToggleDetail)
         : null;
     if (this.embedded) {
-      if (detail?.open === false || !this.available) {
+      if (!this.presented || detail?.open === false || !this.available) {
         return;
       }
       const normalizedRequestedUrl =

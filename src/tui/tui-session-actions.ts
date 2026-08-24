@@ -3,6 +3,8 @@ import type { TUI } from "@earendil-works/pi-tui";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -49,7 +51,7 @@ type SessionActionContext = {
   agentNames: Map<string, string>;
   initialSessionInput: string;
   initialSessionAgentId: string | null;
-  resolveSessionSelection: (raw?: string) => { key: string; agentId: string };
+  resolveSessionSelection: (raw?: string, agentId?: string) => { key: string; agentId: string };
   updateHeader: () => void;
   updateFooter: () => void;
   updateAutocompleteProvider: () => void;
@@ -86,6 +88,46 @@ export function createSessionActions(context: SessionActionContext) {
     sessionKey: state.currentSessionKey,
     agentId: state.currentAgentId,
   });
+
+  const applySessionSelection = (nextSelection: { key: string; agentId: string }) => {
+    const previousSelection = captureSessionSelection();
+    const selectionChanged = !(
+      nextSelection.agentId === previousSelection.agentId &&
+      agentSessionKeysMatchByRequestKey(nextSelection.key, previousSelection.sessionKey)
+    );
+    if (selectionChanged) {
+      // Retire the previous session's runs before history can adopt a new
+      // in-flight owner; otherwise its completion can promote an old run.
+      invalidateRunOwnership?.();
+      reduceTuiSessionProjection(state, {
+        type: "sessionReset",
+        scope: readTuiSessionProjectionScope(state),
+      });
+    }
+    state.currentAgentId = nextSelection.agentId;
+    state.currentSessionKey = nextSelection.key;
+    state.activeChatRunId = null;
+    submit.clearPendingSubmit(state);
+    setActivityStatus("idle");
+    if (selectionChanged) {
+      state.currentSessionId = null;
+      state.sessionInfo.displayName = undefined;
+      clearTuiSessionModeOverrides(state.sessionInfo);
+    }
+    // Session keys can move backwards in updatedAt ordering; drop previous session freshness
+    // so refresh data for the newly selected session isn't rejected as stale.
+    state.sessionInfo.updatedAt = null;
+    state.historyLoaded = false;
+    if (selectionChanged) {
+      // Live prompt identities belong to the old selection, not its pending successor.
+      chatLog.clearAll();
+    }
+    chatLog.clearPendingUsers();
+    clearLocalRunIds?.();
+    btw.clear();
+    updateHeader();
+    updateFooter();
+  };
 
   const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
     state.currentAgentId === selection.agentId &&
@@ -133,18 +175,22 @@ export function createSessionActions(context: SessionActionContext) {
       }
       state.initialSessionApplied = true;
     } else if (!state.agents.some((agent) => agent.id === state.currentAgentId)) {
-      state.currentAgentId =
+      const nextAgentId =
         state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
+      if (nextAgentId !== state.currentAgentId) {
+        applySessionSelection(resolveSessionSelection(undefined, nextAgentId));
+        return;
+      }
     }
     updateHeader();
     updateFooter();
   };
 
-  const refreshAgents = () =>
+  const refreshAgents = (ownsRefresh: () => boolean = () => true) =>
     refreshTuiAgentList({
       load: () => client.listAgents(),
-      apply: applyAgentsResult,
-      reportError: (message) => chatLog.addSystem(`agents list failed: ${message}`),
+      apply: (result) => ownsRefresh() && applyAgentsResult(result),
+      reportError: (error) => ownsRefresh() && chatLog.addSystem(`agents list failed: ${error}`),
     });
 
   const updateAgentFromSessionKey = (key: string) => {
@@ -427,7 +473,8 @@ export function createSessionActions(context: SessionActionContext) {
       const record = history as {
         messages?: unknown[];
         sessionId?: string;
-        sessionInfo?: SessionInfoEntry;
+        sessionInfo?: SessionInfoEntry &
+          Partial<Pick<SessionEntry, "abortedLastRun" | "lastRunError" | "status">>;
         defaults?: SessionInfoDefaults;
         thinkingLevel?: string;
         fastMode?: FastMode;
@@ -557,20 +604,12 @@ export function createSessionActions(context: SessionActionContext) {
             : [],
         ),
       );
-      // Restore a run still streaming for this session+agent that the gateway
-      // reports as in-flight. Its live deltas were delivered to a per-agent key
-      // we stopped watching after switching away, so the persisted history above
-      // does not contain it; render the partial and re-adopt the run so further
-      // deltas (now that this session is active again) continue it.
       const inFlightRunId = formatPrimitiveString(record.inFlightRun?.runId, "");
       const inFlightText = formatPrimitiveString(record.inFlightRun?.text, "");
       if (inFlightRunId) {
-        // Render any buffered partial (embedded runtimes); Codex has none mid-run.
         if (inFlightText) {
           chatLog.updateAssistant(inFlightText, inFlightRunId);
         }
-        // Adopt the run regardless so its status shows `streaming` (not idle) and
-        // its completion is handled here instead of an unowned error path.
         state.activeChatRunId = inFlightRunId;
         setActivityStatus("streaming");
       }
@@ -582,56 +621,29 @@ export function createSessionActions(context: SessionActionContext) {
       }
       void rememberSessionKey?.(state.currentSessionKey);
       tui.requestRender(true);
-      return { loaded: true, inFlightRunId: inFlightRunId || null };
+      const status = sessionInfo?.status;
+      const runOutcome = inFlightRunId
+        ? ({ state: "active", runId: inFlightRunId } as const)
+        : status === "failed" || status === "timeout"
+          ? ({
+              state: "failed",
+              errorMessage: sessionInfo?.lastRunError ?? `session run ${status}`,
+            } as const)
+          : status === "killed" || sessionInfo?.abortedLastRun === true
+            ? ({ state: "interrupted" } as const)
+            : ({ state: "completed" } as const);
+      return { loaded: true, runOutcome };
     } catch (err) {
-      if (!isCurrentLoad()) {
-        return { loaded: false };
+      if (isCurrentLoad() && !isAbortError(err)) {
+        chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);
+        tui.requestRender(true);
       }
-      chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);
-      tui.requestRender(true);
       return { loaded: false };
     }
   };
 
   const setSession = async (rawKey: string) => {
-    const previousSelection = captureSessionSelection();
-    const nextSelection = resolveSessionSelection(rawKey);
-    const nextKey = nextSelection.key;
-    const selectionChanged = !(
-      nextSelection.agentId === previousSelection.agentId &&
-      agentSessionKeysMatchByRequestKey(nextKey, previousSelection.sessionKey)
-    );
-    if (selectionChanged) {
-      // Retire the previous session's runs before history can adopt a new
-      // in-flight owner; otherwise its completion can promote an old run.
-      invalidateRunOwnership?.();
-      reduceTuiSessionProjection(state, {
-        type: "sessionReset",
-        scope: readTuiSessionProjectionScope(state),
-      });
-    }
-    state.currentAgentId = nextSelection.agentId;
-    state.currentSessionKey = nextKey;
-    state.activeChatRunId = null;
-    submit.clearPendingSubmit(state);
-    setActivityStatus("idle");
-    if (selectionChanged) {
-      state.currentSessionId = null;
-      clearTuiSessionModeOverrides(state.sessionInfo);
-    }
-    // Session keys can move backwards in updatedAt ordering; drop previous session freshness
-    // so refresh data for the newly selected session isn't rejected as stale.
-    state.sessionInfo.updatedAt = null;
-    state.historyLoaded = false;
-    if (selectionChanged) {
-      // Live prompt identities belong to the old selection, not its pending successor.
-      chatLog.clearAll();
-    }
-    chatLog.clearPendingUsers();
-    clearLocalRunIds?.();
-    btw.clear();
-    updateHeader();
-    updateFooter();
+    applySessionSelection(resolveSessionSelection(rawKey));
     await loadHistory();
   };
 

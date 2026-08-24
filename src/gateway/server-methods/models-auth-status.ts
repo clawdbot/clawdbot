@@ -1,11 +1,9 @@
 // Model auth status methods report provider credential health, profile expiry,
 // usage windows, cleanup actions, and auth-state refreshes.
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import {
   type AuthHealthSummary,
   type AuthProfileHealthStatus,
@@ -24,19 +22,15 @@ import {
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../../agents/auth-profiles.js";
 import {
-  listProviderEnvAuthLookupKeys,
-  resolveProviderEnvAuthLookupMaps,
-} from "../../agents/model-auth-env-vars.js";
-import { resolveProviderEnvAuthEvidence } from "../../agents/model-auth-env.js";
+  listConfiguredExternalCliProfileMetadataIds,
+  normalizeExternalCliProfileMetadata,
+} from "../../agents/auth-profiles/external-cli-profile-metadata.js";
+import { getRuntimeExternalCliProfileIds } from "../../agents/auth-profiles/runtime-external-profile-references.js";
 import {
-  isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
 } from "../../agents/model-auth-markers.js";
-import {
-  resolveProviderEntryApiKeyProfileReference,
-  resolveUsableCustomProviderApiKey,
-} from "../../agents/model-auth.js";
+import { resolveProviderEntryApiKeyProfileReference } from "../../agents/model-auth.js";
 import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
@@ -46,7 +40,7 @@ import {
   resolveProviderIdForAuth,
 } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { coerceSecretRef, hasConfiguredSecretInput } from "../../config/types.secrets.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -56,9 +50,10 @@ import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalo
 import { formatForLog } from "../ws-log.js";
 import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
+import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
+import { suppressSyntheticAliasRowsCoveredByExternalCli } from "./models-auth-status-projection.js";
 import {
   clearModelAuthStatusUsageCache,
-  fingerprintProviderUsageCredentials,
   type ProviderUsageStatus,
   readProviderUsageStaleWhileRevalidate,
 } from "./models-auth-status-usage-cache.js";
@@ -69,6 +64,7 @@ import type {
   ModelAuthStatusResult,
   ModelProviderCapability,
 } from "./models-auth-status.types.js";
+import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 export type {
@@ -291,6 +287,7 @@ function mapProvider(
   apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>,
   logoutProfileIds: ReadonlySet<string>,
   configBoundProfileIds: ReadonlySet<string>,
+  externalCliProfileIds: ReadonlySet<string>,
 ): ModelAuthStatusProvider {
   const usageProfile =
     prov.profiles.find((profile) => profile.type === "oauth" || profile.type === "token") ??
@@ -299,11 +296,27 @@ function mapProvider(
     credentialType: usageProfile?.type,
   });
   const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
-  const rollup = aggregateRefreshableAuthStatus(
+  const rawRollup = aggregateRefreshableAuthStatus(
     prov,
     Date.now(),
     expectsOAuthSet.has(prov.provider),
   );
+  const effectiveProfiles = prov.effectiveProfiles ?? prov.profiles;
+  const refreshableProfiles = effectiveProfiles.filter(
+    (profile) => profile.type === "oauth" || profile.type === "token",
+  );
+  // External CLI access tokens rotate without operator action. Keep their raw
+  // profile expiry diagnostic, but do not turn it into a provider login warning.
+  const externalCliOwnsOAuthRefresh =
+    refreshableProfiles.length > 0 &&
+    refreshableProfiles.every(
+      (profile) => profile.type === "oauth" && externalCliProfileIds.has(profile.profileId),
+    );
+  const rollup: ModelAuthStatusRollup =
+    externalCliOwnsOAuthRefresh &&
+    (rawRollup.status === "expired" || rawRollup.status === "expiring")
+      ? { status: "ok" }
+      : rawRollup;
   const apiKey = apiKeys.get(normalizeProviderId(prov.provider));
   const hasRefreshableProfile = prov.profiles.some(
     (profile) => profile.type === "oauth" || profile.type === "token",
@@ -341,89 +354,6 @@ function mapProvider(
   };
 }
 
-// API-key provenance stays presence-only. SecretRef ids may be shown, but
-// credential values never cross this status boundary.
-function resolveEnvVarName(source: string): string | undefined {
-  const match = /^(?:shell env|env): ([A-Z][A-Z0-9_]*)$/u.exec(source);
-  return match?.[1];
-}
-
-function resolveProviderApiKeys(
-  cfg: OpenClawConfig,
-  store: AuthProfileStore,
-  authAliasLookupParams: PreparedAuthMetadataLookupParams,
-): Map<string, ModelAuthStatusProvider["apiKey"]> {
-  const lookupMaps = resolveProviderEnvAuthLookupMaps({
-    ...authAliasLookupParams,
-    config: cfg,
-    env: process.env,
-  });
-  const providerIds = new Set<string>([
-    ...Object.keys(cfg.models?.providers ?? {}),
-    ...Object.values(cfg.auth?.profiles ?? {})
-      .map((profile) => profile?.provider)
-      .filter((provider): provider is string => typeof provider === "string"),
-    ...listProviderEnvAuthLookupKeys(lookupMaps),
-  ]);
-  const apiKeys = new Map<string, ModelAuthStatusProvider["apiKey"]>();
-  for (const rawProvider of providerIds) {
-    const provider = normalizeProviderId(rawProvider);
-    if (!provider) {
-      continue;
-    }
-    const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
-    if (hasConfiguredSecretInput(providerConfig?.apiKey, cfg.secrets?.defaults)) {
-      const ref = coerceSecretRef(providerConfig?.apiKey, cfg.secrets?.defaults);
-      const profileReference = resolveProviderEntryApiKeyProfileReference({
-        cfg,
-        authAliasLookupParams,
-        provider,
-        store,
-      });
-      if (profileReference.kind !== "profile" && profileReference.kind !== "profile-incompatible") {
-        if (ref && ref.source !== "env") {
-          apiKeys.set(provider, { source: "config" });
-          continue;
-        }
-        const available = resolveUsableCustomProviderApiKey({
-          cfg,
-          provider,
-          env: process.env,
-        });
-        if (available) {
-          const rawKey =
-            typeof providerConfig?.apiKey === "string" ? providerConfig.apiKey.trim() : "";
-          // Local no-auth placeholders (e.g. the ollama-local marker) resolve to
-          // a usable value but represent no credential; do not advertise them as
-          // a configured API key or the provider would render as static.
-          if (rawKey && isNonSecretApiKeyMarker(rawKey, { includeEnvVarName: false })) {
-            continue;
-          }
-          const envVar =
-            ref?.source === "env"
-              ? ref.id
-              : profileReference.kind === "marker" && isKnownEnvApiKeyMarker(rawKey)
-                ? rawKey
-                : resolveEnvVarName(available.source);
-          apiKeys.set(provider, envVar ? { source: "env", envVar } : { source: "config" });
-          continue;
-        }
-      }
-    }
-    const envEvidence = resolveProviderEnvAuthEvidence(provider, process.env, {
-      aliasMap: lookupMaps.aliasMap,
-      candidateMap: lookupMaps.envCandidateMap,
-      authEvidenceMap: lookupMaps.authEvidenceMap,
-    });
-    if (envEvidence?.mode !== "api-key") {
-      continue;
-    }
-    const envVar = resolveEnvVarName(envEvidence.source);
-    apiKeys.set(provider, { source: "env", ...(envVar ? { envVar } : {}) });
-  }
-  return apiKeys;
-}
-
 function resolveConfigBoundProfileIds(
   cfg: OpenClawConfig,
   store: AuthProfileStore,
@@ -450,9 +380,11 @@ function resolveConfiguredProviders(
 ): {
   providers: string[];
   expectsOAuth: Set<string>;
+  directModelAuthProviders: Set<string>;
 } {
   const out = new Set<string>();
   const expectsOAuth = new Set<string>();
+  const directModelAuthProviders = new Set<string>();
   for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
     const normalized = normalizeProviderId(id);
     if (!normalized) {
@@ -467,6 +399,7 @@ function resolveConfiguredProviders(
     if (mode !== "oauth" && mode !== "token" && !hasApiKey) {
       continue;
     }
+    directModelAuthProviders.add(normalized);
     if (apiKeys.has(normalized)) {
       continue;
     }
@@ -498,7 +431,44 @@ function resolveConfiguredProviders(
       expectsOAuth.add(normalized);
     }
   }
-  return { providers: Array.from(out), expectsOAuth };
+  return { providers: Array.from(out), expectsOAuth, directModelAuthProviders };
+}
+
+function resolveLegacyExternalCliAliasProfileIds(
+  cfg: OpenClawConfig,
+  directModelAuthProviders: ReadonlySet<string>,
+): Map<string, string> {
+  const profiles = cfg.auth?.profiles;
+  const aliases = new Map<string, string>();
+  for (const profileId of listConfiguredExternalCliProfileMetadataIds(profiles)) {
+    const profile = profiles?.[profileId];
+    const canonical = normalizeExternalCliProfileMetadata(profileId, profile);
+    if (!profile || !canonical) {
+      continue;
+    }
+    const provider = normalizeProviderId(profile.provider);
+    const hasIndependentAuthProfile = Object.entries(profiles ?? {}).some(
+      ([otherProfileId, otherProfile]) =>
+        otherProfileId !== profileId &&
+        normalizeProviderId(otherProfile?.provider) === provider &&
+        (otherProfile?.mode === "oauth" || otherProfile?.mode === "token"),
+    );
+    const hasIndependentAuthOrder = Object.entries(cfg.auth?.order ?? {}).some(
+      ([orderProvider, orderedProfileIds]) =>
+        normalizeProviderId(orderProvider) === provider &&
+        orderedProfileIds.some((orderedProfileId) => orderedProfileId !== profileId),
+    );
+    if (
+      provider &&
+      provider !== canonical.provider &&
+      !directModelAuthProviders.has(provider) &&
+      !hasIndependentAuthProfile &&
+      !hasIndependentAuthOrder
+    ) {
+      aliases.set(provider, profileId);
+    }
+  }
+  return aliases;
 }
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
@@ -606,9 +576,16 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
   "models.authStatus": async ({ params, respond, context }) => {
     const now = Date.now();
     const refreshRequested = Boolean(params.refresh);
+    const resolveScope = (cfg: OpenClawConfig) =>
+      resolveModelAuthAgentScope(
+        cfg,
+        params.agentId === undefined || params.agentId === ""
+          ? tryResolveAmbientOwnerAgentId(cfg)
+          : params.agentId,
+      );
     try {
       let cfg = context.getRuntimeConfig();
-      let scope = resolveModelAuthAgentScope(cfg, params.agentId);
+      let scope = resolveScope(cfg);
       if (!scope.ok) {
         respond(false, undefined, modelAuthAgentScopeError(scope));
         return;
@@ -616,7 +593,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       if (refreshRequested) {
         await refreshModelAuthStatusRuntimeState();
         cfg = context.getRuntimeConfig();
-        scope = resolveModelAuthAgentScope(cfg, params.agentId);
+        scope = resolveScope(cfg);
         if (!scope.ok) {
           respond(false, undefined, modelAuthAgentScopeError(scope));
           return;
@@ -680,21 +657,25 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         ),
       ];
 
+      const providerUsageRuntime = getProviderUsageRuntimeSnapshot({
+        config: cfg,
+        agentId,
+        agentDir,
+        store,
+      });
       const usageByProvider = readProviderUsageStaleWhileRevalidate({
         agentId,
         agentDir,
+        authStore: providerUsageRuntime.store,
         configRef: cfg,
-        credentialKey: fingerprintProviderUsageCredentials({
-          cfg,
-          directApiKeys: apiKeys,
-          store,
-        }),
+        credentialKey: providerUsageRuntime.credentialKey,
         forceRefresh: refreshRequested,
         providerIds: usageProviderIds,
         now,
       });
 
       const externalProfileIds = new Set(store.runtimeExternalProfileIds ?? []);
+      const externalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
       const logoutProfileIds = new Set(
         Object.entries(store.profiles)
           .filter(
@@ -705,15 +686,24 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           .map(([profileId]) => profileId),
       );
       const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store, authAliasLookupParams);
-      const providers = authHealth.providers.map((prov) =>
-        mapProvider(
-          prov,
-          usageByProvider,
-          configured.expectsOAuth,
-          apiKeys,
-          logoutProfileIds,
-          configBoundProfileIds,
+      const legacyExternalCliAliasProfileIds = resolveLegacyExternalCliAliasProfileIds(
+        cfg,
+        configured.directModelAuthProviders,
+      );
+      const providers = suppressSyntheticAliasRowsCoveredByExternalCli(
+        authHealth.providers.map((prov) =>
+          mapProvider(
+            prov,
+            usageByProvider,
+            configured.expectsOAuth,
+            apiKeys,
+            logoutProfileIds,
+            configBoundProfileIds,
+            externalCliProfileIds,
+          ),
         ),
+        externalCliProfileIds,
+        legacyExternalCliAliasProfileIds,
       );
       const providerCapabilities = buildProviderCapabilities({
         config: cfg,

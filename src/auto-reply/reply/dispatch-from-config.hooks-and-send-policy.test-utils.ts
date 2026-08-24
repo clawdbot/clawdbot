@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -18,6 +19,7 @@ import {
   globalMocks,
   hookMocks,
   mocks,
+  placementContextMocks,
   sessionBindingMocks,
   sessionStoreMocks,
   ttsMocks,
@@ -1167,10 +1169,39 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
   });
 
-  it("does not deliver no-visible fallback when dispatcher already queued a block", async () => {
+  it("does not duplicate a final accepted by a legacy dispatcher", async () => {
     setNoAbort();
-    // Channel-owned admissions outside the dispatch pipeline have unknown
-    // settlement; the foreign-admission backstop keeps the fallback quiet.
+    const dispatcher = createDispatcher();
+    delete dispatcher.supportsSettledReceipt;
+    dispatcher.waitForIdle = vi.fn(async () => {});
+    const ctx = buildTestCtx({
+      ChatType: "group",
+      Surface: "telegram",
+      Provider: "telegram",
+      SessionKey: "agent:main:telegram:group:oc_group",
+      WasMentioned: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        agents: { defaults: { silentReply: { group: "disallow" } } },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () => ({ text: "Legacy final answer." })),
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({
+      text: "Legacy final answer.",
+    });
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
+      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+    });
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+  });
+
+  it("does not infer receipt visibility from a custom dispatcher's queued block", async () => {
+    setNoAbort();
     const dispatcher = createDispatcher();
     dispatcher.getQueuedCounts = vi.fn(() => ({ tool: 0, block: 1, final: 0 }));
     const replyResolver = vi.fn(async () => undefined);
@@ -1197,11 +1228,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+    expect(result.queuedFinal).toBe(true);
     expect(result.counts.block).toBe(1);
-    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
-    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
   it("keeps no-visible fallback eligible when core fallback delivery fails", async () => {
@@ -1647,31 +1677,142 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         pluginRoot: "/tmp/plugin",
       },
     } satisfies SessionBindingRecord);
+    const archivedAt = Date.now() - 1_000;
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
       updatedAt: Date.now(),
-      archivedAt: Date.now(),
+      archivedAt,
     };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "must not run" }) satisfies ReplyPayload);
     const ctx = buildTestCtx({
       Provider: "discord",
       Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:archived-test",
+      ChatType: "channel",
+      From: "discord:user:12345",
       To: "discord:channel:archived-test",
       AccountId: "default",
       SessionKey: "agent:main:discord:channel:archived-test",
       Body: "start work",
+      CommandBody: "start work",
+      RawBody: "start work",
+      CommandSource: undefined,
+      InboundAccessAuthorized: true,
+      InboundEventKind: "user_request",
+      InputProvenance: { kind: "external_user", sourceChannel: "discord" },
     });
 
     await expect(
       dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver }),
     ).rejects.toThrow(/is archived/i);
 
+    expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
     expect(sessionBindingMocks.touch).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { name: "no placement", blocked: false, suppliedOwner: false },
+    { name: "active placement", blocked: true, suppliedOwner: false },
+    {
+      name: "owning Gateway proves failed environment is gone",
+      blocked: false,
+      suppliedOwner: true,
+    },
+  ])(
+    "restores admitted archived channel work before reply-operation admission: $name",
+    async ({ blocked, suppliedOwner }) => {
+      setNoAbort();
+      const sessionId = "archived-channel-session";
+      const sessionKey = "agent:main:discord:channel:restored-test";
+      const archivedAt = Date.now() - 1_000;
+      sessionStoreMocks.currentEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        archivedAt,
+        archivedBy: { type: "human", id: "profile-operator" },
+      };
+      if (blocked || suppliedOwner) {
+        placementContextMocks.getMany.mockReturnValue(
+          new Map([[sessionId, { state: "active" } as WorkerSessionPlacementRecord]]),
+        );
+      }
+      const ownerGetMany = vi.fn(
+        () =>
+          new Map([
+            [
+              sessionId,
+              {
+                state: "failed",
+                environmentId: "environment-a",
+              } as WorkerSessionPlacementRecord,
+            ],
+          ]),
+      );
+      const sessionWorkerPlacementContext = suppliedOwner
+        ? {
+            workerEnvironmentService: { get: vi.fn(() => undefined) },
+            workerSessionPlacementService: { getMany: ownerGetMany },
+          }
+        : undefined;
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "restored reply" }) satisfies ReplyPayload);
+      const ctx = buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel:restored-test",
+        ChatType: "channel",
+        From: "discord:user:12345",
+        To: "discord:channel:restored-test",
+        AccountId: "default",
+        SessionKey: sessionKey,
+        Body: "start work",
+        CommandBody: "start work",
+        RawBody: "start work",
+        CommandSource: undefined,
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "discord" },
+      });
+
+      const dispatch = dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        ...(sessionWorkerPlacementContext ? { sessionWorkerPlacementContext } : {}),
+      });
+
+      if (blocked) {
+        await expect(dispatch).rejects.toThrow(/is archived/i);
+        expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
+        expect(sessionStoreMocks.currentEntry?.archivedBy).toEqual({
+          type: "human",
+          id: "profile-operator",
+        });
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        return;
+      }
+
+      const result = await dispatch;
+      expect(result.queuedFinal).toBe(true);
+      expect(sessionStoreMocks.currentEntry?.sessionId).toBe(sessionId);
+      expect(sessionStoreMocks.currentEntry?.archivedAt).toBeUndefined();
+      expect(sessionStoreMocks.currentEntry?.archivedBy).toBeUndefined();
+      if (suppliedOwner) {
+        expect(ownerGetMany).toHaveBeenCalledWith([sessionId]);
+        expect(placementContextMocks.resolveSessionWorkerPlacementContext).not.toHaveBeenCalled();
+      }
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "restored reply" });
+    },
+  );
 
   it("skips plugin-bound claim hook under deny and falls through to suppressed agent dispatch", async () => {
     // Plugin-bound inbound handlers can emit outbound replies we cannot
@@ -1874,6 +2015,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         queuedFinal: false,
         counts: { tool: 0, block: 0, final: 0 },
         sourceReplyDeliveryMode: "message_tool_only",
+        ...(params.expectPluginReplyDelivered ? { observedReplyDelivery: true } : {}),
       });
       expect(sessionBindingMocks.touch).toHaveBeenCalledWith(params.bindingId);
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(

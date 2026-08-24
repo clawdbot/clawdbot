@@ -28,7 +28,7 @@ describe("createChannelProgressDraftCompositor", () => {
     const work = createChannelProgressWorkCounter({ now: () => now });
 
     work.noteToolCall("exec");
-    work.noteToolCall("update_plan");
+    work.noteToolCall("progress_card");
     now = 43_000;
 
     expect(work.toolCalls).toBe(1);
@@ -68,6 +68,29 @@ describe("createChannelProgressDraftCompositor", () => {
     progress.reset();
     await progress.pushToolProgress("🛠️ Next", { startImmediately: true });
     expect(update).toHaveBeenLastCalledWith("🛠️ Next", expect.anything());
+  });
+
+  it("keeps plan task progress independent from tool progress", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, commentary: true, toolProgress: false },
+        },
+      },
+      update,
+    });
+
+    expect(
+      await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }], {
+        explanation: "Applying the change.",
+      }),
+    ).toBe(true);
+    expect(update).toHaveBeenLastCalledWith("Applying the change.\n\n▸ Patch", {
+      flush: true,
+      lines: [],
+    });
   });
 
   it("publishes partial-preview tool lines without enabling progress-only plans", async () => {

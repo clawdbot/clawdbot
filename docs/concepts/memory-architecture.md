@@ -47,17 +47,18 @@ Five rules shape everything below:
 
 ## The tier model
 
-| Tier         | Surface                                                 | Written by                                          | Injected                           |
-| ------------ | ------------------------------------------------------- | --------------------------------------------------- | ---------------------------------- |
-| Instructions | `AGENTS.md` and workspace instruction files             | Human only                                          | Always, at session start           |
-| Curated core | `MEMORY.md`, `USER.md`                                  | Dreaming consolidation; direct user request         | Always, at session start, budgeted |
-| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | Never; searchable on demand        |
-| Prospective  | Standing intents (SQLite) and cron jobs                 | `intent` tool; scheduled tasks                      | Only when a trigger fires          |
-| Review       | `DREAMS.md`, dreaming reports                           | Dreaming phases                                     | Never; for human reading           |
+| Tier         | Surface                                                 | Written by                                          | Injected                                               |
+| ------------ | ------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
+| Instructions | `AGENTS.md` and workspace instruction files             | Human only                                          | Always, at session start                               |
+| Curated core | `MEMORY.md`, `USER.md`                                  | Dreaming consolidation; direct user request         | At session start when provenance is eligible; budgeted |
+| Episodic     | `memory/YYYY-MM-DD.md` daily notes, session transcripts | Agent during work; memory flush; transcript capture | Never; searchable on demand                            |
+| Prospective  | Standing intents (SQLite) and cron jobs                 | `intent` tool; scheduled tasks                      | Only when a trigger fires                              |
+| Review       | `DREAMS.md`, dreaming reports                           | Dreaming phases                                     | Never; for human reading                               |
 
 The boundary that matters most is between the **curated core** and the
-**episodic** tier. Curated files are small, always in context, and written
-only through gated consolidation. Episodic files are large, append-friendly,
+**episodic** tier. Curated files are small, normally in context when their
+provenance is eligible, and written only through gated consolidation. Episodic
+files are large, append-friendly,
 and reachable only through explicit search tools or the escalation lane.
 Nothing crosses from episodic to curated without passing the promotion gates
 described below.
@@ -193,8 +194,12 @@ that need it.
 
 Three mechanisms run on eligible turns with no model involvement:
 
-- **Bootstrap injection.** `MEMORY.md` and `USER.md` load at session start
-  within budgets, and refresh per turn so long-lived sessions pick up
+- **Bootstrap injection.** When a memory runtime is selected, `MEMORY.md` and
+  `USER.md` load at session start only when that runtime classifies their
+  provenance as eligible. Ineligible, missing, or unsupported classifications
+  are omitted from automatic context but remain available through explicit
+  memory tools. With no selected memory runtime, bootstrap behavior is unchanged.
+  Eligible files refresh per turn within budgets so long-lived sessions pick up
   consolidation results without restarting.
 - **Ranked search.** `memory_search` scores hybrid relevance multiplied by
   an exponential recency decay (30-day half-life) and an importance

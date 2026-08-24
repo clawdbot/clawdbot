@@ -31,6 +31,7 @@ import {
   type WorkboardExecutionStatus,
   type WorkboardLink,
   type WorkboardLinkType,
+  type WorkboardLaunchState,
   type WorkboardMetadata,
   type WorkboardNotification,
   type WorkboardNotificationKind,
@@ -386,10 +387,16 @@ function normalizeWorkspace(
   if (kind === "dir" && (!workspacePath || !isAbsoluteWorkspacePath(workspacePath))) {
     throw new Error("dir workspace path must be absolute.");
   }
-  const branch = normalizeBoundedString(record.branch, fallback?.branch, 160, "workspace branch");
+  const workspaceFallback = workspacePath === fallback?.path ? fallback : undefined;
+  const branch = normalizeBoundedString(
+    record.branch,
+    workspaceFallback?.branch,
+    160,
+    "workspace branch",
+  );
   const sourcePath = normalizeBoundedString(
     record.sourcePath,
-    fallback?.sourcePath,
+    workspaceFallback?.sourcePath,
     2000,
     "workspace source path",
   );
@@ -398,7 +405,7 @@ function normalizeWorkspace(
   }
   const sourceBranch = normalizeBoundedString(
     record.sourceBranch,
-    fallback?.sourceBranch,
+    workspaceFallback?.sourceBranch,
     160,
     "workspace source branch",
   );
@@ -414,11 +421,9 @@ function normalizeWorkspace(
 export function normalizeAutomation(
   value: unknown,
   fallback: WorkboardAutomation = {},
+  options: { allowLaunchState?: boolean } = {},
 ): WorkboardAutomation | undefined {
-  if (!isRecord(value)) {
-    return Object.keys(fallback).length ? fallback : undefined;
-  }
-  const record = value;
+  const record = isRecord(value) ? value : {};
   const tenant = normalizeBoundedString(record.tenant, fallback.tenant, 80, "tenant");
   const boardId = Object.hasOwn(record, "boardId")
     ? normalizeBoardId(record.boardId, fallback.boardId)
@@ -460,8 +465,11 @@ export function normalizeAutomation(
   const workspace = Object.hasOwn(record, "workspace")
     ? normalizeWorkspace(record.workspace, fallback.workspace)
     : fallback.workspace;
-  // Raw metadata preserves host-issued authority but cannot mint or widen it.
+  // Raw metadata preserves host-issued authority/state but cannot mint or widen either.
   const workspaceAccess = fallback.workspaceAccess;
+  const launch = normalizeLaunchState(
+    options.allowLaunchState && Object.hasOwn(record, "launch") ? record.launch : fallback.launch,
+  );
   const next = removeUndefinedAutomationFields({
     ...(tenant ? { tenant } : {}),
     ...(boardId ? { boardId } : {}),
@@ -477,8 +485,58 @@ export function normalizeAutomation(
     ...(createdCardIds?.length ? { createdCardIds } : {}),
     ...(dispatchCount ? { dispatchCount } : {}),
     ...(lastDispatchAt ? { lastDispatchAt } : {}),
+    ...(launch ? { launch } : {}),
   });
   return Object.keys(next).length ? next : undefined;
+}
+
+function normalizeLaunchTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
+function normalizeLaunchString(value: unknown, maxLength: number): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized && normalized.length <= maxLength ? normalized : undefined;
+}
+
+function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const requestedSessionKey = normalizeLaunchString(value.requestedSessionKey, 240);
+  const provisionalRunId = normalizeLaunchString(value.provisionalRunId, 160);
+  const preparedAt = normalizeLaunchTimestamp(value.preparedAt);
+  if (!requestedSessionKey || !provisionalRunId || preparedAt === undefined) {
+    return undefined;
+  }
+  const identity = { requestedSessionKey, provisionalRunId, preparedAt };
+  if (value.phase === "prepared") {
+    return { phase: "prepared", ...identity };
+  }
+  if (value.phase === "accepted") {
+    const acceptedAt = normalizeLaunchTimestamp(value.acceptedAt);
+    const acceptedSessionKey = normalizeLaunchString(value.acceptedSessionKey, 240);
+    const acceptedRunId = normalizeLaunchString(value.acceptedRunId, 160);
+    return acceptedAt === undefined || !acceptedSessionKey
+      ? undefined
+      : {
+          phase: "accepted",
+          ...identity,
+          acceptedAt,
+          acceptedSessionKey,
+          ...(acceptedRunId ? { acceptedRunId } : {}),
+        };
+  }
+  if (value.phase === "failed") {
+    const failedAt = normalizeLaunchTimestamp(value.failedAt);
+    const reason = normalizeLaunchString(value.reason, 800);
+    return failedAt === undefined || !reason
+      ? undefined
+      : { phase: "failed", ...identity, failedAt, reason };
+  }
+  return undefined;
 }
 
 export function deriveChildIdempotencyKey(
@@ -1035,6 +1093,7 @@ export function normalizeMetadata(
   options: {
     allowDependencyLinks?: boolean;
     allowArchivedAt?: boolean;
+    allowAutomationLaunch?: boolean;
     preserveProofId?: string;
   } = {},
 ): WorkboardMetadata {
@@ -1112,9 +1171,11 @@ export function normalizeMetadata(
     workerProtocol: Object.hasOwn(record, "workerProtocol")
       ? normalizeWorkerProtocol(record.workerProtocol, fallback.workerProtocol)
       : fallback.workerProtocol,
-    automation: Object.hasOwn(record, "automation")
-      ? normalizeAutomation(record.automation, fallback.automation)
-      : fallback.automation,
+    automation: normalizeAutomation(
+      Object.hasOwn(record, "automation") ? record.automation : {},
+      fallback.automation,
+      { allowLaunchState: options.allowAutomationLaunch },
+    ),
     claim: Object.hasOwn(record, "claim")
       ? record.claim
         ? normalizeClaim(record.claim, fallback.claim)
@@ -1240,6 +1301,7 @@ function removeUndefinedAutomationFields(automation: WorkboardAutomation): Workb
     "createdCardIds",
     "dispatchCount",
     "lastDispatchAt",
+    "launch",
   ] as const) {
     const value = next[key];
     if (

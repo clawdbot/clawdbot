@@ -149,7 +149,7 @@ extension CronSettings {
                     .font(.headline)
                 Spacer()
                 Button {
-                    Task { await self.store.refreshRuns(jobId: job.id) }
+                    self.store.refreshRuns(jobId: job.id)
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }

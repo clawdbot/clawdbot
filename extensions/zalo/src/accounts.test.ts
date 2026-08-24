@@ -93,6 +93,35 @@ describe("resolveZaloAccount", () => {
     expect(resolveDefaultZaloAccountId(cfg)).toBe("default");
     expect(resolveZaloAccount({ cfg, accountId: "default" }).enabled).toBe(true);
   });
+
+  it("carries account-owned unavailable credential diagnostics into the resolved account", () => {
+    const tokenFile = "/private/zalo-resolved-account-token";
+    const resolved = resolveZaloAccount({
+      cfg: {
+        channels: {
+          zalo: {
+            botToken: "lower-priority-token",
+            accounts: { work: { tokenFile } },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved).toMatchObject({
+      token: "",
+      tokenSource: "configFile",
+      tokenStatus: "configured_unavailable",
+      credentialDiagnostics: [
+        {
+          code: "CREDENTIAL_FILE_UNAVAILABLE",
+          path: "channels.zalo.accounts.work.tokenFile",
+          reason: "not-found",
+        },
+      ],
+    });
+    expect(JSON.stringify(resolved.credentialDiagnostics)).not.toContain(tokenFile);
+  });
 });
 
 describe("Zalo account SecretRef inspection", () => {

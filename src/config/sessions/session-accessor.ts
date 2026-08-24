@@ -136,7 +136,6 @@ export {
   listSessionChildEntriesReadOnly,
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
-  listSessionEntriesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
   listSessionEntryKeysReadOnly,
@@ -186,6 +185,17 @@ export {
   listSessionParticipantsReadOnly,
   type SessionParticipantRecord,
 } from "./session-accessor.sqlite-participant-projection.js";
+export {
+  listCanonicalSessionRepairFacts,
+  loadCanonicalSessionRepairEntries,
+  scanDoctorSessionEntriesStrict,
+  scanDoctorSessionEntriesTolerant,
+  type CanonicalSessionRepairFact,
+} from "./session-accessor.sqlite-canonical-inventory.js";
+export {
+  iterateDoctorSessionKeyBatches,
+  rewriteDoctorSessionEntries,
+} from "./session-accessor.sqlite-doctor-rewrite.js";
 export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,

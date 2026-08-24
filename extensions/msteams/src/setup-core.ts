@@ -6,7 +6,6 @@ import {
   DEFAULT_ACCOUNT_ID,
   createSetupTranslator,
   normalizeAccountId,
-  type ChannelSetupInput,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
   type WizardPrompter,
@@ -28,8 +27,33 @@ type MSTeamsSetupAccountConfig = Partial<MSTeamsConfig> & {
   name?: string;
 };
 
+type MSTeamsSetupInput = {
+  name?: string;
+  appId?: string;
+  appPassword?: string;
+  tenantId?: string;
+  webhookPort?: number;
+  useEnv?: boolean;
+};
+
+function applySecretAuthCredentials(
+  patch: MSTeamsSetupAccountConfig,
+  existing: MSTeamsSetupAccountConfig,
+): MSTeamsSetupAccountConfig {
+  return {
+    ...patch,
+    authType: "secret",
+    ...(existing.certificatePath !== undefined ? { certificatePath: undefined } : {}),
+    ...(existing.certificateThumbprint !== undefined ? { certificateThumbprint: undefined } : {}),
+    ...(existing.useManagedIdentity !== undefined ? { useManagedIdentity: undefined } : {}),
+    ...(existing.managedIdentityClientId !== undefined
+      ? { managedIdentityClientId: undefined }
+      : {}),
+  };
+}
+
 function readMSTeamsSetupCredential(
-  input: ChannelSetupInput,
+  input: MSTeamsSetupInput,
   key: "appId" | "appPassword" | "tenantId",
 ): string | undefined {
   switch (key) {
@@ -49,6 +73,12 @@ function resolveSetupAccountId(cfg: OpenClawConfig, accountId?: string | null): 
   return normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
 }
 
+function resolveMSTeamsSetupChannelConfig(
+  cfg: OpenClawConfig,
+): MSTeamsMultiAccountConfig | undefined {
+  return cfg.channels?.msteams as MSTeamsMultiAccountConfig | undefined; // SAFETY: the public config contract owns these optional fields.
+}
+
 function resolveRawMSTeamsAccountKey(
   accounts: Record<string, Partial<MSTeamsConfig>> | undefined,
   accountId: string,
@@ -65,8 +95,7 @@ function resolveRawMSTeamsAccountConfig(
   accountId: string,
 ): MSTeamsSetupAccountConfig {
   const normalized = normalizeAccountId(accountId);
-  // SAFETY: MSTeamsConfig's public contract owns the optional multi-account fields.
-  const msteams = (cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig;
+  const msteams = (cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig; // SAFETY: the public config contract owns these optional fields.
   if (normalized === DEFAULT_ACCOUNT_ID) {
     return msteams;
   }
@@ -106,8 +135,7 @@ export function patchMSTeamsAccountConfig(params: {
   scopeDefaultToAccounts?: boolean;
 }): OpenClawConfig {
   const accountId = normalizeAccountId(params.accountId);
-  // SAFETY: MSTeamsConfig's public contract owns the optional multi-account fields.
-  const msteams = (params.cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig;
+  const msteams = (params.cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig; // SAFETY: the public config contract owns these optional fields.
   const ensureEnabled = params.ensureEnabled ?? true;
   const scopeDefaultToAccounts = params.scopeDefaultToAccounts ?? false;
   if (accountId === DEFAULT_ACCOUNT_ID && !scopeDefaultToAccounts) {
@@ -127,20 +155,19 @@ export function patchMSTeamsAccountConfig(params: {
   const { root: baseMsteams, defaultAccount } = splitRootIdentity(msteams);
   const baseAccounts = baseMsteams.accounts ?? {};
   const hasPromotedDefaultIdentity = Object.keys(defaultAccount).length > 0;
+  const promotedDefaultKey =
+    resolveRawMSTeamsAccountKey(baseAccounts, DEFAULT_ACCOUNT_ID) ?? DEFAULT_ACCOUNT_ID;
   const accounts =
     hasPromotedDefaultIdentity && accountId !== DEFAULT_ACCOUNT_ID
       ? {
           ...baseAccounts,
-          default: {
+          [promotedDefaultKey]: {
             ...defaultAccount,
-            ...baseAccounts.default,
+            ...baseAccounts[promotedDefaultKey],
           },
         }
       : baseAccounts;
-  const rawAccountKey =
-    accountId === DEFAULT_ACCOUNT_ID
-      ? DEFAULT_ACCOUNT_ID
-      : (resolveRawMSTeamsAccountKey(accounts, accountId) ?? accountId);
+  const rawAccountKey = resolveRawMSTeamsAccountKey(accounts, accountId) ?? accountId;
   const existing =
     accountId === DEFAULT_ACCOUNT_ID
       ? ({ ...defaultAccount, ...accounts[rawAccountKey] } as MSTeamsSetupAccountConfig) // SAFETY: both are account fragments.
@@ -160,8 +187,7 @@ export function patchMSTeamsAccountConfig(params: {
             ...params.patch,
           },
         },
-        // SAFETY: the assembled object preserves MSTeamsConfig and adds its declared accounts map.
-      } as MSTeamsMultiAccountConfig,
+      } as MSTeamsMultiAccountConfig, // SAFETY: this preserves MSTeamsConfig and adds its declared accounts map.
     },
   };
 }
@@ -198,7 +224,7 @@ function hasConfiguredCredentialsForSetup(cfg: OpenClawConfig, accountId: string
   );
 }
 
-export const msteamsSetupAdapter: ChannelSetupAdapter = {
+export const msteamsSetupAdapter: ChannelSetupAdapter<MSTeamsSetupInput> = {
   resolveAccountId: ({ cfg, accountId }) => resolveSetupAccountId(cfg, accountId),
   applyAccountName: ({ cfg, accountId, name }) => {
     const trimmed = name?.trim();
@@ -210,15 +236,28 @@ export const msteamsSetupAdapter: ChannelSetupAdapter = {
         })
       : cfg;
   },
-  validateInput: ({ accountId, input }) => {
+  validateInput: ({ cfg, accountId, input }) => {
     const appId = readMSTeamsSetupCredential(input, "appId");
     const appPassword = readMSTeamsSetupCredential(input, "appPassword");
     const tenantId = readMSTeamsSetupCredential(input, "tenantId");
     if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
       return "MSTEAMS_* environment variables can only be used for the default account.";
     }
-    if (!input.useEnv && !(appId && appPassword && tenantId)) {
+    if (!input.useEnv && !(appId?.trim() && appPassword?.trim() && tenantId?.trim())) {
       return "MS Teams requires appId, appPassword, and tenantId (or --use-env for the default account).";
+    }
+    if (
+      input.webhookPort !== undefined &&
+      (!Number.isInteger(input.webhookPort) || input.webhookPort < 1 || input.webhookPort > 65535)
+    ) {
+      return "MS Teams webhook port must be an integer between 1 and 65535.";
+    }
+    if (
+      accountId !== DEFAULT_ACCOUNT_ID &&
+      input.webhookPort === undefined &&
+      typeof resolveRawMSTeamsAccountConfig(cfg, accountId).webhook?.port !== "number"
+    ) {
+      return "MS Teams named accounts require --webhook-port <1-65535>.";
     }
     return null;
   },
@@ -227,6 +266,7 @@ export const msteamsSetupAdapter: ChannelSetupAdapter = {
     const appId = readMSTeamsSetupCredential(input, "appId");
     const appPassword = readMSTeamsSetupCredential(input, "appPassword");
     const tenantId = readMSTeamsSetupCredential(input, "tenantId");
+    const existing = resolveRawMSTeamsAccountConfig(cfg, resolvedAccountId);
     const patch: MSTeamsSetupAccountConfig = {};
     if (appId?.trim()) {
       patch.appId = appId.trim();
@@ -237,25 +277,58 @@ export const msteamsSetupAdapter: ChannelSetupAdapter = {
     if (tenantId?.trim()) {
       patch.tenantId = tenantId.trim();
     }
+    if (input.webhookPort !== undefined) {
+      patch.webhook = { ...existing.webhook, port: input.webhookPort };
+    }
     return patchMSTeamsAccountConfig({
       cfg,
       accountId: resolvedAccountId,
-      patch,
+      patch: applySecretAuthCredentials(patch, existing),
       scopeDefaultToAccounts: true,
     });
   },
 };
 
 export const msteamsSetupContract = defineChannelSetupContract({
-  fields: {},
-  legacyAdapter: msteamsSetupAdapter,
+  fields: {
+    appId: {
+      kind: "string",
+      cli: { flags: "--app-id <id>", description: "Microsoft Teams application id" },
+    },
+    appPassword: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--app-password <secret>", description: "Microsoft Teams app password" },
+    },
+    tenantId: {
+      kind: "string",
+      cli: { flags: "--tenant-id <id>", description: "Microsoft Teams tenant id" },
+    },
+    webhookPort: {
+      kind: "integer",
+      cli: { flags: "--webhook-port <port>", description: "Microsoft Teams webhook port" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use Microsoft Teams environment credentials" },
+      envVars: ["MSTEAMS_APP_ID", "MSTEAMS_APP_PASSWORD", "MSTEAMS_TENANT_ID"],
+      envVarMode: "all",
+    },
+  },
+  adapter: msteamsSetupAdapter,
 });
 
 function enableMSTeamsAccount(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
+  const resolvedAccountId = normalizeAccountId(accountId);
+  const accounts = resolveMSTeamsSetupChannelConfig(cfg)?.accounts;
+  const hasScopedDefault =
+    resolvedAccountId === DEFAULT_ACCOUNT_ID &&
+    resolveRawMSTeamsAccountKey(accounts, DEFAULT_ACCOUNT_ID) !== undefined;
   return patchMSTeamsAccountConfig({
     cfg,
-    accountId,
+    accountId: resolvedAccountId,
     patch: {},
+    scopeDefaultToAccounts: hasScopedDefault,
   });
 }
 
@@ -271,14 +344,17 @@ function setMSTeamsAccountCredentials(params: {
   return patchMSTeamsAccountConfig({
     cfg: params.cfg,
     accountId: params.accountId,
-    patch: {
-      appId: params.appId,
-      appPassword: params.appPassword,
-      tenantId: params.tenantId,
-      ...(params.webhookPort !== undefined
-        ? { webhook: { ...existing.webhook, port: params.webhookPort } }
-        : {}),
-    },
+    patch: applySecretAuthCredentials(
+      {
+        appId: params.appId,
+        appPassword: params.appPassword,
+        tenantId: params.tenantId,
+        ...(params.webhookPort !== undefined
+          ? { webhook: { ...existing.webhook, port: params.webhookPort } }
+          : {}),
+      },
+      existing,
+    ),
     scopeDefaultToAccounts: params.accountId === DEFAULT_ACCOUNT_ID,
   });
 }
@@ -306,13 +382,14 @@ async function promptMSTeamsWebhookPort(params: {
     message: t("wizard.msteams.webhookPortPrompt"),
     initialValue: typeof current === "number" ? String(current) : undefined,
     validate: (value) => {
-      const port = Number.parseInt(value.trim(), 10);
+      const trimmed = value.trim();
+      const port = /^\d+$/u.test(trimmed) ? Number(trimmed) : Number.NaN;
       return Number.isInteger(port) && port > 0 && port <= 65535
         ? undefined
         : t("wizard.msteams.webhookPortInvalid");
     },
   });
-  return Number.parseInt(raw.trim(), 10);
+  return Number(raw.trim());
 }
 async function promptMSTeamsCredentials(prompter: WizardPrompter): Promise<{
   appId: string;

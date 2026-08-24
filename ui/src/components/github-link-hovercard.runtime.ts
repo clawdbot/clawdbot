@@ -16,15 +16,11 @@ import {
   parseGitHubLinkTarget,
   type GitHubLinkTarget,
 } from "./github-link-target.ts";
+import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 100;
-const VIEWPORT_PADDING = 12;
-const CARD_GAP = 10;
-// Traversal grace: the pointer has to cross CARD_GAP of unowned page between the
-// link and the card, and neither surface is hovered during that crossing.
-const CLOSE_DELAY_MS = 120;
 
 type GitHubPreview = GitHubLinkTarget & ControlUiGitHubPreview;
 
@@ -265,13 +261,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   // the portaled card (e.g. clicking the title link) can hold it open, so a
   // pointer-driven open still fully releases on mouse-out (see handleCardPointerLeave).
   private activeTrigger: "focus" | "pointer" | null = null;
-  private card: HTMLDivElement | null = null;
-  private cardFocusInside = false;
-  private closeTimer: number | null = null;
-  private focusInside = false;
-  private openTimer: number | null = null;
-  private pointerInside = false;
-  private pointerOverCard = false;
+  private readonly hovercard = new PortaledHovercardController(() => this.close());
   private renderedPreview: GitHubPreview | null = null;
   private renderedUnavailable = false;
   private stopI18n: (() => void) | null = null;
@@ -283,22 +273,22 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     args: () => [this.activeTarget] as const,
     task: ([target], { signal }) => (target ? this.loadPreview(target, signal) : initialState),
     onComplete: (preview) => {
-      const card = this.card;
+      const card = this.hovercard.card;
       if (!card) {
         return;
       }
       this.renderedPreview = preview;
       renderPreview(card, preview);
-      this.positionCard();
+      this.hovercard.position();
     },
     onError: () => {
-      const card = this.card;
+      const card = this.hovercard.card;
       if (!card) {
         return;
       }
       this.renderedUnavailable = true;
       renderUnavailable(card);
-      this.positionCard();
+      this.hovercard.position();
     },
   });
   private readonly activeAnchorObserver = new MutationObserver(() => {
@@ -340,7 +330,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   }
 
   private readonly handleLocaleChange = () => {
-    const card = this.card;
+    const card = this.hovercard.card;
     if (!card) {
       return;
     }
@@ -351,7 +341,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     } else {
       renderLoading(card);
     }
-    this.positionCard();
+    this.hovercard.position();
   };
 
   private readonly handlePointerOver = (event: Event) => {
@@ -375,40 +365,40 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     if (event.relatedTarget instanceof Node && anchor.contains(event.relatedTarget)) {
       return;
     }
-    this.pointerInside = false;
-    this.scheduleClose();
+    this.hovercard.pointerInside = false;
+    this.hovercard.scheduleClose();
   };
 
   private readonly handleCardPointerEnter = () => {
-    this.pointerOverCard = true;
-    this.clearCloseTimer();
+    this.hovercard.pointerOverCard = true;
+    this.hovercard.clearClose();
   };
 
   private readonly handleCardPointerLeave = () => {
-    this.pointerOverCard = false;
+    this.hovercard.pointerOverCard = false;
     // A pointer-opened card must release fully on mouse-out even if a click
     // inside the card (e.g. the title link) left it focused; otherwise it
     // would stay stuck open with nothing left driving the intent.
     if (this.activeTrigger === "pointer") {
-      this.cardFocusInside = false;
+      this.hovercard.cardFocusInside = false;
     }
-    this.scheduleClose();
+    this.hovercard.scheduleClose();
   };
 
   // The card is portaled to document.body, so focus landing on its title link
   // never reaches the provider's delegated focusin/focusout listeners; track it
   // directly so keyboard users can tab into the link without losing the card.
   private readonly handleCardFocusIn = () => {
-    this.cardFocusInside = true;
-    this.clearCloseTimer();
+    this.hovercard.cardFocusInside = true;
+    this.hovercard.clearClose();
   };
 
   private readonly handleCardFocusOut = (event: FocusEvent) => {
-    if (event.relatedTarget instanceof Node && this.card?.contains(event.relatedTarget)) {
+    if (event.relatedTarget instanceof Node && this.hovercard.card?.contains(event.relatedTarget)) {
       return;
     }
-    this.cardFocusInside = false;
-    this.scheduleClose();
+    this.hovercard.cardFocusInside = false;
+    this.hovercard.scheduleClose();
   };
 
   private readonly handleFocusIn = (event: Event) => {
@@ -430,42 +420,9 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     if (event.relatedTarget instanceof Node && this.activeAnchor.contains(event.relatedTarget)) {
       return;
     }
-    this.focusInside = false;
-    this.scheduleClose();
+    this.hovercard.focusInside = false;
+    this.hovercard.scheduleClose();
   };
-
-  private clearCloseTimer(): void {
-    if (this.closeTimer !== null) {
-      window.clearTimeout(this.closeTimer);
-      this.closeTimer = null;
-    }
-  }
-
-  // Hover intent spans link and card: dismissal waits out the traversal grace and
-  // re-checks every surface that holds the card open, so moving from one to the
-  // other keeps it alive and only leaving both closes it.
-  private scheduleClose(): void {
-    this.clearCloseTimer();
-    if (this.hoverIntentHeld) {
-      return;
-    }
-    // Without a card there is only a pending open timer, and no gap to cross:
-    // cancel the open now instead of granting grace to a card that never showed.
-    if (!this.card) {
-      this.close();
-      return;
-    }
-    this.closeTimer = window.setTimeout(() => {
-      this.closeTimer = null;
-      if (!this.hoverIntentHeld) {
-        this.close();
-      }
-    }, CLOSE_DELAY_MS);
-  }
-
-  private get hoverIntentHeld(): boolean {
-    return this.pointerInside || this.pointerOverCard || this.focusInside || this.cardFocusInside;
-  }
 
   private readonly handleKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
@@ -507,7 +464,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   };
 
   private cardFocusables(): HTMLElement[] {
-    return [...(this.card?.querySelectorAll<HTMLElement>("a[href]") ?? [])];
+    return [...(this.hovercard.card?.querySelectorAll<HTMLElement>("a[href]") ?? [])];
   }
 
   private readonly handleClick = () => {
@@ -523,9 +480,9 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.activate(anchor, target, delay);
     this.activeTrigger = trigger;
     if (trigger === "pointer") {
-      this.pointerInside = true;
+      this.hovercard.pointerInside = true;
     } else {
-      this.focusInside = true;
+      this.hovercard.focusInside = true;
     }
   }
 
@@ -538,27 +495,22 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.activeTarget = target;
     // Announce the popup affordance as soon as the link is recognized; show()
     // flips the state once the card exists, close() takes the whole set away.
-    anchor.setAttribute("aria-haspopup", "dialog");
-    anchor.setAttribute("aria-expanded", "false");
+    this.hovercard.markTrigger(anchor);
     this.activeAnchorObserver.observe(this, { childList: true, subtree: true });
-    this.openTimer = window.setTimeout(() => {
-      this.openTimer = null;
-      this.show(anchor, target);
-    }, delay);
+    this.hovercard.scheduleOpen(delay, () => this.show(anchor, target));
   }
 
   private show(anchor: HTMLAnchorElement, target: GitHubLinkTarget): void {
     if (this.activeAnchor !== anchor || this.activeTarget?.href !== target.href) {
       return;
     }
-    const card = document.createElement("div");
     nextHovercardId += 1;
-    card.id = `openclaw-github-hovercard-${nextHovercardId}`;
-    card.className = "github-link-hovercard";
-    card.dataset.open = "true";
+    const card = createPortaledHovercard(
+      `openclaw-github-hovercard-${nextHovercardId}`,
+      "github-link-hovercard",
+    );
     // A tooltip may not own controls: its content is flattened and unreachable.
     // The card is a non-modal dialog instead, named by the render functions.
-    card.setAttribute("role", "dialog");
     this.renderedPreview = null;
     this.renderedUnavailable = false;
     renderLoading(card);
@@ -569,12 +521,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     card.addEventListener("focusin", this.handleCardFocusIn);
     card.addEventListener("focusout", this.handleCardFocusOut);
     card.addEventListener("keydown", this.handleCardKeyDown);
-    document.body.append(card);
-    this.card = card;
-    anchor.setAttribute("aria-controls", card.id);
-    anchor.setAttribute("aria-expanded", "true");
-    this.listenForViewportChanges();
-    this.positionCard();
+    this.hovercard.mount(anchor, card, "vertical");
 
     void this.previewTask.run([target]);
   }
@@ -630,69 +577,13 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   }
 
   private close(): void {
-    if (this.openTimer !== null) {
-      window.clearTimeout(this.openTimer);
-      this.openTimer = null;
-    }
-    this.clearCloseTimer();
+    this.hovercard.reset();
     this.activeAnchorObserver.disconnect();
     void this.previewTask.run([null]);
-    if (this.activeAnchor) {
-      this.activeAnchor.removeAttribute("aria-controls");
-      this.activeAnchor.removeAttribute("aria-expanded");
-      this.activeAnchor.removeAttribute("aria-haspopup");
-    }
-    this.card?.remove();
-    this.card = null;
     this.renderedPreview = null;
     this.renderedUnavailable = false;
     this.activeAnchor = null;
     this.activeTarget = null;
     this.activeTrigger = null;
-    this.cardFocusInside = false;
-    this.focusInside = false;
-    this.pointerInside = false;
-    this.pointerOverCard = false;
-    this.stopListeningForViewportChanges();
-  }
-
-  private readonly handleViewportChange = () => {
-    this.positionCard();
-  };
-
-  private listenForViewportChanges(): void {
-    window.addEventListener("resize", this.handleViewportChange);
-    window.addEventListener("scroll", this.handleViewportChange, true);
-    window.visualViewport?.addEventListener("resize", this.handleViewportChange);
-    window.visualViewport?.addEventListener("scroll", this.handleViewportChange);
-  }
-
-  private stopListeningForViewportChanges(): void {
-    window.removeEventListener("resize", this.handleViewportChange);
-    window.removeEventListener("scroll", this.handleViewportChange, true);
-    window.visualViewport?.removeEventListener("resize", this.handleViewportChange);
-    window.visualViewport?.removeEventListener("scroll", this.handleViewportChange);
-  }
-
-  private positionCard(): void {
-    const anchor = this.activeAnchor;
-    const card = this.card;
-    if (!anchor || !card) {
-      return;
-    }
-    const anchorRect = anchor.getBoundingClientRect();
-    const cardRect = card.getBoundingClientRect();
-    const fitsBelow =
-      anchorRect.bottom + CARD_GAP + cardRect.height + VIEWPORT_PADDING <= innerHeight;
-    const side = fitsBelow ? "bottom" : "top";
-    const top =
-      side === "bottom"
-        ? anchorRect.bottom + CARD_GAP
-        : anchorRect.top - cardRect.height - CARD_GAP;
-    const maxLeft = Math.max(VIEWPORT_PADDING, innerWidth - cardRect.width - VIEWPORT_PADDING);
-    const maxTop = Math.max(VIEWPORT_PADDING, innerHeight - cardRect.height - VIEWPORT_PADDING);
-    card.dataset.side = side;
-    card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.left), maxLeft)}px`;
-    card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, top), maxTop)}px`;
   }
 }

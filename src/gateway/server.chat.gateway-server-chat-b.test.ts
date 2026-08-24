@@ -1,11 +1,13 @@
 // Gateway chat integration tests cover dashboard chat requests, transcript
 // history limits, model overrides, inbound dispatch, and streaming event fanout.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
@@ -51,6 +53,7 @@ import {
   createTextTranscriptEvent,
 } from "./server-chat.agent-events.test-helpers.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
+import { createGatewayChatMetadataRuntime } from "./server-methods/chat-metadata-runtime.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -683,7 +686,176 @@ async function prepareMainHistoryHarness(params: {
   return sessionDir;
 }
 
+async function prepareUnconfiguredAcpHarnessSession(options?: { withMetadata?: boolean }) {
+  openDirectChatSession();
+  const sessionKey = `agent:codex:acp:${randomUUID()}`;
+  const config: OpenClawConfig = {
+    agents: { entries: { main: { default: true } } },
+    acp: { enabled: true, backend: "acpx", allowedAgents: ["codex"] },
+  };
+  testState.agentsConfig = config.agents;
+  await writeGatewayConfig(config);
+  if (options?.withMetadata === false) {
+    await writeSessionStore({
+      agentId: "codex",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-acp-codex",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+  } else {
+    await upsertAcpSessionMeta({
+      sessionKey,
+      agentId: "codex",
+      cfg: getRuntimeConfig(),
+      now: () => 1,
+      mutate: () => ({
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: sessionKey,
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      }),
+    });
+  }
+  return sessionKey;
+}
+
 describe("gateway server chat", () => {
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s reads a persisted ACP harness session without configuring its harness as an ordinary agent",
+    async (method) => {
+      try {
+        const sessionKey = await prepareUnconfiguredAcpHarnessSession();
+        const responses: CapturedChatResponse[] = [];
+        await callDirectChat(method, {
+          id: `acp-harness-${method}`,
+          params: { sessionKey },
+          respond: captureChatResponse(responses),
+          context: createDirectChatContext({ getRuntimeConfig }),
+        });
+
+        expect(responses).toHaveLength(1);
+        expect(responses[0]?.ok, JSON.stringify(responses[0]?.error ?? null)).toBe(true);
+      } finally {
+        testState.agentsConfig = undefined;
+        resetDirectChatSession();
+      }
+    },
+  );
+
+  test("chat.send accepts a persisted ACP harness without configuring it as an ordinary agent", async () => {
+    try {
+      const sessionKey = await prepareUnconfiguredAcpHarnessSession();
+      const responses: CapturedChatResponse[] = [];
+      const context = createDirectChatContext({ getRuntimeConfig });
+      await callDirectChat("chat.send", {
+        id: "acp-harness-send",
+        params: {
+          sessionKey,
+          message: "continue the bound ACP session",
+          idempotencyKey: "acp-harness-send",
+        },
+        respond: captureChatResponse(responses),
+        context,
+      });
+
+      expect(responses).toHaveLength(1);
+      expect(responses[0]?.ok, JSON.stringify(responses[0]?.error ?? null)).toBe(true);
+      expect(responses[0]?.payload).toMatchObject({ status: "started" });
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+    } finally {
+      testState.agentsConfig = undefined;
+      resetDirectChatSession();
+    }
+  });
+
+  test("chat.send rejects an unconfigured ACP-shaped session without authoritative ACP metadata", async () => {
+    try {
+      const sessionKey = await prepareUnconfiguredAcpHarnessSession({ withMetadata: false });
+      const responses: CapturedChatResponse[] = [];
+      await callDirectChat("chat.send", {
+        id: "acp-harness-forged",
+        params: {
+          sessionKey,
+          message: "reject an unconfirmed ACP session",
+          idempotencyKey: "acp-harness-forged",
+        },
+        respond: captureChatResponse(responses),
+        context: createDirectChatContext({ getRuntimeConfig }),
+      });
+
+      expect(responses).toHaveLength(1);
+      expect(responses[0]).toMatchObject({
+        ok: false,
+        error: { message: 'Agent "codex" no longer exists in configuration' },
+      });
+    } finally {
+      testState.agentsConfig = undefined;
+      resetDirectChatSession();
+    }
+  });
+
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s projects the session's durable worker placement",
+    async (method) => {
+      openDirectChatSession();
+      try {
+        await writeMainSessionStore();
+        const placement = {
+          sessionId: "sess-main",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          executionMode: "worker-turn",
+          state: "active",
+          environmentId: "env-placement",
+          generation: 7,
+          activeOwnerEpoch: 12,
+          workspaceBaseManifestRef: "manifest-base",
+          remoteWorkspaceDir: "/workspace/main",
+          workerBundleHash: "ab".repeat(32),
+          recoveryError: null,
+          terminalReason: null,
+          terminalAtMs: null,
+          turnClaim: null,
+          createdAtMs: 100,
+          updatedAtMs: 300,
+          stateChangedAtMs: 200,
+        };
+        const context = createDirectChatContext({
+          workerSessionPlacementService: {
+            getMany: () => new Map([[placement.sessionId, placement]]),
+            getPlacementMoves: () => new Map(),
+          },
+        } as unknown as Partial<GatewayRequestContext>);
+        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+        await callDirectChat(method, {
+          id: method,
+          params: makeMainSessionParams(),
+          respond: captureChatResult(responses),
+          context,
+        });
+
+        expect(responses[0]?.ok).toBe(true);
+        // Clients merge this row into the same store sessions.list fills, so a
+        // missing placement here silently erases a live worker placement.
+        expect(
+          (responses[0]?.payload as { sessionInfo?: { placement?: { state?: string } } })
+            ?.sessionInfo?.placement,
+        ).toMatchObject({ state: "active", environmentId: "env-placement" });
+      } finally {
+        testState.sessionStorePath = undefined;
+        clearConfigCache();
+      }
+    },
+  );
+
   test.each(["chat.history", "chat.startup"] as const)(
     "%s replays the active plan snapshot in inFlightRun",
     async (method) => {
@@ -795,7 +967,7 @@ describe("gateway server chat", () => {
   );
 
   test.each(["chat.history", "chat.startup"] as const)(
-    "%s replays bounded active progress events in inFlightRun",
+    "%s retains completed tool owner events in bounded inFlightRun replay",
     async (method) => {
       const {
         createAgentEventHandler,
@@ -955,6 +1127,31 @@ describe("gateway server chat", () => {
             },
             {
               runId: "run-active",
+              seq: 4,
+              stream: "tool",
+              ts: 1_004,
+              sessionKey: "main",
+              data: {
+                phase: "start",
+                name: "exec",
+                toolCallId: "tool-finished",
+                args: {},
+              },
+            },
+            {
+              runId: "run-active",
+              seq: 5,
+              stream: "tool",
+              ts: 1_005,
+              sessionKey: "main",
+              data: {
+                phase: "result",
+                name: "exec",
+                toolCallId: "tool-finished",
+              },
+            },
+            {
+              runId: "run-active",
               seq: 6,
               stream: "item",
               ts: 1_006,
@@ -1069,7 +1266,9 @@ describe("gateway server chat", () => {
         modelOverride: "gpt-5",
         modelProvider: "openai",
         model: "gpt-5",
+        agentHarnessId: "openclaw",
         contextTokens: 128_000,
+        contextTokensSource: "runtime",
       });
       await writeMainSessionTranscript([
         createTextTranscriptEvent("user", "persisted metadata", { timestamp: updatedAt }),
@@ -1124,7 +1323,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.startup returns chat history with the initial agents list and provenance", async () => {
+  test("chat.startup returns warm metadata while agents.list owns roster provenance", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await writeGatewayConfig({
         agents: {
@@ -1163,18 +1362,10 @@ describe("gateway server chat", () => {
       await writeMainSessionTranscript([
         createTextTranscriptEvent("user", "startup hydrate", { timestamp: updatedAt }),
       ]);
+      const preparedMetadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
+      expect(preparedMetadata.ok).toBe(true);
 
       const startup = await rpcReq<{
-        agentsList?: {
-          agents?: Array<{
-            id?: string;
-            createdVia?: string;
-            creatorAgentId?: string | null;
-            createdAt?: number;
-          }>;
-          defaultId?: string | null;
-          mainKey?: string | null;
-        };
         metadata?: {
           commands?: Array<{ name?: string; textAliases?: string[] }>;
           models?: Array<{ id?: string; provider?: string }>;
@@ -1182,14 +1373,24 @@ describe("gateway server chat", () => {
         messages?: unknown[];
         sessionInfo?: { key?: string; sessionId?: string };
       }>(ws, "chat.startup", makeMainSessionParams());
+      const agents = await rpcReq<{
+        agents?: Array<{
+          id?: string;
+          createdVia?: string;
+          creatorAgentId?: string | null;
+          createdAt?: number;
+        }>;
+        defaultId?: string | null;
+        mainKey?: string | null;
+      }>(ws, "agents.list", {});
 
       expect(startup.ok).toBe(true);
-      expect(startup.payload?.agentsList?.defaultId).toBe("main");
-      expect(startup.payload?.agentsList?.mainKey).toBe("main");
-      expect(startup.payload?.agentsList?.agents?.map((agent) => agent.id)).toContain("main");
-      expect(
-        startup.payload?.agentsList?.agents?.find((agent) => agent.id === "research"),
-      ).toMatchObject({
+      expect(startup.payload).not.toHaveProperty("agentsList");
+      expect(agents.ok).toBe(true);
+      expect(agents.payload?.defaultId).toBe("main");
+      expect(agents.payload?.mainKey).toBe("main");
+      expect(agents.payload?.agents?.map((agent) => agent.id)).toContain("main");
+      expect(agents.payload?.agents?.find((agent) => agent.id === "research")).toMatchObject({
         createdVia: "agent",
         creatorAgentId: "main",
         createdAt: 42,
@@ -1294,14 +1495,59 @@ describe("gateway server chat", () => {
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
         | {
-            agentsList?: { agents?: Array<{ id?: string }> };
             metadata?: unknown;
             sessionInfo?: { sessionId?: string };
           }
         | undefined;
       expect(payload?.sessionInfo?.sessionId).toBe("sess-main");
-      expect(payload?.agentsList?.agents?.map((agent) => agent.id)).toContain("main");
       expect(payload?.metadata).toBeUndefined();
+    } finally {
+      testState.sessionStorePath = undefined;
+    }
+  });
+
+  test("chat.startup returns a profile-neutral transcript while metadata replacement is pending", async () => {
+    openDirectChatSession();
+    try {
+      await writeStoredMainSession();
+      await writeMainSessionTranscript([
+        createTextTranscriptEvent("user", "paint without metadata"),
+      ]);
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+      const metadataRuntime = createGatewayChatMetadataRuntime({
+        getConfig: () => ({}),
+        getContext: () => context,
+        log: context.logGateway,
+      });
+      context.readChatStartupProjection = metadataRuntime.readStartup;
+      metadataRuntime.invalidate();
+
+      const startup = callDirectChat("chat.startup", {
+        id: "startup-neutral-pending-metadata",
+        params: makeMainSessionParams(),
+        respond: captureChatResponse(responses),
+        context,
+      });
+
+      try {
+        await vi.waitFor(() => expect(responses).toHaveLength(1), FAST_WAIT_OPTS);
+        expect(responses[0]).toMatchObject({
+          ok: true,
+          payload: {
+            messages: [
+              expect.objectContaining({
+                role: "user",
+                content: [{ type: "text", text: "paint without metadata" }],
+              }),
+            ],
+          },
+        });
+        expect(responses[0]?.payload).not.toHaveProperty("metadata");
+      } finally {
+        metadataRuntime.fail(new Error("test metadata replacement stopped"));
+        await startup;
+      }
     } finally {
       testState.sessionStorePath = undefined;
     }
@@ -1524,7 +1770,6 @@ describe("gateway server chat", () => {
           const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
           const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
             await import("./server-methods/models-list-result.js");
-          const { listAgentsForGateway } = await import("./session-utils.js");
           const projectionByKey = new Map<
             string,
             Promise<{
@@ -1595,10 +1840,9 @@ describe("gateway server chat", () => {
                 ...catalogSnapshot,
               }),
             getRuntimeConfig: () => persistedConfig,
-            readChatStartupProjection: vi.fn(async ({ agentId, sessionEntry, includeSystem }) => {
-              const [mainProjection, workProjection, sessionProjection] = await Promise.all([
-                projectAgent(context, "main"),
-                projectAgent(context, "work"),
+            readChatStartupProjection: vi.fn(async ({ agentId, sessionEntry }) => {
+              const [neutralProjection, sessionProjection] = await Promise.all([
+                projectAgent(context, agentId),
                 projectAgent(context, agentId, sessionEntry),
               ]);
               preparedThinkingPolicy.fallback = sessionProjection.modelCatalog.some(
@@ -1609,14 +1853,7 @@ describe("gateway server chat", () => {
               return {
                 metadata: sessionProjection.metadata,
                 sessionModelCatalog: sessionProjection.modelCatalog,
-                defaultModelCatalog: mainProjection.modelCatalog,
-                agentsList: listAgentsForGateway(persistedConfig, mainProjection.modelCatalog, {
-                  modelCatalogByAgentId: new Map([
-                    ["main", mainProjection.modelCatalog],
-                    ["work", workProjection.modelCatalog],
-                  ]),
-                  includeSystem,
-                }),
+                defaultModelCatalog: neutralProjection.modelCatalog,
               };
             }),
           });
@@ -1648,9 +1885,6 @@ describe("gateway server chat", () => {
                 metadata?: { models?: unknown[] };
                 sessionInfo?: { thinkingLevels?: Array<{ id?: string }> };
                 defaults?: { thinkingLevels?: Array<{ id?: string }> };
-                agentsList?: {
-                  agents?: Array<{ id?: string; thinkingLevels?: Array<{ id?: string }> }>;
-                };
               }
             | undefined;
           expect(payload?.metadata?.models).toEqual([
@@ -1661,6 +1895,7 @@ describe("gateway server chat", () => {
               agentRuntime: {
                 id: "codex",
                 cloudPlacementSupported: false,
+                devicePlacementSupported: false,
                 source: "implicit",
               },
               contextWindow: 400_000,
@@ -1670,10 +1905,6 @@ describe("gateway server chat", () => {
           ]);
           expect(payload?.sessionInfo?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
           expect(payload?.defaults?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
-          const mainAgent = payload?.agentsList?.agents?.find((agent) => agent.id === "main");
-          const workAgent = payload?.agentsList?.agents?.find((agent) => agent.id === "work");
-          expect(mainAgent?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
-          expect(workAgent?.thinkingLevels?.map((level) => level.id)).toContain("high");
           const serialized = JSON.stringify(responses[0]?.payload);
           expect(serialized).not.toContain("private-route-token");
           expect(serialized).not.toContain("platform-api-key");
@@ -1750,6 +1981,8 @@ describe("gateway server chat", () => {
         },
       });
       await connectOk(ws);
+      const preparedMetadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
+      expect(preparedMetadata.ok).toBe(true);
 
       const startup = await rpcReq<{
         metadata?: { models?: Array<{ id?: string; provider?: string }> };
@@ -1815,7 +2048,7 @@ describe("gateway server chat", () => {
       } as unknown as OpenClawConfig;
       await writeGatewayConfig(config);
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-      const readChatMetadata = vi.fn(async () => ({
+      const metadata = {
         models: [
           {
             id: "MiniMax-M2.7-highspeed",
@@ -1824,6 +2057,11 @@ describe("gateway server chat", () => {
           },
         ],
         swarmEnabled: false,
+      };
+      const readChatStartupProjection = vi.fn(async () => ({
+        metadata,
+        sessionModelCatalog: metadata.models,
+        defaultModelCatalog: metadata.models,
       }));
       const context = createDirectChatContext({
         loadGatewayModelCatalogSnapshot: vi
@@ -1854,7 +2092,7 @@ describe("gateway server chat", () => {
             };
           }),
         getRuntimeConfig: () => config,
-        readChatMetadata,
+        readChatStartupProjection,
       });
       await callDirectChat("chat.startup", {
         id: "startup-agent-scoped-metadata",
@@ -1864,12 +2102,13 @@ describe("gateway server chat", () => {
       });
 
       expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-      expect(readChatMetadata).toHaveBeenCalledWith(
+      expect(readChatStartupProjection).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "work",
           sessionEntry: expect.objectContaining({ sessionId: "sess-work" }),
         }),
       );
+      expect(context.readChatMetadata).not.toHaveBeenCalled();
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
@@ -2957,6 +3196,9 @@ describe("gateway server chat", () => {
     const dispatchRelease = createDeferred();
     try {
       await writeStoredMainSession(makeDoneSessionEntry());
+      await patchSessionEntryCore({ sessionKey: "agent:main:main", storePath }, () => ({
+        lastRunId: "previous-run",
+      }));
       const context = createDirectChatContext();
       dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
       let snapshotAtAck:
@@ -2989,6 +3231,7 @@ describe("gateway server chat", () => {
         sessionId: "sess-main",
         status: "running",
       });
+      expect(snapshotAtAck?.entry?.lastRunId).toBeUndefined();
       expect(snapshotAtAck?.entry?.restartRecoveryDeliveryContext).toBeUndefined();
       expect(snapshotAtAck?.events).toEqual(
         expect.arrayContaining([
@@ -3346,6 +3589,7 @@ describe("gateway server chat", () => {
       const stored = loadSessionEntry(scope);
       expect(stored).toMatchObject({
         abortedLastRun: !retryable,
+        lastRunId: runId,
         sessionId: "sess-main",
         status: "killed",
       });
@@ -5982,6 +6226,53 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history retains a completed command's Guardian review details", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      const toolCallId = "exec-guardian-approved";
+      const review = {
+        id: "review-guardian-approved",
+        label: "Guardian",
+        status: "approved",
+        riskLevel: "low",
+        userAuthorization: "high",
+        rationale: "The command is local and read-only.",
+      };
+      await writeMainSessionTranscript([
+        {
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: toolCallId, name: "exec", arguments: {} }],
+          },
+        },
+        makeTranscriptTextEvent("Command completed.", {
+          role: "toolResult",
+          message: {
+            toolCallId,
+            toolName: "exec",
+            details: {
+              approvalReviews: [review],
+              approvalReviewOutcome: "approved",
+              internal: "not for display",
+            },
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws);
+      expect(messages).toHaveLength(2);
+      expect(messages[1]).toMatchObject({
+        role: "toolResult",
+        toolCallId,
+        details: {
+          approvalReviews: [review],
+          approvalReviewOutcome: "approved",
+        },
+      });
+      expect(messages[1]).not.toHaveProperty("details.internal");
+    });
+  });
+
   test("chat.history preserves quoted inline directives verbatim", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
@@ -6117,12 +6408,19 @@ describe("gateway server chat", () => {
 
       const historyMessages = await fetchHistoryMessages(ws, { maxChars: 5 });
       expect(JSON.stringify(historyMessages)).toContain("abcde\\n...(truncated)...");
+      // The capped row is structurally marked so a client can detect the bounded
+      // preview without sniffing the sentinel, then fetch the durable content.
+      expect(
+        (historyMessages[0] as Record<string, unknown> | undefined)?.["__openclaw"],
+      ).toMatchObject({ truncated: true, reason: "display-cap" });
 
       const full = await fetchChatMessage(ws, makeMainMessageParams("msg-full-assistant"));
       expect(full.ok).toBe(true);
       expect(full.unavailableReason).toBeUndefined();
       expect(JSON.stringify(full.message)).toContain("abcdefghij");
       expect(JSON.stringify(full.message)).not.toContain("...(truncated)...");
+      const fullMeta = (full.message as Record<string, unknown> | undefined)?.["__openclaw"];
+      expect((fullMeta as { truncated?: unknown } | undefined)?.truncated).toBeUndefined();
     });
   });
 

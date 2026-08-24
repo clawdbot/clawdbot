@@ -51,6 +51,7 @@ export const SessionRowSchema = Type.Object(
     ]),
     label: Type.Optional(Type.String()),
     icon: Type.Optional(Type.String()),
+    channelAvatarUrl: Type.Optional(NonEmptyString),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),
@@ -78,6 +79,7 @@ export const SessionRowSchema = Type.Object(
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(
       Type.Union([
+        Type.Literal("queued"),
         Type.Literal("running"),
         Type.Literal("done"),
         Type.Literal("failed"),
@@ -86,6 +88,8 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     lastRunError: Type.Optional(Type.String()),
+    /** Exact run that produced the latest terminal lifecycle projection. */
+    lastRunId: Type.Optional(NonEmptyString),
     restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),

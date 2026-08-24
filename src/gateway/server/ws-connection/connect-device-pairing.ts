@@ -36,7 +36,11 @@ import { shouldAutoApproveNodePairingFromTrustedCidrs } from "../../node-pairing
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { applyConnectionScopeCap } from "./connect-admission.js";
+import {
+  applyConnectionScopeCap,
+  isStartupNodeBootstrapConnect,
+  rejectGatewayStartupConnect,
+} from "./connect-admission.js";
 import {
   isControlUiOwnerBootstrapProfile,
   isControlUiOperatorBootstrapProfile,
@@ -300,6 +304,20 @@ export async function authorizeGatewayConnectDevice(
     skipLocalBackendSelfPairing,
     controlUiPairingKind,
   } = state;
+  const roleConfiguredHumanOperator = role === "operator" && Boolean(configSnapshot.gateway?.roles);
+  const sharedSecretOwner = authMethod === "token" || authMethod === "password";
+  if (roleConfiguredHumanOperator && !sharedSecretOwner && !authResult.user?.trim()) {
+    const message = "operator role policies require a verified user identity";
+    setHandshakeState("failed");
+    send({
+      type: "res",
+      id: frame.id,
+      ok: false,
+      error: errorShape(ErrorCodes.NOT_PAIRED, message),
+    });
+    close(1008, truncateCloseReason(message));
+    return undefined;
+  }
   let hasServerApprovedDeviceTokenBaseline = false;
   let pairedClientId: string | undefined;
   let pairedBrowserOrigin: string | undefined;
@@ -623,6 +641,14 @@ export async function authorizeGatewayConnectDevice(
 
     const paired = await getPairedDevice(device.id);
     const isPaired = paired?.publicKey === devicePublicKey;
+    if (
+      state.startupPending &&
+      !isStartupNodeBootstrapConnect(connectParams) &&
+      (!paired || !isPaired || !hasEffectivePairedDeviceRole(paired, "node") || !paired.nodeSurface)
+    ) {
+      await rejectGatewayStartupConnect(context);
+      return undefined;
+    }
     const pairingRecordDoesNotAuthorizeSession =
       skipLocalBackendSelfPairing || controlUiPairingKind === "auth-none";
     if (pairingRecordDoesNotAuthorizeSession) {
@@ -696,11 +722,16 @@ export async function authorizeGatewayConnectDevice(
     return undefined;
   }
 
-  const { deviceToken, bootstrapDeviceTokens } = await issueGatewayConnectDeviceTokens({
-    state: { ...state, scopes, handoffBootstrapProfile },
-    scopes,
-    hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
-  });
+  // Device tokens do not carry profile identity and existing broader grants may be reused.
+  // Team-role operators must reauthenticate as their verified person on every connection.
+  const { deviceToken, bootstrapDeviceTokens } =
+    roleConfiguredHumanOperator && authResult.user?.trim()
+      ? { deviceToken: null, bootstrapDeviceTokens: [] }
+      : await issueGatewayConnectDeviceTokens({
+          state: { ...state, scopes, handoffBootstrapProfile },
+          scopes,
+          hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
+        });
 
   return {
     ...state,

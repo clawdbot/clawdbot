@@ -31,7 +31,12 @@ import {
   resolveCronTaskRecordTimestamp,
 } from "../task-run-detail.js";
 import { cronRunLogEntryFromEvent } from "../task-run-event-codec.js";
-import type { CronJob, CronRunErrorClassification, CronRunStatus } from "../types.js";
+import type {
+  CronCompletionStatus,
+  CronJob,
+  CronRunErrorClassification,
+  CronRunStatus,
+} from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
@@ -263,6 +268,7 @@ export function tryFinishCronTaskRunWithoutHistory(
   result: {
     taskRunId?: string;
     status: "ok" | "error" | "skipped";
+    completionStatus?: CronCompletionStatus;
     error?: unknown;
     endedAt: number;
     summary?: string;
@@ -286,7 +292,11 @@ export function tryFinishCronTaskRunWithoutHistory(
     finalizeTaskRunByRunIdCore({
       runId: result.taskRunId,
       runtime: "cron",
-      status: cronRunStatusToTaskStatus({ status: result.status, error }),
+      status: cronRunStatusToTaskStatus({
+        status: result.status,
+        completionStatus: quietTriggerEval ? "succeeded" : result.completionStatus,
+        error,
+      }),
       endedAt: result.endedAt,
       lastEventAt: result.endedAt,
       error,

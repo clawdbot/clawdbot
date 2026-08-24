@@ -50,6 +50,8 @@ pr_wrapper_components=(
   scripts/lib/plain-gh.mjs
   scripts/lib/direct-run.mjs
   scripts/lib/tsx-cli-shim.mjs
+  scripts/verify-pr-hosted-gates.mjs
+  scripts/verify-pr-hosted-gates.mts
   scripts/watch-pr-ci.mjs
   scripts/watch-pr-ci.mts
 )
@@ -238,8 +240,9 @@ require_cmds() {
 
 require_main_target_pr() {
   local pr="$1"
-  local base
-  base=$(gh pr view "$pr" --json baseRefName --jq .baseRefName)
+  local base base_json
+  base_json=$(read_pr_view_json "$pr" "baseRefName") || exit 1
+  base=$(pr_view_string_field "$base_json" "baseRefName" "$pr" "Retry the scripts/pr command.") || exit 1
   if [ "$base" != "main" ]; then
     echo "scripts/pr prepare and merge commands only support PRs targeting main; PR #$pr targets $base." >&2
     echo "Use the reviewed release-branch landing flow for non-main PRs." >&2

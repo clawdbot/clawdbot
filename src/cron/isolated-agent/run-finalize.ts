@@ -5,10 +5,20 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
+import { resolveAuthoredModelContextTokens } from "../../agents/context-resolution.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { hasIntentionalTerminalCompletion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import {
+  CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
+  isEmbeddedRunTerminalToolFailure,
+} from "../../agents/embedded-agent-runner/terminal-tool-failure.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
+import {
+  resolveProjectedSessionContextTokens,
+  resolveTrustedSessionContextTokens,
+} from "../../config/sessions/context-token-provenance.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -26,13 +36,16 @@ import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import { buildCronDeliveryTrace, loadCronDeliveryRuntime } from "./run-delivery-trace.js";
 import type { PreparedCronRunContext } from "./run-prepare.js";
-import { adoptCronRunSessionMetadata } from "./run-session-state.js";
+import {
+  adoptCronRunSessionMetadata,
+  setCronSessionAgentHarnessId,
+  setCronSessionRuntimeModel,
+} from "./run-session-state.js";
 import {
   DEFAULT_CONTEXT_TOKENS,
   deriveSessionTotalTokens,
   hasNonzeroUsage,
   isCliProvider,
-  setSessionRuntimeModel,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
@@ -91,22 +104,62 @@ export async function finalizeCronRun(params: {
     finalRunResult.meta?.agentMeta?.provider ??
     execution.fallbackProvider ??
     execution.liveSelection.provider;
-  const contextTokens =
-    (await cronContextRuntimeLoader.load()).resolveContextTokensForModel({
-      cfg: prepared.cfgWithAgentDefaults,
-      provider: providerUsed,
-      model: modelUsed,
-      allowAsyncLoad: false,
-    }) ??
-    resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
-    DEFAULT_CONTEXT_TOKENS;
+  const runtimeContextTokens = resolvePositiveContextTokens(
+    finalRunResult.meta?.agentMeta?.contextTokens,
+  );
+  const modelContextTokens = (await cronContextRuntimeLoader.load()).resolveContextTokensForModel({
+    cfg: prepared.cfgWithAgentDefaults,
+    provider: providerUsed,
+    model: modelUsed,
+    allowAsyncLoad: false,
+  });
+  const agentHarnessId = normalizeOptionalString(finalRunResult.meta?.agentMeta?.agentHarnessId);
+  const authoredContextTokens = resolveAuthoredModelContextTokens({
+    cfg: prepared.cfgWithAgentDefaults,
+    provider: providerUsed,
+    model: modelUsed,
+  });
+  const retainedRuntimeContextTokens = resolveTrustedSessionContextTokens({
+    entry: prepared.cronSession.sessionEntry,
+    provider: providerUsed,
+    model: modelUsed,
+    agentHarnessId,
+  });
+  const projectedContextTokens = resolveProjectedSessionContextTokens({
+    entry: prepared.cronSession.sessionEntry,
+    provider: providerUsed,
+    model: modelUsed,
+    agentHarnessId,
+    resolvedContextTokens: modelContextTokens,
+    authoredContextTokens,
+  });
+  const contextTokens = runtimeContextTokens ?? projectedContextTokens ?? DEFAULT_CONTEXT_TOKENS;
+  // Preserve persisted provenance only when the projector selected that owner;
+  // a current/authored clamp stays resolved so removed caps cannot stick.
+  const projectedUsesPersistedContext =
+    retainedRuntimeContextTokens !== undefined &&
+    (prepared.cronSession.sessionEntry.modelSelectionLocked === true ||
+      (authoredContextTokens === undefined &&
+        projectedContextTokens === retainedRuntimeContextTokens));
+  const contextTokensSource =
+    runtimeContextTokens !== undefined
+      ? (finalRunResult.meta?.agentMeta?.contextTokensSource ?? "resolved")
+      : projectedUsesPersistedContext
+        ? prepared.cronSession.sessionEntry.contextTokensSource
+        : "resolved";
 
   if (!params.isAborted()) {
-    setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
+    setCronSessionRuntimeModel({
+      entry: prepared.cronSession.sessionEntry,
       provider: providerUsed,
       model: modelUsed,
     });
+    setCronSessionAgentHarnessId({
+      entry: prepared.cronSession.sessionEntry,
+      agentHarnessId,
+    });
     prepared.cronSession.sessionEntry.contextTokens = contextTokens;
+    prepared.cronSession.sessionEntry.contextTokensSource = contextTokensSource;
     if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
       const cliSessionBinding = finalRunResult.meta?.agentMeta?.cliSessionBinding;
       const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
@@ -148,10 +201,6 @@ export async function finalizeCronRun(params: {
     );
     prepared.cronSession.sessionEntry.inputTokens = input;
     prepared.cronSession.sessionEntry.outputTokens = output;
-    const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
-      input_tokens: input,
-      output_tokens: output,
-    };
     const bucketTotalTokens = input + output + cacheRead + cacheWrite;
     // Keep telemetry totals consistent when a provider reports only a partial
     // aggregate alongside the normalized billing buckets.
@@ -159,9 +208,13 @@ export async function finalizeCronRun(params: {
       typeof usage.total === "number" && Number.isFinite(usage.total)
         ? Math.max(bucketTotalTokens, usage.total)
         : bucketTotalTokens;
-    if (aggregateTotalTokens > 0) {
-      telemetryUsage.total_tokens = aggregateTotalTokens;
-    }
+    const telemetryUsage: NonNullable<CronRunTelemetry["usage"]> = {
+      input_tokens: input,
+      output_tokens: output,
+      ...(aggregateTotalTokens > 0 ? { total_tokens: aggregateTotalTokens } : {}),
+      ...(cacheRead > 0 ? { cache_read_tokens: cacheRead } : {}),
+      ...(cacheWrite > 0 ? { cache_write_tokens: cacheWrite } : {}),
+    };
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
@@ -300,6 +353,11 @@ export async function finalizeCronRun(params: {
     hasFatalErrorPayload,
     embeddedRunError,
   } = cronPayloadOutcome;
+  const terminalToolFailure = finalRunResult.meta?.terminalToolFailure;
+  const hasTerminalToolFailure = isEmbeddedRunTerminalToolFailure(terminalToolFailure);
+  if (hasFatalErrorPayload && hasTerminalToolFailure) {
+    summary = CODE_MODE_MCP_CATALOG_MISS_MESSAGE;
+  }
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
@@ -323,7 +381,7 @@ export async function finalizeCronRun(params: {
       delivery: result?.delivery,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
-        hasFatalErrorPayload
+        hasFatalErrorPayload && !hasTerminalToolFailure
           ? createCronRunDiagnosticsFromError(
               "agent-run",
               embeddedRunError ?? "cron isolated run returned an error payload",
@@ -366,13 +424,16 @@ export async function finalizeCronRun(params: {
     didSendViaMessageTool: finalRunResult.didSendViaMessagingTool,
     messageToolSentTargets: finalRunResult.messagingToolSentTargets,
   });
+  let queueSourceSessionMessageToolAwareness: (() => Promise<void>) | undefined;
   if (sourceDeliveryOutcome.visibleDeliveries.length > 0) {
     const { queueCronMessageToolDeliveryAwareness } = await loadCronDeliveryRuntime();
-    await queueCronMessageToolDeliveryAwareness({
+    queueSourceSessionMessageToolAwareness = await queueCronMessageToolDeliveryAwareness({
       cfg: prepared.cfgWithAgentDefaults,
       job: prepared.input.job,
       agentId: prepared.agentId,
       agentSessionKey: prepared.agentSessionKey,
+      deferredTargetSessionKey:
+        prepared.input.job.sessionTarget === "current" ? prepared.sourceSessionKey : undefined,
       runStartedAt: execution.runStartedAt,
       resolvedDelivery: prepared.resolvedDelivery,
       sourceDeliveryOutcome,
@@ -393,9 +454,11 @@ export async function finalizeCronRun(params: {
     !sourceDeliveryOutcome.satisfiesSourceDelivery &&
     !hasCommittedTerminalProgress &&
     !hasIntentionalSilentReply &&
+    !hasIntentionalTerminalCompletion(finalRunResult) &&
     deliveryPayloads.length === 0 &&
     normalizeOptionalString(synthesizedText) === undefined
   ) {
+    await queueSourceSessionMessageToolAwareness?.();
     const error = "cron isolated run completed without a final assistant payload";
     return prepared.withRunSession({
       status: "error",
@@ -422,6 +485,7 @@ export async function finalizeCronRun(params: {
       fallbackUsed: false,
       delivered: sourceDeliveryOutcome.verifiedMessageToolDelivery,
     });
+    await queueSourceSessionMessageToolAwareness?.();
     return resolveRunOutcome({
       delivered: sourceDeliveryOutcome.verifiedMessageToolDelivery,
       deliveryAttempted: sourceDeliveryOutcome.verifiedMessageToolDelivery,
@@ -436,6 +500,7 @@ export async function finalizeCronRun(params: {
     job: prepared.input.job,
     agentId: prepared.agentId,
     agentSessionKey: prepared.agentSessionKey,
+    sourceSessionKey: prepared.sourceSessionKey,
     runSessionKey: prepared.runSessionKey,
     sessionId: prepared.currentRunSessionId(),
     lifecycleRevision: prepared.cronSession.lifecycleRevision,
@@ -449,6 +514,7 @@ export async function finalizeCronRun(params: {
     skipHeartbeatDelivery,
     spawnOnlyHandoff,
     sourceDeliveryOutcome,
+    queueSourceSessionMessageToolAwareness,
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,

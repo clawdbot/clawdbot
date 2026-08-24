@@ -16,18 +16,19 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "22.22.3"
+          cache-mode: restore
+          node-version: "22.23.2"
           install-bun: "false"
 
       - name: Resolve trusted declaration cache artifact
         id: declaration_cache
         env:
-          ARTIFACT_NAME: build-all-cache-v1-Linux-X64-node-22.22.3
+          ARTIFACT_NAME: build-all-cache-v1-Linux-X64-node-22.23.2
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
@@ -115,7 +116,7 @@ jobs:
           compression-level: 1
           if-no-files-found: error
           include-hidden-files: true
-          name: build-all-cache-v1-${{ runner.os }}-${{ runner.arch }}-node-22.22.3
+          name: build-all-cache-v1-${{ runner.os }}-${{ runner.arch }}-node-22.23.2
           overwrite: true
           path: .artifacts/build-all-cache
           retention-days: 14

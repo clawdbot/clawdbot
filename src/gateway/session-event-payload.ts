@@ -28,14 +28,22 @@ export function buildGatewaySessionEventRow(
   return session;
 }
 
+/** Incremental events clear cached exact IDs when the current owner exposes only liveness. */
+export function projectSessionEventActiveRunIds(
+  state: { runIds?: string[] } | null | undefined,
+): string[] | null | undefined {
+  return state ? (state.runIds ?? null) : undefined;
+}
+
 export function buildGatewaySessionEventFields(params: {
   sessionRow: GatewaySessionRow;
   agentId?: string;
   label?: string;
   displayName?: string;
   parentSessionKey?: string;
+  status?: GatewaySessionRow["status"];
   hasActiveRun?: boolean;
-  activeRunIds?: string[];
+  activeRunIds?: string[] | null;
 }): Record<string, unknown> {
   const { sessionRow } = params;
   const omitUnscopedGlobalGoal = sessionRow.key === "global" && !params.agentId;
@@ -83,6 +91,7 @@ export function buildGatewaySessionEventFields(params: {
     previousSessionId: sessionRow.previousSessionId,
     label: params.label ?? sessionRow.label ?? null,
     icon: sessionRow.icon ?? null,
+    channelAvatarUrl: sessionRow.channelAvatarUrl ?? null,
     // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
     category: sessionRow.category ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
@@ -116,9 +125,11 @@ export function buildGatewaySessionEventFields(params: {
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
     agentRuntime: sessionRow.agentRuntime,
-    status: sessionRow.status,
+    status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.
     lastRunError: sessionRow.lastRunError ?? null,
+    // Explicit null lets a newer start evict the previous terminal run identity.
+    lastRunId: sessionRow.lastRunId ?? null,
     // Explicit false lets subscribed clients drop the flag during merge-reconcile.
     hasAutomation: sessionRow.hasAutomation ?? false,
     ...(params.hasActiveRun === undefined ? {} : { hasActiveRun: params.hasActiveRun }),

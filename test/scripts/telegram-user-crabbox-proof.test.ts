@@ -9,14 +9,18 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  COMMAND_TIMEOUT_MS,
   createContainerizedSutSpawnSpec,
+  createOpenClawGatewaySpawnSpec,
+  runSutContainerAction,
+  waitForLog,
+  writeSutConfig,
+} from "../../scripts/e2e/telegram-mantis-sut.ts";
+import {
+  COMMAND_TIMEOUT_MS,
   createCrabboxWarmupArgs,
   createOpenClawCliSpawnSpec,
-  createOpenClawGatewaySpawnSpec,
   parseArgs,
   processTargetExists,
-  readCodexProxyPort,
   readLogAfterOffset,
   readLogTail,
   readTelegramUserProofLogTailBytes,
@@ -30,25 +34,19 @@ import {
   renderTailscaleSshProxy,
   restartSessionGateway,
   runCommand,
-  runSutContainerAction,
   selectCrabboxSshPort,
-  signalCommandTree,
   signalPidTree,
   stageFullSessionArtifacts,
   startLocalSut,
-  waitForLog,
   waitForLogAfterOffset,
-  writeSutConfig,
 } from "../../scripts/e2e/telegram-user-crabbox-proof.ts";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const posixIt = process.platform === "win32" ? it.skip : it;
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
+// Proof subprocesses expose explicit ready files; the timeout only bounds broken fixtures and
+// must leave headroom for cold tsx startup on loaded maintainer hosts.
+const PROCESS_READY_TIMEOUT_MS = 30_000;
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -97,7 +95,10 @@ function runProofCli(args: string[]) {
   );
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = PROCESS_READY_TIMEOUT_MS,
+): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     if (predicate()) {
@@ -166,7 +167,6 @@ describe("telegram user Crabbox proof log polling", () => {
     const repoRoot = makeTempDir(tempDirs, "openclaw-telegram-proof-");
     const runtimeRoot = makeTempDir(tempDirs, "openclaw-telegram-proof-");
     const spec = createContainerizedSutSpawnSpec({
-      codexProxyPort: 43123,
       containerName: "openclaw-telegram-sut-test",
       gatewayEnv: {
         TELEGRAM_BOT_TOKEN: "telegram-burner-token",
@@ -183,6 +183,8 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(spec.args).toContain("/usr/local/sbin/openclaw-mantis-sut-container");
     expect(spec.args).toContain("run");
     expect(spec.args).toContain("candidate");
+    expect(spec.args.at(-2)).toBe("19042");
+    expect(spec.args.at(-1)).toBe("19043");
     expect(spec.args).not.toContain("docker");
     expect(spec.args.join("\n")).not.toContain("--preserve-env");
     expect(spec.args.join("\n")).not.toContain("CODEX_HOME");
@@ -194,20 +196,6 @@ describe("telegram user Crabbox proof log polling", () => {
       mockResponseText: "streamed response",
       telegramBotToken: "telegram-burner-token",
     });
-  });
-
-  it("reads only the loopback Responses proxy port from Codex config", () => {
-    const codexHome = makeTempDir(tempDirs, "openclaw-telegram-proof-");
-    fs.writeFileSync(
-      path.join(codexHome, "config.toml"),
-      '[model_providers.codex-action-responses-proxy]\nbase_url = "http://127.0.0.1:43123/v1"\n',
-    );
-    expect(readCodexProxyPort(codexHome)).toBe(43123);
-    fs.writeFileSync(
-      path.join(codexHome, "config.toml"),
-      '[model_providers.codex-action-responses-proxy]\nbase_url = "https://api.openai.com/v1"\n',
-    );
-    expect(readCodexProxyPort(codexHome)).toBeUndefined();
   });
 
   it("requires successful privileged SUT teardown commands", () => {
@@ -505,6 +493,7 @@ describe("telegram user Crabbox proof log polling", () => {
       gatewayPort: 19042,
       groupId: "group",
       mcpAppFixture: true,
+      mockHost: "127.0.0.1",
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       repoRoot: "/repo",
@@ -532,6 +521,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const configRoot = writeSutConfig({
       gatewayPort: 19042,
       groupId: "group",
+      mockHost: "127.0.0.1",
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -544,13 +534,15 @@ describe("telegram user Crabbox proof log polling", () => {
       executionIdentity: true,
       messages: "direct",
     });
+    expect(config.models.providers.openai.baseUrl).toBe("http://127.0.0.1:19043/v1");
   });
 
   it("injects the requested Telegram link-preview setting before startup", () => {
     const disabledConfigRoot = writeSutConfig({
+      configPatch: { channels: { telegram: { linkPreview: false } } },
       gatewayPort: 19042,
       groupId: "group",
-      linkPreview: false,
+      mockHost: "127.0.0.1",
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -558,6 +550,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const defaultConfigRoot = writeSutConfig({
       gatewayPort: 19044,
       groupId: "group",
+      mockHost: "127.0.0.1",
       mockPort: 19045,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -573,9 +566,16 @@ describe("telegram user Crabbox proof log polling", () => {
 
   it("injects the requested fixed human delay before startup", () => {
     const delayedConfigRoot = writeSutConfig({
+      configPatch: {
+        agents: {
+          defaults: {
+            humanDelay: { maxMs: 1200, minMs: 1200, mode: "custom" },
+          },
+        },
+      },
       gatewayPort: 19042,
       groupId: "group",
-      humanDelayFixedMs: 1200,
+      mockHost: "127.0.0.1",
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -583,6 +583,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const defaultConfigRoot = writeSutConfig({
       gatewayPort: 19044,
       groupId: "group",
+      mockHost: "127.0.0.1",
       mockPort: 19045,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -1193,75 +1194,6 @@ setInterval(() => {}, 1000);
         process.kill(grandchildPid, "SIGKILL");
       }
     }
-  });
-
-  it("signals Windows proof command process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalCommandTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    signalCommandTree(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows proof command process trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalCommandTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
   });
 
   posixIt("lets timed-out command descendants exit during kill grace", async () => {

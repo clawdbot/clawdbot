@@ -26,8 +26,16 @@ import { CONTEXT_ENGINE_TURN_OUTBOX_TABLE } from "./openclaw-agent-context-engin
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "./openclaw-agent-db-additive-columns.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
-import { ensureSessionEntryValidityProjection } from "./openclaw-agent-db-session-migrations.js";
+import {
+  ensureSessionAdditiveColumns,
+  ensureSessionEntryValidityProjection,
+} from "./openclaw-agent-db-session-migrations.js";
 import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
+import {
+  ensureOpenClawAgentProgressCardSchemaInTransaction,
+  AGENT_PROGRESS_CARD_SCHEMA_SQL,
+  SESSION_PROGRESS_CARDS_TABLE,
+} from "./openclaw-agent-progress-card-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { SESSION_PARTICIPANTS_TABLE } from "./openclaw-agent-session-participants-schema.js";
 import {
@@ -56,12 +64,14 @@ const AGENT_SCHEMA_COMPATIBILITY = {
     CONTEXT_ENGINE_TURN_OUTBOX_TABLE,
     MESSAGE_TOOL_RUN_OUTCOMES_TABLE,
     SESSION_PARTICIPANTS_TABLE,
+    SESSION_PROGRESS_CARDS_TABLE,
     SESSION_TRANSCRIPT_ARCHIVES_TABLE,
     STANDING_INTENTS_TABLE,
     STANDING_INTENTS_FTS_TABLE,
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
   allowedMissingColumns: [
+    "session_conversations.route_context_json",
     "session_participants.actor_source",
     "standing_intents.creator_sender",
     ...FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS.map(
@@ -180,6 +190,7 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
     );
   }
 
+  ensureSessionAdditiveColumns(database);
   ensureSessionEntryValidityProjection(database);
   ensureSessionKeyContractSchemaInTransaction(database);
 
@@ -202,6 +213,11 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
     assertSqliteSchemaTablesPresent(database, options.pathname, AGENT_V14_BOARD_SCHEMA_SQL);
     ensureOpenClawAgentBoardSchemaInTransaction(database);
     repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_V14_BOARD_SCHEMA_SQL);
+  }
+  if (hasAnyCanonicalTable(database, AGENT_PROGRESS_CARD_SCHEMA_SQL)) {
+    assertSqliteSchemaTablesPresent(database, options.pathname, AGENT_PROGRESS_CARD_SCHEMA_SQL);
+    ensureOpenClawAgentProgressCardSchemaInTransaction(database);
+    repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_PROGRESS_CARD_SCHEMA_SQL);
   }
 }
 

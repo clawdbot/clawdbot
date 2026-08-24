@@ -1434,6 +1434,32 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Ready for operator review.");
   });
 
+  it("renders a queued linked session without running copy", () => {
+    const { state, container, renderView } = createWorkboardView({
+      sessions: [
+        {
+          key: "agent:main:queued",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: true,
+          status: "queued",
+        },
+      ],
+    });
+    state.cards = [
+      createWorkboardCard({
+        status: "todo",
+        sessionKey: "agent:main:queued",
+      }),
+    ];
+    renderView();
+
+    expect(container.querySelector(".workboard-lifecycle")?.textContent?.trim()).toBe("Queued");
+    expect(container.querySelector(".workboard-card__lifecycle-detail")?.textContent?.trim()).toBe(
+      "Waiting for a concurrency slot",
+    );
+  });
+
   it("uses terminal session lifecycle when cached task status is stale", () => {
     const { state, container, renderView } = createWorkboardView({
       sessions: [
@@ -2524,10 +2550,8 @@ describe("renderWorkboard", () => {
 
     expect(request).toHaveBeenCalledWith("workboard.cards.update", {
       id: card.id,
-      patch: expect.objectContaining({
-        title: "Renamed without unlinking",
-        sessionKey: testCase.sessionKey,
-      }),
+      expectedUpdatedAt: card.updatedAt,
+      patch: { title: "Renamed without unlinking" },
     });
     expect(state.cards[0]?.execution?.sessionKey).toBe("agent:main:execution-linked-session");
     renderView();
@@ -2557,6 +2581,7 @@ describe("renderWorkboard", () => {
         ? {
             card: {
               ...state.cards[0],
+              updatedAt: 2,
               metadata: {
                 comments: [
                   ...(state.cards[0]?.metadata?.comments ?? []),
@@ -2570,7 +2595,7 @@ describe("renderWorkboard", () => {
               ...state.cards[0],
               title: "Renamed",
               priority: "high",
-              updatedAt: 2,
+              updatedAt: 3,
             },
           },
     );
@@ -2596,6 +2621,10 @@ describe("renderWorkboard", () => {
     expect(container.querySelector("openclaw-modal-dialog")?.textContent).toContain(
       "Needs owner check",
     );
+    const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
+    expect(title?.value).toBe("Rename me");
+    title!.value = "Renamed";
+    title!.dispatchEvent(new InputEvent("input", { bubbles: true }));
     const commentInput = container.querySelector<HTMLTextAreaElement>(".workboard-comments__input");
     commentInput!.value = "Ship after CI";
     commentInput!.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -2613,10 +2642,10 @@ describe("renderWorkboard", () => {
     expect(state.cards[0]?.metadata?.comments?.at(-1)?.body).toBe("Ship after CI");
     render(renderWorkboard(props), container);
 
-    const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
-    expect(title?.value).toBe("Rename me");
-    title!.value = "Renamed";
-    title!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
+      "Renamed",
+    );
+    expect(state.editingCardBase?.updatedAt).toBe(2);
     const priority = [
       ...(container
         .querySelector(".workboard-draft")
@@ -2631,12 +2660,13 @@ describe("renderWorkboard", () => {
 
     expect(request).toHaveBeenCalledWith("workboard.cards.update", {
       id: "card-1",
-      patch: expect.objectContaining({
-        title: "Renamed",
-        priority: "high",
-      }),
+      expectedUpdatedAt: 2,
+      patch: { title: "Renamed", priority: "high" },
     });
-    expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 2 });
+    expect(
+      request.mock.calls.filter(([method]) => method === "workboard.cards.update"),
+    ).toHaveLength(1);
+    expect(state.cards[0]).toMatchObject({ title: "Renamed", priority: "high", updatedAt: 3 });
 
     render(renderWorkboard(props), container);
     expect(container.querySelector("openclaw-modal-dialog")).toBeNull();

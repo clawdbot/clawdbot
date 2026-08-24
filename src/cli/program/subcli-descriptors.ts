@@ -46,6 +46,12 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "telemetry",
+    description: "Inspect and manage anonymous usage telemetry",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
     name: "infer",
     description: "Run provider-backed inference commands through a stable CLI surface",
     hasSubcommands: true,

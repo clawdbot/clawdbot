@@ -59,6 +59,8 @@ type ProviderCall = {
 };
 
 type ProviderControls = {
+  embedQueryCalls: number;
+  embeddedQueryTexts: string[];
   embedBatchCalls: number;
   embeddedBatchTexts: string[];
   embedBatchInputCalls: number;
@@ -100,6 +102,7 @@ export type ManagerIndexFixture = {
   getFreshManager: (
     cfg: ManagerConfig,
     purpose?: "default" | "status" | "cli",
+    inspectSources?: boolean,
   ) => Promise<MemoryIndexManager>;
   getFtsSessionManager: (params: { stateDirName: string }) => Promise<MemoryIndexManager | null>;
   seedSessionTranscript: (params: {
@@ -117,6 +120,8 @@ export type ManagerIndexFixture = {
 };
 
 const providerState = vi.hoisted(() => ({
+  embedQueryCalls: 0,
+  embeddedQueryTexts: [] as string[],
   embedBatchCalls: 0,
   embeddedBatchTexts: [] as string[],
   embedBatchInputCalls: 0,
@@ -257,7 +262,11 @@ vi.mock("./embeddings.js", async (importOriginal) => {
               throw providerState.providerCloseFailure;
             }
           },
-          embedQuery: async (text: string) => embedText(text),
+          embedQuery: async (text: string) => {
+            providerState.embedQueryCalls += 1;
+            providerState.embeddedQueryTexts.push(text);
+            return embedText(text);
+          },
           embedBatch: async (texts: string[]) => {
             providerState.embedBatchCalls += 1;
             providerState.embeddedBatchTexts.push(...texts);
@@ -465,9 +474,10 @@ export function createManagerIndexFixture(deps: {
   const getFreshManager = async (
     cfg: ManagerConfig,
     purpose?: "default" | "status" | "cli",
+    inspectSources?: boolean,
   ): Promise<MemoryIndexManager> => {
     const manager = requireManager(
-      await deps.getMemorySearchManager({ cfg, agentId: "main", purpose }),
+      await deps.getMemorySearchManager({ cfg, agentId: "main", purpose, inspectSources }),
     );
     trackManager(manager);
     return manager;
@@ -548,6 +558,8 @@ export function createManagerIndexFixture(deps: {
   beforeEach(async () => {
     vi.useRealTimers();
     clearRegistry();
+    providerState.embedQueryCalls = 0;
+    providerState.embeddedQueryTexts = [];
     providerState.embedBatchCalls = 0;
     providerState.embeddedBatchTexts = [];
     providerState.embedBatchInputCalls = 0;

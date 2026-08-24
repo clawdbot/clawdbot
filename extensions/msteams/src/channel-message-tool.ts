@@ -13,7 +13,7 @@ export function describeMSTeamsMessageTool({
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
   const account = resolveMSTeamsAccount({ cfg, accountId });
-  const enabled = account.enabled && account.configured;
+  const enabled = account.enabled && account.configured && account.tokenStatus === "available";
   return {
     actions: enabled
       ? ([

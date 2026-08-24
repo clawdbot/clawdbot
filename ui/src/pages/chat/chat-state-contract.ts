@@ -7,7 +7,6 @@ import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { LocalTerminalReconcile } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
-import type { PlanStatus } from "./tool-stream.ts";
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
@@ -43,14 +42,12 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunStartup?: ChatRunStartupState | null;
-  planStatus?: PlanStatus | null;
   lastError: string | null;
   chatError?: string | null;
   chatRunError?: { summary: string } | null;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
-  onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => boolean;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;
   agentsList?: ChatAgentsListSnapshot | null;

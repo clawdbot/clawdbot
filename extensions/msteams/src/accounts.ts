@@ -4,6 +4,7 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -16,6 +17,11 @@ export type ResolvedMSTeamsAccount = {
   accountId: string;
   enabled: boolean;
   configured: boolean;
+  tokenStatus: "available" | "configured_unavailable" | "missing";
+  credentialDiagnostics?: Extract<
+    ReturnType<typeof tryReadSecretFileSync>,
+    { status: "configured_unavailable" }
+  >["diagnostic"][];
   config: MSTeamsConfig;
 };
 
@@ -31,6 +37,10 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("ms
 
 export const listMSTeamsAccountIds = listAccountIds;
 export const resolveDefaultMSTeamsAccountId = resolveDefaultAccountId;
+
+function resolveMSTeamsChannelConfig(cfg: OpenClawConfig): MSTeamsMultiAccountConfig | undefined {
+  return cfg.channels?.msteams as MSTeamsMultiAccountConfig | undefined; // SAFETY: the public config contract owns these optional fields.
+}
 
 export function withAccountScopedMSTeamsConfig(params: {
   cfg: OpenClawConfig;
@@ -57,12 +67,20 @@ function resolveMSTeamsAccountEntry(
   accounts: Record<string, Partial<MSTeamsConfig>> | undefined,
   accountId: string,
 ): Partial<MSTeamsConfig> | undefined {
+  const key = resolveMSTeamsAccountEntryKey(accounts, accountId);
+  return key ? accounts?.[key] : undefined;
+}
+
+function resolveMSTeamsAccountEntryKey(
+  accounts: Record<string, Partial<MSTeamsConfig>> | undefined,
+  accountId: string,
+): string | undefined {
   if (!accounts) {
     return undefined;
   }
-  for (const [key, value] of Object.entries(accounts)) {
+  for (const key of Object.keys(accounts)) {
     if (normalizeAccountId(key) === accountId) {
-      return value;
+      return key;
     }
   }
   return undefined;
@@ -92,8 +110,7 @@ function clearNamedAccountInheritedIdentity(
     if (account?.[field] === undefined) {
       delete next[field];
     } else {
-      // SAFETY: IDENTITY_FIELDS only contains writable keys shared by both config shapes.
-      next[field] = account[field] as never;
+      next[field] = account[field] as never; // SAFETY: both config shapes share these writable keys.
     }
   }
 
@@ -116,8 +133,7 @@ export function resolveMSTeamsAccountConfig(
   accountId?: string | null,
 ): MSTeamsConfig {
   const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
-  // SAFETY: MSTeamsConfig's public contract owns the optional multi-account fields.
-  const channelConfig = cfg.channels?.msteams as MSTeamsMultiAccountConfig | undefined;
+  const channelConfig = resolveMSTeamsChannelConfig(cfg);
   const account = resolveMSTeamsAccountEntry(channelConfig?.accounts, resolvedAccountId);
   const merged = resolveMergedAccountConfig<MSTeamsConfig>({
     channelConfig,
@@ -153,7 +169,9 @@ export function resolveMSTeamsRuntimeAccount(params: {
   accountId?: string | null;
   msteamsCfg?: MSTeamsConfig;
 }) {
-  const accountId = normalizeAccountId(params.accountId ?? DEFAULT_ACCOUNT_ID);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMSTeamsAccountId(params.cfg),
+  );
   const config = params.msteamsCfg ?? resolveMSTeamsAccountConfig(params.cfg, accountId);
   const credentials = resolveMSTeamsCredentials(config, {
     allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,
@@ -175,19 +193,38 @@ export function resolveMSTeamsAccount(params: {
   const channelEnabled = params.cfg.channels?.msteams?.enabled !== false;
   const config = resolveMSTeamsAccountConfig(params.cfg, accountId);
   const accountEnabled = config.enabled !== false;
-  const configured = Boolean(
-    resolveMSTeamsCredentials(config, {
-      allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,
-      pathPrefix:
-        accountId === DEFAULT_ACCOUNT_ID
-          ? "channels.msteams"
-          : `channels.msteams.accounts.${accountId}`,
-    }),
-  );
+  const pathPrefix =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? "channels.msteams"
+      : `channels.msteams.accounts.${accountId}`;
+  const credentials = resolveMSTeamsCredentials(config, {
+    allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,
+    pathPrefix,
+  });
+  const certificatePath =
+    credentials?.type === "federated" && !credentials.useManagedIdentity
+      ? credentials.certificatePath
+      : undefined;
+  const channelConfig = resolveMSTeamsChannelConfig(params.cfg);
+  const rawAccountKey = resolveMSTeamsAccountEntryKey(channelConfig?.accounts, accountId);
+  const rawAccount = rawAccountKey ? channelConfig?.accounts?.[rawAccountKey] : undefined;
+  const certificateConfigPath = rawAccount?.certificatePath?.trim()
+    ? `channels.msteams.accounts.${rawAccountKey}.certificatePath`
+    : channelConfig?.certificatePath?.trim()
+      ? "channels.msteams.certificatePath"
+      : "env.MSTEAMS_CERTIFICATE_PATH";
+  const certificate = certificatePath
+    ? tryReadSecretFileSync(certificatePath, "Microsoft Teams certificate", undefined, {
+        configPath: certificateConfigPath,
+      })
+    : undefined;
+  const unavailable = certificate?.status === "configured_unavailable";
   return {
     accountId,
     enabled: channelEnabled && accountEnabled,
-    configured,
+    configured: Boolean(credentials),
+    tokenStatus: !credentials ? "missing" : unavailable ? "configured_unavailable" : "available",
+    ...(unavailable ? { credentialDiagnostics: [certificate.diagnostic] } : {}),
     config,
   };
 }

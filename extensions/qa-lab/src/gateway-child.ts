@@ -51,6 +51,7 @@ import {
   waitForQaGatewayRestartBoundary,
 } from "./gateway-child-readiness.js";
 import { redactQaGatewayDebugText } from "./gateway-log-redaction.js";
+import { reserveQaGatewayPort } from "./gateway-port-reservation.js";
 import {
   createQaGatewayProcessBoundaryController,
   type QaGatewayVerifiedProcessIdentity,
@@ -67,7 +68,11 @@ import {
   stageQaLiveApiKeyProfiles,
   stageQaLiveAnthropicSetupToken,
 } from "./providers/live-frontier/auth.js";
-import { buildQaMockProfileId, stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
+import {
+  applyQaMockAuthProfileConfig,
+  buildQaMockProfileId,
+  stageQaMockAuthProfiles,
+} from "./providers/shared/mock-auth.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
@@ -100,21 +105,6 @@ function createQaGatewayEmptyTransport() {
     requiredPluginIds: [] as const,
     createGatewayConfig: () => ({}),
   } satisfies Pick<QaTransportAdapter, "requiredPluginIds" | "createGatewayConfig">;
-}
-
-async function getFreePort() {
-  return await new Promise<number>((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", (error) => reject(error));
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("failed to allocate port"));
-        return;
-      }
-      server.close((error) => (error ? reject(error) : resolve(address.port)));
-    });
-  });
 }
 
 function appendQaGatewayTempRoot(details: string, tempRoot: string) {
@@ -189,6 +179,7 @@ function createQaPackagedMockApiKey(): string {
 
 async function stageQaPackagedMockAuthProfiles(params: {
   command: QaGatewayChildCommand;
+  configPath: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
   providers: readonly string[];
@@ -210,7 +201,7 @@ async function stageQaPackagedMockAuthProfiles(params: {
           buildQaMockProfileId(provider),
         ],
         cwd: params.command.cwd ?? params.cwd,
-        env: params.env,
+        env: { ...params.env, OPENCLAW_CONFIG_PATH: params.configPath },
         stdin: `${createQaPackagedMockApiKey()}\n`,
       });
     } catch (error) {
@@ -261,6 +252,7 @@ export async function startQaGatewayChild(params: {
     ReturnType<typeof createQaGatewayProcessBoundaryController>
   > | null = null;
   let rpcClient: Awaited<ReturnType<typeof startQaGatewayRpcClient>> | null = null;
+  let gatewayPortReservation: Awaited<ReturnType<typeof reserveQaGatewayPort>> | null = null;
   let stagedBundledPluginsRoot: string | null = null;
   const tempRoot = await fs.mkdtemp(path.join(tempParentDir, "openclaw-qa-suite-"));
   // The startup owner must release its temp root even when launcher or staging
@@ -283,6 +275,7 @@ export async function startQaGatewayChild(params: {
     const xdgDataHome = path.join(tempRoot, "xdg-data");
     const xdgCacheHome = path.join(tempRoot, "xdg-cache");
     const configPath = path.join(tempRoot, "openclaw.json");
+    const packagedAuthConfigPath = path.join(stateDir, "qa-auth-bootstrap", "openclaw.json");
     const gatewayToken = `qa-suite-${randomUUID()}`;
     const transport = params.transport ?? createQaGatewayEmptyTransport();
     await seedQaAgentWorkspace({
@@ -365,7 +358,9 @@ export async function startQaGatewayChild(params: {
       });
       const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
       if (mockAuthProviders && mockAuthProviders.length > 0) {
-        if (!usesPackagedCandidate) {
+        if (usesPackagedCandidate) {
+          cfg = applyQaMockAuthProfileConfig({ cfg, providers: mockAuthProviders });
+        } else {
           cfg = await stageQaMockAuthProfiles({
             cfg,
             stateDir,
@@ -391,6 +386,7 @@ export async function startQaGatewayChild(params: {
     let cfg!: OpenClawConfig;
     let getChildFailure: (() => QaChildFailure | null) | null = null;
     let env: NodeJS.ProcessEnv | null = null;
+    let packagedMockAuthStaged = false;
     let migrationConvergenceRestartUsed = false;
     let reuseStartupLaunchState = false;
 
@@ -514,7 +510,8 @@ export async function startQaGatewayChild(params: {
     };
     for (let attempt = 1; attempt <= QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS; attempt += 1) {
       if (!reuseStartupLaunchState) {
-        gatewayPort = await getFreePort();
+        gatewayPortReservation = await reserveQaGatewayPort(net.createServer());
+        gatewayPort = gatewayPortReservation.port;
         baseUrl = `http://127.0.0.1:${gatewayPort}`;
         wsUrl = `ws://127.0.0.1:${gatewayPort}`;
         cfg = await buildStagedGatewayConfig(gatewayPort);
@@ -588,13 +585,29 @@ export async function startQaGatewayChild(params: {
           mode: 0o600,
         });
         const mockAuthProviders = getQaProvider(providerMode).mockAuthProviders;
-        if (usesPackagedCandidate && gatewayCommand && mockAuthProviders?.length) {
+        if (
+          usesPackagedCandidate &&
+          gatewayCommand &&
+          mockAuthProviders?.length &&
+          !packagedMockAuthStaged
+        ) {
+          const canonicalConfig = await fs.readFile(configPath);
+          await fs.mkdir(path.dirname(packagedAuthConfigPath), { recursive: true, mode: 0o700 });
+          await fs.writeFile(packagedAuthConfigPath, canonicalConfig, {
+            flag: "wx",
+            mode: 0o600,
+          });
           await stageQaPackagedMockAuthProfiles({
             command: gatewayCommand,
+            configPath: packagedAuthConfigPath,
             cwd: gatewayCwd,
             env,
             providers: mockAuthProviders,
           });
+          if (!canonicalConfig.equals(await fs.readFile(configPath))) {
+            throw new Error("installed package mock auth bootstrap mutated canonical config");
+          }
+          packagedMockAuthStaged = true;
         }
       }
       if (!env) {
@@ -603,6 +616,10 @@ export async function startQaGatewayChild(params: {
       reuseStartupLaunchState = false;
 
       const attemptLogMark = output.mark();
+      // Hold the selected port through plugin/config staging so parallel QA workers
+      // cannot satisfy readiness against one another. Release only for the child bind.
+      await gatewayPortReservation?.release();
+      gatewayPortReservation = null;
       const spawnedAttempt = await spawnGatewayProcess(env);
       const attemptChild = spawnedAttempt.child;
       child = attemptChild;
@@ -1027,6 +1044,13 @@ export async function startQaGatewayChild(params: {
     };
   } catch (error) {
     const cleanupErrors: unknown[] = [];
+    if (gatewayPortReservation) {
+      try {
+        await gatewayPortReservation.release();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
     await rpcClient?.stop().catch(() => {});
     let processStopped = child === null;
     if (child) {

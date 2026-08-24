@@ -72,6 +72,12 @@ type DiscordMessageProcessObserver = {
   onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
 };
 
+type DiscordProviderDeliveryInfo = {
+  kind: ReplyDispatchKind;
+  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
+  onPlatformSendDispatch: () => Promise<void>;
+};
+
 export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
@@ -217,7 +223,7 @@ async function processDiscordMessageInner(
   let userFacingFinalDelivered = false;
   let userFacingFinalDeliveryFailed = false;
   let pendingToolWarningFinal:
-    | { payload: ReplyPayload; info: { kind: ReplyDispatchKind } }
+    | { payload: ReplyPayload; info: DiscordProviderDeliveryInfo }
     | undefined;
   const markFinalReplyDelivered = (isError = false) => {
     draftPreview.markFinalReplyDelivered(isError);
@@ -265,10 +271,7 @@ async function processDiscordMessageInner(
 
   const deliverDiscordPayload = async (
     payload: ReplyPayload,
-    info: {
-      kind: ReplyDispatchKind;
-      bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
-    },
+    info: DiscordProviderDeliveryInfo,
     options?: {
       allowFallbackOnlyToolWarning?: boolean;
       allowProgressBlock?: boolean;
@@ -326,6 +329,7 @@ async function processDiscordMessageInner(
         mediaLocalRoots,
         kind: "block",
         bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+        onPlatformSendDispatch: info.onPlatformSendDispatch,
       });
       if (result.visibleReplySent) {
         replyReference.markSent();
@@ -481,6 +485,7 @@ async function processDiscordMessageInner(
             allowedMentions,
             kind: info.kind,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+            onPlatformSendDispatch: info.onPlatformSendDispatch,
           });
           return deliveryResult.visibleReplySent;
         },
@@ -530,6 +535,7 @@ async function processDiscordMessageInner(
       mediaLocalRoots,
       kind: info.kind,
       bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+      onPlatformSendDispatch: info.onPlatformSendDispatch,
     });
     if (!result.visibleReplySent) {
       return result;
@@ -565,11 +571,11 @@ async function processDiscordMessageInner(
       ),
     );
   };
-  let dispatchResult: {
-    queuedFinal: boolean;
-    counts: Record<ReplyDispatchKind, number>;
-    failedCounts?: Partial<Record<ReplyDispatchKind, number>>;
-  } | null = null;
+  type DispatchResult = Extract<
+    Awaited<ReturnType<typeof dispatchChannelInboundTurn>>,
+    { dispatched: true }
+  >["dispatchResult"];
+  let dispatchResult: DispatchResult | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
   const deliverPendingToolWarningFinalIfNeeded = async () => {
@@ -683,7 +689,16 @@ async function processDiscordMessageInner(
       return;
     }
     dispatchError = true;
-    if (await completeDiscordSessionConflict(err, deliverDiscordPayload, onDiscordDeliveryError)) {
+    const conflictCompleted = await completeDiscordSessionConflict(
+      err,
+      (payload, info) =>
+        deliverDiscordPayload(payload, {
+          ...info,
+          onPlatformSendDispatch: () => Promise.resolve(),
+        }),
+      onDiscordDeliveryError,
+    );
+    if (conflictCompleted) {
       // The visible terminal notice owns this event, so replay can commit.
       return;
     }
@@ -693,7 +708,9 @@ async function processDiscordMessageInner(
     endDeliveryCorrelation();
     await draftPreview.cleanup();
     dispatchError ||= readAgentRunTerminalOutcome(dispatchResult) === "failed";
-    const finalDeliveryFailed = (dispatchResult?.failedCounts?.final ?? 0) > 0;
+    const finalReceipt = dispatchResult?.settledReceipt?.counts.final;
+    const finalDeliveryFailed =
+      (finalReceipt?.failedBeforeSend ?? 0) + (finalReceipt?.failedAfterSend ?? 0) > 0;
     await reactions.finish({ dispatchAborted, dispatchError, finalDeliveryFailed });
   }
   if (dispatchAborted) {
@@ -705,7 +722,7 @@ async function processDiscordMessageInner(
     return;
   }
   if (shouldLogVerbose()) {
-    const finalCount = finalDispatchResult.counts.final;
+    const finalCount = finalDispatchResult.settledReceipt?.counts.final.delivered ?? 0;
     logVerbose(
       `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
     );

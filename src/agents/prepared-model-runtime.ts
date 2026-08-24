@@ -2,11 +2,9 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
-import {
-  acquirePreparedModelRuntimeLeaseFromOwners,
-  resolveWorkspacePluginRootPresence,
-} from "./prepared-model-runtime-lease.js";
+import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-runtime-lease.js";
 import { registerPreparedRuntimeAuthMaterializationPublisher } from "./prepared-model-runtime-materializations.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -64,7 +62,6 @@ let modelRuntimeBuildTimeoutMs = DEFAULT_MODEL_RUNTIME_BUILD_TIMEOUT_MS;
 
 const owners = new Map<string, PreparedModelRuntimeOwner>();
 const agentBuildCompletions = new Map<string, Promise<void>>();
-const workspacePluginRootPresenceResolutions = new Map<string, Promise<boolean | undefined>>();
 const standaloneActivationTails = new Map<string, Promise<void>>();
 const retainedDirectRunOwners = new PreparedModelRuntimeOwnerRetention(1);
 const retainedGatewayRunOwners = new PreparedModelRuntimeOwnerRetention(8);
@@ -275,7 +272,6 @@ async function activateStandalonePreparedModelRuntimeNow(
 const preparedModelRuntimeLeaseContext = {
   owners,
   agentBuildCompletions,
-  workspacePluginRootPresenceResolutions,
   retainedDirectRunOwners,
   retainedGatewayRunOwners,
   getBuildTimeoutMs: () => modelRuntimeBuildTimeoutMs,
@@ -290,6 +286,8 @@ export async function acquireAgentRunPreparedModelRuntime(
   options: {
     retainIdleRunOwner?: boolean;
     catalogMode?: PreparedModelRuntimeCatalogMode;
+    pluginGeneration?: PreparedModelRuntimeOwner["pluginGeneration"];
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
   } = {},
 ): Promise<PreparedModelRuntimeLease> {
   return await acquirePreparedModelRuntimeLeaseFromOwners(
@@ -435,10 +433,6 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const knownKeys = new Set<string>();
   for (const rawInput of listConfiguredOwnerInputs(config, workspace, bindings)) {
     let input = normalizePreparedModelRuntimeInput(rawInput);
-    const workspacePluginRootPresent = await resolveWorkspacePluginRootPresence(input);
-    if (workspacePluginRootPresent !== undefined) {
-      input = normalizePreparedModelRuntimeInput({ ...input, workspacePluginRootPresent });
-    }
     const preservedOwner = [...owners.values()].find(
       (owner) =>
         owner.provenance === "configured" &&
@@ -490,6 +484,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     // candidates, while a newer config epoch stops every remaining build in this publication.
     isBuildCurrent: () => publicationEpoch === refreshRequestEpoch,
     onBuildStats: options.onBuildStats,
+    pluginMetadataSnapshot: options.pluginMetadataSnapshot,
     registerEntriesAfterBuildStart: true,
   });
 }
@@ -661,7 +656,6 @@ function resetPreparedModelRuntimeSnapshotsForTest(): void {
   pendingModelRuntimeReplacement = undefined;
   owners.clear();
   agentBuildCompletions.clear();
-  workspacePluginRootPresenceResolutions.clear();
   standaloneActivationTails.clear();
   retainedGatewayRunOwners.clear(owners);
   gatewayLifecycleActive = false;

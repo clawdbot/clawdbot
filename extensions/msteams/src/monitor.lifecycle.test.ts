@@ -259,6 +259,32 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     ssoTokenStore.remove.mockClear();
   });
 
+  it("does not start a named listener when the Teams channel is disabled globally", async () => {
+    const result = await monitorMSTeamsProvider({
+      cfg: {
+        channels: {
+          msteams: {
+            enabled: false,
+            tenantId: "tenant-id",
+            accounts: {
+              support: {
+                enabled: true,
+                appId: "support-app-id",
+                appPassword: "support-app-password",
+                webhook: { port: 3979 },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "support",
+      runtime: createRuntime(),
+    });
+
+    expect(result.app).toBeNull();
+    expect(loadMSTeamsSdkWithAuth).not.toHaveBeenCalled();
+  });
+
   it("stays active until aborted", async () => {
     const abort = new AbortController();
     const stores = createStores();

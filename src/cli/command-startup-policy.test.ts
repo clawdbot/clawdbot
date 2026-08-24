@@ -32,6 +32,8 @@ describe("command-startup-policy", () => {
       ["config", "validate"],
       ["config", "schema"],
       ["docs"],
+      ["reset"],
+      ["uninstall"],
       ["agent", "exec"],
       ["status"],
       ["agents", "bindings"],

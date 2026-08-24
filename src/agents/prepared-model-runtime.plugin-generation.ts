@@ -1,5 +1,5 @@
-import { projectPluginMetadataSnapshotWorkspace } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type {
   PreparedModelRuntimeCatalogMode,
@@ -17,6 +17,7 @@ export function createPreparedPluginGeneration(params: {
   pluginMetadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"];
   preparedStaticProviderCatalog: PreparedModelRuntimePluginGeneration["preparedStaticProviderCatalog"];
   providerStaticModels: PreparedModelRuntimePluginGeneration["providerStaticModels"];
+  preferBuiltPluginArtifacts?: boolean;
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration;
   runtimePluginRegistry: PreparedModelRuntimePluginGeneration["pluginRegistry"];
 }): PreparedModelRuntimePluginGeneration {
@@ -35,6 +36,7 @@ export function createPreparedPluginGeneration(params: {
     ...(params.inboundPluginRegistry
       ? { inboundPluginRegistry: params.inboundPluginRegistry }
       : {}),
+    ...(params.preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
     ...(params.mediaCapabilityProviders
       ? { mediaCapabilityProviders: params.mediaCapabilityProviders }
       : {}),
@@ -45,25 +47,6 @@ export function createPreparedPluginGeneration(params: {
       ? { providerStaticModels: Object.freeze([...(params.providerStaticModels ?? [])]) }
       : {}),
   });
-}
-
-export function projectPreparedPluginGeneration(params: {
-  input: PreparedModelRuntimeInput;
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
-}): PreparedModelRuntimePluginGeneration {
-  const { input, pluginGeneration } = params;
-  if (!input.workspaceDir) {
-    return pluginGeneration;
-  }
-  const pluginMetadataSnapshot = projectPluginMetadataSnapshotWorkspace({
-    snapshot: pluginGeneration.pluginMetadataSnapshot,
-    config: input.config,
-    env: input.env ?? process.env,
-    workspaceDir: input.workspaceDir,
-  });
-  return pluginMetadataSnapshot === pluginGeneration.pluginMetadataSnapshot
-    ? pluginGeneration
-    : Object.freeze({ ...pluginGeneration, pluginMetadataSnapshot });
 }
 
 export async function buildPreparedPluginModelCatalog(params: {
@@ -78,8 +61,8 @@ export async function buildPreparedPluginModelCatalog(params: {
   const { credentials, input } = params.agentFacts;
   return await withPreparedPluginGenerationScope(
     { input, pluginGeneration: params.pluginGeneration },
-    (metadataSnapshot) =>
-      buildPreparedModelCatalogSnapshot({
+    async (metadataSnapshot) => {
+      const snapshot = await buildPreparedModelCatalogSnapshot({
         agentDir: input.agentDir,
         authCredentials: credentials,
         config: input.config,
@@ -89,7 +72,15 @@ export async function buildPreparedPluginModelCatalog(params: {
         ...(input.env ? { env: input.env } : {}),
         ...(input.readOnly ? { readOnly: true } : {}),
         ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      }),
+      });
+      return params.catalogMode === "live"
+        ? await augmentPreparedModelCatalogWithAgentHarness({
+            input,
+            snapshot,
+            pluginRegistry: params.pluginGeneration.pluginRegistry,
+          })
+        : snapshot;
+    },
   );
 }
 
@@ -101,15 +92,13 @@ export function withPreparedPluginGenerationScope<T>(
   },
   run: (metadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"]) => T,
 ): T {
-  const { input } = params;
-  const pluginGeneration = projectPreparedPluginGeneration(params);
+  const { input, pluginGeneration } = params;
   const metadataSnapshot = pluginGeneration.pluginMetadataSnapshot;
   return withPluginRuntimeGenerationScope(
     {
       config: input.config,
       metadataSnapshot,
       pluginRegistry: pluginGeneration.pluginRegistry,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     },
     () => run(metadataSnapshot),
   );

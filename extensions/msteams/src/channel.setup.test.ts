@@ -43,4 +43,37 @@ describe("msteamsSetupPlugin", () => {
       },
     });
   });
+
+  it("deletes display-style aliases of the canonical default account", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          accounts: {
+            Default: {
+              appId: "default-app-id",
+              appPassword: "default-secret",
+              webhook: { port: 3978 },
+            },
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              webhook: { port: 3979 },
+            },
+          },
+          defaultAccount: "Default",
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = msteamsSetupPlugin.config?.deleteAccount?.({ cfg, accountId: "default" });
+    expect(next?.channels?.msteams?.accounts).toEqual({
+      support: {
+        appId: "support-app-id",
+        appPassword: "support-secret",
+        webhook: { port: 3979 },
+      },
+    });
+    expect(next?.channels?.msteams?.defaultAccount).toBeUndefined();
+  });
 });

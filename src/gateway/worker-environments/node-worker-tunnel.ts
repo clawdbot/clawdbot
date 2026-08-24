@@ -1,4 +1,5 @@
 import fsp from "node:fs/promises";
+import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
@@ -28,10 +29,12 @@ import {
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
-import type {
-  WorkerTunnelHandle,
-  WorkerTunnelStatus,
-  WorkerWorkspaceCommand,
+import {
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerTunnelStatus,
+  type WorkerTurnLaunchRequest,
+  type WorkerTurnTunnelHandle,
+  type WorkerWorkspaceCommand,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -46,6 +49,7 @@ import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
+const COMMAND_RESULT_GRACE_MS = 5_000;
 const RETRY_DELAY_MS = 100;
 const tunnelLog = createSubsystemLogger("gateway/worker-tunnel");
 const RETRYABLE_TRANSPORT_CODES = new Set([
@@ -70,7 +74,7 @@ type NodeWorkerLaunch = (request: {
     gatewayNamespace: string;
     expectedBundleHash: string;
     placementGeneration: number;
-    descriptor: Parameters<WorkerTunnelHandle["launchTurn"]>[0]["plan"];
+    descriptor: WorkerTurnLaunchRequest["plan"];
   };
   isDispatchAuthorized: () => boolean;
   isCancellationAuthorized: () => boolean;
@@ -111,10 +115,10 @@ type NodeWorkerTunnelStartRequest = {
 type NodeTunnelEntry = NodeWorkerTunnelStartRequest & {
   abortController: AbortController;
   gatewayNamespace: string;
-  handle?: WorkerTunnelHandle;
+  handle?: WorkerTurnTunnelHandle;
   initialization?: Promise<void>;
   launchTasks: Set<Promise<unknown>>;
-  readiness: Deferred<WorkerTunnelHandle>;
+  readiness: Deferred<WorkerTurnTunnelHandle>;
   stopPromise?: Promise<void>;
 };
 
@@ -207,10 +211,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   const findNode = async (
     entry: NodeTunnelEntry,
     signal: AbortSignal,
-  ): Promise<{
-    transport: NodeWorkerSupervisorTransport;
-    node: NodeWorkerSupervisorNodeProof;
-  }> => {
+  ): Promise<{ transport: NodeWorkerSupervisorTransport; node: NodeWorkerSupervisorNodeProof }> => {
     const transport = options.getTransport();
     if (!transport) {
       throw new Error("device worker node transport is unavailable");
@@ -219,7 +220,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       (candidate) => candidate.nodeId === entry.deviceId,
     );
     if (!node) {
-      throw new Error("device worker node is not connected with the supervisor dialect");
+      throw new WorkerTunnelOwnerDisconnectedError(
+        "device worker node is not connected with the supervisor dialect",
+      );
     }
     return { transport, node };
   };
@@ -229,9 +232,13 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     generation: number,
     command: WorkerWorkspaceCommand & { resetWorkspace?: boolean },
   ): Promise<NodeWorkerWorkspaceExecResult> => {
-    const timeoutMs = command.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
-    const deadline = Date.now() + timeoutMs;
-    const signals = [entry.abortController.signal, AbortSignal.timeout(timeoutMs)];
+    const commandTimeoutMs = command.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+    // Keep the subprocess deadline authoritative while allowing its terminal result to cross the
+    // node transport. Equal deadlines turn an ordinary process timeout into a transport failure.
+    const transportTimeoutMs =
+      addTimerTimeoutGraceMs(commandTimeoutMs, COMMAND_RESULT_GRACE_MS) ?? commandTimeoutMs;
+    const deadline = Date.now() + transportTimeoutMs;
+    const signals = [entry.abortController.signal, AbortSignal.timeout(transportTimeoutMs)];
     if (command.signal) {
       signals.push(command.signal);
     }
@@ -243,7 +250,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       generation,
       argv: [...command.argv],
       ...(command.input === undefined ? {} : { input: command.input }),
-      ...(command.timeoutMs === undefined ? {} : { timeoutMs: command.timeoutMs }),
+      timeoutMs: commandTimeoutMs,
       ...(command.resetWorkspace === undefined ? {} : { resetWorkspace: command.resetWorkspace }),
       ...(command.transfer === undefined ? {} : { transfer: command.transfer }),
     };
@@ -305,7 +312,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   const createHandle = (
     entry: Omit<NodeTunnelEntry, "handle" | "readiness" | "initialization">,
     restoredWorkspace: NodeWorkerWorkspaceBinding | undefined,
-  ): { handle: WorkerTunnelHandle; validateRestoredWorkspace: () => Promise<void> } => {
+  ): { handle: WorkerTurnTunnelHandle; validateRestoredWorkspace: () => Promise<void> } => {
     let workspaceReady = restoredWorkspace !== undefined;
     const exec = async (command: Parameters<typeof runWorkspaceCommand>[2]) => {
       if (!workspaceReady) {
@@ -373,7 +380,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       }
     };
     const reconcileWorkspace = async (
-      request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0],
+      request: Parameters<WorkerTurnTunnelHandle["reconcileWorkspace"]>[0],
     ) => {
       const pending = request.journal.load();
       if (pending) {
@@ -508,7 +515,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
       }
     };
-    const handle: WorkerTunnelHandle = {
+    const handle: WorkerTurnTunnelHandle = {
       environmentId: entry.environmentId,
       ownerEpoch: entry.ownerEpoch,
       launchTurn: async (request) => {
@@ -627,7 +634,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     bindWorkspaceBindingResolver(resolver: NodeWorkerWorkspaceBindingResolver): void {
       resolveWorkspaceBinding = resolver;
     },
-    async start(request: NodeWorkerTunnelStartRequest): Promise<WorkerTunnelHandle> {
+    async start(request: NodeWorkerTunnelStartRequest): Promise<WorkerTurnTunnelHandle> {
       const current = entries.get(request.environmentId);
       if (current) {
         if (request.ownerEpoch < current.ownerEpoch) {
@@ -645,7 +652,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           return current.readiness.promise; // Share restored-workspace validation without false readiness.
         }
       }
-      const readiness = createDeferredCore<WorkerTunnelHandle>();
+      const readiness = createDeferredCore<WorkerTurnTunnelHandle>();
       void readiness.promise.catch(() => undefined);
       const entry: NodeTunnelEntry = {
         ...request,

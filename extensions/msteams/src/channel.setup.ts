@@ -17,10 +17,11 @@ export const msteamsSetupPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
     aliases: [...msteamsMeta.aliases],
   },
   capabilities: {
-    chatTypes: ["direct", "channel", "thread"],
+    chatTypes: ["direct", "channel", "group", "thread"],
     polls: true,
     threads: true,
     media: true,
+    reactions: true,
   },
   reload: { configPrefixes: ["channels.msteams"] },
   configSchema: MSTeamsChannelConfigSchema,
@@ -31,6 +32,7 @@ export const msteamsSetupPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       describeAccountSnapshot({
         account,
         configured: account.configured,
+        extra: { tokenStatus: account.tokenStatus },
       }),
   },
   setupWizard: msteamsSetupWizard,

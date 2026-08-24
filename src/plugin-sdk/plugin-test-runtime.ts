@@ -139,6 +139,9 @@ export {
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 export { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
+export async function loadWebFetchToolFactoryForTest() {
+  return (await import("../agents/tools/web-fetch.js")).createWebFetchTool;
+}
 export { buildPluginApi } from "../plugins/api-builder.js";
 export {
   createCapturedPluginRegistration,

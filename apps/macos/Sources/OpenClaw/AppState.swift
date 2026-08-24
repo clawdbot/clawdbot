@@ -81,7 +81,7 @@ final class AppState {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
     private static let execApprovalsReadRetryAttempts = 5
 
-    private let isPreview: Bool
+    let isPreview: Bool
     @ObservationIgnored private let execApprovalsDefaultsAsyncResolver:
         @MainActor () async -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError>
     @ObservationIgnored private let execApprovalsReadRetryDelay: Duration
@@ -260,6 +260,10 @@ final class AppState {
         }
     }
 
+    var talkRealtimeRelayEnabled = isTalkRealtimeRelayEnabled() {
+        didSet { self.persistTalkRealtimeRelayPreference(previousValue: oldValue) }
+    }
+
     var talkPhaseSoundsEnabled: Bool {
         didSet {
             self.ifNotPreview {
@@ -376,6 +380,7 @@ final class AppState {
         self.ifNotPreview {
             let computerControlEnabled = isComputerControlEnabled()
             let provider = ComputerControlProvider.current()
+            let launchPlan = AppLaunchRuntimePlan.current
             let peekabooBridgeEnabled = self.peekabooBridgeEnabled
             self.computerControlHostGeneration &+= 1
             let generation = self.computerControlHostGeneration
@@ -389,7 +394,9 @@ final class AppState {
                     guard generation == self.computerControlHostGeneration else { return }
                     await CuaDriverHostCoordinator.shared.setEnabled(true)
                 case .peekaboo:
-                    await CuaDriverHostCoordinator.shared.setEnabled(false)
+                    if launchPlan.allowsCuaComputerControl {
+                        await CuaDriverHostCoordinator.shared.setEnabled(false)
+                    }
                     guard generation == self.computerControlHostGeneration else { return }
                     await PeekabooBridgeHostCoordinator.shared.setEnabled(
                         peekabooBridgeEnabled && computerControlEnabled)
@@ -490,7 +497,7 @@ final class AppState {
         self.execApprovalsReadRetryDelay = execApprovalsReadRetryDelay
         self.gatewayConfigSaver = gatewayConfigSaver
         let onboardingSeen = AppDefaults.standard.bool(forKey: onboardingSeenKey)
-        self.isPaused = AppDefaults.standard.bool(forKey: pauseDefaultsKey)
+        self.isPaused = AppLaunchRuntimePlan.current.resolvePaused(AppDefaults.standard.bool(forKey: pauseDefaultsKey))
         self.launchAtLogin = false
         self.onboardingSeen = onboardingSeen
         self.debugPaneEnabled = AppDefaults.standard.bool(forKey: debugPaneEnabledKey)
@@ -603,8 +610,8 @@ final class AppState {
         self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
         self.execApprovalMode = .deny
         self.execApprovalPolicyLoadState = .loading
-        self.peekabooBridgeEnabled = AppDefaults.standard
-            .object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true
+        self.peekabooBridgeEnabled = AppLaunchRuntimePlan.current.resolvePeekabooBridgeEnabled(
+            AppDefaults.standard.object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true)
         if !self.isPreview, !AppProfile.current.isActive {
             Task.detached(priority: .utility) { [weak self] in
                 let current = await LaunchAgentManager.status()

@@ -3,6 +3,7 @@ import type { Api, AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
+import { codeModeToolSurfaceObserver } from "../provider-options.js";
 import {
   closeOpenAICodexWebSocketSessions,
   resetOpenAICodexWebSocketStateForTest,
@@ -483,6 +484,7 @@ describe("OpenAI Responses provider prompt observer", () => {
 
   it("observes the async replacement immediately before final transformed egress", async () => {
     const prompt = "PRIVATE-FINAL-TRANSFORMED-PROMPT";
+    const toolSurfaceObserver = vi.fn();
     const tool = (name: string) => ({
       name,
       description: name,
@@ -495,41 +497,54 @@ describe("OpenAI Responses provider prompt observer", () => {
         resolveTransportTurnState: () => ({ metadata: { host: "added" } }),
       },
     });
+    const options = {
+      openclawCodeModeToolSurface: true,
+      openclawCodeModeAllowedHostedToolTypes: new Set(["web_search"]),
+      onPayload: async () => {
+        await Promise.resolve();
+        return {
+          model: "gpt-5.4",
+          stream: true,
+          metadata: { caller: "kept" },
+          input: [
+            { type: "message", role: "developer", content: prompt },
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_image", image_url: "data:image/png;base64,invalid!" }],
+            },
+          ],
+          tools: [
+            tool("exec"),
+            tool("wait"),
+            tool("rogue"),
+            { type: "web_search" },
+            { type: "file_search" },
+          ],
+        };
+      },
+    };
+    codeModeToolSurfaceObserver.set(options, toolSurfaceObserver);
     const run = await runObservedRequest({
       context: createContext(prompt, { tools: [tool("exec"), tool("wait")] as never }),
-      options: {
-        openclawCodeModeToolSurface: true,
-        openclawCodeModeAllowedHostedToolTypes: new Set(["web_search"]),
-        onPayload: async () => {
-          await Promise.resolve();
-          return {
-            model: "gpt-5.4",
-            stream: true,
-            metadata: { caller: "kept" },
-            input: [
-              { type: "message", role: "developer", content: prompt },
-              {
-                type: "message",
-                role: "user",
-                content: [{ type: "input_image", image_url: "data:image/png;base64,invalid!" }],
-              },
-            ],
-            tools: [
-              tool("exec"),
-              tool("wait"),
-              tool("rogue"),
-              { type: "web_search" },
-              { type: "file_search" },
-            ],
-          };
-        },
-      },
+      options,
     });
 
     expect(run.order).toEqual(["observe", "openai.create"]);
     expect(run.observations[0]?.matchesAssembledPrompt).toBe(true);
     expect(run.requests[0]?.metadata).toEqual({ caller: "kept", host: "added" });
     expect(run.requests[0]?.tools).toEqual([tool("exec"), tool("wait"), { type: "web_search" }]);
+    expect(toolSurfaceObserver).toHaveBeenCalledOnce();
+    expect(toolSurfaceObserver).toHaveBeenCalledWith({
+      beforeToolIdentities: [
+        "client:exec",
+        "client:wait",
+        "client:rogue",
+        "hosted:web_search",
+        "hosted:file_search",
+      ],
+      afterToolIdentities: ["client:exec", "client:wait", "hosted:web_search"],
+    });
     expect(JSON.stringify(run.requests[0]?.input)).toContain("omitted image payload");
   });
 

@@ -5,7 +5,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
-  attachModelProviderMetadataOwners,
+  attachModelProviderRequestRouteFacts,
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -33,10 +33,7 @@ import {
   resolveProviderRequestTimeoutMs,
   resolveProviderTransport,
 } from "./model.provider-hooks.js";
-import {
-  resolveBundledStaticCatalogModel,
-  type ManifestModelCatalogProviderAliasMetadata,
-} from "./model.static-catalog.js";
+import type { ManifestModelCatalogProviderAliasMetadata } from "./model.static-catalog.js";
 
 export function buildConfiguredFallbackModel(params: {
   provider: string;
@@ -45,6 +42,7 @@ export function buildConfiguredFallbackModel(params: {
   agentDir?: string;
   manifestAlias: ManifestModelCatalogProviderAliasMetadata;
   providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
+  getStaticCatalogModel?: () => StaticCatalogFallbackModel | undefined;
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model | undefined {
@@ -55,13 +53,7 @@ export function buildConfiguredFallbackModel(params: {
   if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
     return undefined;
   }
-  const staticCatalogModel = resolveBundledStaticCatalogModel({
-    provider,
-    modelId,
-    cfg,
-    workspaceDir,
-    includeRuntimeDiscovery: true,
-  }) as StaticCatalogFallbackModel | undefined;
+  const staticCatalogModel = params.getStaticCatalogModel?.();
   const metadataModel = configuredModel ?? staticCatalogModel;
   const fallbackMediaInput = mergeModelMediaInput(
     staticCatalogModel?.mediaInput,
@@ -173,7 +165,7 @@ export function buildConfiguredFallbackModel(params: {
     cfg,
     agentDir,
     workspaceDir,
-    model: attachModelProviderMetadataOwners(
+    model: attachModelProviderRequestRouteFacts(
       attachModelProviderLocalService(
         attachModelProviderRequestTransport(
           {

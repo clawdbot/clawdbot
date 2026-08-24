@@ -115,6 +115,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   { commandPath: ["message"], policy: { loadPlugins: "never" } },
   { commandPath: ["docs"], policy: { configGuard: "skip" } },
+  // Destructive maintenance owns a validity-aware, non-observing config read.
+  // Startup migrations would mutate the SQLite state these commands may refuse to remove.
+  { commandPath: ["reset"], policy: { configGuard: "skip" } },
+  { commandPath: ["uninstall"], policy: { configGuard: "skip" } },
   {
     commandPath: ["channels"],
     policy: {
@@ -182,6 +186,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "bypass",
     },
     route: { id: "status" },
+  },
+  {
+    commandPath: ["telemetry"],
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   {
     commandPath: ["health"],

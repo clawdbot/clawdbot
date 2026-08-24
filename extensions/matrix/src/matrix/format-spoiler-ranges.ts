@@ -1,10 +1,11 @@
 // Matrix helper module resolves spoiler delimiters in ordinary Markdown inline blocks.
-import MarkdownIt from "markdown-it";
+import MarkdownIt, { type Env } from "markdown-it";
 import { findCodeRegions, isInsideCode, tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
 import { isMarkdownEscaped, projectMatrixMarkdown } from "./format-profile.js";
 import { findMatrixTableSourceRanges } from "./format-table-ranges.js";
 
 const spoilerParser = new MarkdownIt({ html: false, linkify: true, typographer: false });
+spoilerParser.linkify.set({ fuzzyLink: true });
 
 function findInlineMetadataRanges(
   markdown: string,
@@ -106,7 +107,7 @@ function findInlineMetadataRanges(
 export function findMatrixMarkdownMetadataRanges(
   markdown: string,
 ): Array<{ start: number; end: number }> {
-  const env: { references?: Record<string, unknown> } = {};
+  const env: Env = {};
   const tokens = spoilerParser.parse(markdown, env);
   const references = new Set(Object.keys(env.references ?? {}));
   const lineStarts = [0];

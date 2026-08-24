@@ -8,6 +8,7 @@ describe("SessionRowSchema", () => {
     const row = {
       key: "agent:main:main",
       kind: "global",
+      lastRunId: "run-settled",
       activeLeafEntryId: "leaf-rendered",
       createdActor: {
         type: "human",
@@ -27,6 +28,7 @@ describe("SessionRowSchema", () => {
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
       icon: "🦞",
+      channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
       visibility: "suggest",
       sharingRole: "owner",
       restartRecoveryStatus: "tombstoned",
@@ -36,6 +38,7 @@ describe("SessionRowSchema", () => {
     const roundTripped = structuredClone(row);
 
     expect(SessionRowSchema.properties.activeLeafEntryId).toBeDefined();
+    expect(SessionRowSchema.properties.lastRunId).toBeDefined();
     expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
     expect(Value.Check(SessionRowSchema, { ...roundTripped, activeLeafEntryId: null })).toBe(true);
     expect(
@@ -49,9 +52,11 @@ describe("SessionRowSchema", () => {
     ).toBe(false);
     expect(roundTripped).toMatchObject({
       activeLeafEntryId: "leaf-rendered",
+      lastRunId: "run-settled",
       createdActor: { avatarUrl: "/api/users/profile-ada/avatar?v=7" },
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
       visibility: "suggest",
       sharingRole: "owner",
       restartRecoveryStatus: "tombstoned",
@@ -61,6 +66,7 @@ describe("SessionRowSchema", () => {
     expect(Value.Check(SessionRowSchema, { ...roundTripped, permissionMode: "unrestricted" })).toBe(
       false,
     );
+    expect(Value.Check(SessionRowSchema, { ...roundTripped, lastRunId: "" })).toBe(false);
   });
 
   it("keeps sessions.assignOwner target actors closed and non-empty", () => {

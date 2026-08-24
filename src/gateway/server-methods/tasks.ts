@@ -19,6 +19,7 @@ import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { canAccessTaskRequesterSession } from "../task-session-access.js";
 import { mapTaskSummary } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -61,7 +62,7 @@ function parseCursor(cursor: string | undefined): number | null {
 // Control UI task methods expose the stable gateway protocol shape; helpers
 // above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
-  "tasks.list": ({ params, respond, context }) => {
+  "tasks.list": ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksListParams, "tasks.list", respond)) {
       return;
     }
@@ -108,6 +109,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionAgentId,
       cfg,
+      filter: (task) => canAccessTaskRequesterSession({ cfg, client, task }),
     });
     const nextOffset = cursor + page.tasks.length;
     respond(true, {
@@ -115,13 +117,16 @@ export const tasksHandlers: GatewayRequestHandlers = {
       ...(page.hasMore ? { nextCursor: String(nextOffset) } : {}),
     });
   },
-  "tasks.get": ({ params, respond }) => {
+  "tasks.get": ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksGetParams, "tasks.get", respond)) {
       return;
     }
     const taskId = params.taskId;
     const task = getTaskById(taskId);
-    if (!task) {
+    if (
+      !task ||
+      !canAccessTaskRequesterSession({ cfg: context.getRuntimeConfig(), client, task })
+    ) {
       respond(
         false,
         undefined,
@@ -133,7 +138,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
     // stay compact while detail views can show the operator what was requested.
     respond(true, { task: mapTaskSummary(task, { includePrompt: true }) });
   },
-  "tasks.cancel": async ({ params, respond, context }) => {
+  "tasks.cancel": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksCancelParams, "tasks.cancel", respond)) {
       return;
     }
@@ -141,8 +146,14 @@ export const tasksHandlers: GatewayRequestHandlers = {
     const reason = normalizeOptionalString(params.reason);
     const { cancelDetachedTaskRunByIdCore } =
       await import("../../tasks/task-executor-cancel.runtime.js");
+    const cfg = context.getRuntimeConfig();
+    const task = getTaskById(taskId);
+    if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
+      respond(true, { found: false, cancelled: false });
+      return;
+    }
     const result = await cancelDetachedTaskRunByIdCore({
-      cfg: context.getRuntimeConfig(),
+      cfg,
       taskId,
       ...(reason ? { reason } : {}),
     });
@@ -153,12 +164,18 @@ export const tasksHandlers: GatewayRequestHandlers = {
       ...(result.task ? { task: mapTaskSummary(result.task) } : {}),
     });
   },
-  "tasks.retry": async ({ params, respond }) => {
+  "tasks.retry": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.retry", respond)) {
       return;
     }
     const results = [];
+    const cfg = context.getRuntimeConfig();
     for (const taskId of params.taskIds) {
+      const task = getTaskById(taskId);
+      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
+        results.push({ taskId, ok: false, reason: "task not found" });
+        continue;
+      }
       const result = await retrySubagentCompletionDelivery(taskId);
       results.push({
         taskId,
@@ -170,14 +187,20 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     respond(true, { results });
   },
-  "tasks.dismiss": async ({ params, respond }) => {
+  "tasks.dismiss": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.dismiss", respond)) {
       return;
     }
     const { discardSubagentTerminalDelivery } =
       await import("../../agents/subagents/registry/subagent-registry.js");
     const results = [];
+    const cfg = context.getRuntimeConfig();
     for (const taskId of params.taskIds) {
+      const task = getTaskById(taskId);
+      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
+        results.push({ taskId, ok: false, reason: "task not found" });
+        continue;
+      }
       const result = await dismissSubagentCompletionDelivery(taskId, {
         discardTerminalDelivery: discardSubagentTerminalDelivery,
       });

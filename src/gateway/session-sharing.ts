@@ -10,23 +10,32 @@ import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
 import { isSessionMember, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { verifyBoardViewTicket } from "./board-view-ticket.js";
-import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
+import {
+  authorizeGatewaySessionCreation,
+  operatorSessionCap,
+  resolveGatewayOperatorRoleActor,
+} from "./operator-role-policy.js";
+import {
+  authenticatedProfileUnavailableError,
+  gatewayClientSessionCreator,
+  isGatewayClientProfilePending,
+} from "./server-methods/gateway-client-identity.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { resolveSessionGroupMutationTargetsByName } from "./session-group-mutation-targets.js";
 import {
-  invalidateSessionSharingSnapshot,
   loadCachedSessionSharingSnapshot,
   type SessionSharingSnapshot,
 } from "./session-sharing-snapshot-cache.js";
 import {
-  readSessionSharingStringParam as readStringParam,
+  isRequiredSessionTargetMethod,
+  isSessionProfileDependentMethod,
   resolveDirectIncognitoTargets,
+  resolveDirectSessionTargets,
+  resolveSessionMutationTargets,
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
 import type {
@@ -48,12 +57,29 @@ type SessionSharingTarget = {
 };
 
 type AuthorizedSessionMutationTarget = SessionMutationTarget & {
-  resolved: Pick<
-    SessionSharingTarget,
-    "agentId" | "canonicalKey" | "storeKey" | "storePath"
-  > | null;
+  resolved: Omit<SessionSharingTarget, "entry" | "storeKeys"> | null;
   sessionId: string | null;
 };
+
+const AGENT_RUN_START_METHODS = new Set([
+  "agent",
+  "chat.send",
+  "message.action",
+  "send",
+  "sessions.dispatch",
+  "sessions.send",
+  "sessions.steer",
+  "talk.client.create",
+  "talk.session.create",
+  "tools.invoke",
+  "wake",
+]);
+
+// Documented contract (docs/gateway/protocol.md): these methods authorize by session
+// visibility inside their handler, not by mutation participation. The pipeline still
+// applies incognito checks and the operator role cap: a view/suggest-capped caller
+// must not reassign ownership of a foreign session it can merely see.
+const VISIBILITY_AUTHORIZED_METHODS = new Set(["sessions.assignOwner"]);
 
 export class SessionMutationAuthorizationChangedError extends Error {
   readonly error: ErrorShape;
@@ -65,7 +91,7 @@ export class SessionMutationAuthorizationChangedError extends Error {
   }
 }
 
-export { invalidateSessionSharingSnapshot };
+export { invalidateSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
 
 export function resolveSessionVisibility(
   entry: Pick<SessionEntry, "visibility">,
@@ -126,61 +152,96 @@ export function resolveSessionSharingTarget(params: {
     : null;
 }
 
-export function resolveSessionSharingRole(params: {
+type SessionSharingRoleParams = {
+  cfg?: OpenClawConfig;
   client: GatewayClient | null;
   target: SessionSharingTarget;
   includeMembership?: boolean;
   isMember?: boolean;
-}): SessionSharingRole {
+};
+
+export function resolveSessionSharingRole(params: SessionSharingRoleParams): SessionSharingRole {
+  return resolveSharingRole(params);
+}
+
+function resolveSharingRole(
+  params: SessionSharingRoleParams,
+  preparedCap?: { value: ReturnType<typeof operatorSessionCap> },
+): SessionSharingRole {
   if (isGatewayAdmin(params.client)) {
     return "admin";
   }
-  const identity = gatewayClientSessionCreator(params.client);
+  const operatorActor = resolveGatewayOperatorRoleActor(params.client);
+  const identity =
+    gatewayClientSessionCreator(params.client) ??
+    (operatorActor?.kind === "operator"
+      ? { type: "human" as const, id: operatorActor.profileId }
+      : undefined);
   // Shared-secret/no-auth solo deployments have no durable person identity.
   if (!identity) {
-    return "owner";
+    return params.client?.authenticatedGitHubIdentitySync ||
+      (params.cfg?.gateway?.roles && operatorActor?.kind !== "system")
+      ? "viewer"
+      : "owner";
   }
   if (params.target.entry.createdActor?.id === identity.id) {
     return "owner";
   }
-  if (params.isMember !== undefined) {
-    return params.isMember ? "member" : "viewer";
-  }
-  if (params.includeMembership === false) {
-    return "viewer";
-  }
+  const sessionCap = preparedCap
+    ? preparedCap.value
+    : params.cfg && operatorSessionCap(params.client, params.cfg);
   if (
-    isSessionMember(
-      {
-        agentId: params.target.agentId,
-        sessionKey: params.target.storeKey,
-        storePath: params.target.storePath,
-      },
-      identity.id,
-    )
+    sessionCap === "write" &&
+    resolveSessionVisibility(params.target.entry) !== "draft" &&
+    params.target.entry.incognito !== true &&
+    !isIncognitoSessionKey(params.target.canonicalKey)
   ) {
     return "member";
   }
-  return "viewer";
+  if (sessionCap === "none") {
+    return "viewer";
+  }
+  const member =
+    params.isMember ??
+    (params.includeMembership !== false &&
+      isSessionMember(
+        {
+          agentId: params.target.agentId,
+          sessionKey: params.target.storeKey,
+          storePath: params.target.storePath,
+        },
+        identity.id,
+      ));
+  return member ? "member" : "viewer";
 }
 
 export function canManageSessionSharing(role: SessionSharingRole): boolean {
   return role === "admin" || role === "owner";
 }
 
-function canMutateSession(params: {
-  role: SessionSharingRole;
-  visibility: SessionVisibility;
-}): boolean {
-  // Drafts stay creator/admin-only; membership becomes active only after promotion.
-  if (params.visibility === "draft") {
-    return params.role === "admin" || params.role === "owner";
-  }
-  return params.visibility === "shared" || params.role !== "viewer";
+function hiddenSessionNotFound(sessionKey: string, incognito = false): ErrorShape {
+  const label = incognito ? "Incognito session" : "Session";
+  return errorShape(ErrorCodes.INVALID_REQUEST, `${label} "${sessionKey}" was not found.`);
 }
 
-function incognitoSessionNotFound(sessionKey: string): ErrorShape {
-  return errorShape(ErrorCodes.INVALID_REQUEST, `Incognito session "${sessionKey}" was not found.`);
+function isIncognitoSessionTarget(params: {
+  sessionKey: string;
+  target: Pick<SessionSharingTarget, "canonicalKey" | "entry"> | null;
+}): boolean {
+  return params.target
+    ? params.target.entry.incognito === true || isIncognitoSessionKey(params.target.canonicalKey)
+    : isIncognitoSessionKey(params.sessionKey);
+}
+
+export function isResolvedIncognitoSession(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+}): boolean {
+  return isIncognitoSessionTarget({
+    sessionKey: params.sessionKey,
+    target: resolveSessionSharingTarget(params),
+  });
 }
 
 export function authorizeIncognitoSessionTarget(params: {
@@ -188,20 +249,20 @@ export function authorizeIncognitoSessionTarget(params: {
   sessionKey: string;
   target: SessionSharingTarget | null;
 }): ErrorShape | null {
-  const incognito = params.target
-    ? params.target.entry.incognito === true || isIncognitoSessionKey(params.target.canonicalKey)
-    : isIncognitoSessionKey(params.sessionKey);
-  if (!incognito) {
+  if (!isIncognitoSessionTarget(params)) {
     return null;
   }
   if (isGatewayAdmin(params.client)) {
     return null;
   }
+  if (isGatewayClientProfilePending(params.client)) {
+    return authenticatedProfileUnavailableError();
+  }
   const identity = gatewayClientSessionCreator(params.client);
   if (!identity) {
     return null;
   }
-  return incognitoSessionNotFound(params.sessionKey);
+  return hiddenSessionNotFound(params.sessionKey, true);
 }
 
 export function canAccessIncognitoSession(params: {
@@ -228,10 +289,26 @@ export function authorizeResolvedSessionMutation(params: {
   sessionKey: string;
   agentId?: string;
 }): ErrorShape | null {
+  if (isGatewayAdmin(params.client) && !params.cfg.gateway?.roles) {
+    return null;
+  }
+  if (isGatewayClientProfilePending(params.client)) {
+    return authenticatedProfileUnavailableError();
+  }
+  const target = resolveSessionSharingTarget(params);
+  if (target) {
+    const agentError = authorizeSessionAgentRun({
+      cfg: params.cfg,
+      client: params.client,
+      agentId: target.agentId,
+    });
+    if (agentError) {
+      return agentError;
+    }
+  }
   if (isGatewayAdmin(params.client)) {
     return null;
   }
-  const target = resolveSessionSharingTarget(params);
   const incognitoError = authorizeIncognitoSessionTarget({
     client: params.client,
     sessionKey: params.sessionKey,
@@ -243,16 +320,35 @@ export function authorizeResolvedSessionMutation(params: {
   if (!target) {
     return null;
   }
-  return authorizeSessionSharingTarget({ client: params.client, target });
+  return authorizeSessionSharingTarget({ cfg: params.cfg, client: params.client, target });
+}
+
+function authorizeSessionAgentRun(params: {
+  cfg: OpenClawConfig;
+  client: GatewayClient | null;
+  agentId: string;
+}): ErrorShape | null {
+  return authorizeGatewaySessionCreation(params) ?? null;
 }
 
 export function authorizeSessionSharingTarget(params: {
+  cfg?: OpenClawConfig;
   client: GatewayClient | null;
   target: SessionSharingTarget;
 }): ErrorShape | null {
   const visibility = resolveSessionVisibility(params.target.entry);
-  const role = resolveSessionSharingRole({ client: params.client, target: params.target });
-  return canMutateSession({ role, visibility })
+  const sessionCap = params.cfg && operatorSessionCap(params.client, params.cfg);
+  const role = resolveSharingRole(params, { value: sessionCap });
+  if (sessionCap === "none" && role !== "owner" && role !== "admin") {
+    return hiddenSessionNotFound(params.target.canonicalKey);
+  }
+  const capped = sessionCap === "view" || sessionCap === "suggest";
+  // Draft membership is inactive, while an explicit role caps even shared visibility.
+  const canMutate =
+    visibility === "draft"
+      ? canManageSessionSharing(role)
+      : role !== "viewer" || (visibility === "shared" && !capped);
+  return canMutate
     ? null
     : errorShape(ErrorCodes.INVALID_REQUEST, `session is ${visibility} for this connection`, {
         details: {
@@ -263,183 +359,13 @@ export function authorizeSessionSharingTarget(params: {
       });
 }
 
-const SESSION_KEY_PARAM_BY_METHOD = new Map<string, "key" | "sessionKey">([
-  ["agent", "sessionKey"],
-  ["board.event", "sessionKey"],
-  ["board.update", "sessionKey"],
-  ["board.widget.grant", "sessionKey"],
-  ["board.widget.put", "sessionKey"],
-  ["chat.abort", "sessionKey"],
-  ["chat.inject", "sessionKey"],
-  ["chat.send", "sessionKey"],
-  ["message.action", "sessionKey"],
-  ["plugins.sessionAction", "sessionKey"],
-  ["send", "sessionKey"],
-  ["session.discussion.open", "sessionKey"],
-  ["sessions.abort", "key"],
-  ["sessions.compaction.branch", "key"],
-  ["sessions.compaction.restore", "key"],
-  ["sessions.compact", "key"],
-  ["sessions.create", "key"],
-  ["sessions.delete", "key"],
-  ["sessions.dispatch", "key"],
-  ["sessions.files.set", "sessionKey"],
-  ["sessions.fork", "key"],
-  ["sessions.patch", "key"],
-  ["sessions.pluginPatch", "key"],
-  ["sessions.reclaim", "key"],
-  ["sessions.reset", "key"],
-  ["sessions.rewind", "key"],
-  ["sessions.send", "key"],
-  ["sessions.steer", "key"],
-  ["sessions.branches.switch", "key"],
-  ["tools.invoke", "sessionKey"],
-]);
-
-const REQUIRED_SESSION_TARGET_METHODS = new Set([
-  "board.action",
-  "board.event",
-  "board.update",
-  "board.widget.grant",
-  "board.widget.put",
-  "chat.abort",
-  "chat.inject",
-  "chat.send",
-  "session.discussion.open",
-  "sessions.abort",
-  "sessions.branches.switch",
-  "sessions.compact",
-  "sessions.compaction.branch",
-  "sessions.compaction.restore",
-  "sessions.delete",
-  "sessions.dispatch",
-  "sessions.files.set",
-  "sessions.fork",
-  "sessions.groups.delete",
-  "sessions.groups.rename",
-  "sessions.groups.update",
-  "sessions.patch",
-  "sessions.pluginPatch",
-  "sessions.reclaim",
-  "sessions.reset",
-  "sessions.rewind",
-  "sessions.send",
-  "sessions.steer",
-]);
-
-function resolveSessionGroupMutationTargets(params: {
-  getCfg: () => OpenClawConfig;
-  requestParams: unknown;
-}): SessionMutationTarget[] | undefined {
-  const groupName = readStringParam(params.requestParams, "name");
-  return groupName
-    ? (resolveSessionGroupMutationTargetsByName(params.getCfg()).get(groupName) ?? [])
-    : undefined;
-}
-
-function resolveApprovalSessionTarget(
-  method: string,
-  params: unknown,
-  context: GatewayRequestContext,
-): SessionMutationTarget | undefined {
-  const id = readStringParam(params, "id");
-  if (!id) {
-    return undefined;
-  }
-  const kind = readStringParam(params, "kind");
-  const manager =
-    method === "plugin.approval.resolve" || kind === "plugin"
-      ? context.pluginApprovalManager
-      : method === "approval.resolve" && kind === "system-agent"
-        ? context.systemAgentApprovalManager
-        : context.execApprovalManager;
-  const resolvedId = manager?.lookupApprovalId(id, { includeResolved: true });
-  const recordId =
-    resolvedId?.kind === "exact" || resolvedId?.kind === "prefix" ? resolvedId.id : id;
-  const request = manager?.getSnapshot(recordId)?.request;
-  const sessionKey = readStringParam(request, "sessionKey");
-  const agentId = readStringParam(request, "agentId");
-  return sessionKey
-    ? {
-        sessionKey,
-        ...(agentId ? { agentId } : {}),
-      }
-    : undefined;
-}
-
-function resolveSessionMutationTargets(params: {
-  method: string;
-  requestParams: unknown;
-  context: GatewayRequestContext;
-  getCfg: () => OpenClawConfig;
-}): SessionMutationTarget[] | undefined {
-  if (params.method === "sessions.patchMany") {
-    const targets = (params.requestParams as { targets?: unknown } | null)?.targets;
-    return Array.isArray(targets)
-      ? targets.slice(0, 101).flatMap((target): SessionMutationTarget[] => {
-          const sessionKey = readStringParam(target, "key");
-          const agentId = readStringParam(target, "agentId");
-          return sessionKey ? [{ sessionKey, ...(agentId ? { agentId } : {}) }] : [];
-        })
-      : undefined;
-  }
-  if (
-    params.method === "sessions.groups.rename" ||
-    params.method === "sessions.groups.delete" ||
-    params.method === "sessions.groups.update"
-  ) {
-    return resolveSessionGroupMutationTargets({
-      getCfg: params.getCfg,
-      requestParams: params.requestParams,
-    });
-  }
-  if (
-    params.method === "exec.approval.resolve" ||
-    params.method === "plugin.approval.resolve" ||
-    params.method === "approval.resolve"
-  ) {
-    const target = resolveApprovalSessionTarget(
-      params.method,
-      params.requestParams,
-      params.context,
-    );
-    return target ? [target] : undefined;
-  }
-  const field = SESSION_KEY_PARAM_BY_METHOD.get(params.method);
-  const directKey = field ? readStringParam(params.requestParams, field) : undefined;
-  if (!directKey && (params.method === "board.event" || params.method === "board.action")) {
-    const ticket = readStringParam(params.requestParams, "ticket");
-    const claims = ticket ? verifyBoardViewTicket(ticket) : undefined;
-    if (!claims) {
-      return undefined;
-    }
-    const requestedAgentId = readStringParam(params.requestParams, "agentId");
-    if (requestedAgentId && requestedAgentId !== claims.agentId) {
-      return undefined;
-    }
-    return [
-      {
-        sessionKey: claims.sessionKey,
-        ...(claims.agentId ? { agentId: claims.agentId } : {}),
-      },
-    ];
-  }
-  if (directKey || params.method !== "sessions.abort") {
-    const agentId = readStringParam(params.requestParams, "agentId");
-    return directKey
-      ? [
-          {
-            sessionKey: directKey,
-            ...(agentId ? { agentId } : {}),
-          },
-        ]
-      : undefined;
-  }
-  const runId = readStringParam(params.requestParams, "runId");
-  const run = runId ? params.context.chatAbortControllers.get(runId) : undefined;
-  return run
-    ? [{ sessionKey: run.sessionKey, ...(run.agentId ? { agentId: run.agentId } : {}) }]
-    : undefined;
+export function authorizeSessionSharing(
+  params: Parameters<typeof resolveSessionSharingTarget>[0] & { client: GatewayClient | null },
+): ErrorShape | null {
+  const target = resolveSessionSharingTarget(params);
+  return (
+    target && authorizeSessionSharingTarget({ cfg: params.cfg, client: params.client, target })
+  );
 }
 
 export function resolveSessionMutationAuthorization(params: {
@@ -448,8 +374,15 @@ export function resolveSessionMutationAuthorization(params: {
   requestParams: unknown;
   context: GatewayRequestContext;
 }): { authorization?: SessionMutationAuthorization; error: ErrorShape | null } {
-  if (isGatewayAdmin(params.client)) {
+  const authorizesAgentRun = AGENT_RUN_START_METHODS.has(params.method);
+  if (isGatewayAdmin(params.client) && !authorizesAgentRun) {
     return { error: null };
+  }
+  if (
+    isGatewayClientProfilePending(params.client) &&
+    isSessionProfileDependentMethod(params.method)
+  ) {
+    return { error: authenticatedProfileUnavailableError() };
   }
   // Resolve runtime config at most once per request and only when a path needs it. The context
   // getter reloads/resolves gateway config, so non-session requests (the vast majority) must not
@@ -463,7 +396,7 @@ export function resolveSessionMutationAuthorization(params: {
     storeCache: GatewaySessionStoreCache;
     targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
   } => ({ storeCache: new Map(), targetDiscoveryCache: new Map() });
-  const lookupCaches = createLookupCaches();
+  let lookupCaches: ReturnType<typeof createLookupCaches> | undefined;
   const resolveAuthorizedTarget = (
     targetRef: SessionMutationTarget,
   ): { target: SessionSharingTarget | null } | { error: ErrorShape } => {
@@ -473,7 +406,7 @@ export function resolveSessionMutationAuthorization(params: {
           cfg: getCfg(),
           sessionKey: targetRef.sessionKey,
           agentId: targetRef.agentId,
-          ...lookupCaches,
+          ...(lookupCaches ??= createLookupCaches()),
         }),
       };
     } catch (error) {
@@ -485,9 +418,16 @@ export function resolveSessionMutationAuthorization(params: {
       throw error;
     }
   };
-  // Incognito direct reads and writes share this central participation choke point;
-  // hidden keys use the stale-session refusal instead of revealing existence.
-  for (const targetRef of resolveDirectIncognitoTargets(params.method, params.requestParams)) {
+  const directTargets = resolveDirectSessionTargets(params.method, params.requestParams);
+  const hidesForeignSessions =
+    directTargets.length > 0 &&
+    gatewayClientSessionCreator(params.client) &&
+    operatorSessionCap(params.client, getCfg()) === "none";
+  // Incognito and role-hidden direct reads share the same non-disclosing access boundary.
+  const protectedTargets = hidesForeignSessions
+    ? directTargets
+    : resolveDirectIncognitoTargets(params.method, params.requestParams);
+  for (const targetRef of protectedTargets) {
     const resolved = resolveAuthorizedTarget(targetRef);
     if ("error" in resolved) {
       return { error: resolved.error };
@@ -501,6 +441,13 @@ export function resolveSessionMutationAuthorization(params: {
     if (error) {
       return { error };
     }
+    if (
+      hidesForeignSessions &&
+      target &&
+      target.entry.createdActor?.id !== params.client?.authenticatedUserProfile?.profileId
+    ) {
+      return { error: hiddenSessionNotFound(targetRef.sessionKey) };
+    }
   }
   const targetRefs = resolveSessionMutationTargets({
     method: params.method,
@@ -509,7 +456,7 @@ export function resolveSessionMutationAuthorization(params: {
     getCfg,
   });
   if (!targetRefs) {
-    if (REQUIRED_SESSION_TARGET_METHODS.has(params.method)) {
+    if (isRequiredSessionTargetMethod(params.method)) {
       return {
         error: errorShape(ErrorCodes.INVALID_REQUEST, "session mutation target is unavailable", {
           details: { code: "SESSION_MUTATION_TARGET_REQUIRED", method: params.method },
@@ -526,14 +473,25 @@ export function resolveSessionMutationAuthorization(params: {
     }
     const target = resolved.target;
     const error =
-      (params.method === "sessions.patchMany"
-        ? authorizeIncognitoSessionTarget({
+      (target && authorizesAgentRun
+        ? authorizeSessionAgentRun({
+            cfg: getCfg(),
             client: params.client,
-            sessionKey: targetRef.sessionKey,
-            target,
+            agentId: target.agentId,
           })
         : null) ??
-      (target ? authorizeSessionSharingTarget({ client: params.client, target }) : null);
+      authorizeIncognitoSessionTarget({
+        client: params.client,
+        sessionKey: targetRef.sessionKey,
+        target,
+      }) ??
+      (target &&
+      !(
+        VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
+        (operatorSessionCap(params.client, getCfg()) ?? "write") === "write"
+      )
+        ? authorizeSessionSharingTarget({ cfg: getCfg(), client: params.client, target })
+        : null);
     if (error) {
       return { error };
     }
@@ -594,13 +552,23 @@ export function resolveSessionMutationAuthorization(params: {
           return;
         }
         const error =
-          (params.method === "sessions.patchMany"
-            ? authorizeIncognitoSessionTarget({
+          (authorizesAgentRun
+            ? authorizeSessionAgentRun({
+                cfg: currentCfg,
                 client: params.client,
-                sessionKey: targetRef.sessionKey,
-                target: current,
+                agentId: current.agentId,
               })
-            : null) ?? authorizeSessionSharingTarget({ client: params.client, target: current });
+            : null) ??
+          authorizeIncognitoSessionTarget({
+            client: params.client,
+            sessionKey: targetRef.sessionKey,
+            target: current,
+          }) ??
+          authorizeSessionSharingTarget({
+            cfg: currentCfg,
+            client: params.client,
+            target: current,
+          });
         if (error) {
           throw new SessionMutationAuthorizationChangedError(error);
         }
@@ -667,13 +635,23 @@ export function canReceiveSessionEvent(params: {
   if (isGatewayAdmin(params.client)) {
     return true;
   }
-  const identity = gatewayClientSessionCreator(params.client);
+  const operatorActor = resolveGatewayOperatorRoleActor(params.client);
+  const identity =
+    gatewayClientSessionCreator(params.client) ??
+    (operatorActor?.kind === "operator"
+      ? { type: "human" as const, id: operatorActor.profileId }
+      : undefined);
   if (!identity) {
-    return params.event !== "session.suggestion" && params.event !== "session.typing";
+    return (
+      (!params.cfg.gateway?.roles || operatorActor?.kind === "system") &&
+      params.event !== "session.suggestion" &&
+      params.event !== "session.typing"
+    );
   }
+  const hidesForeignSessions = operatorSessionCap(params.client, params.cfg) === "none";
   const visible = params.sessionKeys.every((sessionKey) => {
     const snapshot = loadSharingSnapshot(params.cfg, sessionKey, params.agentId);
-    if (snapshot.incognito) {
+    if (snapshot.incognito || (hidesForeignSessions && snapshot.creatorId !== identity.id)) {
       return false;
     }
     if (snapshot.visibility !== "draft" || snapshot.creatorId === identity.id) {
@@ -689,7 +667,9 @@ export function canReceiveSessionEvent(params: {
     });
     return (
       target !== null &&
-      canManageSessionSharing(resolveSessionSharingRole({ client: params.client, target }))
+      canManageSessionSharing(
+        resolveSessionSharingRole({ cfg: params.cfg, client: params.client, target }),
+      )
     );
   });
   if (!visible || params.event !== "session.suggestion") {
@@ -709,21 +689,33 @@ export function canReceiveSessionEvent(params: {
       agentId: params.agentId,
     });
     return (
-      target !== null && resolveSessionSharingRole({ client: params.client, target }) !== "viewer"
+      target !== null &&
+      resolveSessionSharingRole({ cfg: params.cfg, client: params.client, target }) !== "viewer"
     );
   });
 }
 
 export function createSessionListEntryFilter(params: {
+  cfg?: OpenClawConfig;
   client: GatewayClient | null;
 }): ((sessionKey: string, entry: SessionEntry) => boolean) | undefined {
-  const identity = gatewayClientSessionCreator(params.client);
-  if (isGatewayAdmin(params.client) || !identity) {
+  const operatorActor = resolveGatewayOperatorRoleActor(params.client);
+  const identity =
+    gatewayClientSessionCreator(params.client) ??
+    (operatorActor?.kind === "operator"
+      ? { type: "human" as const, id: operatorActor.profileId }
+      : undefined);
+  if (isGatewayAdmin(params.client) || (!identity && operatorActor?.kind === "system")) {
     return undefined;
   }
-  return (sessionKey, entry) => {
-    const owner = entry.createdActor?.id === identity.id;
-    const incognito = entry.incognito === true || isIncognitoSessionKey(sessionKey);
-    return !incognito && (owner || resolveSessionVisibility(entry) !== "draft");
-  };
+  if (!identity) {
+    return params.cfg?.gateway?.roles ? () => false : undefined;
+  }
+  const hidesForeignSessions =
+    params.cfg && operatorSessionCap(params.client, params.cfg) === "none";
+  return (sessionKey, entry) =>
+    entry.incognito !== true &&
+    !isIncognitoSessionKey(sessionKey) &&
+    (entry.createdActor?.id === identity.id ||
+      (!hidesForeignSessions && resolveSessionVisibility(entry) !== "draft"));
 }

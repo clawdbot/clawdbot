@@ -1410,6 +1410,7 @@ describe("codex command", () => {
       entry: {
         sessionId: "session-1",
         updatedAt: Date.now(),
+        model: "gpt-5.6-sol",
         permissionMode: "full",
       },
     });
@@ -1423,7 +1424,7 @@ describe("codex command", () => {
       {
         threadId: "thread-status",
         cwd: tempDir,
-        model: "gpt-5.5",
+        model: "codex-execution-model",
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         serviceTier: "priority",
@@ -1432,7 +1433,7 @@ describe("codex command", () => {
 
     await expect(
       handleCodexCommand(createSandboxedContext("model", sessionFile), { deps: createDeps() }),
-    ).resolves.toEqual({ text: "Codex model: gpt-5.5" });
+    ).resolves.toEqual({ text: "Codex model: gpt-5.6-sol" });
     await expect(
       handleCodexCommand(createSandboxedContext("fast status", sessionFile), {
         deps: createDeps(),
@@ -2740,6 +2741,65 @@ describe("codex command", () => {
     expect(result.text).not.toContain("active now");
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(3);
   });
+
+  it.each([
+    ["auth", "wham_token_expired"],
+    ["auth_permanent", "wham_account_dead"],
+  ] as const)(
+    "shows %s subscription cooldowns classified as %s as sign-in expired",
+    async (cooldownReason, cooldownClassification) => {
+      const config = {};
+      const now = Date.now();
+      installAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:expired@example.com": {
+              type: "oauth",
+              provider: "openai",
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: now + 60 * 60 * 1000,
+              email: "expired@example.com",
+            },
+            "openai:api-key": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-test",
+            },
+          },
+          order: {
+            openai: ["openai:expired@example.com", "openai:api-key"],
+          },
+          usageStats: {
+            "openai:expired@example.com": {
+              cooldownUntil: now + 60 * 60 * 1000,
+              cooldownReason,
+              cooldownClassification,
+            },
+          },
+        },
+        config,
+      );
+
+      const safeCodexControlRequest = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          value: { account: { type: "unknown" }, requiresOpenaiAuth: false },
+        })
+        .mockResolvedValueOnce({ ok: false, error: "rate limits unavailable" })
+        .mockResolvedValueOnce({ ok: false, error: "subscription limits unavailable" });
+
+      const result = await runCommand("account", { safeCodexControlRequest }, { config });
+
+      expect(result.text).toContain(
+        "\n  1. expired@example.com   ChatGPT subscription   — sign-in expired",
+      );
+      expect(result.text).toContain("\n  2. api-key   API key   — active now");
+      expect(result.text).not.toContain("temporarily unavailable");
+    },
+  );
 
   it("escapes successful Codex account fallback summaries before chat display", async () => {
     const unsafe = "<@U123> [trusted](https://evil) @here";
@@ -4206,7 +4266,9 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(createContext("diagnostics second", sessionFile), { deps }),
     ).resolves.toEqual({
-      text: "Codex diagnostics were already sent for this account or channel recently. Try again in 60s.",
+      text: expect.stringMatching(
+        /^Codex diagnostics were already sent for this account or channel recently\. Try again in (?:[1-9]|[1-5]\d|60)s\.$/,
+      ),
     });
 
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
@@ -6068,13 +6130,13 @@ describe("codex command", () => {
       expectedPermissionMode: "full",
     },
     {
-      name: "resets to default for an owner without admin scope",
+      name: "persists explicit guarded default for an owner without admin scope",
       mode: "default",
       senderIsOwner: true,
       gatewayClientScopes: ["operator.write"],
       initialPermissionMode: "full",
       expectedText: "Codex permissions set to default.",
-      expectedPermissionMode: undefined,
+      expectedPermissionMode: "guarded",
     },
   ] as const)("$name", async (testCase) => {
     const sessionKey = `agent:main:test:permissions-${testCase.mode}`;
@@ -6085,6 +6147,7 @@ describe("codex command", () => {
       entry: {
         sessionId: "session-1",
         updatedAt: Date.now(),
+        sessionRoot: tempDir,
         ...(testCase.initialPermissionMode
           ? { permissionMode: testCase.initialPermissionMode }
           : {}),
@@ -6107,8 +6170,13 @@ describe("codex command", () => {
         sessionKey,
         storePath,
         readConsistency: "latest",
-      })?.permissionMode,
-    ).toBe(testCase.expectedPermissionMode);
+      }),
+    ).toMatchObject({
+      ...(testCase.expectedPermissionMode
+        ? { permissionMode: testCase.expectedPermissionMode }
+        : {}),
+      sessionRoot: tempDir,
+    });
   });
 
   it("rejects model and binding replacement commands for a locked supervised session", async () => {

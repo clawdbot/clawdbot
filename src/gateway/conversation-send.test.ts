@@ -15,6 +15,7 @@ const conversation = {
   channel: "reef",
   accountId: "default",
   kind: "direct" as const,
+  peerId: "molty",
   target: "reef:molty",
   sessionId: "reef-session",
   sessionKey: "agent:main:reef:direct:molty",
@@ -190,8 +191,6 @@ describe("runGatewayConversationSend", () => {
       createdAt: 100,
       updatedAt: 200,
     });
-    deps.resolveConversation.mockReturnValue(undefined);
-
     await expect(
       runGatewayConversationSend(
         {
@@ -205,8 +204,126 @@ describe("runGatewayConversationSend", () => {
         deps,
       ),
     ).resolves.toMatchObject({ status: "sent", messageId: "reef-existing" });
-    expect(deps.resolveConversation).not.toHaveBeenCalled();
+    expect(deps.resolveConversation).toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("does not reveal completed send state after the route owner changes", async () => {
+    const deps = createDeps();
+    deps.operations.set("send-reassigned", {
+      operationId: "send-reassigned",
+      operationKind: "send",
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageHash: "hello",
+      status: "sent",
+      platformMessageId: "reef-private-message",
+      createdAt: 100,
+      updatedAt: 200,
+    });
+
+    await expect(
+      runGatewayConversationSend(
+        {
+          config: {
+            agents: { entries: { main: {}, finance: {} } },
+            bindings: [
+              {
+                type: "route",
+                agentId: "finance",
+                match: { channel: "reef", accountId: "default" },
+              },
+            ],
+          },
+          agentId: "main",
+          senderIsOwner: true,
+          operationId: "send-reassigned",
+          conversationRef: conversation.conversationRef,
+          message: "hello",
+        },
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(ConversationInputError);
+  });
+
+  it("rejects a stored conversation route owned by another agent", async () => {
+    const deps = createDeps();
+
+    await expect(
+      runGatewayConversationSend(
+        {
+          config: {
+            agents: { entries: { main: {}, finance: {} } },
+            bindings: [
+              {
+                type: "route",
+                agentId: "finance",
+                match: { channel: "reef", accountId: "default" },
+              },
+            ],
+          },
+          agentId: "main",
+          senderIsOwner: true,
+          operationId: "send-sibling-route",
+          conversationRef: conversation.conversationRef,
+          message: "hello",
+        },
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(ConversationInputError);
+    expect(deps.beginOperation).not.toHaveBeenCalled();
+    expect(deps.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("revalidates a route-owner change at the durable delivery attempt", async () => {
+    const deps = createDeps();
+    deps.runMessageAction = vi.fn(async (input: Record<string, unknown>) => {
+      const onDeliveryIntent = input.onDeliveryIntent as (intent: {
+        id: string;
+        channel: string;
+        to: string;
+        durability: "required";
+      }) => void;
+      onDeliveryIntent({
+        id: "queue-revoked-route",
+        channel: "reef",
+        to: "molty",
+        durability: "required",
+      });
+      await (input.onDeliveryAttempt as () => Promise<void>)();
+      return sentResult();
+    }) as never;
+    const readCurrentConfig = vi
+      .fn()
+      .mockReturnValueOnce({})
+      .mockReturnValue({
+        agents: { entries: { main: {}, finance: {} } },
+        bindings: [
+          {
+            type: "route",
+            agentId: "finance",
+            match: { channel: "reef", accountId: "default" },
+          },
+        ],
+      });
+
+    await expect(
+      runGatewayConversationSend(
+        {
+          config: {},
+          readCurrentConfig,
+          agentId: "main",
+          senderIsOwner: true,
+          operationId: "send-revoked-route",
+          conversationRef: conversation.conversationRef,
+          message: "hello",
+        },
+        deps,
+      ),
+    ).resolves.toMatchObject({ status: "queued", queueId: "queue-revoked-route" });
+
+    expect(readCurrentConfig).toHaveBeenCalledTimes(2);
+    expect(deps.markSent).not.toHaveBeenCalled();
   });
 
   it("namespaces stable queue intents across agents", async () => {
@@ -226,7 +343,9 @@ describe("runGatewayConversationSend", () => {
     );
     await runGatewayConversationSend(
       {
-        config: {},
+        config: {
+          agents: { entries: { worker: { default: true } } },
+        },
         agentId: "worker",
         senderIsOwner: true,
         operationId: "shared-operation",

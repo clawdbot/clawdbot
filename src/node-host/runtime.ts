@@ -15,6 +15,8 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
   NODE_TERMINAL_UPLOAD_COMMAND,
 } from "../infra/node-commands.js";
+import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
+import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { ensureTerminalUploadCleanup } from "../infra/terminal-file-upload.js";
 import { logDebug } from "../logger.js";
@@ -29,6 +31,7 @@ import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
+import { resolveNodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
@@ -57,12 +60,13 @@ export type NodeHostInventory = {
 type PreparedNodeHostRuntime = {
   manifest: NodeHostManifest;
   workerHostingEnabled: boolean;
+  workerHostingDisabledReason?: string;
   initialInventory: NodeHostInventory;
   start(params: {
     client: NodeHostClient;
     onInventoryChanged?: (inventory: NodeHostInventory) => void;
     onManifestChanged?: (manifest: NodeHostManifest) => void;
-    onRunnerAvailabilityChanged?: (available: boolean) => void;
+    onRunnerCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
   }): ActiveNodeHostRuntime;
 };
 
@@ -89,6 +93,7 @@ type NodeInvokeInputTarget = {
 
 type ActiveNodeInvoke = {
   controller: AbortController;
+  framedFailure?: Error;
   input?: NodeInvokeInputTarget;
 };
 
@@ -252,6 +257,8 @@ export async function prepareNodeHostRuntime(params?: {
   enableAgentRuns?: boolean;
   /** The embedded app worker never advertises full worker session hosting. */
   enableWorkerRuns?: boolean;
+  /** Process-scoped worker hosting for environment-managed disposable nodes. */
+  forceWorkerRuns?: boolean;
   /** Embedded workers may still host long-lived plugin commands over the app-owned socket. */
   enableDuplexPluginCommands?: boolean;
   installedAppsSharingEnabled?: boolean;
@@ -283,8 +290,59 @@ export async function prepareNodeHostRuntime(params?: {
     params?.enableAgentRuns === true && config.nodeHost?.agentRuns?.claude?.enabled === true
       ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
-  const workerRunsEnabled =
-    params?.enableWorkerRuns === true && config.nodeHost?.workerRuns?.enabled === true;
+  let workerRunsEnabled =
+    params?.enableWorkerRuns === true &&
+    (params.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
+  let preparedContainerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
+  let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
+  let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
+  let publishContainerCapacity: ((capacity: NodeWorkerCapacitySnapshot) => void) | undefined;
+  let workerHostingDisabledReason: string | undefined;
+  if (workerRunsEnabled && config.nodeHost?.workerRuns?.isolation === "container") {
+    let engineResolved = false;
+    try {
+      if (platform === "win32") {
+        throw new Error(
+          'Container-isolated node workers are unsupported on Windows because native paths cannot be mounted at their container paths; run the node host on Linux or macOS, or set isolation to "none".',
+        );
+      }
+      const containerEngine = await resolveNodeWorkerContainerEngine({ env });
+      engineResolved = true;
+      preparedContainerWorkspace = new NodeWorkerWorkspaceRuntime({ env });
+      preparedContainerSupervisor = createNodeWorkerSupervisor({
+        env,
+        capacity: config.nodeHost?.workerRuns?.capacity,
+        workspace: preparedContainerWorkspace,
+        containerEngine,
+        ...(config.nodeHost?.workerRuns?.containerImage
+          ? { containerImage: config.nodeHost.workerRuns.containerImage }
+          : {}),
+        onCapacityChanged: (capacity) => {
+          preparedContainerCapacity = capacity;
+          publishContainerCapacity?.(capacity);
+        },
+      });
+      // Container ownership and orphan cleanup must succeed before any worker capacity is advertised.
+      await preparedContainerSupervisor.initialize();
+    } catch (error) {
+      let failure = error;
+      try {
+        await preparedContainerSupervisor?.close();
+      } catch (closeError) {
+        if (closeError !== error) {
+          failure = new Error(`${String(error)}; supervisor cleanup failed: ${String(closeError)}`);
+        }
+      }
+      workerRunsEnabled = false;
+      preparedContainerWorkspace = undefined;
+      preparedContainerSupervisor = undefined;
+      preparedContainerCapacity = undefined;
+      const detail = failure instanceof Error ? failure.message : String(failure);
+      workerHostingDisabledReason = engineResolved
+        ? `container worker reconciliation failed: ${detail}; inspect the container engine and worker launch journal before retrying`
+        : detail;
+    }
+  }
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [
@@ -317,23 +375,32 @@ export async function prepareNodeHostRuntime(params?: {
   return {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
+    ...(workerHostingDisabledReason ? { workerHostingDisabledReason } : {}),
     initialInventory,
-    start({ client, onInventoryChanged, onManifestChanged, onRunnerAvailabilityChanged }) {
+    start({ client, onInventoryChanged, onManifestChanged, onRunnerCapacityChanged }) {
       const mcpAbort = new AbortController();
-      const workerWorkspace = workerRunsEnabled
-        ? new NodeWorkerWorkspaceRuntime({ env })
-        : undefined;
+      const workerWorkspace =
+        preparedContainerWorkspace ??
+        (workerRunsEnabled ? new NodeWorkerWorkspaceRuntime({ env }) : undefined);
       const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;
-      const workerSupervisor = workerRunsEnabled
-        ? createNodeWorkerSupervisor({
-            env,
-            onAvailabilityChanged: onRunnerAvailabilityChanged,
-            workspace: workerWorkspace,
-          })
-        : undefined;
-      if (workerSupervisor) {
+      const workerSupervisor =
+        preparedContainerSupervisor ??
+        (workerRunsEnabled
+          ? createNodeWorkerSupervisor({
+              env,
+              capacity: config.nodeHost?.workerRuns?.capacity,
+              onCapacityChanged: onRunnerCapacityChanged,
+              workspace: workerWorkspace,
+            })
+          : undefined);
+      if (preparedContainerSupervisor) {
+        publishContainerCapacity = onRunnerCapacityChanged;
+        if (preparedContainerCapacity) {
+          onRunnerCapacityChanged?.(preparedContainerCapacity);
+        }
+      } else if (workerSupervisor) {
         void workerSupervisor.initialize().catch((error: unknown) => {
           logDebug(`node-host: worker capacity reconciliation failed: ${String(error)}`);
         });
@@ -344,6 +411,12 @@ export async function prepareNodeHostRuntime(params?: {
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
         sendNodeEvent: async (event, payload) =>
           await client.request("node.event", buildNodeEventParams(event, payload)),
+        ...(workerWorkspace
+          ? {
+              acquireManagedWorkspace: (request) =>
+                workerWorkspace.acquireManagedWorkspace(request),
+            }
+          : {}),
       };
       let currentPluginNodeHost = pluginNodeHost;
       let currentManifest = manifest;
@@ -434,8 +507,22 @@ export async function prepareNodeHostRuntime(params?: {
           if (duplexCommand) {
             progress?.startHeartbeats();
           }
-          const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
+          const framedIo =
             input && progress
+              ? createNodeDuplexEndpoint({
+                  sendFrame: async (payloadJSON) => await progress.write(payloadJSON),
+                  onError: (error) => {
+                    active.framedFailure = error;
+                    controller.abort(error);
+                  },
+                })
+              : undefined;
+          if (framedIo) {
+            controller.signal.addEventListener("abort", () => framedIo.close(), { once: true });
+          }
+          let framedInputRegistered = false;
+          const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
+            input && progress && framedIo
               ? {
                   signal: controller.signal,
                   emitChunk: async (chunk) => await progress.write(chunk),
@@ -444,13 +531,37 @@ export async function prepareNodeHostRuntime(params?: {
                       registerNodeInvokeInputHandler(input, callback);
                     }
                   },
+                  frames: {
+                    send: async (message) => await framedIo.send(message),
+                    onMessage: (callback) => {
+                      const unsubscribe = framedIo.onMessage(callback);
+                      if (!framedInputRegistered) {
+                        framedInputRegistered = true;
+                        registerNodeInvokeInputHandler(input, (payloadJSON) => {
+                          try {
+                            framedIo.receive(payloadJSON);
+                          } catch (error) {
+                            controller.abort(error);
+                          }
+                        });
+                        void framedIo.sendReady().catch(controller.abort.bind(controller));
+                      }
+                      return unsubscribe;
+                    },
+                  },
                 }
               : undefined;
           try {
             await handleInvoke(frame, client, skillBins, manager, {
               ...(claudePath ? { claudePath } : {}),
               signal: controller.signal,
-              ...(pluginCommandIo ? { pluginCommandIo } : {}),
+              pluginCommandIo,
+              flushPluginCommandIo: framedIo?.drain,
+              canReportAbortedFailure: (error) =>
+                controller.signal.aborted &&
+                error === active.framedFailure &&
+                error === controller.signal.reason &&
+                activeInvokes.get(frame.id) === active,
               ...(gatewayConnection?.url ? { gatewayUrl: gatewayConnection.url } : {}),
               ...(gatewayConnection?.tlsFingerprint
                 ? { gatewayTlsFingerprint: gatewayConnection.tlsFingerprint }
@@ -468,6 +579,7 @@ export async function prepareNodeHostRuntime(params?: {
               ...(workerWorkspace ? { workerWorkspace } : {}),
             });
           } finally {
+            framedIo?.close();
             progress?.stop();
             await progress?.flush();
             if (activeInvokes.get(frame.id) === active) {

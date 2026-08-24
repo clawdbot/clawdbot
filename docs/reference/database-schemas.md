@@ -31,6 +31,24 @@ Changes may stay at the same schema version only when downgraded readers remain 
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+The placement-move table uses this same-version rule for its nullable bare
+`abandon_source INTEGER` column. The feature lazily ensures the column on first
+move use. `NULL` means ordinary reconcile-first movement; `1` records the
+operator's explicit offline-device abandonment decision so restart recovery
+cannot accidentally resume remote reconciliation. Older readers ignore the
+column and can reopen the same database safely.
+
+Conversation associations use the same rule for the nullable bare
+`route_context_json TEXT` column. The database-open repair ensures the column
+for updated binaries. Older readers ignore it and can reopen and update the
+same database safely; their association update invalidates context captured by
+a newer writer so it cannot be replayed after re-upgrade.
+
+User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
+column in state schema 9. Operator-role assignment lazily ensures the column on
+first use. Older readers ignore the column and can reopen the same database
+safely.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
 
 ## Preflight a target release
