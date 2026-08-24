@@ -1035,6 +1035,12 @@ export async function runModelsAuthLoginFlowCore(
     );
   }
 
+  if (!process.stdin.isTTY && chosenMethod.kind !== "device_code") {
+    throw new Error(
+      `models auth login requires an interactive TTY unless the resolved provider auth method is device-code. In automation, use ${formatCliCommand("openclaw models auth login --provider openai --method device-code")} for provider device-code auth, or ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} when token auth is available.`,
+    );
+  }
+
   if (opts.force) {
     // Purge existing profiles for this provider only after we have a valid
     // auth method to invoke. Running the purge earlier (before method
@@ -1094,9 +1100,9 @@ export async function runModelsAuthLoginFlowCore(
 }
 
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
-  if (!process.stdin.isTTY) {
+  if (!process.stdin.isTTY && (!opts.provider || !opts.method)) {
     throw new Error(
-      `models auth login requires an interactive TTY. In automation, use ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} when token auth is available.`,
+      `models auth login requires an interactive TTY unless --provider and --method device-code are set. In automation, use ${formatCliCommand("openclaw models auth login --provider openai --method device-code")} for provider device-code auth, or ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} when token auth is available.`,
     );
   }
 

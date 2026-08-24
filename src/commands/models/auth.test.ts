@@ -690,6 +690,58 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledOnce();
   });
 
+  it("allows explicit provider device-code login without an interactive TTY", async () => {
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("");
+    const runtime = createRuntime();
+    const runDeviceCodeAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      createProvider({
+        id: "openai",
+        label: "OpenAI Codex",
+        run: runOauthAuth as ProviderPlugin["auth"][number]["run"],
+        auth: [
+          { id: "oauth", label: "OAuth", kind: "oauth", run: runOauthAuth },
+          { id: "device-code", label: "Device code", kind: "device_code", run: runDeviceCodeAuth },
+        ],
+      }),
+    ]);
+
+    await modelsAuthLoginCommand({ provider: "openai", method: "device-code" }, runtime);
+
+    expect(runOauthAuth).not.toHaveBeenCalled();
+    expect(runDeviceCodeAuth).toHaveBeenCalledOnce();
+  });
+
+  it("rejects non-TTY login when a provider uses the device-code id for a non-device method", async () => {
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("");
+    const runtime = createRuntime();
+    const runDeviceCodeNamedOauth = vi.fn().mockResolvedValue({ profiles: [] });
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      createProvider({
+        id: "openai",
+        label: "OpenAI Codex",
+        run: runDeviceCodeNamedOauth as ProviderPlugin["auth"][number]["run"],
+        auth: [
+          {
+            id: "device-code",
+            label: "Interactive browser flow with colliding id",
+            kind: "oauth",
+            run: runDeviceCodeNamedOauth,
+          },
+        ],
+      }),
+    ]);
+
+    await expect(
+      modelsAuthLoginCommand({ provider: "openai", method: "device-code" }, runtime),
+    ).rejects.toThrow("resolved provider auth method is device-code");
+
+    expect(runDeviceCodeNamedOauth).not.toHaveBeenCalled();
+  });
+
   it("honors --method api-key for OpenAI login", async () => {
     const runtime = createRuntime();
     const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [] });
