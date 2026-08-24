@@ -115,8 +115,6 @@ export async function runGlobalUpdate(params: {
         ...stepParams,
         cwd: stepParams.cwd ?? pkgRoot,
         progress: opts.progress,
-        stepIndex: 0,
-        totalSteps: 1,
       }),
     postVerifyStep: async (verifiedPackageRoot) => {
       const doctorEntry = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
@@ -148,8 +146,6 @@ export async function runGlobalUpdate(params: {
           compatibilityHostVersion: candidateHostVersion,
         }),
         progress: opts.progress,
-        stepIndex: 0,
-        totalSteps: 1,
       });
     },
   });

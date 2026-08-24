@@ -141,8 +141,6 @@ export async function runPackageInstallUpdate(params: {
       const doctorProgressInfo = {
         name: `${CLI_NAME} doctor`,
         command: doctorArgv.join(" "),
-        index: 0,
-        total: 0,
       };
       params.progress?.onStepStart?.(doctorProgressInfo);
       const doctorStep = await runUpdateStep({

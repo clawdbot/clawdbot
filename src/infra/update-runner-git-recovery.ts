@@ -44,8 +44,6 @@ export async function rebuildRolledBackGitRuntime(params: {
       cwd: params.gitRoot,
       timeoutMs: params.timeoutMs,
       env,
-      stepIndex: 0,
-      totalSteps: 1,
       results: params.steps,
     });
     return result.exitCode === 0;

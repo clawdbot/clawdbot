@@ -166,10 +166,21 @@ async function resolveExplicitTarget(params: {
       const remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
       let fetchedTag = false;
       for (const remote of remotes) {
+        // Configured pruning must not delete unrelated tags while resolving one explicit target.
         const fetchStep = await runStep(
           params.step(
             `git fetch ${remote} ${tagFetchRef}`,
-            ["git", "-C", params.gitRoot, "fetch", remote, `+${tagFetchRef}:${tagFetchRef}`],
+            [
+              "git",
+              "-C",
+              params.gitRoot,
+              "fetch",
+              "--no-prune",
+              "--no-tags",
+              "--",
+              remote,
+              `+${tagFetchRef}:${tagFetchRef}`,
+            ],
             params.gitRoot,
           ),
         );

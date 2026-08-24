@@ -26,9 +26,9 @@ function mergeCommandEnvironments(
 }
 
 export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
-  const { runCommand, name, argv, cwd, timeoutMs, env, progress, stepIndex, totalSteps } = opts;
+  const { runCommand, name, argv, cwd, timeoutMs, env, progress } = opts;
   const command = argv.join(" ");
-  const stepInfo: UpdateStepInfo = { name, command, index: stepIndex, total: totalSteps };
+  const stepInfo: UpdateStepInfo = { name, command };
   progress?.onStepStart?.(stepInfo);
 
   const started = Date.now();
