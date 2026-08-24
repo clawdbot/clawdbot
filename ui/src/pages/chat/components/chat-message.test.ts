@@ -5068,6 +5068,33 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-card__expand svg")).not.toBeNull();
   });
 
+  it("carries the known attachment kind into the sidebar when MIME is absent", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(
+      container,
+      createAssistantMessage([
+        createAttachmentBlock(
+          "https://example.com/download/asset",
+          "document",
+          "asset",
+          "",
+        ),
+      ]),
+      { showToolCalls: false, onOpenSidebar },
+    );
+
+    expectElement(
+      container,
+      ".chat-assistant-attachment-card__expand",
+      HTMLButtonElement,
+    ).click();
+
+    expect(onOpenSidebar).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "attachment", attachmentKind: "document" }),
+    );
+  });
+
   it("downloads a managed image from the compact preview header", async () => {
     const attachmentId = crypto.randomUUID();
     const artifactId = `artifact_managed_image_${attachmentId}`;

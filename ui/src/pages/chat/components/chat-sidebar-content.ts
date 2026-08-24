@@ -51,7 +51,7 @@ function renderSidebarAttachment(
       ${t("chat.attachments.previewUnavailable")}
     </div>`;
   }
-  if (mimeType.startsWith("video/")) {
+  if (content.attachmentKind === "video" || mimeType.startsWith("video/")) {
     return html`<openclaw-chat-video-player
       .src=${src}
       .sourceIdentity=${content.sourceIdentity ?? content.src}
@@ -62,7 +62,7 @@ function renderSidebarAttachment(
       .sizeBytes=${content.sizeBytes}
     ></openclaw-chat-video-player>`;
   }
-  if (mimeType.startsWith("audio/")) {
+  if (content.attachmentKind === "audio" || mimeType.startsWith("audio/")) {
     return html`<openclaw-chat-audio-player
       .src=${src}
       .sourceIdentity=${content.sourceIdentity ?? content.src}
@@ -75,7 +75,7 @@ function renderSidebarAttachment(
       .voiceNote=${content.voiceNote === true}
     ></openclaw-chat-audio-player>`;
   }
-  if (mimeType.startsWith("image/")) {
+  if (content.attachmentKind === "image" || mimeType.startsWith("image/")) {
     return html`<img class="sidebar-attachment-preview__image" src=${src} alt=${content.title} />`;
   }
   const canFrame =

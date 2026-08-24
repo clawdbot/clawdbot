@@ -491,6 +491,7 @@ export function renderAssistantAttachments(
       ? () =>
           onOpenSidebar?.({
             kind: "attachment",
+            attachmentKind: attachment.kind,
             title: attachment.label,
             src: attachmentUrl,
             mimeType: attachment.mimeType,

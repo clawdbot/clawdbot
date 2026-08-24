@@ -45,6 +45,7 @@ type ImageSidebarContent = {
 
 type AttachmentSidebarContent = {
   kind: "attachment";
+  attachmentKind?: "audio" | "video" | "document" | "image";
   title: string;
   src: string;
   mimeType?: string | null;
