@@ -23,48 +23,23 @@ import { buildLmstudioAuthHeaders } from "./runtime.js";
 
 const log = createSubsystemLogger("extensions/lmstudio/models");
 const LMSTUDIO_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
-const REDACTED_SECRET_PLACEHOLDER = "***";
 
-function collectLmstudioRequestSecrets(params: {
-  apiKey?: string;
-  headers?: Record<string, string>;
-}): string[] {
-  const secrets = new Set<string>();
-  const apiKey = params.apiKey?.trim();
-  if (apiKey) {
-    secrets.add(apiKey);
-    secrets.add(`Bearer ${apiKey}`);
-  }
-  for (const [headerName, headerValue] of Object.entries(params.headers ?? {})) {
-    if (!headerValue) {
-      continue;
-    }
-    secrets.add(headerValue);
-    if (headerName.toLowerCase() === "authorization" && headerValue.startsWith("Bearer ")) {
-      secrets.add(headerValue.slice("Bearer ".length));
-    }
-  }
-  return Array.from(secrets);
-}
-
-/**
- * Redacts the exact credential values sent in the request before applying the
- * shared pattern-based redactor. This covers short configured API keys (e.g.
- * `sk-test`) that the generic standalone-Bearer pattern may miss.
- */
-function redactLmstudioErrorBody(
-  body: string,
-  params: {
-    apiKey?: string;
-    headers?: Record<string, string>;
-  },
-): string {
-  const secrets = collectLmstudioRequestSecrets(params).toSorted((a, b) => b.length - a.length);
-  let redacted = body;
-  for (const secret of secrets) {
-    redacted = redacted.replaceAll(secret, REDACTED_SECRET_PLACEHOLDER);
-  }
-  return redactToolPayloadText(redacted);
+function redactLmstudioLoadError(value: string, headers: Record<string, string> | undefined) {
+  const credentials = Object.entries(headers ?? {})
+    .filter(([name]) => name.toLowerCase() !== "content-type")
+    .flatMap(([name, header]) => {
+      const normalized = header.trim();
+      if (!normalized) {
+        return [];
+      }
+      return name.toLowerCase() === "authorization"
+        ? [normalized, normalized.replace(/^\S+\s+/u, "")]
+        : [normalized];
+    })
+    .toSorted((left, right) => right.length - left.length);
+  return redactToolPayloadText(
+    credentials.reduce((redacted, credential) => redacted.replaceAll(credential, "***"), value),
+  );
 }
 
 type LmstudioLoadResponse = {
@@ -318,15 +293,16 @@ export async function ensureLmstudioModelLoaded(params: {
   }
 
   try {
+    const requestHeaders = buildLmstudioAuthHeaders({
+      apiKey: params.apiKey,
+      headers: params.headers,
+      json: true,
+    });
     const { response, release } = await fetchLmstudioEndpoint({
       url: `${baseUrl}/api/v1/models/load`,
       init: {
         method: "POST",
-        headers: buildLmstudioAuthHeaders({
-          apiKey: params.apiKey,
-          headers: params.headers,
-          json: true,
-        }),
+        headers: requestHeaders,
         body: JSON.stringify({
           model: canonicalModelKey,
           // Ask LM Studio to load with our default target, capped to the model's own limit.
@@ -343,14 +319,12 @@ export async function ensureLmstudioModelLoaded(params: {
         const bodyRead = await readResponseTextPrefix(response, LMSTUDIO_ERROR_BODY_LIMIT_BYTES, {
           chunkTimeoutMs: 10_000,
         });
-        if (bodyRead.truncated) {
-          // A reflected credential split across the byte cap cannot be reliably
-          // redacted, so keep only the status in the operator-visible error.
-          throw new Error(`LM Studio model load failed (${response.status})`);
-        }
-        const body = bodyRead.text;
+        // A truncated credential cannot be identified safely; drop the entire diagnostic.
+        const detail = bodyRead.truncated
+          ? ""
+          : redactLmstudioLoadError(bodyRead.text, requestHeaders);
         throw new Error(
-          `LM Studio model load failed (${response.status})${body ? `: ${redactLmstudioErrorBody(body, { apiKey: params.apiKey, headers: params.headers })}` : ""}`,
+          `LM Studio model load failed (${response.status})${detail ? `: ${detail}` : ""}`,
         );
       }
       // Read the success body through the shared byte-capped reader so a misbehaving
@@ -361,7 +335,8 @@ export async function ensureLmstudioModelLoaded(params: {
         "LM Studio model load",
       );
       if (typeof payload.status === "string" && payload.status.toLowerCase() !== "loaded") {
-        throw new Error(`LM Studio model load returned unexpected status: ${payload.status}`);
+        const status = redactLmstudioLoadError(payload.status, requestHeaders);
+        throw new Error(`LM Studio model load returned unexpected status: ${status}`);
       }
     } finally {
       await release();
