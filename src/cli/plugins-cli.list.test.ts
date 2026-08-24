@@ -86,6 +86,13 @@ describe("plugins cli list", () => {
           error: "missing plugin module",
         }),
         createPluginRecord({ id: "healthy", description: "Healthy plugin" }),
+        createPluginRecord({
+          id: "disabled",
+          description: "Disabled plugin description",
+          enabled: false,
+          status: "disabled",
+          error: "workspace plugin (disabled by default)",
+        }),
       ],
       diagnostics: [],
     });
@@ -95,6 +102,7 @@ describe("plugins cli list", () => {
     const output = pluginsCliRuntimeLogs.join("\n");
     expect(output).toContain("missing plugin module");
     expect(output).toContain("Healthy plugin");
+    expect(output).toContain("Disabled plugin description");
   });
 
   it("includes imported state in JSON output", async () => {
