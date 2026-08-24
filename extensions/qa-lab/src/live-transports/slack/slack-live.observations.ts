@@ -72,7 +72,7 @@ export async function listSlackMessages(params: {
   client: WebClient;
   oldestTs: string;
 }) {
-  const messages: SlackMessage[] = [];
+  const messages: NonNullable<ReturnType<typeof slackHistorySchema.parse>["messages"]> = [];
   let cursor: string | undefined;
   for (let page = 0; page < SLACK_QA_CHANNEL_HISTORY_MAX_PAGES; page += 1) {
     const history = slackHistorySchema.parse(
