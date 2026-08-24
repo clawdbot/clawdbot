@@ -324,20 +324,9 @@ export async function prepareGatewayLifecycle(params: {
     addGatewayLifetimeSidecar: (sidecar: (typeof runtimeState.gatewayLifetimeSidecars)[number]) => {
       runtimeState.gatewayLifetimeSidecars.push(sidecar);
     },
-    setMaintenanceHandles: (handles: {
-      tickInterval: typeof runtimeState.tickInterval;
-      healthInterval: typeof runtimeState.healthInterval;
-      dedupeCleanup: typeof runtimeState.dedupeCleanup;
-      stopMediaCleanup: typeof runtimeState.stopMediaCleanup;
-      worktreeCleanup: typeof runtimeState.worktreeCleanup;
-      skillCuratorCleanup: typeof runtimeState.skillCuratorCleanup;
-    }) => {
-      runtimeState.tickInterval = handles.tickInterval;
-      runtimeState.healthInterval = handles.healthInterval;
-      runtimeState.dedupeCleanup = handles.dedupeCleanup;
+    setMaintenanceHandles: (handles: NonNullable<typeof runtimeState.maintenance>) => {
+      runtimeState.maintenance = handles;
       runtimeState.stopMediaCleanup = handles.stopMediaCleanup;
-      runtimeState.worktreeCleanup = handles.worktreeCleanup;
-      runtimeState.skillCuratorCleanup = handles.skillCuratorCleanup;
     },
   };
   runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
@@ -524,12 +513,8 @@ export async function prepareGatewayLifecycle(params: {
       stopTaskRegistryMaintenance: shutdownRuntime.stopTaskRegistryMaintenance,
       nodePresenceTimers,
       broadcast,
-      tickInterval: runtimeState.tickInterval,
-      healthInterval: runtimeState.healthInterval,
-      dedupeCleanup: runtimeState.dedupeCleanup,
+      maintenance: runtimeState.maintenance,
       stopMediaCleanup: stopMediaCleanupForClose,
-      worktreeCleanup: runtimeState.worktreeCleanup,
-      skillCuratorCleanup: runtimeState.skillCuratorCleanup,
       agentUnsub: runtimeState.agentUnsub,
       heartbeatUnsub: runtimeState.heartbeatUnsub,
       transcriptUnsub: runtimeState.transcriptUnsub,

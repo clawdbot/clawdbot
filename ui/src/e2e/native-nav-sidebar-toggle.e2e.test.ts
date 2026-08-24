@@ -1,6 +1,7 @@
 // Shipped apps stamp `openclaw-native-nav`; current apps advertise web chrome
 // at document start and stamp `openclaw-native-web-chrome` at document end.
 // Plain browsers keep their normal in-page controls.
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext } from "playwright";
 import { afterEach, expect, it } from "vitest";
@@ -9,6 +10,10 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import {
+  failNextDeviceIdentityMint,
+  openChatSidePanelType,
+} from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -17,6 +22,8 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 const TOAST_PROOF_DIR = path.resolve(".artifacts/control-ui-e2e/toast-layering");
+const railProofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+const limitedScopes = ["operator.read", "operator.write"];
 const TOAST_SCENARIO: ControlUiMockGatewayScenario = {
   featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
   methodResponses: {
@@ -61,6 +68,7 @@ suite.define(() => {
 
   async function openPage(options: {
     colorScheme?: "dark" | "light";
+    deviceLess?: boolean;
     hasTouch?: boolean;
     height?: number;
     nativeNav?: boolean;
@@ -76,6 +84,9 @@ suite.define(() => {
       viewport: { height: options.height ?? 900, width: options.width ?? 1280 },
     });
     const page = await context.newPage();
+    if (options.deviceLess) {
+      await failNextDeviceIdentityMint(page);
+    }
     if (options.nativeNav) {
       // Mirrors the WKUserScript in DashboardWindowController.installNativeChromeScript,
       // which runs at document end. Playwright init scripts fire before
@@ -298,6 +309,92 @@ suite.define(() => {
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .not.toContain("shell--nav-collapsed");
+  });
+
+  it.each([
+    {
+      deviceLess: false,
+      label: "ordinary collapsed-navigation",
+      navCollapsed: true,
+      operatorScopes: undefined,
+      width: 1280,
+    },
+    {
+      deviceLess: true,
+      label: "limited-access collapsed-navigation",
+      navCollapsed: true,
+      operatorScopes: limitedScopes,
+      width: 1280,
+    },
+    {
+      deviceLess: true,
+      label: "limited-access expanded-navigation",
+      navCollapsed: false,
+      operatorScopes: limitedScopes,
+      width: 620,
+    },
+  ])("keeps expanded side-panel tabs clear of $label web titlebar chrome", async (testCase) => {
+    const page = await openPage({
+      deviceLess: testCase.deviceLess,
+      scenario: testCase.operatorScopes
+        ? {
+            featureMethods: [
+              "chat.metadata",
+              "chat.startup",
+              "device.scopes.requestUpgrade",
+              "device.scopes.waitUpgrade",
+              "sessions.create",
+            ],
+            methodResponses: { "sessions.list": chatSessionListResponse() },
+            operatorScopes: testCase.operatorScopes,
+          }
+        : undefined,
+      webChrome: true,
+      width: testCase.width,
+    });
+    const toolbar = page.locator(".macos-titlebar-controls");
+    if (testCase.navCollapsed) {
+      await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
+    }
+    await openChatSidePanelType(page, "Side chat");
+    const panel = page.getByRole("region", { name: "Side panel" });
+    await panel.getByRole("button", { name: "Expand side panel" }).click();
+    await panel.getByRole("button", { name: "Restore side panel" }).waitFor();
+
+    const shellControls = page.locator(
+      ".macos-titlebar-controls button:visible, .scope-upgrade-shell-status:visible",
+    );
+    const panelControls = panel.locator(":scope > .side-panel__header :is(button, wa-tab):visible");
+    const shellBoxes = await Promise.all(
+      Array.from({ length: await shellControls.count() }, (_, index) =>
+        shellControls.nth(index).boundingBox(),
+      ),
+    );
+    const panelBoxes = await Promise.all(
+      Array.from({ length: await panelControls.count() }, (_, index) =>
+        panelControls.nth(index).boundingBox(),
+      ),
+    );
+    const shellRight = Math.max(...shellBoxes.flatMap((box) => (box ? [box.x + box.width] : [])));
+    const panelLeft = Math.min(...panelBoxes.flatMap((box) => (box ? [box.x] : [])));
+    expect(panelLeft - shellRight).toBeGreaterThanOrEqual(4);
+    expect(panelLeft - shellRight).toBeLessThanOrEqual(16);
+    if (testCase.deviceLess) {
+      await page.locator(".scope-upgrade-shell-status").waitFor();
+    }
+    for (let index = 0; index < (await panelControls.count()); index += 1) {
+      await panelControls.nth(index).click({ trial: true });
+    }
+    if (railProofDir) {
+      await mkdir(railProofDir, { recursive: true });
+      await page.screenshot({
+        fullPage: true,
+        path: path.join(
+          railProofDir,
+          `native-web-${testCase.deviceLess ? "limited" : "ordinary"}-${testCase.navCollapsed ? "collapsed" : "expanded"}.png`,
+        ),
+      });
+    }
   });
 
   it("keeps only history controls in the Settings titlebar", async () => {

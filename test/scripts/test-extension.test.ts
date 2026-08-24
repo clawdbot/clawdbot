@@ -17,7 +17,6 @@ import {
   createExtensionTestProcessTargetChunks,
   createExtensionTestShards,
   listExtensionTestFilesForRoots,
-  listTrackedTestFilesForRoots,
   resolveExtensionBatchPlan,
   resolveExtensionTestConfig,
   resolveExtensionTestPlan,
@@ -94,7 +93,7 @@ function findExtensionWithoutTests() {
 }
 
 function listExtensionTestFiles(extensionId: string): string[] {
-  return listTrackedTestFilesForRoots([bundledPluginRoot(extensionId)]);
+  return listExtensionTestFilesForRoots([bundledPluginRoot(extensionId)]);
 }
 
 function expectedMatrixTestProcessCount() {

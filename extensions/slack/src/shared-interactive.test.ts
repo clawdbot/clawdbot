@@ -339,6 +339,52 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(buttonBlock.elements?.[2]?.style).toBe("primary");
     expect(buttonBlock.elements?.[3]).not.toHaveProperty("style");
   });
+
+  it.each([
+    {
+      name: "approval",
+      action: {
+        type: "approval" as const,
+        approvalId: "request-1",
+        approvalKind: "exec" as const,
+        decision: "allow-once" as const,
+      },
+      actionId: "openclaw:approval_button:5:1",
+      value:
+        'openclaw:approval:v1:{"approvalId":"request-1","approvalKind":"exec","decision":"allow-once"}',
+    },
+    {
+      name: "callback",
+      action: { type: "callback" as const, value: "plugin:opaque|value" },
+      actionId: "openclaw:callback_button:5:1",
+      value: "plugin:opaque|value",
+    },
+    {
+      name: "question",
+      action: {
+        type: "question" as const,
+        questionId: "ask_0123456789abcdef0123456789abcdef",
+        optionValue: "Production",
+      },
+      actionId: "openclaw:question_button:5:1",
+      value: "slq1:ask_0123456789abcdef0123456789abcdef:0",
+    },
+  ])(
+    "preserves typed $name authority through the legacy renderer",
+    ({ action, actionId, value }) => {
+      expect(
+        buildSlackInteractiveBlocks(
+          { blocks: [{ type: "buttons", buttons: [{ label: "Continue", action }] }] },
+          { buttonIndexOffset: 4 },
+        ),
+      ).toMatchObject([
+        {
+          block_id: "openclaw_reply_buttons_5",
+          elements: [{ action_id: actionId, value }],
+        },
+      ]);
+    },
+  );
 });
 
 describe("buildSlackPresentationBlocks", () => {

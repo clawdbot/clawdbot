@@ -2578,7 +2578,8 @@ describe("gateway server chat", () => {
             event.type === "event" &&
             event.event === "sessions.changed" &&
             event.payload?.reason === "chat.run.settled" &&
-            event.payload?.sessionKey === "agent:main:main",
+            event.payload?.sessionKey === "agent:main:main" &&
+            event.payload?.lastRunId === runId,
           8_000,
         );
         blockedReply.resolve();

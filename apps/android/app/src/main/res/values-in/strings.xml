@@ -976,6 +976,7 @@
     <string name="native_948cff139c5c153d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pilih izin perangkat"</string>
     <string name="native_94b917998807d655" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Durasi Terakhir"</string>
     <string name="native_94da52ecd6c5c3b7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agen default"</string>
+    <string name="native_94ea9b1d33a02975" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tampilkan lebih sedikit"</string>
     <string name="native_94f5698f54d7d31a" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sj"</string>
     <string name="native_950d7da1f43f723a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Percakapan sedang berlangsung"</string>
     <string name="native_95204ae1796ddfab" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidak dapat menginstal %1$s dari ClawHub."</string>
@@ -1564,6 +1565,7 @@
     <string name="native_f5387f9bb6ed7031" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Jenis"</string>
     <string name="native_f565318d124534cf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Batalkan pengarsipan"</string>
     <string name="native_f584049cab5f523e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Transcripts"</string>
+    <string name="native_f5c9bd131486e793" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tampilkan lebih banyak"</string>
     <string name="native_f5f0563199a5b403" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kata aktivasi"</string>
     <string name="native_f616dfac9815faea" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konfigurasikan %1$s di Gateway"</string>
     <string name="native_f61d0c645f00a4ed" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pindai kode QR atau gunakan kode penyiapan dari OpenClaw Gateway Anda."</string>
