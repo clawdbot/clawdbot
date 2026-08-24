@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 339214,
-  "reason": "boot-group chunk consolidation shrinks startup JS",
+  "startupJsGzipBytes": 340388,
+  "reason": "rebase onto current main; startup growth landed on main since the boot-group ratchet",
   "updatedAt": "2026-08-24"
 }
