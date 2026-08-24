@@ -639,22 +639,14 @@ export async function reconcileLoopCallExecutionParams(args: {
       cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
       warningThreshold: resolveToolLoopWarningThreshold(),
     });
-    if (churn.active) {
+    if (churn.active || churn.executionParamsChanged) {
+      // A trusted novel rewrite can clear before execution; unchanged duplicate
+      // preparation cannot, because its completed outcome owns any later clear.
       markDiagnosticArgumentChurnObservation({
         sessionKey: args.ctx.sessionKey,
         sessionId: args.ctx.sessionId,
         runId: args.ctx.runId,
-        active: true,
-      });
-    } else if (churn.executionParamsChanged) {
-      // A trusted rewrite to a novel execution variant is authoritative before
-      // the tool starts. Duplicate prepared/wrapped admission of unchanged
-      // params is not; its completed outcome owns any later clear.
-      markDiagnosticArgumentChurnObservation({
-        sessionKey: args.ctx.sessionKey,
-        sessionId: args.ctx.sessionId,
-        runId: args.ctx.runId,
-        active: false,
+        active: churn.active,
       });
     }
   } catch (err) {
