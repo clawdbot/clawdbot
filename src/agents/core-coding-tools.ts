@@ -92,6 +92,10 @@ type CoreCodingToolsOptions = {
   skillInstructionPaths?: readonly string[];
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  // Whether the active model accepts image input. Forwarded to the read tool so
+  // non-vision models skip image payloads; the bare read tool wrapper gets no
+  // per-call model context, so this construction-time flag is the carrier.
+  modelHasVision?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   baseToolNames?: readonly string[];
   baseToolFactories?: {
@@ -140,11 +144,13 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             bridge: sandboxFsBridge!,
             modelContextWindowTokens: options.modelContextWindowTokens,
             imageSanitization: options.imageSanitization,
+            modelHasVision: options.modelHasVision,
             createTool: options.baseToolFactories?.createReadTool,
           })
         : createOpenClawReadTool(
             (options.baseToolFactories?.createReadTool ?? createReadTool)(options.codingRoot, {
               maxBytes: resolveAdaptiveReadMaxBytes(options),
+              modelHasVision: options.modelHasVision,
             }),
             {
               modelContextWindowTokens: options.modelContextWindowTokens,

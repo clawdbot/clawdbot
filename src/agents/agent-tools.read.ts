@@ -940,6 +940,9 @@ type SandboxToolParams = {
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  // Forwarded to the read tool so non-vision sandboxed models skip image
+  // payloads; only the read sandbox consumes this.
+  modelHasVision?: boolean;
 };
 
 /** Create a sandbox-backed read tool with OpenClaw result normalization. */
@@ -950,6 +953,7 @@ export function createSandboxedReadTool(
     (params.createTool ?? createReadTool)(params.root, {
       operations: createSandboxReadOperations(params),
       maxBytes: resolveAdaptiveReadMaxBytes(params),
+      modelHasVision: params.modelHasVision,
     }),
   );
   return createOpenClawReadTool(base, {

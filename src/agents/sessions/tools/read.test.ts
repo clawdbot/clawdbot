@@ -8,7 +8,7 @@ import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { createReadToolDefinition } from "./read.js";
+import { createReadTool, createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
 
 const decodeWindowsTextFileBufferMock = vi.hoisted(() =>
@@ -38,9 +38,7 @@ function createTinyBmp(): Buffer {
   return buffer;
 }
 
-function textContent(
-  result: Awaited<ReturnType<ReturnType<typeof createReadToolDefinition>["execute"]>>,
-): string {
+function textContent(result: { content: Array<{ type: string; text?: string }> }): string {
   const first = result.content[0];
   return first?.type === "text" ? (first.text ?? "") : "";
 }
@@ -153,6 +151,58 @@ describe("read tool", () => {
         mimeType: "image/png",
       });
       // No omission note for a vision model.
+      expect(textContent(result)).not.toContain("does not support images");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("drops the image payload via the embedded read tool when constructed non-vision (#127009)", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-embedded-nonvision-"));
+    const imagePath = path.join(stateDir, "pixel.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
+    // The embedded runtime constructs the read tool once with the prepared
+    // modelHasVision flag and never passes a per-call model context (the bare
+    // wrapper supplies no ctxFactory), so ctx.model is undefined here. The
+    // construction-time flag is the only signal that path can carry, and it must
+    // drive the drop — pre-fix this path always attached the image.
+    const tool = createReadTool(stateDir, { autoResizeImages: false, modelHasVision: false });
+    try {
+      const result = await tool.execute(
+        "call-embedded-nonvision",
+        { path: imagePath },
+        undefined,
+        undefined,
+      );
+      const imageParts = result.content.filter((part) => part.type === "image");
+      expect(imageParts).toHaveLength(0);
+      expect(textContent(result)).toContain("does not support images");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the image payload via the embedded read tool when constructed vision-capable (#127009)", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-embedded-vision-"));
+    const imagePath = path.join(stateDir, "pixel.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
+    // The same embedded path with the flag true attaches the image as before —
+    // the flag gates the drop rather than unconditionally omitting it.
+    const tool = createReadTool(stateDir, { autoResizeImages: false, modelHasVision: true });
+    try {
+      const result = await tool.execute(
+        "call-embedded-vision",
+        { path: imagePath },
+        undefined,
+        undefined,
+      );
+      const imageParts = result.content.filter((part) => part.type === "image");
+      expect(imageParts).toHaveLength(1);
+      expect(imageParts[0]).toStrictEqual({
+        type: "image",
+        data: ONE_PIXEL_PNG_BASE64,
+        mimeType: "image/png",
+      });
       expect(textContent(result)).not.toContain("does not support images");
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });

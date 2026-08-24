@@ -141,6 +141,13 @@ export interface ReadToolOptions {
   operations?: ReadOperations;
   /** Complete model-visible call budget; individual pages never exceed the session ceiling. */
   maxBytes?: number;
+  // The active model's image-input capability, prepared at tool-construction
+  // time. When `false`, image payloads are dropped (a text note remains) so a
+  // non-vision model never receives base64 it cannot use — the bare read tool
+  // wrapper receives no per-call model context, so this flag is the only signal
+  // the embedded runtime can carry in. `undefined` falls back to the extension
+  // context's model when one is provided per call.
+  modelHasVision?: boolean;
 }
 
 type ReadRenderArgs = {
@@ -179,8 +186,23 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
   return lines.slice(0, end);
 }
 
-function getNonVisionImageNote(model: Model | undefined): string | undefined {
-  if (!model || model.input.includes("image")) {
+function getNonVisionImageNote(opts: {
+  model?: Model;
+  modelHasVision?: boolean;
+}): string | undefined {
+  // An explicit construction-time capability flag wins: the embedded runtime
+  // prepares it from the real model's input, and the bare read tool wrapper
+  // never receives a per-call model context, so this flag is the only signal
+  // that path can carry in. `false` => non-vision; `true` => vision.
+  if (opts.modelHasVision === false) {
+    return "[Current model does not support images. The image will be omitted from this request.]";
+  }
+  if (opts.modelHasVision === true) {
+    return undefined;
+  }
+  // Capability unknown at construction: fall back to the per-call extension
+  // context's model (TUI / extension-registered tools) when one is provided.
+  if (!opts.model || opts.model.input.includes("image")) {
     return undefined;
   }
   return "[Current model does not support images. The image will be omitted from this request.]";
@@ -473,6 +495,7 @@ export function createReadToolDefinition(
   const autoResizeImages = options?.autoResizeImages ?? true;
   const ops = options?.operations ?? defaultReadOperations;
   const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;
+  const modelHasVision = options?.modelHasVision;
   return {
     name: "read",
     label: "read",
@@ -553,7 +576,10 @@ export function createReadToolDefinition(
             const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
             let content: (TextContent | ImageContent)[];
             let truncated: Parameters<typeof createReadToolDetails>[1];
-            const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
+            const nonVisionImageNote = getNonVisionImageNote({
+              model: ctx?.model,
+              modelHasVision,
+            });
             if (mimeType) {
               const base64 = buffer.toString("base64");
               const processed = await processImage(
