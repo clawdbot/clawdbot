@@ -136,7 +136,6 @@ function formatMissingOfficialExternalPluginWarning(
 export function validateExplicitPluginConfig(params: {
   raw: unknown;
   config: OpenClawConfig;
-  effectiveConfig: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   applyDefaults: boolean;
   registry: PluginManifestRegistry;
@@ -151,7 +150,6 @@ export function validateExplicitPluginConfig(params: {
   const {
     raw,
     config,
-    effectiveConfig,
     env,
     applyDefaults,
     registry,
@@ -365,7 +363,7 @@ export function validateExplicitPluginConfig(params: {
       id: pluginId,
       origin: record.origin,
       config: normalizedPlugins,
-      rootConfig: effectiveConfig,
+      rootConfig: config,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
     });
     let enabled = activationState.activated;

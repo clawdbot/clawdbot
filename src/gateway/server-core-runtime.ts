@@ -151,8 +151,6 @@ export async function startGatewayCoreRuntime(input: {
     workerEnvironmentStartup,
     broadcastPluginEvent,
     activateRuntimeSecrets,
-    residentRegistry,
-    shutdownRuntime,
   } = runtime;
   let currentPluginMetadataSnapshot = runtime.pluginMetadataSnapshot;
   if (desktopSessionRegistry) {
@@ -171,11 +169,8 @@ export async function startGatewayCoreRuntime(input: {
   if (secretEgressProxy) {
     kernel.addGatewayLifetimeSidecar(secretEgressProxy);
   }
-  let earlyRuntimePromise: ReturnType<
-    Awaited<ReturnType<typeof loadGatewayStartupEarlyModule>>["startGatewayEarlyRuntime"]
-  > | null = null;
-  const startEarlyRuntime = () => {
-    earlyRuntimePromise ??= loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
+  const earlyRuntime = await startupTrace.measure("runtime.early", () =>
+    loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
       startGatewayEarlyRuntime({
         minimalTestGateway,
         cfgAtStart,
@@ -221,38 +216,19 @@ export async function startGatewayCoreRuntime(input: {
         getRuntimeConfig,
         startupTrace,
       }),
-    );
-    return earlyRuntimePromise;
-  };
-  const discoveryResident = residentRegistry.register({
-    name: "bonjour-discovery",
-    start: startEarlyRuntime,
-    stop: async () => await kernel.swapBonjourStop(null)?.(),
-  });
-  const taskAndSkillsResident = residentRegistry.register({
-    name: "task-and-skills-runtime",
-    start: async () => await discoveryResident.start(),
-    stop: async () => {
-      const earlyRuntime = await startEarlyRuntime();
-      await earlyRuntime.skillsChangeUnsub();
-      shutdownRuntime.stopTaskRegistryMaintenance();
-    },
-  });
-  const earlyRuntime = await startupTrace.measure("runtime.early", () =>
-    taskAndSkillsResident.start(),
+    ),
   );
   kernel.setEarlyRuntimeHandles(earlyRuntime);
 
-  const [{ startGatewayEventSubscriptions }, { startGatewayRuntimeServices }] =
+  const [{ startGatewayEventSubscriptions }, { startGatewayChannelHealthMonitor }] =
     await startupTrace.measure("runtime.post-early-imports", () =>
       Promise.all([
         import("./server-runtime-subscriptions.js"),
         import("./server-runtime-startup-services.js"),
       ]),
     );
-  const eventSubscriptionsResident = residentRegistry.register({
-    name: "event-subscriptions",
-    start: () =>
+  const { sessionCompanion, sessionObserver, ...runtimeSubscriptionUnsubs } =
+    await startupTrace.measure("runtime.subscriptions", () =>
       startGatewayEventSubscriptions({
         log,
         broadcast,
@@ -267,27 +243,12 @@ export async function startGatewayCoreRuntime(input: {
         restartRecoveryCandidates,
         terminalSessions,
       }),
-    stop: async () => {
-      await runtimeState.agentUnsub?.();
-      runtimeState.heartbeatUnsub?.();
-      runtimeState.transcriptUnsub?.();
-      runtimeState.lifecycleUnsub?.();
-      runtimeState.taskUnsub?.();
-    },
-  });
-  const { sessionCompanion, sessionObserver, ...runtimeSubscriptionUnsubs } =
-    await startupTrace.measure("runtime.subscriptions", () => eventSubscriptionsResident.start());
+    );
   Object.assign(runtimeState, runtimeSubscriptionUnsubs);
 
-  const runtimeServices = await startupTrace.measure("runtime.services", () =>
-    startGatewayRuntimeServices({
-      minimalTestGateway,
-      cfgAtStart,
-      channelManager,
-      log,
-    }),
+  await startupTrace.measure("runtime.services", () =>
+    kernel.setChannelHealthMonitor(startGatewayChannelHealthMonitor({ channelManager })),
   );
-  Object.assign(runtimeState, runtimeServices);
 
   const { createOperatorApprovalSessionEventRuntime } =
     await import("./operator-approval-session-events.js");

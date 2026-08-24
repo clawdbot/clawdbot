@@ -659,8 +659,8 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(forkParams?.threadId).toBe("parent-thread");
     expect(forkParams?.model).toBe("codex-side-execution-model");
     expect(forkParams).not.toHaveProperty("personality");
-    expect(forkParams?.approvalPolicy).toBe("on-request");
-    expect(forkParams?.sandbox).toBe("workspace-write");
+    expect(forkParams?.approvalPolicy).toBe("never");
+    expect(forkParams?.sandbox).toBe("danger-full-access");
     expect(forkParams?.ephemeral).toBe(true);
     expect(forkParams?.threadSource).toBe("user");
     expect(forkParams?.approvalsReviewer).toBe("user");
@@ -761,6 +761,48 @@ describe("runCodexAppServerSideQuestion", () => {
       messageActionTurnCapability: "turn-capability-1",
     });
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
+  });
+
+  it("keeps stale binding full access from overriding a guarded side-session root", async () => {
+    const root = "/tmp/workspace/guarded";
+    readCodexAppServerBindingMock.mockResolvedValue({
+      threadId: "parent-thread",
+      cwd: "/tmp/outside-session-root",
+      authProfileId: "openai:work",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          sessionKey: "agent:main:session-1",
+          sessionEntry: {
+            sessionId: "session-1",
+            sessionFile: "/tmp/session-1.jsonl",
+            updatedAt: 1,
+            permissionMode: "guarded",
+            sessionRoot: root,
+          },
+        }),
+      ),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    expect(mockCall(client.request)[1]).toMatchObject({
+      cwd: root,
+      runtimeWorkspaceRoots: [root],
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+    });
+    expect(mockCall(createOpenClawCodingToolsMock)[0]).toMatchObject({
+      exec: { mode: "ask" },
+      sessionPermissionPolicy: { mode: "guarded", root },
+    });
   });
 
   it("returns an explicit unsupported decline for ordinary MCP input", async () => {
@@ -1647,6 +1689,12 @@ describe("runCodexAppServerSideQuestion", () => {
       runCodexAppServerSideQuestion(
         sideLoopRelayParams({
           sessionKey: "agent:main:session-1",
+          sessionEntry: {
+            sessionId: "session-1",
+            updatedAt: 1,
+            permissionMode: "guarded",
+            sessionRoot: "/tmp/workspace",
+          },
           messageChannel: "discord",
           messageProvider: "discord-voice",
           currentChannelId: "discord:voice-room",
@@ -1743,6 +1791,12 @@ describe("runCodexAppServerSideQuestion", () => {
     const run = runCodexAppServerSideQuestion(
       sideLoopRelayParams({
         sessionKey: "agent:main:session-1",
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          permissionMode: "guarded",
+          sessionRoot: "/tmp/workspace",
+        },
         messageChannel: "discord",
         messageProvider: "discord-voice",
         opts: { runId: "run-side-approval" },

@@ -283,34 +283,29 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       leaseId: lease.leaseId,
       sharedHost: lease.sharedHost === true,
       desktop: lease.desktop ?? null,
+      ...(lease.node
+        ? { nodeDeviceId: lease.node.deviceId, sshEndpoint: null }
+        : { nodeDeviceId: null, sshEndpoint: lease.ssh }),
     };
     const leaseModeError = resolveWorkerLeaseModeError(provider, lease);
     if (leaseModeError) {
-      const leasePatch = {
-        ...patch,
-        ...(lease.node
-          ? { nodeDeviceId: lease.node.deviceId, sshEndpoint: null }
-          : { nodeDeviceId: null, sshEndpoint: lease.ssh }),
-      };
       return await failBootstrap(
         record,
         lease.leaseId,
         provider,
         leaseModeError,
         "invalid_profile",
-        leasePatch,
+        patch,
       );
+    }
+    if (record.destroyRequestedAtMs !== null) {
+      // Replay must recover its exact lease, but teardown intent forbids transport bootstrap.
+      return move(record, "draining", patch);
     }
     if (lease.node) {
       return await finishNodeProvisioning(record, lease, provider, patch);
     }
-    const bootstrapping = move(record, "bootstrapping", {
-      ...patch,
-      sshEndpoint: lease.ssh,
-    });
-    if (record.destroyRequestedAtMs !== null) {
-      return bootstrapping;
-    }
+    const bootstrapping = move(record, "bootstrapping", patch);
     let installation = preparedInstallation;
     if (!installation) {
       try {

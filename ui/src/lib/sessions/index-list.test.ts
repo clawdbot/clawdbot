@@ -154,6 +154,70 @@ describe("session list requests", () => {
     sessions.dispose();
   });
 
+  it("coalesces concurrent managed-list demand while preserving later forced refreshes", async () => {
+    let resolveRequest!: (result: SessionsListResult) => void;
+    const pendingResult = new Promise<SessionsListResult>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const request = vi
+      .fn()
+      .mockImplementationOnce(async () => pendingResult)
+      .mockResolvedValue(listResult(["agent:main:refreshed"]));
+    const { sessions } = sessionHarness(request);
+    const query = { agentId: "main", archivedFilter: "all" as const, limit: 50 };
+    const unsubscribe = sessions.subscribeList(query, () => undefined);
+
+    try {
+      const first = sessions.refreshList(query);
+      const duplicate = sessions.refreshList(query);
+      expect(duplicate).toBe(first);
+      expect(request).toHaveBeenCalledOnce();
+
+      resolveRequest(listResult(["agent:main:initial"]));
+      await Promise.all([first, duplicate]);
+      expect(request).toHaveBeenCalledOnce();
+
+      await sessions.refreshList({ ...query, force: true });
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:refreshed");
+    } finally {
+      resolveRequest(listResult());
+      unsubscribe();
+      sessions.dispose();
+    }
+  });
+
+  it("retains an in-flight managed query while its route subscriber is replaced", async () => {
+    let resolveRequest!: (result: SessionsListResult) => void;
+    const pendingResult = new Promise<SessionsListResult>((resolve) => {
+      resolveRequest = resolve;
+    });
+    const request = vi.fn(async () => pendingResult);
+    const { sessions } = sessionHarness(request);
+    const query = { agentId: "main", archivedFilter: "all" as const, limit: 50 };
+    let unsubscribe = sessions.subscribeList(query, () => undefined);
+
+    try {
+      const first = sessions.refreshList(query);
+      unsubscribe();
+      unsubscribe = sessions.subscribeList(query, () => undefined);
+
+      expect(sessions.listSnapshot(query).loading).toBe(true);
+      const replacement = sessions.refreshList(query);
+      expect(replacement).toBe(first);
+      expect(request).toHaveBeenCalledOnce();
+
+      resolveRequest(listResult(["agent:main:retained"]));
+      await Promise.all([first, replacement]);
+      expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:retained");
+      expect(request).toHaveBeenCalledOnce();
+    } finally {
+      resolveRequest(listResult());
+      unsubscribe();
+      sessions.dispose();
+    }
+  });
+
   it("keeps dashboard and sidebar queries distinct without inventing a dashboard agent", async () => {
     const request = vi.fn(async (_method: string, params?: ListParams) =>
       listResult([

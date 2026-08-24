@@ -48,7 +48,7 @@ function cachedLifecycleDiffersFromRuntime(params: {
       return true;
     }
   }
-  return false;
+  return params.cachedAccount === undefined;
 }
 
 /** Checks whether cached channel health is stale against the live runtime snapshot. */
@@ -97,7 +97,12 @@ function cachedHealthDiffersFromRuntime(
     }
   }
 
-  return false;
+  // Hot-unloaded plugins vanish from both runtime maps before cached health expires.
+  return Object.keys(cached.channels).some(
+    (channelId) =>
+      !Object.hasOwn(runtime.channels, channelId) &&
+      !Object.hasOwn(runtime.channelAccounts, channelId),
+  );
 }
 
 /** Merges cheap live runtime facts into a cached health summary before responding. */

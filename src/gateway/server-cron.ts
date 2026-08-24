@@ -260,7 +260,7 @@ async function finalizeCronCompletionAnnouncement(params: {
   const abortSignal = params.abortSignal ?? new AbortController().signal;
   let deliveryMayHaveReachedRecipient = false;
   try {
-    await retryTransientDirectCronDelivery({
+    const result = await retryTransientDirectCronDelivery({
       jobId: params.job.id,
       label: params.label,
       signal: abortSignal,
@@ -285,10 +285,12 @@ async function finalizeCronCompletionAnnouncement(params: {
           },
         }),
     });
+    const delivered =
+      result.status === "sent" ? true : deliveryMayHaveReachedRecipient ? undefined : false;
     return {
       deliveryAttempted: true,
-      delivered: true,
-      delivery: { ...delivery, delivered: true },
+      delivered,
+      delivery: { ...delivery, delivered },
     };
   } catch (err) {
     const deliveryError = formatErrorMessage(err);
@@ -1027,8 +1029,21 @@ export function buildGatewayCronService(params: {
       // Any job/store change can alter session automation bindings, including
       // in-place enable flips during runs; run/schedule events bump too (cheap).
       bumpSessionAutomationVersion();
+      const jobSnapshot = evt.job ?? cron.getJob(evt.jobId);
+      const scopedSessionKey =
+        jobSnapshot?.owner?.sessionKey ??
+        (jobSnapshot && resolveCronSessionTargetSessionKey(jobSnapshot.sessionTarget)) ??
+        jobSnapshot?.sessionKey ??
+        evt.sessionKey;
+      const scopedAgentId = jobSnapshot?.owner?.agentId ?? jobSnapshot?.agentId;
       params.broadcast("cron", evt.job ? { ...evt, job: toPublicCronJob(evt.job) } : evt, {
         dropIfSlow: true,
+        ...(scopedSessionKey
+          ? {
+              sessionKeys: [scopedSessionKey],
+              ...(scopedAgentId ? { agentId: scopedAgentId } : {}),
+            }
+          : {}),
       });
       // Build hook event from CronEvent. The job snapshot is carried on the
       // internal event so it's available even for "removed" actions where
@@ -1038,7 +1053,6 @@ export function buildGatewayCronService(params: {
       // Resolve job snapshot from the event or live service so top-level
       // convenience fields (sessionTarget, agentId) are always populated
       // when the job is known.
-      const jobSnapshot = evt.job ?? cron.getJob(evt.jobId);
       const pluginJob = jobSnapshot ? toPluginCronJob(jobSnapshot) : undefined;
       const hookSummary =
         isCommandCronJob(jobSnapshot) && typeof evt.summary === "string"

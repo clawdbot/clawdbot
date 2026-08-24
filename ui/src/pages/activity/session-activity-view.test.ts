@@ -108,6 +108,39 @@ describe("session activity people filter", () => {
     expect(unresolved?.querySelector('[data-activity-person="explicit-id"]')).toBeNull();
   });
 
+  it("shows the client IP and self-reported time zone on the device row", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderSessionActivityView(
+        props({
+          filters: { personId: "online", query: "", time: "7d" },
+          retainedIdentity: {
+            id: "online",
+            name: "Online person",
+            watchedSessions: [],
+            entries: [
+              {
+                host: "openclaw-control-ui",
+                platform: "Win32",
+                deviceFamily: "Mac16,6",
+                ip: "203.0.113.7",
+                timeZone: "Europe/Vienna",
+                ts: Date.now(),
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const device = container.querySelector(".activity-feed__device")?.textContent;
+    expect(device).toContain("203.0.113.7");
+    expect(device).toContain("Europe/Vienna");
+  });
+
   it("selecting Everyone clears the person while preserving the other filters", () => {
     const onFiltersChange = vi.fn();
     const container = document.createElement("div");

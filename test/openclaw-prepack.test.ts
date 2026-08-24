@@ -31,6 +31,7 @@ const standaloneBundledChannelSmokeFiles = [
   "scripts/lib/optional-bundled-clusters.mjs",
   "scripts/lib/package-root-args.mts",
   "scripts/lib/record-shared.mjs",
+  "scripts/lib/root-package-bundled-plugin-excludes.mjs",
   "scripts/process-warning-filter.mts",
 ];
 

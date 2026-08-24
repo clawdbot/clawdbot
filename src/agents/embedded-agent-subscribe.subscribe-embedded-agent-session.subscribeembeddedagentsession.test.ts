@@ -1006,6 +1006,74 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { label: "successful", stopReason: "stop", phase: undefined },
+    { label: "failed", stopReason: "error", phase: undefined },
+    { label: "aborted", stopReason: "aborted", phase: undefined },
+    { label: "commentary", stopReason: "stop", phase: "commentary" },
+  ] as const)(
+    "closes a reasoning preview before the $label message ends without thinking_end",
+    ({ stopReason, phase }) => {
+      const visibleEvents: string[] = [];
+      const onReasoningEnd = vi.fn(async () => {
+        visibleEvents.push("reasoning-end");
+      });
+      const { emit } = createSubscribedHarness({
+        runId: "run-reasoning-terminal",
+        reasoningMode: "stream",
+        onReasoningStream: vi.fn(),
+        onReasoningEnd,
+        onAgentEvent: (event) => {
+          if (event.stream === "assistant") {
+            visibleEvents.push("assistant");
+          }
+        },
+      });
+      const thinkingMessage = {
+        role: "assistant" as const,
+        content: [{ type: "thinking" as const, thinking: "Checking files" }],
+      };
+
+      emit({ type: "message_start", message: thinkingMessage });
+      emit({
+        type: "message_update",
+        message: thinkingMessage,
+        assistantMessageEvent: { type: "thinking_delta", delta: "Checking files" },
+      });
+      emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason,
+          ...(phase ? { phase } : {}),
+          content: [
+            { type: "thinking", thinking: "Checking files" },
+            { type: "text", text: "Final answer" },
+          ],
+        },
+      });
+
+      expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+      expect(visibleEvents[0]).toBe("reasoning-end");
+    },
+  );
+
+  it("does not close a reasoning preview that was never opened", () => {
+    const onReasoningEnd = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run-without-reasoning",
+      reasoningMode: "stream",
+      onReasoningEnd,
+    });
+
+    emit({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
+    });
+
+    expect(onReasoningEnd).not.toHaveBeenCalled();
+  });
+
   type ReasoningWindowGateCase = {
     label: string;
     reasoningMode: "off" | "stream";
@@ -1590,15 +1658,14 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("preserves deterministic side-effect liveness across compaction retries", () => {
+  it("preserves successful cron evidence and liveness across compaction retries", async () => {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session,
       runId: "run-cron-side-effect-compaction",
       onAgentEvent,
-      sessionKey: "test-session",
     });
 
     emitToolRun({
@@ -1609,7 +1676,12 @@ describe("subscribeEmbeddedAgentSession", () => {
       isError: false,
       result: { details: { status: "ok" } },
     });
+    await subscription.waitForPendingEvents();
+    expect(subscription.getSuccessfulCronAdds()).toBe(1);
     emit(retryingCompactionEnd());
+    await subscription.waitForPendingEvents();
+    expect(subscription.isCompacting()).toBe(true);
+    expect(subscription.getSuccessfulCronAdds()).toBe(1);
     emit({ type: "agent_end" });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);

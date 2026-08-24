@@ -33,3 +33,41 @@ Authoritative at-dispatch result: 945 files examined; 580 `GENUINE`, 66
 snapshot did not provide authoritative FROZEN/MIXED counts, so this run is the
 sole baseline. Gate exit 0 permits the exact `--no-ff` back-merge. The 66 mixed
 rows are a required post-merge disposition walk, not automatic restoration.
+
+## §1 — 2026-08-24T15:39Z — exact upstream back-merge conflict resolution
+
+Back-merged frozen upstream `a6a9f553d0b304aa4ae520c5c96450201f566765`
+with `--no-ff`. Git produced exactly the seven conflicts predicted by the
+workorder. Every resolution used stage-1 ancestor, stage-2 reviewed bytes, and
+stage-3 upstream bytes; no side-selection strategy was used.
+
+- `src/agents/embedded-agent-runner/compact.hooks.test.ts`: retained the
+  reviewed nested-compaction invariant (`disableContinuationTools: true`) and
+  absorbed upstream's stronger table-driven final permission-policy/exec-mode
+  proof.
+- `src/agents/embedded-agent-subscribe.ts`: retained the reviewed extraction to
+  canonical `createEmbeddedToolLifecycle`; projected upstream's new nested
+  lifecycle provenance into that owner in
+  `src/agents/embedded-agent-subscribe.handlers.tools.ts`, preventing nested
+  catalog execution from owning the outer block-reply boundary.
+- `src/gateway/server-maintenance.ts`: retained delegate-artifact GC constants
+  and absorbed upstream telemetry maintenance cadence. Both timer owners and
+  their cancellation paths remain present.
+- `src/plugins/npm-install-security-scan.release.test.ts`: upstream's generated
+  Codex source-region attribution strictly supersedes the reviewed first-region
+  approximation by tracking nested region start/end state and rejecting
+  unattributed findings. Resolved bytes equal upstream exactly.
+- The three `test/vitest/vitest.unit-fast*.config.ts` conflicts resolve to
+  upstream exactly. Upstream preserves the reviewed environment-pattern
+  intersection while consolidating it into `includeFromEnv`.
+
+Direct Codex contract check was mandatory because the drift touches the Codex
+app-server integration. The sibling source was absent and was cloned to
+`../codex`; pinned tag `rust-v0.148.0` matches
+`extensions/codex/package.json`. Inspected
+`codex-rs/app-server-protocol/src/protocol/v2/item.rs` dynamic call params and
+response shapes, `codex-rs/app-server/src/bespoke_event_handling.rs` request
+projection, and `codex-rs/app-server/tests/suite/v2/dynamic_tools.rs` request /
+response lifecycle. The contract carries exact thread, turn, call, namespace,
+tool, arguments, content items, and success fields; the absorbed OpenClaw
+changes remain aligned with that pinned runtime contract.

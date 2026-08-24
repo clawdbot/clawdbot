@@ -359,6 +359,8 @@ public struct BoardWidget: Codable, Sendable {
     public let tabid: String
     public let title: String?
     public let contentkind: AnyCodable
+    public let contentowner: String?
+    public let registeredcontentkind: String?
     public let pluginkind: String?
     public let props: [String: AnyCodable]?
     public let presentation: AnyCodable?
@@ -385,6 +387,8 @@ public struct BoardWidget: Codable, Sendable {
         tabid: String,
         title: String? = nil,
         contentkind: AnyCodable,
+        contentowner: String? = nil,
+        registeredcontentkind: String? = nil,
         pluginkind: String? = nil,
         props: [String: AnyCodable]? = nil,
         presentation: AnyCodable? = nil,
@@ -410,6 +414,8 @@ public struct BoardWidget: Codable, Sendable {
         self.tabid = tabid
         self.title = title
         self.contentkind = contentkind
+        self.contentowner = contentowner
+        self.registeredcontentkind = registeredcontentkind
         self.pluginkind = pluginkind
         self.props = props
         self.presentation = presentation
@@ -437,6 +443,8 @@ public struct BoardWidget: Codable, Sendable {
         case tabid = "tabId"
         case title
         case contentkind = "contentKind"
+        case contentowner = "contentOwner"
+        case registeredcontentkind = "registeredContentKind"
         case pluginkind = "pluginKind"
         case props
         case presentation
@@ -1515,6 +1523,7 @@ public struct PresenceEntry: Codable, Sendable {
     public let platform: String?
     public let devicefamily: String?
     public let modelidentifier: String?
+    public let timezone: String?
     public let mode: String?
     public let lastinputseconds: Int?
     public let reason: String?
@@ -1535,6 +1544,7 @@ public struct PresenceEntry: Codable, Sendable {
         platform: String? = nil,
         devicefamily: String? = nil,
         modelidentifier: String? = nil,
+        timezone: String? = nil,
         mode: String? = nil,
         lastinputseconds: Int? = nil,
         reason: String? = nil,
@@ -1554,6 +1564,7 @@ public struct PresenceEntry: Codable, Sendable {
         self.platform = platform
         self.devicefamily = devicefamily
         self.modelidentifier = modelidentifier
+        self.timezone = timezone
         self.mode = mode
         self.lastinputseconds = lastinputseconds
         self.reason = reason
@@ -1575,6 +1586,7 @@ public struct PresenceEntry: Codable, Sendable {
         case platform
         case devicefamily = "deviceFamily"
         case modelidentifier = "modelIdentifier"
+        case timezone = "timeZone"
         case mode
         case lastinputseconds = "lastInputSeconds"
         case reason
@@ -7171,13 +7183,22 @@ public struct SessionPlacementDiskSpace: Codable, Sendable {
 public struct SessionPlacementRunner: Codable, Sendable {
     public let kind: String
     public let status: AnyCodable
+    public let deviceid: String?
 
     public init(
         kind: String,
-        status: AnyCodable)
+        status: AnyCodable,
+        deviceid: String? = nil)
     {
         self.kind = kind
         self.status = status
+        self.deviceid = deviceid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case status
+        case deviceid = "deviceId"
     }
 }
 
@@ -7710,6 +7731,7 @@ public struct SessionsDispatchParams: Codable, Sendable {
     public let agentid: String?
     public let profileid: String?
     public let deviceid: String?
+    public let autodevice: Bool?
     public let machineclass: String?
 
     public init(
@@ -7717,12 +7739,14 @@ public struct SessionsDispatchParams: Codable, Sendable {
         agentid: String? = nil,
         profileid: String? = nil,
         deviceid: String? = nil,
+        autodevice: Bool? = nil,
         machineclass: String? = nil)
     {
         self.key = key
         self.agentid = agentid
         self.profileid = profileid
         self.deviceid = deviceid
+        self.autodevice = autodevice
         self.machineclass = machineclass
     }
 
@@ -7731,6 +7755,7 @@ public struct SessionsDispatchParams: Codable, Sendable {
         case agentid = "agentId"
         case profileid = "profileId"
         case deviceid = "deviceId"
+        case autodevice = "autoDevice"
         case machineclass = "machineClass"
     }
 }
@@ -8946,6 +8971,7 @@ public struct SessionWorktreeInfo: Codable, Sendable {
 
 public struct SessionsCreateParams: Codable, Sendable {
     public let key: String?
+    public let idempotencykey: String?
     public let agentid: String?
     public let label: String?
     public let category: String?
@@ -8974,6 +9000,7 @@ public struct SessionsCreateParams: Codable, Sendable {
 
     public init(
         key: String? = nil,
+        idempotencykey: String? = nil,
         agentid: String? = nil,
         label: String? = nil,
         category: String? = nil,
@@ -9001,6 +9028,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         cwd: String? = nil)
     {
         self.key = key
+        self.idempotencykey = idempotencykey
         self.agentid = agentid
         self.label = label
         self.category = category
@@ -9030,6 +9058,7 @@ public struct SessionsCreateParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case key
+        case idempotencykey = "idempotencyKey"
         case agentid = "agentId"
         case label
         case category

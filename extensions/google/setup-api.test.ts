@@ -104,7 +104,7 @@ describe("google gemini cli backend config", () => {
 
     const restrictedArgs = backend.resolveExecutionArgs?.({
       ...baseContext,
-      toolAvailability: { native: [], openClaw: ["read"], mcp: ["read"] },
+      toolAvailability: { native: [], openClaw: ["read"] },
     });
     expect(restrictedArgs).toEqual([
       "--prompt",
@@ -118,7 +118,7 @@ describe("google gemini cli backend config", () => {
 
     const emptyArgs = backend.resolveExecutionArgs?.({
       ...baseContext,
-      toolAvailability: { native: [], openClaw: [], mcp: [] },
+      toolAvailability: { native: [], openClaw: [] },
     });
     expect(emptyArgs?.slice(0, -4)).toEqual(["--prompt", "{prompt}", "--allowed-mcp-server-names"]);
     expect(emptyArgs?.at(-4)).toMatch(

@@ -2,16 +2,20 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../components/command-palette-contract.ts";
-import { TERMINAL_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
+import {
+  KEYBOARD_SHORTCUTS_REQUEST_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+} from "../components/panel-toggle-contract.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   createLazyElementSpec,
   resetAppHostTestGlobals,
   type ShellKeyboardState,
   type TestOptionalCustomElement,
+  stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
 import "./app-host.ts";
-import { DEBUG_OVERLAY_ELEMENT } from "./lazy-custom-element.ts";
+import { DEBUG_OVERLAY_ELEMENT, KEYBOARD_SHORTCUTS_ELEMENT } from "./lazy-custom-element.ts";
 import { readLazyShellAction } from "./lazy-shell-action.ts";
 
 const storageKey = "openclaw:lazy-event";
@@ -49,6 +53,54 @@ describe("lazy shell action storage", () => {
 });
 
 describe("shell lazy events", () => {
+  it("requests the keyboard shortcuts dialog even from a focused text input", async () => {
+    const requested = vi.fn();
+    const toggled = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState &
+      ShellLifecycle &
+      HTMLElement;
+    const dialog = document.createElement(KEYBOARD_SHORTCUTS_ELEMENT.tagName) as HTMLElement & {
+      toggle: () => void;
+    };
+    dialog.toggle = toggled;
+    shell.append(dialog);
+    Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
+    const input = document.body.appendChild(document.createElement("input"));
+    const shortcut = new KeyboardEvent("keydown", {
+      key: "/",
+      code: "Slash",
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.addEventListener(KEYBOARD_SHORTCUTS_REQUEST_EVENT, requested);
+
+    try {
+      await withConnectedShell(shell, async () => {
+        input.dispatchEvent(shortcut);
+
+        expect(shortcut.defaultPrevented).toBe(true);
+        expect(requested).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(toggled).toHaveBeenCalledOnce());
+
+        input.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "/",
+            code: "Slash",
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        expect(toggled).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      input.remove();
+      window.removeEventListener(KEYBOARD_SHORTCUTS_REQUEST_EVENT, requested);
+    }
+  });
+
   it("loads the debug overlay shortcut and ignores editable targets", async () => {
     const toggled = vi.fn();
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState &
@@ -102,6 +154,7 @@ describe("shell lazy events", () => {
     Object.defineProperty(shell, "approvalOverlay", {
       get: () => (customElements.get(element.tagName) ? { show } : undefined),
     });
+    stubRenderedWhenDefined(shell);
 
     await withConnectedShell(shell, async () => {
       shell.openApprovals();

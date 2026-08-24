@@ -2906,7 +2906,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       sessionKey: "agent:unit-session",
       toolResultFormat: "markdown",
     });
-    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed");
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec blocked");
   });
 
   it("records an actionable failure when unavailable-approval notice delivery rejects", async () => {
@@ -2994,6 +2994,44 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       summary: "Awaiting approval before command can run.",
     });
   });
+
+  it.each([
+    [false, null, "blocked", undefined],
+    [true, 12, "failed", 12],
+    [undefined, Number.POSITIVE_INFINITY, "failed", undefined],
+    [true, -1, "failed", undefined],
+  ] as const)(
+    "projects executionStarted=%s with duration %s",
+    async (executionStarted, durationMs, expectedStatus, expectedDurationMs) => {
+      const { ctx, onAgentEvent } = createTestContext();
+      await executeTool(ctx, {
+        toolName: "exec",
+        toolCallId: "tool-exec-status",
+        args: { command: "exit 7" },
+        isError: true,
+        ...(executionStarted === undefined ? {} : { executionStarted }),
+        result: { content: [], details: { status: "failed", exitCode: 7, durationMs } },
+      });
+
+      const events = onAgentEvent.mock.calls.map((call) => call[0] as CapturedAgentEvent);
+      expect(
+        events
+          .filter((event) => event.stream === "item" && event.data?.phase === "end")
+          .map((event) => event.data?.status),
+      ).toEqual([expectedStatus, expectedStatus]);
+      const commandOutput = requireEvent(
+        events,
+        (event) => event.stream === "command_output",
+        "command output event",
+      ).data;
+      expect([
+        commandOutput?.status,
+        commandOutput?.exitCode,
+        commandOutput?.durationMs,
+        "durationMs" in commandOutput!,
+      ]).toEqual([expectedStatus, 7, expectedDurationMs, expectedDurationMs !== undefined]);
+    },
+  );
 });
 
 describe("handleToolExecutionEnd derived tool events", () => {

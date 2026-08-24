@@ -43,6 +43,7 @@ import { chatHandlers } from "./chat.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { registerCreatedSessionCategory } from "./session-create-category.js";
+import { idempotentSessionCreate } from "./session-create-idempotency.js";
 import {
   resolveSessionCreateInitialTurn,
   shouldAttachPendingMessageSeq,
@@ -518,6 +519,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       projectId: requestedProjectId,
       incognito: p.incognito,
       ...(client?.connect ? { requestingOperatorScopes: clientScopes } : {}),
+      ...(client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: client.internal.operatorRoleActor }
+        : {}),
       visibility: p.visibility,
       allowExistingModelSelection,
       parentSessionKey,
@@ -683,3 +690,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
   },
 };
+
+sessionCreateHandlers["sessions.create"] = idempotentSessionCreate(
+  expectDefined(sessionCreateHandlers["sessions.create"], "sessions.create handler"),
+);

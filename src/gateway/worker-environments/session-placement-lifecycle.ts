@@ -158,6 +158,7 @@ export function resolveSessionWorkerPlacementMutationError(
 
 export async function prepareSessionWorkerPlacementForArchive(params: {
   agentId: string;
+  authorize?: () => void;
   context: SessionWorkerPlacementContext;
   reclaimActive: boolean;
   sessionId?: string;
@@ -191,8 +192,17 @@ export async function prepareSessionWorkerPlacementForArchive(params: {
   if (!context.workerPlacementDispatchService?.reclaim) {
     throw new Error(`Session ${sessionKey} cloud worker reclaim is unavailable.`);
   }
-  const reclaimed: Placement = await context.workerPlacementDispatchService.reclaim(request);
-  if (reclaimed.state !== "reclaimed" || !matches(reclaimed)) {
+  const reclaimed: Placement = params.authorize
+    ? await context.workerPlacementDispatchService.reclaim(request, params.authorize)
+    : await context.workerPlacementDispatchService.reclaim(request);
+  const settled = context.workerSessionPlacementService?.getMany([sessionId]).get(sessionId);
+  if (
+    reclaimed.state !== "reclaimed" ||
+    !matches(reclaimed) ||
+    settled?.state !== "reclaimed" ||
+    !matches(settled) ||
+    settled.generation !== reclaimed.generation
+  ) {
     throw new Error(`Session ${sessionKey} cloud worker reclaim identity changed.`);
   }
 }

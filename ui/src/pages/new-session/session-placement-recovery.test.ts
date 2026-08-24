@@ -93,6 +93,21 @@ describe("session placement recovery", () => {
     expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([]);
   });
 
+  it("preserves automatic device selection across placement recovery", () => {
+    const automatic = {
+      ...recovery,
+      target: { kind: "auto-device" as const },
+    };
+    expect(writeSessionPlacementRecovery(automatic)).toBe(true);
+    expect(
+      readSessionPlacementRecovery(
+        automatic.gatewayUrl,
+        automatic.recoveryScope,
+        automatic.sessionKey,
+      ),
+    ).toEqual(automatic);
+  });
+
   it("migrates only exact framed rows under a new scope", () => {
     const sourceScope = recovery.recoveryScope;
     const newScope = "gateway-principal";

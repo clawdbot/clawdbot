@@ -1439,9 +1439,8 @@ create` validates the written archive by default; `--no-verify` is the
 - The bundled session-memory hook now resolves previous-session context from
   SQLite by `{agentId, sessionId}`. It no longer scans, stores, or synthesizes
   transcript paths or `workspace/sessions` directories.
-- The bundled command-logger hook now writes command audit rows to the shared
-  SQLite `command_log_entries` table instead of appending
-  `logs/commands.log`.
+- The bundled command-logger hook remains a named log artifact. It writes only
+  `logs/commands.log`; it does not write command audit rows to SQLite.
 - Channel pairing allowlists now expose only SQLite-backed read/write helpers at
   runtime. The deprecated plugin SDK path resolver remains for migration
   compatibility; file readers live only in doctor state migration code.
@@ -1478,8 +1477,8 @@ create` validates the written archive by default; `--no-verify` is the
   runtime `cache/*.json` stores, generic
   `thread-bindings.json` sidecars, cron state/run-log JSON, config health JSON,
   restart and lock sidecars, Voice Wake settings, plugin binding approvals,
-  installed plugin index JSON, File Transfer audit JSONL, Memory Wiki activity
-  logs and the old bundled `command-logger` text log. It also bans old
+  installed plugin index JSON, File Transfer audit JSONL, and Memory Wiki
+  activity logs. It also bans old
   root-level doctor legacy module names so
   compatibility code stays under `src/commands/doctor/`. Android debug handlers
   also use logcat/in-memory output instead of staging `camera_debug.log` or
@@ -2290,7 +2289,6 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `gateway.<hash>.lock`
 - `qmd/embed.lock.lock`
 - `agents/<agentId>/qmd-write.lock.lock`
-- `commands.log`
 - `config-health.json`
 - `port-guard.json`
 - `settings/voicewake.json`

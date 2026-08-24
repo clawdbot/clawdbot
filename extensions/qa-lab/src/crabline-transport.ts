@@ -6,6 +6,7 @@ import {
   type OpenClawCrablineChannelDriverSelection,
   type OpenClawCrablineInbound,
   type StartedOpenClawCrablineAdapter,
+  type StartedOpenClawCrablineCorrelatedAdapter,
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -299,7 +300,7 @@ function createCrablineState(params: {
 }
 
 class QaCrablineTransport extends QaStateBackedTransportAdapter {
-  readonly #adapter: StartedOpenClawCrablineAdapter;
+  readonly #adapter: StartedOpenClawCrablineCorrelatedAdapter;
   readonly #selection: OpenClawCrablineChannelDriverSelection;
   readonly #transportPolicy?: QaTransportPolicy;
   readonly #state: QaCrablineTransportState;
@@ -310,7 +311,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   }>;
 
   constructor(params: {
-    adapter: StartedOpenClawCrablineAdapter;
+    adapter: StartedOpenClawCrablineCorrelatedAdapter;
     transportPolicy?: QaTransportPolicy;
     selection: OpenClawCrablineChannelDriverSelection;
     state: QaCrablineTransportState;
@@ -395,7 +396,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     return delivery;
   };
 
-  createRuntimeEnvPatch = () => this.#adapter.createChannelDriverSmokeEnv({});
+  createRuntimeEnvPatch = () => this.#adapter.createProviderReadinessEnv({});
 
   handleAction = async (_params: {
     action: QaTransportActionName;

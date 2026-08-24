@@ -26,7 +26,7 @@ async function fixture() {
   await fs.mkdir(bin);
   await fs.writeFile(
     path.join(bin, "ps"),
-    '#!/bin/sh\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid"; fi ;;\nesac\n',
+    '#!/bin/sh\ncase "$*" in\n  *"stat=,lstart= -p"*|*"lstart= -p"*) exec /bin/ps "$@" ;;\n  *) printf "%s %s %s S Tue Jul 15 08:00:00 2026\\n" "$$" "$PPID" "$(id -u)"; if [ -f "$OPENCLAW_TEST_PS_EXTRA" ]; then extra_pid=$(cat "$OPENCLAW_TEST_PS_EXTRA"); /bin/ps -o pid=,ppid=,uid=,stat=,lstart= -p "$extra_pid" || true; fi ;;\nesac\n',
   );
   await fs.chmod(path.join(bin, "ps"), 0o755);
   return {
@@ -161,7 +161,7 @@ describe("remote workspace quiescence scripts", () => {
 
   it("recovers a prior nonce without letting its watchdog own the next lease", async () => {
     const input = await fixture();
-    const firstNonce = await quiesce(input);
+    const firstNonce = await quiesce(input, false, "1000");
     const firstLease = JSON.parse(
       await fs.readFile(leasePath(input.home, input.workspace, firstNonce), "utf8"),
     ) as { watchdog: { pid: number; start: string } };
@@ -173,9 +173,12 @@ describe("remote workspace quiescence scripts", () => {
     await expect(
       fs.access(leasePath(input.home, input.workspace, secondNonce)),
     ).resolves.toBeUndefined();
-    await vi.waitFor(() => {
-      expect(() => process.kill(firstLease.watchdog.pid, 0)).toThrow();
-    });
+    await vi.waitFor(
+      () => {
+        expect(() => process.kill(firstLease.watchdog.pid, 0)).toThrow();
+      },
+      { timeout: 5_000 },
+    );
     await resume(input, secondNonce);
   });
 
@@ -359,6 +362,135 @@ esac
         process.kill(lease.watchdog.pid, "SIGTERM");
       } catch {
         // Expected once the missing lease has retired it.
+      }
+    }
+  });
+
+  it.each([
+    ["shared-host", true],
+    ["dedicated", false],
+  ])("removes an empty %s orphan lease without depending on ps", async (_mode, sharedHost) => {
+    const input = await fixture();
+    const healthyPs = await fs.readFile(path.join(input.bin, "ps"), "utf8");
+    const nonce = await quiesce(input, true, "30000");
+    const leaseFile = leasePath(input.home, input.workspace, nonce);
+    const lease = JSON.parse(await fs.readFile(leaseFile, "utf8")) as {
+      sharedHost: boolean;
+      watchdog: { pid: number };
+    };
+    lease.sharedHost = sharedHost;
+    await fs.writeFile(leaseFile, JSON.stringify(lease));
+
+    await fs.writeFile(path.join(input.bin, "ps"), STALLED_PS);
+    await fs.chmod(path.join(input.bin, "ps"), 0o755);
+
+    try {
+      const result = await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_QUIESCE_JS,
+          input.workspace,
+          "10000",
+          "shared-host",
+        ],
+        { timeoutMs: 15_000, baseEnv: input.env },
+      );
+
+      // Starting the replacement watchdog still needs ps and fails closed, but the stale
+      // empty lease must already be gone so it cannot block another reconciliation attempt.
+      expect(result.termination).toBe("exit");
+      expect(result.code).not.toBe(0);
+      await expect(fs.access(leaseFile)).rejects.toThrow();
+    } finally {
+      await fs.writeFile(path.join(input.bin, "ps"), healthyPs);
+      await fs.chmod(path.join(input.bin, "ps"), 0o755);
+      try {
+        process.kill(lease.watchdog.pid, "SIGTERM");
+      } catch {
+        // Expected once the missing lease has retired it.
+      }
+    }
+  });
+
+  it("retains an unverified empty orphan lease until a dedicated retry can retire it", async () => {
+    const input = await fixture();
+    const healthyPs = await fs.readFile(path.join(input.bin, "ps"), "utf8");
+    const firstNonce = await quiesce(input, true, "30000");
+    const firstLeaseFile = leasePath(input.home, input.workspace, firstNonce);
+    const firstLease = JSON.parse(await fs.readFile(firstLeaseFile, "utf8")) as {
+      watchdog: { pid: number };
+    };
+    let replacementNonce: string | undefined;
+
+    await fs.writeFile(path.join(input.bin, "ps"), STALLED_PS);
+    await fs.chmod(path.join(input.bin, "ps"), 0o755);
+    try {
+      const failed = await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          REMOTE_WORKSPACE_QUIESCE_JS,
+          input.workspace,
+          "10000",
+          "dedicated",
+        ],
+        { timeoutMs: 15_000, baseEnv: input.env },
+      );
+
+      expect(failed.termination).toBe("exit");
+      expect(failed.code).not.toBe(0);
+      await expect(fs.access(firstLeaseFile)).resolves.toBeUndefined();
+
+      await fs.writeFile(path.join(input.bin, "ps"), healthyPs);
+      await fs.chmod(path.join(input.bin, "ps"), 0o755);
+      replacementNonce = await quiesce(input, false, "10000");
+      const replacementLease = JSON.parse(
+        await fs.readFile(leasePath(input.home, input.workspace, replacementNonce), "utf8"),
+      ) as { processes: Array<{ pid: number }> };
+
+      expect(replacementLease.processes).not.toContainEqual({ pid: firstLease.watchdog.pid });
+      await expect(fs.access(firstLeaseFile)).rejects.toThrow();
+    } finally {
+      await fs.writeFile(path.join(input.bin, "ps"), healthyPs);
+      await fs.chmod(path.join(input.bin, "ps"), 0o755);
+      if (replacementNonce !== undefined) {
+        await resume(input, replacementNonce);
+      }
+      try {
+        process.kill(firstLease.watchdog.pid, "SIGTERM");
+      } catch {
+        // Expected once the healthy retry retires it.
+      }
+    }
+  });
+
+  it("retires an empty orphan watchdog before a dedicated replacement sweep", async () => {
+    const input = await fixture();
+    const firstNonce = await quiesce(input, true, "30000");
+    const firstLeaseFile = leasePath(input.home, input.workspace, firstNonce);
+    const firstLease = JSON.parse(await fs.readFile(firstLeaseFile, "utf8")) as {
+      watchdog: { pid: number };
+    };
+    await fs.writeFile(input.extraProcessPath, `${firstLease.watchdog.pid}\n`);
+
+    let replacementNonce: string | undefined;
+    try {
+      replacementNonce = await quiesce(input, false, "10000");
+      const replacementLease = JSON.parse(
+        await fs.readFile(leasePath(input.home, input.workspace, replacementNonce), "utf8"),
+      ) as { processes: Array<{ pid: number }> };
+
+      expect(replacementLease.processes).not.toContainEqual({ pid: firstLease.watchdog.pid });
+      expect(() => process.kill(firstLease.watchdog.pid, 0)).toThrow();
+    } finally {
+      if (replacementNonce !== undefined) {
+        await resume(input, replacementNonce);
+      }
+      try {
+        process.kill(firstLease.watchdog.pid, "SIGTERM");
+      } catch {
+        // Expected once orphan recovery retires it.
       }
     }
   });

@@ -120,7 +120,6 @@ Example:
   logging: { level: "info" },
   agents: {
     defaults: {
-      model: { primary: "anthropic/claude-opus-5" },
       workspace: "~/.openclaw/workspace",
       thinkingDefault: "high",
       timeoutSeconds: 1800,

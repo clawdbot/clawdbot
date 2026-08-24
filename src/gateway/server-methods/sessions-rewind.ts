@@ -28,6 +28,7 @@ import {
   readSessionUpstreamLink,
   type SessionUpstreamLink,
 } from "../../sessions/session-upstream-links.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
@@ -231,6 +232,17 @@ async function mutateSessionAtMessage(
       errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${sessionKey}`),
     );
     return;
+  }
+  if (action === "fork") {
+    const creationError = authorizeGatewaySessionCreation({
+      cfg,
+      client,
+      agentId: initial.target.agentId,
+    });
+    if (creationError) {
+      respond(false, undefined, creationError);
+      return;
+    }
   }
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;

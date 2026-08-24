@@ -11,7 +11,6 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { t } from "../i18n/index.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
@@ -19,6 +18,7 @@ import { createIdleImport } from "../lib/idle-import.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -138,7 +138,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private sessionNavigationState: SidebarSessionNavigationState | undefined;
   private projectedSessionRows: SidebarRecentSession[] | undefined;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
-  private readonly nativeGatewaysChanged = () => this.requestUpdate();
+  private readonly nativeGatewaysChanged = () => this.sidebarMenus.closeSessionMenu();
   private readonly refreshAppearanceSettings = () => this.context?.theme.refresh();
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
@@ -454,6 +454,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     trigger?: HTMLElement,
   ): void {
     this.sidebarMenus.catalogMenu.open(request, x, y, trigger);
+  }
+
+  retargetCatalogMenuTrigger(key: CatalogSessionKey, element: Element | undefined): void {
+    this.sidebarMenus.catalogMenu.retargetTrigger(key, element);
   }
 
   renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {

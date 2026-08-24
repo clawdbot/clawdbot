@@ -13,9 +13,11 @@ export function createUnitFastIsolatedVitestConfig(
   options: { argv?: string[] } = {},
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
-  const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const isolatedTestFiles = getUnitFastIsolatedTestFiles();
-  const envInclude = intersectIncludePatterns(isolatedTestFiles, includeFromEnv);
+  const includeFromEnv = intersectIncludePatterns(
+    isolatedTestFiles,
+    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
+  );
   const cliInclude = narrowIncludePatternsForCli(isolatedTestFiles, options.argv);
 
   return defineConfig({
@@ -27,7 +29,7 @@ export function createUnitFastIsolatedVitestConfig(
       isolate: true,
       runner: undefined,
       setupFiles: [resolveRepoRootPath("test/setup.env.ts")],
-      include: envInclude ?? cliInclude ?? isolatedTestFiles,
+      include: includeFromEnv ?? cliInclude ?? isolatedTestFiles,
       exclude: sharedTest.exclude ?? [],
       passWithNoTests: true,
     },

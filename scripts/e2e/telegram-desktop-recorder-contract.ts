@@ -106,6 +106,7 @@ export type StopOptions = {
   command: "stop";
   crop?: "telegram-window";
   sessionPath: string;
+  since?: string;
 };
 
 export type TeardownOptions = {
@@ -148,7 +149,7 @@ export function recorderUsageText(): string {
     "  pnpm qa:telegram-desktop-recorder actions --session <recorder.json> --actions-file <json> [--timeout-seconds <seconds>]",
     "  pnpm qa:telegram-desktop-recorder screenshot --session <recorder.json> [--output <png>]",
     "  pnpm qa:telegram-desktop-recorder recover --session <recorder.json>",
-    "  pnpm qa:telegram-desktop-recorder stop --session <recorder.json> [--crop telegram-window]",
+    "  pnpm qa:telegram-desktop-recorder stop --session <recorder.json> [--crop telegram-window] [--since <ISO timestamp>]",
     "  pnpm qa:telegram-desktop-recorder teardown --session <recorder.json>",
     "  pnpm qa:telegram-desktop-recorder status --session <recorder.json>",
     "",
@@ -255,7 +256,7 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
           : command === "screenshot"
             ? new Set(["--output", "--session"])
             : command === "stop"
-              ? new Set(["--crop", "--session"])
+              ? new Set(["--crop", "--session", "--since"])
               : new Set(["--session"]);
   for (const flag of values.keys()) {
     if (!allowed.has(flag)) {
@@ -324,13 +325,14 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
   }
   if (command === "stop") {
     const crop = values.get("--crop");
-    if (crop === undefined) {
-      return { command, sessionPath };
-    }
-    if (crop !== "telegram-window") {
+    if (crop !== undefined && crop !== "telegram-window") {
       throw new Error("--crop must be telegram-window.");
     }
-    return { command, crop, sessionPath };
+    const since = values.get("--since");
+    if (since !== undefined && !Number.isFinite(Date.parse(since))) {
+      throw new Error("--since must be an ISO timestamp.");
+    }
+    return { command, ...(crop ? { crop } : {}), sessionPath, ...(since ? { since } : {}) };
   }
   return { command, sessionPath };
 }

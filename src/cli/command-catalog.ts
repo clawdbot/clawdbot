@@ -188,6 +188,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "status" },
   },
   {
+    commandPath: ["telemetry"],
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["health"],
     policy: {
       configGuard: "skip",

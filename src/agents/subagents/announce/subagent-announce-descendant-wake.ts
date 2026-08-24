@@ -223,6 +223,7 @@ export async function wakeSubagentRunAfterDescendants(
             idempotencyKey: wakeDispatchId,
           },
           {
+            operatorRoleActor: { kind: "system" },
             timeoutMs: announceTimeoutMs,
           },
         );

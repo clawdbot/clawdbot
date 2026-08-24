@@ -6,6 +6,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../commands/onboard-core-auth-flags.js";
+import { rejectOnboardingOption } from "../../commands/onboard-options.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -229,7 +230,12 @@ function pickOnboardAuthOptionValues(opts: Record<string, unknown>): Partial<Onb
 export function resolveOnboardCommandOptions(
   opts: Record<string, unknown>,
   command: Command,
-): OnboardOptions {
+  runtime: RuntimeEnv,
+): OnboardOptions | false {
+  if (opts.customImageInput === true && opts.customTextInput === true) {
+    const message = "Use either --custom-image-input or --custom-text-input, not both.";
+    return rejectOnboardingOption({ json: opts.json === true }, runtime, message);
+  }
   return {
     workspace: readStringValue(opts.workspace),
     agentName: readStringValue(opts.agentName),
@@ -268,18 +274,6 @@ export function resolveOnboardCommandOptions(
     importSecrets: Boolean(opts.importSecrets),
     json: Boolean(opts.json),
   };
-}
-
-export function validateOnboardAuthOptionValues(
-  opts: Record<string, unknown>,
-  runtime: RuntimeEnv,
-): boolean {
-  if (opts.customImageInput === true && opts.customTextInput === true) {
-    runtime.error("Use either --custom-image-input or --custom-text-input, not both.");
-    runtime.exit(1);
-    return false;
-  }
-  return true;
 }
 
 export function registerOnboardCommand(program: Command): void {
@@ -380,30 +374,30 @@ export function registerOnboardCommand(program: Command): void {
   command.action(async (opts, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
+      const rejectOption = (message: string) =>
+        rejectOnboardingOption({ json: Boolean(opts.json) }, defaultRuntime, message);
       if (opts.modern) {
         const unsupportedOptions = listExplicitOptionFlagsExcept(
           commandRuntime,
           MODERN_ONBOARD_OPTION_KEYS,
         );
         if (unsupportedOptions.length > 0) {
-          defaultRuntime.error(
+          rejectOption(
             [
               `--modern cannot be combined with: ${unsupportedOptions.join(", ")}.`,
               "Run those setup options without --modern, or remove them to open OpenClaw.",
             ].join("\n"),
           );
-          defaultRuntime.exit(1);
           return;
         }
         if (opts.nonInteractive && opts.acceptRisk !== true) {
-          defaultRuntime.error(
+          rejectOption(
             [
               "Non-interactive setup requires explicit risk acknowledgement.",
               "Read: https://docs.openclaw.ai/security",
               `Re-run with: ${formatCliCommand("openclaw onboard --modern --non-interactive --accept-risk ...")}`,
             ].join("\n"),
           );
-          defaultRuntime.exit(1);
           return;
         }
         const { runSystemAgentWithInference } =
@@ -426,13 +420,14 @@ export function registerOnboardCommand(program: Command): void {
         );
         return;
       }
-      if (!validateOnboardAuthOptionValues(opts as Record<string, unknown>, defaultRuntime)) {
-        return;
-      }
       const onboardingOptions = resolveOnboardCommandOptions(
         opts as Record<string, unknown>,
         commandRuntime,
+        defaultRuntime,
       );
+      if (!onboardingOptions) {
+        return;
+      }
       const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(onboardingOptions, defaultRuntime);
     });

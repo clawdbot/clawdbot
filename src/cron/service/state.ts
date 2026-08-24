@@ -285,6 +285,7 @@ type CronRunAdmission = {
 
 type QueuedCronRunReservation = {
   identity: object;
+  lifecycleGeneration: number;
   markerAtMs: number;
   runReceipt: CronRunReceiptHandle;
   preserveWhenDisabled: boolean;
@@ -303,6 +304,8 @@ export type CronServiceState = {
   /** Number of timer batches currently executing admitted scheduled work. */
   activeTimerTicks: number;
   stopped: boolean;
+  /** Rotates synchronously on stop so an immediate restart cannot revive old work. */
+  lifecycleGeneration: number;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
   activeManualRunJobIds: Set<string>;
@@ -340,6 +343,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     running: false,
     activeTimerTicks: 0,
     stopped: false,
+    lifecycleGeneration: 0,
     schedulingPaused: false,
     schedulerStarted: false,
     activeManualRunJobIds: new Set<string>(),

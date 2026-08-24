@@ -38,6 +38,7 @@ type SessionRosterRefreshHost = {
 type ManagedSessionListRefresh = {
   append: boolean;
   offset?: number;
+  invalidated?: true;
 };
 
 type ManagedSessionListQuery = Readonly<Record<string, unknown>> & { readonly limit: number };
@@ -119,7 +120,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       listeners: new Set(),
       coordinator: createSessionEventRefreshCoordinator({
         active: pageActive,
-        refresh: () => refreshManagedList(entry, { append: false }),
+        refresh: () => refreshManagedList(entry, { append: false, invalidated: true }),
       }),
       pending: null,
       queued: null,
@@ -137,7 +138,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return Promise.resolve();
     }
     if (entry.pending) {
-      if (!refresh.append) {
+      if (refresh.invalidated) {
         entry.queued = refresh;
       }
       return entry.pending;
@@ -471,9 +472,20 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       entry.listeners.add(listener);
       return () => {
         entry.listeners.delete(listener);
-        if (entry.listeners.size === 0 && managedLists.get(entry.key) === entry) {
-          entry.coordinator.dispose();
-          managedLists.delete(entry.key);
+        if (entry.listeners.size > 0 || managedLists.get(entry.key) !== entry) {
+          return;
+        }
+        const release = () => {
+          if (entry.listeners.size === 0 && managedLists.get(entry.key) === entry) {
+            entry.coordinator.dispose();
+            managedLists.delete(entry.key);
+          }
+        };
+        // Route replacement may briefly remove every subscriber while this query still owns a request.
+        if (entry.pending) {
+          void entry.pending.finally(release);
+        } else {
+          release();
         }
       };
     },
@@ -552,8 +564,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return refresh({ ...options, force: true });
     },
     lastOptions: () => lastListOptions,
-    scheduleEvent(options: { agentId?: string | null } = {}) {
-      eventRefreshCoordinator.schedule();
+    // Gateway-owned membership filters require an authoritative list refresh.
+    canApplyPrimarySnapshot: () => isPrimarySessionListQuery(lastListOptions),
+    scheduleEvent(options: { agentId?: string | null; primarySnapshotApplied?: boolean } = {}) {
+      if (!options.primarySnapshotApplied) {
+        eventRefreshCoordinator.schedule();
+      }
       const agentId = options.agentId ? normalizeAgentId(options.agentId) : null;
       for (const entry of managedLists.values()) {
         const queryAgentId = managedSessionListAgentId(entry);

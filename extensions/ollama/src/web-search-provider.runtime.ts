@@ -29,6 +29,7 @@ import {
   fetchOllamaModels,
   resolveOllamaApiBase,
 } from "./provider-models.js";
+import { redactOllamaResponseErrorText } from "./request-header-redaction.js";
 import {
   OLLAMA_WEB_SEARCH_TOOL_DESCRIPTION,
   OLLAMA_WEB_SEARCH_TOOL_PARAMETERS,
@@ -228,8 +229,10 @@ async function runOllamaWebSearch(params: {
       }
       if (!response.ok) {
         const detail = await readResponseText(response, { maxBytes: 64_000 });
-        const message =
-          `Ollama web search failed (${response.status}): ${detail.text || ""}`.trim();
+        const detailText = redactOllamaResponseErrorText(detail.text, headers, {
+          sourceTruncated: detail.truncated,
+        });
+        const message = `Ollama web search failed (${response.status}): ${detailText}`.trim();
         if (response.status === 404) {
           lastError = new Error(message);
           continue;

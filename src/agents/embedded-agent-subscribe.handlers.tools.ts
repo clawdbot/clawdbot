@@ -33,6 +33,7 @@ export function createEmbeddedToolLifecycle(ctx: ToolHandlerContext) {
       args: toolParams.args,
       replaySafe: toolParams.replaySafe,
       hideFromChannelProgress: toolParams.hideFromChannelProgress,
+      lifecycleProvenance: "nested",
     });
     let executionStarted = false;
     const onImplementationStart = () => {

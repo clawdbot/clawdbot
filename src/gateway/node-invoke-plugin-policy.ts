@@ -411,16 +411,16 @@ export async function applyPluginNodeInvokePolicy(params: {
         message: "node pairing changed before dispatch",
       });
     }
-    const currentConfig = params.context.getRuntimeConfig();
-    const allowlist = resolveNodeCommandAllowlist(currentConfig, {
-      ...currentNode,
-      approvedCommands: currentNode.commands,
-    });
-    const allowed = isNodeCommandAllowed({
-      command: params.command,
-      declaredCommands: currentNode.commands,
-      allowlist,
-    });
+    const resolveCommandAuthorization = () =>
+      isNodeCommandAllowed({
+        command: params.command,
+        declaredCommands: currentNode.commands,
+        allowlist: resolveNodeCommandAllowlist(params.context.getRuntimeConfig(), {
+          ...currentNode,
+          approvedCommands: currentNode.commands,
+        }),
+      });
+    const allowed = resolveCommandAuthorization();
     if (!allowed.ok) {
       return deny("node_command_revoked", {
         ok: false,
@@ -492,7 +492,8 @@ export async function applyPluginNodeInvokePolicy(params: {
         (params.nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
         (!callerIdentity ||
           params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) === true) &&
-        params.isApprovalAuthorityActive?.() !== false,
+        params.isApprovalAuthorityActive?.() !== false &&
+        resolveCommandAuthorization().ok,
       onDispatchReady: (invokeId) => {
         // Only the registry knows that the transport send succeeded. Preserve
         // pre-send failures as retry-safe while making later failures ambiguous.

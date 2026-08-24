@@ -22,7 +22,7 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
  * Sanitize text content to strip tool call markers and thinking tags.
  * This ensures user-facing text doesn't leak internal tool representations.
  */
-export function sanitizeTextContent(text: string): string {
+function sanitizeTextContent(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "history");
 }
 

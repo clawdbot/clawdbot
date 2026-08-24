@@ -31,6 +31,7 @@ import {
 import {
   buildAssistantStreamData,
   emitAssistantMessageStart,
+  emitReasoningEnd,
   extractStandaloneMessageToolText,
   hasMessageToolOnlySourceDelivery,
   isAnthropicAssistantMessage,
@@ -125,6 +126,10 @@ export function handleMessageEnd(
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
+  // Provider completion can omit thinking_end; close the visible lane before final output.
+  if (!suppressMessageToolOnlySourceReplyOutput) {
+    emitReasoningEnd(ctx);
+  }
   ctx.noteLastAssistant(assistantMessage);
   ctx.noteCompletedAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);

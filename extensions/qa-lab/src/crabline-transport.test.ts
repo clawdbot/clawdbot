@@ -14,10 +14,10 @@ afterEach(() => {
 
 function createSelection(channel: OpenClawCrablineChannelDriverSelection["channel"] = "telegram") {
   return {
-    capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+    capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
     channel,
     channelDriver: "crabline",
-    smokeArtifactPath: "crabline-fake-provider-smoke.json",
+    providerReadinessArtifactPath: "crabline-provider-readiness.json",
   } as const;
 }
 
@@ -247,6 +247,12 @@ describe("crabline transport", () => {
           | undefined;
         const apiRoot = requireString(telegram?.apiRoot, "Telegram API root");
         const botToken = requireString(telegram?.botToken, "Telegram bot token");
+        await transport.sendInbound({
+          conversation: { id: "-1001234567890", kind: "group" },
+          senderId: "100001",
+          text: "forum topic seed",
+          threadId: "42",
+        });
         const postTelegram = async (method: string, body: Record<string, unknown>) => {
           const response = await fetch(`${apiRoot}/bot${botToken}/${method}`, {
             body: JSON.stringify(body),
@@ -654,6 +660,7 @@ describe("crabline transport", () => {
           senderName: "Alice",
           text: "Mattermost baseline marker check.",
         });
+        await transport.state.reset();
         const delivery = transport.buildAgentDelivery({ target: "group:qa-channel" });
         const env = transport.createRuntimeEnvPatch?.() ?? {};
         const mattermostUrl = requireString(env.MATTERMOST_URL, "Mattermost URL");
@@ -773,7 +780,7 @@ describe("crabline transport", () => {
         ).resolves.toMatchObject({
           conversation: { id: roomId, kind: "group" },
           direction: "inbound",
-          id: expect.stringMatching(/^\$[a-f0-9]{16}:matrix\.test$/u),
+          id: expect.stringMatching(/^\$[A-Za-z0-9_-]{43}$/u),
           senderId: "driver",
           text: "Matrix baseline marker check.",
         });
@@ -942,7 +949,9 @@ describe("crabline transport", () => {
           url: `${telegram?.apiRoot}/bot${telegram?.botToken}/sendMessage`,
           init: {
             body: JSON.stringify({
-              chat_id: inbound.conversation.id,
+              chat_id: transport.buildAgentDelivery({
+                target: `channel:${inbound.conversation.id}`,
+              }).to,
               text: "assistant via fake telegram",
             }),
             headers: { "content-type": "application/json" },

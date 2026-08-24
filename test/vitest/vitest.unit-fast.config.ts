@@ -17,13 +17,15 @@ export function createUnitFastVitestConfig(
   options: { argv?: string[]; runner?: string } = {},
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
-  const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const timerTestFiles = new Set(getUnitFastTimerTestFiles());
   const isolatedTestFiles = new Set(getUnitFastIsolatedTestFiles());
   const unitFastTestFiles = getUnitFastTestFiles().filter(
     (file) => !timerTestFiles.has(file) && !isolatedTestFiles.has(file),
   );
-  const envInclude = intersectIncludePatterns(unitFastTestFiles, includeFromEnv);
+  const includeFromEnv = intersectIncludePatterns(
+    unitFastTestFiles,
+    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
+  );
   const cliInclude = narrowIncludePatternsForCli(unitFastTestFiles, options.argv);
 
   return defineConfig({
@@ -36,7 +38,7 @@ export function createUnitFastVitestConfig(
       // Env isolation only (no shared-setup mocks): membership is auto-curated,
       // so tests must never read the developer's real config/state.
       setupFiles: [resolveRepoRootPath("test/setup.env.ts")],
-      include: envInclude ?? cliInclude ?? unitFastTestFiles,
+      include: includeFromEnv ?? cliInclude ?? unitFastTestFiles,
       exclude: sharedTest.exclude ?? [],
       passWithNoTests: true,
     },

@@ -18,9 +18,11 @@ export function createUnitFastFakeTimersVitestConfig(
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
   const sharedSequence = (sharedTest as { sequence?: { groupOrder?: number } }).sequence;
-  const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const unitFastTimerTestFiles = getUnitFastTimerTestFiles();
-  const envInclude = intersectIncludePatterns(unitFastTimerTestFiles, includeFromEnv);
+  const includeFromEnv = intersectIncludePatterns(
+    unitFastTimerTestFiles,
+    loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env),
+  );
   const cliInclude = narrowIncludePatternsForCli(unitFastTimerTestFiles, options.argv);
 
   return defineConfig({
@@ -32,7 +34,7 @@ export function createUnitFastFakeTimersVitestConfig(
       runner: nonIsolatedRunnerPath,
       // Env isolation only (no shared-setup mocks), mirroring unit-fast.
       setupFiles: [resolveRepoRootPath("test/setup.env.ts")],
-      include: envInclude ?? cliInclude ?? unitFastTimerTestFiles,
+      include: includeFromEnv ?? cliInclude ?? unitFastTimerTestFiles,
       exclude: sharedTest.exclude ?? [],
       maxWorkers: 1,
       fileParallelism: false,

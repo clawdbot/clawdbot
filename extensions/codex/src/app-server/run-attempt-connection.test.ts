@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as appServerPolicy from "./app-server-policy.js";
 import { applyCodexAppServerAuthProfile } from "./auth-bridge.js";
 import * as bindingConnection from "./binding-connection.js";
+import * as codexRequirements from "./config-requirements.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import {
   createCodexRuntimePlanFixture,
@@ -423,6 +424,46 @@ describe("prepareCodexAttemptConnection", () => {
 
     // Upstream 28f10c00b4e keeps YOLO approvals disabled despite generic tool hooks.
     expect(connection.appServer.approvalPolicy).toBe("never");
+  });
+
+  it("prepares one Guardian policy when requirements clamp an explicitly full session", async () => {
+    vi.mocked(codexRequirements.readCodexRequirementsToml).mockReturnValue(
+      [
+        'allowed_sandbox_modes = ["workspace-write"]',
+        'allowed_approval_policies = ["on-request"]',
+        'allowed_approvals_reviewers = ["auto_review"]',
+      ].join("\n"),
+    );
+    const workspaceDir = path.join(tempDir, "requirements-clamped-workspace");
+    const sessionFile = path.join(tempDir, "requirements-clamped-session.jsonl");
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = path.join(tempDir, "agent");
+    params.provider = "openai";
+    params.permissionMode = "full";
+    params.sessionRoot = workspaceDir;
+    params.execOverrides = { ...params.execOverrides, mode: "full" };
+    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+
+    const connection = await prepareCodexAttemptConnection({
+      params,
+      options: { bindingStore: testCodexAppServerBindingStore },
+    });
+
+    expect(connection.appServer).toMatchObject({
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+    });
+    expect(connection.sessionPermissionPolicy).toEqual({
+      mode: "workspace",
+      root: workspaceDir,
+      execMode: "auto",
+    });
+    expect(params).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: workspaceDir,
+      execOverrides: { mode: "auto" },
+    });
   });
 
   it.each([

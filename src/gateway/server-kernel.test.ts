@@ -56,18 +56,6 @@ describe("createGatewayKernel", () => {
       expect(getStartup()).toMatchObject({ ok: true, status: "started" });
       expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
 
-      const discoveryResident = kernel.residentRegistry
-        .list()
-        .find((resident) => resident.name === "bonjour-discovery");
-      if (!discoveryResident) {
-        throw new Error("Expected the Gateway discovery resident");
-      }
-      const residentFirstStop = vi.fn(async () => {});
-      kernel.kernel.swapBonjourStop(residentFirstStop);
-      await discoveryResident.stop();
-      expect(residentFirstStop).toHaveBeenCalledOnce();
-      expect(kernel.runtimeState.bonjourStop).toBeNull();
-
       const closeFirstStop = vi.fn(async () => {});
       kernel.kernel.swapBonjourStop(closeFirstStop);
       const configReloaderStop = createDeferred();
@@ -80,7 +68,6 @@ describe("createGatewayKernel", () => {
       expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });
       configReloaderStop.resolve();
       await closing;
-      await discoveryResident.stop();
       expect(closeFirstStop).toHaveBeenCalledOnce();
       expect(kernel.runtimeState.bonjourStop).toBeNull();
     } finally {

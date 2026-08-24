@@ -4,6 +4,7 @@
  */
 import { createHmac, randomBytes } from "node:crypto";
 import type {
+  CliBackendExecuteContext,
   CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
@@ -41,6 +42,19 @@ type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
 };
 
 const CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY = randomBytes(32);
+const CLAUDE_CLI_DEFAULT_ARGS = [
+  "-p",
+  "--output-format",
+  "stream-json",
+  "--include-partial-messages",
+  "--verbose",
+  "--setting-sources",
+  "user",
+  "--allowedTools",
+  "mcp__openclaw__*",
+  "--disallowedTools",
+  "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
+] as const;
 
 function createClaudeCliAuthInput(params: {
   envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" | "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR";
@@ -143,14 +157,6 @@ export function buildAnthropicCliBackend(
       entrypoint: "command",
       nativeExecutableNames: ["claude", "claude.exe"],
     },
-    // Claude Code 2.1.206 first shipped per-input lifecycle correlation. The
-    // runtime checks the advertised capability so backports and wrappers work.
-    liveSessionRequirement: {
-      capability: "msg_lifecycle_v1",
-      minimumVersion: "2.1.206",
-      versionArgs: ["--version"],
-      updateCommand: "claude update",
-    },
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
@@ -196,34 +202,8 @@ export function buildAnthropicCliBackend(
     subscriptionAuthDispatch: true,
     config: {
       command: "claude",
-      args: [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--include-partial-messages",
-        "--verbose",
-        "--setting-sources",
-        "user",
-        "--allowedTools",
-        "mcp__openclaw__*",
-        "--disallowedTools",
-        "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
-      ],
-      resumeArgs: [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--include-partial-messages",
-        "--verbose",
-        "--setting-sources",
-        "user",
-        "--allowedTools",
-        "mcp__openclaw__*",
-        "--disallowedTools",
-        "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
-        "--resume",
-        "{sessionId}",
-      ],
+      args: [...CLAUDE_CLI_DEFAULT_ARGS],
+      resumeArgs: [...CLAUDE_CLI_DEFAULT_ARGS, "--resume", "{sessionId}"],
       forkArg: "--fork-session",
       // Claude Code 2.1.209+ exposes this hidden print-mode flag, and stream-json
       // emits the matching transcript UUID on assistant records.
@@ -270,7 +250,16 @@ export function buildAnthropicCliBackend(
           ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
           ...authInput?.env,
         };
-        return Object.keys(env).length > 0 || isolatedCompletion
+        const agentSdkExecution =
+          !isolatedCompletion && context.executionMode === "agent"
+            ? {
+                async *execute(executionContext: CliBackendExecuteContext) {
+                  const { executeClaudeAgentSdk } = await import("./agent-sdk.runtime.js");
+                  yield* executeClaudeAgentSdk(executionContext, authInput?.secretInput);
+                },
+              }
+            : undefined;
+        return Object.keys(env).length > 0 || isolatedCompletion || agentSdkExecution
           ? {
               env,
               // The paired side-question argv projection disables settings, memory,
@@ -279,6 +268,7 @@ export function buildAnthropicCliBackend(
               ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
               ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
               ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
+              ...agentSdkExecution,
             }
           : undefined;
       };

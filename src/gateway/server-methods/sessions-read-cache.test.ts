@@ -28,7 +28,9 @@ import {
   readOpenIncognitoAgentDatabaseGeneration,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { bumpSessionAutomationVersion } from "../session-automation-index.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
@@ -124,43 +126,23 @@ async function seedSessions(): Promise<OpenClawConfig> {
   const config: OpenClawConfig = {
     agents: { list: [{ id: "main", default: true }, { id: "work" }] },
   };
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: "agent:main:active" },
-    {
-      sessionId: "main-active",
-      updatedAt: 400,
-      createdActor: { type: "human", id: "owner@example.com" },
-      visibility: "shared",
-    },
-  );
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: "agent:main:draft" },
-    {
-      sessionId: "main-draft",
-      updatedAt: 300,
-      createdActor: { type: "human", id: "owner@example.com" },
-      visibility: "draft",
-    },
-  );
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: "agent:main:archived" },
-    {
-      sessionId: "main-archived",
-      updatedAt: 200,
-      archivedAt: 200,
-      createdActor: { type: "human", id: "viewer@example.com" },
-      visibility: "shared",
-    },
-  );
-  await upsertSessionEntryCore(
-    { agentId: "work", sessionKey: "agent:work:active" },
-    {
-      sessionId: "work-active",
-      updatedAt: 100,
-      createdActor: { type: "human", id: "viewer@example.com" },
-      visibility: "shared",
-    },
-  );
+  for (const [agentId, name, updatedAt, owner, overrides] of [
+    ["main", "active", 400, "owner@example.com", {}],
+    ["main", "draft", 300, "owner@example.com", { visibility: "draft" }],
+    ["main", "archived", 200, "viewer@example.com", { archivedAt: 200 }],
+    ["work", "active", 100, "viewer@example.com", {}],
+  ] as const) {
+    await upsertSessionEntryCore(
+      { agentId, sessionKey: `agent:${agentId}:${name}` },
+      {
+        sessionId: `${agentId}-${name}`,
+        updatedAt,
+        createdActor: { type: "human", id: owner },
+        visibility: "shared",
+        ...overrides,
+      },
+    );
+  }
   return config;
 }
 
@@ -956,7 +938,7 @@ describe("sessions.list single-flight", () => {
     });
   });
 
-  it("does not share filtered results across client identities", async () => {
+  it("fences cached rows across client identities and operator-role changes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = await seedSessions();
       const context = requestContext(config);
@@ -977,6 +959,32 @@ describe("sessions.list single-flight", () => {
       expect(owner.sessions.map((session) => session.key)).toContain("agent:main:draft");
       expect(viewer.sessions.map((session) => session.key)).not.toContain("agent:main:draft");
       expect(loader.calls).toHaveBeenCalledTimes(2);
+      const scopes: Array<"operator.read" | "operator.write"> = ["operator.read", "operator.write"];
+      const defineRole = (others: "write" | "none") => ({
+        sessions: { others },
+        agents: "*" as const,
+        scopes,
+      });
+      config.gateway = {
+        roles: {
+          default: "maintainer",
+          definitions: {
+            maintainer: defineRole("write"),
+            guest: defineRole("none"),
+          },
+        },
+      };
+      const profile = ensureProfileForEmail("cache-role@example.com");
+      const request = { agentId: "main", archived: "all" as const, limit: 100 };
+      const listProfileSessions = () =>
+        listSessions({ client: identifiedClient(profile.id), context, request });
+      const privileged = await listProfileSessions();
+      expect(privileged.sessions.map((session) => session.key)).toContain("agent:main:active");
+      setUserProfileRole(profile.id, "guest");
+      invalidateOperatorRolePolicy(profile.id);
+      const restricted = await listProfileSessions();
+      expect(restricted.sessions.map((session) => session.key)).not.toContain("agent:main:active");
+      expect(loader.calls).toHaveBeenCalledTimes(4);
     });
   });
 
