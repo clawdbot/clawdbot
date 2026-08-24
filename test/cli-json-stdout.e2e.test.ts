@@ -54,6 +54,126 @@ async function seedTrajectorySession(tempHome: string, sessionKey: string) {
 describe("cli json stdout contract", () => {
   it.each([
     {
+      name: "add without an interactive terminal in human mode",
+      args: ["agents", "add", "work"],
+      message:
+        "Agent creation needs an interactive TTY. Use `openclaw agents add <id> --non-interactive --workspace <dir>` for automation.",
+      human: true,
+    },
+    {
+      name: "add without an interactive terminal in JSON wizard mode",
+      args: ["agents", "add", "work", "--json"],
+      message:
+        "Agent creation needs an interactive TTY. Use `openclaw agents add <id> --non-interactive --workspace <dir>` for automation.",
+    },
+    {
+      name: "add without a workspace in human mode",
+      args: ["agents", "add", "work", "--non-interactive"],
+      message:
+        "Non-interactive agent creation requires --workspace. Re-run openclaw agents add <id> --workspace <path> or omit flags to use the wizard.",
+      human: true,
+    },
+    {
+      name: "add without a workspace in explicit non-interactive mode",
+      args: ["agents", "add", "work", "--non-interactive", "--json"],
+      message:
+        "Non-interactive agent creation requires --workspace. Re-run openclaw agents add <id> --workspace <path> or omit flags to use the wizard.",
+    },
+    {
+      name: "add without a workspace when a model selects automation",
+      args: ["agents", "add", "work", "--model", "openai/gpt-5.6-luna", "--json"],
+      message:
+        "Non-interactive agent creation requires --workspace. Re-run openclaw agents add <id> --workspace <path> or omit flags to use the wizard.",
+    },
+    {
+      name: "add without a workspace before its missing name",
+      args: ["agents", "add", "--non-interactive", "--json"],
+      message:
+        "Non-interactive agent creation requires --workspace. Re-run openclaw agents add <id> --workspace <path> or omit flags to use the wizard.",
+    },
+    {
+      name: "add without a name after a valid workspace",
+      args: ["agents", "add", "--workspace", "$WORKSPACE", "--json"],
+      message:
+        "Agent name is required in non-interactive mode. Run openclaw agents add <id> --workspace <path>.",
+    },
+    {
+      name: "add with an invalid agent id",
+      args: ["agents", "add", "агент✨", "--workspace", "$WORKSPACE", "--json"],
+      message:
+        'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
+    },
+    ...["openclaw", "crestodian"].map((agentId) => ({
+      name: `add with reserved system-agent id ${agentId}`,
+      args: ["agents", "add", agentId, "--workspace", "$WORKSPACE", "--json"],
+      message: `"${agentId}" is reserved. Choose another name, or run openclaw agents list to inspect configured agents.`,
+    })),
+    {
+      name: "add with an already-configured agent",
+      args: ["agents", "add", "main", "--workspace", "$WORKSPACE", "--json"],
+      message: 'Agent "main" already exists.',
+    },
+    {
+      name: "add with a malformed binding",
+      args: ["agents", "add", "work", "--workspace", "$WORKSPACE", "--bind", "telegram:", "--json"],
+      message:
+        'Invalid binding "telegram:". Account id is empty. Use <channel>:<account>, for example telegram:default.',
+    },
+    {
+      name: "add with multiple malformed bindings in input order",
+      args: [
+        "agents",
+        "add",
+        "work",
+        "--workspace",
+        "$WORKSPACE",
+        "--bind",
+        "telegram:",
+        "--bind",
+        "telegram:work:extra",
+        "--json",
+      ],
+      message: [
+        'Invalid binding "telegram:". Account id is empty. Use <channel>:<account>, for example telegram:default.',
+        'Invalid binding "telegram:work:extra". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.',
+      ].join("\n"),
+    },
+    {
+      name: "add with an unknown binding channel",
+      args: [
+        "agents",
+        "add",
+        "work",
+        "--workspace",
+        "$WORKSPACE",
+        "--bind",
+        "definitely-not-a-channel",
+        "--json",
+      ],
+      message:
+        'Unknown channel "definitely-not-a-channel". Run `openclaw channels list --all` to see configured and installable channels.',
+    },
+    {
+      name: "add with a normalized id before a malformed binding",
+      args: ["agents", "add", "Work", "--workspace", "$WORKSPACE", "--bind", "telegram:", "--json"],
+      message:
+        'Invalid binding "telegram:". Account id is empty. Use <channel>:<account>, for example telegram:default.',
+    },
+    {
+      name: "add without a workspace through dual-TTY finalization",
+      args: ["agents", "add", "work", "--non-interactive", "--json"],
+      message:
+        "Non-interactive agent creation requires --workspace. Re-run openclaw agents add <id> --workspace <path> or omit flags to use the wizard.",
+      tty: true,
+    },
+    {
+      name: "add with a malformed binding through dual-TTY finalization",
+      args: ["agents", "add", "work", "--workspace", "$WORKSPACE", "--bind", "telegram:", "--json"],
+      message:
+        'Invalid binding "telegram:". Account id is empty. Use <channel>:<account>, for example telegram:default.',
+      tty: true,
+    },
+    {
       name: "bindings with an invalid agent",
       args: ["agents", "bindings", "--agent", "агент✨", "--json"],
       message: 'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
@@ -135,14 +255,18 @@ describe("cli json stdout contract", () => {
       message: "Provide at least one --bind <channel[:accountId]>.",
       tty: true,
     },
-  ])("renders agent binding $name through the canonical failure owner", async (testCase) => {
+  ])("renders agent management $name through the canonical failure owner", async (testCase) => {
     await withTempHome(
       async (tempHome) => {
         const configPath = path.join(tempHome, "missing-openclaw.json");
+        const workspace = path.join(tempHome, "workspace");
         const preload = `data:text/javascript,${encodeURIComponent(
           'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
         )}`;
-        const result = runBuiltCli(tempHome, testCase.args, {
+        const args = testCase.args.map((argument) =>
+          argument === "$WORKSPACE" ? workspace : argument,
+        );
+        const result = runBuiltCli(tempHome, args, {
           OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
           OPENCLAW_CONFIG_PATH: configPath,
           ...("tty" in testCase ? { NODE_OPTIONS: `--import=${preload}`, FORCE_COLOR: "1" } : {}),
@@ -164,8 +288,9 @@ describe("cli json stdout contract", () => {
           expect(result.stderr).toContain("\u001B[?25h");
         }
         await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(workspace)).rejects.toMatchObject({ code: "ENOENT" });
       },
-      { prefix: "openclaw-agent-bindings-json-failure-e2e-" },
+      { prefix: "openclaw-agent-management-json-failure-e2e-" },
     );
   });
 
