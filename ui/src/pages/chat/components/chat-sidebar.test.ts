@@ -371,6 +371,34 @@ describe("markdown sidebar", () => {
     fallbackPanel.remove();
   });
 
+  it("preserves authenticated transcoded video playback in attachment previews", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete?: Promise<unknown>;
+    };
+    panel.content = {
+      kind: "attachment",
+      title: "clip.mov",
+      src: "/api/chat/media/outgoing/session/artifact/full?mediaTicket=ticket",
+      sourceIdentity: "artifact:clip",
+      mimeType: "video/quicktime",
+      playback: "transcode",
+      authToken: "session-token",
+    };
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toContain("playback=1");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
+    expect(panel.querySelector("openclaw-chat-video-player")).not.toBeNull();
+    expect(panel.querySelector(":scope > video")).toBeNull();
+    panel.remove();
+  });
+
   it("keeps a canvas scripts ceiling under a trusted global sandbox", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;
