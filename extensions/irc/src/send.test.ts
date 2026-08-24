@@ -425,6 +425,49 @@ describe("sendMessageIrc cfg threading", () => {
     expect(client.quit).toHaveBeenCalledOnce();
   });
 
+  it("stops before recording another chunk after the connection closes", async () => {
+    const providedCfg = {
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "openclaw",
+        },
+      },
+    } as unknown as CoreConfig;
+    let ready = true;
+    const client = {
+      isReady: vi.fn(() => ready),
+      join: vi.fn(),
+      sendPrivmsg: vi.fn(),
+      quit: vi.fn(),
+    } as unknown as IrcClient & {
+      join: ReturnType<typeof vi.fn>;
+      sendPrivmsg: ReturnType<typeof vi.fn>;
+      quit: ReturnType<typeof vi.fn>;
+    };
+    hoisted.connectIrcClient.mockResolvedValue(client);
+    const onDeliveryResult = vi.fn(() => {
+      ready = false;
+    });
+    const onPlatformSendDispatch = vi.fn();
+    const text = Array.from({ length: 80 }, (_, index) => `word-${index}`).join(" ");
+
+    await expect(
+      sendFormattedIrcText({
+        cfg: providedCfg,
+        to: "#room",
+        text,
+        onDeliveryResult,
+        onPlatformSendDispatch,
+      }),
+    ).rejects.toThrow("IRC connection closed before send");
+
+    expect(client.sendPrivmsg).toHaveBeenCalledOnce();
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(client.quit).toHaveBeenCalledOnce();
+  });
+
   it("declares message adapter durable text, media, and reply with receipt proofs", async () => {
     const providedCfg = {
       channels: {

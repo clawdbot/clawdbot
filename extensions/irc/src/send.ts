@@ -119,7 +119,14 @@ export async function sendIrcMessages(
     }
     for (const message of preparedMessages) {
       opts.abortSignal?.throwIfAborted();
+      if (!client.isReady()) {
+        throw new Error("IRC connection closed before send");
+      }
       await opts.onPlatformSendDispatch?.();
+      opts.abortSignal?.throwIfAborted();
+      if (!client.isReady()) {
+        throw new Error("IRC connection closed before send");
+      }
       client.sendPrivmsg(target, message.payload);
       recordIrcOutboundActivity(account.accountId);
 
