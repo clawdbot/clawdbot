@@ -1,3 +1,4 @@
+import OpenClawKit
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
@@ -42,5 +43,27 @@ struct ChannelsStoreUIConfigTests {
         store.applyConfigSnapshot(snapshot, sourceKey: "gateway", force: true)
 
         #expect(AppStateStore.shared.seamColorHex == "#112233")
+    }
+
+    @Test func `gateway pushes refresh config only when its snapshot may be stale`() {
+        let hello = HelloOk(
+            type: "hello-ok",
+            _protocol: 3,
+            server: [:],
+            features: [:],
+            snapshot: Snapshot(
+                presence: [],
+                health: [:],
+                stateversion: StateVersion(presence: 0, health: 0),
+                uptimems: 0),
+            auth: [:],
+            policy: [:])
+
+        #expect(ChannelsStore.gatewayPushRequestsConfigRefresh(
+            .event(EventFrame(type: "event", event: "config.changed"))))
+        #expect(ChannelsStore.gatewayPushRequestsConfigRefresh(.snapshot(hello)))
+        #expect(ChannelsStore.gatewayPushRequestsConfigRefresh(.seqGap(expected: 1, received: 3)))
+        #expect(!ChannelsStore.gatewayPushRequestsConfigRefresh(
+            .event(EventFrame(type: "event", event: "presence"))))
     }
 }
