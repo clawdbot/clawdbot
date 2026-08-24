@@ -875,6 +875,16 @@ describe("capability cli", () => {
     });
   });
 
+  it("renders an explicit empty model list without changing JSON output", async () => {
+    mocks.loadModelCatalog.mockResolvedValue([]);
+
+    await runCapability("model", "list", "--json");
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith([]);
+
+    await runCapability("model", "list");
+    expect(mocks.runtime.log).toHaveBeenCalledWith("No results found.");
+  });
+
   it("reports model providers configured through their environment key", async () => {
     vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
 
