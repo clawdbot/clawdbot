@@ -13,26 +13,15 @@ import type {
 import type { AgentToolResult } from "./runtime/index.js";
 import { failedTextResult, textResult } from "./tools/common.js";
 
-export function createExecApprovalReviewProjection() {
-  let review: ExecToolApprovalReview | undefined;
-  return {
-    set(next: ExecToolApprovalReview | undefined): void {
-      review = next;
-    },
-    attach(result: AgentToolResult<ExecToolDetails>): AgentToolResult<ExecToolDetails> {
-      if (!review) {
-        return result;
-      }
-      return {
-        ...result,
-        details: {
-          ...result.details,
-          approvalReviews: [review],
-          approvalReviewOutcome: review.status === "approved" ? "approved" : "denied",
-        },
-      };
-    },
-  };
+export function attachExecApprovalReview(
+  result: AgentToolResult<ExecToolDetails>,
+  review?: ExecToolApprovalReview,
+): AgentToolResult<ExecToolDetails> {
+  if (review) {
+    result.details.approvalReviews = [review];
+    result.details.approvalReviewOutcome = review.status === "approved" ? "approved" : "denied";
+  }
+  return result;
 }
 
 export function buildExecForegroundResult(params: {

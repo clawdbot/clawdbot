@@ -139,12 +139,11 @@ export type ExecToolApprovalReview = {
   rationale?: string;
 };
 
-type ExecToolApprovalReviewDetails = {
+/** Structured details returned by exec tool calls. */
+export type ExecToolDetails = {
   approvalReviews?: readonly ExecToolApprovalReview[];
   approvalReviewOutcome?: "approved" | "denied" | "reviewing";
-};
-
-type ExecToolStateDetails =
+} & (
   | {
       status: "running";
       sessionId: string;
@@ -199,7 +198,5 @@ type ExecToolStateDetails =
       cwd?: string;
       nodeId?: string;
       warningText?: string;
-    };
-
-/** Structured details returned by exec tool calls. */
-export type ExecToolDetails = ExecToolApprovalReviewDetails & ExecToolStateDetails;
+    }
+);

@@ -301,18 +301,7 @@ describe("createModelExecAutoReviewer", () => {
       },
     });
 
-    await expect(
-      reviewer({
-        ...input,
-        command: "git status && git diff --stat",
-        argv: undefined,
-        resolvedPath: undefined,
-        executionPlan: [
-          { argv: ["git", "status"], resolvedPath: "/usr/bin/git" },
-          { argv: ["git", "diff", "--stat"], resolvedPath: "/usr/bin/git" },
-        ],
-      }),
-    ).resolves.toEqual({
+    await expect(reviewer(input)).resolves.toEqual({
       decision: "ask",
       risk: "high",
       rationale: "network side effect",
@@ -338,30 +327,14 @@ describe("createModelExecAutoReviewer", () => {
         }),
       }),
     );
-    expect(capturedPrompt).toContain('"executionPlan"');
     expect(capturedPrompt).toContain('"resolvedPath": "/usr/bin/git"');
     expect(capturedPrompt).not.toContain("sessionKey");
   });
 
-  it.each([
-    {
-      name: "too many execution-plan steps",
-      request: {
-        ...input,
-        executionPlan: Array.from({ length: 65 }, () => ({
-          argv: ["git", "status"],
-          resolvedPath: "/usr/bin/git",
-        })),
-      },
-    },
-    {
-      name: "an oversized serialized request",
-      request: { ...input, command: "x".repeat(20_000) },
-    },
-  ])("defers $name before model preparation", async ({ request }) => {
+  it("defers an oversized serialized request before model preparation", async () => {
     const { reviewer, prepare, complete } = createReviewerHarness();
 
-    await expect(reviewer(request)).resolves.toEqual({
+    await expect(reviewer({ ...input, command: "x".repeat(20_000) })).resolves.toEqual({
       decision: "ask",
       risk: "unknown",
       rationale: "exec reviewer deferred because the request exceeds review input limits",
