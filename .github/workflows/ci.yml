@@ -3833,9 +3833,28 @@ jobs:
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 150
     env:
+      BUNDLE_DEPLOYMENT: "true"
+      BUNDLE_GEMFILE: ${{ github.workspace }}/apps/ios/Gemfile
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *platform_checkout_step
+
+      - name: Setup Ruby
+        if: env.HISTORICAL_TARGET != 'true'
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: "3.4.10"
+          bundler: "2.6.9"
+          bundler-cache: false
+          working-directory: apps/ios
+
+      - name: Install locked Fastlane bundle
+        if: env.HISTORICAL_TARGET != 'true'
+        working-directory: apps/ios
+        run: |
+          bundle _2.6.9_ install --jobs 4 --retry 3
+          bundle _2.6.9_ check
+          bundle _2.6.9_ exec fastlane --version
 
       - name: Select Xcode 26
         run: |

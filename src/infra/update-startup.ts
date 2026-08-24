@@ -39,6 +39,7 @@ import {
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { readVerifiedGitUpdateReceipt, type VerifiedGitUpdateReceipt } from "./restart-sentinel.js";
 import {
+  normalizeGatewayRestartDelayMs,
   resolveGatewayRestartDeferralTimeoutMs,
   scheduleGatewaySigusr1Restart,
 } from "./restart.js";
@@ -154,7 +155,6 @@ const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
 const AUTO_STABLE_DELAY_HOURS_DEFAULT = 6;
 const AUTO_STABLE_JITTER_HOURS_DEFAULT = 12;
 const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
-const MANAGED_AUTO_UPDATE_SYSTEMD_RESTART_GRACE_MS = 2000;
 const DEV_COMMIT_LIMIT = 5;
 const DEV_COMMIT_SUBJECT_MAX_LENGTH = 120;
 const DEV_COMMIT_LOG_MAX_OUTPUT_BYTES = 8 * 1024;
@@ -162,13 +162,7 @@ const DEV_COMMIT_LOG_MAX_OUTPUT_BYTES = 8 * 1024;
 type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 
 function shouldSkipCheck(allowInTests: boolean): boolean {
-  if (allowInTests) {
-    return false;
-  }
-  if (process.env.VITEST || process.env.NODE_ENV === "test") {
-    return true;
-  }
-  return false;
+  return !allowInTests && Boolean(process.env.VITEST || process.env.NODE_ENV === "test");
 }
 
 function resolveAutoUpdatePolicy(cfg: OpenClawConfig): AutoUpdatePolicy {
@@ -438,14 +432,12 @@ function resolveStableAutoApplyAtMs(params: {
   return firstSeenMs + baseDelayMs + jitterMs;
 }
 
-function resolveManagedAutoUpdateRestartDelayMs(supervisor: RespawnSupervisor): number {
-  return supervisor === "systemd" ? MANAGED_AUTO_UPDATE_SYSTEMD_RESTART_GRACE_MS : 0;
-}
-
 async function startManagedServiceAutoUpdateHandoff(
   params: AutoUpdateRunParams & { supervisor: RespawnSupervisor },
 ): Promise<AutoUpdateRunResult> {
-  const restartDelayMs = resolveManagedAutoUpdateRestartDelayMs(params.supervisor);
+  const restartDelayMs = normalizeGatewayRestartDelayMs(
+    params.supervisor === "systemd" ? undefined : 0,
+  );
   const handoffId = randomUUID();
   try {
     if (!params.root?.trim()) {
@@ -454,7 +446,9 @@ async function startManagedServiceAutoUpdateHandoff(
     const started = await startManagedServiceUpdateHandoff({
       root: params.root,
       timeoutMs: params.timeoutMs,
-      restartDrainTimeoutMs: params.restartDrainTimeoutMs,
+      restartDrainTimeoutMs:
+        resolveGatewayRestartDeferralTimeoutMs(params.restartDrainTimeoutMs) ??
+        resolveGatewayRestartDeferralTimeoutMs(),
       channel: params.channel,
       ...(params.packageTargetVersion ? { tag: params.packageTargetVersion } : {}),
       restartDelayMs,
@@ -469,9 +463,11 @@ async function startManagedServiceAutoUpdateHandoff(
     // Pair helper creation with restart scheduling before any state persistence
     // can fail and leave an indefinite handoff waiting on a live parent.
     if (started.status === "started") {
+      const { handoffId: ownerId, installRoot } = started;
       scheduleGatewaySigusr1Restart({
         delayMs: restartDelayMs,
         reason: "update.auto",
+        successorOwner: { kind: "managed-update-handoff", handoffId: ownerId, installRoot },
         skipCooldown: true,
         skipDeferral: true,
       });
@@ -514,15 +510,7 @@ async function runAutoUpdateCommand(params: AutoUpdateRunParams): Promise<AutoUp
     }
   }
   if (supervisor) {
-    return await startManagedServiceAutoUpdateHandoff({
-      channel: params.channel,
-      timeoutMs: params.timeoutMs,
-      restartDrainTimeoutMs: params.restartDrainTimeoutMs,
-      root: params.root,
-      ...(params.packageTargetVersion ? { packageTargetVersion: params.packageTargetVersion } : {}),
-      ...(params.devTarget ? { devTarget: params.devTarget } : {}),
-      supervisor,
-    });
+    return await startManagedServiceAutoUpdateHandoff({ ...params, supervisor });
   }
 
   const targetArgs = [

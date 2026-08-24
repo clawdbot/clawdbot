@@ -948,6 +948,7 @@ export const en: TranslationMap = {
     incognitoDescription: "Keep this session only until the Gateway restarts",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
+    composerOptionsSelected: "Add attachments or session options ({count} selected)",
     messagePlaceholder: "What should this session work on?",
     readingAttachment: "Reading attachment",
     start: "Start session",
@@ -967,6 +968,8 @@ export const en: TranslationMap = {
     agentsUnavailable: "No agents are available on this Gateway yet.",
     nodeUnavailable: "The selected device is unavailable. Pick another place.",
     terminalNeedsFolder: "Pick a folder before starting in a terminal.",
+    terminalCapabilityOverridesUnsupported:
+      "Clear session capability overrides before starting in a terminal.",
     what: "What",
     detail: "Detail",
     local: "Local",

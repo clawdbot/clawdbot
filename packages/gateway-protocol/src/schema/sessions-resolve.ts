@@ -21,3 +21,21 @@ export const SessionsResolveParamsSchema = closedObject({
 });
 
 export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
+
+export const SessionsResolveCandidateSchema = closedObject({
+  key: NonEmptyString,
+  agentId: NonEmptyString,
+  displayName: Type.Optional(Type.String()),
+  boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+});
+
+export const SessionsResolveResultSchema = Type.Union([
+  closedObject({ ok: Type.Literal(true), ...SessionsResolveCandidateSchema.properties }),
+  closedObject({
+    ok: Type.Literal(false),
+    candidates: Type.Optional(Type.Array(SessionsResolveCandidateSchema, { maxItems: 10 })),
+  }),
+]);
+
+export type SessionsResolveCandidate = Static<typeof SessionsResolveCandidateSchema>;
+export type SessionsResolveResult = Static<typeof SessionsResolveResultSchema>;

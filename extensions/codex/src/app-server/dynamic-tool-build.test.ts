@@ -11,6 +11,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
@@ -749,6 +750,58 @@ describe("Codex app-server dynamic tool build", () => {
       (receivedOptions?.webFetchHostnameAllowlistRef as { value?: string[] } | undefined)?.value,
     ).toBeUndefined();
   });
+
+  it.each([
+    {
+      name: "publication capability is unavailable",
+      githubPublicationAvailable: undefined,
+      profile: "coding",
+      expectedTools: [],
+    },
+    {
+      name: "publication is unavailable for a prepared session",
+      githubPublicationAvailable: false,
+      profile: "coding",
+      expectedTools: ["github_identity_status"],
+    },
+    {
+      name: "publication is available for a prepared session",
+      githubPublicationAvailable: true,
+      profile: "coding",
+      expectedTools: ["github_identity_status", "github_publish"],
+    },
+    {
+      name: "the active profile excludes coding tools",
+      githubPublicationAvailable: true,
+      profile: "messaging",
+      expectedTools: [],
+    },
+  ] as const)(
+    "exposes prepared GitHub tools when $name",
+    async ({ githubPublicationAvailable, profile, expectedTools }) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.disableTools = false;
+      params.githubPublicationAvailable = githubPublicationAvailable;
+      params.config = { tools: { profile } };
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      const { hostCapabilities: _hostCapabilities, ...attempt } = params;
+      const host = await createAgentHarnessHostCapabilitiesForTest({ attempt, pluginId: "codex" });
+      params.hostCapabilities = host.capabilities;
+
+      try {
+        const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+          sandbox: null as never,
+        });
+
+        expect(tools.map((tool) => tool.name).filter((name) => name.startsWith("github_"))).toEqual(
+          expectedTools,
+        );
+      } finally {
+        host.close();
+      }
+    },
+  );
 
   it("forwards client caps alongside channel authority context", async () => {
     // Regression: capability-gated tools (requiredClientCaps) vanished on the

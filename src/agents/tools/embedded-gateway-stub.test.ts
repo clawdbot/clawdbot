@@ -239,6 +239,7 @@ describe("embedded gateway stub", () => {
     });
 
     expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
       maxMessages: 200,
     });
@@ -306,6 +307,7 @@ describe("embedded gateway stub", () => {
     });
 
     expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
       maxMessages: 1,
     });
@@ -366,6 +368,7 @@ describe("embedded gateway stub", () => {
       },
     );
     expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith(rawMessages.slice(0, 2), {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
     });
     expect(result).toMatchObject({
@@ -403,6 +406,7 @@ describe("embedded gateway stub", () => {
     });
 
     expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith([rawMessages[1]], {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
     });
     expect(result.messages).toEqual([projectedMessages[1]]);
@@ -438,6 +442,7 @@ describe("embedded gateway stub", () => {
 
     expect(runtime.dropPreSessionStartAnnouncePairs).toHaveBeenCalledWith(rawMessages, 1234);
     expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith(filteredMessages, {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
     });
     expect(result.messages).toEqual(filteredMessages);
@@ -501,6 +506,7 @@ describe("embedded gateway stub", () => {
       },
     );
     expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
       maxMessages: 2,
     });
@@ -555,6 +561,7 @@ describe("embedded gateway stub", () => {
     });
 
     expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
       maxMessages: 2,
     });

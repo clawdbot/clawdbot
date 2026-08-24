@@ -35,6 +35,7 @@ import {
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
   prepareSessionPatchArchive,
   type SessionPatchArchivePreparation,
@@ -132,6 +133,7 @@ async function executeSessionPatchMutations(params: {
 }): Promise<MutationCoreResult> {
   const { client } = params;
   const cfg = params.context.getRuntimeConfig();
+  const creation = resolveOperatorSessionCreation(client);
   const archiveActor = gatewayClientSessionCreator(client);
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const callerCanManageCron = client === null || callerScopes.includes(ADMIN_SCOPE);
@@ -432,6 +434,7 @@ async function executeSessionPatchMutations(params: {
                         }
                         const projected = await projectSessionsPatchEntry({
                           cfg,
+                          creation,
                           existingEntry,
                           isLabelInUse: (label) => labelOwners.isLabelInUse(label, candidateKeys),
                           storeKey: primaryKey,

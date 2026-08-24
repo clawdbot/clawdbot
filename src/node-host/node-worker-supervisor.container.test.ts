@@ -55,7 +55,16 @@ const args = process.argv.slice(2);
 const command = args[0];
 const statePath = (id) => path.join(engineRoot, id + ".container.json");
 const load = (id) => JSON.parse(fs.readFileSync(statePath(id), "utf8"));
-const save = (container) => fs.writeFileSync(statePath(container.id), JSON.stringify(container));
+// Sibling shim invocations (rm/inspect/wait) read this state while another
+// writes it. A truncating write exposes a zero-length window, so a reader
+// parses partial JSON and the shim exits 1; rename is atomic, so readers
+// always see either the previous or the next complete state.
+const save = (container) => {
+  const target = statePath(container.id);
+  const pending = target + "." + process.pid + ".pending";
+  fs.writeFileSync(pending, JSON.stringify(container));
+  fs.renameSync(pending, target);
+};
 const launchIdFor = (container) =>
   Buffer.from(container.labels["openclaw.node-worker.launch"], "base64url").toString("utf8");
 const journalState = (launchId) => {

@@ -448,12 +448,7 @@ export async function finishGatewayStartup(params: {
       },
       applyMaintenance: async (maintenance) => {
         if (lifecycle.closePreludeStarted) {
-          clearInterval(maintenance.tickInterval);
-          clearInterval(maintenance.healthInterval);
-          clearInterval(maintenance.dedupeCleanup);
-          await maintenance.stopMediaCleanup();
-          clearInterval(maintenance.worktreeCleanup);
-          maintenance.skillCuratorCleanup();
+          await gatewayRuntimeServices.clearGatewayMaintenanceHandles(maintenance);
           return;
         }
         // Publish the stop owner before cleanup can touch SQLite or state paths;

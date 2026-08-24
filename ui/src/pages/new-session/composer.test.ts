@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
+import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
@@ -28,6 +29,7 @@ function renderComposer(
     messageLocked?: boolean;
     visibility?: NewSessionVisibility;
     draftAvailable?: boolean;
+    toolOverrides?: SessionToolOverrides | null;
     onVisibilityChange?: (visibility: NewSessionVisibility) => void;
     message?: string;
     onInput?: (message: string) => void;
@@ -58,6 +60,7 @@ function renderComposer(
         message,
         visibility: overrides.visibility,
         draftAvailable: overrides.draftAvailable,
+        toolOverrides: overrides.toolOverrides,
         modelControl: new NewSessionModelControl(() => undefined),
         requiresModifier: overrides.requiresModifier ?? false,
         requestUpdate: renderCurrent,
@@ -418,20 +421,31 @@ describe("new-session composer attachment drops", () => {
     expect(switches).toHaveLength(0);
   });
 
-  it("lets the draft pill replace page-level incognito", () => {
+  it("moves Draft into Plus and keeps active selections visible", () => {
     const onVisibilityChange = vi.fn();
     const { composer } = renderComposer({
       draftAvailable: true,
-      visibility: "incognito",
+      visibility: "draft",
+      toolOverrides: { skills: { release: false } },
       onVisibilityChange,
     });
-    const draftPill = composer.querySelector<HTMLButtonElement>('[role="switch"]');
+    const menu = composer.querySelector<HTMLElement>("wa-dropdown.agent-chat__capability-menu");
+    const draftToggle = menu?.querySelector<HTMLElement>(
+      'wa-dropdown-item[value="new-session-draft"]',
+    );
 
-    expect(draftPill?.textContent).toContain("Draft");
-    expect(draftPill?.getAttribute("aria-checked")).toBe("false");
+    expect(
+      (draftToggle?.querySelector("wa-switch") as HTMLElement & { checked?: boolean })?.checked,
+    ).toBe(true);
+    expect(composer.querySelectorAll(".new-session-page__selection-status")).toHaveLength(2);
+    expect(composer.textContent).toContain("Draft");
+    expect(composer.textContent).toContain("1 session override");
+    expect(composer.querySelector(".agent-chat__input-btn--selected")).not.toBeNull();
 
-    draftPill?.click();
-    expect(onVisibilityChange).toHaveBeenCalledWith("draft");
+    menu?.dispatchEvent(
+      new CustomEvent("wa-select", { bubbles: true, detail: { item: draftToggle } }),
+    );
+    expect(onVisibilityChange).toHaveBeenCalledWith("normal");
   });
 
   it("adds a dropped file through the shared attachment handling", async () => {

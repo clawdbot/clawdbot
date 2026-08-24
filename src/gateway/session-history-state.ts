@@ -184,6 +184,7 @@ export function buildSessionHistorySnapshot(params: {
   totalRawMessages?: number;
 }): SessionHistorySnapshot {
   const projected = projectChatDisplayMessagesWithState(params.rawMessages, {
+    includeCommentaryFallbacks: true,
     maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
     resolveCurrentUserProfileDisplay,
   });
@@ -320,6 +321,7 @@ export class SessionHistorySseState {
     });
     const hadPendingTurnBoundary = this.turnBoundaryPending;
     const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
+      includeCommentaryFallbacks: true,
       maxChars: this.maxChars,
       turnBoundaryPending: hadPendingTurnBoundary,
       streamErrorFallbackPending: this.streamErrorFallbackPending,
@@ -337,6 +339,7 @@ export class SessionHistorySseState {
     // emitting a misleading single SSE item.
     const projectedMessages = toSessionHistoryMessages(
       projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
+        includeCommentaryFallbacks: true,
         maxChars: this.maxChars,
         resolveCurrentUserProfileDisplay,
       }),

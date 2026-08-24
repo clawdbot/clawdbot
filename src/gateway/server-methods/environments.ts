@@ -148,15 +148,16 @@ export function summarizeWorkerEnvironment(
 }
 export async function listGatewayEnvironments(
   context: GatewayRequestContext,
+  workers = listWorkerEnvironments(context),
 ): Promise<EnvironmentSummary[]> {
   const [devices, nodes] = await Promise.all([listDevicePairing(), listNodePairing()]);
+  // Orphaned or failed rows that retain a node binding still own its pairing role.
+  // Only destroyed proves enrollment retirement; teardown-failed rows clear nodeDeviceId.
   const managedCloudNodeIds = new Set(
-    listWorkerEnvironments(context).flatMap((environment) =>
+    workers.flatMap((environment) =>
       environment.providerId !== "device" &&
       environment.nodeDeviceId &&
-      environment.state !== "destroyed" &&
-      environment.state !== "failed" &&
-      environment.state !== "orphaned"
+      environment.state !== "destroyed"
         ? [environment.nodeDeviceId]
         : [],
     ),
@@ -219,8 +220,7 @@ function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironme
   try {
     return context.workerEnvironmentService?.list() ?? [];
   } catch {
-    // A damaged worker store must not regress the pre-existing gateway/node inventory.
-    return [];
+    throw new Error("environment inventory unavailable");
   }
 }
 export function listWorkerProfiles(context: GatewayRequestContext) {
@@ -469,8 +469,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       return rejectInvalid(respond, "environments.list", validateEnvironmentsListParams);
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const environments = await listGatewayEnvironments(context);
       const workers = listWorkerEnvironments(context);
+      const environments = await listGatewayEnvironments(context, workers);
       const summarizedAtMs = Date.now();
       environments.push(
         ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),

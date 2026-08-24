@@ -40,4 +40,24 @@ describe("sessions.create schema", () => {
     );
     expect(validateSessionsCreateParams({ agentId: "main", idempotencyKey: "" })).toBe(false);
   });
+
+  it("accepts initial session tool overrides", () => {
+    expect(
+      validateSessionsCreateParams({
+        agentId: "main",
+        toolOverrides: {
+          mcpServers: { github: false },
+          skills: { release: true },
+          webSearch: false,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([null, { webSearch: "yes" }, { skills: { release: "yes" } }, { unknown: true }])(
+    "rejects malformed initial tool overrides %#",
+    (toolOverrides) => {
+      expect(validateSessionsCreateParams({ agentId: "main", toolOverrides })).toBe(false);
+    },
+  );
 });

@@ -340,7 +340,7 @@ export function handleMessageUpdate(
     }
     emitResolvedCommentaryDisplay(ctx, ctx.state.deltaBuffer, {
       itemId: deliveryItemId,
-      preferReplace: !chunk,
+      preferReplace: true,
     });
     return;
   }

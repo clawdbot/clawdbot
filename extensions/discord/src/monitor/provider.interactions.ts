@@ -88,6 +88,7 @@ export function createDiscordProviderInteractionSurface(params: {
       sessionPrefix: params.sessionPrefix,
       ephemeralDefault: params.ephemeralDefault,
       threadBindings: params.threadBindings,
+      dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     });
   });
 
@@ -138,6 +139,7 @@ export function createDiscordProviderInteractionSurface(params: {
       accountId: params.accountId,
       sessionPrefix: params.sessionPrefix,
       threadBindings: params.threadBindings,
+      dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     }),
     createDiscordModelPickerFallbackButton({
       cfg: params.cfg,
@@ -145,6 +147,7 @@ export function createDiscordProviderInteractionSurface(params: {
       accountId: params.accountId,
       sessionPrefix: params.sessionPrefix,
       threadBindings: params.threadBindings,
+      dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     }),
     createDiscordModelPickerFallbackSelect({
       cfg: params.cfg,
@@ -152,6 +155,7 @@ export function createDiscordProviderInteractionSurface(params: {
       accountId: params.accountId,
       sessionPrefix: params.sessionPrefix,
       threadBindings: params.threadBindings,
+      dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     }),
   ];
   const activityButton = createDiscordActivityButton(
