@@ -9,6 +9,7 @@ import {
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
+import { hasFeishuAllowFromWildcard } from "./allow-from-wildcard.js";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 export { z };
@@ -359,14 +360,14 @@ export const FeishuConfigSchema = buildMultiAccountChannelSchema(FeishuConfigSch
     if (value.enabled !== false && account.enabled !== false) {
       const effectiveDmPolicy = account.dmPolicy ?? dmPolicy;
       const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-      requireOpenAllowFrom({
-        policy: effectiveDmPolicy,
-        allowFrom: effectiveAllowFrom,
-        ctx,
-        path: ["accounts", accountId, "allowFrom"],
-        message:
-          'channels.feishu.accounts.*.dmPolicy="open" requires channels.feishu.accounts.*.allowFrom (or channels.feishu.allowFrom) to include "*"',
-      });
+      if (effectiveDmPolicy === "open" && !hasFeishuAllowFromWildcard(effectiveAllowFrom)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["accounts", accountId, "allowFrom"],
+          message:
+            'channels.feishu.accounts.*.dmPolicy="open" requires channels.feishu.accounts.*.allowFrom (or channels.feishu.allowFrom) to include a Feishu wildcard',
+        });
+      }
     }
   }
 });
