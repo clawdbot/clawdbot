@@ -31,5 +31,31 @@ describe("buildWidgetDocument", () => {
     expect(html).toContain("widget prompt host unavailable");
     expect(html).toContain("openclaw:widget-chat-host");
     expect(html).not.toContain("widget is not hosted on a board");
+    const bridgeKeys = JSON.parse(html.match(/const keys=(\[[^\]]+\])/)?.[1] ?? "[]") as string[];
+    expect(bridgeKeys).toEqual([
+      "surface",
+      "card",
+      "elevated",
+      "text",
+      "text-strong",
+      "muted",
+      "border",
+      "border-strong",
+      "accent",
+      "accent-fill",
+      "accent-fg",
+      "ok",
+      "warn",
+      "danger",
+      "info",
+      "radius",
+      "radius-full",
+      "scrollbar-size",
+      "scrollbar-thumb-inset",
+      "scrollbar-thumb",
+      "scrollbar-thumb-hover",
+      "font-body",
+      "font-mono",
+    ]);
   });
 });
