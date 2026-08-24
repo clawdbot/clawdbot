@@ -236,16 +236,12 @@ export function createReplyRestartRecoveryClaimController(params: {
       }
     }
     const activeClaimRunId = normalizeOptionalString(entry?.restartRecoveryDeliveryRunId);
-    const isTranscriptOnlyClaim =
-      admissionRunId &&
-      entry &&
-      entry.restartRecoveryDeliveryContext === undefined &&
-      activeClaimRunId === admissionRunId;
-    if (isTranscriptOnlyClaim) {
+    const isExactRecoveryClaim = admissionRunId && entry && activeClaimRunId === admissionRunId;
+    if (isExactRecoveryClaim) {
       if (entry.status !== "running" || entry.abortedLastRun === true) {
         throw new Error("restart recovery claim changed before agent adoption");
       }
-      // Clear the retry verifier as the transcript-only claim crosses into execution.
+      // Clear the retry verifier as the exact admitted claim crosses into execution.
       const adopted = await persistAdmissionPatch({
         entry,
         patch: {
