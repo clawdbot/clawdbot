@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       instructions:
-        description: Optional maintainer guidance for the scenario designer
+        description: Optional maintainer guidance for the open-ended investigation
         required: false
         type: string
       allow_fork_candidate:
