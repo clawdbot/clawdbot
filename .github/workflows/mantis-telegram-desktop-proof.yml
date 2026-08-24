@@ -219,8 +219,6 @@ jobs:
         with:
           path: .artifacts/mantis-runtime-build.tar
           key: ${{ runner.os }}-${{ runner.arch }}-mantis-runtime-v2-${{ steps.worktrees.outputs.lockfile_sha256 }}-${{ steps.worktrees.outputs.node_version }}-${{ steps.worktrees.outputs.pnpm_version }}-${{ needs.resolve_request.outputs.baseline_revision }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-mantis-runtime-v2-${{ steps.worktrees.outputs.lockfile_sha256 }}-${{ steps.worktrees.outputs.node_version }}-${{ steps.worktrees.outputs.pnpm_version }}-
 
       - name: Build baseline and candidate
         env:

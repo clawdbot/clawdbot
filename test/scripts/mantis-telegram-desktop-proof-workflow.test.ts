@@ -5,7 +5,12 @@ import { parse } from "yaml";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-visible-proof.md";
 
-type Step = { name?: string; run?: string; env?: Record<string, string> };
+type Step = {
+  name?: string;
+  run?: string;
+  env?: Record<string, string>;
+  with?: Record<string, unknown>;
+};
 type Workflow = { jobs?: Record<string, { steps?: Step[] }> };
 
 function workflow() {
@@ -60,6 +65,12 @@ describe("Mantis Telegram proof workflow", () => {
     expect(snapshot).toBeGreaterThan(stop);
     expect(build).toBeGreaterThan(snapshot);
     expect(collect).toContain("${RUNNER_TEMP}/mantis-trusted-evidence-");
+  });
+
+  it("restores baseline builds only for the exact selected revision", () => {
+    const restore = proofSteps().find((entry) => entry.name === "Restore exact baseline build");
+    expect(restore?.with?.key).toContain("${{ needs.resolve_request.outputs.baseline_revision }}");
+    expect(restore?.with).not.toHaveProperty("restore-keys");
   });
 
   it("retains the real userbot, isolated SUT, recorder, lease, and cleanup", () => {
