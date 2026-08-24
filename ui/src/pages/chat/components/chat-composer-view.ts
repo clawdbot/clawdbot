@@ -7,10 +7,6 @@ import { strokeIcon } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
-import {
-  countSessionToolOverrides,
-  sessionToolOverrideNames,
-} from "../../../lib/sessions/tool-overrides.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
@@ -27,7 +23,6 @@ import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
 import {
   resetSkillMenuState,
-  renderSkillDraftOverlay,
   renderSkillMenu,
   type SkillMenuHost,
 } from "./chat-composer-skill-menu.ts";
@@ -51,7 +46,7 @@ import {
   restorePointerOpenedChatComposerTrigger,
 } from "./chat-picker-overlay.ts";
 import type { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
-import { renderChatVoiceError, renderMicrophoneActivity } from "./chat-voice-activity.ts";
+import { renderChatVoiceError } from "./chat-voice-activity.ts";
 
 type ChatComposerViewContext = {
   props: ChatComposerProps;
@@ -192,11 +187,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     state.capabilityMenuView = "root";
   }
   const disabledReasonId = paneDomId(props.paneId, "disabled-reason");
-  const overrideCount = countSessionToolOverrides(props.toolOverrides);
-  const overrideTooltip = sessionToolOverrideNames(
-    props.toolOverrides,
-    t("chat.composer.menu.webSearch"),
-  ).join(", ");
   const voiceError = showComposerInput
     ? renderChatVoiceError({
         status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
@@ -257,11 +247,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ).value
       : visibleDraft;
   const draftDirection = detectTextDirection(dictationPreviewDraft);
-  const skillDraftOverlay = renderSkillDraftOverlay(
-    dictationPreviewDraft,
-    draftDirection,
-    state.skillCaretOffset,
-  );
   const interruptedStatus = renderChatRunStatusIndicator(composerRunStatus);
   const fallbackStatus = renderFallbackIndicator(props.fallbackStatus);
   const compactionStatus = renderCompactionIndicator(props.compactionStatus);
@@ -308,7 +293,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ${interruptedStatus === nothing
           ? nothing
           : html`<div class="agent-chat__composer-run-status">${interruptedStatus}</div>`}
-        ${composerUnderlaps}
       </div>
       ${questionPanelProps
         ? html`
@@ -379,13 +363,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       <div
                         class=${`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
                       >
-                        <span class="agent-chat__dictation-wave">
-                          ${renderMicrophoneActivity({
-                            status: dictation.connecting ? "connecting" : "listening",
-                            inputLevel: dictation.inputLevel,
-                            bars: 48,
-                            mode: "scroll",
-                          })}
+                        <span class="agent-chat__dictation-phase">
+                          ${dictation.connecting
+                            ? t("chat.composer.dictationConnecting")
+                            : dictation.finalizing
+                              ? t("chat.composer.dictationFinalizing")
+                              : t("chat.composer.dictationListening")}
                         </span>
                         <span class="agent-chat__dictation-elapsed" aria-hidden="true"
                           >${dictation.elapsed}</span
@@ -442,9 +425,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               <div class="agent-chat__composer-combobox">
                 <textarea
                   ${ref(state.textareaRef ?? undefined)}
-                  class=${skillDraftOverlay === nothing
-                    ? ""
-                    : "agent-chat__composer-textarea--rich"}
                   .value=${dictationPreviewDraft}
                   dir=${draftDirection}
                   ?disabled=${!canCompose}
@@ -487,7 +467,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   placeholder=${dictation?.active ? "" : placeholder}
                   rows="1"
                 ></textarea>
-                ${skillDraftOverlay}
                 <span
                   id=${slashMenuAnnouncementId}
                   class="sr-only"
@@ -555,50 +534,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   ${contextNotice}
                 </div>
                 ${composerControls !== nothing
-                  ? html`
-                      <div class="agent-chat__composer-controls">
-                        ${overrideCount > 0 && props.capabilityMenu
-                          ? html`
-                              <openclaw-tooltip .content=${overrideTooltip}>
-                                <span class="agent-chat__session-overrides-pill">
-                                  <button
-                                    type="button"
-                                    class="agent-chat__session-overrides-open"
-                                    @click=${() => {
-                                      state.capabilityMenuView = "root";
-                                      state.capabilityMenuOpen = true;
-                                      requestUpdate();
-                                    }}
-                                  >
-                                    ${t(
-                                      overrideCount === 1
-                                        ? "chat.composer.overrides.countOne"
-                                        : "chat.composer.overrides.count",
-                                      { count: String(overrideCount) },
-                                    )}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class="agent-chat__session-overrides-clear"
-                                    aria-label=${t("chat.composer.overrides.clear")}
-                                    title=${props.capabilityMenu.mutationBlockedReason ?? ""}
-                                    ?disabled=${props.capabilityMenu.mutationBlockedReason !== null}
-                                    @click=${(event: MouseEvent) => {
-                                      event.stopPropagation();
-                                      if (!props.capabilityMenu?.mutationBlockedReason) {
-                                        props.capabilityMenu?.onPatchToolOverrides(null);
-                                      }
-                                    }}
-                                  >
-                                    ${icons.x}
-                                  </button>
-                                </span>
-                              </openclaw-tooltip>
-                            `
-                          : nothing}
-                        ${composerControls}
-                      </div>
-                    `
+                  ? html` <div class="agent-chat__composer-controls">${composerControls}</div> `
                   : nothing}
                 <div class="agent-chat__composer-actions">
                   ${renderChatPrimaryActions(runControlsProps)}
@@ -607,6 +543,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             </div>
           </div> `
         : nothing}
+      ${composerUnderlaps}
     </div>
   `;
 }

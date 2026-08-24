@@ -3933,7 +3933,7 @@ describe("chat slash menu accessibility", () => {
     container.remove();
   });
 
-  it("renders confirmed skills as atomic tokens for pointer and arrow navigation", () => {
+  it("keeps confirmed skill references as raw textarea text with native selection", () => {
     replaceSkillCommands({
       key: "prose_writer",
       skillDisplayName: "Prose Writer",
@@ -3943,81 +3943,23 @@ describe("chat slash menu accessibility", () => {
     inputDraftAtEnd(container, "Use $prose_writer: next");
 
     const textarea = getComposerTextarea(container);
-    const token = container.querySelector(".agent-chat__skill-token");
-    expect(token?.textContent).toContain("Prose Writer");
-    expect(token?.getAttribute("data-raw")).toBe("$prose_writer");
-    expect(
-      container
-        .querySelector(".agent-chat__composer-draft-overlay")
-        ?.textContent?.replace(/\s+/gu, " ")
-        .includes("Use Prose Writer: next"),
-    ).toBe(true);
-    expect(textarea.classList.contains("agent-chat__composer-textarea--rich")).toBe(true);
+    expect(textarea.value).toBe("Use $prose_writer: next");
+    expect(container.querySelector(".agent-chat__skill-token")).toBeNull();
+    expect(container.querySelector(".agent-chat__composer-draft-overlay")).toBeNull();
+    expect(textarea.classList.contains("agent-chat__composer-textarea--rich")).toBe(false);
 
     textarea.setSelectionRange(8, 8);
     textarea.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
-    expect(textarea.selectionStart).toBe(4);
+    expect(textarea.selectionStart).toBe(8);
 
     textarea.setSelectionRange(8, 8);
     textarea.dispatchEvent(new Event("select", { bubbles: true }));
-    expect(textarea.selectionStart).toBe(4);
+    expect(textarea.selectionStart).toBe(8);
 
     textarea.setSelectionRange("Use $prose_writer".length, "Use $prose_writer".length);
-    keydownComposer(container, "ArrowLeft");
-    expect(textarea.selectionStart).toBe(4);
-    textarea.setSelectionRange(4, 4);
-    keydownComposer(container, "ArrowRight");
-    expect(textarea.selectionStart).toBe("Use $prose_writer".length);
-
-    const tokenStart = 4;
-    const tokenEnd = "Use $prose_writer".length;
-    textarea.setSelectionRange(tokenEnd, tokenEnd);
-    const selectBackward = keydownComposer(container, "ArrowLeft", { shiftKey: true });
-    expect(selectBackward.defaultPrevented).toBe(true);
-    expect([textarea.selectionStart, textarea.selectionEnd, textarea.selectionDirection]).toEqual([
-      tokenStart,
-      tokenEnd,
-      "backward",
-    ]);
-
-    const contractForward = keydownComposer(container, "ArrowRight", { shiftKey: true });
-    expect(contractForward.defaultPrevented).toBe(true);
-    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([tokenEnd, tokenEnd]);
-
-    textarea.setSelectionRange(tokenStart, tokenStart);
-    const selectForward = keydownComposer(container, "ArrowRight", { shiftKey: true });
-    expect(selectForward.defaultPrevented).toBe(true);
-    expect([textarea.selectionStart, textarea.selectionEnd, textarea.selectionDirection]).toEqual([
-      tokenStart,
-      tokenEnd,
-      "forward",
-    ]);
-  });
-
-  it.each([
-    { key: "Backspace", boundary: "end" },
-    { key: "Delete", boundary: "start" },
-  ] as const)("handles $key as an atomic skill-token deletion", ({ key, boundary }) => {
-    replaceSkillCommands({
-      key: "prose_writer",
-      skillDisplayName: "Prose Writer",
-      description: "Draft polished prose.",
-    });
-    const { container } = createReactiveDraftHarness();
-    const draft = "Use $prose_writer: next";
-    inputDraftAtEnd(container, draft);
-
-    const textarea = getComposerTextarea(container);
-    const tokenStart = draft.indexOf("$prose_writer");
-    const tokenEnd = tokenStart + "$prose_writer".length;
-    const caret = boundary === "start" ? tokenStart : tokenEnd;
-    textarea.setSelectionRange(caret, caret);
-    const event = keydownComposer(container, key);
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(textarea.value).toBe("Use : next");
-    expect(textarea.selectionStart).toBe(tokenStart);
-    expect(container.querySelector(".agent-chat__skill-token")).toBeNull();
+    expect(keydownComposer(container, "ArrowLeft").defaultPrevented).toBe(false);
+    expect(keydownComposer(container, "Backspace").defaultPrevented).toBe(false);
+    expect(textarea.value).toBe("Use $prose_writer: next");
   });
 
   it("fills a selected $ skill without submitting the surrounding prompt", async () => {
@@ -5792,6 +5734,20 @@ describe("chat model controls", () => {
     expect(modelSelect.getAttribute("aria-disabled")).toBe("true");
   });
 
+  it("renders an accessible skeleton and hides effort before the first catalog snapshot", () => {
+    const { state } = createChatHeaderState();
+    const container = renderModelControls(state, {
+      modelCatalogState: { hasSnapshot: false, status: "loading" },
+      modelsLoading: true,
+    });
+    const trigger = getChatModelSelect(container);
+
+    expect(trigger.getAttribute("aria-busy")).toBe("true");
+    expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).not.toBeNull();
+    expect(trigger.textContent).not.toContain("Loading models");
+    expect(container.querySelector(".chat-controls__effort-picker")).toBeNull();
+  });
+
   it("shows disabled configured models and model setup when no model has authentication", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.6-sol",
@@ -5856,7 +5812,7 @@ describe("chat model controls", () => {
   });
 
   it.each([
-    { status: "offline", catalogState: "offline", triggerLabel: "Offline" },
+    { status: "offline", catalogState: "offline", triggerLabel: "GPT-5.6 Sol" },
     { status: "error", catalogState: null, triggerLabel: "GPT-5.6 Sol" },
   ] as const)(
     "renders $status over a stale all-cold catalog",
@@ -5890,6 +5846,9 @@ describe("chat model controls", () => {
       );
       expect(container.textContent).not.toContain("Authentication failed");
       expect(container.querySelector('[data-chat-model-setup="true"]')).toBeNull();
+      if (status === "offline") {
+        expect(container.querySelector(".chat-controls__effort-picker")).toBeNull();
+      }
     },
   );
 
@@ -6675,16 +6634,20 @@ describe("chat model controls", () => {
     const trigger = getChatModelSelect(container);
 
     expect(trigger.dataset.chatModelTools).toBe("unavailable");
-    expect(
-      trigger.querySelector(".chat-controls__model-capability-badge")?.textContent?.trim(),
-    ).toBe("Chat only");
+    expect(trigger.querySelector(".chat-controls__model-capability-badge")).toBeNull();
+    expect(trigger.querySelector(".chat-controls__model-capability-alert")).not.toBeNull();
     expect(trigger.getAttribute("aria-label")).toContain("Chat only");
     expect(
       container
         .querySelector('[data-chat-model-option="lmstudio/qwen3-8b"]')
         ?.querySelector(".chat-controls__model-option-meta")
         ?.textContent?.trim(),
-    ).toBe("32.8k · Chat only");
+    ).toBe("32.8k");
+    expect(
+      container.querySelector(
+        '[data-chat-model-option="lmstudio/qwen3-8b"] .chat-controls__model-chat-only-info',
+      )?.textContent,
+    ).toBe("i");
     expect(
       container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
     ).not.toContain("Chat only");

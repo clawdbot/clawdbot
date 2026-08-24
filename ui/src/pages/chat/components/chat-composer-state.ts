@@ -14,7 +14,6 @@ function createChatComposerState(): ChatComposerState {
     ...createSlashMenuState(),
     ...createSkillMenuState(),
     composerComposing: false,
-    skillCaretOffset: null,
     composingDraft: null,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,

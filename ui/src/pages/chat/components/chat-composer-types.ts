@@ -154,7 +154,6 @@ type ComposingDraft = {
 export type ChatComposerState = SkillMenuState &
   SlashMenuState & {
     composerComposing: boolean;
-    skillCaretOffset: number | null;
     composingDraft: ComposingDraft | null;
     composerInputIntentKey: string | null;
     pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
