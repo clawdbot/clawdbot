@@ -552,11 +552,11 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       return refresh({ ...options, force: true });
     },
     lastOptions: () => lastListOptions,
+    // Ownership and participation membership can only be reevaluated by the Gateway.
+    canApplyPrimarySnapshot: () =>
+      !lastListOptions.ownerId?.trim() && lastListOptions.involvingMe !== true,
     scheduleEvent(options: { agentId?: string | null; primarySnapshotApplied?: boolean } = {}) {
-      // Ownership and participation membership can only be reevaluated by the Gateway.
-      const gatewayFilteredPrimary =
-        Boolean(lastListOptions.ownerId?.trim()) || lastListOptions.involvingMe === true;
-      if (!options.primarySnapshotApplied || gatewayFilteredPrimary) {
+      if (!options.primarySnapshotApplied) {
         eventRefreshCoordinator.schedule();
       }
       const agentId = options.agentId ? normalizeAgentId(options.agentId) : null;

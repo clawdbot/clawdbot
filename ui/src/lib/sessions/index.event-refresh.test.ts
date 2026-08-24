@@ -342,7 +342,7 @@ describe("event-driven session list refresh", () => {
             },
           },
         });
-        expect(sessions.state.result?.sessions.map((session) => session.key)).toEqual([key]);
+        expect(sessions.state.result?.sessions).toEqual([row]);
         await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
         expect(request).toHaveBeenCalledTimes(1);

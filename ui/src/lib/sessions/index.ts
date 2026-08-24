@@ -424,13 +424,14 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     const status = reconciled.status ?? eventInfo?.status;
     const runEnded =
       hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
-    const reconciledTerminalSession =
+    const primarySnapshotApplied =
       event.event === "session.message" &&
       runEnded &&
       reconciled.applied &&
       typeof payload?.session === "object" &&
-      payload.session !== null;
-    if (eventInfo?.archived !== null || reconciledTerminalSession) {
+      payload.session !== null &&
+      roster.canApplyPrimarySnapshot();
+    if (eventInfo?.archived !== null || primarySnapshotApplied) {
       const result = decorateRows(reconciled.result);
       if (result !== state.result) {
         publishReconciledState({ ...state, result });
@@ -479,7 +480,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         eventInfo?.agentId ??
         parseAgentSessionKey(eventInfo?.key)?.agentId ??
         (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
-      primarySnapshotApplied: reconciledTerminalSession,
+      primarySnapshotApplied,
     });
   });
 
