@@ -204,6 +204,9 @@ async function executeSpawnPipeline<TState>(
     registration = params.buildRegistration(state, runId);
     params.assertRegistrationAdmission?.();
     const registrationResult = registerSubagentRun(registration);
+    if (registrationResult.status !== "new-row-committed") {
+      throw new Error(`Subagent registration did not commit a new row: ${runId}`);
+    }
     registrationOwnership = registrationResult.attempted;
     params.publishRegistration?.(registration);
     // Registry insertion takes ownership synchronously; keeping the slot would double-count it.

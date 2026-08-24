@@ -97,7 +97,9 @@ class SubagentRunManager extends SubagentLaunchManager {
       !entry ||
       entry.childSessionKey !== params.childSessionKey ||
       (params.expectedRegistration !== undefined &&
-        (entry.generation !== params.expectedRegistration.generation ||
+        (entry.runId !== params.expectedRegistration.runId ||
+          entry.childSessionKey !== params.expectedRegistration.childSessionKey ||
+          entry.generation !== params.expectedRegistration.generation ||
           entry.createdAt !== params.expectedRegistration.createdAt))
     ) {
       return false;

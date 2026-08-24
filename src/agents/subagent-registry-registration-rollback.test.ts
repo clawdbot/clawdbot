@@ -482,7 +482,23 @@ describe("subagent registration rollback", () => {
     if (!result.ok) {
       return;
     }
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe(result.runId);
+    const registered = getSubagentRunByChildSessionKey(childSessionKey);
+    expect(registered?.runId).toBe(result.runId);
+    if (!registered || registered.generation === undefined) {
+      throw new Error("expected exact registered row identity");
+    }
+    expect(
+      rollbackSubagentRunRegistration({
+        runId: registered.runId,
+        childSessionKey,
+        expectedRegistration: {
+          runId: "different-run",
+          childSessionKey,
+          generation: registered.generation,
+          createdAt: registered.createdAt,
+        },
+      }),
+    ).toBe(false);
     await result.rollbackAccepted();
     expect(getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
     expect(cleanupOnFailure).toHaveBeenCalledOnce();
