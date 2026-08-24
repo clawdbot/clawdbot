@@ -20,7 +20,7 @@ import type { CodexConfigReadParams, CodexConfigReadResponse } from "./protocol-
 
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_CONFIG_TOML_FILENAME = "config.toml";
-const effectiveReviewerConfigByClient = new WeakMap<object, Map<string, Promise<void>>>();
+const effectiveReviewerConfigInFlightByClient = new WeakMap<object, Map<string, Promise<void>>>();
 
 /** Cloud/system config can redirect reviews after local home/profile checks have passed. */
 export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
@@ -42,10 +42,10 @@ export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
     return;
   }
   const effectiveCwd = path.resolve(params.cwd);
-  const cachedClientAttestations = effectiveReviewerConfigByClient.get(params.client);
+  const cachedClientAttestations = effectiveReviewerConfigInFlightByClient.get(params.client);
   const clientAttestations = cachedClientAttestations ?? new Map<string, Promise<void>>();
   if (!cachedClientAttestations) {
-    effectiveReviewerConfigByClient.set(params.client, clientAttestations);
+    effectiveReviewerConfigInFlightByClient.set(params.client, clientAttestations);
   }
   let attestation = clientAttestations.get(effectiveCwd);
   if (!attestation) {
@@ -85,12 +85,15 @@ export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
           );
         }
       });
-    clientAttestations.set(effectiveCwd, attestation);
-    attestation.catch(() => {
+    attestation = attestation.finally(() => {
       if (clientAttestations.get(effectiveCwd) === attestation) {
         clientAttestations.delete(effectiveCwd);
+        if (clientAttestations.size === 0) {
+          effectiveReviewerConfigInFlightByClient.delete(params.client);
+        }
       }
     });
+    clientAttestations.set(effectiveCwd, attestation);
   }
   await attestation;
 }

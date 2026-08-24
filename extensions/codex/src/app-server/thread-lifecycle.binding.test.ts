@@ -3810,6 +3810,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(requestCalls.map(([method]) => method)).toEqual([
       "config/read",
       "thread/start",
+      "config/read",
       "thread/resume",
     ]);
     const threadRequests = requestCalls.filter(([method]) => method !== "config/read");

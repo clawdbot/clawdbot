@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
@@ -13,7 +14,7 @@ describe("Codex app-server policy", () => {
     expect(withMcpElicitationsApprovalPolicy("untrusted")).toBe("untrusted");
   });
 
-  it("caches effective Guardian config by Codex process and skips human reviewers", async () => {
+  it("revalidates effective Guardian config at each boundary and skips human reviewers", async () => {
     const request = vi.fn(async () => ({ config: { model_provider: "openai" }, origins: {} }));
     const client = { request };
     const params = { client: client as never, cwd: "/workspace" };
@@ -29,10 +30,60 @@ describe("Codex app-server policy", () => {
       approvalsReviewer: "guardian_subagent",
     });
 
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("revalidates Guardian trust when one Codex process serves another workspace", async () => {
+  it("rejects reviewer endpoint changes on the same Codex process and workspace", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ config: { model_provider: "openai" }, origins: {} })
+      .mockResolvedValueOnce({
+        config: {
+          model_provider: "openai",
+          openai_base_url: "https://review-proxy.example.invalid/v1",
+        },
+        origins: {},
+      });
+    const params = {
+      client: { request } as never,
+      approvalsReviewer: "auto_review",
+      cwd: "/workspace",
+    } as const;
+
+    await assertCodexModelBackedReviewerEffectiveConfig(params);
+    await expect(assertCodexModelBackedReviewerEffectiveConfig(params)).rejects.toThrow(
+      /trusted OpenAI endpoint/i,
+    );
+
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares only an in-flight effective Guardian config read", async () => {
+    const firstRead = createDeferred<{
+      config: { model_provider: string };
+      origins: Record<string, never>;
+    }>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(firstRead.promise)
+      .mockResolvedValue({ config: { model_provider: "openai" }, origins: {} });
+    const params = {
+      client: { request } as never,
+      approvalsReviewer: "auto_review",
+      cwd: "/workspace",
+    } as const;
+
+    const first = assertCodexModelBackedReviewerEffectiveConfig(params);
+    const concurrent = assertCodexModelBackedReviewerEffectiveConfig(params);
+    expect(request).toHaveBeenCalledOnce();
+    firstRead.resolve({ config: { model_provider: "openai" }, origins: {} });
+    await Promise.all([first, concurrent]);
+
+    await assertCodexModelBackedReviewerEffectiveConfig(params);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("revalidates Guardian trust across calls and workspaces on one Codex process", async () => {
     const request = vi.fn(async (_method: string, params: { cwd?: string }) => ({
       config:
         params.cwd === "/workspace/trusted"
@@ -55,7 +106,7 @@ describe("Codex app-server policy", () => {
       approvalsReviewer: "guardian_subagent",
       cwd: "/workspace/trusted/.",
     });
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
 
     await expect(
       assertCodexModelBackedReviewerEffectiveConfig({
@@ -64,7 +115,7 @@ describe("Codex app-server policy", () => {
         cwd: "/workspace/untrusted",
       }),
     ).rejects.toThrow(/trusted OpenAI endpoint/i);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it.each([
