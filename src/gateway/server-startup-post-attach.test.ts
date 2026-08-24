@@ -82,6 +82,15 @@ const hoisted = vi.hoisted(() => {
   const refreshPreparedModelRuntimeSnapshots = vi.fn(
     async (_cfg?: unknown, _options?: unknown) => {},
   );
+  const publishPreparedRuntimeDiscoveryCatalogs = vi.fn(async () => 0);
+  const hasExhaustedPreparedRuntimeDiscoveryCatalogs = vi.fn(() => false);
+  const runtimePublicationListeners = new Set<
+    (event: { phase: "invalidated" | "published" | "failed"; error?: Error }) => void
+  >();
+  const registerPreparedModelRuntimePublicationListener = vi.fn((listener) => {
+    runtimePublicationListeners.add(listener);
+    return () => runtimePublicationListeners.delete(listener);
+  });
   const prewarmConfigDrivenReplyRuntime = vi.fn(async () => {});
   const prewarmContextWindowCacheAfterReady = vi.fn(async () => {});
   const scheduleGatewayHandlerPrewarm = vi.fn(() => ({ stop: vi.fn() }));
@@ -122,6 +131,10 @@ const hoisted = vi.hoisted(() => {
     getModelRefStatus,
     prepareModelRuntimeSnapshot,
     refreshPreparedModelRuntimeSnapshots,
+    publishPreparedRuntimeDiscoveryCatalogs,
+    hasExhaustedPreparedRuntimeDiscoveryCatalogs,
+    runtimePublicationListeners,
+    registerPreparedModelRuntimePublicationListener,
     prewarmConfigDrivenReplyRuntime,
     prewarmContextWindowCacheAfterReady,
     scheduleGatewayHandlerPrewarm,
@@ -228,6 +241,11 @@ vi.mock("../agents/model-selection.js", () => ({
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   publishPreparedModelRuntimeSnapshot: hoisted.prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots: hoisted.refreshPreparedModelRuntimeSnapshots,
+  publishPreparedRuntimeDiscoveryCatalogs: hoisted.publishPreparedRuntimeDiscoveryCatalogs,
+  hasExhaustedPreparedRuntimeDiscoveryCatalogs:
+    hoisted.hasExhaustedPreparedRuntimeDiscoveryCatalogs,
+  registerPreparedModelRuntimePublicationListener:
+    hoisted.registerPreparedModelRuntimePublicationListener,
 }));
 
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
@@ -515,6 +533,12 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.prepareModelRuntimeSnapshot.mockResolvedValue({});
     hoisted.refreshPreparedModelRuntimeSnapshots.mockReset();
     hoisted.refreshPreparedModelRuntimeSnapshots.mockResolvedValue(undefined);
+    hoisted.publishPreparedRuntimeDiscoveryCatalogs.mockReset();
+    hoisted.publishPreparedRuntimeDiscoveryCatalogs.mockResolvedValue(0);
+    hoisted.hasExhaustedPreparedRuntimeDiscoveryCatalogs.mockReset();
+    hoisted.hasExhaustedPreparedRuntimeDiscoveryCatalogs.mockReturnValue(false);
+    hoisted.runtimePublicationListeners.clear();
+    hoisted.registerPreparedModelRuntimePublicationListener.mockClear();
     hoisted.prewarmConfigDrivenReplyRuntime.mockReset();
     hoisted.prewarmConfigDrivenReplyRuntime.mockResolvedValue(undefined);
     hoisted.prewarmContextWindowCacheAfterReady.mockReset();
@@ -1572,7 +1596,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await vi.advanceTimersToNextTimerAsync();
       await vi.advanceTimersToNextTimerAsync();
       expect(postReadyRequestTurn).toHaveBeenCalledTimes(1);
-      expect(onPostReadySidecars.mock.calls[0]?.[0]).toHaveLength(1);
+      expect(onPostReadySidecars.mock.calls[0]?.[0]).toHaveLength(3);
       expect(onGatewayLifetimeSidecars.mock.calls[0]?.[0]).toHaveLength(3);
       await vi.dynamicImportSettled();
       await waitForGatewayTestState(() => {
@@ -1714,7 +1738,7 @@ describe("startGatewayPostAttachRuntime", () => {
       const lifetimeSidecars = onGatewayLifetimeSidecars.mock.calls[0]?.[0] as
         | { stop: () => void }[]
         | undefined;
-      expect(gmailSidecars).toHaveLength(2);
+      expect(gmailSidecars).toHaveLength(4);
       expect(lifetimeSidecars).toHaveLength(3);
 
       for (const sidecar of gmailSidecars ?? []) {
@@ -1776,7 +1800,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const lifetimeSidecars = onGatewayLifetimeSidecars.mock.calls[0]?.[0] as
       | Array<{ stop: () => Promise<void> | void }>
       | undefined;
-    expect(gmailSidecars).toHaveLength(2);
+    expect(gmailSidecars).toHaveLength(4);
     expect(lifetimeSidecars).toHaveLength(3);
 
     await waitForGatewayTestState(() => {
@@ -2813,9 +2837,144 @@ describe("startGatewayPostAttachRuntime", () => {
       name: "sidecars.ready",
       metrics: [
         ["loadedPluginCount", 2],
-        ["postReadySidecarCount", 3],
+        ["postReadySidecarCount", 5],
       ],
     });
+  });
+
+  it("publishes runtime discovery after ready without owning Chat metadata refresh", async () => {
+    const refreshChatMetadata = vi.fn(async () => {});
+    hoisted.publishPreparedRuntimeDiscoveryCatalogs.mockResolvedValueOnce(1);
+
+    const result = await startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: false } } } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      refreshChatMetadata,
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+    // Startup performs its own initial projection. Isolate the later post-ready refresh.
+    refreshChatMetadata.mockClear();
+
+    await waitForGatewayTestState(() => {
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledTimes(1);
+      expect(refreshChatMetadata).not.toHaveBeenCalled();
+    });
+    for (const sidecar of result.postReadySidecars) {
+      await stopTrackedSidecar(sidecar);
+    }
+  });
+
+  it("publishes runtime discovery for a replacement prepared generation", async () => {
+    const result = await startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: false } } } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      refreshChatMetadata: vi.fn(async () => {}),
+      log: { warn: vi.fn() },
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+    });
+
+    try {
+      await waitForGatewayTestState(() => {
+        expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledOnce();
+        expect(hoisted.runtimePublicationListeners.size).toBe(1);
+      });
+      for (const listener of hoisted.runtimePublicationListeners) {
+        listener({ phase: "published" });
+      }
+      await waitForGatewayTestState(() => {
+        expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledTimes(2);
+      });
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenLastCalledWith(false);
+    } finally {
+      for (const sidecar of result.postReadySidecars) {
+        await stopTrackedSidecar(sidecar);
+      }
+    }
+  });
+
+  it("advances runtime discovery backoff only for newly armed recovery timers", async () => {
+    vi.useFakeTimers();
+    hoisted.hasExhaustedPreparedRuntimeDiscoveryCatalogs.mockReturnValue(true);
+    let resolveInitialPublish: ((published: number) => void) | undefined;
+    hoisted.publishPreparedRuntimeDiscoveryCatalogs.mockImplementationOnce(
+      async () =>
+        await new Promise<number>((resolve) => {
+          resolveInitialPublish = resolve;
+        }),
+    );
+
+    const result = await startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: false } } } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      refreshChatMetadata: vi.fn(async () => {}),
+      log: { warn: vi.fn() },
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+    });
+
+    try {
+      await vi.advanceTimersToNextTimerAsync();
+      await vi.dynamicImportSettled();
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledOnce();
+
+      resolveInitialPublish?.(0);
+      for (const listener of hoisted.runtimePublicationListeners) {
+        listener({ phase: "published" });
+      }
+      await vi.dynamicImportSettled();
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledTimes(3);
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenLastCalledWith(true);
+      for (const listener of hoisted.runtimePublicationListeners) {
+        listener({ phase: "published" });
+      }
+      await vi.dynamicImportSettled();
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledTimes(5);
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenLastCalledWith(true);
+      await vi.dynamicImportSettled();
+
+      hoisted.hasExhaustedPreparedRuntimeDiscoveryCatalogs.mockReturnValue(false);
+      for (const listener of hoisted.runtimePublicationListeners) {
+        listener({ phase: "published" });
+      }
+      await vi.dynamicImportSettled();
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledTimes(6);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(hoisted.publishPreparedRuntimeDiscoveryCatalogs).toHaveBeenCalledTimes(6);
+    } finally {
+      for (const sidecar of result.postReadySidecars) {
+        await stopTrackedSidecar(sidecar);
+      }
+      vi.useRealTimers();
+    }
   });
 
   it("runs Gmail watcher after sidecars are ready", async () => {
@@ -2858,7 +3017,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     sidecarStartReturned = true;
 
-    expect(result.postReadySidecars).toHaveLength(2);
+    expect(result.postReadySidecars).toHaveLength(4);
     expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
     expect(onPostReadySidecars).toHaveBeenCalledWith(result.postReadySidecars);
 
@@ -2948,7 +3107,7 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
-    expect(result.postReadySidecars).toHaveLength(2);
+    expect(result.postReadySidecars).toHaveLength(4);
     await waitForGatewayTestState(() => {
       expect(log.warn).toHaveBeenCalledWith(
         "sidecars.gmail-watch failed after gateway ready: Error: boom",
@@ -2977,7 +3136,7 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
-    expect(result.postReadySidecars).toHaveLength(2);
+    expect(result.postReadySidecars).toHaveLength(4);
     for (const sidecar of result.postReadySidecars) {
       await stopTrackedSidecar(sidecar);
     }
@@ -3085,7 +3244,7 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
-    expect(result.postReadySidecars).toHaveLength(2);
+    expect(result.postReadySidecars).toHaveLength(4);
     expect(hoisted.loadModelCatalog).not.toHaveBeenCalled();
 
     await waitForGatewayTestState(() => {
@@ -3589,7 +3748,7 @@ describe("startGatewayPostAttachRuntime", () => {
       waitForPostReadyWork: () => postReadyWork,
     });
 
-    expect(result.postReadySidecars).toHaveLength(2);
+    expect(result.postReadySidecars).toHaveLength(4);
     for (const sidecar of result.postReadySidecars) {
       await stopTrackedSidecar(sidecar);
     }

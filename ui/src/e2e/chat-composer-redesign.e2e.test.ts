@@ -51,6 +51,9 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup", { after: 1 });
       await expect
         .poll(() => composer.locator('[data-chat-model-catalog-state="refreshing"]').count())
+        .toBe(0);
+      await expect
+        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.5"]').count())
         .toBe(1);
       await expect.poll(() => textarea.isEnabled()).toBe(true);
       await expect.poll(() => disabledReason.count()).toBe(0);

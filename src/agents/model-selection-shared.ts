@@ -1446,6 +1446,10 @@ export function buildConfiguredModelCatalog(params: {
           : isVllmQwenThinkingCompat(providerId, compat)
             ? true
             : undefined;
+      const thinkingLevelMap =
+        model?.thinkingLevelMap && typeof model.thinkingLevelMap === "object"
+          ? model.thinkingLevelMap
+          : undefined;
       catalog.push({
         provider: providerId,
         id,
@@ -1458,6 +1462,7 @@ export function buildConfiguredModelCatalog(params: {
         contextTokens,
         reasoning,
         ...(typeof model?.reasoning === "boolean" ? { configuredReasoning: model.reasoning } : {}),
+        ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
         input,
         ...(modelParams ? { params: modelParams } : {}),
         compat,

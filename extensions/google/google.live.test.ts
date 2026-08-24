@@ -18,7 +18,7 @@ import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { buildGoogleLiveCatalogProvider } from "./provider-catalog.js";
+import { buildGoogleLiveProviderCatalog } from "./provider-catalog.js";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
@@ -143,10 +143,12 @@ describeLive("google plugin live", () => {
   it.each(["gemini-3.7-flash", "gemini-3.5-flash-lite"])(
     "discovers and completes through %s",
     async (modelId) => {
-      const provider = await buildGoogleLiveCatalogProvider({
-        apiKey: "GEMINI_API_KEY",
-        discoveryApiKey: GOOGLE_API_KEY,
-      });
+      const provider = (
+        await buildGoogleLiveProviderCatalog({
+          apiKey: "GEMINI_API_KEY",
+          discoveryApiKey: GOOGLE_API_KEY,
+        })
+      ).provider;
       const definition = provider.models.find((model) => model.id === modelId);
       expect(definition, `${modelId} missing from Google models.list`).toBeDefined();
 
@@ -178,10 +180,12 @@ describeLive("google plugin live", () => {
   );
 
   it("understands native video through the registered Google chat transport", async () => {
-    const catalog = await buildGoogleLiveCatalogProvider({
-      apiKey: "GEMINI_API_KEY",
-      discoveryApiKey: GOOGLE_API_KEY,
-    });
+    const catalog = (
+      await buildGoogleLiveProviderCatalog({
+        apiKey: "GEMINI_API_KEY",
+        discoveryApiKey: GOOGLE_API_KEY,
+      })
+    ).provider;
     const definition = catalog.models.find((candidate) => candidate.id === "gemini-3.5-flash-lite");
     expect(definition, "gemini-3.5-flash-lite missing from Google models.list").toBeDefined();
     expect(definition?.input).toContain("video");

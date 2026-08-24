@@ -71,6 +71,8 @@ type ModelsListResult = {
 
 let loggedSlowModelsListCatalog = false;
 
+export class ModelsListRuntimeDiscoveryPendingError extends Error {}
+
 function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBrowseView {
   const view = params.view;
   return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
@@ -161,7 +163,7 @@ function createModelsListEntryEvaluator(params: {
         (outcome) =>
           outcome.status === "auth-rejected" &&
           normalizeProviderId(outcome.provider) === provider &&
-          (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
+          outcome.profileId === resolved.selectedProfileId,
       )
         ? { ...resolved, availability: false }
         : resolved;
@@ -542,6 +544,13 @@ export async function buildModelsListResult(
       loadedSnapshot = fullSnapshot;
       snapshot = escalatedCatalog;
     }
+  }
+  if (
+    preparedOnly &&
+    params.params.waitForRuntimeDiscovery === true &&
+    loadedSnapshot?.runtimeDiscoveryPending !== false
+  ) {
+    throw new ModelsListRuntimeDiscoveryPendingError();
   }
   if (
     loadedSnapshot &&

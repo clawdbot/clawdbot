@@ -36,6 +36,7 @@ import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from 
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import {
   loadGatewaySessionEntryReadOnly,
+  loadGatewaySessionRow,
   resolveGatewaySessionStoreTarget,
 } from "../session-utils.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
@@ -504,6 +505,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       clientScopes,
     ).allowed;
     const modelCatalogAgentId = sessionAgentId;
+    let validatedModelCatalog: ReturnType<typeof context.loadGatewayModelCatalog> | undefined;
+    const loadValidatedModelCatalog = () =>
+      (validatedModelCatalog ??= context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }));
     if (!authority.ensureActive()) {
       return;
     }
@@ -562,8 +566,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       creation: sessionCreation,
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       armSessionDiffBaselineCapture: true,
-      loadGatewayModelCatalog: () =>
-        context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
+      loadGatewayModelCatalog: loadValidatedModelCatalog,
       ...(commitGuard ? { commitGuard } : {}),
       afterCreate: async ({ key, agentId, entry, storePath }) => {
         if (!authority.hasActive()) {
@@ -632,6 +635,22 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const responseEntry = sessionEntryForkedFromParent(created.entry)
       ? { ...created.entry, forkedFromParent: true as const }
       : created.entry;
+    let responseSession: ReturnType<typeof loadGatewaySessionRow> | undefined;
+    try {
+      const responseModelCatalog = validatedModelCatalog
+        ? await validatedModelCatalog
+        : await context.readPreparedGatewayModelCatalog?.({ agentId: modelCatalogAgentId });
+      // Return the canonical projection before the asynchronous session observer
+      // publishes it, so clients do not render created settings from defaults.
+      responseSession = loadGatewaySessionRow(created.key, {
+        agentId: created.agentId,
+        ...(responseModelCatalog ? { modelCatalog: responseModelCatalog } : {}),
+      });
+    } catch (error) {
+      // Session creation is already committed; optional response projection must
+      // not turn that success into a retry that creates a second session.
+      sessionLog.warn(`failed to project created session response: ${formatErrorMessage(error)}`);
+    }
     if (created.resetExisting) {
       respond(
         true,
@@ -640,6 +659,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           key: created.key,
           sessionId: created.entry.sessionId,
           entry: responseEntry,
+          ...(responseSession ? { session: responseSession } : {}),
           resolved: created.resolved,
           runStarted: false,
           ...(createdWorktree ? { worktree: createdWorktree } : {}),
@@ -668,6 +688,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         key: created.key,
         sessionId: created.entry.sessionId,
         entry: responseEntry,
+        ...(responseSession ? { session: responseSession } : {}),
         runStarted,
         ...(runPayload ? runPayload : {}),
         ...(runStarted && typeof messageSeq === "number" ? { messageSeq } : {}),

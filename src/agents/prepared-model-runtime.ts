@@ -6,6 +6,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-runtime-lease.js";
 import { registerPreparedRuntimeAuthMaterializationPublisher } from "./prepared-model-runtime-materializations.js";
+import { collectPreparedModelRuntimeDiscoveryProviderIds } from "./prepared-model-runtime.configured.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimeOwnerRetention,
@@ -71,12 +72,106 @@ let refreshRequestEpoch = 0;
 let pendingModelRuntimeReplacement: PreparedModelRuntimeReplacement | undefined;
 type AuthMutationEvent = { agentDir?: string; affectsInheritedStores: boolean };
 const pendingAuthMutations: AuthMutationEvent[] = [];
-
+let exhaustedRuntimeDiscoverySnapshots = new WeakSet<PreparedModelRuntimeSnapshot>();
 const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
   isGatewayLifecycleActive: () => gatewayLifecycleActive,
   getPendingReplacement: () => pendingModelRuntimeReplacement?.promise,
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
+
+const listPreparedRuntimeDiscoveryProviderIds = (snapshot: PreparedModelRuntimeSnapshot) =>
+  collectPreparedModelRuntimeDiscoveryProviderIds(
+    snapshot.config,
+    snapshot.metadataSnapshot,
+    snapshot.agentId,
+  );
+
+export const readPreparedRuntimeDiscoveryState = (snapshot: PreparedModelRuntimeSnapshot) => {
+  const discovery = snapshot.readRuntimeDiscovery?.();
+  // Recovery exhaustion controls background backoff, not readiness. Otherwise an automatic
+  // client can cache a successful partial catalog and miss the later publication.
+  const pending =
+    listPreparedRuntimeDiscoveryProviderIds(snapshot).length > 0 &&
+    (!discovery || discovery.pendingProviderIds.length > 0);
+  return { catalog: discovery?.catalog, pending } as const;
+};
+
+export const isPreparedRuntimeDiscoveryPending = (snapshot: PreparedModelRuntimeSnapshot) =>
+  readPreparedRuntimeDiscoveryState(snapshot).pending;
+
+export const hasExhaustedPreparedRuntimeDiscoveryCatalogs = () =>
+  [...owners.values()].some(
+    (owner) =>
+      owner.provenance === "configured" &&
+      !owner.needsRefresh &&
+      !owner.pending &&
+      Boolean(owner.snapshot && exhaustedRuntimeDiscoverySnapshots.has(owner.snapshot)),
+  );
+
+export async function publishPreparedRuntimeDiscoveryCatalogs(recover = false): Promise<number> {
+  const published = new Set<PreparedModelRuntimeSnapshot>();
+  const attempts: Array<{ snapshot: PreparedModelRuntimeSnapshot; providerIds: string[] }> = [];
+  const publish = async (snapshot: PreparedModelRuntimeSnapshot, providerIds: string[]) => {
+    const previousCatalog = snapshot.readRuntimeDiscovery?.()?.catalog;
+    await snapshot.loadRuntimeDiscoveryCatalog!(providerIds);
+    const discovery = snapshot.readRuntimeDiscovery?.();
+    if (discovery?.catalog !== previousCatalog) {
+      published.add(snapshot);
+    }
+    if (discovery?.pendingProviderIds.length) {
+      throw new Error(
+        `runtime discovery unavailable for ${discovery.pendingProviderIds.join(", ")}`,
+      );
+    }
+    exhaustedRuntimeDiscoverySnapshots.delete(snapshot);
+  };
+  for (const owner of owners.values()) {
+    if (
+      owner.provenance !== "configured" ||
+      owner.needsRefresh ||
+      owner.pending ||
+      !owner.snapshot
+    ) {
+      continue;
+    }
+    const { snapshot } = owner;
+    if (
+      recover !== exhaustedRuntimeDiscoverySnapshots.has(snapshot) ||
+      (!recover && snapshot.readRuntimeDiscovery?.() !== undefined)
+    ) {
+      continue;
+    }
+    const providerIds = listPreparedRuntimeDiscoveryProviderIds(snapshot);
+    if (providerIds.length === 0 || !snapshot.loadRuntimeDiscoveryCatalog) {
+      continue;
+    }
+    attempts.push({ snapshot, providerIds });
+  }
+  const attemptPublish = (attempt: (typeof attempts)[number]) =>
+    publish(attempt.snapshot, attempt.providerIds).then(
+      () => undefined,
+      () => attempt,
+    );
+  const retries = (await Promise.all(attempts.map(attemptPublish))).filter(
+    (attempt): attempt is (typeof attempts)[number] => attempt !== undefined,
+  );
+  await Promise.all(
+    retries.map(async ({ snapshot, providerIds }) => {
+      try {
+        await publish(snapshot, providerIds);
+      } catch (error) {
+        exhaustedRuntimeDiscoverySnapshots.add(snapshot);
+        log.warn(
+          `runtime model discovery failed after retry for agent ${snapshot.agentId ?? "unknown"}: ${String(toStringifiedError(error))}`,
+        );
+      }
+    }),
+  );
+  if (published.size > 0) {
+    notifyPreparedModelRuntimePublication({ phase: "published" });
+  }
+  return published.size;
+}
 
 /** Resolves a published owner or activates a standalone lifecycle owner. */
 export async function loadPreparedModelRuntimeSnapshot(
@@ -654,6 +749,7 @@ registerPreparedRuntimeAuthMaterializationPublisher(owners, notifyPreparedModelR
 function resetPreparedModelRuntimeSnapshotsForTest(): void {
   pendingModelRuntimeReplacement?.resolve();
   pendingModelRuntimeReplacement = undefined;
+  exhaustedRuntimeDiscoverySnapshots = new WeakSet();
   owners.clear();
   agentBuildCompletions.clear();
   standaloneActivationTails.clear();

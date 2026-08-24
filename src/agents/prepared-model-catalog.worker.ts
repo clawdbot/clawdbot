@@ -75,7 +75,13 @@ function refreshAuthStore(params: {
 
 async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
   const { prepareWorkspaceBuildGroup } = await import("./prepared-model-runtime.facts.js");
-  const prepared = await prepareWorkspaceBuildGroup([value.input], "live");
+  const prepared = await prepareWorkspaceBuildGroup(
+    [value.input],
+    "live",
+    value.providerDiscoveryProviderIds
+      ? { providerDiscoveryProviderIds: value.providerDiscoveryProviderIds }
+      : {},
+  );
   const agentFacts = prepared.agentFacts[0];
   if (!agentFacts) {
     throw new Error("prepared model catalog worker produced no agent facts");
@@ -84,6 +90,9 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
     input: value.input,
     authStore: value.authStore,
     providerIds: value.providerIds,
+    ...(value.providerDiscoveryProviderIds
+      ? { providerDiscoveryProviderIds: value.providerDiscoveryProviderIds }
+      : {}),
     pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
   });
   if (reconstructedFingerprint !== value.generationFingerprint) {
@@ -131,7 +140,7 @@ export async function runPreparedModelCatalogWorkerRequest(
       authStore: value.authStore,
       config: value.input.config,
       env: value.input.env ?? process.env,
-      providerIds: listExternalCliSyncProviderIds(),
+      providerIds: value.providerDiscoveryProviderIds ?? listExternalCliSyncProviderIds(),
       pluginGeneration: prepared.pluginGeneration,
     });
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: value.input.agentDir, store: authStore }]);
@@ -166,7 +175,12 @@ export async function runPreparedModelCatalogWorkerRequest(
       prepared.pluginGeneration,
       "live",
       false,
-      { authStore },
+      {
+        authStore,
+        ...(value.providerDiscoveryProviderIds
+          ? { providerDiscoveryProviderIds: value.providerDiscoveryProviderIds }
+          : {}),
+      },
     );
     const facts = await prepareFullCatalogFacts(
       exactAgentFacts,

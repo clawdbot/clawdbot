@@ -753,15 +753,15 @@ suite.define(() => {
 
       await navigateInApp(page, "chat");
       await waitForCommittedChatRoute(page);
-      const metadataRequests = (await gateway.getRequests("chat.metadata")).length;
+      const modelRequests = (await gateway.getRequests("models.list")).length;
       const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
-      await gateway.deferNext("chat.metadata");
+      await gateway.deferNext("models.list");
       await gateway.deferNext("worktrees.branches");
       await navigateInApp(page, "new-session");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await expect
-        .poll(async () => (await gateway.getRequests("chat.metadata")).length)
-        .toBe(metadataRequests + 1);
+        .poll(async () => (await gateway.getRequests("models.list")).length)
+        .toBe(modelRequests + 1);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
         .toBe(branchRequests + 1);
@@ -770,7 +770,7 @@ suite.define(() => {
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
 
-      await gateway.resolveDeferred("chat.metadata", { models });
+      await gateway.resolveDeferred("models.list", { models });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await gateway.rejectDeferred("worktrees.branches", {
         code: "UNAVAILABLE",

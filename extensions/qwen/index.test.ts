@@ -40,6 +40,26 @@ async function registerQwenProvider() {
 }
 
 describe("qwen provider plugin", () => {
+  it("declares runtime provider aliases in control-plane metadata", () => {
+    expect(manifest.modelCatalog.aliases).toEqual({
+      modelstudio: { provider: "qwen" },
+      qwencloud: { provider: "qwen" },
+    });
+  });
+
+  it("completes with static rows when runtime discovery has no credential", async () => {
+    const provider = await registerQwenProvider();
+    const result = await provider.catalog?.run({
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({}),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    } as never);
+
+    expect(requireCatalogProvider(result).models).not.toHaveLength(0);
+    expect(result?.outcomes).toEqual([{ provider: "qwen", status: "ready" }]);
+  });
+
   it("keeps Standard-only models out of Coding Plan normalized catalogs", async () => {
     const provider = await registerQwenProvider();
 

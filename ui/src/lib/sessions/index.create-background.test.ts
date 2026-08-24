@@ -10,9 +10,19 @@ it("claims created placement while carrying work metadata through background rec
     resolveList = resolve;
   });
   const key = "agent:main:created-in-background";
-  const request = vi.fn(async (method: string) => {
+  const request = vi.fn(async (method: string, _params?: unknown) => {
     if (method === "sessions.create") {
-      return { key };
+      return {
+        key,
+        session: {
+          key,
+          kind: "direct",
+          model: "gpt-5.6-sol",
+          modelProvider: "openai",
+          thinkingLevel: "xhigh",
+          updatedAt: 1,
+        },
+      };
     }
     if (method === "sessions.list") {
       return await pendingList;
@@ -44,6 +54,12 @@ it("claims created placement while carrying work metadata through background rec
   expect(created).toHaveBeenCalledWith(key);
   expect(sessions.isPreparedWorkSession(key)).toBe(true);
   expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5.6-sol");
+  expect(sessions.state.agentId).toBeNull();
+  expect(sessions.state.result?.sessions).toContainEqual(
+    expect.objectContaining({ key, thinkingLevel: "xhigh" }),
+  );
+  const listRequest = request.mock.calls.find(([method]) => method === "sessions.list");
+  expect(listRequest?.[1]).not.toHaveProperty("agentId");
 
   resolveList({
     ts: 2,
@@ -62,6 +78,85 @@ it("claims created placement while carrying work metadata through background rec
   await waitForFast(() => expect(sessions.isPreparedWorkSession(key)).toBe(false));
   expect(created).toHaveBeenCalledOnce();
   expect(sessions.isPreparedWorkSession(key)).toBe(false);
+  expect(sessions.state.agentId).toBeNull();
+  sessions.dispose();
+});
+
+it.each([
+  ["with a projected response row", true],
+  ["without a projected response row", false],
+])("moves an agent-scoped roster to the created session owner %s", async (_label, includeRow) => {
+  let resolveResearchList: (result: SessionsListResult) => void = () => undefined;
+  const researchList = new Promise<SessionsListResult>((resolve) => {
+    resolveResearchList = resolve;
+  });
+  const key = "agent:research:created-in-background";
+  const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
+    if (method === "sessions.create") {
+      return {
+        key,
+        ...(includeRow
+          ? { session: { key, kind: "direct", agentId: "research", updatedAt: 2 } }
+          : {}),
+      };
+    }
+    if (method === "sessions.list") {
+      if (params?.agentId === "research") {
+        return await researchList;
+      }
+      return {
+        ts: 1,
+        path: "agent:main",
+        count: 1,
+        defaults: { modelProvider: "openai", model: "main-default", contextTokens: 111 },
+        sessions: [{ key: "agent:main:existing", kind: "direct", agentId: "main", updatedAt: 1 }],
+      } satisfies SessionsListResult;
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const client = { request } as unknown as GatewayBrowserClient;
+  const sessions = createSessionCapability({
+    snapshot: {
+      client,
+      phase: "connected" as const,
+      hello: null,
+      assistantAgentId: "main",
+      sessionKey: "agent:main:existing",
+    },
+    subscribe: () => () => undefined,
+    subscribeEvents: () => () => undefined,
+  });
+  await sessions.refresh({ agentId: "main", force: true });
+  expect(sessions.state.result?.defaults.model).toBe("main-default");
+
+  await expect(
+    sessions.createResult({ agentId: "research" }, { reconciliation: "background" }),
+  ).resolves.toMatchObject({ key });
+
+  expect(sessions.state.agentId).toBe("research");
+  if (includeRow) {
+    expect(sessions.state.result?.sessions).toEqual([
+      expect.objectContaining({ key, agentId: "research" }),
+    ]);
+    expect(sessions.state.result?.defaults).toEqual({
+      modelProvider: null,
+      model: null,
+      contextTokens: null,
+    });
+  } else {
+    expect(sessions.state.result).toBeNull();
+  }
+  expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ agentId: "research" });
+
+  resolveResearchList({
+    ts: 3,
+    path: "agent:research",
+    count: 1,
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions: [{ key, kind: "direct", agentId: "research", updatedAt: 3 }],
+  });
+  await waitForFast(() => expect(sessions.state.loading).toBe(false));
+  expect(sessions.state.agentId).toBe("research");
   sessions.dispose();
 });
 

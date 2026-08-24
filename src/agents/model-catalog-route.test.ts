@@ -39,6 +39,7 @@ const platformEntry: ModelCatalogEntry = {
   contextWindow: 1_000_000,
   contextTokens: 272_000,
   reasoning: true,
+  thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh" },
   input: ["text", "image"],
   params: { platformOnly: true },
   compat: { supportsTools: false },
@@ -53,6 +54,7 @@ const chatGPTEntry: ModelCatalogEntry = {
   contextWindow: 400_000,
   contextTokens: 300_000,
   reasoning: true,
+  thinkingLevelMap: { off: "none", minimal: null, xhigh: null },
   input: ["text"],
   params: { chatGPTOnly: true },
   compat: { supportsTools: true },
@@ -103,6 +105,7 @@ describe("projectModelCatalogEntryForRoute", () => {
       contextWindow: 1_000_000,
       contextTokens: 272_000,
       reasoning: true,
+      thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh" },
       input: ["text", "image"],
     });
 
@@ -121,6 +124,7 @@ describe("projectModelCatalogEntryForRoute", () => {
       contextWindow: 400_000,
       contextTokens: 300_000,
       reasoning: true,
+      thinkingLevelMap: { off: "none", minimal: null, xhigh: null },
       input: ["text"],
     });
   });

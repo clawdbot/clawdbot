@@ -15,6 +15,11 @@ import type { ModelRegistry } from "./sessions/model-registry.js";
 
 export type PreparedModelRuntimeCatalogMode = "live" | "static";
 
+export type PreparedModelRuntimeDiscovery = Readonly<{
+  catalog: ModelCatalogSnapshot;
+  pendingProviderIds: readonly string[];
+}>;
+
 export type PreparedModelRuntimePluginGeneration = Readonly<{
   pluginMetadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
@@ -59,6 +64,14 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
   /** Builds this generation's full control-plane catalog without replacing turn facts. */
   loadFullModelCatalog?: (options?: { refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
+  /** Reads post-ready discovery and its provider-specific recovery state without starting work. */
+  readRuntimeDiscovery?: () => PreparedModelRuntimeDiscovery | undefined;
+  /** Readiness captured atomically with a materialized prepared-only catalog. */
+  runtimeDiscoveryPending?: boolean;
+  /** Discovers configured runtime-only providers without replacing the full control-plane cache. */
+  loadRuntimeDiscoveryCatalog?: (
+    providerDiscoveryProviderIds: readonly string[],
+  ) => Promise<ModelCatalogSnapshot>;
   /** Full static models for configured refs, resolved once at the lifecycle boundary. */
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
   /** Inline provider projection prepared once for all resolutions owned by this snapshot. */

@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 
 type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
 type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
+type ModelCatalogSnapshot = import("./model-catalog.types.js").ModelCatalogSnapshot;
 
 const mocks = vi.hoisted(() => {
   const metadataSnapshot = {
@@ -58,7 +60,11 @@ const mocks = vi.hoisted(() => {
       }),
     ),
     buildPreparedModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
-    runPreparedModelCatalogWorker: vi.fn(async () => ({ entries: [], routeVariants: [] })),
+    runPreparedModelCatalogWorker: vi.fn(
+      async (): Promise<ModelCatalogSnapshot> => ({ entries: [], routeVariants: [] }),
+    ),
+    workerInputs: [] as unknown[],
+    workerTerminalStates: [] as boolean[],
     loadAgentRuntimePluginRegistryHandle: vi.fn(),
     loadStaticCatalog: vi.fn(async () => []),
     prepareStaticCatalog: vi.fn(async (..._args: unknown[]) => ({
@@ -95,6 +101,10 @@ const mocks = vi.hoisted(() => {
     })),
     resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
     resolveSyntheticAuth,
+    resolveAgentDir: vi.fn((_config: unknown, _agentId: string) => "/tmp/prepared-static-agent"),
+    resolveAgentWorkspaceDir: vi.fn(
+      (_config: unknown, _agentId: string) => "/tmp/prepared-static-workspace",
+    ),
     mutationListener: undefined as
       | ((event: { agentDir?: string; affectsInheritedStores: boolean }) => void)
       | undefined,
@@ -113,14 +123,25 @@ vi.mock("./agent-auth-discovery.js", () => ({
 }));
 
 vi.mock("./prepared-model-catalog-worker.js", () => ({
-  createPreparedModelCatalogWorkerInput: ({ agentFacts }: { agentFacts: unknown }) => ({
+  createPreparedModelCatalogWorkerInput: ({
+    agentFacts,
+    providerDiscoveryProviderIds,
+  }: {
+    agentFacts: unknown;
+    providerDiscoveryProviderIds?: readonly string[];
+  }) => ({
     generationFingerprint: "test-generation",
     input: (agentFacts as { input: unknown }).input,
+    ...(providerDiscoveryProviderIds ? { providerDiscoveryProviderIds } : {}),
   }),
-  createPreparedModelCatalogWorker: () => ({
-    loadCatalog: mocks.runPreparedModelCatalogWorker,
-    loadAuth: async () => ({ authStore: { version: 1, profiles: {} }, authModes: {} }),
-  }),
+  createPreparedModelCatalogWorker: ({ input }: { input: unknown }) => {
+    const workerIndex = mocks.workerInputs.push(input) - 1;
+    return {
+      isTerminal: () => mocks.workerTerminalStates[workerIndex] === true,
+      loadCatalog: mocks.runPreparedModelCatalogWorker,
+      loadAuth: async () => ({ authStore: { version: 1, profiles: {} }, authModes: {} }),
+    };
+  },
 }));
 
 vi.mock("./agent-model-discovery.js", () => ({
@@ -156,9 +177,11 @@ vi.mock("./legacy-inherited-auth-dir.js", () => ({
 
 vi.mock("./agent-scope.js", () => ({
   listAgentEntries: (config: { agents?: { list?: unknown[] } }) => config.agents?.list ?? [],
-  listAgentIds: () => ["default"],
-  resolveAgentDir: () => "/tmp/prepared-static-agent",
-  resolveAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
+  listAgentIds: (config: { agents?: { list?: Array<{ id?: string }> } }) =>
+    config.agents?.list?.map((entry) => entry.id ?? "") ?? ["default"],
+  resolveAgentDir: (config: unknown, agentId: string) => mocks.resolveAgentDir(config, agentId),
+  resolveAgentWorkspaceDir: (config: unknown, agentId: string) =>
+    mocks.resolveAgentWorkspaceDir(config, agentId),
   tryResolveConfiguredAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
   tryResolveSystemAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
   resolveDefaultAgentDir: () => "/tmp/prepared-static-agent",
@@ -209,13 +232,31 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: vi.fn() }),
 }));
 
-const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
-  await import("./prepared-model-runtime.js");
-const { getAvailablePreparedModelCatalogSnapshot } = await import("./prepared-model-catalog.js");
+const {
+  getPreparedModelRuntimeSnapshot,
+  hasExhaustedPreparedRuntimeDiscoveryCatalogs,
+  isPreparedRuntimeDiscoveryPending,
+  publishPreparedRuntimeDiscoveryCatalogs,
+  registerPreparedModelRuntimePublicationListener,
+  refreshPreparedModelRuntimeSnapshots,
+} = await import("./prepared-model-runtime.js");
+const { getAvailablePreparedModelCatalogSnapshot, isPreparedModelRuntimeDiscoveryPending } =
+  await import("./prepared-model-catalog.js");
 const { prepareScopedReadOnlyLiveModelCatalog, prepareScopedReadOnlyModelCatalog } =
   await import("./prepared-model-runtime.scoped-catalog.js");
 const { resetPreparedModelRuntimeSnapshotsForTest } =
   await import("./prepared-model-runtime.test-support.js");
+
+function runtimeCatalogWithOutcome(
+  provider: string,
+  status: "ready" | "auth-rejected" | "unavailable" = "ready",
+): ModelCatalogSnapshot {
+  return {
+    entries: [],
+    routeVariants: [],
+    providerOutcomes: [{ provider, status }],
+  };
+}
 
 beforeEach(() => {
   resetPreparedModelRuntimeSnapshotsForTest();
@@ -223,7 +264,15 @@ beforeEach(() => {
     .mockReset()
     .mockReturnValue(createEmptyPluginRegistry());
   vi.clearAllMocks();
+  mocks.workerInputs.length = 0;
+  mocks.workerTerminalStates.length = 0;
+  mocks.runPreparedModelCatalogWorker
+    .mockReset()
+    .mockResolvedValue({ entries: [], routeVariants: [] });
+  (mocks.metadataSnapshot as { plugins: unknown[] }).plugins = [];
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
+  mocks.resolveAgentDir.mockReset().mockReturnValue("/tmp/prepared-static-agent");
+  mocks.resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/prepared-static-workspace");
 });
 
 describe("prepared model runtime Gateway catalog mode", () => {
@@ -294,6 +343,404 @@ describe("prepared model runtime Gateway catalog mode", () => {
       expect.objectContaining({ providerDiscoveryEntriesOnly: true }),
     );
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
+  it("publishes configured runtime catalogs without discovering refreshable providers", async () => {
+    (mocks.metadataSnapshot as { plugins: unknown[] }).plugins = [
+      {
+        modelCatalog: { discovery: { omniroute: "runtime", ollama: "refreshable" } },
+      },
+    ];
+    const config = {
+      agents: { defaults: { model: { primary: "omniroute/auto" } } },
+      models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
+    };
+    mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(
+      runtimeCatalogWithOutcome("omniroute"),
+    );
+
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+
+    const snapshot = getPreparedModelRuntimeSnapshot({
+      agentId: "default",
+      config,
+      agentDir: "/tmp/prepared-static-agent",
+      inheritedAuthDir: "/tmp/prepared-static-agent",
+      workspaceDir: "/tmp/prepared-static-workspace",
+    });
+    expect(snapshot).toBeDefined();
+    expect(isPreparedRuntimeDiscoveryPending(snapshot!)).toBe(true);
+
+    const events: string[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      events.push(event.phase);
+    });
+    await expect(publishPreparedRuntimeDiscoveryCatalogs()).resolves.toBe(1);
+    unregister();
+    expect(events).toEqual(["published"]);
+    expect(mocks.workerInputs).toContainEqual(
+      expect.objectContaining({ providerDiscoveryProviderIds: ["omniroute"] }),
+    );
+    expect(snapshot?.readRuntimeDiscovery?.()?.catalog).toEqual(
+      expect.objectContaining({ entries: [], routeVariants: [] }),
+    );
+    expect(isPreparedRuntimeDiscoveryPending(snapshot!)).toBe(false);
+    const discoveryCalls = mocks.workerInputs.length;
+    await expect(publishPreparedRuntimeDiscoveryCatalogs()).resolves.toBe(0);
+    expect(mocks.workerInputs).toHaveLength(discoveryCalls);
+  });
+
+  it("discovers a runtime provider selected only by its owner policy wildcard", async () => {
+    (mocks.metadataSnapshot as { plugins: unknown[] }).plugins = [
+      { modelCatalog: { discovery: { omniroute: "runtime" } } },
+    ];
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          modelPolicy: { allow: ["omniroute/*"] },
+        },
+      },
+      models: { providers: { omniroute: { baseUrl: "http://omniroute.invalid", models: [] } } },
+    };
+    mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(
+      runtimeCatalogWithOutcome("omniroute", "auth-rejected"),
+    );
+
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const snapshot = getPreparedModelRuntimeSnapshot({
+      agentId: "default",
+      config,
+      agentDir: "/tmp/prepared-static-agent",
+      inheritedAuthDir: "/tmp/prepared-static-agent",
+      workspaceDir: "/tmp/prepared-static-workspace",
+    });
+
+    expect(isPreparedRuntimeDiscoveryPending(snapshot!)).toBe(true);
+    await expect(publishPreparedRuntimeDiscoveryCatalogs()).resolves.toBe(1);
+    expect(mocks.workerInputs).toContainEqual(
+      expect.objectContaining({ providerDiscoveryProviderIds: ["omniroute"] }),
+    );
+    expect(isPreparedRuntimeDiscoveryPending(snapshot!)).toBe(false);
+  });
+
+  it("keeps post-ready runtime discovery scoped to each configured agent", async () => {
+    (mocks.metadataSnapshot as { plugins: unknown[] }).plugins = [
+      {
+        modelCatalog: { discovery: { alpha: "runtime", beta: "runtime" } },
+      },
+    ];
+    const config = {
+      models: {
+        providers: {
+          alpha: { baseUrl: "http://alpha.invalid", models: [] },
+          beta: { baseUrl: "http://beta.invalid", models: [] },
+        },
+      },
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        list: [
+          { id: "alpha-agent", model: { primary: "alpha/model" } },
+          { id: "beta-agent", model: { primary: "beta/model" } },
+        ],
+      },
+    };
+    mocks.resolveAgentDir.mockImplementation((_config, agentId) => `/tmp/${agentId}-agent`);
+    mocks.resolveAgentWorkspaceDir.mockImplementation(
+      (_config, agentId) => `/tmp/${agentId}-workspace`,
+    );
+
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    mocks.workerInputs.length = 0;
+    const alphaCatalog = createDeferred<ModelCatalogSnapshot>();
+    mocks.runPreparedModelCatalogWorker
+      .mockImplementationOnce(() => alphaCatalog.promise)
+      .mockResolvedValueOnce(runtimeCatalogWithOutcome("beta"));
+
+    const publication = publishPreparedRuntimeDiscoveryCatalogs();
+    await vi.waitFor(() => expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2));
+    alphaCatalog.resolve(runtimeCatalogWithOutcome("alpha"));
+    await expect(publication).resolves.toBe(2);
+    expect(
+      mocks.workerInputs.map(
+        (input) =>
+          (input as { providerDiscoveryProviderIds?: string[] }).providerDiscoveryProviderIds,
+      ),
+    ).toEqual([["alpha"], ["beta"]]);
+  });
+
+  it("retries a failed owner after publishing its siblings", async () => {
+    (mocks.metadataSnapshot as { plugins: unknown[] }).plugins = [
+      { modelCatalog: { discovery: { alpha: "runtime", beta: "runtime" } } },
+    ];
+    const config = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        list: [
+          { id: "alpha-agent", model: { primary: "alpha/model" } },
+          { id: "beta-agent", model: { primary: "beta/model" } },
+        ],
+      },
+    };
+    mocks.runPreparedModelCatalogWorker
+      .mockRejectedValueOnce(new Error("alpha discovery failed"))
+      .mockResolvedValueOnce(runtimeCatalogWithOutcome("beta"))
+      .mockResolvedValueOnce(runtimeCatalogWithOutcome("alpha"));
+
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    mocks.workerInputs.length = 0;
+    const events: string[] = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      events.push(event.phase);
+    });
+
+    await expect(publishPreparedRuntimeDiscoveryCatalogs()).resolves.toBe(2);
+    unregister();
+
+    expect(
+      mocks.workerInputs.map(
+        (input) =>
+          (input as { providerDiscoveryProviderIds?: string[] }).providerDiscoveryProviderIds,
+      ),
+    ).toEqual([["alpha"], ["beta"]]);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);
+    expect(events).toEqual(["published"]);
+    expect(
+      isPreparedRuntimeDiscoveryPending(
+        getPreparedModelRuntimeSnapshot({
+          agentId: "alpha-agent",
+          config,
+          agentDir: "/tmp/prepared-static-agent",
+          inheritedAuthDir: "/tmp/prepared-static-agent",
+          workspaceDir: "/tmp/prepared-static-workspace",
+        })!,
+      ),
+    ).toBe(false);
+    expect(
+      isPreparedRuntimeDiscoveryPending(
+        getPreparedModelRuntimeSnapshot({
+          agentId: "beta-agent",
+          config,
+          agentDir: "/tmp/prepared-static-agent",
+          inheritedAuthDir: "/tmp/prepared-static-agent",
+          workspaceDir: "/tmp/prepared-static-workspace",
+        })!,
+      ),
+    ).toBe(false);
+
+    const recoveredConfig = {
+      agents: {
+        defaults: { model: { primary: "alpha/recovered" } },
+      },
+    };
+    await refreshPreparedModelRuntimeSnapshots(recoveredConfig, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    const recovered = getPreparedModelRuntimeSnapshot({
+      agentId: "default",
+      config: recoveredConfig,
+      agentDir: "/tmp/prepared-static-agent",
+      inheritedAuthDir: "/tmp/prepared-static-agent",
+      workspaceDir: "/tmp/prepared-static-workspace",
+    });
+
+    expect(isPreparedRuntimeDiscoveryPending(recovered!)).toBe(true);
+    mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(runtimeCatalogWithOutcome("alpha"));
+    await expect(publishPreparedRuntimeDiscoveryCatalogs()).resolves.toBe(1);
+    expect(isPreparedRuntimeDiscoveryPending(recovered!)).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "an unavailable",
+      outcomes: [
+        { provider: "alpha", status: "ready" as const },
+        { provider: "beta", status: "unavailable" as const },
+      ],
+    },
+    { label: "a missing", outcomes: [{ provider: "alpha", status: "ready" as const }] },
+  ])(
+    "keeps $label provider outcome pending after bounded retries and recovers",
+    async ({ outcomes }) => {
+      (mocks.metadataSnapshot as { plugins: unknown[] }).plugins = [
+        { modelCatalog: { discovery: { alpha: "runtime", beta: "runtime" } } },
+      ];
+      const config = {
+        agents: {
+          defaults: {
+            model: { primary: "alpha/model" },
+            modelPolicy: { allow: ["alpha/*", "beta/*"] },
+          },
+        },
+      };
+      const alpha = { id: "alpha-model", name: "Alpha", provider: "alpha" };
+      const beta = { id: "beta-model", name: "Beta", provider: "beta" };
+      const partialCatalog = {
+        entries: [alpha],
+        routeVariants: [],
+        providerOutcomes: outcomes,
+      };
+      const recoveredCatalog = {
+        entries: [alpha, beta],
+        routeVariants: [],
+        providerOutcomes: [
+          { provider: "alpha", status: "ready" as const },
+          { provider: "beta", status: "ready" as const },
+        ],
+      };
+      mocks.runPreparedModelCatalogWorker
+        .mockResolvedValueOnce(partialCatalog)
+        .mockResolvedValueOnce(partialCatalog)
+        .mockResolvedValueOnce(partialCatalog)
+        .mockResolvedValueOnce(recoveredCatalog);
+
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+      });
+      const snapshot = getPreparedModelRuntimeSnapshot({
+        agentId: "default",
+        config,
+        agentDir: "/tmp/prepared-static-agent",
+        inheritedAuthDir: "/tmp/prepared-static-agent",
+        workspaceDir: "/tmp/prepared-static-workspace",
+      });
+
+      await snapshot?.loadFullModelCatalog?.();
+      expect(isPreparedModelRuntimeDiscoveryPending({ agentId: "default", config })).toBe(true);
+      await expect(publishPreparedRuntimeDiscoveryCatalogs()).resolves.toBe(1);
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);
+      expect(snapshot?.readRuntimeDiscovery?.()).toEqual({
+        catalog: expect.objectContaining({ entries: [alpha] }),
+        pendingProviderIds: ["beta"],
+      });
+      expect(isPreparedRuntimeDiscoveryPending(snapshot!)).toBe(true);
+      expect(hasExhaustedPreparedRuntimeDiscoveryCatalogs()).toBe(true);
+
+      await expect(publishPreparedRuntimeDiscoveryCatalogs(true)).resolves.toBe(1);
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(4);
+      expect(snapshot?.readRuntimeDiscovery?.()).toEqual({
+        catalog: expect.objectContaining({ entries: [alpha, beta] }),
+        pendingProviderIds: [],
+      });
+      expect(snapshot?.readFullModelCatalog?.()).toBeUndefined();
+      expect(
+        getAvailablePreparedModelCatalogSnapshot({
+          agentId: "default",
+          config,
+          agentDir: "/tmp/prepared-static-agent",
+          workspaceDir: "/tmp/prepared-static-workspace",
+        }),
+      ).toBe(recoveredCatalog);
+      expect(hasExhaustedPreparedRuntimeDiscoveryCatalogs()).toBe(false);
+    },
+  );
+
+  it("keeps a failed runtime discovery pending until recovery publishes", async () => {
+    (mocks.metadataSnapshot as { plugins: unknown[] }).plugins = [
+      { modelCatalog: { discovery: { alpha: "runtime" } } },
+    ];
+    const config = {
+      agents: {
+        defaults: { model: { primary: "alpha/model" } },
+      },
+    };
+    mocks.runPreparedModelCatalogWorker
+      .mockRejectedValueOnce(new Error("alpha discovery failed"))
+      .mockRejectedValueOnce(new Error("alpha discovery failed"));
+
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    mocks.workerInputs.length = 0;
+
+    await expect(publishPreparedRuntimeDiscoveryCatalogs()).resolves.toBe(0);
+    expect(hasExhaustedPreparedRuntimeDiscoveryCatalogs()).toBe(true);
+
+    expect(
+      mocks.workerInputs.map(
+        (input) =>
+          (input as { providerDiscoveryProviderIds?: string[] }).providerDiscoveryProviderIds,
+      ),
+    ).toEqual([["alpha"]]);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2);
+    expect(
+      isPreparedRuntimeDiscoveryPending(
+        getPreparedModelRuntimeSnapshot({
+          agentId: "default",
+          config,
+          agentDir: "/tmp/prepared-static-agent",
+          inheritedAuthDir: "/tmp/prepared-static-agent",
+          workspaceDir: "/tmp/prepared-static-workspace",
+        })!,
+      ),
+    ).toBe(true);
+    mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(runtimeCatalogWithOutcome("alpha"));
+    await expect(publishPreparedRuntimeDiscoveryCatalogs(true)).resolves.toBe(1);
+    expect(hasExhaustedPreparedRuntimeDiscoveryCatalogs()).toBe(false);
+    expect(
+      isPreparedRuntimeDiscoveryPending(
+        getPreparedModelRuntimeSnapshot({
+          agentId: "default",
+          config,
+          agentDir: "/tmp/prepared-static-agent",
+          inheritedAuthDir: "/tmp/prepared-static-agent",
+          workspaceDir: "/tmp/prepared-static-workspace",
+        })!,
+      ),
+    ).toBe(false);
+    expect(
+      mocks.workerInputs.map(
+        (input) =>
+          (input as { providerDiscoveryProviderIds?: string[] }).providerDiscoveryProviderIds,
+      ),
+    ).toEqual([["alpha"]]);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);
+  });
+
+  it("recreates terminal discovery workers before background recovery", async () => {
+    (mocks.metadataSnapshot as { plugins: unknown[] }).plugins = [
+      { modelCatalog: { discovery: { alpha: "runtime" } } },
+    ];
+    const config = {
+      agents: { defaults: { model: { primary: "alpha/model" } } },
+    };
+    mocks.runPreparedModelCatalogWorker
+      .mockRejectedValueOnce(new Error("worker crashed"))
+      .mockRejectedValueOnce(new Error("worker crashed"));
+
+    await refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    mocks.workerInputs.length = 0;
+    mocks.workerTerminalStates.push(true, true, false);
+
+    await expect(publishPreparedRuntimeDiscoveryCatalogs()).resolves.toBe(0);
+    mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce(runtimeCatalogWithOutcome("alpha"));
+    await expect(publishPreparedRuntimeDiscoveryCatalogs(true)).resolves.toBe(1);
+
+    expect(
+      mocks.workerInputs.map(
+        (input) =>
+          (input as { providerDiscoveryProviderIds?: string[] }).providerDiscoveryProviderIds,
+      ),
+    ).toEqual([["alpha"], ["alpha"], ["alpha"]]);
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(3);
   });
 
   it("does not publish a static catalog generation superseded while its hook is running", async () => {

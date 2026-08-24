@@ -718,6 +718,20 @@ describe("prepared model catalog worker boundary", () => {
     expect(loggedOut?.authStore.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toBeUndefined();
   });
 
+  it("does not hydrate unrelated CLI auth during scoped runtime discovery", async () => {
+    const codexHome = tempDirs.make("openclaw-scoped-worker-codex-");
+    writeCodexAuth(codexHome, "unrelated");
+    const fixture = await createStaticSnapshot(0, { CODEX_HOME: codexHome });
+
+    const catalog = await fixture.snapshot.loadRuntimeDiscoveryCatalog?.([PROVIDER_ID]);
+
+    expect(
+      getPreparedModelFullCatalogAuth(catalog!)?.authStore.profiles[
+        OPENAI_CODEX_DEFAULT_PROFILE_ID
+      ],
+    ).toBeUndefined();
+  });
+
   it("shares in-flight discovery, caches completion, and explicitly refreshes prepared facts", async () => {
     const fixture = await createStaticSnapshot(750);
     let settled = false;

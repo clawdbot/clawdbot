@@ -22,6 +22,7 @@ import {
   runProviderStaticCatalog,
   type PreparedProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
+import { matchesProviderPluginRef } from "../plugins/provider-registry-shared.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -330,16 +331,43 @@ function hasProviderWildcardVisibility(params: {
   );
 }
 
-function hasRuntimeProviderCatalog(
+const hasRuntimeProviderCatalog = (provider: import("../plugins/types.js").ProviderPlugin) =>
+  typeof provider.catalog?.run === "function";
+
+function providerMatchesDiscoveryScope(
   provider: import("../plugins/types.js").ProviderPlugin,
+  providerScope: ReadonlySet<string> | undefined,
 ): boolean {
-  return typeof provider.catalog?.run === "function";
+  // Hook aliases select a shared owner hook (including refreshable provider
+  // families); returned provider identities are filtered separately below.
+  return (
+    !providerScope ||
+    [...providerScope].some((providerId) => matchesProviderPluginRef(provider, providerId))
+  );
+}
+
+function providerResultMatchesDiscoveryScope(params: {
+  provider: import("../plugins/types.js").ProviderPlugin;
+  providerId: string;
+  providerScope: ReadonlySet<string> | undefined;
+}): boolean {
+  const providerScope = params.providerScope;
+  const normalizedProviderId = normalizeProviderId(params.providerId);
+  return (
+    !providerScope ||
+    providerScope.has(normalizedProviderId) ||
+    (providerMatchesDiscoveryScope(params.provider, providerScope) &&
+      [params.provider.id, ...(params.provider.aliases ?? [])].some(
+        (id) => normalizeProviderId(id) === normalizedProviderId,
+      ))
+  );
 }
 
 async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
   providers: import("../plugins/types.js").ProviderPlugin[],
   order: import("../plugins/types.js").ProviderCatalogOrder,
+  providerScope: ReadonlySet<string> | undefined,
   preparedStaticResults?: ReadonlyMap<
     import("../plugins/types.js").ProviderPlugin,
     PreparedProviderStaticCatalog["entries"][number]["result"]
@@ -349,6 +377,10 @@ async function resolvePluginImplicitProviders(
   const discovered: Record<string, ProviderConfig> = {};
   const catalogConfig = buildPluginCatalogConfig(ctx);
   for (const provider of byOrder[order]) {
+    // A hook can contact or terminalize only selected identities it owns.
+    const hookProviderScope = providerScope
+      ? [...providerScope].filter((providerId) => matchesProviderPluginRef(provider, providerId))
+      : undefined;
     const resolveCatalogProviderApiKey = (providerId?: string) => {
       const resolvedProviderId = providerId?.trim() || provider.id;
       const resolved = ctx.resolveProviderApiKey(resolvedProviderId);
@@ -409,10 +441,23 @@ async function resolvePluginImplicitProviders(
         agentDir: ctx.agentDir,
         workspaceDir: ctx.workspaceDir,
         env: ctx.env,
+        ...(hookProviderScope ? { providerIds: hookProviderScope } : {}),
         resolveProviderApiKey: resolveCatalogProviderApiKey,
         resolveProviderAuth: (providerId, options) =>
           ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
-        reportCatalogOutcome: ctx.onProviderCatalogOutcome,
+        reportCatalogOutcome: ctx.onProviderCatalogOutcome
+          ? (outcome) => {
+              if (
+                providerResultMatchesDiscoveryScope({
+                  provider,
+                  providerId: outcome.provider,
+                  providerScope,
+                })
+              ) {
+                ctx.onProviderCatalogOutcome?.(outcome);
+              }
+            }
+          : undefined,
         timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
       });
     }
@@ -427,6 +472,9 @@ async function resolvePluginImplicitProviders(
       result,
     });
     for (const [providerId, implicitProvider] of Object.entries(normalizedResult)) {
+      if (!providerResultMatchesDiscoveryScope({ provider, providerId, providerScope })) {
+        continue;
+      }
       const mergedProvider = mergeImplicitProviderConfig({
         providerId,
         existing:
@@ -636,6 +684,9 @@ export async function resolveImplicitProviders(
           ...(params.providerDiscoveryEntriesOnly === true ? { discoveryEntriesOnly: true } : {}),
         })
       : [];
+  const providerScope = params.providerDiscoveryProviderIds
+    ? new Set(params.providerDiscoveryProviderIds.map(normalizeProviderId).filter(Boolean))
+    : undefined;
   const discoveryProviders = [
     ...new Map(
       [...resolvedProviders, ...preparedProviders].map((provider) => [
@@ -643,7 +694,7 @@ export async function resolveImplicitProviders(
         provider,
       ]),
     ).values(),
-  ];
+  ].filter((provider) => providerMatchesDiscoveryScope(provider, providerScope));
   const preparedStaticResultsByProvider = new Map(
     preparedStaticEntries?.map(({ provider, result }) => [
       `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
@@ -667,6 +718,7 @@ export async function resolveImplicitProviders(
         context,
         discoveryProviders,
         order,
+        providerScope,
         preparedStaticResults,
       ),
     );

@@ -178,6 +178,19 @@ describe("gateway chat metadata lifecycle", () => {
     await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(3));
   });
 
+  it("invalidates the metadata generation after a runtime publication", async () => {
+    const { lifecycle: pendingLifecycle } = createLifecycle(false);
+    const lifecycle = await pendingLifecycle;
+
+    await lifecycle.attachContext(context, []);
+    const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
+
+    modelListener({ phase: "published" });
+
+    expect(mocks.invalidate).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
+  });
+
   it("propagates a failed model publication without starting a refresh", async () => {
     const { lifecycle: pendingLifecycle } = createLifecycle(false);
     const lifecycle = await pendingLifecycle;

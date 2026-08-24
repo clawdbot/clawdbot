@@ -37,6 +37,7 @@ export type SecretDefaults = {
 /** Resolved API key value plus provenance for discovery and secret-marker handling. */
 type ProfileApiKeyResolution = {
   apiKey: string;
+  profileId?: string;
   source: "plaintext" | "env-ref" | "non-env-ref";
   discoveryApiKey?: string;
 };
@@ -45,6 +46,7 @@ type ProfileApiKeyResolution = {
 export type ProviderApiKeyResolver = (provider: string) => {
   apiKey: string | undefined;
   discoveryApiKey?: string;
+  profileId?: string;
 };
 
 /** Resolves full provider auth state for callers that need mode and profile provenance. */
@@ -219,7 +221,7 @@ export function resolveApiKeyFromProfiles(params: {
   for (const id of ids) {
     const resolved = resolveApiKeyFromCredential(params.store.profiles[id], params.env);
     if (resolved) {
-      return resolved;
+      return { ...resolved, profileId: id };
     }
   }
   return undefined;

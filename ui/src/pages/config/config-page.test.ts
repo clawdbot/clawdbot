@@ -11,13 +11,13 @@ import type {
 } from "../../app/context.ts";
 import { changedServerUiPrefs, resetServerUiPrefsSync } from "../../app/server-prefs.ts";
 import { loadSettings } from "../../app/settings.ts";
+import * as chatModels from "../../lib/chat/model-catalog-store.ts";
 import {
   installDialogPolyfill,
   nextFrame,
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import * as chatModels from "../chat/models.ts";
 import * as realtimeTalk from "../chat/realtime-talk.ts";
 import {
   ConfigPage,

@@ -845,6 +845,28 @@ describe("model-selection", () => {
       expect(model?.configuredReasoning).toBe(true);
     });
 
+    it("carries configured thinking maps into catalog entries", () => {
+      const cfg = {
+        models: {
+          providers: {
+            omniroute: {
+              models: [
+                {
+                  id: "deepseekv4flash-equivalent",
+                  thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh" },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const model = buildConfiguredModelCatalog({ cfg }).find(
+        (entry) => entry.provider === "omniroute" && entry.id === "deepseekv4flash-equivalent",
+      );
+      expect(model?.thinkingLevelMap).toEqual({ off: "none", minimal: null, xhigh: "xhigh" });
+    });
+
     it("carries configured model params into catalog entries for provider policy", () => {
       const cfg = {
         models: {

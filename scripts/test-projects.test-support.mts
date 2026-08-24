@@ -640,8 +640,30 @@ const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
   "extensions/openai/openai-provider.test.ts",
   "test/scripts/codex-client-version-contract.test.ts",
 ];
+const RUNTIME_PROVIDER_CATALOG_CONTRACT_TEST_TARGET =
+  "src/plugins/bundled-runtime-provider-catalog.contract.test.ts";
+const RUNTIME_PROVIDER_CATALOG_OWNER_TEST_TARGETS = (
+  [
+    ["extensions/arcee/index.ts", ["extensions/arcee/index.test.ts"]],
+    [
+      "extensions/google/provider-registration.ts",
+      ["extensions/google/provider-registration.test.ts"],
+    ],
+    ["extensions/litellm/index.ts", ["extensions/litellm/index.test.ts"]],
+    ["extensions/minimax/provider-registration.ts", ["extensions/minimax/index.test.ts"]],
+    ["extensions/openai/openai-provider.ts", ["extensions/openai/openai-provider.test.ts"]],
+    ["extensions/opencode/index.ts", ["extensions/opencode/index.test.ts"]],
+    ["extensions/opencode-go/index.ts", ["extensions/opencode-go/index.test.ts"]],
+    ["extensions/openrouter/index.ts", ["extensions/openrouter/index.test.ts"]],
+    ["extensions/qwen/index.ts", ["extensions/qwen/index.test.ts"]],
+  ] satisfies Array<[string, string[]]>
+).map(([source, targets]): [string, string[]] => [
+  source,
+  [...targets, RUNTIME_PROVIDER_CATALOG_CONTRACT_TEST_TARGET],
+]);
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  ...RUNTIME_PROVIDER_CATALOG_OWNER_TEST_TARGETS,
   ["extensions/codex/package.json", CODEX_VERSION_CONTRACT_TEST_TARGETS],
   ["extensions/codex/src/app-server/version.ts", CODEX_VERSION_CONTRACT_TEST_TARGETS],
   ["src/test-utils/openclaw-test-state.ts", ["src/test-utils/openclaw-test-state.test.ts"]],

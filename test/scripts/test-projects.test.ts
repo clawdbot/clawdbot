@@ -2539,6 +2539,16 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it("routes runtime provider owners through their bundled catalog contract", () => {
+    expectChangedTargets(
+      ["extensions/google/provider-registration.ts"],
+      [
+        "extensions/google/provider-registration.test.ts",
+        "src/plugins/bundled-runtime-provider-catalog.contract.test.ts",
+      ],
+    );
+  });
+
   it("routes memory doctor and embedding default edits to focused tests", () => {
     expectChangedTargets(
       [

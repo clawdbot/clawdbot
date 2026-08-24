@@ -481,6 +481,63 @@ describe("gateway chat metadata runtime", () => {
     expect(loadFullModelCatalog).not.toHaveBeenCalled();
   });
 
+  test("projects the published runtime-discovery catalog without starting a full catalog", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          modelPolicy: { allow: ["omniroute/*"] },
+        },
+        list: [{ id: "main", default: true }],
+      },
+      models: {
+        providers: {
+          omniroute: {
+            baseUrl: "http://127.0.0.1:20128/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const harness = createHarness(config, { useDefaultProjection: true });
+    const owner = createOwner(config, "static", {}, "other");
+    const loadFullModelCatalog = vi.fn(async () => {
+      throw new Error("chat metadata must not start full discovery");
+    });
+    harness.setOwner({
+      ...owner,
+      loadFullModelCatalog,
+      readRuntimeDiscovery: () => ({
+        catalog: {
+          entries: [
+            {
+              id: "deepseekv4flash",
+              name: "DeepSeek V4 Flash",
+              provider: "omniroute",
+              reasoning: true,
+              thinkingLevelMap: { off: "none", xhigh: "xhigh" },
+            },
+          ],
+          routeVariants: [],
+        },
+        pendingProviderIds: [],
+      }),
+    });
+
+    await harness.runtime.refresh();
+
+    await expect(harness.runtime.readStartup({ agentId: "main" })).resolves.toMatchObject({
+      sessionModelCatalog: [
+        expect.objectContaining({
+          id: "deepseekv4flash",
+          provider: "omniroute",
+          thinkingLevelMap: expect.objectContaining({ xhigh: "xhigh" }),
+        }),
+      ],
+    });
+    expect(loadFullModelCatalog).not.toHaveBeenCalled();
+  });
+
   test("retains a generation while auth store revisions are unchanged", async () => {
     const harness = createHarness();
     harness.getPreparedAuthStore.mockImplementation(() => ({ version: 1, profiles: {} }));

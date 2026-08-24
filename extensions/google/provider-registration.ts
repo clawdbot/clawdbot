@@ -4,11 +4,14 @@ import type {
   ProviderReasoningOutputModeContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import type {
+  ModelProviderConfig,
+  ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./onboard.js";
 import {
-  buildGoogleLiveCatalogProvider,
+  buildGoogleLiveProviderCatalog,
   buildGoogleStaticCatalogProvider,
   buildGoogleVertexStaticCatalogProvider,
 } from "./provider-catalog.js";
@@ -101,18 +104,44 @@ export function buildGoogleProvider(): ProviderPlugin {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        // This hook owns several identities; scope before auth/network and terminate each selected
+        // identity so one agent cannot contact another provider or leave alias readiness pending.
+        const providerIds = new Set(
+          ctx.providerIds ?? ["google", "google-antigravity", "google-vertex"],
+        );
+        const includeGoogle = providerIds.has("google");
+        const includeVertex = providerIds.has("google-vertex");
+        const providers: Record<string, ModelProviderConfig> = {};
+        if (includeVertex) {
+          providers["google-vertex"] = buildGoogleVertexStaticCatalogProvider();
+        }
+        const aliasOutcomes = [...providerIds]
+          .filter((provider) => provider !== "google")
+          .map((provider) => ({ provider, status: "ready" as const }));
+        if (!includeGoogle) {
+          return { providers, outcomes: aliasOutcomes };
+        }
         const auth = ctx.resolveProviderApiKey("google");
         if (!auth.apiKey) {
-          return null;
+          return {
+            providers: {
+              google: buildGoogleStaticCatalogProvider(),
+              ...providers,
+            },
+            outcomes: [{ provider: "google", status: "ready" }, ...aliasOutcomes],
+          };
         }
+        const catalog = await buildGoogleLiveProviderCatalog({
+          apiKey: auth.apiKey,
+          discoveryApiKey: auth.discoveryApiKey,
+          profileId: auth.profileId,
+        });
         return {
           providers: {
-            google: await buildGoogleLiveCatalogProvider({
-              apiKey: auth.apiKey,
-              discoveryApiKey: auth.discoveryApiKey,
-            }),
-            "google-vertex": buildGoogleVertexStaticCatalogProvider(),
+            google: catalog.provider,
+            ...providers,
           },
+          outcomes: [...catalog.outcomes, ...aliasOutcomes],
         };
       },
     },

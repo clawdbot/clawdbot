@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
   SESSION_CREATE_RETRY_WINDOW_MS,
+  SessionRowSchema,
+  SessionsCreateResultSchema,
   validateSessionsCreateParams,
 } from "../index.js";
 
@@ -60,4 +62,14 @@ describe("sessions.create schema", () => {
       expect(validateSessionsCreateParams({ agentId: "main", toolOverrides })).toBe(false);
     },
   );
+
+  it("declares model-control fields on the canonical session row", () => {
+    expect(SessionRowSchema.properties).toMatchObject({
+      thinkingLevel: expect.any(Object),
+      thinkingLevels: expect.any(Object),
+      thinkingOptions: expect.any(Object),
+      thinkingDefault: expect.any(Object),
+    });
+    expect(SessionsCreateResultSchema.properties.session).toBeDefined();
+  });
 });

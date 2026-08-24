@@ -19,6 +19,7 @@ import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runt
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-catalog-order.js";
+import { canonicalizePreparedModelCatalogProvider } from "./model-catalog-provider-alias.js";
 import type {
   ModelCatalogEntry,
   ModelCatalogSnapshot,
@@ -48,6 +49,7 @@ export {
   findModelInCatalog,
   modelSupportsInput,
 } from "./model-catalog-lookup.js";
+export { canonicalizePreparedModelCatalogProvider } from "./model-catalog-provider-alias.js";
 
 type DiscoveredModel = {
   id: string;
@@ -57,6 +59,7 @@ type DiscoveredModel = {
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;
+  thinkingLevelMap?: ModelCatalogEntry["thinkingLevelMap"];
   input?: ModelInputType[];
   params?: ModelCatalogEntry["params"];
   compat?: ModelCatalogEntry["compat"];
@@ -99,25 +102,6 @@ function loadProviderApiKeyResolver() {
 export function resetModelCatalogBuilderCacheForTest() {
   manifestModelCatalogCache = new WeakMap();
   hasLoggedModelCatalogError = false;
-}
-
-/** Canonicalizes a provider alias against the metadata captured with a prepared catalog. */
-export function canonicalizePreparedModelCatalogProvider(
-  provider: string,
-  metadataSnapshot: Pick<PluginMetadataSnapshot, "manifestRegistry">,
-): string {
-  const normalizedProvider = normalizeProviderId(provider);
-  for (const plugin of metadataSnapshot.manifestRegistry.plugins) {
-    for (const [alias, target] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
-      if (normalizeProviderId(alias) === normalizedProvider) {
-        const canonicalProvider = normalizeProviderId(target.provider);
-        if (canonicalProvider) {
-          return canonicalProvider;
-        }
-      }
-    }
-  }
-  return normalizedProvider;
 }
 
 function catalogEntryDedupeKey(provider: string, id: string): string {
@@ -183,6 +167,7 @@ function clearRouteBoundCatalogMetadata(entry: ModelCatalogEntry): ModelCatalogE
     contextWindowDefault: _contextWindowDefault,
     contextTokens: _contextTokens,
     reasoning: _reasoning,
+    thinkingLevelMap: _thinkingLevelMap,
     input: _input,
     params: _params,
     compat: _compat,
@@ -243,6 +228,9 @@ function overlayCatalogMetadata(
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
+    ...(overlay.thinkingLevelMap !== undefined
+      ? { thinkingLevelMap: overlay.thinkingLevelMap }
+      : {}),
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
     ...(params ? { params } : {}),
     ...(overlay.mediaInput !== undefined ? { mediaInput: overlay.mediaInput } : {}),
@@ -454,6 +442,9 @@ export function loadManifestModelCatalog(params: {
     if (typeof row.reasoning === "boolean") {
       entry.reasoning = row.reasoning;
     }
+    if (row.thinkingLevelMap) {
+      entry.thinkingLevelMap = { ...row.thinkingLevelMap };
+    }
     if (row.input?.length) {
       entry.input = [...row.input];
     }
@@ -547,6 +538,10 @@ export async function buildPreparedModelCatalogSnapshot(
           ? entry.contextTokens
           : undefined;
       const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
+      const thinkingLevelMap =
+        entry?.thinkingLevelMap && typeof entry.thinkingLevelMap === "object"
+          ? entry.thinkingLevelMap
+          : undefined;
       const api = typeof entry?.api === "string" ? entry.api : undefined;
       const input = Array.isArray(entry?.input) ? entry.input : undefined;
       const modelParams =
@@ -561,6 +556,7 @@ export async function buildPreparedModelCatalogSnapshot(
         contextWindow,
         ...(contextTokens !== undefined ? { contextTokens } : {}),
         reasoning,
+        ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
         input,
         ...(modelParams ? { params: modelParams } : {}),
         compat,

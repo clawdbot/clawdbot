@@ -6239,6 +6239,10 @@ public struct SessionRow: Codable, Sendable {
     public let estimatedcostusd: Double?
     public let model: String?
     public let modelprovider: String?
+    public let thinkinglevel: String?
+    public let thinkinglevels: [[String: AnyCodable]]?
+    public let thinkingoptions: [String]?
+    public let thinkingdefault: String?
     public let tooloverrides: [String: AnyCodable]?
 
     public init(
@@ -6310,6 +6314,10 @@ public struct SessionRow: Codable, Sendable {
         estimatedcostusd: Double? = nil,
         model: String? = nil,
         modelprovider: String? = nil,
+        thinkinglevel: String? = nil,
+        thinkinglevels: [[String: AnyCodable]]? = nil,
+        thinkingoptions: [String]? = nil,
+        thinkingdefault: String? = nil,
         tooloverrides: [String: AnyCodable]? = nil)
     {
         self.key = key
@@ -6380,6 +6388,10 @@ public struct SessionRow: Codable, Sendable {
         self.estimatedcostusd = estimatedcostusd
         self.model = model
         self.modelprovider = modelprovider
+        self.thinkinglevel = thinkinglevel
+        self.thinkinglevels = thinkinglevels
+        self.thinkingoptions = thinkingoptions
+        self.thinkingdefault = thinkingdefault
         self.tooloverrides = tooloverrides
     }
 
@@ -6452,6 +6464,10 @@ public struct SessionRow: Codable, Sendable {
         case estimatedcostusd = "estimatedCostUsd"
         case model
         case modelprovider = "modelProvider"
+        case thinkinglevel = "thinkingLevel"
+        case thinkinglevels = "thinkingLevels"
+        case thinkingoptions = "thinkingOptions"
+        case thinkingdefault = "thinkingDefault"
         case tooloverrides = "toolOverrides"
     }
 }
@@ -9122,6 +9138,7 @@ public struct SessionsCreateResult: Codable, Sendable {
     public let key: String
     public let sessionid: String?
     public let entry: [String: AnyCodable]?
+    public let session: SessionRow?
     public let runstarted: Bool?
     public let runid: String?
     public let messageseq: Int?
@@ -9133,6 +9150,7 @@ public struct SessionsCreateResult: Codable, Sendable {
         key: String,
         sessionid: String? = nil,
         entry: [String: AnyCodable]? = nil,
+        session: SessionRow? = nil,
         runstarted: Bool? = nil,
         runid: String? = nil,
         messageseq: Int? = nil,
@@ -9143,6 +9161,7 @@ public struct SessionsCreateResult: Codable, Sendable {
         self.key = key
         self.sessionid = sessionid
         self.entry = entry
+        self.session = session
         self.runstarted = runstarted
         self.runid = runid
         self.messageseq = messageseq
@@ -9155,6 +9174,7 @@ public struct SessionsCreateResult: Codable, Sendable {
         case key
         case sessionid = "sessionId"
         case entry
+        case session
         case runstarted = "runStarted"
         case runid = "runId"
         case messageseq = "messageSeq"
@@ -14437,6 +14457,7 @@ public struct ModelsListParams: Codable, Sendable {
     public let agentid: String?
     public let includeprovidercapabilities: Bool?
     public let preparedonly: Bool?
+    public let waitforruntimediscovery: Bool?
     public let refresh: Bool?
     public let view: AnyCodable?
 
@@ -14444,12 +14465,14 @@ public struct ModelsListParams: Codable, Sendable {
         agentid: String? = nil,
         includeprovidercapabilities: Bool? = nil,
         preparedonly: Bool? = nil,
+        waitforruntimediscovery: Bool? = nil,
         refresh: Bool? = nil,
         view: AnyCodable? = nil)
     {
         self.agentid = agentid
         self.includeprovidercapabilities = includeprovidercapabilities
         self.preparedonly = preparedonly
+        self.waitforruntimediscovery = waitforruntimediscovery
         self.refresh = refresh
         self.view = view
     }
@@ -14458,6 +14481,7 @@ public struct ModelsListParams: Codable, Sendable {
         case agentid = "agentId"
         case includeprovidercapabilities = "includeProviderCapabilities"
         case preparedonly = "preparedOnly"
+        case waitforruntimediscovery = "waitForRuntimeDiscovery"
         case refresh
         case view
     }

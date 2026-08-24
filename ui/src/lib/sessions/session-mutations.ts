@@ -16,6 +16,7 @@ import {
   type SessionCreateParams,
 } from "./create.ts";
 import type { SessionPatch, SessionPatchOptions } from "./patch.ts";
+import { reconcileSessionHistory } from "./reconcile.ts";
 import { requestSessionRecovery } from "./recover.ts";
 import type {
   SessionConnectionOwner,
@@ -29,6 +30,7 @@ import type {
   SessionResetResult,
   SessionState,
 } from "./session-capability.ts";
+import { normalizeAgentId } from "./session-key.ts";
 import {
   confirmsSessionDeletion,
   requestSessionDelete,
@@ -182,6 +184,30 @@ export function createSessionMutations(host: SessionMutationsHost) {
       // Creation precedes canonical rows; claim placement before any event or
       // list publication can assign this key an ordinary roster position.
       host.notifyCreated(result.key);
+      const state = host.readState();
+      const rawCreatedAgentId = result.session?.agentId?.trim() || params.agentId?.trim();
+      const createdAgentId = rawCreatedAgentId ? normalizeAgentId(rawCreatedAgentId) : null;
+      // All-agent rosters retain their union. Agent-scoped rosters transfer to
+      // the created owner without briefly mixing rows from two agent scopes.
+      const resultAgentId = state.agentId === null ? null : (createdAgentId ?? state.agentId);
+      const resultScopeChanged = state.agentId !== null && state.agentId !== resultAgentId;
+      // Carry settings and scope across refresh; missing optional projection clears the old roster.
+      const scopedResult = resultScopeChanged ? null : state.result;
+      const reconciled = result.session
+        ? reconcileSessionHistory(
+            scopedResult,
+            result.session,
+            resultScopeChanged ? undefined : state.result?.defaults,
+            resultAgentId ? { resultAgentId } : undefined,
+          )
+        : scopedResult;
+      if (reconciled !== state.result || resultScopeChanged) {
+        host.publish({
+          ...state,
+          result: reconciled,
+          agentId: resultScopeChanged ? resultAgentId : state.agentId,
+        });
+      }
       if (requestParams.worktree === true || Boolean(requestParams.execNode?.trim())) {
         preparedWorkSessionKeys.add(result.key.trim());
       }
@@ -190,7 +216,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       } else if (preparedWorkSessionKeys.has(result.key)) {
         host.publish({ ...host.readState() });
       }
-      const reconciliation = host.refreshReplacement(params.agentId);
+      const reconciliation = host.refreshReplacement(resultAgentId);
       if (options.reconciliation === "background") {
         void reconciliation.catch((error: unknown) => {
           if (host.connection.isCurrent(scope)) {

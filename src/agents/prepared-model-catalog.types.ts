@@ -13,6 +13,7 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
   authStore?: AuthProfileStore;
   metadataSnapshot: PluginMetadataSnapshot;
   modelCatalog: ModelCatalogSnapshot;
+  runtimeDiscoveryPending?: boolean;
 }>;
 
 export type ResolvedPublishedModelCatalogOwner = Readonly<{

@@ -134,7 +134,10 @@ describe("models.list provider catalog outcomes", () => {
     });
   });
 
-  it("does not apply one profile rejection to a different selected profile", async () => {
+  it.each([
+    ["a different profile", { profileId: "openai:rejected" }],
+    ["a profile-less credential", {}],
+  ])("does not apply rejection from %s to a selected profile", async (_label, outcomeScope) => {
     const config = {
       agents: {
         defaults: {
@@ -156,7 +159,7 @@ describe("models.list provider catalog outcomes", () => {
       providerOutcomes: [
         {
           provider: "openai",
-          profileId: "openai:rejected",
+          ...outcomeScope,
           status: "auth-rejected" as const,
         },
       ],

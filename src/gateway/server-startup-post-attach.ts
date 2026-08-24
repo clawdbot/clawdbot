@@ -1,5 +1,9 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
+import {
+  MODEL_RUNTIME_DISCOVERY_RECOVERY_DELAY_MS,
+  MODEL_RUNTIME_DISCOVERY_RECOVERY_MAX_DELAY_MS,
+} from "../agents/prepared-model-runtime-recovery.js";
 import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -307,37 +311,62 @@ function schedulePostReadySidecarTask(params: {
   };
 }
 
+type GatewayGenerationTimer = GatewayPostReadySidecarHandle & {
+  cancel: () => void;
+  schedule: (delayMs: number) => boolean;
+};
+
+function createGatewayGenerationTimer(params: {
+  run: (isStopped: () => boolean) => Awaitable<void>;
+  onError: (err: unknown) => void;
+}): GatewayGenerationTimer {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const isStopped = () => stopped;
+  const cancel = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+  const schedule = (delayMs: number) => {
+    if (isStopped() || timer) {
+      return false;
+    }
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (isStopped()) {
+        return;
+      }
+      void runWithGatewayIndependentRootWorkAdmission(async () => {
+        await params.run(isStopped);
+      }).catch((err: unknown) => {
+        if (!isStopped()) {
+          params.onError(err);
+        }
+      });
+    }, delayMs);
+    timer.unref?.();
+    return true;
+  };
+  return {
+    cancel,
+    schedule,
+    stop: () => {
+      stopped = true;
+      cancel();
+    },
+  };
+}
+
 function scheduleGatewayGenerationTimer(params: {
   delayMs: number;
   run: (isStopped: () => boolean) => Awaitable<void>;
   onError: (err: unknown) => void;
 }): GatewayPostReadySidecarHandle {
-  let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const isStopped = () => stopped;
-  timer = setTimeout(() => {
-    timer = undefined;
-    if (isStopped()) {
-      return;
-    }
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
-      await params.run(isStopped);
-    }).catch((err: unknown) => {
-      if (!isStopped()) {
-        params.onError(err);
-      }
-    });
-  }, params.delayMs);
-  timer.unref?.();
-  return {
-    stop: () => {
-      stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
-    },
-  };
+  const timer = createGatewayGenerationTimer(params);
+  timer.schedule(params.delayMs);
+  return timer;
 }
 
 function scheduleRestartSentinelWakeAfterReady(params: {
@@ -864,6 +893,17 @@ export async function startGatewaySidecars(params: {
   }
 
   let restartSentinelWake: GatewayPostReadySidecarHandle | undefined;
+  let enqueueRuntimeDiscovery: ((recover: boolean) => Promise<void>) | undefined;
+  let stopRuntimeDiscoveryPublicationListener = () => {};
+  const runtimeDiscoveryRecovery = createGatewayGenerationTimer({
+    run: async (isStopped) => {
+      if (!isStopped()) {
+        await enqueueRuntimeDiscovery?.(true);
+      }
+    },
+    onError: (err) => params.log.warn(`runtime model discovery recovery failed: ${String(err)}`),
+  });
+  postReadySidecars.push(runtimeDiscoveryRecovery);
   postReadySidecars.push(
     schedulePostReadySidecarTask({
       startupTrace: params.startupTrace,
@@ -970,6 +1010,67 @@ export async function startGatewaySidecars(params: {
       }),
     );
   }
+
+  postReadySidecars.push(
+    schedulePostReadySidecarTask({
+      startupTrace: params.startupTrace,
+      name: "sidecars.model-runtime-discovery",
+      log: params.log,
+      waitForPostReadyWork: params.waitForPostReadyWork,
+      run: async (isStopped) => {
+        const {
+          hasExhaustedPreparedRuntimeDiscoveryCatalogs,
+          publishPreparedRuntimeDiscoveryCatalogs,
+          registerPreparedModelRuntimePublicationListener,
+        } = await import("../agents/prepared-model-runtime.js");
+        if (isStopped()) {
+          return;
+        }
+        let recoveryDelayMs = MODEL_RUNTIME_DISCOVERY_RECOVERY_DELAY_MS;
+        let discoveryTail: Promise<void> = Promise.resolve();
+        enqueueRuntimeDiscovery = (recover) => {
+          const discovery = discoveryTail.then(async () => {
+            if (isStopped()) {
+              return;
+            }
+            await publishPreparedRuntimeDiscoveryCatalogs(recover);
+            if (hasExhaustedPreparedRuntimeDiscoveryCatalogs()) {
+              // Publication can enqueue a duplicate pass behind this one. Advance
+              // backoff only when this pass owns the newly armed recovery timer.
+              if (runtimeDiscoveryRecovery.schedule(recoveryDelayMs)) {
+                recoveryDelayMs = Math.min(
+                  recoveryDelayMs * 2,
+                  MODEL_RUNTIME_DISCOVERY_RECOVERY_MAX_DELAY_MS,
+                );
+              }
+            } else {
+              runtimeDiscoveryRecovery.cancel();
+              recoveryDelayMs = MODEL_RUNTIME_DISCOVERY_RECOVERY_DELAY_MS;
+            }
+          });
+          discoveryTail = discovery.catch(() => undefined);
+          return discovery;
+        };
+        stopRuntimeDiscoveryPublicationListener = registerPreparedModelRuntimePublicationListener(
+          (event) => {
+            if (event.phase !== "published" || isStopped()) {
+              return;
+            }
+            void enqueueRuntimeDiscovery?.(false).catch((error: unknown) => {
+              if (!isStopped()) {
+                params.log.warn(`runtime model discovery publication failed: ${String(error)}`);
+              }
+            });
+          },
+        );
+        await enqueueRuntimeDiscovery(false);
+      },
+      stop: () => {
+        stopRuntimeDiscoveryPublicationListener();
+        enqueueRuntimeDiscovery = undefined;
+      },
+    }),
+  );
 
   // These handles schedule later tasks but do not yield after creation. Transfer
   // ownership in the same turn so close cannot seal between creation and publication.

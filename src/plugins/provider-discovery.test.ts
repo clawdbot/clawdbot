@@ -135,6 +135,117 @@ describe("groupPluginDiscoveryProvidersByOrder", () => {
 });
 
 describe("runProviderCatalog", () => {
+  it.each([
+    {
+      name: "successful legacy hook",
+      result: { provider: makeModelProviderConfig() },
+      status: "ready" as const,
+    },
+    { name: "empty legacy hook", result: null, status: "ready" as const },
+  ])("reports a fallback outcome for a $name", async ({ result, status }) => {
+    const outcomes: Array<{ provider: string; status: string }> = [];
+    const provider: ProviderPlugin = {
+      id: "legacy",
+      label: "Legacy",
+      auth: [],
+      catalog: { run: async () => result },
+    };
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([{ provider: "legacy", status }]);
+  });
+
+  it("reports legacy multi-provider outcomes under the returned provider identities", async () => {
+    const outcomes: Array<{ provider: string; status: string }> = [];
+    const provider: ProviderPlugin = {
+      id: "family",
+      label: "Family",
+      auth: [],
+      catalog: {
+        run: async () => ({
+          providers: {
+            alpha: makeModelProviderConfig(),
+            beta: makeModelProviderConfig(),
+          },
+        }),
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      { provider: "alpha", status: "ready" },
+      { provider: "beta", status: "ready" },
+    ]);
+  });
+
+  it("reports the declared provider ready when all legacy provider keys are unsafe", async () => {
+    const outcomes: Array<{ provider: string; status: string }> = [];
+    const provider: ProviderPlugin = {
+      id: "family",
+      label: "Family",
+      auth: [],
+      catalog: {
+        run: async () => ({
+          providers: {
+            ["__proto__"]: makeModelProviderConfig(),
+            constructor: makeModelProviderConfig(),
+            prototype: makeModelProviderConfig(),
+          },
+        }),
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([{ provider: "family", status: "ready" }]);
+  });
+
+  it("reports scoped provider readiness for an empty aliased legacy hook", async () => {
+    const outcomes: Array<{ provider: string; status: string }> = [];
+    const provider: ProviderPlugin = {
+      id: "family",
+      label: "Family",
+      auth: [],
+      hookAliases: ["beta"],
+      catalog: { run: async () => null },
+    };
+
+    await runProviderCatalog({
+      provider,
+      providerIds: ["beta"],
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([{ provider: "beta", status: "ready" }]);
+  });
+
   it("carries explicit provider-owned catalog outcomes across an async hook", async () => {
     const outcomes: Array<{
       provider: string;

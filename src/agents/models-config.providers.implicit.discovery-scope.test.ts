@@ -187,8 +187,10 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     ) as { onlyPluginIds?: string[] };
     expect(discoveryOptions?.onlyPluginIds).toEqual(["openai"]);
     const catalogOptions = firstMockArg(mocks.runProviderCatalog, "provider catalog") as {
+      providerIds?: string[];
       timeoutMs?: number;
     };
+    expect(catalogOptions?.providerIds).toEqual(["openai"]);
     expect(catalogOptions?.timeoutMs).toBe(1234);
   });
 
@@ -261,6 +263,70 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       firstMockArg(mocks.resolveRuntimePluginDiscoveryProviders, "runtime plugin discovery"),
     ).toMatchObject({ onlyPluginIds: expected });
   });
+
+  it.each(["qwen", "modelstudio"])(
+    "keeps discovery scoped to one provider inside a shared plugin when selected by %s",
+    async (selectedProvider) => {
+      const qwen = {
+        ...createProvider("qwen"),
+        pluginId: "qwen",
+        hookAliases: ["modelstudio"],
+      };
+      const tokenPlan = { ...createProvider("qwen-token-plan"), pluginId: "qwen" };
+      mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([qwen, tokenPlan]);
+      const outcomes: Array<{ provider: string; status: string }> = [];
+      mocks.runProviderCatalog.mockImplementation(
+        async (catalogParams: {
+          provider: ProviderPlugin;
+          reportCatalogOutcome?: (outcome: { provider: string; status: "ready" }) => void;
+        }) => {
+          catalogParams.reportCatalogOutcome?.({ provider: "qwen", status: "ready" });
+          catalogParams.reportCatalogOutcome?.({ provider: "qwen-token-plan", status: "ready" });
+          return {
+            providers: {
+              qwen: {
+                baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                api: "openai-completions" as const,
+                models: [],
+              },
+              "qwen-token-plan": {
+                baseUrl: "https://portal.qwen.ai/v1",
+                api: "openai-completions" as const,
+                models: [],
+              },
+            },
+          };
+        },
+      );
+
+      const providers = await resolveImplicitProviders({
+        agentDir: "/tmp/openclaw-agent",
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        explicitProviders: {},
+        pluginMetadataSnapshot: {
+          index: { plugins: [] } as never,
+          manifestRegistry: { plugins: [], diagnostics: [] },
+          owners: metadataOwners({
+            providers: new Map([
+              ["qwen", ["qwen"]],
+              ["qwen-token-plan", ["qwen"]],
+            ]),
+          }),
+        },
+        providerDiscoveryProviderIds: [selectedProvider],
+        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+      });
+
+      expect(mocks.runProviderCatalog).toHaveBeenCalledTimes(1);
+      expect(firstMockArg(mocks.runProviderCatalog, "provider catalog")).toMatchObject({
+        provider: qwen,
+        providerIds: [selectedProvider],
+      });
+      expect(Object.keys(providers ?? {})).toEqual(["qwen"]);
+      expect(outcomes).toEqual([{ provider: "qwen", status: "ready" }]);
+    },
+  );
 
   it("records an unavailable outcome when live catalog discovery times out", async () => {
     mocks.runProviderCatalog.mockImplementationOnce(() => new Promise<void>(() => {}));

@@ -243,6 +243,25 @@ describe("models-config provider auth provenance", () => {
     });
   });
 
+  it("preserves the selected auth profile id for catalog discovery", () => {
+    const auth = createProviderApiKeyResolver({} as NodeJS.ProcessEnv, {
+      version: 1,
+      profiles: {
+        "vllm:profile-a": {
+          type: "api_key",
+          provider: "vllm",
+          key: "profile-a-key",
+        },
+      },
+    });
+
+    expect(auth("vllm")).toEqual({
+      apiKey: "profile-a-key",
+      discoveryApiKey: "profile-a-key",
+      profileId: "vllm:profile-a",
+    });
+  });
+
   it("resolves custom configured env markers for catalog discovery", () => {
     const auth = createProviderApiKeyResolver(
       {

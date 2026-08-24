@@ -269,6 +269,10 @@ function requestModelsList(params: {
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
   includeProviderCapabilities?: boolean;
+  preparedOnly?: boolean;
+  preparedCatalog?: Array<Record<string, unknown>>;
+  runtimeDiscoveryPending?: boolean;
+  waitForRuntimeDiscovery?: boolean;
   deferredAuth?: Promise<PreparedModelRuntimeAuth>;
   preparedAuthModes?: PreparedModelRuntimeAuth["authModes"];
 }) {
@@ -301,6 +305,7 @@ function requestModelsList(params: {
       entries,
       routeVariants: entries,
       authMaterializations: [],
+      runtimeDiscoveryPending: params.runtimeDiscoveryPending ?? false,
     } as unknown as PreparedGatewayModelCatalogSnapshot;
   };
   const loadGatewayModelCatalogSnapshot = async (
@@ -322,10 +327,10 @@ function requestModelsList(params: {
       ({
         ...resolveOwnerFacts(),
         catalogComplete: false,
-        entries: [],
-        routeVariants: [],
+        entries: params.preparedCatalog ?? [],
+        routeVariants: params.preparedCatalog ?? [],
         authMaterializations: [],
-      }) as PreparedGatewayModelCatalogSnapshot,
+      }) as unknown as PreparedGatewayModelCatalogSnapshot,
   });
   const request = expectDefined(
     modelsHandlers["models.list"],
@@ -338,12 +343,16 @@ function requestModelsList(params: {
       params: {
         view: params.view,
         ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.preparedOnly ? { preparedOnly: true } : {}),
+        ...(params.waitForRuntimeDiscovery ? { waitForRuntimeDiscovery: true } : {}),
         ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
       },
     },
     params: {
       view: params.view,
       ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.preparedOnly ? { preparedOnly: true } : {}),
+      ...(params.waitForRuntimeDiscovery ? { waitForRuntimeDiscovery: true } : {}),
       ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
     },
     respond: respond as RespondFn,
@@ -362,6 +371,59 @@ function requestModelsList(params: {
 }
 
 describe("models.list", () => {
+  it.each(["Config", "cron suggestions", "diagnostics", "Model Providers"])(
+    "returns the static prepared catalog to %s while runtime discovery is pending",
+    async () => {
+      const { request, respond } = requestModelsList({
+        view: "configured",
+        preparedOnly: true,
+        runtimeDiscoveryPending: true,
+        preparedCatalog: [{ id: "static-model", name: "Static Model", provider: "test" }],
+        runtimeConfig: {
+          agents: { defaults: { models: { "test/static-model": {} } } },
+        } as OpenClawConfig,
+        loadGatewayModelCatalog: vi.fn(async () => [
+          { id: "static-model", name: "Static Model", provider: "test" },
+        ]),
+      });
+
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          models: [expect.objectContaining({ id: "static-model", provider: "test" })],
+        }),
+        undefined,
+      );
+    },
+  );
+
+  it("keeps New Session retryable while runtime discovery is pending", async () => {
+    const { request, respond } = requestModelsList({
+      view: "configured",
+      preparedOnly: true,
+      waitForRuntimeDiscovery: true,
+      runtimeDiscoveryPending: true,
+      loadGatewayModelCatalog: vi.fn(async () => [
+        { id: "static-model", name: "Static Model", provider: "test" },
+      ]),
+    });
+
+    await request;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        details: { reason: "startup-sidecars" },
+        retryAfterMs: 5_000,
+        retryable: true,
+      }),
+    );
+  });
+
   it("loads the requested agent catalog", async () => {
     const loadGatewayModelCatalog = vi.fn(async () => [
       { id: "writer-model", name: "Writer Model", provider: "test" },

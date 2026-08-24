@@ -2,7 +2,7 @@
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  buildLiveModelProviderConfig,
+  buildLiveModelProviderCatalog,
   fetchLiveProviderModelIds,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -388,6 +388,7 @@ type OpencodeZenModelDefinition = ModelDefinitionConfig & {
 type FetchOpencodeZenLiveModelIdsParams = {
   apiKey?: string;
   discoveryApiKey?: string;
+  profileId?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 };
@@ -519,10 +520,10 @@ function projectOpencodeZenLiveModels(rows: readonly unknown[]): OpencodeZenMode
   return models;
 }
 
-export async function buildOpencodeZenLiveProviderConfig(
+export async function buildOpencodeZenLiveProviderCatalog(
   params: FetchOpencodeZenLiveModelIdsParams = {},
-): Promise<ModelProviderConfig> {
-  return await buildLiveModelProviderConfig({
+) {
+  return await buildLiveModelProviderCatalog({
     providerId: PROVIDER_ID,
     endpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
     providerConfig: {
@@ -532,6 +533,7 @@ export async function buildOpencodeZenLiveProviderConfig(
     models: OPENCODE_ZEN_MODELS,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
+    profileId: params.profileId,
     fetchGuard: params.fetchGuard,
     signal: params.signal,
     timeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,

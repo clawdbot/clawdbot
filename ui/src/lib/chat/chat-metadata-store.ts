@@ -1,10 +1,8 @@
-import {
-  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-  resolveGatewayStartupRetryAfterMs,
-} from "@openclaw/gateway-client/browser";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
+import { retryGatewayStartupRequest } from "../gateway-startup-retry.ts";
 
 export type ChatMetadataResult = CommandsListResult & {
   models?: ModelCatalogEntry[];
@@ -41,12 +39,6 @@ function metadataEntryFor(
   return entry;
 }
 
-function waitForMetadataRetry(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    globalThis.setTimeout(resolve, delayMs);
-  });
-}
-
 async function requestChatMetadata(
   client: GatewayBrowserClient,
   agentId: string | null | undefined,
@@ -58,38 +50,15 @@ async function requestChatMetadata(
     return client.request<ChatMetadataResult>("chat.metadata", params);
   }
 
-  const deadlineAt = Date.now() + retryWindowMs;
-  let latestStartupError: Error | undefined;
-
-  while (true) {
-    const remainingMs = deadlineAt - Date.now();
-    if (remainingMs <= 0) {
-      throw latestStartupError ?? new Error("New-session metadata retry deadline elapsed");
-    }
-
-    try {
-      return await client.request<ChatMetadataResult>("chat.metadata", params, {
+  return retryGatewayStartupRequest({
+    retryWindowMs,
+    request: (remainingMs) =>
+      client.request<ChatMetadataResult>("chat.metadata", params, {
         timeoutMs: Math.min(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, remainingMs),
-      });
-    } catch (error) {
-      const requestError =
-        error instanceof Error
-          ? error
-          : new Error("New-session metadata request failed", { cause: error });
-      const retryAfterMs = resolveGatewayStartupRetryAfterMs(requestError);
-      if (retryAfterMs === null) {
-        throw requestError;
-      }
-
-      const retryRemainingMs = deadlineAt - Date.now();
-      if (retryRemainingMs <= 0) {
-        throw requestError;
-      }
-
-      latestStartupError = requestError;
-      await waitForMetadataRetry(Math.min(retryAfterMs, retryRemainingMs));
-    }
-  }
+      }),
+    requestFailure: (error) => new Error("New-session metadata request failed", { cause: error }),
+    retryDeadlineMessage: "New-session metadata retry deadline elapsed",
+  });
 }
 
 function beginChatMetadataRequest(

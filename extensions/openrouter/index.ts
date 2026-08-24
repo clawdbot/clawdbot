@@ -30,7 +30,7 @@ import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
-  buildOpenrouterLiveProvider,
+  buildOpenrouterLiveProviderCatalog,
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -282,17 +282,19 @@ export default defineSingleProviderPluginEntry({
           const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
           const apiKey = auth.apiKey;
           if (!apiKey) {
-            return null;
+            return {
+              provider: buildOpenrouterProvider(),
+              outcomes: [{ provider: PROVIDER_ID, status: "ready" }],
+            };
           }
           const providerConfig = ctx.config.models?.providers?.openrouter;
-          return {
-            provider: await buildOpenrouterLiveProvider({
-              apiKey,
-              discoveryApiKey: auth.discoveryApiKey,
-              baseUrl: providerConfig?.baseUrl,
-              request: providerConfig?.request,
-            }),
-          };
+          return await buildOpenrouterLiveProviderCatalog({
+            apiKey,
+            discoveryApiKey: auth.discoveryApiKey,
+            profileId: auth.profileId,
+            baseUrl: providerConfig?.baseUrl,
+            request: providerConfig?.request,
+          });
         },
         staticRun: async () => ({
           provider: buildOpenrouterProvider(),

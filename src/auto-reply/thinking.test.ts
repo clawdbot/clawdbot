@@ -657,6 +657,70 @@ describe("listThinkingLevels", () => {
     ).toBe(true);
   });
 
+  it("honors a discovered thinking map before a provider runtime is active", () => {
+    const catalog = [
+      {
+        provider: "omniroute",
+        id: "deepseekv4flash-equivalent",
+        reasoning: true,
+        thinkingLevelMap: {
+          off: "none",
+          minimal: null,
+          low: "low",
+          medium: "medium",
+          high: "high",
+          xhigh: "xhigh",
+          max: null,
+        },
+        compat: {
+          supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
+        },
+      },
+    ];
+
+    expect(listThinkingLevels("omniroute", "deepseekv4flash-equivalent", catalog)).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
+  it("derives OpenClaw Ultra and a supported default from a map-only Max", () => {
+    const catalog = [
+      {
+        provider: "omniroute",
+        id: "mapped-max",
+        reasoning: true,
+        thinkingLevelMap: {
+          off: "none",
+          minimal: null,
+          low: null,
+          medium: null,
+          high: "high",
+          xhigh: null,
+          max: "max",
+        },
+      },
+    ];
+
+    expect(listThinkingLevels("omniroute", "mapped-max", catalog, "openclaw")).toEqual([
+      "off",
+      "high",
+      "max",
+      "ultra",
+    ]);
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "omniroute",
+        model: "mapped-max",
+        catalog,
+        agentRuntime: "openclaw",
+      }),
+    ).toBe("high");
+  });
+
   it("uses advanced catalog efforts and derives OpenClaw Ultra from Max", () => {
     const catalog = [
       {

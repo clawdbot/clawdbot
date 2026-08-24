@@ -15,10 +15,13 @@ import {
   type PreparedProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-import { resolveAgentEntry } from "./agent-scope-config.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { listAgentIds, resolveAgentEntry } from "./agent-scope-config.js";
 import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
 import type { StaticModelIdMatcher } from "./embedded-agent-runner/model.static-id.js";
+import { canonicalizePreparedModelRuntimeDiscoveryProvider } from "./model-catalog-provider-alias.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
+import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 import { resolveEffectiveAgentRuntime } from "./thinking-runtime.js";
 
@@ -53,6 +56,80 @@ export function collectPreparedModelRuntimeConfiguredRefs(
   });
 }
 
+function collectProviderIdsFromConfiguredRefs(
+  configuredModelRefs: readonly ConfiguredModelRef[],
+): Set<string> {
+  const providerIds = new Set<string>();
+  for (const { value } of configuredModelRefs) {
+    const separator = value.indexOf("/");
+    if (separator > 0) {
+      providerIds.add(normalizeProviderId(value.slice(0, separator)));
+    }
+  }
+  providerIds.delete("");
+  return providerIds;
+}
+
+export function collectPreparedModelRuntimeDiscoveryProviderIds(
+  config: OpenClawConfig,
+  metadataSnapshot: Pick<PluginMetadataSnapshot, "manifestRegistry" | "plugins">,
+  agentId?: string,
+): string[] {
+  const canonicalizeProvider = (provider: string) =>
+    canonicalizePreparedModelRuntimeDiscoveryProvider(provider, metadataSnapshot);
+  const runtimeProviders = new Set(
+    metadataSnapshot.plugins.flatMap((plugin) =>
+      Object.entries(plugin.modelCatalog?.discovery ?? {}).flatMap(([provider, discovery]) =>
+        discovery === "runtime" ? [canonicalizeProvider(provider)] : [],
+      ),
+    ),
+  );
+  const collectReferencedProviders = (ownerAgentId?: string) => {
+    const visibility = parseConfiguredModelVisibilityEntries({
+      cfg: config,
+      agentId: ownerAgentId,
+    });
+    const providerIds = new Set(
+      [
+        ...collectProviderIdsFromConfiguredRefs([
+          ...collectPreparedModelRuntimeConfiguredRefs(config, ownerAgentId),
+          ...visibility.exactModelRefs.map((value, index) => ({
+            path: `modelPolicy.allow.${index}`,
+            value,
+          })),
+        ]),
+      ].map(canonicalizeProvider),
+    );
+    for (const providerId of visibility.providerWildcards) {
+      providerIds.add(canonicalizeProvider(providerId));
+    }
+    return { providerIds, hasVisibilityEntries: visibility.hasEntries };
+  };
+  const selected = collectReferencedProviders(agentId);
+  const configuredProviders = new Set(selected.providerIds);
+  if (!selected.hasVisibilityEntries) {
+    for (const providerId of Object.keys(config.models?.providers ?? {})) {
+      configuredProviders.add(canonicalizeProvider(providerId));
+    }
+    const selectedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
+    for (const otherAgentId of listAgentIds(config)) {
+      if (otherAgentId === selectedAgentId) {
+        continue;
+      }
+      for (const providerId of collectReferencedProviders(otherAgentId).providerIds) {
+        if (!selected.providerIds.has(providerId)) {
+          configuredProviders.delete(providerId);
+        }
+      }
+    }
+  }
+  // An unassigned provider is global for allow-any owners; an agent reference reserves it.
+  // Without this split, one owner can contact and publish another owner's runtime catalog.
+  return [...configuredProviders]
+    .filter((providerId) => providerId && runtimeProviders.has(providerId))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function isCatalogModelApi(
   value: string | undefined,
 ): value is NonNullable<ModelCatalogEntry["api"]> {
@@ -75,6 +152,7 @@ export function toStaticCatalogEntry(model: ProviderRuntimeModel): ModelCatalogE
     ...(model.contextWindowDefault ? { contextWindowDefault: model.contextWindowDefault } : {}),
     ...(model.contextTokens ? { contextTokens: model.contextTokens } : {}),
     ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
     ...(model.input ? { input: model.input } : {}),
     ...(model.params ? { params: model.params } : {}),
     ...(model.compat ? { compat: model.compat } : {}),
@@ -88,7 +166,7 @@ export function collectPreparedModelRuntimeProviderIds(
   includeCredentialProviders: boolean,
   configuredModelRefs: readonly ConfiguredModelRef[] = collectConfiguredModelRefs(config),
 ): string[] {
-  const providerIds = new Set<string>();
+  const providerIds = collectProviderIdsFromConfiguredRefs(configuredModelRefs);
   const addProviderId = (value: string) => {
     const providerId = normalizeProviderId(value);
     if (providerId) {
@@ -102,12 +180,6 @@ export function collectPreparedModelRuntimeProviderIds(
   }
   for (const providerId of Object.keys(config.models?.providers ?? {})) {
     addProviderId(providerId);
-  }
-  for (const ref of configuredModelRefs) {
-    const separator = ref.value.indexOf("/");
-    if (separator > 0) {
-      addProviderId(ref.value.slice(0, separator));
-    }
   }
   return [...providerIds].toSorted((left, right) => left.localeCompare(right));
 }

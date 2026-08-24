@@ -2,7 +2,7 @@
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  buildLiveModelProviderConfig,
+  buildLiveModelProviderCatalog,
   fetchLiveProviderModelIds,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -199,6 +199,7 @@ const OPENCODE_GO_MODELS = OPENCODE_GO_RESOLVABLE_MODELS.filter(
 type FetchOpencodeGoLiveModelIdsParams = {
   apiKey?: string;
   discoveryApiKey?: string;
+  profileId?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 };
@@ -231,10 +232,10 @@ export async function resolveOpencodeGoStarterModel(params: {
   return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
 }
 
-export async function buildOpencodeGoLiveProviderConfig(
+export async function buildOpencodeGoLiveProviderCatalog(
   params: FetchOpencodeGoLiveModelIdsParams = {},
-): Promise<ModelProviderConfig> {
-  return await buildLiveModelProviderConfig({
+) {
+  return await buildLiveModelProviderCatalog({
     providerId: PROVIDER_ID,
     endpoint: OPENCODE_GO_MODELS_ENDPOINT,
     providerConfig: {
@@ -244,6 +245,7 @@ export async function buildOpencodeGoLiveProviderConfig(
     models: OPENCODE_GO_MODELS,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
+    profileId: params.profileId,
     fetchGuard: params.fetchGuard,
     signal: params.signal,
     timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,

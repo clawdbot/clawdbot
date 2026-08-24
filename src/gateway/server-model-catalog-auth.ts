@@ -7,6 +7,7 @@ import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.j
 export type PreparedGatewayModelCatalogSnapshot = GatewayModelCatalogSnapshot &
   Pick<ResolvedPublishedModelCatalogOwner, "authModes" | "authStore" | "metadataSnapshot"> & {
     authMaterializations: readonly RuntimeAuthMaterialization[];
+    runtimeDiscoveryPending?: boolean;
   };
 
 type GatewayModelCatalogReadParams = {

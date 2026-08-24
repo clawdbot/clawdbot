@@ -3,7 +3,7 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildOpenrouterLiveProvider, buildOpenrouterProvider } from "./provider-catalog.js";
+import { buildOpenrouterLiveProviderCatalog, buildOpenrouterProvider } from "./provider-catalog.js";
 
 describe("OpenRouter provider catalog", () => {
   beforeEach(() => {
@@ -53,11 +53,13 @@ describe("OpenRouter provider catalog", () => {
       release,
     }));
 
-    const provider = await buildOpenrouterLiveProvider({
-      apiKey: "OPENROUTER_API_KEY",
-      discoveryApiKey: "resolved-openrouter-key",
-      fetchGuard,
-    });
+    const provider = (
+      await buildOpenrouterLiveProviderCatalog({
+        apiKey: "OPENROUTER_API_KEY",
+        discoveryApiKey: "resolved-openrouter-key",
+        fetchGuard,
+      })
+    ).provider;
 
     expect(provider.apiKey).toBe("OPENROUTER_API_KEY");
     expect(provider.models.map((model) => model.id)).toEqual(
@@ -89,15 +91,17 @@ describe("OpenRouter provider catalog", () => {
       release: async () => undefined,
     }));
 
-    const provider = await buildOpenrouterLiveProvider({
-      apiKey: "OPENROUTER_API_KEY",
-      discoveryApiKey: "synthetic-private-proxy-key",
-      baseUrl: "https://private.example.invalid/router/v1///",
-      request: {
-        headers: { "X-Private-Proxy-Tenant": "synthetic-tenant" },
-      },
-      fetchGuard,
-    });
+    const provider = (
+      await buildOpenrouterLiveProviderCatalog({
+        apiKey: "OPENROUTER_API_KEY",
+        discoveryApiKey: "synthetic-private-proxy-key",
+        baseUrl: "https://private.example.invalid/router/v1///",
+        request: {
+          headers: { "X-Private-Proxy-Tenant": "synthetic-tenant" },
+        },
+        fetchGuard,
+      })
+    ).provider;
 
     const request = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(request?.url).toBe("https://private.example.invalid/router/v1/models");
@@ -119,11 +123,13 @@ describe("OpenRouter provider catalog", () => {
         release: async () => undefined,
       }));
 
-      const provider = await buildOpenrouterLiveProvider({
-        apiKey: "synthetic-official-key",
-        baseUrl,
-        fetchGuard,
-      });
+      const provider = (
+        await buildOpenrouterLiveProviderCatalog({
+          apiKey: "synthetic-official-key",
+          baseUrl,
+          fetchGuard,
+        })
+      ).provider;
 
       expect(provider.baseUrl).toBe("https://openrouter.ai/api/v1");
       expect(vi.mocked(fetchGuard).mock.calls[0]?.[0].url).toBe(
@@ -142,7 +148,7 @@ describe("OpenRouter provider catalog", () => {
     const fetchGuard = vi.fn() as unknown as LiveModelCatalogFetchGuard;
 
     await expect(
-      buildOpenrouterLiveProvider({ apiKey: "synthetic-private-key", baseUrl, fetchGuard }),
+      buildOpenrouterLiveProviderCatalog({ apiKey: "synthetic-private-key", baseUrl, fetchGuard }),
     ).rejects.toThrow("Invalid OpenRouter API base URL");
     expect(fetchGuard).not.toHaveBeenCalled();
   });
@@ -154,7 +160,7 @@ describe("OpenRouter provider catalog", () => {
       release: async () => undefined,
     }));
 
-    await buildOpenrouterLiveProvider({
+    await buildOpenrouterLiveProviderCatalog({
       apiKey: "OPENROUTER_API_KEY",
       baseUrl: "https://private.example.invalid/v1",
       fetchGuard,
@@ -175,22 +181,22 @@ describe("OpenRouter provider catalog", () => {
     const tenantA = { headers: { "X-Private-Proxy-Tenant": "tenant-a" } };
     const tenantB = { headers: { "X-Private-Proxy-Tenant": "tenant-b" } };
 
-    await buildOpenrouterLiveProvider({
+    await buildOpenrouterLiveProviderCatalog({
       ...base,
       baseUrl: "https://first.invalid/v1",
       request: tenantA,
     });
-    await buildOpenrouterLiveProvider({
+    await buildOpenrouterLiveProviderCatalog({
       ...base,
       baseUrl: "https://first.invalid/v1",
       request: tenantB,
     });
-    await buildOpenrouterLiveProvider({
+    await buildOpenrouterLiveProviderCatalog({
       ...base,
       baseUrl: "https://second.invalid/v1",
       request: tenantA,
     });
-    await buildOpenrouterLiveProvider({
+    await buildOpenrouterLiveProviderCatalog({
       ...base,
       baseUrl: "https://first.invalid/v1",
       request: tenantA,
@@ -211,7 +217,7 @@ describe("OpenRouter provider catalog", () => {
       release: async () => undefined,
     }));
 
-    await buildOpenrouterLiveProvider({
+    await buildOpenrouterLiveProviderCatalog({
       apiKey: "synthetic-original-key",
       baseUrl: "https://private.example.invalid/router/v1",
       request: {
@@ -243,11 +249,13 @@ describe("OpenRouter provider catalog", () => {
       release: async () => undefined,
     }));
 
-    const provider = await buildOpenrouterLiveProvider({
-      apiKey: "synthetic-private-key",
-      baseUrl: "https://private.example.invalid/v1",
-      fetchGuard,
-    });
+    const provider = (
+      await buildOpenrouterLiveProviderCatalog({
+        apiKey: "synthetic-private-key",
+        baseUrl: "https://private.example.invalid/v1",
+        fetchGuard,
+      })
+    ).provider;
 
     expect(fetchGuard).toHaveBeenCalledOnce();
     expect(provider.models).toEqual(buildOpenrouterProvider().models);
@@ -268,7 +276,7 @@ describe("OpenRouter provider catalog", () => {
       };
     });
 
-    await buildOpenrouterLiveProvider({
+    await buildOpenrouterLiveProviderCatalog({
       apiKey: "synthetic-private-key",
       baseUrl: "https://private.example.invalid/v1",
       request: { headers: { "X-Private-Proxy-Tenant": "synthetic-secret-tenant" } },
@@ -285,7 +293,7 @@ describe("OpenRouter provider catalog", () => {
     const fetchGuard = vi.fn() as unknown as LiveModelCatalogFetchGuard;
 
     await expect(
-      buildOpenrouterLiveProvider({
+      buildOpenrouterLiveProviderCatalog({
         apiKey: "synthetic-private-key",
         baseUrl: "https://private.example.invalid/v1",
         request: {
@@ -317,12 +325,12 @@ describe("OpenRouter provider catalog", () => {
       release: async () => undefined,
     }));
 
-    await buildOpenrouterLiveProvider({
+    await buildOpenrouterLiveProviderCatalog({
       apiKey: "runtime-a",
       discoveryApiKey: "discovery-a",
       fetchGuard,
     });
-    await buildOpenrouterLiveProvider({
+    await buildOpenrouterLiveProviderCatalog({
       apiKey: "runtime-b",
       discoveryApiKey: "discovery-a",
       fetchGuard,
@@ -331,11 +339,12 @@ describe("OpenRouter provider catalog", () => {
 
     clearLiveCatalogCacheForTests();
     vi.mocked(fetchGuard).mockRejectedValueOnce(new Error("network unavailable"));
-    const fallback = await buildOpenrouterLiveProvider({
+    const fallback = await buildOpenrouterLiveProviderCatalog({
       apiKey: "runtime-a",
       discoveryApiKey: "discovery-a",
       fetchGuard,
     });
-    expect(fallback.models).toEqual(buildOpenrouterProvider().models);
+    expect(fallback.provider.models).toEqual(buildOpenrouterProvider().models);
+    expect(fallback.outcomes).toEqual([{ provider: "openrouter", status: "unavailable" }]);
   });
 });

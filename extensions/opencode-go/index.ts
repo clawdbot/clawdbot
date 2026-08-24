@@ -5,7 +5,7 @@ import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-prov
 import { OPENCODE_GO_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
-  buildOpencodeGoLiveProviderConfig,
+  buildOpencodeGoLiveProviderCatalog,
   buildStaticOpencodeGoProviderConfig,
   listOpencodeGoModelCatalogEntries,
   normalizeOpencodeGoBaseUrl,
@@ -17,7 +17,7 @@ import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
-type OpencodeGoCatalogAuth = { apiKey?: string; discoveryApiKey?: string };
+type OpencodeGoCatalogAuth = { apiKey?: string; discoveryApiKey?: string; profileId?: string };
 
 function resolveOpencodeGoCatalogAuth(
   resolveProviderApiKey: (providerId: string) => OpencodeGoCatalogAuth,
@@ -97,19 +97,22 @@ export default defineSingleProviderPluginEntry({
       run: async (ctx) => {
         const auth = resolveOpencodeGoCatalogAuth(ctx.resolveProviderApiKey);
         if (!auth) {
-          return null;
+          return {
+            provider: buildStaticOpencodeGoProviderConfig(),
+            outcomes: [{ provider: PROVIDER_ID, status: "ready" }],
+          };
         }
         if (!auth.discoveryApiKey) {
           return {
             provider: buildStaticOpencodeGoProviderConfig(auth.apiKey),
+            outcomes: [{ provider: PROVIDER_ID, status: "ready" }],
           };
         }
-        return {
-          provider: await buildOpencodeGoLiveProviderConfig({
-            apiKey: auth.apiKey ?? auth.discoveryApiKey,
-            discoveryApiKey: auth.discoveryApiKey,
-          }),
-        };
+        return await buildOpencodeGoLiveProviderCatalog({
+          apiKey: auth.apiKey ?? auth.discoveryApiKey,
+          discoveryApiKey: auth.discoveryApiKey,
+          profileId: auth.profileId,
+        });
       },
     },
     augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),

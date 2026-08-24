@@ -7,10 +7,18 @@ const streamFns = vi.hoisted(() => ({
   createGenerativeAi: vi.fn(() => vi.fn()),
   createVertex: vi.fn(() => vi.fn()),
 }));
+const catalogFns = vi.hoisted(() => ({
+  buildLive: vi.fn(),
+}));
 
 vi.mock("./transport-stream.js", () => ({
   createGoogleGenerativeAiTransportStreamFn: streamFns.createGenerativeAi,
   createGoogleVertexTransportStreamFn: streamFns.createVertex,
+}));
+
+vi.mock("./provider-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./provider-catalog.js")>()),
+  buildGoogleLiveProviderCatalog: catalogFns.buildLive,
 }));
 
 function model(overrides: Partial<Model> = {}): Model {
@@ -107,5 +115,28 @@ describe("buildGoogleProvider createStreamFn", () => {
       } as never);
       expect(normalized?.input).toEqual(["text", "image"]);
     }
+  });
+});
+
+describe("buildGoogleProvider catalog", () => {
+  it("does not contact AI Studio and terminates every selected alias without Google", async () => {
+    const resolveProviderApiKey = vi.fn(() => ({ apiKey: "google-key" }));
+    const result = await buildGoogleProvider().catalog?.run({
+      providerIds: ["google-vertex", "google-antigravity"],
+      config: {},
+      env: {},
+      resolveProviderApiKey,
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
+
+    expect(resolveProviderApiKey).not.toHaveBeenCalled();
+    expect(catalogFns.buildLive).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      providers: { "google-vertex": expect.any(Object) },
+      outcomes: [
+        { provider: "google-vertex", status: "ready" },
+        { provider: "google-antigravity", status: "ready" },
+      ],
+    });
   });
 });

@@ -65,6 +65,7 @@ describe("prepared model catalog worker input", () => {
         index: {} as never,
         plugins: [],
       } as unknown as PluginMetadataSnapshot,
+      providerDiscoveryProviderIds: ["OmniRoute", "omniroute"],
     });
 
     const cloned = structuredClone(workerInput);
@@ -84,6 +85,7 @@ describe("prepared model catalog worker input", () => {
     expect(cloned.input.runtimePluginSelections).toEqual([
       { provider: "selected", modelId: "model" },
     ]);
+    expect(cloned.providerDiscoveryProviderIds).toEqual(["omniroute"]);
     expect(cloned.input).not.toHaveProperty("loadRuntimePlugins");
   });
 });

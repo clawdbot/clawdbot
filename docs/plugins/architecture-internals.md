@@ -812,6 +812,10 @@ Provider plugins can define model catalogs for inference with
 - `{ provider }` for one provider entry
 - `{ providers }` for multiple provider entries
 
+When `ctx.providerIds` is present, the caller requested only those identities
+owned by this hook. OpenClaw narrows the agent-wide scope before invocation;
+paired or family hooks must apply the hook-local scope before live endpoint calls.
+
 Use `catalog` when the plugin owns provider-specific model ids, base URL
 defaults, or auth-gated model metadata.
 
