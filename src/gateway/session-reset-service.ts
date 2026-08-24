@@ -1318,9 +1318,8 @@ export async function performGatewaySessionReset(params: {
       await triggerInternalHook(hookEvent);
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
-      // Cleanup below is destructive. Once it starts, finish rotating the same
-      // session even if gateway ownership changes; otherwise runtime state can be
-      // reset while the persisted session still points at the old conversation.
+      // Cleanup can fail before rotation when continuation cancellation cannot persist.
+      // Once cleanup succeeds, finish rotating this session even if ownership changes.
       const runtimeCleanupError = await ensureSessionRuntimeCleanup({
         cfg,
         key: params.key,
