@@ -670,7 +670,14 @@ describe("chat pane keyboard shortcuts", () => {
     ]);
     expect(state.sidebarContent).toBe(canvasContent);
 
-    const collapseEvent = dispatchSidebarShortcut(pane);
+    const collapseEvent = new KeyboardEvent("keydown", {
+      cancelable: true,
+      key: "b",
+      code: "KeyB",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    pane.handleDocumentKeydown(collapseEvent);
 
     expect(collapseEvent.defaultPrevented).toBe(true);
     expect(hasWorkspace()).toBe(false);

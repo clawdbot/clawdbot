@@ -84,7 +84,7 @@ describe("AppSidebar session mutation feedback", () => {
     if (!link) {
       throw new Error(`expected row link for ${key}`);
     }
-    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true }));
   }
 
   async function mountToastHost() {

@@ -103,6 +103,7 @@ export type ChatItem =
       icon?: keyof typeof toolIcons;
       label?: string;
       startsTurn?: true;
+      boundaryId?: string;
       tone?: "danger";
     }
   | {

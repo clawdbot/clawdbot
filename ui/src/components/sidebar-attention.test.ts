@@ -2,16 +2,24 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { CronJob, CronJobsListResult, ModelAuthStatusResult } from "../api/types.ts";
+import type {
+  CronJob,
+  CronJobsListResult,
+  ModelAuthStatusResult,
+  UpdateScheduleState,
+} from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   addDismissal,
+  dismissUpdateAttention,
   dismissalStoreKey,
+  isUpdateAttentionDismissed,
   loadDismissals,
   pruneDismissals,
+  resolveUpdateAttentionDismissal,
   type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
 import { buildSidebarAttentionItems } from "./sidebar-attention-items.ts";
@@ -57,6 +65,9 @@ type SidebarAttentionElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   cronJobs: CronJob[];
   hasUpdateSurface(): boolean;
+  updateSurfaceVisible(): boolean;
+  dismissUpdateSurface(): void;
+  startUpdate(): void;
   modelAuthStatus: ModelAuthStatusResult | null;
   loadedAtMs: number;
 };
@@ -409,7 +420,7 @@ describe("sidebar attention refresh ownership", () => {
     switchedAuth.resolve({ ts: 3, providers: [] });
   });
 
-  it("clears a stale failure alert when the gateway reports an automation change", async () => {
+  it("opens top-mounted attention downward and clears stale live automation alerts", async () => {
     const responses = {
       "cron.list": [cronListResponse([cronJob("failed")]), cronListResponse([])],
       "models.authStatus": [{ ts: 1, providers: [] }],
@@ -467,10 +478,26 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() =>
       expect(element.querySelector<HTMLButtonElement>(".sidebar-issues-button")).not.toBeNull(),
     );
-    element.querySelector<HTMLButtonElement>(".sidebar-issues-button")?.click();
+    const trigger = element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!;
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+      x: 20,
+      y: 10,
+      left: 20,
+      top: 10,
+      right: 52,
+      bottom: 42,
+      width: 32,
+      height: 32,
+      toJSON: () => ({}),
+    });
+    trigger.click();
     await waitForFast(() =>
       expect(element.querySelector('[data-attention-kind="cronFailed"]')).not.toBeNull(),
     );
+    const panel = element.querySelector<HTMLElement>(".sidebar-issues-panel")!;
+    expect(panel.style.top).toBe("50px");
+    expect(panel.style.bottom).toBe("");
+    expect(panel.style.getPropertyValue("--sidebar-issues-panel-top")).toBe("50px");
 
     eventListener?.({ type: "event", event: "cron", payload: {} });
     await waitForFast(() =>
@@ -526,10 +553,173 @@ describe("update attention", () => {
     overlaySnapshot.updateCampaignStatusHydrated = true;
     expect(element.hasUpdateSurface()).toBe(true);
   });
+
+  it("keeps restart reconciliation visible after update metadata clears", () => {
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    element.context = {
+      gateway: { snapshot: { phase: "connected" } },
+      overlays: {
+        snapshot: {
+          updateAvailable: null,
+          updateSchedule: null,
+          updateRunning: false,
+          updateReconciliationPending: true,
+          updateStatusBanner: null,
+        },
+      },
+    } as unknown as ApplicationContext;
+
+    expect(element.hasUpdateSurface()).toBe(true);
+  });
+
+  it("dismisses one target for one Gateway boot and resurfaces on either change", () => {
+    vi.stubGlobal("localStorage", createTestStorageMock());
+    const overlaySnapshot = {
+      updateAvailable: {
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.2",
+        channel: "latest",
+      },
+      updateSchedule: {
+        channel: "stable",
+        autoEnabled: false,
+        target: { kind: "package" as const, version: "2026.8.2" },
+      },
+      updateCampaignStatusHydrated: true,
+      updateReconciliationPending: false,
+      updateRunning: false,
+      updateStatusBanner: null,
+    };
+    const gatewaySnapshot = {
+      client: {} as GatewayBrowserClient,
+      phase: "connected" as const,
+      hello: {
+        server: { bootId: "boot-a" },
+        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+        features: { methods: ["update.run"] },
+      },
+    };
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    element.context = {
+      gateway: {
+        connection: { gatewayUrl: "ws://gateway.test" },
+        snapshot: gatewaySnapshot,
+      },
+      overlays: { snapshot: overlaySnapshot },
+    } as unknown as ApplicationContext;
+    (element as unknown as { dismissedScope: string }).dismissedScope = "ws://gateway.test";
+
+    expect(element.updateSurfaceVisible()).toBe(true);
+    element.dismissUpdateSurface();
+    expect(element.updateSurfaceVisible()).toBe(false);
+    expect(loadDismissals("ws://gateway.test").updateAvailable).toEqual({
+      version: "2026.8.2",
+      gatewayBootId: "boot-a",
+    });
+
+    overlaySnapshot.updateSchedule.target.version = "2026.8.3";
+    expect(element.updateSurfaceVisible()).toBe(true);
+    overlaySnapshot.updateSchedule.target.version = "2026.8.2";
+    gatewaySnapshot.hello.server.bootId = "boot-b";
+    expect(element.updateSurfaceVisible()).toBe(true);
+  });
+
+  it("forces a dismissed update back for warning and failure outcomes", () => {
+    vi.stubGlobal("localStorage", createTestStorageMock());
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    const overlaySnapshot = {
+      updateAvailable: {
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.2",
+        channel: "latest",
+      },
+      updateSchedule: null as UpdateScheduleState | null,
+      updateCampaignStatusHydrated: true,
+      updateReconciliationPending: false,
+      updateRunning: false,
+      updateStatusBanner: null as null | { tone: "warn" | "danger"; text: string },
+    };
+    element.context = {
+      gateway: {
+        connection: { gatewayUrl: "ws://gateway.test" },
+        snapshot: {
+          client: {} as GatewayBrowserClient,
+          phase: "connected",
+          hello: {
+            server: { bootId: "boot-a" },
+            auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+            features: { methods: ["update.run"] },
+          },
+        },
+      },
+      overlays: { snapshot: overlaySnapshot },
+    } as unknown as ApplicationContext;
+    (element as unknown as { dismissedScope: string }).dismissedScope = "ws://gateway.test";
+    element.dismissUpdateSurface();
+    expect(element.updateSurfaceVisible()).toBe(false);
+
+    overlaySnapshot.updateStatusBanner = { tone: "warn", text: "Update blocked" };
+    expect(element.updateSurfaceVisible()).toBe(true);
+    overlaySnapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
+    expect(element.updateSurfaceVisible()).toBe(true);
+
+    overlaySnapshot.updateStatusBanner = null;
+    overlaySnapshot.updateRunning = true;
+    expect(element.updateSurfaceVisible()).toBe(true);
+    overlaySnapshot.updateRunning = false;
+    overlaySnapshot.updateReconciliationPending = true;
+    expect(element.updateSurfaceVisible()).toBe(true);
+    overlaySnapshot.updateReconciliationPending = false;
+    overlaySnapshot.updateSchedule = {
+      channel: "stable",
+      autoEnabled: true,
+      target: { kind: "package", version: "2026.8.2" },
+      campaign: {
+        id: "campaign-applying",
+        state: "applying",
+        announcedAtMs: 1,
+        forceAtMs: 2,
+        updatedAtMs: 2,
+      },
+    };
+    expect(element.updateSurfaceVisible()).toBe(true);
+  });
+
+  it("does not start an update when a failure has no actionable target", () => {
+    const runUpdate = vi.fn();
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    element.context = {
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["update.run"] },
+          },
+        },
+      },
+      overlays: {
+        runUpdate,
+        snapshot: {
+          updateAvailable: null,
+          updateSchedule: null,
+          updateRunning: false,
+          updateStatusBanner: { tone: "danger", text: "Update failed" },
+        },
+      },
+    } as unknown as ApplicationContext;
+
+    element.startUpdate();
+
+    expect(runUpdate).not.toHaveBeenCalled();
+  });
 });
 
 describe("pruneDismissals", () => {
-  const chip = (kind: SidebarAttentionKind, signature: string) => ({ kind, signature });
+  const chip = (kind: SidebarAttentionKind, signature: string) => ({
+    kind,
+    signature,
+  });
 
   it("keeps a dismissal while the same entity set is still affected", () => {
     const dismissals = { cronFailed: ["alpha", "beta"] };
@@ -589,5 +779,57 @@ describe("addDismissal", () => {
     );
 
     expect(loadDismissals(gatewayUrl)).toEqual({ cronFailed: ["legacy-signature"] });
+  });
+});
+
+describe("update dismissal fact", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the canonical package target and persists the literal boot binding", () => {
+    vi.stubGlobal("localStorage", createTestStorageMock());
+    const dismissal = resolveUpdateAttentionDismissal({
+      gatewayBootId: "boot-a",
+      updateAvailable: {
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.2",
+        channel: "latest",
+      },
+      updateSchedule: {
+        channel: "stable",
+        autoEnabled: false,
+        target: { kind: "package", version: "2026.8.3" },
+      },
+    });
+    expect(dismissal).toEqual({ version: "2026.8.3", gatewayBootId: "boot-a" });
+    const stored = dismissUpdateAttention("ws://gateway.test", dismissal!);
+    expect(isUpdateAttentionDismissed(stored, dismissal)).toBe(true);
+    expect(
+      JSON.parse(localStorage.getItem(dismissalStoreKey("ws://gateway.test")) ?? "null"),
+    ).toEqual({ updateAvailable: { version: "2026.8.3", gatewayBootId: "boot-a" } });
+  });
+
+  it("uses the git target SHA instead of an unchanged package version", () => {
+    expect(
+      resolveUpdateAttentionDismissal({
+        gatewayBootId: "boot-a",
+        updateAvailable: {
+          currentVersion: "2026.8.1",
+          latestVersion: "2026.8.1",
+          channel: "dev",
+        },
+        updateSchedule: {
+          channel: "dev",
+          autoEnabled: true,
+          target: {
+            kind: "git",
+            upstreamRef: "origin/main",
+            upstreamSha: "abcdef1234567890",
+            commitsBehind: 2,
+          },
+        },
+      }),
+    ).toEqual({ version: "abcdef1234567890", gatewayBootId: "boot-a" });
   });
 });

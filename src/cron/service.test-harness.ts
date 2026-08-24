@@ -252,6 +252,7 @@ export function createMockCronStateForJobs(params: {
     running: false,
     activeTimerTicks: 0,
     stopped: false,
+    lifecycleGeneration: 0,
     schedulingPaused: false,
     schedulerStarted: false,
     activeManualRunJobIds: new Set<string>(),

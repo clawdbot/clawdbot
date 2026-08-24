@@ -3,6 +3,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
+import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
 import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
@@ -56,6 +57,7 @@ type CodeModeRunState = {
 
 const MAX_ACTIVE_CODE_MODE_RUNS = 64;
 const MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS = 4;
+const BRIDGE_CLOSED_MESSAGE = "Code Mode tool canceled, expired, or owner lost; start a new run.";
 
 export const activeRuns = new Map<string, CodeModeRunState>();
 export const resumingRunIds = new Set<string>();
@@ -158,16 +160,8 @@ export function cancelPendingBridgeStatesById(
     return;
   }
   const canceled = new Set(canceledRequestIds);
-  const retained = pending.filter((entry) => {
-    if (!canceled.has(entry.id)) {
-      return true;
-    }
-    if (!entry.settled) {
-      entry.cancel?.();
-    }
-    return false;
-  });
-  pending.splice(0, pending.length, ...retained);
+  cancelPendingBridgeStates(pending.filter((entry) => canceled.has(entry.id)));
+  pending.splice(0, pending.length, ...pending.filter((entry) => !canceled.has(entry.id)));
 }
 
 /** Deliver bridge responses in actual settlement order, not request order. */
@@ -351,9 +345,13 @@ export function createPendingBridgeStates(params: {
     // Bridge calls start immediately while the VM snapshot is stored. Their
     // settled values are later replayed into QuickJS by the wait tool.
     const abortController = new AbortController();
-    const signal = params.signal
-      ? AbortSignal.any([params.signal, abortController.signal])
-      : abortController.signal;
+    const signal = AbortSignal.any(
+      [params.signal, params.ctx.abortSignal, abortController.signal].filter(
+        (candidate): candidate is AbortSignal => candidate !== undefined,
+      ),
+    );
+    const target = params.catalogProjection.byCallableName.get(String(request.args[0]));
+    const yieldRunSignal = target?.name === "sessions_yield" ? params.ctx.abortSignal : undefined;
     const tracksDispatch = request.method !== "sleep";
     if (tracksDispatch) {
       params.bridgeDispatch.started = true;
@@ -362,21 +360,29 @@ export function createPendingBridgeStates(params: {
         params.bridgeDispatch.repairProvenance = "invalid";
       }
     }
+    const bridgeCall = runBridgeRequest({
+      runtime: params.runtime,
+      catalogProjection: params.catalogProjection,
+      namespaceRuntime: params.namespaceRuntime,
+      parentToolCallId: params.parentToolCallId,
+      codeModeRunId: params.codeModeRunId,
+      maxOutputBytes: params.config.maxOutputBytes,
+      remainingMs: Math.max(1, params.deadlineMs - Date.now()),
+      ctx: params.ctx,
+      request,
+      signal,
+      onUpdate: params.onUpdate,
+    });
+    const completion = raceWithAbortSignal(bridgeCall, signal, yieldRunSignal).catch(
+      (): SettledBridgeRequest => ({
+        id: request.id,
+        ok: false,
+        error: signal.reason instanceof Error ? signal.reason.message : BRIDGE_CLOSED_MESSAGE,
+      }),
+    );
     const state: PendingBridgeState = {
       ...request,
-      promise: runBridgeRequest({
-        runtime: params.runtime,
-        catalogProjection: params.catalogProjection,
-        namespaceRuntime: params.namespaceRuntime,
-        parentToolCallId: params.parentToolCallId,
-        codeModeRunId: params.codeModeRunId,
-        maxOutputBytes: params.config.maxOutputBytes,
-        remainingMs: Math.max(1, params.deadlineMs - Date.now()),
-        ctx: params.ctx,
-        request,
-        signal,
-        onUpdate: params.onUpdate,
-      }).then((settled) => {
+      promise: completion.then((settled) => {
         const trustedNoStart = tracksDispatch && consumeTrustedToolNoStartError(settled);
         if (tracksDispatch && params.bridgeDispatch.repairProvenance !== "invalid") {
           params.bridgeDispatch.repairProvenance =
@@ -401,7 +407,7 @@ export function createPendingBridgeStates(params: {
         }
         return settled;
       }),
-      cancel: () => abortController.abort(),
+      cancel: () => abortController.abort(new Error(BRIDGE_CLOSED_MESSAGE)),
     };
     return state;
   });

@@ -1299,10 +1299,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it.each([
-    [430, 720],
-    [1366, 900],
-  ] as const)("keeps activity disclosures compact at %sx%s", async (width, height) => {
-    const page = await openBrowserPage(width, height);
+    { label: "narrow desktop", width: 430, height: 720, hasTouch: false },
+    { label: "desktop", width: 1366, height: 900, hasTouch: false },
+    { label: "mobile touch", width: 430, height: 720, hasTouch: true },
+  ])("keeps activity disclosures compact on $label", async ({ width, height, hasTouch }) => {
+    const page = await openBrowserPage(width, height, { hasTouch, isolated: true });
     try {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${activityAlignmentHtml()}</body></html>`,
@@ -1320,21 +1321,39 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const activity = document.querySelector<HTMLElement>(".chat-activity-group__summary")!;
         const label = activity.querySelector<HTMLElement>(".chat-activity-group__label")!;
         const chevron = activity.querySelector<HTMLElement>(".chat-tool-row__chevron")!;
+        const toolRows = [
+          ...document.querySelectorAll<HTMLElement>(
+            ".chat-activity-group__body .chat-tool-msg-summary",
+          ),
+        ];
+        const firstToolStyle = getComputedStyle(toolRows[0]!);
+        const firstToolRect = toolRows[0]!.getBoundingClientRect();
+        const secondToolRect = toolRows[1]!.getBoundingClientRect();
         return {
           activity: getComputedStyle(activity).userSelect,
           activityBackground: getComputedStyle(activity).backgroundColor,
+          activityPaddingBlock: [
+            getComputedStyle(activity).paddingTop,
+            getComputedStyle(activity).paddingBottom,
+          ],
           chevronGap: chevron.getBoundingClientRect().left - label.getBoundingClientRect().right,
-          tool: getComputedStyle(document.querySelector<HTMLElement>(".chat-tool-msg-summary")!)
-            .userSelect,
+          tool: firstToolStyle.userSelect,
+          toolPaddingBlock: [firstToolStyle.paddingTop, firstToolStyle.paddingBottom],
+          toolRowGap: secondToolRect.top - firstToolRect.bottom,
         };
       });
-      expect(styles).toEqual({
+      const { toolRowGap, ...disclosureStyles } = styles;
+      expect(disclosureStyles).toEqual({
         activity: "text",
         activityBackground: "rgba(0, 0, 0, 0)",
+        activityPaddingBlock: hasTouch ? ["8px", "8px"] : ["5px", "5px"],
         // Summary gap (8px) less the chevron's own -3px inset.
         chevronGap: 5,
         tool: "text",
+        toolPaddingBlock: ["3px", "3px"],
       });
+      expect(toolRowGap).toBeGreaterThanOrEqual(0);
+      expect(toolRowGap).toBeLessThanOrEqual(2);
     } finally {
       await closeBrowserPage(page);
     }
@@ -1719,6 +1738,86 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(layout.bubbleBottom - layout.avatarBottom).toBeCloseTo(4, 0);
       expect(layout.footerBottom).toBeLessThanOrEqual(layout.firstBottom + 1);
       expect(layout.secondTop).toBeGreaterThanOrEqual(layout.firstBottom - 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("paints open message context above its virtual row", async () => {
+    const page = await openBrowserPage(900, 500);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread chat-thread--direct" style="width: 720px; height: 400px;">
+            <div class="chat-thread-inner chat-thread-inner--virtual" style="width: 720px;">
+              <div class="chat-virtual-sizer" style="height: 400px;">
+                <div
+                  class="chat-virtual-row"
+                  data-previous-row
+                  style="height: 100px; transform: translateY(0px);"
+                >
+                  <div class="chat-group tool">
+                    <div class="chat-group-messages">Previous transcript row</div>
+                  </div>
+                </div>
+                <div
+                  class="chat-virtual-row"
+                  data-context-row
+                  style="transform: translateY(100px); contain-intrinsic-block-size: auto 28px;"
+                >
+                  <div class="chat-group assistant chat-group--with-footer">
+                    <div class="chat-group-messages"></div>
+                    <div class="chat-group-footer">
+                      <div class="chat-group-footer__meta">
+                        <span class="chat-sender-name">Assistant</span>
+                        <details class="msg-meta" open>
+                          <summary class="msg-meta__summary">
+                            <time class="chat-group-timestamp">just now</time>
+                          </summary>
+                          <span class="msg-meta__details">
+                            <span class="msg-meta__time">Aug 24, 2026, 1:15 PM UTC</span>
+                            <span class="msg-meta__tokens">↑19.6k</span>
+                            <span class="msg-meta__tokens">↓126</span>
+                            <span class="msg-meta__cache">R2.4k</span>
+                            <span class="msg-meta__model">gpt-5.5</span>
+                          </span>
+                        </details>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+      await waitForLayoutSettled(page, "[data-context-row], .msg-meta__details");
+
+      const layout = await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>("[data-context-row]")!;
+        const popover = row.querySelector<HTMLElement>(".msg-meta__details")!;
+        const rowRect = row.getBoundingClientRect();
+        const popoverRect = popover.getBoundingClientRect();
+        const sample = {
+          x: popoverRect.left + Math.min(10, popoverRect.width / 2),
+          y: Math.min(rowRect.top - 1, popoverRect.bottom - 1),
+        };
+        const target = document.elementFromPoint(sample.x, sample.y);
+        return {
+          paintedAboveRow:
+            sample.y >= popoverRect.top &&
+            sample.y < rowRect.top &&
+            target !== null &&
+            popover.contains(target),
+          popoverBottom: popoverRect.bottom,
+          popoverTop: popoverRect.top,
+          rowTop: rowRect.top,
+        };
+      });
+
+      expect(layout.popoverTop).toBeLessThan(layout.rowTop);
+      expect(layout.popoverBottom).toBeGreaterThan(layout.rowTop - 1);
+      expect(layout.paintedAboveRow).toBe(true);
     } finally {
       await closeBrowserPage(page);
     }
@@ -2923,6 +3022,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               display: getComputedStyle(node).display,
             };
           };
+          const paddingFor = (selector: string) => {
+            const node = document.querySelector(selector) as HTMLElement | null;
+            if (!node) {
+              return null;
+            }
+            const style = getComputedStyle(node);
+            return {
+              end: Number.parseFloat(style.paddingInlineEnd),
+              start: Number.parseFloat(style.paddingInlineStart),
+            };
+          };
           return {
             chat: rectFor(".card.chat"),
             shell: rectFor(".agent-chat__composer-shell"),
@@ -2933,10 +3043,12 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             meta: rectFor(".agent-chat__composer-meta"),
             model: rectFor(".chat-composer-model-control"),
             modelTrigger: rectFor(".chat-controls__model-trigger"),
+            modelTriggerPadding: paddingFor(".chat-controls__model-trigger"),
             modelLabel: rectFor(
               ".chat-controls__model-trigger .chat-controls__inline-select-label",
             ),
             effortTrigger: rectFor(".chat-controls__effort-trigger"),
+            effortTriggerPadding: paddingFor(".chat-controls__effort-trigger"),
             effortLabel: rectFor(
               ".chat-controls__effort-trigger .chat-controls__inline-select-label",
             ),
@@ -2964,6 +3076,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           controls.effortTrigger,
           "composer thinking trigger",
         );
+        expect(controls.modelTriggerPadding).not.toBeNull();
+        expect(controls.effortTriggerPadding).not.toBeNull();
         const effortLabel = expectControlRect(controls.effortLabel, "composer thinking label");
         const permission = expectControlRect(controls.permission, "composer permission trigger");
         const permissionLabel = expectControlRect(
@@ -3013,6 +3127,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           .locator(".agent-chat__composer-combobox > textarea")
           .evaluate((textareaNode) => Number.parseFloat(getComputedStyle(textareaNode).fontSize));
         if (width <= 768) {
+          expect(controls.modelTriggerPadding).toEqual({ end: 10, start: 10 });
+          expect(controls.effortTriggerPadding).toEqual({ end: 10, start: 10 });
           expect(composerFontSize).toBe(16);
           expect(model.width).toBeGreaterThanOrEqual(40);
           expect(model.width).toBeLessThanOrEqual(footer.width);
@@ -3034,6 +3150,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           }
           expect(footer.height).toBeLessThanOrEqual(49.1);
         } else {
+          expect(controls.modelTriggerPadding).toEqual({ end: 6, start: 8 });
+          expect(controls.effortTriggerPadding).toEqual({ end: 6, start: 8 });
           expect(composerFontSize).toBe(14);
           for (const label of [permissionLabel, modelLabel, effortLabel]) {
             expect(label.scrollWidth).toBeLessThanOrEqual((label.clientWidth ?? 0) + 1);

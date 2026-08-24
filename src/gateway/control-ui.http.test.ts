@@ -10,6 +10,7 @@ import { brotliCompressSync, brotliDecompressSync, gzipSync, gunzipSync } from "
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { normalizeAssistantIdentity } from "../../ui/src/lib/assistant-identity.ts";
+import * as configIo from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
@@ -2473,6 +2474,39 @@ describe("handleControlUiHttpRequest", () => {
               "127.0.0.1",
               AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
             );
+          },
+        });
+      },
+    });
+  });
+
+  it("rejects paired device-token bootstrap when team roles cannot bind a durable person", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        await withControlUiRoot({
+          fn: async (tmp) => {
+            vi.spyOn(configIo, "getRuntimeConfig").mockReturnValue({
+              gateway: {
+                roles: {
+                  default: "guest",
+                  definitions: {
+                    guest: {
+                      sessions: { others: "view" },
+                      agents: ["guest"],
+                      scopes: ["operator.read"],
+                    },
+                  },
+                },
+              },
+            });
+            const { res, handled } = await runBootstrapConfigRequest({
+              rootPath: tmp,
+              auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: { authorization: `Bearer ${operatorToken}` },
+            });
+
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(401);
           },
         });
       },

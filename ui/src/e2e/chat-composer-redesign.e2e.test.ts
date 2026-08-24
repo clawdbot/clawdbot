@@ -655,6 +655,22 @@ suite.define(() => {
       ) {
         throw new Error("expected mobile composer controls to have layout boxes");
       }
+      await expect
+        .poll(() =>
+          model.evaluate((node) => {
+            const style = getComputedStyle(node);
+            return [style.paddingInlineStart, style.paddingInlineEnd];
+          }),
+        )
+        .toEqual(["10px", "10px"]);
+      await expect
+        .poll(() =>
+          effort.evaluate((node) => {
+            const style = getComputedStyle(node);
+            return [style.paddingInlineStart, style.paddingInlineEnd];
+          }),
+        )
+        .toEqual(["9px", "11px"]);
       for (const control of [mobileModelBox, mobileContextBox]) {
         expect(
           Math.abs(control.y + control.height / 2 - (mobileModelBox.y + mobileModelBox.height / 2)),

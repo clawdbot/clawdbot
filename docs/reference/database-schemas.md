@@ -44,6 +44,11 @@ for updated binaries. Older readers ignore it and can reopen and update the
 same database safely; their association update invalidates context captured by
 a newer writer so it cannot be replayed after re-upgrade.
 
+User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
+column in state schema 9. Operator-role assignment lazily ensures the column on
+first use. Older readers ignore the column and can reopen the same database
+safely.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
 
 ## Preflight a target release

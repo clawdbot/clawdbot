@@ -71,6 +71,7 @@ export type SessionChangedEvent = {
   clientRunId?: string;
   sessionId?: string;
   updatedAt?: number | null;
+  activeRunIds?: string[] | null;
 };
 
 export type SessionMessageEvent = {

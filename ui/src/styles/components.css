@@ -196,29 +196,9 @@ openclaw-session-owner-chip {
   color: var(--accent);
 }
 
-.connect-splash__logo {
-  width: 44px;
-  height: 44px;
-  animation: connect-splash-wiggle 1.8s ease-in-out infinite;
-}
-
-@keyframes connect-splash-wiggle {
-  0%,
-  100% {
-    transform: rotate(-6deg);
-  }
-  50% {
-    transform: rotate(6deg);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .connect-splash {
     opacity: 1;
-    animation: none;
-  }
-
-  .connect-splash__logo {
     animation: none;
   }
 }
@@ -576,19 +556,19 @@ openclaw-session-owner-chip {
   height: 8px;
   border-radius: var(--radius-full);
   background: var(--danger);
-  box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 50%, transparent);
   animation: pulse-subtle 2s ease-in-out infinite;
 }
 
 .statusDot.ok {
   background: var(--ok);
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--ok) 50%, transparent);
   animation: none;
 }
 
 .statusDot.warn {
   background: var(--warn);
-  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 50%, transparent);
   animation: none;
 }
 
@@ -702,7 +682,7 @@ openclaw-session-owner-chip {
 }
 
 .btn.danger:hover {
-  background: rgba(239, 68, 68, 0.15);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
 }
 
 .btn--sm {
@@ -1467,102 +1447,10 @@ select.input {
   height: 16px;
 }
 
-/* ===========================================
-   Cron Form
-   =========================================== */
-
-/* Stat strip used by the tasks page. */
-.summary-strip {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px 18px;
-  padding: 14px 16px;
-}
-
-.summary-strip__stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 28px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.summary-stat {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.summary-stat__icon {
-  width: 30px;
-  height: 30px;
-  color: var(--accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-md);
-  background: var(--accent-subtle);
-  padding: 6px;
-  flex-shrink: 0;
-}
-
-.summary-stat__icon svg {
-  width: 100%;
-  height: 100%;
-  stroke: currentColor;
-  fill: none;
-}
-
-.summary-stat--danger .summary-stat__icon {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-}
-
-.summary-stat__copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.summary-stat__label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.summary-stat__value {
-  color: var(--text-strong);
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.3;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  white-space: nowrap;
-}
-
 .field input[aria-invalid="true"],
 .field textarea[aria-invalid="true"],
 .field select[aria-invalid="true"] {
   border-color: var(--danger);
-}
-
-@media (max-width: 1100px) {
-  .summary-strip {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .summary-strip__stats {
-    width: 100%;
-    gap: 8px 18px;
-  }
 }
 
 :root[data-theme-mode="light"] .field input,
@@ -1756,14 +1644,22 @@ select.input {
 }
 
 .callout.info {
-  border-color: rgba(59, 130, 246, 0.25);
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(59, 130, 246, 0.04) 100%);
+  border-color: color-mix(in srgb, var(--info) 25%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--info) 8%, transparent) 0%,
+    color-mix(in srgb, var(--info) 4%, transparent) 100%
+  );
   color: var(--info);
 }
 
 .callout.success {
-  border-color: rgba(34, 197, 94, 0.25);
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.08) 0%, rgba(34, 197, 94, 0.04) 100%);
+  border-color: color-mix(in srgb, var(--ok) 25%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--ok) 8%, transparent) 0%,
+    color-mix(in srgb, var(--ok) 4%, transparent) 100%
+  );
   color: var(--ok);
 }
 
@@ -1883,7 +1779,7 @@ select.input {
 
 .compaction-indicator--active {
   color: var(--info);
-  border-color: rgba(59, 130, 246, 0.35);
+  border-color: color-mix(in srgb, var(--info) 35%, transparent);
 }
 
 .compaction-indicator--active svg {
@@ -1892,17 +1788,17 @@ select.input {
 
 .compaction-indicator--complete {
   color: var(--ok);
-  border-color: rgba(34, 197, 94, 0.35);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 .compaction-indicator--fallback {
   color: var(--warn-strong);
-  border-color: rgba(217, 119, 6, 0.35);
+  border-color: color-mix(in srgb, var(--warn-strong) 35%, transparent);
 }
 
 .compaction-indicator--fallback-cleared {
   color: var(--ok);
-  border-color: rgba(34, 197, 94, 0.35);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 @keyframes compaction-spin {
@@ -2440,12 +2336,12 @@ openclaw-chat-session-rail {
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion {
   color: var(--hljs-deletion);
-  background: rgba(248, 81, 73, 0.12);
+  background: var(--danger-subtle);
 }
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition {
   color: var(--hljs-addition);
-  background: rgba(46, 160, 67, 0.12);
+  background: var(--ok-subtle);
 }
 
 :is(.code-block, .code-block-wrapper pre code.hljs) .hljs-emphasis {
@@ -2707,19 +2603,19 @@ openclaw-chat-session-rail {
 
 .chip-ok {
   color: var(--ok);
-  border-color: rgba(34, 197, 94, 0.3);
+  border-color: color-mix(in srgb, var(--ok) 30%, transparent);
   background: var(--ok-subtle);
 }
 
 .chip-warn {
   color: var(--warn);
-  border-color: rgba(245, 158, 11, 0.3);
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
   background: var(--warn-subtle);
 }
 
 .chip-danger {
   color: var(--danger);
-  border-color: rgba(239, 68, 68, 0.3);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
   background: var(--danger-subtle);
 }
 
@@ -3035,7 +2931,7 @@ td.data-table-key-col {
 
 .log-level.info {
   color: var(--info);
-  border-color: rgba(59, 130, 246, 0.3);
+  border-color: color-mix(in srgb, var(--info) 30%, transparent);
 }
 
 .log-level.warn {
@@ -3056,7 +2952,7 @@ td.data-table-key-col {
 
 .log-chip.info {
   color: var(--info);
-  border-color: rgba(59, 130, 246, 0.3);
+  border-color: color-mix(in srgb, var(--info) 30%, transparent);
 }
 
 .log-chip.warn {
@@ -3760,8 +3656,7 @@ td.data-table-key-col {
   gap: 12px;
 }
 
-/* Same tile geometry as .summary-stat__icon, in the ok tone: the outcome is settled,
-   and the mark says so before any sentence is read. */
+/* The compact ok-tone tile makes the settled outcome visible before its copy. */
 .secret-reveal__status {
   width: 28px;
   height: 28px;
@@ -4433,7 +4328,11 @@ td.data-table-key-col {
   overscroll-behavior: contain;
   padding: clamp(18px, 3vw, 28px);
   background:
-    radial-gradient(circle at top right, rgba(255, 92, 92, 0.055), transparent 32%),
+    radial-gradient(
+      circle at top right,
+      color-mix(in srgb, var(--accent) 5.5%, transparent),
+      transparent 32%
+    ),
     radial-gradient(circle at bottom left, rgba(20, 184, 166, 0.045), transparent 28%),
     linear-gradient(
       180deg,
@@ -5823,7 +5722,24 @@ td.data-table-key-col {
    aside stacks transient state, relative time, and management actions in one
    grid cell, so hovering swaps state for actions without any layout shift. */
 .session-row-host {
+  /* One size and one stroke for every glyph the row draws. Seven different
+     values used to land on the same line, which read as broken alignment.
+     The row-scoped SVG rule below leaves other surfaces at their own sizes. */
+  /* One grid for everything in the trailing column. The 24px action target sets
+     the desktop pitch; 14px endcap glyphs use the remaining 10px as their gap
+     so both lines share one trailing axis. */
+  --row-action-size: 24px;
+  --row-glyph-gap: 10px;
+
+  /* What the title gives up so the actions have somewhere to land: both boxes
+     plus a hair of clearance from the ellipsis. */
+  --row-actions-reserve: calc(var(--row-action-size) * 2 + 3px);
+
   position: relative;
+}
+
+.session-row-host[data-session-row-action-count="1"] {
+  --row-actions-reserve: calc(var(--row-action-size) + 3px);
 }
 
 .session-row-host--draft {
@@ -5895,14 +5811,19 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
+/* Sized to its glyphs. The old 24px box matched the action button this used to
+   trade places with, which padded a 7px unread dot with 8.5px a side and broke
+   the endcap's even 6px rhythm. Nothing trades now, so it sizes to content. */
 .session-row-state {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-width: 24px;
-  min-height: 24px;
-  transition: opacity var(--duration-fast) ease;
+  gap: var(--row-glyph-gap, 6px);
+  /* The ring and the unread dot are bare shapes, not icons in a box, so
+     right-flush they hung 2-4px past the icon column above them. One glyph-wide
+     floor plus the centring above puts whatever the row is showing on the same
+     axis as the icons. */
+  min-width: 14px;
   pointer-events: none;
 }
 
@@ -5926,7 +5847,7 @@ td.data-table-key-col {
 .session-row-badges {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--row-glyph-gap, 6px);
   flex: 0 0 auto;
 }
 
@@ -5936,7 +5857,8 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.session-row-badge--attention {
+.session-row-badge--attention,
+.session-row-badge--approval {
   gap: 2px;
   color: var(--warn);
   font-size: 10px;
@@ -5952,13 +5874,8 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.session-row-badge--approval {
-  display: inline-flex;
-  align-items: center;
-  color: var(--warn);
-}
-
-.session-row-badge--cloud[data-placement-state="failed"] {
+.session-row-badge--cloud[data-placement-state="failed"],
+.session-row-badge--cloud[data-disk-space-status="critical"] {
   color: var(--danger);
 }
 
@@ -5973,16 +5890,9 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.session-row-badge--cloud[data-workspace-conflicts] {
-  color: var(--warn);
-}
-
+.session-row-badge--cloud[data-workspace-conflicts],
 .session-row-badge--cloud[data-disk-space-status="warning"] {
   color: var(--warn);
-}
-
-.session-row-badge--cloud[data-disk-space-status="critical"] {
-  color: var(--danger);
 }
 
 .session-row-badge svg {
@@ -5997,16 +5907,14 @@ td.data-table-key-col {
 
 .session-row-actions {
   display: inline-flex;
-  align-items: center;
-  gap: 1px;
 }
 
 .session-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: var(--row-action-size);
+  height: var(--row-action-size);
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
@@ -6014,13 +5922,9 @@ td.data-table-key-col {
   color: var(--muted);
   opacity: 0;
   pointer-events: none;
-  transition:
-    opacity var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
 }
 
-.session-action svg {
+.session-row-host svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -6053,13 +5957,20 @@ td.data-table-key-col {
   pointer-events: auto;
 }
 
-.session-row-host:is(:hover, :focus-within) :is(.session-row-trail, .session-row-state) {
-  opacity: 0;
-}
+/* Nothing in the row trades places with the actions any more. Two-line rows put
+   them on the title line; single-line rows reserve their width in the text
+   column, which slides the endcap clear. Fading state here used to prevent an
+   overlap that no longer happens, and it took the unread dot with it the moment
+   the pointer arrived — while the badges beside it stayed, which read as a
+   glitch rather than a deliberate swap. */
 
 /* Sidebar rows are now the direct management surface after removing the
    duplicate picker; touch users need pin/menu controls without hover. */
 @media (hover: none), (pointer: coarse) {
+  .sidebar-recent-session.session-row-host {
+    --row-action-size: 44px;
+  }
+
   .sidebar-recent-session .session-action {
     opacity: 1;
     pointer-events: auto;
@@ -6067,22 +5978,6 @@ td.data-table-key-col {
 
   .sidebar-recent-session .session-action:disabled {
     opacity: 0.35;
-  }
-
-  .sidebar-recent-session .session-row-trail {
-    opacity: 0;
-  }
-
-  .sidebar-recent-session .session-row-aside:has(> .session-row-state) {
-    column-gap: 1px;
-  }
-
-  .sidebar-recent-session .session-row-state {
-    grid-area: 1 / 1;
-  }
-
-  .sidebar-recent-session .session-row-actions {
-    grid-area: 1 / 2;
   }
 }
 
@@ -6093,8 +5988,8 @@ td.data-table-key-col {
 .session-run-spinner {
   box-sizing: border-box;
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   flex: 0 0 auto;
   border: 1.5px solid color-mix(in srgb, var(--run) 28%, transparent);
   border-top-color: var(--run);
@@ -6274,4 +6169,19 @@ td.data-table-key-col {
   100% {
     transform: rotate(-10deg);
   }
+}
+
+/* Identity links (a name or avatar opening that person's Activity feed) stay neutral
+   until hover so identity chrome keeps its weight in dense surfaces. */
+.person-activity-link {
+  color: inherit;
+}
+
+.person-activity-link:not(:hover, :focus-visible) {
+  text-decoration: none;
+}
+
+.person-activity-avatar-link {
+  display: block;
+  line-height: 0;
 }

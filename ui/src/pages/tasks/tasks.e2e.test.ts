@@ -254,6 +254,19 @@ suite.define(() => {
       await dismissRow.waitFor({ state: "visible" });
       await page.screenshot({ path: path.join(actionArtifactDir, "01-blocked.png") });
 
+      await page.setViewportSize({ width: 320, height: 844 });
+      const recoveryActions = ["Copy result", "Retry delivery", "Dismiss delivery"];
+      for (const name of recoveryActions) {
+        const action = retryRow.getByRole("button", { name });
+        await action.waitFor({ state: "visible" });
+        const bounds = await action.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds?.x ?? -1).toBeGreaterThanOrEqual(0);
+        expect((bounds?.x ?? 321) + (bounds?.width ?? 0)).toBeLessThanOrEqual(320);
+      }
+      await page.screenshot({ path: path.join(actionArtifactDir, "01-blocked-mobile.png") });
+      await page.setViewportSize({ width: 1440, height: 900 });
+
       await gateway.deferNext("tasks.retry", { taskIds: [retryBlockedTask.taskId] });
       const retryButton = retryRow.getByRole("button", { name: "Retry delivery" });
       await retryButton.evaluate((element) => {

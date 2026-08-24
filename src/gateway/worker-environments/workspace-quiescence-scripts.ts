@@ -154,18 +154,40 @@ const orphanNames = fs.readdirSync(leaseDirectory).filter((name) =>
   name.startsWith(workspaceKey + ".") && name.endsWith(".json"),
 );
 if (orphanNames.length > 16) throw new Error("too many workspace quiescence leases");
+let sawUnverifiedEmptyLeaseWatchdog = false;
 for (const name of orphanNames) {
   const match = name.match(/^[a-f0-9]{64}\.([a-f0-9]{32})\.json$/);
   if (!match) continue;
   const orphanPath = path.join(leaseDirectory, name);
   const lease = parseLease(fs.readFileSync(orphanPath, "utf8"), match[1]);
   resumeProcesses(lease.processes);
-  if (lease.watchdog !== null && processIdentity(lease.watchdog.pid) === lease.watchdog.start) {
-    try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
+  let retainLeaseForRetry = false;
+  if (lease.watchdog !== null) {
+    try {
+      let watchdogMatches = processIdentity(lease.watchdog.pid) === lease.watchdog.start;
+      if (watchdogMatches) {
+        try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
+        for (let attempt = 0; attempt < 100 && watchdogMatches; attempt += 1) {
+          Atomics.wait(sleeper, 0, 0, 10);
+          watchdogMatches = processIdentity(lease.watchdog.pid) === lease.watchdog.start;
+        }
+        if (watchdogMatches) throw new Error("prior workspace quiescence watchdog did not retire");
+      }
+    } catch (error) {
+      if (lease.processes.length > 0) throw error;
+      sawUnverifiedEmptyLeaseWatchdog = true;
+      retainLeaseForRetry = !sharedHost;
+    }
   }
+  if (retainLeaseForRetry) continue;
   // The orphan's own watchdog can resume and unlink first; a lease that is already gone
   // is the outcome we wanted, so it must not fail this sweep.
   try { fs.unlinkSync(orphanPath); } catch (error) { if (!error || error.code !== "ENOENT") throw error; }
+}
+// Shared-host replacements can remove empty leases during a ps outage because they never sweep
+// processes. Dedicated replacements retain the watchdog identity so a retry can exclude it.
+if (!sharedHost && sawUnverifiedEmptyLeaseWatchdog) {
+  throw new Error("could not verify prior workspace quiescence watchdog retirement; retry when ps is available");
 }
 writeLease();
 const watchdog = childProcess.spawn(
@@ -455,7 +477,7 @@ for (const entry of input.processes) {
 }
 let watchdogStart = null;
 try { if (input.watchdog !== null) watchdogStart = processIdentity(input.watchdog.pid); } catch (error) {
-  // An empty shared-host lease has nothing to strand, so ps cannot block its release.
+  // An empty lease has nothing to strand, so ps cannot block its release.
   if (input.processes.length > 0) throw error;
 }
 if (input.watchdog !== null && watchdogStart === input.watchdog.start) {

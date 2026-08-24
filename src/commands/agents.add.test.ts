@@ -334,50 +334,55 @@ describe("agents add command", () => {
     );
   }
 
-  it("requires --workspace when flags are present", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
-
-    await agentsAddCommand({ name: "Work" }, runtime, { hasAutomationFlags: true });
-
-    expect(runtime.error).toHaveBeenCalledOnce();
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
-  });
-
-  it("requires --workspace in non-interactive mode", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
-
-    await agentsAddCommand({ name: "Work", nonInteractive: true }, runtime, {
-      hasAutomationFlags: false,
-    });
-
-    expect(runtime.error).toHaveBeenCalledOnce();
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
-  });
-
-  it.each(RESERVED_SYSTEM_AGENT_IDS_FOR_TEST)(
-    "rejects reserved system-agent id %s",
-    async (name) => {
-      readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
-
-      await agentsAddCommand({ name, workspace: "/tmp/reserved" }, runtime, {
-        hasAutomationFlags: true,
-      });
-
-      expect(runtime.error).toHaveBeenCalledWith(
-        `"${name}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(writeConfigFileMock).not.toHaveBeenCalled();
+  it.each([
+    {
+      name: "a missing workspace with automation flags",
+      options: { name: "Work" },
+      flags: { hasAutomationFlags: true },
+      message: `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
     },
-  );
+    {
+      name: "a missing workspace with explicit non-interactive mode",
+      options: { name: "Work", nonInteractive: true },
+      flags: { hasAutomationFlags: false },
+      message: `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
+    },
+    {
+      name: "a missing name after a valid workspace",
+      options: { workspace: "/tmp/work" },
+      flags: { hasAutomationFlags: true },
+      message: `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
+    },
+    {
+      name: "an unrepresentable non-interactive name",
+      options: { name: "агент✨", workspace: "/tmp/work" },
+      flags: { hasAutomationFlags: true },
+      message:
+        'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
+    },
+    ...RESERVED_SYSTEM_AGENT_IDS_FOR_TEST.map((agentId) => ({
+      name: `reserved system-agent id ${agentId}`,
+      options: { name: agentId, workspace: "/tmp/reserved" },
+      flags: { hasAutomationFlags: true },
+      message: `"${agentId}" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
+    })),
+  ])("rejects $name through the root failure owner before mutation", async (testCase) => {
+    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await expect(agentsAddCommand(testCase.options, runtime, testCase.flags)).rejects.toMatchObject(
+      {
+        name: "ExpectedCliError",
+        message: testCase.message,
+        humanOutput: testCase.message,
+        machineOutput: testCase.message,
+      },
+    );
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(createAgentMock).not.toHaveBeenCalled();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
 
   it("rejects an unrepresentable positional name before targeting an existing agent", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
@@ -459,14 +464,20 @@ describe("agents add command", () => {
         outro: vi.fn(),
       });
 
-      await agentsAddCommand({ json }, runtime);
+      const message =
+        "Agent creation needs an interactive TTY. Use `openclaw agents add <id> --non-interactive --workspace <dir>` for automation.";
+      await expect(agentsAddCommand({ json }, runtime)).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message,
+        humanOutput: message,
+        machineOutput: message,
+      });
 
-      expect(runtime.error).toHaveBeenCalledWith(
-        "Agent creation needs an interactive TTY. Use `openclaw agents add <id> --non-interactive --workspace <dir>` for automation.",
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
       expect(runtime.log).not.toHaveBeenCalled();
       expect(terminalMocks.isTerminalInteractive).toHaveBeenCalledWith(output);
+      expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
       expect(wizardMocks.createClackPrompter).not.toHaveBeenCalled();
       expect(createAgentMock).not.toHaveBeenCalled();
       expect(writeConfigFileMock).not.toHaveBeenCalled();
@@ -1006,26 +1017,49 @@ describe("agents add command", () => {
       expect(terminalMocks.isTerminalInteractive).not.toHaveBeenCalled();
     });
 
-    it("reports a duplicate rejected by the canonical service", async () => {
+    it.each([
+      {
+        name: "a duplicate agent",
+        result: {
+          status: "error" as const,
+          reason: "already-exists",
+          agentId: "work",
+          message: 'agent "work" already exists',
+        },
+        message: 'Agent "work" already exists.',
+      },
+      {
+        name: "a rejected binding",
+        result: {
+          status: "error" as const,
+          reason: "invalid-bindings",
+          agentId: "work",
+          message: 'Invalid binding "telegram:". Account id is empty.',
+        },
+        message: 'Invalid binding "telegram:". Account id is empty.',
+      },
+    ])("reports $name through the root failure owner", async (testCase) => {
       readConfigFileSnapshotMock.mockResolvedValue({
         ...baseConfigSnapshot,
         config: { agents: { list: [{ id: "main", default: true }] } },
         sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
       });
-      createAgentMock.mockResolvedValueOnce({
-        status: "error",
-        reason: "already-exists",
-        agentId: "work",
-        message: 'agent "work" already exists',
-      });
+      createAgentMock.mockResolvedValueOnce(testCase.result);
 
-      await agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
-        hasAutomationFlags: true,
+      await expect(
+        agentsAddCommand({ name: "Work", workspace: "/tmp/work" }, runtime, {
+          hasAutomationFlags: true,
+        }),
+      ).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message: testCase.message,
+        humanOutput: testCase.message,
+        machineOutput: testCase.message,
       });
 
       expect(writeConfigFileMock).not.toHaveBeenCalled();
-      expect(runtime.error).toHaveBeenCalledWith('Agent "work" already exists.');
-      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
     });
 
     it("reports binding conflicts from the committed mutation", async () => {

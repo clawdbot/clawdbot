@@ -64,7 +64,7 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
     set -euo pipefail
     export PNPM_HOME=/tmp/pnpm-home
     export PATH="$PNPM_HOME:$PATH"
-    corepack prepare pnpm@11.15.1 --activate
+    corepack prepare pnpm@11.22.0 --activate
     pnpm config set global-bin-dir "$PNPM_HOME"
     pnpm config set global-dir /tmp/pnpm-global
     pnpm add --global --allow-build=openclaw /tmp/openclaw-current.tgz

@@ -205,8 +205,9 @@ stated honestly (revision 1 undersold this):
   `{ profileId } | { deviceId }`; the device → environment mapping resolves
   server-side. Devices are not smuggled through synthesized
   `cloudWorkers.profiles` entries.
-- **Concurrency slots.** The node supervisor admits two physical worker
-  processes by default. Durable `pending` and `running` launches consume those
+- **Concurrency slots.** The node supervisor defaults to one physical worker
+  process per available CPU core; `nodeHost.workerRuns.capacity` overrides the
+  slot count. Durable `pending` and `running` launches consume those
   slots atomically; same-launch replay consumes no additional slot. The node
   publishes exact bounded `{ total, available }` capacity after restart
   reconciliation and every occupancy transition. New launches require
@@ -218,9 +219,15 @@ stated honestly (revision 1 undersold this):
   namespaced by gateway identity so two gateways pairing one machine cannot
   corrupt each other's state.
 
-Isolation on node runners: optional worker-in-docker/podman, same sandbox
-axis as gateway-local sessions. Cloud leases keep full-permission-within-the-
-box (the machine is the boundary).
+Node runners can opt into per-worker Docker-compatible container isolation
+with `nodeHost.workerRuns.isolation: "container"`; the default `"none"`
+preserves direct host execution. The node resolves its engine at startup,
+fails closed when the requested boundary is unavailable, and owns durable
+container identity, cancellation, restart reconciliation, and orphan cleanup.
+The verified bundle remains read-only, the session workspace remains writable,
+and both retain their exact host paths inside the container. This is the same
+isolation axis as gateway-local sessions, not a separate placement type. Cloud
+leases keep full-permission-within-the-box because the machine is the boundary.
 
 Milestone 6 now has the public worker ingress, transport-neutral launch
 descriptor, durable node-host supervisor, private launch/status/cancel dialect,
@@ -235,7 +242,7 @@ makes clients refetch without exposing hashes, paths, or receipt details. Status
 and cancellation reacquire the current supervisor proof and use the durable
 launch identity so an upgrade cannot strand an existing worker. Node-local
 opt-in advertises capacity; default nodes remain non-hosts. The supervisor owns
-two atomic durable capacity slots, bounded 10-second admission, restart
+configurable atomic durable capacity slots, bounded 10-second admission, restart
 reconciliation, and exact occupancy publication.
 Device dormancy expiry and terminal launch/environment retention bound durable
 rows. Node workspace cleanup waits for a full reconnect-scoped Gateway retain
@@ -244,8 +251,8 @@ and then removes retired generations, transfer siblings, unreachable manifests,
 and empty workspace parents in bounded passes. The Gateway bundle producer
 also prunes unreferenced local tarballs only after a successful current build,
 while preserving hashes named by durable environments and placements. Durable
-offline recovery is complete; isolation and checkout ownership remain milestone
-6 work.
+offline recovery and opt-in container isolation are complete; checkout
+ownership remains milestone 6 work.
 
 ### Trust model (operator-decided, v1)
 
@@ -517,7 +524,8 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
    admission; invalid attempts are cheap and unenumerable.
 6. **Node worker provider**: lease union, dispatch target union, node tunnel
    handle, durable supervised launch, HTTPS delta sync + origin fetch,
-   tri-state inspect + reaper + GC, concurrency slots, `runner-offline`
+   tri-state inspect + reaper + GC, concurrency slots, opt-in container
+   isolation with durable container lifecycle reconciliation, `runner-offline`
    placement semantics, gateway-namespaced install root, approver-provenance
    column. Fault-injection tests gate exit: device sleep mid-turn, node WS
    blip mid-turn (turn survives), gateway restart with offline device,

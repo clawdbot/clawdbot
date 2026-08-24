@@ -79,10 +79,8 @@ export function formatEnvelopeForText(value: unknown): string {
   for (const output of envelope.outputs) {
     const pathValue = typeof output.path === "string" ? output.path : undefined;
     const textValue = typeof output.text === "string" ? output.text : undefined;
-    if (pathValue) {
-      lines.push(pathValue);
-    } else if (textValue) {
-      lines.push(textValue);
+    if (pathValue || textValue) {
+      lines.push(...[pathValue, textValue].filter((entry): entry is string => Boolean(entry)));
     } else {
       lines.push(JSON.stringify(output));
     }
@@ -92,7 +90,7 @@ export function formatEnvelopeForText(value: unknown): string {
 
 export function providerSummaryText(value: unknown): string {
   const providers = value as Array<Record<string, unknown>>;
-  return providers.map((entry) => JSON.stringify(entry)).join("\n");
+  return providers.map((entry) => JSON.stringify(entry)).join("\n") || "No results found.";
 }
 
 function hasOwnKeys(value: unknown): boolean {

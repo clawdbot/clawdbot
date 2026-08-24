@@ -487,6 +487,10 @@ describeBrowserLayout("app chrome interaction styles", () => {
                 <span class="sidebar-recent-session__name">Child session</span>
                 <span class="session-row-trail">3m</span>
               </div>
+              <div class="sidebar-recent-session">
+                <a class="sidebar-recent-session__link">Parent session</a>
+                <button class="sidebar-child-session-toggle" aria-expanded="false">2</button>
+              </div>
             </div>
           </body>
         </html>
@@ -520,6 +524,11 @@ describeBrowserLayout("app chrome interaction styles", () => {
         settingsSearch: 16,
         navItem: 12,
       });
+      const childToggleSize = await page.$eval(".sidebar-child-session-toggle", (node) => ({
+        height: node.getBoundingClientRect().height,
+        width: node.getBoundingClientRect().width,
+      }));
+      expect(childToggleSize).toEqual({ height: 44, width: 44 });
 
       await page.evaluate(() => {
         document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");

@@ -1,9 +1,75 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationOverlays } from "../../app/overlays-types.ts";
+import { dismissUpdateAttention } from "../../components/sidebar-attention-dismissals.ts";
 import { createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar footer identity menu", () => {
+  it("keeps a dismissed update as a discreet account-menu chip", async () => {
+    const gatewayHarness = createGatewayHarness({
+      instanceId: "self-instance",
+    } as GatewayBrowserClient);
+    gatewayHarness.publish({
+      hello: {
+        ...gatewayHarness.gateway.snapshot.hello!,
+        server: {
+          ...gatewayHarness.gateway.snapshot.hello!.server,
+          bootId: "boot-a",
+        },
+      },
+    });
+    const { sidebar, context } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+    (context.overlays as unknown as { snapshot: ApplicationOverlays["snapshot"] }).snapshot = {
+      ...context.overlays.snapshot,
+      updateAvailable: {
+        currentVersion: "2026.8.1",
+        latestVersion: "2026.8.2",
+        channel: "latest",
+      },
+      updateSchedule: null,
+      updateStatusBanner: null,
+    };
+    dismissUpdateAttention("ws://gateway.test", {
+      version: "2026.8.2",
+      gatewayBootId: "boot-a",
+    });
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card")?.click();
+    await sidebar.updateComplete;
+    const buildChip = sidebar.querySelector<HTMLElement>("openclaw-sidebar-build-chip");
+    await (buildChip as (HTMLElement & { updateComplete?: Promise<unknown> }) | null)
+      ?.updateComplete;
+
+    expect(
+      (buildChip as (HTMLElement & { updateAttentionDismissed?: boolean }) | null)
+        ?.updateAttentionDismissed,
+    ).toBe(true);
+    expect(buildChip?.querySelector(".sidebar-footer-build__update")?.textContent?.trim()).toBe(
+      "Update available",
+    );
+
+    (context.overlays as unknown as { snapshot: ApplicationOverlays["snapshot"] }).snapshot = {
+      ...context.overlays.snapshot,
+      updateAvailable: {
+        currentVersion: "2026.8.2",
+        latestVersion: "2026.8.2",
+        channel: "latest",
+      },
+    };
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+    expect(
+      (buildChip as HTMLElement & { updateAttentionDismissed?: boolean }).updateAttentionDismissed,
+    ).toBe(false);
+    expect(buildChip?.querySelector(".sidebar-footer-build__update")).toBeNull();
+  });
+
   it("owns account utilities, restores focus, and routes Profile", async () => {
     const fullName = "Ada Lovelace With A Deliberately Long Display Name";
     const gatewayHarness = createGatewayHarness({

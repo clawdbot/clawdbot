@@ -24,7 +24,6 @@ import {
 } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createGatewayResidentRegistry } from "./server-resident-registry.js";
 import "./server-startup-outcomes.test-support.js";
 
 const hoisted = vi.hoisted(() => {
@@ -3850,7 +3849,6 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
       error: vi.fn(),
     },
     unlockStartupMethods: vi.fn(),
-    residentRegistry: createGatewayResidentRegistry(),
     providerAuthPrewarm: { enabled: false },
     unregisterGatewayLifetimeSidecar: vi.fn(),
     stopRegisteredPostReadySidecars: () => stopTrackedSidecars(publishedPostReadySidecars),

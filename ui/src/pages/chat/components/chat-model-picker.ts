@@ -24,7 +24,6 @@ export type ChatModelCatalogState = {
 
 type ChatModelPickerParams = {
   contextWindow?: ChatContextWindowControlParams;
-  defaultModelLabel: string;
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ChatModelCatalogState;
@@ -604,35 +603,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                       ${params.modelOptions.length > 0 && params.selectedModelValue !== ""
                         ? html`<footer class="chat-controls__model-provenance">
                             <span>${t("chat.modelControls.sessionOverride")}</span>
-                            <openclaw-tooltip
-                              .content=${t("chat.modelControls.resetToDefault", {
-                                model: params.defaultModelLabel,
-                              })}
-                            >
-                              <button
-                                class="chat-controls__model-reset"
-                                data-chat-model-reset="true"
-                                type="button"
-                                ?disabled=${params.disabled}
-                                @click=${(event: MouseEvent) => {
-                                  event.stopPropagation();
-                                  if (params.disabled) {
-                                    event.preventDefault();
-                                    return;
-                                  }
-                                  commitModel("");
-                                  const details = (
-                                    event.currentTarget as HTMLElement
-                                  ).closest<HTMLDetailsElement>("details");
-                                  if (details) {
-                                    details.open = false;
-                                    details.querySelector<HTMLElement>("summary")?.focus();
-                                  }
-                                }}
-                              >
-                                ${t("chat.modelControls.useDefault")}
-                              </button>
-                            </openclaw-tooltip>
                           </footer>`
                         : nothing}
                     `

@@ -6,8 +6,8 @@
     500px,
     calc(
       100dvh -
-        max(var(--sidebar-issues-panel-bottom, 8px), calc(8px + env(safe-area-inset-bottom, 0px))) -
-        8px - env(safe-area-inset-top, 0px)
+        max(var(--sidebar-issues-panel-top, 8px), calc(8px + env(safe-area-inset-top, 0px))) -
+        max(var(--sidebar-issues-panel-bottom, 8px), calc(8px + env(safe-area-inset-bottom, 0px)))
     )
   );
   display: flex;
@@ -720,10 +720,4 @@
 
 .sidebar-approval-row__message--error {
   color: var(--danger);
-}
-
-.exec-approval-description {
-  overflow-wrap: anywhere;
-  color: var(--muted-strong);
-  line-height: 1.4;
 }

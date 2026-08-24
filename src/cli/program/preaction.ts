@@ -18,7 +18,7 @@ import {
   resolvePluginInstallInvalidConfigPolicy,
   resolvePluginInstallPreactionRequest,
 } from "../plugin-install-config-policy.js";
-import { getCommanderCommandPath, hasCommanderOptionValue } from "./commander-parse-facts.js";
+import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 import { isParentDefaultHelpAction } from "./parent-default-help.js";
 
@@ -117,10 +117,11 @@ export function registerPreActionHooks(program: Command, programVersion: string)
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
     const argv = process.argv;
-    const helpOrVersionWasOptionValue = hasCommanderOptionValue(
+    const helpOrVersionWasOptionValue = hasCommanderOptionToken(
       actionCommand,
       argv,
       HELP_OR_VERSION_FLAGS,
+      "value",
     );
     if (
       (isHelpOrVersionInvocation(argv) && !helpOrVersionWasOptionValue) ||

@@ -726,7 +726,7 @@ describe("session menu", () => {
     expect(openPr.disabled).toBe(false);
     expect(openPr.hasAttribute("data-new-tab-action")).toBe(true);
     expect(openPr.querySelector(".session-menu__shortcut")?.textContent).toBe("G");
-    expect(menuItem(menu, "Open in").disabled).toBe(true);
+    expect(menuItemLabels(menu)).not.toContain("Open in");
 
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "g", bubbles: true, cancelable: true }),

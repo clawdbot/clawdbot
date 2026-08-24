@@ -34,16 +34,6 @@ type DiscordPayloadSendContext = Awaited<ReturnType<typeof createDiscordPayloadS
 
 const log = createSubsystemLogger("discord/outbound");
 
-function resolveDiscordDeliveryProgress(ctx: DiscordOutboundPayloadContext) {
-  return ctx.onDeliveryResult
-    ? async (result: Awaited<ReturnType<DiscordPayloadSendContext["send"]>>) => {
-        await ctx.onDeliveryResult?.(
-          attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result)),
-        );
-      }
-    : undefined;
-}
-
 function createDiscordUnknownPayloadResult(target: string) {
   return {
     messageId: "",
@@ -106,6 +96,42 @@ export async function sendDiscordOutboundPayload(params: {
   });
   const mediaUrls = resolvePayloadMediaUrls(payload);
   const sendContext = await createDiscordPayloadSendContext(ctx);
+  const payloadContext = { ...ctx, payload };
+  const deliveredResults: DiscordSendResult[] = [];
+  let createdThreadId: string | undefined;
+  payloadContext.onDeliveryResult = async (result) => {
+    await ctx.onDeliveryResult?.(result);
+    const threadId = result.receipt?.threadId;
+    if (threadId && payloadContext.threadId == null) {
+      // A forum starter owns the thread used by every later payload delivery.
+      payloadContext.threadId = threadId;
+      sendContext.target = `channel:${threadId}`;
+      createdThreadId = threadId;
+    }
+    if (createdThreadId && result.target?.kind === "channel" && result.receipt) {
+      deliveredResults.push({
+        messageId: result.messageId,
+        channelId: result.target.id,
+        receipt: result.receipt,
+      });
+    }
+  };
+  const completeResult = <T extends { receipt?: DiscordSendResult["receipt"] }>(result: T): T =>
+    createdThreadId
+      ? {
+          ...result,
+          receipt: createDiscordSendReceiptFromResults({
+            results: deliveredResults,
+            threadId: createdThreadId,
+          }),
+        }
+      : result;
+  const completeDelivery = (result: DiscordSendResult) =>
+    attachChannelToResult("discord", toDiscordOutboundDeliveryResult(completeResult(result)));
+  const onDeliveryResult = async (result: DiscordSendResult) =>
+    await payloadContext.onDeliveryResult?.(
+      attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result)),
+    );
 
   if (payload.audioAsVoice && mediaUrls.length > 0) {
     // Defer voice failure until independent remainder sends finish while preserving progress.
@@ -139,20 +165,20 @@ export async function sendDiscordOutboundPayload(params: {
         await sendContext.send(sendContext.target, fallbackText, {
           verbose: false,
           ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext, voiceReply),
-          onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+          onDeliveryResult,
         });
       }
       voiceFailure = { error: err };
     }
     if (!voiceFailure) {
-      await ctx.onDeliveryResult?.(
+      await payloadContext.onDeliveryResult?.(
         attachChannelToResult("discord", toDiscordOutboundDeliveryResult(lastResult)),
       );
       if (payload.text?.trim()) {
         lastResult = await sendContext.send(sendContext.target, payload.text, {
           verbose: false,
           ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
-          onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+          onDeliveryResult,
         });
       }
     }
@@ -161,7 +187,7 @@ export async function sendDiscordOutboundPayload(params: {
         lastResult = await sendContext.send(sendContext.target, "", {
           verbose: false,
           ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
-          onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+          onDeliveryResult,
         });
       } catch (err) {
         if (!voiceFailure) {
@@ -175,7 +201,7 @@ export async function sendDiscordOutboundPayload(params: {
     if (voiceFailure) {
       throw voiceFailure.error;
     }
-    return attachChannelToResult("discord", toDiscordOutboundDeliveryResult(lastResult));
+    return completeDelivery(lastResult);
   }
 
   const componentSpec = await resolveDiscordComponentSpec(payload);
@@ -205,7 +231,7 @@ export async function sendDiscordOutboundPayload(params: {
             embeds,
             filename,
             ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
-            onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+            onDeliveryResult,
           }),
         send: async ({ text, mediaUrl, isFirst }) =>
           await sendContext.send(sendContext.target, text, {
@@ -214,44 +240,17 @@ export async function sendDiscordOutboundPayload(params: {
             components: isFirst ? nativeComponents : undefined,
             embeds: isFirst ? embeds : undefined,
             filename: isFirst ? filename : undefined,
-            onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+            onDeliveryResult,
           }),
       });
-      return attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result));
+      return completeDelivery(result);
     }
-    const payloadContext = { ...ctx, payload };
-    const deliveredResults: DiscordSendResult[] = [];
-    let createdThreadId: string | undefined;
-    payloadContext.onDeliveryResult = async (result) => {
-      await ctx.onDeliveryResult?.(result);
-      const threadId = result.receipt?.threadId;
-      if (threadId && payloadContext.threadId == null) {
-        // A forum parent creates its conversation on the first platform send.
-        payloadContext.threadId = threadId;
-        createdThreadId = threadId;
-      }
-      if (createdThreadId && result.target?.kind === "channel" && result.receipt) {
-        deliveredResults.push({
-          messageId: result.messageId,
-          channelId: result.target.id,
-          receipt: result.receipt,
-        });
-      }
-    };
     const result = await sendTextMediaPayload({
       channel: "discord",
       ctx: payloadContext,
       adapter: params.fallbackAdapter,
     });
-    return createdThreadId
-      ? {
-          ...result,
-          receipt: createDiscordSendReceiptFromResults({
-            results: deliveredResults,
-            threadId: createdThreadId,
-          }),
-        }
-      : result;
+    return completeResult(result);
   }
 
   const result = await sendPayloadMediaSequenceOrFallback({
@@ -261,22 +260,22 @@ export async function sendDiscordOutboundPayload(params: {
     sendNoMedia: async () => {
       return await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
         ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
-        onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+        onDeliveryResult,
       });
     },
     send: async ({ text, mediaUrl, isFirst }) => {
       if (isFirst) {
         return await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
           ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
-          onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+          onDeliveryResult,
         });
       }
       return await sendContext.send(sendContext.target, text, {
         verbose: false,
         ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
-        onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+        onDeliveryResult,
       });
     },
   });
-  return attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result));
+  return completeDelivery(result);
 }

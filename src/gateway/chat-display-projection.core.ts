@@ -30,6 +30,7 @@ import type {
 } from "./current-user-profile-display.js";
 
 type ChatDisplayProjectionOptions = {
+  includeCommentaryFallbacks?: boolean;
   maxChars?: number;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   stripEnvelope?: boolean;
@@ -314,7 +315,11 @@ export function projectChatDisplayMessagesWithState(
   const projectedErrors = projectEmptyAssistantErrorMessages(repairedStreamErrors.messages);
   const filtered = filterVisibleProjectedHistoryMessages(
     projectSessionsSendInterSessionMessages(
-      toProjectedMessages(sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER)),
+      toProjectedMessages(
+        sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
+          includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
+        }),
+      ),
     ),
     options?.turnBoundaryPending,
   );

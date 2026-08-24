@@ -1378,7 +1378,7 @@ describe("ChatStateController render lifecycle", () => {
     return {
       agents: {
         state: { agentsList: null },
-        adoptList: vi.fn(),
+        ensureList: vi.fn(async () => null),
       },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
@@ -2277,7 +2277,7 @@ describe("image lightbox lifecycle", () => {
     const context = {
       agents: {
         state: { agentsList: null },
-        adoptList: vi.fn(),
+        ensureList: vi.fn(async () => null),
       },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
@@ -2338,7 +2338,7 @@ describe("loadPageAssistantIdentity", () => {
     }));
     const client = { request } as unknown as GatewayBrowserClient;
     const context = {
-      agents: { state: { agentsList: null }, adoptList: vi.fn() },
+      agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
       config: {

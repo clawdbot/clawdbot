@@ -7,6 +7,10 @@ import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.j
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
+  readSessionProgressCard,
+  writeSessionProgressCard,
+} from "../../session-cards/progress-card-store.js";
+import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
@@ -2853,6 +2857,33 @@ describe("session accessor seam", () => {
     },
   );
 
+  it("clears progress cards when lifecycle deletion retains transcript windows", async () => {
+    const sessionKey = "agent:main:progress-delete";
+    const scope = { agentId: "main", sessionId: "progress-delete", sessionKey, storePath };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: scope.agentId }).path,
+      "progress delete database path",
+    );
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: databasePath });
+    writeSessionProgressCard(database.db, sessionKey, { markdown: "Working" });
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
+
+    expect(result.deleted).toBe(true);
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    expect(
+      database.db
+        .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+        .get(sessionKey),
+    ).toEqual({ entry_valid: -1 });
+    expect(readSessionProgressCard(database.db, sessionKey)).toBeNull();
+  });
+
   it("trims a manual compact transcript and clears stale token metadata", async () => {
     const sessionId = "11111111-1111-4111-8111-111111111111";
     const scope = {
@@ -3326,6 +3357,7 @@ describe("session accessor seam", () => {
             content: "second committed message",
             idempotencyKey: "ordered-turn-second",
             timestamp: 3,
+            __openclaw: { runId: "run-ordered-turn" },
           },
           messageId: result.messages[1]?.messageId,
           messageSeq: 3,

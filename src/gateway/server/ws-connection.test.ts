@@ -442,48 +442,61 @@ describe("attachGatewayWsConnectionHandler", () => {
     },
   );
 
-  it("rejects a real closing WebSocket before ws can silently buffer a lost response", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await once(server, "listening");
-    const accepted = once(server, "connection");
-    const peer = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`);
-    await once(peer, "open");
-    const [socket] = (await accepted) as [WebSocket];
+  it.each(["closing", "failed-send"] as const)(
+    "retires a real %s WebSocket without silently losing its peer",
+    async (failure) => {
+      const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+      await once(server, "listening");
+      const accepted = once(server, "connection");
+      const peer = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`);
+      await once(peer, "open");
+      const [socket] = (await accepted) as [WebSocket];
 
-    try {
-      const { clients, passed } = await connectTestWs({
-        socket: socket as unknown as GatewayWsTestSocket,
-      });
-      const handlerParams = passed as {
-        send: (frame: unknown) => { kind: string };
-        setClient: (client: unknown) => boolean;
-      };
-      handlerParams.setClient({
-        socket,
-        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
-        connId: "real-closing-client",
-        usesSharedGatewayAuth: false,
-      });
+      try {
+        const { clients, passed } = await connectTestWs({
+          socket: socket as unknown as GatewayWsTestSocket,
+        });
+        const handlerParams = passed as {
+          send: (frame: unknown) => { kind: string };
+          setClient: (client: unknown) => boolean;
+        };
+        handlerParams.setClient({
+          socket,
+          connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+          connId: "real-closing-client",
+          usesSharedGatewayAuth: false,
+        });
 
-      socket.close(1000, "real close race");
-      expect(socket.readyState).toBe(WebSocket.CLOSING);
-      const bufferedAtClose = socket.bufferedAmount;
+        if (failure === "closing") {
+          socket.close(1000, "real close race");
+          expect(socket.readyState).toBe(WebSocket.CLOSING);
+        } else {
+          vi.spyOn(socket, "send").mockImplementationOnce(() => {
+            throw new Error("response transport unavailable");
+          });
+          vi.spyOn(socket, "close").mockImplementationOnce(() => {
+            throw new Error("closing handshake unavailable");
+          });
+        }
+        const bufferedAtClose = socket.bufferedAmount;
 
-      expect(handlerParams.send({ type: "res", id: "real-closing-request", ok: true })).toEqual({
-        kind: "unavailable",
-      });
-      expect(socket.bufferedAmount).toBe(bufferedAtClose);
-      expect(clients.size).toBe(0);
-    } finally {
-      peer.terminate();
-      for (const activeSocket of server.clients) {
-        activeSocket.terminate();
+        expect(handlerParams.send({ type: "res", id: "real-closing-request", ok: true })).toEqual({
+          kind: "unavailable",
+        });
+        expect(socket.bufferedAmount).toBe(bufferedAtClose);
+        expect(clients.size).toBe(0);
+        await vi.waitFor(() => expect(peer.readyState).toBe(WebSocket.CLOSED));
+      } finally {
+        peer.terminate();
+        for (const activeSocket of server.clients) {
+          activeSocket.terminate();
+        }
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
       }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
+    },
+  );
 
   it("keeps a closing node discoverable throughout pending lifecycle dispatch and fanout", async () => {
     const unregister = vi.fn(() => "draining-node");
@@ -576,11 +589,20 @@ describe("attachGatewayWsConnectionHandler", () => {
   });
 
   it("distinguishes serialization failure from unavailable transports", async () => {
-    const socket = createGatewayWsTestSocket();
-    const { passed } = await connectTestWs({ socket });
+    const socket = Object.assign(createGatewayWsTestSocket(), { terminate: vi.fn() });
+    const { clients, passed } = await connectTestWs({ socket });
     const handlerParams = passed as {
       send: (frame: unknown) => { kind: string; error?: unknown };
+      setClient: (client: unknown) => boolean;
     };
+    expect(
+      handlerParams.setClient({
+        socket,
+        connect: { client: { id: "openclaw-control-ui", mode: "webchat" } },
+        connId: "failed-response-client",
+        usesSharedGatewayAuth: false,
+      }),
+    ).toBe(true);
     socket.send.mockClear();
 
     const cyclic: { self?: unknown } = {};
@@ -590,13 +612,20 @@ describe("attachGatewayWsConnectionHandler", () => {
       error: expect.any(TypeError),
     });
     expect(socket.send).not.toHaveBeenCalled();
+    expect(clients.size).toBe(1);
 
     socket.send.mockImplementationOnce(() => {
       throw new Error("socket unavailable");
     });
-    expect(handlerParams.send({ type: "event", event: "tick" })).toEqual({
+    socket.close.mockImplementationOnce(() => {
+      throw new Error("closing handshake unavailable");
+    });
+    expect(handlerParams.send({ type: "res", id: "pair-setup", ok: true })).toEqual({
       kind: "unavailable",
     });
+    expect(socket.close).toHaveBeenCalledWith(1000, undefined);
+    expect(socket.terminate).toHaveBeenCalledOnce();
+    expect(clients.size).toBe(0);
 
     socket.emit("close", 1000, Buffer.from("done"));
     expect(handlerParams.send({ type: "event", event: "tick" })).toEqual({
@@ -635,11 +664,13 @@ describe("attachGatewayWsConnectionHandler", () => {
   it.each([1001, 1006])(
     "demotes local app startup abort code %i before the first frame",
     async (closeCode) => {
+      let startupPending = true;
       const { socket, logWsControl } = await connectTestWs({
         headers: { "user-agent": "OpenClaw/2607000290 CFNetwork/3860 Darwin/25" },
-        options: { isStartupPending: () => true },
+        options: { isStartupPending: () => startupPending },
       });
 
+      startupPending = false;
       socket.emit("close", closeCode, Buffer.alloc(0));
 
       expect(logWsControl.debug).toHaveBeenCalledWith(

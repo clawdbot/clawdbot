@@ -539,7 +539,10 @@ async function releasePreparedManualReservation(
   state: CronServiceState,
   prepared: Pick<Extract<PreparedManualRun, { ran: true }>, "jobId" | "reservationIdentity">,
 ): Promise<void> {
-  if (!isQueuedCronRunReservationCurrent(state, prepared.jobId, prepared.reservationIdentity)) {
+  if (
+    state.queuedRunReservationsByJobId.get(prepared.jobId)?.identity !==
+    prepared.reservationIdentity
+  ) {
     return;
   }
   const committedJob = commitCronRuntimeRows({
@@ -549,7 +552,7 @@ async function releasePreparedManualReservation(
     mutate: ({ database, jobs }) => {
       const job = jobs.get(prepared.jobId);
       const ownership = state.queuedRunReservationsByJobId.get(prepared.jobId);
-      if (!job || ownership?.identity !== prepared.reservationIdentity) {
+      if (ownership?.identity !== prepared.reservationIdentity) {
         return { value: undefined };
       }
       finishCronRunReceiptInDatabase({
@@ -559,6 +562,9 @@ async function releasePreparedManualReservation(
         finishedAtMs: state.deps.nowMs(),
         error: "cron manual reservation abandoned before completion",
       });
+      if (!job) {
+        return { value: undefined };
+      }
       const queuedMatches = ownership.markerAtMs === job.state.queuedAtMs;
       const runningMatches = ownership.markerAtMs === job.state.runningAtMs;
       if (!queuedMatches && !runningMatches) {

@@ -2217,20 +2217,26 @@ describe("handleSlackAction", () => {
     expect(sendSlackMessage).not.toHaveBeenCalled();
   });
 
-  it("returns all emojis when no limit is provided", async () => {
+  it("returns sorted usable emoji identifiers and preserves alias targets", async () => {
     listSlackEmojis.mockResolvedValueOnce({
       ok: true,
-      emoji: { party: "https://example.com/party.png", wave: "https://example.com/wave.png" },
+      cache_ts: "ignored-provider-metadata",
+      emoji: {
+        wave: "https://example.com/wave.png",
+        celebrate: "alias:party",
+        party: "https://example.com/party.png",
+      },
     });
 
     const result = await handleSlackAction({ action: "emojiList" }, slackConfig());
 
     const details = requireDetails(result);
     expect(details.ok).toBe(true);
-    expect(details.emojis).toEqual({
-      ok: true,
-      emoji: { party: "https://example.com/party.png", wave: "https://example.com/wave.png" },
-    });
+    expect(details.emojis).toEqual([
+      { name: "celebrate", identifier: "celebrate", aliasOf: "party" },
+      { name: "party", identifier: "party" },
+      { name: "wave", identifier: "wave" },
+    ]);
   });
 
   it("applies limit to emoji-list results", async () => {
@@ -2247,13 +2253,31 @@ describe("handleSlackAction", () => {
 
     const details = requireDetails(result);
     expect(details.ok).toBe(true);
-    expect(details.emojis).toEqual({
+    expect(details.emojis).toEqual([
+      { name: "party", identifier: "party" },
+      { name: "tada", identifier: "tada" },
+    ]);
+  });
+
+  it.each([undefined, 150])("bounds emoji-list output for limit %s", async (limit) => {
+    listSlackEmojis.mockResolvedValueOnce({
       ok: true,
-      emoji: {
-        party: "https://example.com/party.png",
-        tada: "https://example.com/tada.png",
-      },
+      emoji: Object.fromEntries(
+        Array.from({ length: 101 }, (_, index) => [
+          `emoji${String(index).padStart(3, "0")}`,
+          "https://example.com/emoji.png",
+        ]),
+      ),
     });
+
+    const result = await handleSlackAction(
+      { action: "emojiList", ...(limit === undefined ? {} : { limit }) },
+      slackConfig(),
+    );
+
+    const emojis = requireArray(requireDetails(result).emojis, "emoji list");
+    expect(emojis).toHaveLength(100);
+    expect(emojis.at(-1)).toEqual({ name: "emoji099", identifier: "emoji099" });
   });
 
   it("rejects fractional emoji-list limits before reading emojis", async () => {

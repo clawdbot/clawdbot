@@ -483,7 +483,7 @@ describe("Vercel Container Registry publishing", () => {
     expect(immutableSourceStep?.run).toContain("verify-docker-attestations.mjs");
 
     expect(reusablePublish.steps?.find((step) => step.name === "Set up Docker Builder")?.uses).toBe(
-      "docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5",
+      "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
     );
     const materializeVercel = reusablePublish.steps?.find(
       (step) => step.name === "Materialize locked Vercel CLI",
@@ -526,15 +526,15 @@ describe("Vercel Container Registry publishing", () => {
     };
     const materialize = readFileSync("scripts/materialize-vercel-cli.sh", "utf8");
 
-    expect(packageJson.dependencies).toEqual({ vercel: "58.4.4" });
+    expect(packageJson.dependencies).toEqual({ vercel: "59.1.3" });
     expect(packageLock.lockfileVersion).toBe(3);
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
-        "sha512-Mv1807Ptxhy6cQne5xV/2dD+bUGYRtpV3sLVPXEW115RBN6K/ssuvOww8eNfdGucFH9C+p5ccQF07XSyAvBPLQ==",
-      version: "58.4.4",
+        "sha512-sxCp4+S0QlO+LEvGxboxB5tbDZvVE4gO2YeRuGvdamK5CYHTOK4WDHE3u+E8VIe8FVK9mtjKeo4Jnxez5MfNdw==",
+      version: "59.1.3",
     });
     expect(materialize).toContain(
-      'expected_lock_sha256="db00a6dd0cab114931bc2b5a09c5a0556020c3652381019e2f817cc0426e782c"',
+      'expected_lock_sha256="218f2254dddf8f978541736031e8cf5a3e7d368b71e98d47a67322bbe17f3897"',
     );
     expect(materialize).toContain("npm ci \\\n");
     expect(materialize).toContain("--ignore-scripts");

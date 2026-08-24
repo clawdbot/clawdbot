@@ -481,6 +481,15 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
+  it("prebuilds private QA dist before the QA Lab extension fallback", () => {
+    expect(createChangedExtensionFallbackShards(["extensions/qa-lab/src/cli.runtime.ts"])).toEqual([
+      expect.objectContaining({
+        configs: ["test/vitest/vitest.extension-qa.config.ts"],
+        pretestBuildMode: "private-qa",
+      }),
+    ]);
+  });
+
   it("fails safe when a targeted config needs special shard setup", () => {
     expect(createChangedNodeTestShards(["scripts/docs-i18n/main.go"])).toBeNull();
     expect(createChangedNodeTestShards(["src/tui/tui-pty-harness.e2e.test.ts"])).toBeNull();

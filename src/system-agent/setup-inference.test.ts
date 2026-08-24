@@ -1289,14 +1289,13 @@ describe("detectSetupInference", () => {
     expect(probeLocalCommand).not.toHaveBeenCalledWith("agy");
   });
 
-  it("keeps lower-version capability-compatible CLI wrappers available for activation", async () => {
+  it("preserves Agent SDK runtime guidance for an available Claude CLI", async () => {
     vi.mocked(detectInferenceBackends).mockResolvedValueOnce([
       {
         kind: "claude-cli",
         modelRef: "claude-cli/claude-opus-5",
         label: "Claude Code",
-        detail:
-          "logged in; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime.",
+        detail: "logged in; Claude Agent SDK uses the installed Claude Code executable.",
         credentials: true,
       },
     ]);
@@ -1310,8 +1309,7 @@ describe("detectSetupInference", () => {
       {
         brandId: "claude",
         credentials: true,
-        detail:
-          "logged in; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime.",
+        detail: "logged in; Claude Agent SDK uses the installed Claude Code executable.",
         kind: "claude-cli",
         label: "Claude Code",
         modelRef: "claude-cli/claude-opus-5",
@@ -1382,7 +1380,7 @@ describe("activateSetupInference", () => {
   it("omits the token cap when harness selection is automatic", () => {
     expect(resolveSetupInferenceProbeStreamParams("auto")).toEqual({});
     expect(resolveSetupInferenceProbeStreamParams("openclaw")).toEqual({
-      streamParams: { maxTokens: 32 },
+      streamParams: { maxTokens: 256 },
     });
   });
 
@@ -1936,6 +1934,7 @@ describe("activateSetupInference", () => {
     };
     const configHarness = createConfigTransformHarness(initialConfig);
     const updateAuthStore = vi.fn();
+    const runEmbeddedAgent = vi.fn(successfulRunner("lmstudio", "qwen-local"));
 
     const result = await activateSetupInference({
       kind: "provider-auto:lmstudio",
@@ -1951,7 +1950,7 @@ describe("activateSetupInference", () => {
           appGuidedDiscovery: true,
         }),
         resolvePluginProviders: () => [provider],
-        runEmbeddedAgent: vi.fn(successfulRunner("lmstudio", "qwen-local")) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         updateAuthProfileStoreWithLock: updateAuthStore as never,
       },
@@ -1969,6 +1968,13 @@ describe("activateSetupInference", () => {
           ]
         : []),
     ]);
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "lmstudio",
+        model: "qwen-local",
+        streamParams: { maxTokens: 256 },
+      }),
+    );
     expect(detect).not.toHaveBeenCalled();
     expect(prepare).toHaveBeenCalledOnce();
     expect(updateAuthStore).not.toHaveBeenCalled();
@@ -2447,11 +2453,46 @@ describe("activateSetupInference", () => {
     expect(transformConfig).not.toHaveBeenCalled();
   });
 
-  it("treats an empty model reply as a failure with bounded probe identifiers", async () => {
+  it.each([
+    { name: "empty payload", runResult: { payloads: [] } },
+    {
+      name: "reasoning payload",
+      runResult: { payloads: [{ text: "Considering the answer", isReasoning: true }] },
+    },
+    {
+      name: "commentary payload",
+      runResult: { payloads: [{ text: "Checking the model", isCommentary: true }] },
+    },
+    {
+      name: "explicitly hidden payload",
+      runResult: { payloads: [{ text: "Private model output", visible: false }] },
+    },
+    {
+      name: "status notice",
+      runResult: { payloads: [{ text: "Still working", isStatusNotice: true }] },
+    },
+    {
+      name: "compaction notice",
+      runResult: { payloads: [{ text: "Compacting context", isCompactionNotice: true }] },
+    },
+    {
+      name: "fallback notice",
+      runResult: { payloads: [{ text: "Trying another model", isFallbackNotice: true }] },
+    },
+    { name: "silent payload", runResult: { payloads: [{ text: "NO_REPLY" }] } },
+    {
+      name: "silent visible metadata",
+      runResult: { meta: { finalAssistantVisibleText: "NO_REPLY" } },
+    },
+    {
+      name: "raw-only hidden metadata",
+      runResult: { meta: { finalAssistantRawText: "Hidden draft" } },
+    },
+  ])("rejects a $name as a model reply with bounded probe identifiers", async ({ runResult }) => {
     const transformConfig = vi.fn();
-    const runEmbeddedAgent = vi.fn(async (_params: { runId?: string; sessionId?: string }) => ({
-      payloads: [],
-    }));
+    const runEmbeddedAgent = vi.fn(
+      async (_params: { runId?: string; sessionId?: string }) => runResult,
+    );
     const result = await activateSetupInference({
       kind: "anthropic-api-key",
       deps: {

@@ -104,6 +104,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const createdListeners = new Set<(key: string) => void>();
   let canonicalListRevision = 0;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
+  let hydratedSelfUserId: string | null = null;
   let connectionClient = gateway.snapshot.client;
   let sessionEventSubscriptionError: string | null = null;
   let publishedErrorSource: "session-observer" | "operation" | null = null;
@@ -340,6 +341,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const stopGateway = gateway.subscribe((next) => {
     const previousClient = connectionClient;
     const connected = next.phase === "connected";
+    const selfUserId = next.selfUser?.id.trim() || null;
     const connectionChanged = connection.transition(next);
     connectionClient = next.client;
     if (connectionChanged) {
@@ -360,6 +362,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
     if (!connected || !next.client) {
       hydratedClient = null;
+      hydratedSelfUserId = null;
       publish({
         result: null,
         agentId: null,
@@ -373,12 +376,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
       return;
     }
-    if (hydratedClient !== next.client) {
+    if (hydratedClient !== next.client || hydratedSelfUserId !== selfUserId) {
       const scope = connection.capture();
       if (!scope) {
         return;
       }
       hydratedClient = scope.client;
+      hydratedSelfUserId = selfUserId;
       void (async () => {
         await sessionEventSubscription.ensure(scope);
         if (connection.isCurrent(scope)) {
@@ -415,22 +419,44 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       resultAgentId: state.agentId,
       archivedFilter: roster.lastOptions().archivedFilter,
     });
-    if (eventInfo?.archived !== null) {
+    const payload = event.payload as {
+      agentId?: unknown;
+      reason?: unknown;
+      session?: unknown;
+    } | null;
+    const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
+    const status = reconciled.status ?? eventInfo?.status;
+    const runEnded =
+      hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
+    const isTerminalMessage = event.event === "session.message" && runEnded;
+    // Only an existing Gateway roster member that remains active can be replaced directly.
+    const primarySnapshotApplied =
+      isTerminalMessage &&
+      reconciled.applied &&
+      eventInfo !== null &&
+      eventInfo.archived !== true &&
+      typeof payload?.session === "object" &&
+      payload.session !== null &&
+      roster.canApplyPrimarySnapshot() &&
+      state.result?.sessions.some((row) =>
+        uiSessionEventMatches(
+          { ...gateway.snapshot, sessionKey: row.key },
+          eventInfo.key,
+          eventInfo.agentId,
+        ),
+      ) === true;
+    if ((eventInfo?.archived !== null && !isTerminalMessage) || primarySnapshotApplied) {
       const result = decorateRows(reconciled.result);
       if (result !== state.result) {
         publishReconciledState({ ...state, result });
       }
     }
-    const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
-    const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
+    const eventReason = payload?.reason;
+    const payloadAgentId = payload?.agentId;
     if (eventReason === "groups") {
       groups.invalidate();
       void groups.load();
     }
-    const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
-    const status = reconciled.status ?? eventInfo?.status;
-    const runEnded =
-      hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     if (event.event === "session.message" && !runEnded) {
       return;
     }
@@ -463,12 +489,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         publish({ ...state, deletedSessions: remainingDeletedSessions });
       }
     }
-    // Gateway lists own filtering/order; authoritative events invalidate every matching roster.
     roster.scheduleEvent({
       agentId:
         eventInfo?.agentId ??
         parseAgentSessionKey(eventInfo?.key)?.agentId ??
         (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
+      primarySnapshotApplied,
     });
   });
 
@@ -549,6 +575,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       connection.dispose();
       groups.dispose();
       hydratedClient = null;
+      hydratedSelfUserId = null;
       mutations.dispose();
       swarmActivity.clear();
       pullRequestSummaries.clear();

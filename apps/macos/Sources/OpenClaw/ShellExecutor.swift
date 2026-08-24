@@ -173,7 +173,7 @@ enum ShellExecutor {
                 allowedDurationToNextStep: .zero),
         ]
         return Configuration(
-            .path(.init("/usr/bin/env")),
+            executable: .path(.init("/usr/bin/env")),
             arguments: Arguments(command),
             environment: self.environment(from: env),
             workingDirectory: cwd.map { .init($0) },
@@ -226,7 +226,7 @@ enum ShellExecutor {
     {
         let result = try await Subprocess.run(
             configuration,
-            input: .standardInput,
+            input: .currentStandardInput,
             output: output.subprocessStandardOutput,
             error: output.subprocessStandardError)
         return result.terminationStatus
@@ -239,13 +239,13 @@ enum ShellExecutor {
     {
         let result = try await Subprocess.run(
             configuration,
-            input: .standardInput,
+            input: .currentStandardInput,
             output: output.subprocessStandardOutput,
             error: output.subprocessStandardError)
         { execution in
             await self.waitForExitOrTimeout(execution: execution, timeout: timeout)
         }
-        return result.closureOutput ? .timedOut : .completed(result.terminationStatus)
+        return result.closureResult ? .timedOut : .completed(result.terminationStatus)
     }
 
     private static func waitForExitOrTimeout(
@@ -294,7 +294,7 @@ enum ShellExecutor {
     {
         let result = try await Subprocess.run(
             configuration,
-            input: .standardInput,
+            input: .currentStandardInput,
             output: .sequence,
             error: .sequence)
         { execution in
@@ -335,7 +335,7 @@ enum ShellExecutor {
                 _ = Darwin.kill(-processIdentifier, SIGKILL)
             }
         }
-        return (result.terminationStatus, result.closureOutput)
+        return (result.terminationStatus, result.closureResult)
     }
 
     static func runDetailed(

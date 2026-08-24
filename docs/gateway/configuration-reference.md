@@ -547,7 +547,10 @@ See [Plugins](/tools/plugin).
 }
 ```
 
-- `seamColor`: accent color for native app UI chrome (Talk Mode bubble tint, etc.).
+- `seamColor`: operator accent color for native app UI chrome (Talk Mode bubble
+  tint, etc.). The Control UI user accent (`ui.prefs.accent`) takes precedence in
+  `talk.config` payloads and the macOS app's config snapshot. If neither is set,
+  the theme default applies.
 - `assistant`: Control UI identity override. Falls back to active agent identity.
 - `prefs`: cross-device operator preferences. This is the canonical home so agents can
   change them through the approval gate and every Control UI client stays in
@@ -711,6 +714,22 @@ Gateway or node host and check `openclaw nodes pending` again.
         exemptLoopback: true,
       },
     },
+    // Optional person-level access policy for team Gateway deployments.
+    roles: {
+      default: "guest",
+      definitions: {
+        maintainer: {
+          sessions: { others: "write" }, // none | view | suggest | write
+          agents: "*",
+          scopes: ["operator.read", "operator.write", "operator.approvals"],
+        },
+        guest: {
+          sessions: { others: "view" },
+          agents: ["guest-agent"],
+          scopes: ["operator.read", "operator.write"],
+        },
+      },
+    },
     tailscale: {
       mode: "off", // off | serve | funnel
     },
@@ -801,6 +820,7 @@ Gateway or node host and check `openclaw nodes pending` again.
 - `gateway.auth.mode: "trusted-proxy"`: delegate browser/user auth to an identity-aware reverse proxy and trust identity headers from `gateway.trustedProxies` (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)). This mode expects a **non-loopback** proxy source by default; same-host loopback reverse proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true`. Internal same-host callers can use `gateway.auth.password` as a local direct fallback; `gateway.auth.token` remains mutually exclusive with trusted-proxy mode.
 - `gateway.auth.allowTailscale`: when `true`, Tailscale Serve identity headers can satisfy Control UI/WebSocket auth (verified via `tailscale whois`). HTTP API endpoints do **not** use that Tailscale header auth; they follow the gateway's normal HTTP auth mode instead. This tokenless flow assumes the gateway host is trusted. Defaults to `true` when `tailscale.mode = "serve"`.
 - `gateway.auth.identityScopes`: maps a verified trusted-proxy user or Tailscale WhoIs login to connection-only operator scopes. Email keys match case-insensitively; other identities match exactly. For trusted-proxy Control UI connections, `x-openclaw-scopes` caps device enrollment or upgrade requests and the final device-plus-identity session scopes. Grants do not create or modify pairing records. Token, password, and no-auth connections have no verified identity and receive no grant.
+- `gateway.roles`: optional named operator roles for authenticated user profiles on team Gateways. Every definition specifies `sessions.others` (`none`, `view`, `suggest`, or `write`), allowed session-creation and agent-run `agents` (`"*"` or an array of agent IDs), and a closed `scopes` ceiling that also applies to identity-authenticated HTTP requests and signed Control UI plugin grants. The administrator-scoped `users.setRole` Gateway method assigns or clears a profile's role and immediately disconnects its active clients so they reconnect with current authority. Identity-authenticated operator sessions do not receive reusable, person-unbound device/bootstrap tokens while roles are configured, and identity-less device-token or bootstrap-token operator authentication is rejected; reconnect through trusted-proxy or other supported verified identity instead. `default` is required, must name a configured definition, and applies to unassigned profiles. `sessions.others: "none"` also denies Gateway-wide `usage.cost`; audit diagnostics and other `operator.write` control-plane capabilities remain shared-domain surfaces, not hostile-tenant isolation. Omitting `roles` leaves existing solo and shared-secret deployments unchanged. See [Operator scopes](/gateway/operator-scopes#named-operator-roles).
 - `gateway.auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`.
   - On the async Tailscale Serve Control UI path, failed attempts for the same `{scope, clientIp}` are serialized before the failure write. Concurrent bad attempts from the same client can therefore trip the limiter on the second request instead of both racing through as plain mismatches.
   - `gateway.auth.rateLimit.exemptLoopback` defaults to `true`; set `false` when you intentionally want localhost traffic rate-limited too (for test setups or strict proxy deployments).
@@ -1518,6 +1538,26 @@ writer is best-effort, not a lossless compliance archive.
 
 ---
 
+## Telemetry
+
+```json5
+{
+  telemetry: {
+    enabled: false,
+    consentedAt: "2026-08-02T12:00:00.000Z",
+  },
+}
+```
+
+- `enabled`: include anonymous channel names, provider families, plugin count, and recent session count in the existing daily update-check request (default: `false`). Interactive setup offers an explicit opt-in with **No thanks** selected by default; non-interactive setup never enables it. `DO_NOT_TRACK=1` or `DO_NOT_TRACK=true` always disables feature statistics without disabling the update check.
+- `consentedAt`: ISO timestamp recording when the operator accepted or declined feature statistics. Prevents interactive setup from asking again.
+- `openclaw telemetry show` displays the exact current request; `openclaw telemetry on` and `openclaw telemetry off` update the preference and consent timestamp.
+- `OPENCLAW_TELEMETRY_ENDPOINT`: optional full endpoint URL for testing or a self-hosted service. Defaults to `https://telemetry.openclaw.ai/api/latest-version`.
+
+See [Usage telemetry and update checks](/gateway/telemetry) for the complete payload, privacy guarantees, and all opt-out controls.
+
+---
+
 ## Update
 
 ```json5
@@ -1534,8 +1574,8 @@ writer is best-effort, not a lossless compliance archive.
 ```
 
 - `channel`: release channel - `"stable"`, `"extended-stable"`, `"beta"`, or `"dev"`. Extended-stable is package-only: foreground commands own installation, while the Gateway may emit read-only update hints.
-- `checkOnStart`: check for npm updates when the gateway starts (default: `true`). Stored extended-stable selections use the same read-only hint and 24-hour hint schedule.
-- `auto.enabled`: enable background auto-update campaigns for stable and beta package installs and dev git installs (default: `false`). Extended-stable never applies automatically.
+- `checkOnStart`: check for updates through `https://telemetry.openclaw.ai/api/latest-version` when the Gateway starts and at most once every 24 hours afterward (default: `true`). The default request shares only the OpenClaw version and platform information in its `User-Agent`; anonymous feature statistics are included only when `telemetry.enabled` is `true`. Setting this to `false`, or setting `OPENCLAW_NO_AUTO_UPDATE=1`, prevents all automatic update requests, feature statistics, and update notices, even when `auto.enabled` is `true`. Stored extended-stable selections use the same read-only hint and 24-hour hint schedule.
+- `auto.enabled`: enable background auto-update campaigns for stable and beta package installs and dev git installs when `checkOnStart` is also enabled (default: `false`). Extended-stable never applies automatically.
 
 ---
 

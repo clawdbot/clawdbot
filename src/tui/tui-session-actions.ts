@@ -4,6 +4,7 @@ import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -185,11 +186,11 @@ export function createSessionActions(context: SessionActionContext) {
     updateFooter();
   };
 
-  const refreshAgents = () =>
+  const refreshAgents = (ownsRefresh: () => boolean = () => true) =>
     refreshTuiAgentList({
       load: () => client.listAgents(),
-      apply: applyAgentsResult,
-      reportError: (message) => chatLog.addSystem(`agents list failed: ${message}`),
+      apply: (result) => ownsRefresh() && applyAgentsResult(result),
+      reportError: (error) => ownsRefresh() && chatLog.addSystem(`agents list failed: ${error}`),
     });
 
   const updateAgentFromSessionKey = (key: string) => {
@@ -633,11 +634,10 @@ export function createSessionActions(context: SessionActionContext) {
             : ({ state: "completed" } as const);
       return { loaded: true, runOutcome };
     } catch (err) {
-      if (!isCurrentLoad()) {
-        return { loaded: false };
+      if (isCurrentLoad() && !isAbortError(err)) {
+        chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);
+        tui.requestRender(true);
       }
-      chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);
-      tui.requestRender(true);
       return { loaded: false };
     }
   };

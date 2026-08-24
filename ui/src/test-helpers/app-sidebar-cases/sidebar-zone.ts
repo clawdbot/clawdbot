@@ -560,9 +560,7 @@ describe("AppSidebar interleaved zone", () => {
       throw new Error("expected session links");
     }
 
-    alpha.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }),
-    );
+    alpha.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true }));
     beta.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: true }),
     );

@@ -1,5 +1,8 @@
 // Subagent announce format e2e tests exercise the full announce flow with
 // channel fixtures, session stores, hooks, and gateway calls wired together.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
@@ -8,6 +11,7 @@ import {
   type OpenClawConfig,
 } from "../../../config/config.js";
 import * as configSessions from "../../../config/sessions.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
@@ -783,6 +787,77 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("step-139");
   });
 
+  // These two cases deliberately drop the readSubagentSessionEntry stub and read
+  // a real agent session store on disk, so the Stats: clause in the parent-facing
+  // announcement is produced by the production read path rather than a fixture.
+  async function withRealChildSessionStore(
+    entryPatch: Record<string, unknown>,
+    run: () => Promise<void>,
+  ): Promise<void> {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "announce-real-store-")),
+    );
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const childSessionKey = "agent:main:subagent:test";
+    try {
+      await patchSessionEntryCore(
+        { agentId: "main", sessionKey: childSessionKey, storePath },
+        () => ({ sessionId: "child-session-real-store", ...entryPatch }),
+        {
+          fallbackEntry: { sessionId: "child-session-real-store", updatedAt: Date.now() },
+          replaceEntry: true,
+          skipMaintenance: true,
+        },
+      );
+      // readSubagentSessionEntry is intentionally omitted so the real reader runs.
+      subagentAnnounceOutputTesting.setDepsForTest({
+        callGateway: async <T = Record<string, unknown>>(
+          req: Parameters<typeof gatewayCall.callGateway>[0],
+        ) => (await callGatewaySpy(req)) as T,
+        getRuntimeConfig: () => configOverride,
+        resolveAgentIdFromSessionKey: () => "main",
+        resolveSessionStorePathCore: () => storePath,
+      });
+      await run();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("announces tokens unknown when child usage never landed on the real session store", async () => {
+    await withRealChildSessionStore({}, async () => {
+      await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-real-store-absent",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        ...defaultOutcomeAnnounce,
+      });
+
+      const msg = getAgentCall().params?.message as string;
+      expect(msg).toContain("Stats:");
+      expect(msg).toContain("tokens unknown");
+      expect(msg).not.toContain("tokens 0 (in 0 / out 0)");
+    });
+  });
+
+  it("announces a genuine zero-usage reading from the real session store", async () => {
+    await withRealChildSessionStore({ inputTokens: 0, outputTokens: 0 }, async () => {
+      await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-real-store-zero",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        ...defaultOutcomeAnnounce,
+      });
+
+      const msg = getAgentCall().params?.message as string;
+      expect(msg).toContain("Stats:");
+      expect(msg).toContain("tokens 0 (in 0 / out 0)");
+      expect(msg).not.toContain("tokens unknown");
+    });
+  });
+
   it("routes manual spawn completion through a parent-agent announce turn", async () => {
     sessionStore = {
       "agent:main:subagent:test": {
@@ -1454,6 +1529,15 @@ describe("subagent announce formatting", () => {
         replyText: "partial output",
         outcome: { status: "timeout" } as const,
         expectedStatus: "timed out",
+        spawnMode: undefined,
+      },
+      {
+        childSessionId: "child-session-direct-timeout-cause",
+        requesterSessionId: "requester-session-timeout-cause",
+        childRunId: "run-direct-completion-timeout-cause",
+        replyText: "partial output",
+        outcome: { status: "timeout", error: "child run failed before completing" } as const,
+        expectedStatus: "timed out: child run failed before completing",
         spawnMode: undefined,
       },
     ] as const;

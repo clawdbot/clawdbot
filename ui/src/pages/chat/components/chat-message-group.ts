@@ -2,6 +2,11 @@ import { html, nothing } from "lit";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import {
+  personActivityLink,
+  renderPersonName,
+  type PersonActivityRouting,
+} from "../../../components/person-activity-link.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
@@ -87,6 +92,8 @@ type RenderMessageGroupOptions = {
   assistantAvatar?: string | null;
   userId?: string | null;
   userName?: string | null;
+  /** Routing for peer sender names; absent leaves them plain text. */
+  personActivity?: PersonActivityRouting;
   userAvatar?: string | null;
   showAvatarGutter?: boolean;
   showAssistantAvatar?: boolean;
@@ -597,7 +604,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               ${normalizedRole === "user" && !showAvatarGutter
                 ? renderChatAuthorAvatar(group.sender)
                 : nothing}
-              <span class="chat-sender-name">${who}</span>
+              ${renderPersonName(
+                who,
+                // Only other people's messages: your own name links nowhere useful.
+                isPeerGroup ? personActivityLink(group.sender?.id, opts.personActivity) : null,
+                "chat-sender-name",
+              )}
               ${renderMessageMeta(group.timestamp, meta)}
             </div>
             ${isPeerGroup

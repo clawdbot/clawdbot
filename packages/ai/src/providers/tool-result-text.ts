@@ -223,8 +223,11 @@ export function formatToolResultText(params: {
   isError: boolean;
 }): string {
   const trimmed = params.text.trim();
+  // trim() is only an emptiness predicate here: tool output boundary
+  // whitespace (indentation, trailing newlines) is significant durable
+  // content, so the nonblank body must emit params.text unmodified.
   const body = trimmed
-    ? `${trimmed}${params.omittedMediaPlaceholder ? `\n${params.omittedMediaPlaceholder}` : ""}`
+    ? `${params.text}${params.omittedMediaPlaceholder ? `\n${params.omittedMediaPlaceholder}` : ""}`
     : (params.omittedMediaPlaceholder ?? params.mediaPlaceholder ?? "(no tool output)");
   return `${params.isError ? "[tool error] " : ""}${body}`;
 }

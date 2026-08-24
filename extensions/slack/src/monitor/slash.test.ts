@@ -502,6 +502,8 @@ async function runArgMenuAction(
     userName?: string;
     channelId?: string;
     channelName?: string;
+    message?: { ts: string; thread_ts?: string };
+    container?: { message_ts: string; thread_ts?: string };
     respond?: ReturnType<typeof vi.fn>;
     includeRespond?: boolean;
   },
@@ -515,6 +517,8 @@ async function runArgMenuAction(
       user: { id: params.userId ?? "U1", name: params.userName ?? "Ada" },
       channel: { id: params.channelId ?? "C1", name: params.channelName ?? "directmessage" },
       trigger_id: "t1",
+      ...(params.message ? { message: params.message } : {}),
+      ...(params.container ? { container: params.container } : {}),
     },
   };
   if (includeRespond) {
@@ -1223,17 +1227,28 @@ describe("Slack native command argument menus", () => {
     expect(firstDispatchArg().ctx?.OriginatingTo).toBe("team:TGRID1:user:U1");
   });
 
-  it("does not apply the response_url call cap to Web API action replies", async () => {
+  it.each([
+    { name: "top-level", message: undefined, threadTs: undefined },
+    {
+      name: "threaded",
+      message: { ts: "171.222", thread_ts: "170.111" },
+      threadTs: "170.111",
+    },
+  ])("does not cap $name Web API action replies", async ({ message, threadTs }) => {
     mockSixDispatchedReplies();
 
     await runArgMenuAction(argMenuHandler, {
       action: {
         value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
       },
+      message,
       includeRespond: false,
     });
 
     expect(harness.postEphemeral).toHaveBeenCalledTimes(6);
+    for (const [payload] of harness.postEphemeral.mock.calls) {
+      expect(payload.thread_ts).toBe(threadTs);
+    }
   });
 
   it("keeps table fallback tokens literal in Web API action replies", async () => {
@@ -1280,6 +1295,7 @@ describe("Slack native command argument menus", () => {
       action: {
         value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
       },
+      message: { ts: "171.222", thread_ts: "170.111" },
     });
 
     expect(respond).toHaveBeenCalledTimes(5);
@@ -1488,17 +1504,37 @@ describe("Slack native command argument menus", () => {
     expect(trackEvent).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to postEphemeral with token when respond is unavailable", async () => {
-    await runArgMenuAction(argMenuHandler, {
-      action: { value: "garbage" },
-      includeRespond: false,
-    });
+  it.each([
+    { name: "a top-level action", message: undefined, container: undefined, threadTs: undefined },
+    {
+      name: "the action container's parent thread",
+      message: { ts: "171.222", thread_ts: "169.999" },
+      container: { message_ts: "171.222", thread_ts: "170.111" },
+      threadTs: "170.111",
+    },
+    {
+      name: "the action message's parent thread",
+      message: { ts: "171.222", thread_ts: "170.111" },
+      container: { message_ts: "171.222" },
+      threadTs: "170.111",
+    },
+  ])(
+    "keeps $name when respond falls back to postEphemeral",
+    async ({ message, container, threadTs }) => {
+      await runArgMenuAction(argMenuHandler, {
+        action: { value: "garbage" },
+        message,
+        container,
+        includeRespond: false,
+      });
 
-    const payload = firstCallPayload(harness.postEphemeral, "postEphemeral");
-    expect(payload.token).toBe("bot-token");
-    expect(payload.channel).toBe("C1");
-    expect(payload.user).toBe("U1");
-  });
+      const payload = firstCallPayload(harness.postEphemeral, "postEphemeral");
+      expect(payload.token).toBe("bot-token");
+      expect(payload.channel).toBe("C1");
+      expect(payload.user).toBe("U1");
+      expect(payload.thread_ts).toBe(threadTs);
+    },
+  );
 
   it("treats malformed percent-encoding as an invalid button", async () => {
     await runArgMenuAction(argMenuHandler, {

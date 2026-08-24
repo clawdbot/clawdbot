@@ -4,7 +4,7 @@
   "description": "OpenClaw Signal channel plugin",
   "type": "module",
   "dependencies": {
-    "ws": "8.21.1",
+    "ws": "8.21.3",
     "zod": "4.4.3"
   },
   "devDependencies": {

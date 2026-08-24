@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";
+import { validatePackageSourceDir } from "../../package-source-preflight.mjs";
 import { isLocalBuildMetadataDistPath } from "../local-build-metadata-paths.mts";
 import type { CandidateBuild, LaneCommandParams, LaneState, PackageJson } from "./config.ts";
 import {
@@ -35,6 +36,7 @@ export async function prepareCandidate(params: {
   logsDir: string;
 }): Promise<CandidateBuild> {
   logPhase("prepare", "resolve-source-sha");
+  validatePackageSourceDir(params.sourceDir, { allowUnreleasedChangelog: true });
   const packageJson = readPackageJson(params.sourceDir);
   const hasUiBuildScript = packageJsonHasScript(packageJson, "ui:build");
   const sourceSha = (

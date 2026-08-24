@@ -6,6 +6,11 @@ import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  openNewSessionPlusMenu,
+  replaceGatewayClient,
+  selectNewSessionDraft,
+} from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session ownership",
@@ -169,18 +174,6 @@ async function openSidebarSortMenu(targetPage: Page) {
   const menu = targetPage.locator(".sidebar-session-sort-menu");
   await menu.waitFor();
   return menu;
-}
-
-async function replaceGatewayClient(targetPage: Page) {
-  await targetPage.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: { context: { gateway: { connect: () => void } } };
-    };
-    if (!app.runtime) {
-      throw new Error("OpenClaw application runtime is unavailable");
-    }
-    app.runtime.context.gateway.connect();
-  });
 }
 
 suite.define(() => {
@@ -402,6 +395,86 @@ suite.define(() => {
     );
   });
 
+  it("keeps unrelated active sessions out of the involving-me filter", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(sessionOwnerProofArtifactDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      viewport: { height: 800, width: 1200 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: sessionOwnerProofArtifactDir,
+              size: { height: 800, width: 1200 },
+            },
+          }
+        : {}),
+    });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const allSessions = sessionsList(["profile-ada", "profile-bob"]);
+    const gateway = await installMockGateway(currentPage, {
+      hasMultipleSessionSharingIdentities: true,
+      sessionKey: "agent:main:ada",
+      presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": allSessions },
+    });
+
+    await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
+    await gateway.setMethodResponse("sessions.list", {
+      ...allSessions,
+      count: 1,
+      sessions: allSessions.sessions.filter((session) => session.key === "agent:main:ada"),
+    });
+    const menu = await openSidebarSortMenu(currentPage);
+    await menu.evaluate((element) =>
+      element.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          detail: { item: { value: "involving-me" } },
+        }),
+      ),
+    );
+    await expect
+      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
+      .toBe(0);
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests("sessions.list")).some(
+          (request) =>
+            (request.params as { involvingMe?: unknown } | undefined)?.involvingMe === true,
+        ),
+      )
+      .toBe(true);
+    await captureSessionOwnerProof(currentPage, "02-involving-me-before-active-event.png");
+
+    await gateway.emitGatewayEvent("session.message", {
+      sessionKey: "agent:main:bob",
+      key: "agent:main:bob",
+      kind: "direct",
+      updatedAt: 3,
+      archived: false,
+      hasActiveRun: true,
+      status: "running",
+      owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
+      participants: [],
+      participantCount: 0,
+    });
+
+    await expect
+      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
+      .toBe(0);
+    await expectBrowser(currentPage.locator('[data-session-key="agent:main:ada"]')).toBeVisible();
+    const filteredMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(filteredMenu.locator('[value="involving-me"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await captureSessionOwnerProof(currentPage, "03-involving-me-after-active-event.png");
+  });
+
   it("renders zero ownership chrome for a single owner", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
@@ -524,11 +597,12 @@ suite.define(() => {
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
-    // Playwright check()/isChecked() support role="switch" buttons via aria-checked.
-    const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
-    await draftToggle.waitFor();
+    const menu = await openNewSessionPlusMenu(currentPage);
+    await menu.getByRole("menuitem", { name: "Draft" }).waitFor();
     await captureUiProof(currentPage, "02-create-draft-available.png");
-    await draftToggle.check();
+    await menu.getByRole("menuitem", { name: "Draft" }).click();
+    await currentPage.keyboard.press("Escape");
+    await currentPage.getByRole("button", { name: "Draft", exact: true }).waitFor();
     await currentPage.locator(".new-session-page__message").fill("work privately first");
     await captureUiProof(currentPage, "03-create-draft-selected.png");
     await currentPage.getByRole("button", { name: "Start session" }).click();
@@ -940,22 +1014,24 @@ suite.define(() => {
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
-    const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
-    await draftToggle.check();
+    await selectNewSessionDraft(currentPage);
     await gateway.setSessionSharingPolicy({
       allowedSessionVisibilities: ["shared"],
       hasMultipleSessionSharingIdentities: false,
     });
     await replaceGatewayClient(currentPage);
-    await expect.poll(() => draftToggle.count()).toBe(0);
+    await expect
+      .poll(() => currentPage.getByRole("button", { name: "Draft", exact: true }).count())
+      .toBe(0);
 
     await gateway.setSessionSharingPolicy({
       allowedSessionVisibilities: ["shared", "draft"],
       hasMultipleSessionSharingIdentities: true,
     });
     await replaceGatewayClient(currentPage);
-    await draftToggle.waitFor();
-    expect(await draftToggle.isChecked()).toBe(false);
+    const menu = await openNewSessionPlusMenu(currentPage);
+    await menu.getByRole("menuitem", { name: "Draft" }).waitFor();
+    expect(await currentPage.getByRole("button", { name: "Draft", exact: true }).count()).toBe(0);
   });
 
   it("keeps create-as-draft dormant for one owner", async () => {
@@ -969,7 +1045,7 @@ suite.define(() => {
     });
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}new`);
-    await currentPage.locator(".new-session-page__message").waitFor();
-    expect(await currentPage.getByRole("switch", { name: "Draft", exact: true }).count()).toBe(0);
+    const menu = await openNewSessionPlusMenu(currentPage);
+    expect(await menu.getByRole("menuitem", { name: "Draft" }).count()).toBe(0);
   });
 });

@@ -108,9 +108,7 @@ suite.define(() => {
         featureCapabilities: [GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC],
         featureMethods: ["board.get", "board.update", "board.widget.grant", "board.widget.put"],
         methodResponses: {
-          "sessions.describe": {
-            session: sessionRow,
-          },
+          "sessions.describe": { session: sessionRow },
           "board.get": boardSnapshot,
           "board.widget.grant": {
             ...boardSnapshot,
@@ -125,10 +123,21 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}${initialFocusPath}`);
       await gateway.waitForRequest("sessions.resolve");
       expect(await gateway.getRequests("board.get")).toHaveLength(0);
-      await gateway.resolveDeferred("sessions.resolve", { ok: true, key: sessionKey });
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
+      const initialSessionListCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.resolveDeferred("sessions.resolve", {
+        ok: true,
+        key: sessionKey,
+        agentId: "main",
+        displayName: sessionRow.displayName,
+        boardFace: sessionRow.boardFace,
+      });
       const document = page.locator("openclaw-board-document");
       await document.locator("openclaw-board-view").waitFor();
 
+      expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(initialSessionListCount);
       expect(await page.locator("openclaw-app-shell").count()).toBe(0);
       expect(await page.locator(".agent-chat").count()).toBe(0);
       expect((await gateway.getRequests("board.get"))[0]?.params).toEqual({ sessionKey });
@@ -226,17 +235,18 @@ suite.define(() => {
         methodResponses: {
           "sessions.resolve": {
             ok: false,
-            candidates: [{ key: sessionKey }, { key: secondKey }],
-          },
-          "sessions.describe": {
-            sequence: [
-              { session: sessionRow },
+            candidates: [
               {
-                session: {
-                  ...sessionRow,
-                  key: secondKey,
-                  displayName: "Deploy monitor beta",
-                },
+                key: sessionKey,
+                agentId: "main",
+                displayName: sessionRow.displayName,
+                boardFace: sessionRow.boardFace,
+              },
+              {
+                key: secondKey,
+                agentId: "main",
+                displayName: "Deploy monitor beta",
+                boardFace: sessionRow.boardFace,
               },
             ],
           },
@@ -251,6 +261,8 @@ suite.define(() => {
           /^\/focus\/dashboard\/main\//u,
         );
       }
+      expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
       expect(await gateway.getRequests("board.get")).toHaveLength(0);
       expect(await page.locator("openclaw-board-document").count()).toBe(0);
       await closeFocusedView(page, "Close dashboard");
@@ -298,10 +310,14 @@ suite.define(() => {
         sessionKey,
         featureMethods: ["board.get"],
         methodResponses: {
-          "sessions.resolve": { ok: true, key: sessionKey },
-          "sessions.describe": {
-            session: sessionRow,
+          "sessions.resolve": {
+            ok: true,
+            key: sessionKey,
+            agentId: "main",
+            displayName: sessionRow.displayName,
+            boardFace: sessionRow.boardFace,
           },
+          "sessions.describe": { session: sessionRow },
           "board.get": {
             __mockError: { code: "UNAVAILABLE", message: "dashboard storage is unavailable" },
           },
