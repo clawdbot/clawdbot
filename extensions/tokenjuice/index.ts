@@ -5,7 +5,8 @@ import { createTokenjuiceAgentToolResultMiddleware } from "./tool-result-middlew
 export default definePluginEntry({
   id: "tokenjuice",
   name: "tokenjuice",
-  description: "Compacts exec and bash tool results with tokenjuice reducers.",
+  description:
+    "Compacts exec and bash tool results for OpenClaw-embedded runs and OpenClaw dynamic tools in the Codex app-server harness. Native codex-rs bash/exec results are returned unchanged.",
   register(api) {
     api.registerAgentToolResultMiddleware(createTokenjuiceAgentToolResultMiddleware(), {
       runtimes: ["openclaw", "codex"],
