@@ -474,13 +474,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         publish({ ...state, deletedSessions: remainingDeletedSessions });
       }
     }
-    // Terminal snapshots own the primary row; filtered rosters still need server-side evaluation.
     roster.scheduleEvent({
       agentId:
         eventInfo?.agentId ??
         parseAgentSessionKey(eventInfo?.key)?.agentId ??
         (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
-      refreshPrimary: !reconciledTerminalSession,
+      primarySnapshotApplied: reconciledTerminalSession,
     });
   });
 

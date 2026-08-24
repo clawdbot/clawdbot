@@ -284,6 +284,77 @@ describe("event-driven session list refresh", () => {
     }
   });
 
+  it.each([
+    { filter: "ownerId", query: { ownerId: "profile-ada" } },
+    { filter: "involvingMe", query: { involvingMe: true } },
+  ])(
+    "refreshes the $filter-filtered primary roster after a terminal session message",
+    async ({ filter, query }) => {
+      vi.useFakeTimers();
+      const key = "agent:main:main";
+      let matchesFilteredRoster = true;
+      const row = {
+        key,
+        kind: "direct" as const,
+        updatedAt: 1,
+        hasActiveRun: true,
+        status: "running" as const,
+        owner: { actor: { type: "human" as const, id: "profile-ada", label: "Ada" } },
+      };
+      const request = vi.fn(
+        async (method: string, params?: { ownerId?: string; involvingMe?: boolean }) => {
+          if (method !== "sessions.list") {
+            throw new Error(`Unexpected request: ${method}`);
+          }
+          const filtered = Boolean(params?.ownerId || params?.involvingMe);
+          return sessionsResult(
+            matchesFilteredRoster ? 1 : 2,
+            filtered && !matchesFilteredRoster ? [] : [row],
+          );
+        },
+      );
+      const { sessions, emitEvent } = createHarness(
+        request as unknown as GatewayBrowserClient["request"],
+      );
+
+      try {
+        await sessions.refresh({ agentId: "main", force: true });
+        await (filter === "ownerId"
+          ? sessions.setOwnerFilter("profile-ada")
+          : sessions.setInvolvingMeFilter(true));
+        expect(sessions.state.result?.sessions.map((session) => session.key)).toEqual([key]);
+        request.mockClear();
+        matchesFilteredRoster = false;
+
+        emitEvent({
+          type: "event",
+          event: "session.message",
+          payload: {
+            sessionKey: key,
+            hasActiveRun: false,
+            status: "done",
+            session: {
+              ...row,
+              updatedAt: 2,
+              hasActiveRun: false,
+              status: "done",
+              owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
+            },
+          },
+        });
+        expect(sessions.state.result?.sessions.map((session) => session.key)).toEqual([key]);
+        await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(request).toHaveBeenCalledWith("sessions.list", expect.objectContaining(query));
+        expect(sessions.state.result?.sessions).toEqual([]);
+      } finally {
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("retains every loaded page when a session event replaces the canonical list", async () => {
     vi.useFakeTimers();
     const rows = Array.from({ length: 120 }, (_, index) => ({
