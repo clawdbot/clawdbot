@@ -39,7 +39,7 @@ type PendingWorkDeliveryCommitResult = Readonly<
   | { applied: false; work: PendingContinuationWork }
 >;
 
-export type ContinuationWorkTurnFenceResult =
+type ContinuationWorkTurnFenceResult =
   | { allowed: true }
   | { allowed: false; reason: "cancelled" | "stale" };
 

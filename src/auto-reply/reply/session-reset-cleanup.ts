@@ -12,7 +12,7 @@ import { clearContinuationWorkDispatch } from "../continuation/work-dispatch.js"
 import { clearSessionQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
 import { clearReplyRunForResetBySessionId } from "./reply-run-registry.js";
 
-export type SessionRuntimeCleanupReason = "new" | "reset" | "delete" | "idle" | "daily";
+type SessionRuntimeCleanupReason = "new" | "reset" | "delete" | "idle" | "daily";
 
 /** Runtime cleanup result for reset-related queues and system events. */
 type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {
