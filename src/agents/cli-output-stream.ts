@@ -1,4 +1,3 @@
-import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -13,6 +12,7 @@ import type {
   CliStreamJsonOutputLimits,
   CliUsage,
 } from "./cli-output-contracts.js";
+import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
 import type { CliEventProjectionState } from "./cli-output-events.js";
 import {
   createLeadingTaggedReasoningRouter,
@@ -100,62 +100,6 @@ function frameBoundedCliJsonlChunk(
     }
   }
   return true;
-}
-
-type EchoedBinaryStrip = { normalized: boolean; omittedRawChars: number };
-
-/** Strips every echoed base64 payload a parsed record carries, in place. */
-function stripEchoedBinaryPayloads(node: unknown, out: EchoedBinaryStrip) {
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      stripEchoedBinaryPayloads(item, out);
-    }
-    return;
-  }
-  if (!isRecord(node)) {
-    return;
-  }
-  const source = node.source;
-  const data = isRecord(source) && source.type === "base64" ? source.data : undefined;
-  if (
-    typeof data === "string" &&
-    isRecord(source) &&
-    (node.type === "image" || (node.type === "document" && source.media_type === "application/pdf"))
-  ) {
-    const { data: _omitted, ...rest } = source;
-    node.source = rest;
-    node.omitted = true;
-    node.bytes = estimateBase64DecodedBytes(data);
-    out.omittedRawChars += data.length;
-    out.normalized = true;
-  }
-  // Claude echoes built-in image reads a second time as `tool_use_result.file.base64`.
-  const file = node.file;
-  if (isRecord(file) && typeof file.base64 === "string") {
-    const base64 = file.base64;
-    delete file.base64;
-    file.omitted = true;
-    file.bytes = estimateBase64DecodedBytes(base64);
-    out.omittedRawChars += base64.length;
-    out.normalized = true;
-  }
-  for (const value of Object.values(node)) {
-    stripEchoedBinaryPayloads(value, out);
-  }
-}
-
-/** Drops Claude's echoed binary bytes before they enter retained tool/transcript state. */
-function normalizeClaudeCliStreamJsonRecord(
-  parsed: Record<string, unknown>,
-): { line: string; omittedRawChars: number } | undefined {
-  if (parsed.type !== "user" || !isRecord(parsed.message)) {
-    return undefined;
-  }
-  const stripped: EchoedBinaryStrip = { normalized: false, omittedRawChars: 0 };
-  stripEchoedBinaryPayloads(parsed, stripped);
-  return stripped.normalized
-    ? { line: JSON.stringify(parsed), omittedRawChars: stripped.omittedRawChars }
-    : undefined;
 }
 
 function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: number): string {

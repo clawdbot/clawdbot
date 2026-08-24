@@ -358,6 +358,26 @@ describe("createCliJsonlStreamingParser framing", () => {
     expect(parser.getErrorText()).toBeNull();
   });
 
+  it("normalizes a deeply nested record without exhausting the stack", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+    // Built as text: JSON.stringify is itself recursive and cannot serialize this.
+    const depth = 50_000;
+    const payload = JSON.stringify({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "AAAA" },
+    });
+    const line = `{"type":"user","message":{"content":[]},"tool_use_result":${
+      '{"nested":'.repeat(depth) + payload + "}".repeat(depth)
+    }}`;
+
+    expect(() => parser.push(`${line}\n`)).not.toThrow();
+    expect(parser.getErrorText()).toBeNull();
+  });
+
   it("still enforces raw Claude line and retained-text limits", () => {
     const createParser = () =>
       createCliJsonlStreamingParser({
