@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NodeHostClient } from "./client.js";
+import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
@@ -192,6 +193,27 @@ describe("node-host worker manifest", () => {
     ]);
     expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledTimes(2);
     expect(createNodeWorkerSupervisor).toHaveBeenCalledOnce();
+    await runtime.close();
+    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a container engine-context mismatch permanently and actionably disabled", async () => {
+    const mismatch = new NodeWorkerContainerContextMismatchError(
+      "node worker launch launch-1 belongs to a different docker engine or daemon; restore its original engine context before enabling worker hosting",
+    );
+    mocks.initializeWorkerSupervisor.mockRejectedValueOnce(mismatch);
+
+    const prepared = await prepareWorkerRuntime("container");
+
+    expect(prepared.workerHostingEnabled).toBe(false);
+    expect(prepared.workerHostingDisabledReason).toBe(mismatch.message);
+    expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledOnce();
+    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+    const onRunnerCapacityChanged = vi.fn();
+    const runtime = prepared.start({ client, onRunnerCapacityChanged });
+
+    expect(createNodeWorkerSupervisor).toHaveBeenCalledOnce();
+    expect(onRunnerCapacityChanged).not.toHaveBeenCalled();
     await runtime.close();
     expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
   });

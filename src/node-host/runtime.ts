@@ -32,6 +32,7 @@ import { buildNodeEventParams } from "./node-event-params.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { resolveNodeWorkerContainerEngine } from "./node-worker-container-engine.js";
+import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import {
@@ -300,6 +301,21 @@ export async function prepareNodeHostRuntime(params?: {
   let preparedContainerInitialized = false;
   let publishContainerCapacity: ((capacity: NodeWorkerCapacitySnapshot) => void) | undefined;
   let workerHostingDisabledReason: string | undefined;
+  const disablePreparedContainerHosting = async (error: unknown) => {
+    let failure = error;
+    try {
+      await preparedContainerSupervisor?.close();
+    } catch (closeError) {
+      if (closeError !== error) {
+        failure = new Error(`${String(error)}; supervisor cleanup failed: ${String(closeError)}`);
+      }
+    }
+    workerRunsEnabled = false;
+    preparedContainerWorkspace = undefined;
+    preparedContainerSupervisor = undefined;
+    preparedContainerCapacity = undefined;
+    workerHostingDisabledReason = failure instanceof Error ? failure.message : String(failure);
+  };
   if (workerRunsEnabled && config.nodeHost?.workerRuns?.isolation === "container") {
     try {
       if (platform === "win32") {
@@ -327,14 +343,14 @@ export async function prepareNodeHostRuntime(params?: {
         await preparedContainerSupervisor.initialize();
         preparedContainerInitialized = true;
       } catch (error) {
-        logDebug(`node-host: worker capacity reconciliation failed: ${String(error)}`);
+        if (error instanceof NodeWorkerContainerContextMismatchError) {
+          await disablePreparedContainerHosting(error);
+        } else {
+          logDebug(`node-host: worker capacity reconciliation failed: ${String(error)}`);
+        }
       }
     } catch (error) {
-      workerRunsEnabled = false;
-      preparedContainerWorkspace = undefined;
-      preparedContainerSupervisor = undefined;
-      preparedContainerCapacity = undefined;
-      workerHostingDisabledReason = error instanceof Error ? error.message : String(error);
+      await disablePreparedContainerHosting(error);
     }
   }
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
