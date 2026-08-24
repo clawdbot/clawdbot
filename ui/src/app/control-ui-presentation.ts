@@ -7,6 +7,7 @@ const ACCENT_CSS_VARIABLES = [
   "--accent-subtle",
   "--accent-glow",
   "--primary",
+  "--primary-hover",
   "--primary-foreground",
   "--focus",
   "--focus-ring",
@@ -46,6 +47,7 @@ export function applyControlUiAccent(userAccent?: string): void {
     root.style.setProperty(property, ink);
   }
   root.style.setProperty("--accent-hover", "color-mix(in srgb, var(--accent) 82%, white 18%)");
+  root.style.setProperty("--primary-hover", "color-mix(in srgb, var(--primary) 82%, white 18%)");
   root.style.setProperty("--accent-subtle", mix("--accent", 16));
   root.style.setProperty("--accent-glow", mix("--accent", 30));
   root.style.setProperty("--focus", mix("--ring", 22));

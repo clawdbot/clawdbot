@@ -21,6 +21,10 @@ describe("Control UI accent presentation", () => {
     applyControlUiAccent("#fbbf24");
     expect(style.getPropertyValue("--accent")).toBe("#fbbf24");
     expect(style.getPropertyValue("--primary")).toBe("#fbbf24");
+    // Hover must ride the accent too; dark Claw/Knot primary buttons read it.
+    expect(style.getPropertyValue("--primary-hover")).toBe(
+      "color-mix(in srgb, var(--primary) 82%, white 18%)",
+    );
     expect(style.getPropertyValue("--accent-foreground")).toBe("#000000");
     expect(style.getPropertyValue("--primary-foreground")).toBe("#000000");
 
@@ -29,7 +33,12 @@ describe("Control UI accent presentation", () => {
     expect(style.getPropertyValue("--primary-foreground")).toBe("#ffffff");
 
     applyControlUiPresentation({ environment: null });
-    for (const property of ["--accent", "--accent-foreground", "--primary-foreground"]) {
+    for (const property of [
+      "--accent",
+      "--accent-foreground",
+      "--primary-hover",
+      "--primary-foreground",
+    ]) {
       expect(style.getPropertyValue(property)).toBe("");
     }
   });

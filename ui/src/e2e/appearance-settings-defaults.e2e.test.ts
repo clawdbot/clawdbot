@@ -126,6 +126,23 @@ async function readAccentPresentation(page: Page) {
   });
 }
 
+/** Resolves --primary-hover to concrete channels via a painted probe; computed
+ * custom-property reads return the raw color-mix() expression, not a color. */
+async function readResolvedPrimaryHover(page: Page): Promise<number[]> {
+  return page.evaluate(() => {
+    const probe = document.createElement("div");
+    probe.style.backgroundColor = "var(--primary-hover)";
+    document.body.append(probe);
+    const value = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    // Chromium serializes mixed colors as color(srgb r g b) with 0-1 floats.
+    const channels = (value.match(/\d+(?:\.\d+)?/g) ?? []).slice(0, 3).map(Number);
+    return channels.every((channel) => channel <= 1)
+      ? channels.map((channel) => channel * 255)
+      : channels;
+  });
+}
+
 async function readThemeImportRaceState(page: Page) {
   const importer = page.locator(".settings-theme-import");
   const message = importer.locator(".settings-theme-import__message");
@@ -451,6 +468,16 @@ suite.define(() => {
           primaryForeground: "#000000",
         });
       await expect.poll(() => readPersistedSettings(page)).toMatchObject({ accent: mintAccent });
+      // Dark Knot primary buttons hover on --primary-hover; it must track the
+      // selected accent (mint mixed 18% toward white), not the theme default.
+      const hoverChannels = await readResolvedPrimaryHover(page);
+      const expectedHover = [0x52, 0xc9, 0x9a].map((channel) =>
+        Math.round(channel * 0.82 + 255 * 0.18),
+      );
+      expect(hoverChannels).toHaveLength(3);
+      for (const [index, channel] of hoverChannels.entries()) {
+        expect(Math.abs(channel - expectedHover[index]!)).toBeLessThanOrEqual(2);
+      }
       await captureViewport(page, "09-accent-mint-selected.png");
 
       await gateway.setMethodResponse(
