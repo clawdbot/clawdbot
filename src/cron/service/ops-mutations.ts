@@ -14,6 +14,7 @@ import {
   onCronJobInactive,
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { isHeartbeatTaskDeclarationKey } from "../heartbeat-task.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
@@ -203,6 +204,13 @@ async function persistUpdatedJob(params: {
   nextJob: CronJob;
 }) {
   const { state, snapshot, previousJob, nextJob } = params;
+  if (
+    nextJob.state.queuedAtMs !== undefined &&
+    resolveCronJobConfigRevision(previousJob) !== resolveCronJobConfigRevision(nextJob)
+  ) {
+    // Retire the occurrence with its owning edit; A→B→A cannot revive a queued snapshot.
+    delete nextJob.state.queuedAtMs;
+  }
   if (state.store) {
     const index = state.store.jobs.findIndex((entry) => entry.id === nextJob.id);
     if (index >= 0) {
