@@ -277,7 +277,11 @@ describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE
       text: "Safe partial answer",
     });
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBeTruthy();
+    if (fixture.finishReason === null) {
+      expect(result.errorMessage).toBe("Mistral stream ended without a terminal finish reason");
+    } else {
+      expect(result.errorMessage).toBeTruthy();
+    }
     expect(events).not.toContain("toolcall_end");
     expect(result.content).not.toContainEqual(expect.objectContaining({ type: "toolCall" }));
     expect(result.content).toContainEqual({ type: "text", text: "Safe partial answer" });

@@ -14,6 +14,10 @@ import {
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import {
+  conversationRouteContextFromMsgContext,
+  type ConversationRouteContext,
+} from "./conversation-route-context.js";
 import { resolveGroupSessionKey } from "./group.js";
 import { deriveSessionOrigin } from "./metadata.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
@@ -155,6 +159,7 @@ export function buildConversationIdentity(params: {
 /** Derives a transport address from the canonical route snapshot persisted on a session. */
 export function conversationIdentityFromSessionEntry(
   entry: SessionEntry,
+  routeContext?: ConversationRouteContext | null,
 ): ConversationIdentity | null {
   const deliveryContext = deliveryContextFromSession(entry);
   const origin = sessionDeliveryOrigin(entry);
@@ -179,7 +184,7 @@ export function conversationIdentityFromSessionEntry(
     accountId: routeOwnsTarget ? deliveryContext?.accountId : origin?.accountId,
     kind,
     // Native ids remain descriptive metadata and cannot redirect a stored conversation ref.
-    peerId: pairedOriginPeerId ?? deliveryTarget,
+    peerId: routeContext?.peerId ?? pairedOriginPeerId ?? deliveryTarget,
     deliveryTarget,
     threadId: routeOwnsTarget ? deliveryContext?.threadId : origin?.threadId,
     nativeChannelId: origin?.nativeChannelId,
@@ -204,6 +209,7 @@ export function conversationIdentityFromMsgContext(params: {
   });
   const deliveryContext = mergeDeliveryContext(explicitDeliveryContext, routeDeliveryContext);
   const groupResolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
+  const routeContext = conversationRouteContextFromMsgContext(params.ctx);
   const kind = groupResolution?.chatType ?? normalizeKind(params.ctx.ChatType);
   const directIngressTarget = kind === "direct" ? normalizeText(params.ctx.From) : undefined;
   // An explicit delivery context is already a paired route. Otherwise direct ingress
@@ -229,7 +235,7 @@ export function conversationIdentityFromMsgContext(params: {
       ? (route?.accountId ?? params.ctx.AccountId)
       : (deliveryContext?.accountId ?? route?.accountId ?? params.ctx.AccountId),
     kind,
-    peerId: deliveryTarget,
+    peerId: routeContext?.peerId ?? deliveryTarget,
     deliveryTarget,
     threadId: useDirectIngressTarget
       ? (route?.threadId ?? params.ctx.MessageThreadId)

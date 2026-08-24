@@ -10,9 +10,18 @@ describe("new-session placement target", () => {
     expect(
       resolveDraftSessionPlacement(
         { sessionKey: "", target: null },
-        { cloudProfileId: "", deviceId: "runner", machineClass: "" },
+        { cloudProfileId: "", deviceId: "runner", autoDevice: false, machineClass: "" },
       ).target,
     ).toEqual({ kind: "device", deviceId: "runner" });
+  });
+
+  it("preserves automatic device selection through the draft placement target", () => {
+    expect(
+      resolveDraftSessionPlacement(
+        { sessionKey: "", target: null },
+        { cloudProfileId: "", deviceId: "", autoDevice: true, machineClass: "" },
+      ).target,
+    ).toEqual({ kind: "auto-device" });
   });
 
   it("restores a device recovery into the same draft placement owner", () => {

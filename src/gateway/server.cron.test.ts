@@ -35,7 +35,16 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
 );
 
 const sendCronAnnouncePayloadStrictMock = vi.hoisted(() =>
-  vi.fn<typeof import("../cron/delivery.js").sendCronAnnouncePayloadStrict>(async () => undefined),
+  vi.fn<typeof import("../cron/delivery.js").sendCronAnnouncePayloadStrict>(async () => ({
+    status: "sent",
+    results: [{ channel: "telegram", messageId: "cron-message" }],
+    receipt: {
+      primaryPlatformMessageId: "cron-message",
+      platformMessageIds: ["cron-message"],
+      parts: [{ platformMessageId: "cron-message", kind: "text", index: 0 }],
+      sentAt: 0,
+    },
+  })),
 );
 const closeTrackedBrowserTabsForSessionsMock = vi.hoisted(() => vi.fn(async () => 0));
 

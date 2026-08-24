@@ -72,7 +72,6 @@ import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CameraHandler
 import ai.openclaw.app.node.ConnectionManager
 import ai.openclaw.app.node.ContactsHandler
-import ai.openclaw.app.node.DEFAULT_SEAM_COLOR_ARGB
 import ai.openclaw.app.node.DebugHandler
 import ai.openclaw.app.node.DeviceHandler
 import ai.openclaw.app.node.DeviceNotificationListenerService
@@ -91,8 +90,8 @@ import ai.openclaw.app.node.TalkHandler
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
-import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.node.readAndroidPermissionSnapshot
+import ai.openclaw.app.node.resolveGatewayAccentArgb
 import ai.openclaw.app.systemagent.SystemAgentChatController
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.systemagent.SystemAgentGatewayAccess
@@ -1185,8 +1184,8 @@ class NodeRuntime private constructor(
   private val _gatewayUpdateAvailable = MutableStateFlow<GatewayUpdateAvailableSummary?>(null)
   val gatewayUpdateAvailable: StateFlow<GatewayUpdateAvailableSummary?> = _gatewayUpdateAvailable.asStateFlow()
 
-  private val _seamColorArgb = MutableStateFlow(DEFAULT_SEAM_COLOR_ARGB)
-  val seamColorArgb: StateFlow<Long> = _seamColorArgb.asStateFlow()
+  private val _gatewayAccentArgb = MutableStateFlow<Long?>(null)
+  val gatewayAccentArgb: StateFlow<Long?> = _gatewayAccentArgb.asStateFlow()
   private val _modelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
   val modelCatalog: StateFlow<List<GatewayModelSummary>> = _modelCatalog.asStateFlow()
   private val _providerModelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
@@ -1407,7 +1406,7 @@ class NodeRuntime private constructor(
         // Pairing capabilities require positive hello advertisement; an unknown catalog grants none.
         _devicePairingCapabilities.value =
           selectGatewayDevicePairingCapabilities(hello.methods.orEmpty(), operatorScopes)
-        _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
+        _gatewayAccentArgb.value = null
         val mainSessionKey =
           prepareMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
         // Create/adopt before history refresh; this keeps the first connected read on the
@@ -1426,6 +1425,7 @@ class NodeRuntime private constructor(
         wearProxyBridge()?.publishConnection(connected = true, status = "Connected")
         scope.launch {
           subscribeOperatorSessionEvents()
+          refreshBrandingFromGateway()
           refreshWakeWordsFromGateway()
           refreshExecApprovalsFromGateway()
           if (voiceReplySpeakerLazy.isInitialized()) {
@@ -1676,7 +1676,7 @@ class NodeRuntime private constructor(
     replaceGatewayMethods(null)
     _operatorScopes.value = emptyList()
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
-    _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
+    _gatewayAccentArgb.value = null
     _gatewayAgents.value = emptyList()
     selectedChatAgentId = null
     _modelCatalog.value = emptyList()
@@ -5532,11 +5532,9 @@ class NodeRuntime private constructor(
       val res = requestGatewayData(gatewayScope, "config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
-      val ui = config?.get("ui").asObjectOrNull()
-      val raw = ui?.get("seamColor").asStringOrNull()?.trim()
-      val parsed = parseHexColorArgb(raw)
+      val parsed = resolveGatewayAccentArgb(config)
       publishGatewayData(gatewayScope) {
-        _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
+        _gatewayAccentArgb.value = parsed
       }
     } catch (_: Throwable) {
       // ignore

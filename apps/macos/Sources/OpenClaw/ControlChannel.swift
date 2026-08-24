@@ -217,10 +217,8 @@ final class ControlChannel {
     }
 
     func disconnect() async {
-        await GatewayConnection.shared.shutdown()
         self.setStateThrottled(.disconnected)
-        self.lastPingMs = nil
-        self.authSourceLabel = nil
+        await GatewayConnection.shared.shutdown()
     }
 
     func health(timeout: TimeInterval? = nil) async throws -> Data {

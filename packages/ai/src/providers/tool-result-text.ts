@@ -54,25 +54,13 @@ function redactInlineDataUris(value: string): string {
   );
 }
 
-function redactStructuredTextValue(value: string): string {
-  const host = getAiTransportHost();
-  const redacted = host.redactToolPayloadText(value);
-  const trimmed = redacted.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-    return redacted;
-  }
-  try {
-    const redactedWrapper = host.redactSecrets({ structuredTextValue: JSON.parse(redacted) });
-    return JSON.stringify(redactedWrapper.structuredTextValue);
-  } catch {
-    return redacted;
-  }
-}
-
 function stringifyStructuredBlock(block: Record<string, unknown>): string | undefined {
   const seen = new WeakSet<object>();
   try {
-    const redactedWrapper = getAiTransportHost().redactSecrets({ structuredToolResult: block });
+    const host = getAiTransportHost();
+    const redactedWrapper = host.redactModelVisibleSecrets({
+      structuredToolResult: block,
+    });
     const redactedBlock = redactedWrapper.structuredToolResult;
     const serialized = JSON.stringify(
       redactedBlock,
@@ -90,7 +78,7 @@ function stringifyStructuredBlock(block: Record<string, unknown>): string | unde
           return value.toString();
         }
         if (typeof value === "string") {
-          return redactInlineDataUris(redactStructuredTextValue(value));
+          return redactInlineDataUris(host.redactModelVisibleSecrets(value));
         }
         if (typeof value === "function" || typeof value === "symbol" || value === undefined) {
           return undefined;
@@ -235,8 +223,11 @@ export function formatToolResultText(params: {
   isError: boolean;
 }): string {
   const trimmed = params.text.trim();
+  // trim() is only an emptiness predicate here: tool output boundary
+  // whitespace (indentation, trailing newlines) is significant durable
+  // content, so the nonblank body must emit params.text unmodified.
   const body = trimmed
-    ? `${trimmed}${params.omittedMediaPlaceholder ? `\n${params.omittedMediaPlaceholder}` : ""}`
+    ? `${params.text}${params.omittedMediaPlaceholder ? `\n${params.omittedMediaPlaceholder}` : ""}`
     : (params.omittedMediaPlaceholder ?? params.mediaPlaceholder ?? "(no tool output)");
   return `${params.isError ? "[tool error] " : ""}${body}`;
 }

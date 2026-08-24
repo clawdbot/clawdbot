@@ -1,10 +1,9 @@
 // Matrix plugin module implements context summary behavior.
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  formatMatrixMessageText,
-  resolveMatrixMessageAttachment,
-  resolveMatrixMessageBody,
-} from "../media-text.js";
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatMatrixMessageText } from "../media-text.js";
 import {
   formatPollAsText,
   isPollStartType,
@@ -23,15 +22,8 @@ export function summarizeMatrixMessageContextEvent(event: MatrixRawEvent): strin
 
   const content = event.content as { body?: unknown; filename?: unknown; msgtype?: unknown };
   return formatMatrixMessageText({
-    body: resolveMatrixMessageBody({
-      body: normalizeOptionalString(content.body),
-      filename: normalizeOptionalString(content.filename),
-      msgtype: normalizeOptionalString(content.msgtype),
-    }),
-    attachment: resolveMatrixMessageAttachment({
-      body: normalizeOptionalString(content.body),
-      filename: normalizeOptionalString(content.filename),
-      msgtype: normalizeOptionalString(content.msgtype),
-    }),
+    body: readStringValue(content.body),
+    filename: readStringValue(content.filename),
+    msgtype: normalizeOptionalString(content.msgtype),
   });
 }

@@ -801,7 +801,7 @@ suite.define(() => {
             },
           }),
         );
-        window.dispatchEvent(new StorageEvent("storage", { key }));
+        window.dispatchEvent(new StorageEvent("storage", { key, storageArea: sessionStorage }));
       }, firstKey);
       await page
         .locator(

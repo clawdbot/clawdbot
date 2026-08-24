@@ -30,6 +30,68 @@ function catalogDiscoveryRequests(
 }
 
 suite.define(() => {
+  it("selects a context window before creating a session", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      agentModel: "openai/gpt-5.6-luna",
+      methodResponses: {
+        "sessions.create": { key: "agent:main:context-window", runStarted: true },
+      },
+      models: [
+        {
+          available: true,
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+        },
+        {
+          available: true,
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "anthropic",
+          contextWindow: 1_000_000,
+          contextWindows: [
+            { id: "200k", label: "200K", contextWindow: 200_000 },
+            { id: "1m", label: "1M", contextWindow: 1_000_000 },
+          ],
+          contextWindowDefault: "1m",
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      await modelSelect.click();
+      await page.locator('[data-chat-model-option="anthropic/claude-fable-5"]').click();
+      await modelSelect.click();
+
+      const contextWindowToggle = page.locator('[data-chat-context-window-toggle="200k"]');
+      await expect.poll(() => contextWindowToggle.isVisible()).toBe(true);
+      expect(await contextWindowToggle.getAttribute("aria-checked")).toBe("true");
+      await contextWindowToggle.click();
+      await expect
+        .poll(() => page.locator("[data-chat-model-context-badge]").textContent())
+        .toContain("200K");
+
+      await page.locator(".new-session-page__message").fill("use the smaller window");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        message: "use the smaller window",
+        model: "anthropic/claude-fable-5",
+        contextWindow: "200k",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows metadata failure truthfully and recovers when the picker opens", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",

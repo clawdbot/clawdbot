@@ -13,6 +13,11 @@ import {
   resolveIdentityAvatarView,
   type IdentityAvatarView,
 } from "./identity-avatar-view.ts";
+import {
+  personActivityLink,
+  renderStandalonePersonLink,
+  type PersonActivityRouting,
+} from "./person-activity-link.ts";
 import "./tooltip.ts";
 
 function readPresenceEntries(value: unknown): PresenceEntry[] {
@@ -78,6 +83,12 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) excludeUserId?: string;
   @property({ attribute: false }) staticUsers?: readonly PresenceViewer[];
   @property({ type: Number, attribute: "max-visible" }) maxVisible = 3;
+  /**
+   * Opt-in: linking each face to its Activity feed. Facepiles rendered inside an existing
+   * anchor or button (sidebar rows, collapsed group headers) must leave this unset — a
+   * nested interactive element would break the parent's click target.
+   */
+  @property({ attribute: false }) personActivity?: PersonActivityRouting;
 
   override render() {
     const projection = projectPresenceEntries(
@@ -110,7 +121,13 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
       ${visible.map(
         (user) => html`<openclaw-tooltip .content=${presenceViewerLabel(user)}>
           <span class="viewer-facepile__tooltip-anchor">
-            <openclaw-viewer-avatar .user=${user} variant="session"></openclaw-viewer-avatar>
+            ${renderStandalonePersonLink(
+              html`<openclaw-viewer-avatar
+                .user=${user}
+                variant="session"
+              ></openclaw-viewer-avatar>`,
+              personActivityLink(user.id, this.personActivity),
+            )}
           </span>
         </openclaw-tooltip>`,
       )}

@@ -221,6 +221,7 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
     forceSyntheticClient: true,
     pluginRuntimeOwnerId: pluginId,
     resolveGatewayContext,
+    ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
     ...(syntheticScopes ? { syntheticScopes } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });
@@ -233,6 +234,7 @@ export function createGatewaySubagentRuntime(
   overridePolicies: PluginSubagentOverridePolicies = {},
 ): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
+    const scope = getPluginRuntimeGatewayRequestScope();
     const limit =
       params.limit == null || !Number.isFinite(params.limit)
         ? undefined
@@ -246,7 +248,12 @@ export function createGatewaySubagentRuntime(
         key: params.sessionKey,
         ...(limit != null && { limit }),
       },
-      { resolveGatewayContext },
+      {
+        resolveGatewayContext,
+        ...(!scope?.client && canTrustedOfficialPluginRequestScopes(scope ?? {})
+          ? { operatorRoleActor: { kind: "system" as const } }
+          : {}),
+      },
     );
     return { messages: Array.isArray(payload?.messages) ? payload.messages : [] };
   };
@@ -313,6 +320,7 @@ export function createGatewaySubagentRuntime(
         {
           allowSyntheticModelOverride,
           agentRunTracking: "plugin_subagent",
+          ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
           ...(pluginSubagentRequester ? { pluginSubagentRequester } : {}),
           ...(runtimePluginToolGrant ? { runtimePluginToolGrant } : {}),
@@ -379,7 +387,13 @@ export function createGatewaySubagentRuntime(
           key: params.sessionKey,
           deleteTranscript: params.deleteTranscript ?? true,
         },
-        { ...pluginOwnedCleanupOptions, resolveGatewayContext },
+        {
+          ...pluginOwnedCleanupOptions,
+          resolveGatewayContext,
+          ...(!scope?.client && canTrustedOfficialPluginRequestScopes(scope ?? {})
+            ? { operatorRoleActor: { kind: "system" as const } }
+            : {}),
+        },
       );
     },
   };

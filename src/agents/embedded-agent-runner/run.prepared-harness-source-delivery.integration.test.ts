@@ -29,7 +29,10 @@ import {
 import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../../auto-reply/types.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { registerAgentHarness } from "../harness/registry.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
+import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -37,6 +40,7 @@ import {
   mockedBuildEmbeddedRunPayloads,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
+  overflowBaseRunParams,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
@@ -494,6 +498,148 @@ describe("prepared harness source delivery", () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it("completes an admitted turn on its generation after a plugin-runtime replacement", async () => {
+    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
+    const config = {};
+    const workspaceDir = "/tmp/workspace";
+    const pluginRegistry = createEmptyPluginRegistry();
+    const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir,
+    });
+    const admittedMetadataSnapshot = {
+      ...baseLease.snapshot.metadataSnapshot,
+      policyHash: "admitted",
+      workspaceDir,
+    };
+    const admittedGeneration: PreparedModelRuntimePluginGeneration = {
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: admittedMetadataSnapshot,
+      pluginRegistry,
+    };
+    const replacementMetadataSnapshot = {
+      ...baseLease.snapshot.metadataSnapshot,
+      policyHash: "replacement",
+      workspaceDir,
+    };
+    const release = vi.fn();
+    let servedMetadataSnapshot: unknown;
+    mockedAcquireAgentRunPreparedModelRuntime.mockClear();
+    mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
+      async (
+        _input,
+        options?: {
+          pluginGeneration?: { pluginMetadataSnapshot: typeof admittedMetadataSnapshot };
+        },
+      ) => {
+        const metadataSnapshot =
+          options?.pluginGeneration?.pluginMetadataSnapshot ?? replacementMetadataSnapshot;
+        servedMetadataSnapshot = metadataSnapshot;
+        return {
+          ...baseLease,
+          snapshot: {
+            ...baseLease.snapshot,
+            config,
+            workspaceDir,
+            pluginRegistry,
+            metadataSnapshot,
+          },
+          release,
+        };
+      },
+    );
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["ok"] }));
+    useOpenAIPlatformAuthFixture();
+
+    const result = await withPreparedModelRuntimePluginGenerationScope(
+      admittedGeneration,
+      async () =>
+        await runEmbeddedAgent({
+          ...overflowBaseRunParams,
+          config,
+          provider: "openai",
+          model: "gpt-5.4",
+          runId: "admitted-generation-replacement",
+          sessionKey: undefined,
+        }),
+    );
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ config, workspaceDir }),
+      expect.objectContaining({ pluginGeneration: admittedGeneration }),
+    );
+    expect(servedMetadataSnapshot).toBe(admittedGeneration.pluginMetadataSnapshot);
+    expect(result.payloads).toEqual([{ text: "ok" }]);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("starts an isolated probe outside its caller's admitted generation", async () => {
+    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
+    const config = {};
+    const workspaceDir = "/tmp/isolated-probe-workspace";
+    const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
+      agentId: "openclaw",
+      agentDir: "/tmp/isolated-probe-agent",
+      workspaceDir,
+    });
+    const admittedGeneration: PreparedModelRuntimePluginGeneration = {
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: {
+        ...baseLease.snapshot.metadataSnapshot,
+        policyHash: "admitted",
+        workspaceDir,
+      },
+      pluginRegistry: createEmptyPluginRegistry(),
+    };
+    const isolatedMetadataSnapshot = {
+      ...baseLease.snapshot.metadataSnapshot,
+      policyHash: "isolated",
+      workspaceDir,
+    };
+    const release = vi.fn();
+    mockedAcquireAgentRunPreparedModelRuntime.mockClear();
+    mockedAcquireAgentRunPreparedModelRuntime.mockResolvedValueOnce({
+      ...baseLease,
+      snapshot: {
+        ...baseLease.snapshot,
+        config,
+        workspaceDir,
+        metadataSnapshot: isolatedMetadataSnapshot,
+      },
+      release,
+    });
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["ok"] }));
+    useOpenAIPlatformAuthFixture();
+
+    const isolatedProbeParams: RunEmbeddedAgentInternalParams = {
+      ...overflowBaseRunParams,
+      agentId: "openclaw",
+      agentDir: "/tmp/isolated-probe-agent",
+      config,
+      provider: "openai",
+      model: "gpt-5.4",
+      preparedModelRuntimeMode: "isolated-read-only",
+      runId: "isolated-probe-generation",
+      sessionKey: undefined,
+      workspaceDir,
+    };
+    const result = await withPreparedModelRuntimePluginGenerationScope(
+      admittedGeneration,
+      async () => await runEmbeddedAgent(isolatedProbeParams),
+    );
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ config, loadRuntimePlugins: true, workspaceDir }),
+    );
+    expect(result.payloads).toEqual([{ text: "ok" }]);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it.each([

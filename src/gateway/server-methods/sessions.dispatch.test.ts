@@ -39,11 +39,17 @@ function activePlacementRecord(): Extract<WorkerSessionPlacementRecord, { state:
 describe("sessions.dispatch", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry(), "sessions-dispatch-test", "default");
-    const codexHarness: AgentHarness & { cloudPlacement: { mode: "remote-exec" } } = {
+    const codexHarness: AgentHarness = {
       id: "codex",
       label: "Codex",
       autoSelection: { providerIds: ["codex", "openai"] },
-      cloudPlacement: { mode: "remote-exec" },
+      cloudPlacement: {
+        mode: "remote-exec",
+        devicePlacement: {
+          requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+          consumesWorkerSlot: false,
+        },
+      },
       supports: () => ({ supported: true, priority: 10 }),
       async runAttempt() {
         throw new Error("not used");
@@ -431,36 +437,7 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({
         code: ErrorCodes.INVALID_REQUEST,
         message:
-          'runtime codex requires an SSH-backed cloud worker provider; choose a provider that supports remote-exec, or select an agent/model route with agentRuntime.id "openclaw"',
-      }),
-    );
-  });
-
-  it("explains how to make a codex session eligible for paired-device dispatch", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        agentRuntimeOverride: "codex",
-        worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
-      }),
-    );
-    const dispatch = vi.fn();
-    const respond = await invoke(
-      makeContext({
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: { getMany: () => new Map() },
-      }),
-      { deviceId: "device-1" },
-    );
-
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message:
-          'runtime codex cannot dispatch to a paired device; select an agent/model route with agentRuntime.id "openclaw" (the embedded runtime), or choose an SSH-backed cloud worker provider',
+          "selected cloud worker provider does not support the remote-exec execution mode required by runtime codex; use an approved paired device or a provider that advertises remote-exec",
       }),
     );
   });

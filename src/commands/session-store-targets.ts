@@ -33,7 +33,7 @@ function formatResolvedStoreTarget(params: {
     : `${params.resolvedPath} (resolved from --store ${JSON.stringify(params.inputStorePath)})`;
 }
 
-function validateExplicitSessionStorePath(params: {
+export function resolveExplicitSessionStorePath(params: {
   agentId: string;
   inputStorePath: string;
   storePath: string;
@@ -100,7 +100,7 @@ function validateExplicitSessionStorePath(params: {
 }
 
 /** Resolves and validates an operator-supplied legacy selector without changing its semantics. */
-export function resolveExplicitSessionStorePathOrExit(params: {
+function resolveExplicitSessionStorePathOrExit(params: {
   storePath: string;
   inputStorePath?: string;
   agentId: string;
@@ -108,7 +108,7 @@ export function resolveExplicitSessionStorePathOrExit(params: {
   json?: boolean;
 }): string | null {
   try {
-    return validateExplicitSessionStorePath({
+    return resolveExplicitSessionStorePath({
       agentId: params.agentId,
       inputStorePath: params.inputStorePath ?? params.storePath,
       storePath: params.storePath,

@@ -144,7 +144,10 @@ export type PluginRuntime = PluginRuntimeCore & {
     invoke: (params: RuntimeNodeInvokeParams) => Promise<unknown>;
     /** Open a connection-scoped binary node command inside the trusted Gateway runtime. */
     openDuplex: (
-      params: RuntimeNodeInvokeParams & { maxMessageBytes?: number },
+      params: RuntimeNodeInvokeParams & {
+        maxMessageBytes?: number;
+        maxOutstandingDeliveryBytes?: number;
+      },
     ) => Promise<RuntimeNodeDuplexChannel>;
   };
   sandbox: {

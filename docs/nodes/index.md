@@ -2,6 +2,7 @@
 summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for camera/screen/device/notifications/system and the macOS widget panel"
 read_when:
   - Pairing iOS/watchOS/Android nodes to a gateway
+  - Enabling isolated OpenClaw session hosting on a paired node
   - Using node camera or screen capture for agent context
   - Presenting a hosted widget on a Mac
   - Adding new node commands or CLI helpers
@@ -94,7 +95,7 @@ A Gateway can remain healthy for browser users while node hosting is unavailable
 - **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
 - **Node onboarding URL:** With `gateway.bind: "loopback"`, configure Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl` before minting a join code. Otherwise `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.`
 - **Node onboarding plugin:** Join codes and `openclaw connect` require the bundled `device-pair` plugin. If it is disabled or excluded by plugin policy, set `plugins.entries.device-pair.enabled: true`, make sure `device-pair` is allowed, and restart the Gateway.
-- **Device session runtime:** Paired-device runners host only the embedded OpenClaw runtime. Give at least one selected agent/model route `agentRuntime.id: "openclaw"`; Codex and ACPX routes cannot dispatch to a paired device. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [runtime policy](/gateway/config-agents#runtime-policy).
+- **Device session runtime:** Paired-device runners support the embedded OpenClaw runtime and explicitly authorized Codex `remote-exec`; ACPX routes cannot dispatch to a paired device. Codex requires `codex.exec-server.stdio.v1` in `gateway.nodes.commands.allow` plus its normal pairing and invocation approvals. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [Codex paired-device placement](/plugins/codex-harness#run-codex-on-a-paired-device) and [runtime policy](/gateway/config-agents#runtime-policy).
 - **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol#worker-role-and-closed-protocol).
 
 For a Cloudflare Access-fronted Gateway:
@@ -324,7 +325,7 @@ Or per session:
 
 Once set, any `exec` call with `host=node` runs on the node host (subject to the node allowlist/approvals).
 
-`host=auto` will not implicitly choose the node on its own, but an explicit per-call `host=node` request is allowed from `auto`. If you want node exec to be the default for the session, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
+`host=auto` will not implicitly choose the node on its own. An explicit per-call `host=node` request is allowed from `auto` only when no sandbox runtime is active; while a sandbox runtime is active, `auto` rejects it. To run on a node from a sandboxed session, or to make node exec the session default, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
 
 Related:
 
@@ -471,9 +472,10 @@ while its receipt still matches the Gateway's current build.
 
 You can also enroll and enable a service host in one step with
 `openclaw connect --service --session-host`. In Control UI New Session, a
-write-scoped operator selects a Gateway project or folder and then the paired
-device. OpenClaw creates a session-owned managed worktree on the Gateway,
-dispatches it with the exact `deviceId`, and sends the first turn only after the
+write-scoped operator selects a Gateway project or folder and then either a
+specific paired device or **Any available node**. OpenClaw creates a
+session-owned managed worktree on the Gateway, dispatches it with the exact
+`deviceId` or `autoDevice: true`, and sends the first turn only after the chosen
 device placement becomes active. New Session does not bind `execNode` or browse
 the device filesystem.
 
@@ -491,20 +493,36 @@ Gateway does not fall back to the node's local OpenClaw package or an older
 supervisor dialect.
 
 This setting enables supervised session turns on the paired device, including
-Gateway-owned workspace transfer and result reconciliation. Each node runs at
-most two worker processes by default. A third launch waits up to 10 seconds for
-a durable slot; while both slots are occupied, the node remains available for
-status and cancellation but is not selected for a new session turn.
+Gateway-owned workspace transfer and result reconciliation. By default, each
+node has one worker slot per available CPU core. Configure the slot count with
+`nodeHost.workerRuns.capacity`. Launches beyond capacity wait up to 10 seconds
+for a durable slot; while all slots are occupied, the node remains available
+for status and cancellation but is not selected for a new session turn.
 
-The picker derives every device row from `environments.list`. A device is
-selectable only when current inventory reports status `available`,
-`sessionHost: true`, valid exact worker slots, and at least one available slot.
-Connected non-hosts, saturated hosts, hosts without current capacity,
-update-required or otherwise outdated hosts, and unavailable hosts remain
+The picker derives every device row from `environments.list`. Every selected
+runtime requires an available, connected paired session host. OpenClaw worker
+turns additionally require valid exact worker slots with at least one free
+slot. Codex paired-device execution launches its exec-server directly, so it
+does not consume or require a worker slot; instead, its required command must
+appear in the node's effective `invocableCommands`, not merely its declared
+capabilities. A declared command is usable only when the approved pairing and
+Gateway command allowlist both authorize it. Connected non-hosts, ineligible
+or saturated hosts, update-required devices, and unavailable hosts remain
 visible but disabled with an actionable reason. Enable hosting with
 `openclaw connect --service --session-host` or the `nodeHost.workerRuns`
 setting, then restart the node host. Update-required hosts must be upgraded and
 restarted before selection.
+
+Choose **Any available node** to let the Gateway select an eligible paired,
+connected session host. For OpenClaw worker turns, it selects the host with the
+most available worker slots and breaks ties by device ID. Runtimes that do not
+consume worker slots choose the eligible host with the lowest device ID instead.
+If a selected host disconnects, reaches capacity, or otherwise becomes
+ineligible before dispatch finishes, the Gateway tries the next ranked host, up
+to three hosts total. Other dispatch failures are returned immediately. If no
+host is eligible, the error explains whether no session hosts are paired, hosts
+are disconnected or at capacity, a host needs an update, or the selected runtime
+is unsupported. The dispatch response identifies the device that was selected.
 
 When a known session host disconnects, its paired-device record preserves only
 the last accepted current-v6 hosting consent. The offline row remains visible
@@ -520,8 +538,8 @@ process-current, not a terminal placement state. `sessions.list` and
 until that exact current-v6 node runner reconnects. Gateway restart therefore
 shows an active device placement as offline until reconnect; current inventory
 then changes the projection to `available` and emits a session refresh. Exact
-worker slots gate new placements only and do not affect availability of a
-session the device already owns.
+worker slots gate only new placements whose runtime consumes a worker slot;
+they do not affect Codex remote execution or an existing session's availability.
 
 Control UI shows **Device offline** and waits by default without giving up the
 placement, workspace, or authority. Retry the next turn after the device
@@ -541,6 +559,79 @@ failed provider or placement cleanup.
 
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
+
+#### Isolate hosted worker sessions in containers
+
+By default, hosted OpenClaw worker sessions run directly on the paired node.
+Set `nodeHost.workerRuns.isolation` to `"container"` on that node to run each
+worker inside its own container instead:
+
+```json5
+{
+  nodeHost: {
+    workerRuns: {
+      enabled: true,
+      isolation: "container",
+      // Optional: use a digest-pinned, private-registry, or preloaded image.
+      // containerImage: "registry.example.com/openclaw/node:22-slim",
+    },
+  },
+}
+```
+
+Restart the node host after changing either setting. Isolation defaults to
+`"none"`, preserving the existing direct-process behavior. This setting is
+enforced locally on the node; the Gateway cannot silently disable it or fall
+back to an unisolated worker.
+
+Container isolation is supported on Linux and macOS node hosts; Windows is
+unsupported because native Windows paths cannot be mounted at their original
+paths inside the container. The node must have a working Docker-compatible
+container engine. OpenClaw tries the `docker` CLI first, including Docker-backed
+OrbStack installations, and then `podman`. The selected engine and daemon are
+checked when the node host starts and again before each container is created.
+If the platform is unsupported, neither engine works, or the daemon changes,
+session hosting or the affected launch fails visibly instead of falling back to
+an unisolated worker. Install or start the engine, verify `docker version` or
+`podman version`, and restart the node host.
+
+The default image is `node:22-slim`; the engine pulls it on first use when it
+is not already present. Set `nodeHost.workerRuns.containerImage` to choose a
+digest-pinned image, a private-registry image, or an image already available
+to the engine. The image must provide a working Node.js 22 or newer runtime on
+its standard executable search path. If the image cannot be pulled, is
+inaccessible, or does not provide a suitable Node.js runtime, that session
+launch fails visibly; it never retries as a bare host process. Preload the
+image or configure registry access before hosting sessions on an offline or
+restricted node.
+
+Each worker container receives only two host bind mounts: its verified worker
+bundle root is read-only, and its assigned session workspace is read-write.
+Both are mounted at their original absolute host paths so the sealed bundle
+and workspace descriptor remain valid; the session workspace is also the
+container working directory. OpenClaw passes only the existing frozen,
+non-secret worker environment allowlist and adds no other host mounts.
+Container isolation protects the rest of the host filesystem and separates
+the worker process, but the worker can still modify its assigned workspace
+and connect to the Gateway.
+
+The container uses the engine's normal outbound networking and must be able
+to reach the Gateway worker WebSocket endpoint. A Gateway address such as
+`127.0.0.1` or `localhost` that works on the node host points back into the
+container when used by the worker; configure a Gateway address reachable from
+the container network instead. If a Gateway requires a custom certificate
+authority, `NODE_EXTRA_CA_CERTS` must point to a certificate already inside
+the mounted bundle or session workspace; OpenClaw will not mount another host
+path for it. Browser assignments that require access to host-only browser
+state are not supported in container-isolated sessions.
+
+Cancellation and fencing terminate the container itself rather than only the
+container-engine client. The node host records the container's durable engine
+and container identity, checks that identity during restart reconciliation,
+and removes orphaned worker containers labeled for the same Gateway. If the
+node-host process exits unexpectedly, a running container can survive until
+the next node-host startup; keep the node host under a restarting service if
+that cleanup window must remain short.
 
 ### OpenCode and Pi sessions
 
@@ -829,7 +920,7 @@ openclaw nodes invoke --node <idOrNameOrIp> --command photos.latest --params '{"
 
 ## System commands (node host / mac node)
 
-The macOS node exposes `system.run`, `system.which`, `system.notify`, and `system.execApprovals.get/set`. The headless node host exposes `system.run.prepare`, `system.run`, `system.which`, and `system.execApprovals.get/set`.
+The macOS node and headless node host both expose `system.run.prepare`, `system.run`, `system.which`, and `system.execApprovals.get/set`; the macOS node also exposes `system.notify`.
 
 Examples:
 

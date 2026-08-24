@@ -500,18 +500,16 @@ describe("worker placement dispatch", () => {
     expect(harness.placements.current()).toMatchObject({
       state: "draining",
       workspaceBaseManifestRef: harness.reconciledManifestRef,
-      turnClaim: { owner: "worker" },
+      turnClaim: null,
     });
-    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
-      { workspaceAcceptedAtMs: expect.any(Number) },
-    ]);
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
     expect(harness.log).toContain("placement:draining");
     expect(harness.log).toContain("workspace:resume");
   });
 
-  it("preserves a draining provider destroy failure after teardown owns the stopped tunnel", async () => {
+  it("recovers a failed provider destroy and allows a normal local reclaim", async () => {
     const harness = createTestHarness({
-      destroyFails: true,
+      destroyFailureCount: 1,
       destroyFailureState: "destroying",
       resumeFails: true,
     });
@@ -520,17 +518,18 @@ describe("worker placement dispatch", () => {
     await expect(harness.service.reclaim(REQUEST)).rejects.toThrow("destroy pending");
 
     expect(harness.environments.get(active.environmentId)).toMatchObject({
-      state: "destroying",
-      ownerEpoch: active.activeOwnerEpoch,
+      state: "destroyed",
     });
     expect(harness.placements.current()).toMatchObject({
-      state: "draining",
-      turnClaim: { owner: "worker" },
+      state: "failed",
+      turnClaim: null,
     });
-    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
-      { workspaceAcceptedAtMs: expect.any(Number) },
-    ]);
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
     expect(harness.log).not.toContain("workspace:resume");
+
+    await expect(harness.service.reclaim(REQUEST)).resolves.toMatchObject({ state: "local" });
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
   });
 
   it.each<DispatchStage>([

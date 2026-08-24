@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
+import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { GatewaySessionRow, PresenceEntry, SessionsListResult } from "../../../api/types.ts";
@@ -18,14 +18,17 @@ import { createTestChatPane } from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
 import {
+  chatPaneHeaderSessionRow as row,
+  mountChatPaneHeader,
+  type ChatPaneHeaderProps,
+} from "./chat-pane-header.test-support.ts";
+import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
   resolveChatPaneParentSession,
   resolveChatPaneWorkspace,
 } from "./chat-pane-header.ts";
 import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
-
-type ChatPaneHeaderProps = Parameters<typeof renderChatPaneHeader>[0];
 
 const containers: HTMLElement[] = [];
 
@@ -68,54 +71,8 @@ const gatewaySnapshot: NativeGatewaysSnapshot = {
   currentId: "primary",
 };
 
-function row(patch: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
-  return { key: "agent:main:test", kind: "direct", updatedAt: 0, ...patch };
-}
-
-function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  containers.push(container);
-  const props: ChatPaneHeaderProps = {
-    paneId: "pane-1",
-    narrow: false,
-    mergedChrome: false,
-    title: "Session title",
-    session: row(),
-    catalog: false,
-    editing: false,
-    renameValue: "Session title",
-    workspaceRoot: "/repo/openclaw",
-    workspaceLabel: "openclaw",
-    workspaceIcon: null,
-    parentSession: null,
-    branch: "feature/header",
-    branches: [],
-    branchSwitchDisabledReason: null,
-    platform: "darwin",
-    canReveal: true,
-    copiedAction: null,
-    renameDisabledReason: undefined,
-    panelActions: nothing,
-    discussionAction: nothing,
-    diffAction: nothing,
-    backgroundTasksAction: nothing,
-    workspaceAction: nothing,
-    sessionRailAction: nothing,
-    sessionMenuAction: nothing,
-    onBeginRename: vi.fn(),
-    onRenameInput: vi.fn(),
-    onCommitRename: vi.fn(),
-    onCancelRename: vi.fn(),
-    onMenuOpenChange: vi.fn(),
-    onMenuAction: vi.fn(),
-    onOpenParentSession: vi.fn(),
-    onBranchSelect: vi.fn(),
-    ...patch,
-  };
-  props.gatewaysSnapshot ??= props.nativeGateways?.snapshot;
-  render(html`${renderChatPaneHeader(props)}`, container);
-  return { container, props };
+function mountHeader(patch: Partial<ChatPaneHeaderProps> = {}) {
+  return mountChatPaneHeader(containers, patch);
 }
 
 function mountIntegratedPresenceHeader(params: {
@@ -162,16 +119,16 @@ function mountIntegratedPresenceHeader(params: {
 describe("chat pane header", () => {
   it("hides the gateway picker without capability and with one gateway", () => {
     Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
-    expect(mount().container.querySelector(".chat-pane__gateway-menu")).toBeNull();
+    expect(mountHeader().container.querySelector(".chat-pane__gateway-menu")).toBeNull();
     const one = nativeGateways({ gateways: [gatewaySnapshot.gateways[0]!], currentId: "primary" });
     expect(
-      mount({ nativeGateways: one }).container.querySelector(".chat-pane__gateway-menu"),
+      mountHeader({ nativeGateways: one }).container.querySelector(".chat-pane__gateway-menu"),
     ).toBeNull();
   });
 
   it("renders gateway rows, primary tag, and current checkmark", () => {
     Object.assign(window, { __OPENCLAW_NATIVE_WEB_CHROME__: true });
-    const { container } = mount({ nativeGateways: nativeGateways(gatewaySnapshot) });
+    const { container } = mountHeader({ nativeGateways: nativeGateways(gatewaySnapshot) });
     const rows = container.querySelectorAll(".chat-pane__gateway-item");
     expect(rows).toHaveLength(2);
     expect(container.querySelectorAll(".chat-pane__gateway-menu-item")).toHaveLength(4);
@@ -185,12 +142,12 @@ describe("chat pane header", () => {
     const select = vi.fn();
     const openWindow = vi.fn();
     const capability = { ...nativeGateways(gatewaySnapshot), select, openWindow };
-    const first = mount({ nativeGateways: capability }).container.querySelectorAll(
+    const first = mountHeader({ nativeGateways: capability }).container.querySelectorAll(
       ".chat-pane__gateway-item",
     )[1];
     first?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(select).toHaveBeenCalledWith("profile:studio");
-    const second = mount({ nativeGateways: capability }).container.querySelectorAll(
+    const second = mountHeader({ nativeGateways: capability }).container.querySelectorAll(
       ".chat-pane__gateway-item",
     )[1];
     second?.dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true }));
@@ -202,7 +159,7 @@ describe("chat pane header", () => {
     const select = vi.fn();
     const openWindow = vi.fn();
     const capability = { ...nativeGateways(gatewaySnapshot), select, openWindow };
-    const current = mount({ nativeGateways: capability }).container.querySelector(
+    const current = mountHeader({ nativeGateways: capability }).container.querySelector(
       ".chat-pane__gateway-item",
     );
     current?.dispatchEvent(new MouseEvent("click", { bubbles: true, altKey: true }));
@@ -219,7 +176,7 @@ describe("chat pane header", () => {
         return current;
       },
     };
-    const mounted = mount({ nativeGateways: capability, gatewaysSnapshot: current });
+    const mounted = mountHeader({ nativeGateways: capability, gatewaysSnapshot: current });
     const next = {
       ...gatewaySnapshot,
       gateways: [
@@ -253,7 +210,7 @@ describe("chat pane header", () => {
       ),
       currentId: "profile:studio",
     };
-    const { container } = mount({ nativeGateways: nativeGateways(snapshot) });
+    const { container } = mountHeader({ nativeGateways: nativeGateways(snapshot) });
     const item = Array.from(container.querySelectorAll("wa-dropdown-item")).find((candidate) =>
       candidate.textContent?.includes("Set as primary"),
     );
@@ -268,7 +225,7 @@ describe("chat pane header", () => {
     const onPalette = (event: Event) => paletteEvents.push(event);
     window.addEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, onDrawer);
     window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, onPalette);
-    const { container } = mount({ mergedChrome: true, catalog: true, session: undefined });
+    const { container } = mountHeader({ mergedChrome: true, catalog: true, session: undefined });
     const drawer = container.querySelector<HTMLButtonElement>('[aria-label="Expand sidebar"]');
     const palette = container.querySelector<HTMLButtonElement>(
       '[aria-label="Open command palette"]',
@@ -287,13 +244,13 @@ describe("chat pane header", () => {
   });
 
   it("omits shell chrome actions when the header is not merged", () => {
-    const { container } = mount();
+    const { container } = mountHeader();
     expect(container.querySelector(".chat-pane__nav-toggle")).toBeNull();
     expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
   });
 
   it("places the session menu last in the header action row", () => {
-    const { container } = mount({
+    const { container } = mountHeader({
       mergedChrome: true,
       onClosePane: vi.fn(),
       sessionMenuAction: html`<button data-action="session-menu"></button>`,
@@ -306,7 +263,7 @@ describe("chat pane header", () => {
   });
 
   it("moves narrow session actions into the compact menu", () => {
-    const { container } = mount({
+    const { container } = mountHeader({
       narrow: true,
       mergedChrome: true,
       panelActions: html`<button data-action="persistent-surface"></button>`,
@@ -332,7 +289,7 @@ describe("chat pane header", () => {
   });
 
   it("keeps narrow catalog panel shortcuts visible without a session menu", () => {
-    const { container } = mount({
+    const { container } = mountHeader({
       narrow: true,
       catalog: true,
       session: undefined,
@@ -343,7 +300,7 @@ describe("chat pane header", () => {
   });
 
   it("renders an editable title and workspace chip", () => {
-    const { container, props } = mount();
+    const { container, props } = mountHeader();
     const title = container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button");
     const chip = container.querySelector<HTMLButtonElement>(".chat-pane__workspace-chip");
     expect(title?.textContent?.trim()).toBe("Session title");
@@ -355,7 +312,7 @@ describe("chat pane header", () => {
   it("renders a quiet cloud placement chip with move and stop actions", () => {
     const onPlacementMove = vi.fn();
     const onPlacementReclaim = vi.fn();
-    const { container } = mount({
+    const { container } = mountHeader({
       session: row({
         placement: {
           state: "active",
@@ -412,7 +369,7 @@ describe("chat pane header", () => {
         updatedAtMs: 300_000,
       },
     });
-    const { container } = mount({ session });
+    const { container } = mountHeader({ session });
 
     expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
       "Moving to Gateway…",
@@ -420,7 +377,7 @@ describe("chat pane header", () => {
   });
 
   it.each(["local", "reclaimed"] as const)("hides the placement chip for %s state", (state) => {
-    const { container } = mount({
+    const { container } = mountHeader({
       session: row({
         placement: {
           state,
@@ -435,7 +392,7 @@ describe("chat pane header", () => {
   });
 
   it("places pane presence between the identity trail and face control", () => {
-    const { container } = mount({
+    const { container } = mountHeader({
       presence: html`<span data-slot="presence"></span>`,
       faceControl: html`<span data-slot="face"></span>`,
     });
@@ -445,7 +402,7 @@ describe("chat pane header", () => {
   });
 
   it("leads with the project, then a separator, then the session title", () => {
-    const { container } = mount();
+    const { container } = mountHeader();
     const crumbs = container.querySelector(".chat-pane__crumbs");
     const segments = [...(crumbs?.children ?? [])].map((child) => child.className);
     expect(segments).toEqual([
@@ -461,7 +418,7 @@ describe("chat pane header", () => {
 
   it("places a clickable parent between the project and child session", () => {
     const parentSession = { key: "agent:main:parent", title: "Release prep" };
-    const { container, props } = mount({ parentSession });
+    const { container, props } = mountHeader({ parentSession });
     const crumbs = container.querySelector(".chat-pane__crumbs");
 
     expect([...(crumbs?.children ?? [])].map((child) => child.className)).toEqual([
@@ -478,7 +435,7 @@ describe("chat pane header", () => {
   });
 
   it("drops the separator when the session has no project segment", () => {
-    const { container } = mount({ workspaceLabel: null, workspaceRoot: null });
+    const { container } = mountHeader({ workspaceLabel: null, workspaceRoot: null });
     expect(container.querySelector(".chat-pane__crumb-sep")).toBeNull();
     expect(container.querySelector(".chat-pane__crumbs")?.firstElementChild?.className).toContain(
       "chat-pane__session-title",
@@ -486,7 +443,7 @@ describe("chat pane header", () => {
   });
 
   it("keeps the rename input inside the trail so the project stays visible", () => {
-    const { container } = mount({ editing: true, renameValue: "Renaming" });
+    const { container } = mountHeader({ editing: true, renameValue: "Renaming" });
     const crumbs = container.querySelector(".chat-pane__crumbs");
     expect(crumbs?.querySelector(".chat-pane__workspace-chip")).not.toBeNull();
     expect(crumbs?.querySelector<HTMLInputElement>(".chat-pane__session-title-input")?.value).toBe(
@@ -495,7 +452,7 @@ describe("chat pane header", () => {
   });
 
   it("renders the permanent owner chip only when attribution chrome is enabled", () => {
-    const shown = mount({
+    const shown = mountHeader({
       showOwnerChip: true,
       session: row({
         createdActor: { type: "human", id: "profile-ada", label: "Ada" },
@@ -504,7 +461,7 @@ describe("chat pane header", () => {
     });
     expect(shown.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
 
-    const dormant = mount({
+    const dormant = mountHeader({
       showOwnerChip: false,
       session: row({ createdActor: { type: "human", id: "profile-ada", label: "Ada" } }),
     });
@@ -512,7 +469,7 @@ describe("chat pane header", () => {
   });
 
   it("renders the bounded static participant facepile beside the owner", async () => {
-    const mounted = mount({
+    const mounted = mountHeader({
       showOwnerChip: true,
       session: row({
         createdActor: { type: "human", id: "profile-ada", label: "Ada" },
@@ -633,7 +590,7 @@ describe("chat pane header", () => {
   });
 
   it("renders the durable session actor avatar with the header attribution semantics", async () => {
-    const mounted = mount({
+    const mounted = mountHeader({
       showOwnerChip: true,
       session: row({
         createdActor: {
@@ -662,12 +619,12 @@ describe("chat pane header", () => {
   });
 
   it("routes Enter and Escape from the rename input", () => {
-    const enter = mount({ editing: true, renameValue: "  Updated  " });
+    const enter = mountHeader({ editing: true, renameValue: "  Updated  " });
     const enterInput = enter.container.querySelector<HTMLInputElement>("input");
     enterInput?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
     expect(enter.props.onCommitRename).toHaveBeenCalledOnce();
 
-    const escape = mount({ editing: true });
+    const escape = mountHeader({ editing: true });
     escape.container
       .querySelector("input")
       ?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
@@ -676,7 +633,7 @@ describe("chat pane header", () => {
   });
 
   it("keeps catalog sessions static and without a workspace chip", () => {
-    const { container } = mount({
+    const { container } = mountHeader({
       catalog: true,
       session: undefined,
       panelActions: html`<span data-action="terminal"></span>`,
@@ -698,7 +655,9 @@ describe("chat pane header", () => {
   });
 
   it("keeps read-only gateway session titles static", () => {
-    const { container } = mount({ renameDisabledReason: "Operator write access is required." });
+    const { container } = mountHeader({
+      renameDisabledReason: "Operator write access is required.",
+    });
     expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
     expect(container.querySelector(".chat-pane__session-title")?.textContent).toContain(
       "Session title",
@@ -709,12 +668,12 @@ describe("chat pane header", () => {
   });
 
   it("shows copied feedback on the workspace chip", () => {
-    const { container } = mount({ copiedAction: "copy-path" });
+    const { container } = mountHeader({ copiedAction: "copy-path" });
     expect(container.querySelector(".chat-pane__workspace-chip")?.textContent).toContain("Copied");
   });
 
   it("shows cloud placement and hides reveal when disabled", () => {
-    const { container } = mount({
+    const { container } = mountHeader({
       session: row({
         placement: { state: "active" } as GatewaySessionRow["placement"],
       }),
@@ -726,19 +685,19 @@ describe("chat pane header", () => {
   });
 
   it("shows an incognito indicator for in-memory threads", () => {
-    const { container } = mount({ session: row({ incognito: true }) });
+    const { container } = mountHeader({ session: row({ incognito: true }) });
     expect(container.querySelector(".chat-pane__incognito")?.getAttribute("aria-label")).toBe(
       "Incognito session",
     );
   });
 
   it("hides one branch and lists multiple branches with the active tip marked", () => {
-    const one = mount({
+    const one = mountHeader({
       branches: [{ leafEntryId: "only", headline: "Only path", messageCount: 1, active: true }],
     });
     expect(one.container.querySelector(".chat-pane__branches-trigger")).toBeNull();
 
-    const multiple = mount({
+    const multiple = mountHeader({
       branches: [
         { leafEntryId: "active", headline: "Current work", messageCount: 4, active: true },
         {
@@ -775,7 +734,7 @@ describe("chat pane header", () => {
   });
 
   it("disables branch switching while the agent is working", () => {
-    const { container, props } = mount({
+    const { container, props } = mountHeader({
       branchSwitchDisabledReason: "Branch switch is unavailable while the agent is working.",
       branches: [
         { leafEntryId: "active", headline: "Current work", messageCount: 4, active: true },
@@ -827,7 +786,7 @@ describe("chat pane parent resolution", () => {
 
 describe("chat pane workspace chip icon", () => {
   async function mountChip(workspaceIcon: ChatPaneHeaderProps["workspaceIcon"]) {
-    const { container } = mount({ workspaceIcon });
+    const { container } = mountHeader({ workspaceIcon });
     const element = container.querySelector("openclaw-workspace-icon") as
       | (HTMLElement & { updateComplete?: Promise<unknown> })
       | null;
@@ -925,7 +884,7 @@ describe("chat pane workspace chip icon", () => {
       authTokens: ["token"],
       authReady: true,
     };
-    const mounted = mount({ workspaceIcon });
+    const mounted = mountHeader({ workspaceIcon });
     const element = mounted.container.querySelector("openclaw-workspace-icon") as
       | (HTMLElement & { updateComplete?: Promise<unknown> })
       | null;

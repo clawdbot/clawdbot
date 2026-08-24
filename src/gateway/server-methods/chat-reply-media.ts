@@ -65,7 +65,7 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
       continue;
     }
     const mergedMediaUrls: string[] = [];
-    const text = payload.text;
+    let text = payload.text;
     for (const mediaUrl of mediaUrls) {
       if (shouldPreserveDisplayMediaUrl(payload, mediaUrl)) {
         mergedMediaUrls.push(mediaUrl);
@@ -73,10 +73,12 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
       }
       const normalizedPayload = await normalizeMediaPaths({
         ...payload,
+        text,
         mediaUrl,
         mediaUrls: [mediaUrl],
       });
       const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalizedPayload).mediaUrls;
+      text = normalizedPayload.text;
       if (normalizedMediaUrls.length === 0) {
         continue;
       }

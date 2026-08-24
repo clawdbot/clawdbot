@@ -22,13 +22,13 @@ import type { UpdateProgress } from "../app/update-confirmation.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
 import "./settings-save-indicator.ts";
 import "./sidebar-build-chip.ts";
-import "./sidebar-update-card.ts";
 
 type SettingsSidebarProps = {
   basePath: string;
@@ -55,6 +55,7 @@ type SettingsSidebarProps = {
   onReviewUpdate?: () => void;
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
+  searchParams?: Parameters<typeof findSettingsSearchBlocks>[0];
   onExit: () => void;
   onRetryConnect: () => void;
   onNavigate: (routeId: RouteId, options?: ApplicationNavigationOptions) => void;
@@ -244,9 +245,12 @@ function syncSettingsSearchScrollShadow(nav: HTMLElement) {
 
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const reconnecting = t("connection.reconnecting");
+  const searchBlockMatches =
+    props.searchBlockMatches ??
+    (props.searchParams ? findSettingsSearchBlocks(props.searchParams) : []);
   const navigationGroups = filterSettingsNavigationGroups(
     props.searchQuery,
-    props.searchBlockMatches ?? [],
+    searchBlockMatches,
     props.canAdmin !== false,
   );
   return html`
@@ -272,11 +276,15 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           @input=${(event: Event) =>
             props.onSearchQueryChange((event.currentTarget as HTMLInputElement).value)}
           @keydown=${(event: KeyboardEvent) => {
-            if (event.key !== "Escape" || !props.searchQuery) {
+            if (event.key !== "Escape") {
               return;
             }
             event.preventDefault();
-            props.onSearchQueryChange("");
+            if (props.searchQuery) {
+              props.onSearchQueryChange("");
+              return;
+            }
+            props.onExit();
           }}
         />
         ${props.searchQuery
@@ -324,25 +332,6 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
               `,
             )}
       </nav>
-      <openclaw-sidebar-attention
-        .onNavigate=${props.onNavigate}
-        .onOpenApprovals=${props.onOpenApprovals}
-      ></openclaw-sidebar-attention>
-      <openclaw-sidebar-update-card
-        .updateAvailable=${props.updateAvailable}
-        .updateSchedule=${props.updateSchedule ?? null}
-        .heldUpdateCampaignId=${props.heldUpdateCampaignId ?? null}
-        .updateBusy=${props.updateBusy}
-        .statusBanner=${props.updateStatusBanner ?? null}
-        .watchUpdateProgress=${props.watchUpdateProgress}
-        .canUpdate=${props.canUpdate ?? false}
-        .canHoldUpdate=${props.canHoldUpdate ?? false}
-        .onUpdate=${props.onUpdate}
-        .refreshRequired=${props.refreshRequired}
-        .onRefresh=${props.onRefresh}
-        .onHoldUpdate=${props.onHoldUpdate ?? (async () => false)}
-        .onReviewUpdate=${props.onReviewUpdate ?? (() => undefined)}
-      ></openclaw-sidebar-update-card>
       <footer class="settings-sidebar__footer">
         ${props.offline
           ? renderOfflineSidebarStatus({

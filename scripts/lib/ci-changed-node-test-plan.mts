@@ -28,6 +28,7 @@ type ChangedNodeTestShard = {
   configs: string[];
   includePatterns?: string[];
   planConcurrency?: number;
+  pretestBuildMode?: "private-qa" | "runtime";
   requiresDist: boolean;
   runner: string;
   shardName: string;
@@ -44,6 +45,12 @@ const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
 const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
+const PRETEST_RUNTIME_BUILD_TARGETS = new Set([
+  "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+]);
+const PRETEST_PRIVATE_QA_BUILD_TARGETS = new Set([
+  "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
+]);
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
 const DOCKER_SEED_LANE_ORDER = [
   "mcp-channels",
@@ -319,6 +326,11 @@ function createChangedTargetShards(
       shardName: `${names.shardName}${suffix}`,
       targets: chunk,
     };
+    if (chunk.some((target) => PRETEST_PRIVATE_QA_BUILD_TARGETS.has(target))) {
+      shard.pretestBuildMode = "private-qa";
+    } else if (chunk.some((target) => PRETEST_RUNTIME_BUILD_TARGETS.has(target))) {
+      shard.pretestBuildMode = "runtime";
+    }
     if (chunk.some((target) => SERIAL_CHANGED_TARGET_RE.test(target))) {
       shard.planConcurrency = 1;
     }
@@ -363,6 +375,9 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `changed-extensions-config${suffix}`,
     };
+    if (roots.includes("extensions/qa-lab")) {
+      shard.pretestBuildMode = "private-qa";
+    }
     if (includePatterns) {
       shard.includePatterns = includePatterns;
     }

@@ -77,6 +77,7 @@ export async function openGatewayNodeDuplex(options: {
   const endpoint = createNodeDuplexEndpoint({
     requireReady: true,
     maxMessageBytes: params.maxMessageBytes,
+    maxOutstandingDeliveryBytes: params.maxOutstandingDeliveryBytes,
     sendFrame(frame) {
       assertRuntimeCurrent();
       if (!invokeId || !framedReady) {

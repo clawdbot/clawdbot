@@ -232,6 +232,7 @@ export async function installPackageDir<
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => void | Promise<void>;
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
+  afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const deferCommit = isPackageDirInstallCommitDeferred(params);
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
@@ -271,27 +272,36 @@ export async function installPackageDir<
   );
   const fail = async (error: string, cause?: unknown) => {
     const installBaseChanged = isInstallBaseChangedError(cause);
+    let restoreError: string | undefined;
     if (installBaseChanged) {
       params.logger?.warn?.(INSTALL_BASE_CHANGED_ABORT_WARNING);
     } else {
-      await restoreBackup();
+      restoreError = await restoreBackup();
       if (stageDir) {
         await cleanupInstallTempDir(stageDir);
         stageDir = null;
       }
     }
-    return { ok: false as const, error };
+    return {
+      ok: false as const,
+      error: restoreError ? `${error}; could not restore existing install: ${restoreError}` : error,
+    };
   };
-  const restoreBackup = async () => {
+  const restoreBackup = async (): Promise<string | undefined> => {
     if (!backupDir) {
-      return;
+      return undefined;
     }
-    await movePathWithCopyFallback({
-      from: backupDir,
-      sourceHardlinks,
-      to: canonicalTargetDir,
-    }).catch(() => undefined);
-    backupDir = null;
+    try {
+      await movePathWithCopyFallback({
+        from: backupDir,
+        sourceHardlinks,
+        to: canonicalTargetDir,
+      });
+      backupDir = null;
+      return undefined;
+    } catch (error) {
+      return String(error);
+    }
   };
 
   try {
@@ -384,6 +394,20 @@ export async function installPackageDir<
     }
   }
 
+  if (backupDir && params.afterBackup) {
+    // Validate the moved original, not its former path: new path-based writes now
+    // reach the replacement, while a refusal can still restore the original tree.
+    try {
+      const backupResult = await params.afterBackup(backupDir);
+      if (!backupResult.ok) {
+        const failed = await fail(backupResult.error);
+        return { ...backupResult, error: failed.error };
+      }
+    } catch (err) {
+      return await fail(`backup validation failed: ${String(err)}`, err);
+    }
+  }
+
   try {
     await assertInstallBaseStable({
       installBaseDir,
@@ -471,6 +495,7 @@ export async function installPackageDirWithManifestDeps<
   manifestDependencies?: Record<string, unknown>;
   afterCopy?: (installedDir: string) => void | Promise<void>;
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
+  afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const hasDeps = Object.keys(params.manifestDependencies ?? {}).length > 0;
   return installPackageDir<TAfterInstallFailure>({

@@ -11,6 +11,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveConfiguredTalkRealtimeProviderId } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
@@ -19,7 +20,6 @@ import type {
   ConfiguredGenerationProviderIds,
   ConfiguredVoiceProviderIds,
 } from "./gateway-startup-plugin-contracts.js";
-import { normalizeConfiguredSpeechProviderIdForStartup } from "./gateway-startup-speech-providers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { CORE_BUILT_IN_MODEL_APIS } from "./provider-config-owner.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -32,7 +32,7 @@ export function manifestOwnsConfiguredSpeechProvider(params: {
     return false;
   }
   return (params.manifest?.contracts?.speechProviders ?? []).some((providerId) => {
-    const normalized = normalizeConfiguredSpeechProviderIdForStartup(providerId);
+    const normalized = normalizeOptionalLowercaseString(providerId);
     return normalized ? params.configuredSpeechProviderIds.has(normalized) : false;
   });
 }
@@ -216,10 +216,15 @@ export function collectConfiguredVoiceProviderIds(
   config: OpenClawConfig,
 ): ConfiguredVoiceProviderIds {
   const providerIds = collectModelProviderIds(config.agents?.defaults?.voiceModel);
+  const realtimeProviderIds = new Set(providerIds);
+  const talkRealtimeProviderId = resolveConfiguredTalkRealtimeProviderId(config);
+  if (talkRealtimeProviderId) {
+    realtimeProviderIds.add(talkRealtimeProviderId.toLowerCase());
+  }
   return {
     speechProviders: providerIds,
     realtimeTranscriptionProviders: providerIds,
-    realtimeVoiceProviders: providerIds,
+    realtimeVoiceProviders: realtimeProviderIds,
   };
 }
 

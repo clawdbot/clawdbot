@@ -67,6 +67,7 @@ import {
   applySessionEntryMaintenance,
   finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
 } from "./session-accessor.sqlite-maintenance.js";
+import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import {
   cloneSessionEntry,
@@ -77,6 +78,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -339,7 +341,8 @@ export async function applySessionEntryLifecycleMutation(params: {
         sessionKey,
         entry,
         expectedEntry,
-        resetBoundaryPlan,
+        routeContext,
+        resetBoundaryReason,
       } of projected.upsertedEntries) {
         const sameKeyRemoval = validatedRemovals.find(
           (removal) => removal.sessionKey === sessionKey,
@@ -362,14 +365,17 @@ export async function applySessionEntryLifecycleMutation(params: {
         if (sameKeyRemoval && !shouldRemoveSessionEntry(currentEntry, sameKeyRemoval.removal)) {
           throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
         }
-        if (resetBoundaryPlan && expectedEntry?.sessionId) {
-          const events = [...resetBoundaryPlan.seedEvents, resetBoundaryPlan.event];
+        if (resetBoundaryReason && expectedEntry?.sessionId) {
+          const event = buildSessionResetBoundaryEvent({
+            events: loadTranscriptEventsFromDatabase(transactionDb, expectedEntry.sessionId),
+            reason: resetBoundaryReason,
+          });
           const appended = appendTranscriptEventsInTransaction(
             transactionDb,
             { ...resolved, sessionId: expectedEntry.sessionId, sessionKey },
-            events,
+            [event],
           );
-          if (appended !== events.length) {
+          if (appended !== 1) {
             throw new Error(`Failed to append reset boundary for ${sessionKey}`);
           }
         }
@@ -377,6 +383,7 @@ export async function applySessionEntryLifecycleMutation(params: {
           allowStoredAliases: params.allowCanonicalRepair === true,
           preserveNodeSuggestions: params.allowCanonicalRepair === true,
           previousEntry: expectedCurrentEntry ?? null,
+          ...(routeContext !== undefined ? { routeContext } : {}),
         });
         const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
           const removedSessionId = removal.expectedEntry.sessionId;

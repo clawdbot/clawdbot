@@ -331,11 +331,10 @@ export async function setCodexConversationPermissions(params: {
       if (entry.sessionId !== params.session.sessionId) {
         throw new Error("Codex session changed while applying the permission mode.");
       }
-      if (params.mode === "yolo") {
-        entry.permissionMode = "full";
-      } else {
-        delete entry.permissionMode;
+      if (!entry.sessionRoot?.trim()) {
+        throw new Error("Codex permission mode requires a recorded session root.");
       }
+      entry.permissionMode = params.mode === "yolo" ? "full" : "guarded";
       return entry;
     },
   });
@@ -367,7 +366,7 @@ export function parseCodexPermissionsModeArg(arg: string | undefined): Permissio
   if (normalized === "yolo" || normalized === "full" || normalized === "full-access") {
     return "yolo";
   }
-  if (normalized === "default" || normalized === "guardian") {
+  if (["default", "guardian", "guarded", "approve"].includes(normalized)) {
     return "default";
   }
   return undefined;
@@ -376,7 +375,7 @@ export function parseCodexPermissionsModeArg(arg: string | undefined): Permissio
 export function formatPermissionsMode(
   mode: "read-only" | "guarded" | "workspace" | "full" | undefined,
 ): string {
-  return mode === "full" ? "full access" : "default";
+  return mode === "full" ? "full access" : (mode ?? "default");
 }
 
 async function requireThreadBinding(

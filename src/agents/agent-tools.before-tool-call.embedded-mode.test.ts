@@ -7,6 +7,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
@@ -20,6 +21,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { resolveBeforeToolCallApprovalOutcome } from "./agent-tools.before-tool-call.approval.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
@@ -103,6 +105,29 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     setEmbeddedMode(false);
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetGlobalHookRunner();
+  });
+
+  it("carries the host receipt fence beside the execution identity token", async () => {
+    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-receipt-fence");
+    const receiptAuthority = vi.fn(() => true);
+    runBeforeToolCallMock.mockResolvedValue({});
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:session",
+        operationalRunInstance: { instanceId: "instance-receipt", runId: "run-receipt-fence" },
+        executionIdentityToken,
+        receiptAuthority,
+      },
+      () => runBeforeToolCallHook({ toolName: "exec", params: { command: "true" } }),
+    );
+
+    const call = requireBeforeToolCall(runBeforeToolCallMock, "receipt-fenced hook invocation");
+    expect(call[2]?.token).toBe(executionIdentityToken);
+    expect(call[2]?.assertAuthority).toEqual(expect.any(Function));
+    expect(call[2]?.assertAuthority()).toBe(true);
+    expect(receiptAuthority).toHaveBeenCalledOnce();
   });
 
   it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {

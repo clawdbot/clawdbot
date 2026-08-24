@@ -440,6 +440,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               nodeSession,
               command,
               params: forwardedParams.params,
+              ...(sessionKey ? { sessionKey } : {}),
               turnSource: {
                 channel: p.turnSourceChannel,
                 to: p.turnSourceTo,
@@ -524,16 +525,17 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        const resolveDispatchAuthorization = (dispatchCfg: typeof cfg) =>
+          isNodeCommandAllowed({
+            command,
+            declaredCommands: dispatchSession.commands,
+            allowlist: resolveNodeCommandAllowlist(dispatchCfg, {
+              ...dispatchSession,
+              approvedCommands: dispatchSession.commands,
+            }),
+          });
         const dispatchCfg = context.getRuntimeConfig();
-        const dispatchAllowlist = resolveNodeCommandAllowlist(dispatchCfg, {
-          ...dispatchSession,
-          approvedCommands: dispatchSession.commands,
-        });
-        const dispatchAllowed = isNodeCommandAllowed({
-          command,
-          declaredCommands: dispatchSession.commands,
-          allowlist: dispatchAllowlist,
-        });
+        const dispatchAllowed = resolveDispatchAuthorization(dispatchCfg);
         if (!dispatchAllowed.ok) {
           respond(
             false,
@@ -593,7 +595,8 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               context,
               client,
               approvalAuthority: forwardedParams.approvalAuthority,
-            }) === undefined,
+            }) === undefined &&
+            resolveDispatchAuthorization(context.getRuntimeConfig()).ok,
           onDispatchReady: (invokeId) => {
             nodeCommandDispatched = true;
             nodeInvokeStream?.onDispatchReady(invokeId);

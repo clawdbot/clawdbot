@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hashCliReseedPrompt, parseCliReseedPrompt } from "./reseed-envelope.js";
+import { parseCliReseedPrompt } from "./reseed-envelope.js";
 
 const LEGACY_RESEED_PROMPT = [
   "Continue this conversation using the OpenClaw transcript below as prior session history.",
@@ -15,13 +15,11 @@ const LEGACY_RESEED_PROMPT = [
 ].join("\n");
 
 describe("CLI reseed envelope", () => {
-  it("recognizes exact legacy prompts and stable prompt hashes", () => {
+  it("recognizes exact legacy prompts", () => {
     expect(parseCliReseedPrompt(LEGACY_RESEED_PROMPT)).toEqual({
       kind: "legacy",
       userMessage: "current",
     });
-    expect(hashCliReseedPrompt("same")).toBe(hashCliReseedPrompt("same"));
-    expect(hashCliReseedPrompt("same")).not.toBe(hashCliReseedPrompt("different"));
   });
 
   it("keeps suffixes outside the recovered legacy user message", () => {

@@ -1,5 +1,6 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -24,9 +25,10 @@ import {
 } from "./chat-state-refresh.ts";
 import { resolveChatAvatarUrl, selectedChatSessionRow } from "./chat-state-route.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { getChatSessionProjection } from "./history-merge.ts";
+import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
@@ -175,6 +177,110 @@ describe("canonical session message recovery", () => {
     expect(renderedTranscript(state)).toEqual([{ role: "assistant", text }]);
   });
 
+  it("retires the complete transient projection when the durable terminal arrives", () => {
+    const runId = "active-run";
+    const siblingRunId = "sibling-run";
+    const finalText = "The durable terminal reply.";
+    const toolMessage = { role: "assistant", runId, toolCallId: "tool-1" };
+    const siblingToolMessage = {
+      role: "assistant",
+      runId: siblingRunId,
+      toolCallId: "tool-2",
+    };
+    const toolIdentity = buildToolStreamIdentity(runId, "tool-1");
+    const siblingToolIdentity = buildToolStreamIdentity(siblingRunId, "tool-2");
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [],
+      chatRunId: runId,
+      chatStream: finalText,
+      chatStreamStartedAt: 1,
+      chatStreamSegments: [
+        { text: "Commentary", ts: 1, runId, itemId: "commentary-1" },
+        {
+          text: "Sibling commentary",
+          ts: 1,
+          runId: siblingRunId,
+          itemId: "commentary-2",
+        },
+      ],
+      chatToolMessages: [toolMessage, siblingToolMessage],
+      toolStreamById: new Map([
+        [
+          toolIdentity,
+          {
+            message: toolMessage,
+            name: "exec",
+            receivedAt: 1,
+            runId,
+            startedAt: 1,
+            toolCallId: "tool-1",
+          },
+        ],
+        [
+          siblingToolIdentity,
+          {
+            message: siblingToolMessage,
+            name: "read",
+            receivedAt: 1,
+            runId: siblingRunId,
+            startedAt: 1,
+            toolCallId: "tool-2",
+          },
+        ],
+      ]),
+      toolStreamOrder: [toolIdentity, siblingToolIdentity],
+      activityEventSeqById: new Map([
+        [`tool:${JSON.stringify([runId, "tool-1"])}:result`, 2],
+        [`tool:${JSON.stringify([siblingRunId, "tool-2"])}:result`, 2],
+      ]),
+      knownAgentRunIds: new Set([runId, siblingRunId]),
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId }],
+        ["approval-2", { approvalId: "approval-2", toolCallId: "tool-2", runId: siblingRunId }],
+      ]),
+    });
+
+    applySessionMessagePayload(
+      state,
+      {
+        sessionKey: state.sessionKey,
+        runId,
+        messageId: "terminal-message",
+        messageSeq: 2,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: finalText }],
+          timestamp: 2,
+        },
+      },
+      false,
+      { kind: "live", activeRunId: runId },
+    );
+
+    expect(state.chatMessages.filter((message) => extractText(message) === finalText)).toHaveLength(
+      1,
+    );
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamSegments).toEqual([
+      {
+        text: "Sibling commentary",
+        ts: 1,
+        runId: siblingRunId,
+        itemId: "commentary-2",
+      },
+    ]);
+    expect(state.chatToolMessages).toEqual([siblingToolMessage]);
+    expect(state.toolStreamById.has(toolIdentity)).toBe(false);
+    expect(state.toolStreamById.has(siblingToolIdentity)).toBe(true);
+    expect(state.toolStreamOrder).toEqual([siblingToolIdentity]);
+    expect(state.knownAgentRunIds).toEqual(new Set([siblingRunId]));
+    expect([...state.waitingApprovalStatuses.keys()]).toEqual(["approval-2"]);
+    expect([...(state.activityEventSeqById?.keys() ?? [])]).toEqual([
+      `tool:${JSON.stringify([siblingRunId, "tool-2"])}:result`,
+    ]);
+  });
+
   it("keeps cumulative assistant output split across an authoritative steer", () => {
     const activeRunId = "active-run";
     const steerRunId = "steer-request";
@@ -216,6 +322,16 @@ describe("canonical session message recovery", () => {
     ]);
     expect(state.chatRunId).toBe(activeRunId);
     expect(state.chatQueue).toEqual([]);
+    reduceChatSessionProjection(state, {
+      type: "sendPending",
+      runId: steerRunId,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "Steer prompt" }],
+        timestamp: 50,
+        __openclaw: { idempotencyKey: `${steerRunId}:user` },
+      },
+    });
     state.chatRunId = steerRunId;
 
     const steerEvent = {
@@ -243,6 +359,7 @@ describe("canonical session message recovery", () => {
     handlePageGatewayEvent(state, steerEvent);
     expect(state.chatRunId).toBe(activeRunId);
     const segmentsAfterRequestBoundary = state.chatStreamSegments;
+    expect(segmentsAfterRequestBoundary.at(-1)?.boundaryRunId).toBe(steerRunId);
     expect(state.chatStreamSegments).toBe(segmentsAfterRequestBoundary);
     expect(
       state.chatMessages.filter((message) => extractText(message) === "Steer prompt"),
@@ -791,7 +908,12 @@ describe("canonical session message recovery", () => {
     expect(state.chatStream).toBe("Current partial reply");
   });
 
-  it("renders distinct live peers immediately and coalesces their stale history", async () => {
+  it("coalesces distinct live peers into one frame and their stale history into one load", async () => {
+    let renderFrame: FrameRequestCallback | undefined;
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      renderFrame = callback;
+      return 1;
+    });
     let resolveHistory!: (result: {
       messages: unknown[];
       sessionId: string;
@@ -828,8 +950,10 @@ describe("canonical session message recovery", () => {
       });
 
       expect(state.chatMessages).toHaveLength(index + 1);
-      expect(state.requestUpdate).toHaveBeenCalledTimes(index + 1);
+      expect(state.requestUpdate).not.toHaveBeenCalled();
     }
+    renderFrame?.(0);
+    expect(state.requestUpdate).toHaveBeenCalledOnce();
 
     expect(request).toHaveBeenCalledOnce();
     resolveHistory({
@@ -1100,6 +1224,72 @@ describe("canonical session message recovery", () => {
     await Promise.resolve();
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("defers branch hydration when a session reconciliation finishes after the pane hides", async () => {
+    const refreshFinished = createDeferred();
+    let presented = true;
+    const listBranches = vi.fn().mockResolvedValue([]);
+    const { request, state } = createSessionEventState({
+      chatRunId: "run-1",
+      chatStream: "Finishing",
+      sessionsResult: {
+        ts: 1,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      },
+    });
+    state.sessions = {
+      ...state.sessions,
+      listBranches,
+      reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
+      refresh: vi.fn(async () => {
+        await refreshFinished.promise;
+        state.sessionsResult = {
+          ts: 2,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: state.sessionKey,
+              kind: "direct",
+              hasActiveRun: false,
+              status: "done",
+              updatedAt: 2,
+            },
+          ],
+        };
+      }),
+    };
+
+    handlePageGatewayEvent(
+      state,
+      {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId: "run-1",
+          messageId: "terminal-message",
+          messageSeq: 2,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Finished" }],
+            __openclaw: { id: "terminal-message", seq: 2 },
+          },
+        },
+      },
+      () => presented,
+    );
+    presented = false;
+    refreshFinished.resolve();
+
+    await vi.waitFor(() => expect(state.chatRunId).toBeNull());
+    await vi.waitFor(() => expect(request).toHaveBeenCalled());
+    expect(listBranches).not.toHaveBeenCalled();
+  });
 });
 
 describe("ChatStateController render lifecycle", () => {
@@ -1188,7 +1378,7 @@ describe("ChatStateController render lifecycle", () => {
     return {
       agents: {
         state: { agentsList: null },
-        adoptList: vi.fn(),
+        ensureList: vi.fn(async () => null),
       },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
@@ -1563,7 +1753,10 @@ describe("ChatStateController render lifecycle", () => {
     expect(state.waitingApprovalStatuses.size).toBe(0);
   });
 
-  it("skips no-op assistant invalidation while tool changes render immediately", () => {
+  it("skips no-op assistant invalidation while tool changes render on the next frame", () => {
+    const requestAnimationFrame = vi
+      .spyOn(globalThis, "requestAnimationFrame")
+      .mockImplementation(() => 1);
     const requestUpdate = vi.fn();
     const state = createStreamEventState({
       requestUpdate,
@@ -1585,7 +1778,9 @@ describe("ChatStateController render lifecycle", () => {
     expect(requestUpdate).not.toHaveBeenCalled();
 
     emitAgent(2, "tool", { phase: "start", name: "read", toolCallId: "tool-1" });
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    emitAgent(3, "tool", { phase: "update", name: "read", toolCallId: "tool-1" });
+    expect(requestAnimationFrame).toHaveBeenCalledOnce();
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 
   it("coalesces stream invalidations into one animation frame", () => {
@@ -1631,9 +1826,11 @@ describe("ChatStateController render lifecycle", () => {
       event: "session.operation",
       payload: {},
     });
+    expect(frames.size).toBe(1);
+    expect(requestUpdate).toHaveBeenCalledOnce();
     staleFrame?.(0);
 
-    expect(cancelFrame).toHaveBeenCalledWith(2);
+    expect(cancelFrame).not.toHaveBeenCalledWith(2);
     expect(requestUpdate).toHaveBeenCalledTimes(2);
     expect(state.chatStreamRenderFrame).toBeNull();
   });
@@ -2080,7 +2277,7 @@ describe("image lightbox lifecycle", () => {
     const context = {
       agents: {
         state: { agentsList: null },
-        adoptList: vi.fn(),
+        ensureList: vi.fn(async () => null),
       },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
@@ -2141,7 +2338,7 @@ describe("loadPageAssistantIdentity", () => {
     }));
     const client = { request } as unknown as GatewayBrowserClient;
     const context = {
-      agents: { state: { agentsList: null }, adoptList: vi.fn() },
+      agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
       agentSelection: { state: { selectedId: "main" } },
       basePath: "",
       config: {
@@ -2213,7 +2410,7 @@ describe("refreshChatMetadata", () => {
     const refreshSessions = vi.fn().mockResolvedValue(undefined);
     const request = vi.fn(async (method: string, params?: unknown) => {
       expect(method).toBe("models.list");
-      expect(params).toEqual({ view: "configured", agentId: "work" });
+      expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
       return {
         models: [
           {

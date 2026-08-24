@@ -16,10 +16,13 @@ import {
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -29,12 +32,9 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import {
-  hasDismissedScopeUpgradeBanner,
-  readScopeUpgradeAvailability,
-} from "./device-scope-upgrade.ts";
-import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
+  KEYBOARD_SHORTCUTS_ELEMENT,
   type LazyCustomElementRequestController,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
@@ -48,50 +48,19 @@ import {
   NAV_WIDTH_MIN,
   loadSettings,
   normalizeCatalogOpenTarget,
+  normalizeChatSendShortcut,
 } from "./settings.ts";
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
-const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
-  ? "⌘K"
-  : "Ctrl K";
-
-const SCOPE_UPGRADE_BANNER_ELEMENT = {
+const SCOPE_UPGRADE_SURFACE_ELEMENT = {
   tagName: "openclaw-device-scope-upgrade-banner",
-  label: "device scope upgrade banner",
-  loadModule: () => import("./device-scope-upgrade.runtime.ts"),
+  label: t("connection.scopeUpgrade.status"),
+  loadModule: () =>
+    import("./device-scope-upgrade.runtime.ts").catch(
+      () => import("./device-scope-upgrade-retry.runtime.ts"),
+    ),
 } satisfies OptionalCustomElement;
-
-function renderScopeUpgradeBanner(
-  host: ShellViewHost,
-  snapshot: ApplicationContext["gateway"]["snapshot"],
-  compact: boolean,
-) {
-  const state = readScopeUpgradeAvailability(snapshot);
-  if (
-    state.phase === "hidden" ||
-    (state.phase === "guidance" && hasDismissedScopeUpgradeBanner())
-  ) {
-    return nothing;
-  }
-  host.lazyCustomElements.preload(SCOPE_UPGRADE_BANNER_ELEMENT);
-  if (isOptionalElementDefined(SCOPE_UPGRADE_BANNER_ELEMENT)) {
-    return html`<openclaw-device-scope-upgrade-banner
-      .props=${{
-        snapshot,
-        compact,
-      }}
-    ></openclaw-device-scope-upgrade-banner>`;
-  }
-  return html`<openclaw-update-banner
-    .props=${{
-      statusBanner: {
-        tone: "warn",
-        text: t("connection.scopeUpgrade.guidance"),
-      },
-    }}
-  ></openclaw-update-banner>`;
-}
 
 export interface ShellViewHost {
   readonly context: ApplicationContext<RouteId> | undefined;
@@ -234,6 +203,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     </main>`;
   }
   const gatewaySnapshot = context.gateway.snapshot;
+  const config = context.config.current;
   const gatewayConnected = gatewaySnapshot.phase === "connected";
   const operatorAccess = readGatewayOperatorAccess(gatewaySnapshot);
   const canUpdate = canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin");
@@ -241,12 +211,8 @@ export function renderApplicationShell(host: ShellViewHost) {
     canUpdate && canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin");
   const outboxScopeHost = host.storedOutboxScopeHost(context);
   const outboxStoreRuntime = host.outboxStoreRuntime;
-  const storedOutboxes = outboxStoreRuntime
-    ? outboxStoreRuntime.summarizeStoredChatOutboxes(outboxScopeHost)
-    : null;
-  const storedDraftScopeKeys = outboxStoreRuntime
-    ? outboxStoreRuntime.listStoredDraftScopes(outboxScopeHost)
-    : null;
+  const storedOutboxes = outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost) ?? null;
+  const storedDraftScopeKeys = outboxStoreRuntime?.listStoredDraftScopes(outboxScopeHost) ?? null;
   const outboxAttentionCountForSession = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
@@ -268,16 +234,14 @@ export function renderApplicationShell(host: ShellViewHost) {
   // — not the request — decides how long the update surfaces stay busy.
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
   const watchUpdateProgress = createUpdateProgressWatcher(context);
-  const terminalAvailable = isTerminalAvailable(
-    gatewaySnapshot,
-    context.config.current.terminalEnabled ?? false,
-  );
+  const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const custodianPanelAvailable =
     // Scope-aware to match the store: admin-only, never advertisement alone.
     canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
   const activeRoute = host.routeState.routeId ?? "chat";
+  const sessionRoute = isSessionRouteId(activeRoute);
   // Chat has an offline outbox, New Session keeps a local draft, and Appearance
   // persists local preference intent for replay. Their server actions are
   // independently gated; other pages cannot submit useful disconnected work.
@@ -297,15 +261,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   // must not reserve its fixed sidebar column (the grid would stay off-center).
   const settingsTakeover = isSettingsNavigationRoute(activeRoute) && !host.onboardingMode;
   const runtimeConfig = context.runtimeConfig.state;
-  const settingsSearchBlocks = findSettingsSearchBlocks({
-    query: host.settingsSearchQuery,
-    schema: runtimeConfig.configSchema,
-    value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
-    uiHints: runtimeConfig.configUiHints,
-    identityAvailable: Boolean(gatewaySnapshot.selfUser),
-    basePath: context.basePath,
-    canAdmin: operatorAccess.canAdmin,
-  });
   const onboarding = host.onboardingMode;
   const memoryImportActive = onboarding && activeRoute !== "custodian";
   host.lazyCustomElements.requestWhileActive(
@@ -314,13 +269,33 @@ export function renderApplicationShell(host: ShellViewHost) {
   );
   const navDrawerOpen = host.navDrawerOpen && !onboarding;
   const mobileNavLayout = isMobileNavLayout();
+  const nativeWebChrome = isNativeWebChromeHost();
   const mergedChatChrome = shouldMergeChatChrome({
     mobileNavLayout,
     routeId: activeRoute,
     onboarding,
   });
-  // Drawer navigation always opens expanded; the desktop collapse preference
-  // stays persisted for when the viewport returns to the desktop layout.
+  const showScopeUpgradeStatus =
+    gatewayConnected &&
+    gatewaySnapshot.hello?.auth?.scopes !== undefined &&
+    !operatorAccess.canAdmin;
+  if (showScopeUpgradeStatus) {
+    host.lazyCustomElements.preload(SCOPE_UPGRADE_SURFACE_ELEMENT, { reportError: true });
+  }
+  const scopeUpgradeSurface = showScopeUpgradeStatus
+    ? html`<openclaw-device-scope-upgrade-banner
+        .props=${{
+          snapshot: gatewaySnapshot,
+          mobile: mobileNavLayout,
+          // Device-less clients may not reach a session pane, so the shell
+          // retains the manual-repair entry until the header can own it.
+          showTrigger:
+            !sessionRoute || onboarding || gatewaySnapshot.client?.scopeUpgradeReady !== true,
+        }}
+      ></openclaw-device-scope-upgrade-banner>`
+    : null;
+  // Drawer navigation always opens expanded; the tab's desktop collapse state
+  // stays in memory for when the viewport returns to the desktop layout.
   // The settings sidebar has a fixed width, so the collapse state pauses too.
   const navCollapsed =
     navigationSnapshot.navCollapsed &&
@@ -363,7 +338,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   const uiSettings = loadSettings();
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
-  const sessionRoute = isSessionRouteId(activeRoute);
   const chatLikeRoute = sessionRoute || activeRoute === "new-session";
   const custodianRoute = activeRoute === "custodian";
   if (!settingsTakeover) {
@@ -392,22 +366,9 @@ export function renderApplicationShell(host: ShellViewHost) {
       themeMode: context.theme.mode,
       lobsterPetVisits: uiSettings.lobsterPetVisits !== false,
       lobsterPetSounds: uiSettings.lobsterPetSounds === true,
-      gatewayVersion:
-        context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
-      devGitBranch: context.config.current.devGitBranch,
-      updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
-      updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
-      heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
-      updateBusy,
-      updateStatusBanner: overlaySnapshot.updateStatusBanner,
+      gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
+      devGitBranch: config.devGitBranch,
       watchUpdateProgress,
-      canUpdate,
-      canHoldUpdate,
-      onUpdate: () => void context.overlays.runUpdate(),
-      refreshRequired: navigationSurfaceHidden ? false : overlaySnapshot.controlUiRefreshRequired,
-      onRefresh: () => host.refreshControlUi(),
-      onHoldUpdate: () => context.overlays.holdUpdate(),
-      onReviewUpdate: () => host.navigate("updates"),
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
       onOpenNewSession: openNewSession,
@@ -430,8 +391,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         offline: gatewaySnapshot.offlineStable,
         queuedOutboxCount: storedOutboxes?.total ?? 0,
         lastError: gatewaySnapshot.lastError,
-        gatewayVersion:
-          context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
+        gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
         updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
         updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
@@ -446,7 +406,15 @@ export function renderApplicationShell(host: ShellViewHost) {
         onHoldUpdate: () => context.overlays.holdUpdate(),
         onReviewUpdate: () => host.navigate("updates"),
         searchQuery: host.settingsSearchQuery,
-        searchBlockMatches: settingsSearchBlocks,
+        searchParams: {
+          query: host.settingsSearchQuery,
+          schema: runtimeConfig.configSchema,
+          value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
+          uiHints: runtimeConfig.configUiHints,
+          identityAvailable: Boolean(gatewaySnapshot.selfUser),
+          basePath: context.basePath,
+          canAdmin: operatorAccess.canAdmin,
+        },
         onExit: () => host.exitSettings(),
         onRetryConnect: () => context.gateway.connect(),
         onNavigate: (routeId, options) => host.navigate(routeId, options),
@@ -488,6 +456,11 @@ export function renderApplicationShell(host: ShellViewHost) {
     ${isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT)
       ? html`<openclaw-debug-overlay></openclaw-debug-overlay>`
       : nothing}
+    ${isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT)
+      ? html`<openclaw-keyboard-shortcuts-dialog
+          .sendShortcut=${normalizeChatSendShortcut(uiSettings.chatSendShortcut)}
+        ></openclaw-keyboard-shortcuts-dialog>`
+      : nothing}
     <div
       class="shell ${chatLikeRoute ? "shell--chat" : ""} ${navCollapsed
         ? "shell--nav-collapsed"
@@ -500,7 +473,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       @theme-change=${(event: CustomEvent<ThemeModeChangeDetail>) => host.handleThemeChange(event)}
     >
       <a class="shell-skip-link" href="#control-ui-main"> ${t("common.skipToMainContent")} </a>
-      ${isNativeWebChromeHost() && !onboarding
+      ${nativeWebChrome && !onboarding
         ? html`
             <openclaw-macos-titlebar-controls
               .navCollapsed=${host.nativeNavCollapsed()}
@@ -518,7 +491,11 @@ export function renderApplicationShell(host: ShellViewHost) {
         : nothing}
       <openclaw-app-topbar
         .resourceBasePath=${context.resourceBasePath}
+        .environment=${config.environment}
         .navDrawerOpen=${navDrawerOpen}
+        .trailingActions=${mobileNavLayout && !onboarding && !mergedChatChrome
+          ? scopeUpgradeSurface
+          : nothing}
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>
@@ -526,13 +503,16 @@ export function renderApplicationShell(host: ShellViewHost) {
         ? html`
             <div class="shell-chrome-controls">
               <openclaw-tooltip
-                .content=${`${t(navCollapsed ? "nav.expand" : "nav.collapse")} (⌘B)`}
+                .content=${`${t(navCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
               >
                 <button
                   type="button"
                   class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
                   aria-label=${t(navCollapsed ? "nav.expand" : "nav.collapse")}
                   aria-expanded=${navCollapsed ? "false" : "true"}
+                  data-env-avatar=${navCollapsed && config.environment
+                    ? config.assistantIdentity.name.charAt(0)
+                    : nothing}
                   @click=${() => host.toggleNavigationSurface()}
                 >
                   ${navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
@@ -555,7 +535,9 @@ export function renderApplicationShell(host: ShellViewHost) {
                     </button>
                   </openclaw-tooltip>`
                 : nothing}
-              <openclaw-tooltip .content=${`${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`}>
+              <openclaw-tooltip
+                .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
+              >
                 <button
                   type="button"
                   class="shell-chrome-controls__button shell-chrome-controls__search"
@@ -581,6 +563,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             </div>
           `
         : nothing}
+      ${!mobileNavLayout || onboarding || mergedChatChrome ? scopeUpgradeSurface : nothing}
       <div class="shell-nav" ?inert=${navigationSurfaceHidden}>
         ${mobileNavLayout
           ? html`<openclaw-modal-dialog
@@ -617,7 +600,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
       >
-        ${renderScopeUpgradeBanner(host, gatewaySnapshot, mergedChatChrome)}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           mobileNavLayout,
@@ -697,7 +679,6 @@ export function renderApplicationShell(host: ShellViewHost) {
               busy: overlaySnapshot.approvalBusy,
               canGrant: overlaySnapshot.approvalCanGrant,
               errors: overlaySnapshot.approvalErrors,
-              nowMs: overlaySnapshot.approvalNowMs,
               onDecision: (
                 approvalId: string,
                 decision: Parameters<typeof context.overlays.decideApproval>[0],

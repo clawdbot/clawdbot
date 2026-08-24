@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import {
   createCodexManagedThreadStore,
-  markStartedCodexManagedThread,
   type StoredCodexManagedThread,
 } from "./managed-thread-store.js";
 
@@ -57,21 +56,6 @@ describe("Codex managed thread store", () => {
     } as unknown as StoredCodexManagedThread);
 
     await expect(createCodexManagedThreadStore(state).snapshot()).resolves.toEqual(new Map());
-  });
-
-  it("records the supplied catalog home instead of deriving ownership from rollout metadata", async () => {
-    const { state, values } = createStateStore();
-    const sourceHomeId = codexCatalogHomeId("/tmp/configured-codex-home");
-    await markStartedCodexManagedThread(createCodexManagedThreadStore(state), {
-      sourceHomeId,
-      threadId: "thread-1",
-      rolloutPath: "/tmp/other-codex-home/sessions/2026/08/rollout.jsonl",
-    });
-
-    expect([...values.values()][0]).toMatchObject({
-      sourceHomeId,
-      threadId: "thread-1",
-    });
   });
 
   it("uses the same source identity for a symlinked configured home", async () => {

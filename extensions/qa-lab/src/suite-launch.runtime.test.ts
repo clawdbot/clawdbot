@@ -1458,10 +1458,10 @@ describe("qa suite runtime launcher", () => {
       repoRoot,
       outputDir: ".artifacts/qa-e2e/crabline-serial",
       channelDriverSelection: {
-        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
         channel: "telegram",
         channelDriver: "crabline",
-        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+        providerReadinessArtifactPath: "crabline-provider-readiness.json",
       },
       scenarioIds: ["telegram-help-command", "dm-chat-baseline", "control-ui-chat-flow-playwright"],
     });
@@ -1521,10 +1521,10 @@ describe("qa suite runtime launcher", () => {
       repoRoot,
       outputDir: ".artifacts/qa-e2e/crabline-isolated",
       channelDriverSelection: {
-        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
         channel: "telegram",
         channelDriver: "crabline",
-        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+        providerReadinessArtifactPath: "crabline-provider-readiness.json",
       },
       concurrency: 8,
       scenarioIds: [

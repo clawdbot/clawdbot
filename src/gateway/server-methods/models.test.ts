@@ -17,6 +17,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -29,6 +30,11 @@ import {
 } from "../server-model-catalog-auth.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
+
+const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacement"]> = {
+  requiredNodeCommands: [],
+  consumesWorkerSlot: true,
+};
 
 const modelPluginMetadataSnapshot = vi.hoisted(() => {
   const plugins = [
@@ -995,6 +1001,7 @@ describe("models.list", () => {
                   id: "openclaw",
                   cloudPlacementSupported: true,
                   cloudPlacementExecutionMode: "worker-turn",
+                  devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
                   devicePlacementSupported: true,
                   source: "implicit",
                 },
@@ -1056,6 +1063,7 @@ describe("models.list", () => {
                   id: "openclaw",
                   cloudPlacementSupported: true,
                   cloudPlacementExecutionMode: "worker-turn",
+                  devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
                   devicePlacementSupported: true,
                   source: "implicit",
                 },
@@ -1108,6 +1116,7 @@ describe("models.list", () => {
                 id: "openclaw",
                 cloudPlacementSupported: true,
                 cloudPlacementExecutionMode: "worker-turn",
+                devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
                 devicePlacementSupported: true,
                 source: "implicit",
               },

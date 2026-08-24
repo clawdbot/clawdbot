@@ -250,7 +250,7 @@ describe("ModelProvidersPage agent scope", () => {
         page.routeData = routeData;
       }
       document.body.append(page);
-      await vi.waitFor(() => expect(page.data?.providerUsage).toMatchObject({ ok: false }));
+      await waitForFast(() => expect(page.data?.providerUsage).toMatchObject({ ok: false }));
       const previousCalls = requestCount(request, "usage.status");
       providerUnavailable = false;
 
@@ -259,7 +259,7 @@ describe("ModelProvidersPage agent scope", () => {
       await vi.waitFor(() => {
         expect(requestCount(request, "usage.status")).toBe(previousCalls + 1);
       });
-      await vi.waitFor(() =>
+      await waitForFast(() =>
         expect(page.data?.providerUsage).toEqual({
           ok: true,
           value: { updatedAt: 1, providers: [] },
@@ -293,7 +293,7 @@ describe("ModelProvidersPage agent scope", () => {
         };
       }
       document.body.append(page);
-      await vi.waitFor(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
+      await waitForFast(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
       const previousCalls = requestCount(request, "usage.status");
 
       window.dispatchEvent(new Event("focus"));
@@ -321,14 +321,14 @@ describe("ModelProvidersPage agent scope", () => {
       return originalRequest(method);
     });
     const page = appendPage(context);
-    await vi.waitFor(() => expect(page.data?.providerUsage).toMatchObject({ ok: false }));
+    await waitForFast(() => expect(page.data?.providerUsage).toMatchObject({ ok: false }));
     providerUnavailable = false;
 
     source.publish({ ...snapshot, phase: "reconnecting" });
     source.publish({ ...snapshot, phase: "connected" });
 
     await vi.waitFor(() => expect(requestCount(request, "usage.status")).toBe(2));
-    await vi.waitFor(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
+    await waitForFast(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
   });
 
   it("defers failed provider usage recovery while hidden until page activation", async () => {
@@ -346,7 +346,7 @@ describe("ModelProvidersPage agent scope", () => {
       return originalRequest(method);
     });
     const page = appendPage(context);
-    await vi.waitFor(() => expect(page.data?.providerUsage).toMatchObject({ ok: false }));
+    await waitForFast(() => expect(page.data?.providerUsage).toMatchObject({ ok: false }));
     providerUnavailable = false;
 
     source.publish({ ...snapshot, phase: "reconnecting" });
@@ -357,7 +357,7 @@ describe("ModelProvidersPage agent scope", () => {
     document.dispatchEvent(new Event("visibilitychange"));
 
     await vi.waitFor(() => expect(requestCount(request, "usage.status")).toBe(2));
-    await vi.waitFor(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
+    await waitForFast(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
   });
 
   it("supersedes a hung load on disconnect so reconnect can replace it", async () => {
@@ -367,7 +367,7 @@ describe("ModelProvidersPage agent scope", () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const page = appendPage(context);
-    await vi.waitFor(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
+    await waitForFast(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
     deferNextAuthStatus();
     void page.refresh({ force: true });
     await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(2));
@@ -376,7 +376,7 @@ describe("ModelProvidersPage agent scope", () => {
     source.publish({ ...snapshot, phase: "connected" });
 
     await vi.waitFor(() => expect(requestCount(request, "models.authStatus")).toBe(3));
-    await vi.waitFor(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
+    await waitForFast(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
   });
 
   it("keeps direct data visible while a same-client reconnect replaces it", async () => {
@@ -386,7 +386,7 @@ describe("ModelProvidersPage agent scope", () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const page = appendPage(context);
-    await vi.waitFor(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
+    await waitForFast(() => expect(page.data?.providerUsage).toMatchObject({ ok: true }));
     const previousData = page.data;
     const originalRequest = request.getMockImplementation()!;
     request.mockImplementation(async (method: string) => {
@@ -406,7 +406,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.data).toBe(previousData);
 
     release();
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.data?.config).toEqual({
         agents: { defaults: { model: "openai/replacement-model" } },
       }),

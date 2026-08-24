@@ -8,7 +8,8 @@ import {
 
 export type SessionPlacementTarget =
   | { kind: "profile"; profileId: string; machineClass?: string }
-  | { kind: "device"; deviceId: string };
+  | { kind: "device"; deviceId: string }
+  | { kind: "auto-device" };
 
 export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode"> & {
   key?: string;
@@ -125,6 +126,9 @@ function parseSessionPlacementTarget(value: unknown): SessionPlacementTarget | n
   ) {
     // SAFETY: the device discriminator, exact keys, and device id are validated above.
     return value as SessionPlacementTarget;
+  }
+  if (value.kind === "auto-device" && Object.keys(value).every((key) => key === "kind")) {
+    return { kind: "auto-device" };
   }
   return null;
 }

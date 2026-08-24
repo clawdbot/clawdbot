@@ -63,6 +63,7 @@ const hoisted = vi.hoisted(() => {
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
     settleQueuedSessionDelivery: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
+    assertQueuedConversationDeliveryAttemptAuthorized: vi.fn(),
   };
 });
 
@@ -92,6 +93,11 @@ vi.mock("../infra/outbound/delivery-queue-migration.js", () => ({
   migrateLegacyPendingOutboundDeliveries: hoisted.migrateLegacyPendingOutboundDeliveries,
 }));
 
+vi.mock("./conversation-route-ownership.js", () => ({
+  assertQueuedConversationDeliveryAttemptAuthorized:
+    hoisted.assertQueuedConversationDeliveryAttemptAuthorized,
+}));
+
 vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
   startSessionDeliveryRuntime: hoisted.startSessionDeliveryRuntime,
   schedulePendingSessionDeliveries: hoisted.schedulePendingSessionDeliveries,
@@ -119,7 +125,6 @@ const {
   scheduleGatewayPostReadyMaintenance,
   startGatewayChannelHealthMonitor,
   startGatewayCronWithLogging,
-  startGatewayRuntimeServices,
 } = await import("./server-runtime-services.js");
 
 describe("server-runtime-services", () => {
@@ -159,6 +164,7 @@ describe("server-runtime-services", () => {
     hoisted.deliverQueuedSessionDelivery.mockClear();
     hoisted.settleQueuedSessionDelivery.mockClear();
     hoisted.deliverOutboundPayloads.mockClear();
+    hoisted.assertQueuedConversationDeliveryAttemptAuthorized.mockReset();
   });
 
   afterEach(() => {
@@ -167,32 +173,25 @@ describe("server-runtime-services", () => {
     resetGatewayWorkAdmission();
   });
 
-  it("keeps scheduled services inert during initial runtime setup", () => {
-    const services = startGatewayRuntimeServices({
-      minimalTestGateway: false,
-      cfgAtStart: {} as never,
+  it("starts channel health without activating scheduled services", () => {
+    startGatewayChannelHealthMonitor({
       channelManager: {
         getRuntimeSnapshot: vi.fn(),
         isHealthMonitorEnabled: vi.fn(),
         isManuallyStopped: vi.fn(),
       } as never,
-      log: createLog(),
     });
 
     expect(hoisted.startChannelHealthMonitor).toHaveBeenCalledTimes(1);
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
     expect(hoisted.startSessionUpstreamMonitor).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
-
-    services.heartbeatRunner.stop();
-    expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
   });
 
   it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
     "keeps channel health recovery disabled when %s suppresses startup",
     (envKey) => {
       const monitor = startGatewayChannelHealthMonitor({
-        cfg: {} as never,
         channelManager: {} as never,
         env: { [envKey]: "1" },
       });
@@ -380,7 +379,7 @@ describe("server-runtime-services", () => {
       throw new Error("Expected delivery recovery log children");
     }
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith({
-      deliver: hoisted.deliverOutboundPayloads,
+      deliver: expect.any(Function),
       cfg: {},
       log: deliveryLog,
     });
@@ -664,12 +663,55 @@ describe("server-runtime-services", () => {
     const [drain] = hoisted.drainPendingDeliveries.mock.calls[0] ?? [];
     expect(drain).toMatchObject({
       drainKey: "gateway:outbound",
-      deliver: hoisted.deliverOutboundPayloads,
+      deliver: expect.any(Function),
     });
     expect(drain?.selectEntry({ channel: "discord" } as never, Date.now())).toEqual({
       match: true,
       bypassBackoff: false,
     });
+    services.heartbeatRunner.stop();
+  });
+
+  it("reconstructs conversation route authorization for a recovered delivery attempt", async () => {
+    vi.useFakeTimers();
+    const { services } = activateScheduledServicesForTest({ startCron: false });
+    await vi.dynamicImportSettled();
+    const recovery = hoisted.recoverPendingDeliveries.mock.calls[0]?.[0];
+    if (!recovery) {
+      throw new Error("Expected outbound recovery to start");
+    }
+    hoisted.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
+      await params.onDeliveryAttempt?.();
+      return [];
+    });
+    const denial = new Error("conversation route reassigned");
+    hoisted.assertQueuedConversationDeliveryAttemptAuthorized.mockImplementationOnce(() => {
+      throw denial;
+    });
+
+    await expect(
+      recovery.deliver({
+        cfg: {},
+        channel: "reef",
+        to: "reef:molty",
+        payloads: [{ text: "hello" }],
+        conversationDeliveryAttemptAuthority: {
+          agentId: "main",
+          operationId: "operation-recovery",
+          storePath: "/tmp/agent.sqlite",
+          routeFingerprint: "route-recovery",
+        },
+      }),
+    ).rejects.toBe(denial);
+
+    expect(hoisted.assertQueuedConversationDeliveryAttemptAuthorized).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        operationId: "operation-recovery",
+        storePath: "/tmp/agent.sqlite",
+        routeFingerprint: "route-recovery",
+      }),
+    );
     services.heartbeatRunner.stop();
   });
 

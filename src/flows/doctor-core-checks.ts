@@ -431,7 +431,6 @@ const gatewayAuthCheck: HealthCheck = {
         cfg: ctx.cfg,
         env: process.env,
         unresolvedReasonStyle: "detailed",
-        envFallback: gatewayTokenRef ? "never" : "always",
       });
       if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
         return [];

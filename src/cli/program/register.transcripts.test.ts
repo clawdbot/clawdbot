@@ -130,7 +130,15 @@ describe("transcripts CLI", () => {
       session: { sessionId: "active-session" },
       summary: null,
     });
+    expect(JSON.parse(await runTranscriptsCli(["path", "active-session", "--json"]))).toMatchObject(
+      {
+        exists: false,
+      },
+    );
     await expect(runTranscriptsCli(["show", "active-session"])).rejects.toThrow(
+      "summary.md not found",
+    );
+    await expect(runTranscriptsCli(["path", "active-session"])).rejects.toThrow(
       "summary.md not found",
     );
   });

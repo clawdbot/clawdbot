@@ -67,6 +67,7 @@ import {
 } from "../media-generation-task-status.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
+import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -380,6 +381,53 @@ describe("prepareCliRunContext", () => {
     );
   });
 
+  it.each([
+    { name: "the session-selected 200k option", selection: "200k", expected: 200_000 },
+    {
+      name: "the declared default option when unselected",
+      selection: undefined,
+      expected: 1_000_000,
+    },
+  ])("caps the context budget with $name from catalog contextWindows", async (testCase) => {
+    const prepareExecution = vi.fn(async () => undefined);
+    setCliBackendForPrepareTest({ prepareExecution });
+    setCliRunnerPrepareTestDeps({
+      loadManifestModelCatalog: vi.fn(() => [
+        {
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "anthropic",
+          contextWindow: 1_000_000,
+          contextWindows: [
+            { id: "200k", label: "200K", contextWindow: 200_000 },
+            { id: "1m", label: "1M", contextWindow: 1_000_000 },
+          ],
+          contextWindowDefault: "1m",
+        },
+      ]),
+    });
+
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      model: "claude-fable-5",
+      config: {},
+      // The run owner carries the selection as a prepared fact; a session entry
+      // alone must not drive it (reply-path regression: selection dropped when
+      // prepare read sessionEntry directly).
+      ...(testCase.selection ? { contextWindow: testCase.selection } : {}),
+      sessionEntry: {
+        sessionId: "cli-session",
+        updatedAt: 0,
+        ...(testCase.selection ? {} : { contextWindow: "200k" }),
+      },
+    });
+
+    expect(context.contextWindowInfo?.tokens).toBe(testCase.expected);
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ contextTokenBudget: testCase.expected }),
+    );
+  });
+
   beforeEach(() => {
     // Install narrow test doubles for external runtime seams so preparation
     // remains about data flow, not bundled plugin or loopback startup cost.
@@ -408,9 +456,12 @@ describe("prepareCliRunContext", () => {
         args: [],
         cleanup: vi.fn(async () => undefined),
       })),
-      getClaudeGeneration: vi.fn(() => undefined),
+      getCliLiveSessionGeneration: vi.fn(() => undefined),
       readExternalCliBootstrapCredential: readExternalCliBootstrapCredentialImpl,
       resolveApiKeyForProfile: resolveApiKeyForProfileImpl,
+      // Keep preparation off the real plugin-metadata snapshot; catalog-driven
+      // cases inject their own rows.
+      loadManifestModelCatalog: vi.fn(() => []),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     getRuntimeConfigMock.mockReturnValue({});
@@ -1520,6 +1571,7 @@ describe("prepareCliRunContext", () => {
     const skillsCleanup = vi.fn(async () => {
       fs.rmSync(skillsPluginDir, { recursive: true, force: true });
     });
+    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
     fs.mkdirSync(tempRoot, { recursive: true });
     fs.mkdirSync(skillsPluginDir, { recursive: true });
     setTestEnvValue("TMPDIR", tempRoot);
@@ -1535,6 +1587,7 @@ describe("prepareCliRunContext", () => {
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
       mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
+      revokeMcpLoopbackClientGrant,
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
         args: ["--plugin-dir", skillsPluginDir],
@@ -1554,6 +1607,7 @@ describe("prepareCliRunContext", () => {
       ).rejects.toThrow("reference path lookup failed");
 
       expect(skillsCleanup).toHaveBeenCalledOnce();
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
       expect(fs.existsSync(skillsPluginDir)).toBe(false);
       expect(
         fs.readdirSync(tempRoot).filter((entry) => entry.startsWith("openclaw-cli-mcp-")),
@@ -1577,7 +1631,7 @@ describe("prepareCliRunContext", () => {
       contextFiles: [{ path: "context.md", content: "context" }],
     }));
     const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
-    const prepareClaudeCliSkillsPlugin = vi.fn(async () => ({
+    const prepareClaudeCliSkillsPluginMock = vi.fn(async () => ({
       args: ["--plugin-dir", "/tmp/claude-skills"],
       cleanup: vi.fn(async () => undefined),
     }));
@@ -1602,7 +1656,7 @@ describe("prepareCliRunContext", () => {
     setCliRunnerPrepareTestDeps({
       resolveBootstrapContextForRun,
       ensureMcpLoopbackServer,
-      prepareClaudeCliSkillsPlugin,
+      prepareClaudeCliSkillsPlugin: prepareClaudeCliSkillsPluginMock,
       makeBootstrapWarn: vi.fn(() => () => undefined),
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
@@ -1635,7 +1689,7 @@ describe("prepareCliRunContext", () => {
 
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
     expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
-    expect(prepareClaudeCliSkillsPlugin).not.toHaveBeenCalled();
+    expect(prepareClaudeCliSkillsPluginMock).not.toHaveBeenCalled();
     expect(mockGetGlobalHookRunner).not.toHaveBeenCalled();
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({ executionMode: "side-question" }),
@@ -3528,7 +3582,7 @@ describe("prepareCliRunContext", () => {
       "did not enforce exact per-run tool availability during execution preparation",
     );
     expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({ toolAvailability: { native: [], openClaw: [], mcp: [] } }),
+      expect.objectContaining({ toolAvailability: { native: [], openClaw: [] } }),
     );
     expect(cleanup).toHaveBeenCalledOnce();
   });
@@ -3686,7 +3740,7 @@ describe("prepareCliRunContext", () => {
 
     expect(prepareExecution).toHaveBeenCalledWith(
       expect.objectContaining({
-        toolAvailability: { native: ["Read"], openClaw: [], mcp: [] },
+        toolAvailability: { native: ["Read"], openClaw: [] },
       }),
     );
     expect(context.params.cliToolAvailability).toEqual({ native: ["Read"], openClaw: [] });
@@ -3803,7 +3857,7 @@ describe("prepareCliRunContext", () => {
       });
       expect(prepareExecution).toHaveBeenCalledWith(
         expect.objectContaining({
-          toolAvailability: { native: [], openClaw: ["read"], mcp: ["mcp__openclaw__read"] },
+          toolAvailability: { native: [], openClaw: ["read"] },
         }),
       );
       expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.toolsAllow).toEqual(["read"]);
@@ -4313,7 +4367,7 @@ describe("prepareCliRunContext", () => {
       reseedFromRawTranscriptWhenUncompacted: true,
     });
     const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
-    const prepareClaudeCliSkillsPlugin = vi.fn(async () => ({
+    const prepareClaudeCliSkillsPluginMock = vi.fn(async () => ({
       args: ["--plugin-dir", "/tmp/gateway-skills"],
       cleanup: vi.fn(async () => undefined),
     }));
@@ -4321,7 +4375,7 @@ describe("prepareCliRunContext", () => {
     const orphanCheck = vi.fn(async () => false);
     setCliRunnerPrepareTestDeps({
       ensureMcpLoopbackServer,
-      prepareClaudeCliSkillsPlugin,
+      prepareClaudeCliSkillsPlugin: prepareClaudeCliSkillsPluginMock,
       claudeCliSessionTranscriptHasContent: transcriptCheck,
       claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
     });
@@ -4368,7 +4422,7 @@ describe("prepareCliRunContext", () => {
     expect(context.systemPrompt).not.toContain("GATEWAY_ONLY_SKILL_PATH");
     expect(context.mcpDeliveryCapture).toBeUndefined();
     expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
-    expect(prepareClaudeCliSkillsPlugin).not.toHaveBeenCalled();
+    expect(prepareClaudeCliSkillsPluginMock).not.toHaveBeenCalled();
     expect(transcriptCheck).not.toHaveBeenCalled();
     expect(orphanCheck).not.toHaveBeenCalled();
     expect(prepareExecution).toHaveBeenCalledOnce();
@@ -4405,7 +4459,7 @@ describe("prepareCliRunContext", () => {
     setCliRunnerPrepareTestDeps({
       claudeCliSessionTranscriptHasContent: transcriptCheck,
       claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
-      getClaudeGeneration: getLiveSessionGeneration,
+      getCliLiveSessionGeneration: getLiveSessionGeneration,
     });
 
     const context = await fixture.prepare({
@@ -4692,6 +4746,7 @@ describe("prepareCliRunContext", () => {
       expect(context.systemPrompt).toContain("<name>weather</name>");
       expect(context.systemPromptReport.skills.promptChars).toBeGreaterThan(0);
       expect(context.claudeSkillsPluginArgs).toEqual([]);
+      expect(context.preparedBackend.claimLiveSessionResources).toBeUndefined();
     } else {
       expect(context.systemPrompt).not.toContain("<available_skills>");
       expect(context.systemPrompt).not.toContain("<name>weather</name>");
@@ -4700,7 +4755,79 @@ describe("prepareCliRunContext", () => {
         "--plugin-dir",
         path.join(dir, "openclaw-skills"),
       ]);
+      expect(context.preparedBackend.claimLiveSessionResources).toEqual(expect.any(Function));
     }
+  });
+
+  it("isolates claimed native skills from later turns while cleaning each turn's MCP and auth", async () => {
+    const { dir } = fixture.session;
+    const skill = createWeatherSkillFixture(dir, true);
+    const preparedExecutionCleanup = vi.fn(async () => undefined);
+    const revokeMcpLoopbackClientGrant = vi.fn(() => true);
+    setCliBackendForPrepareTest({
+      id: "claude-cli",
+      pluginId: "anthropic",
+      bundleMcp: true,
+      prepareExecution: async () => ({ cleanup: preparedExecutionCleanup }),
+    });
+    setCliRunnerPrepareTestDeps({
+      prepareClaudeCliSkillsPlugin,
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      revokeMcpLoopbackClientGrant,
+    });
+
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      model: "opus",
+      skillsSnapshot: skill.snapshot,
+      sessionKey: "agent:main:main",
+      runId: "native-skill-turn-one",
+    });
+    const pluginDir = context.claudeSkillsPluginArgs[1];
+    if (!pluginDir) {
+      throw new Error("Expected materialized skill plugin");
+    }
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(pluginDir, ".claude-plugin", "plugin.json"), "utf8"),
+    );
+    expect(manifest).toMatchObject({ name: "openclaw-skills", skills: "./skills" });
+    const skillPath = path.join(pluginDir, "skills", "weather", "SKILL.md");
+    expect(fs.readFileSync(skillPath, "utf8")).toContain("Read forecast data before replying.");
+
+    const releaseSkills = context.preparedBackend.claimLiveSessionResources?.();
+    expect(releaseSkills).toEqual(expect.any(Function));
+    expect(context.preparedBackend.claimLiveSessionResources?.()).toBeUndefined();
+    try {
+      await context.preparedBackend.cleanup?.();
+      expect(fs.existsSync(skillPath)).toBe(true);
+      expect(preparedExecutionCleanup).toHaveBeenCalledOnce();
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+
+      const nextTurn = await fixture.prepare({
+        provider: "claude-cli",
+        model: "opus",
+        skillsSnapshot: skill.snapshot,
+        sessionKey: "agent:main:main",
+        runId: "native-skill-turn-two",
+      });
+      const unusedPluginDir = nextTurn.claudeSkillsPluginArgs[1];
+      expect(unusedPluginDir).toEqual(expect.any(String));
+      expect(unusedPluginDir).not.toBe(pluginDir);
+      expect(fs.existsSync(unusedPluginDir ?? "")).toBe(true);
+
+      await nextTurn.preparedBackend.cleanup?.();
+      expect(fs.existsSync(unusedPluginDir ?? "")).toBe(false);
+      expect(fs.existsSync(skillPath)).toBe(true);
+      expect(preparedExecutionCleanup).toHaveBeenCalledTimes(2);
+      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledTimes(2);
+    } finally {
+      await releaseSkills?.();
+    }
+    expect(fs.existsSync(pluginDir)).toBe(false);
   });
 
   it("does not probe the transcript for non-claude-cli providers", async () => {

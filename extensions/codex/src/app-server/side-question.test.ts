@@ -659,8 +659,8 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(forkParams?.threadId).toBe("parent-thread");
     expect(forkParams?.model).toBe("codex-side-execution-model");
     expect(forkParams).not.toHaveProperty("personality");
-    expect(forkParams?.approvalPolicy).toBe("on-request");
-    expect(forkParams?.sandbox).toBe("workspace-write");
+    expect(forkParams?.approvalPolicy).toBe("never");
+    expect(forkParams?.sandbox).toBe("danger-full-access");
     expect(forkParams?.ephemeral).toBe(true);
     expect(forkParams?.threadSource).toBe("user");
     expect(forkParams?.approvalsReviewer).toBe("user");
@@ -690,7 +690,7 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(injectParams?.items).toHaveLength(1);
     expect(injectParams?.items?.[0]?.type).toBe("message");
     expect(injectParams?.items?.[0]?.role).toBe("user");
-    expect(injectCall?.[2]).toEqual({ timeoutMs: 60_000, signal: undefined });
+    expect(injectCall?.[2]).toEqual({ timeoutMs: 60_000, signal: expect.any(AbortSignal) });
     const injectedItem = injectParams?.items?.[0] as
       | { content?: Array<{ text?: string }> }
       | undefined;
@@ -720,7 +720,7 @@ describe("runCodexAppServerSideQuestion", () => {
           },
         },
       },
-      { timeoutMs: 60_000, signal: undefined },
+      { timeoutMs: 60_000, signal: expect.any(AbortSignal) },
     ]);
     const turnStartParams = turnStartCall?.[1] as Record<string, unknown> | undefined;
     expect(turnStartParams).not.toHaveProperty("approvalPolicy");
@@ -761,6 +761,48 @@ describe("runCodexAppServerSideQuestion", () => {
       messageActionTurnCapability: "turn-capability-1",
     });
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
+  });
+
+  it("keeps stale binding full access from overriding a guarded side-session root", async () => {
+    const root = "/tmp/workspace/guarded";
+    readCodexAppServerBindingMock.mockResolvedValue({
+      threadId: "parent-thread",
+      cwd: "/tmp/outside-session-root",
+      authProfileId: "openai:work",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+    });
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          sessionKey: "agent:main:session-1",
+          sessionEntry: {
+            sessionId: "session-1",
+            sessionFile: "/tmp/session-1.jsonl",
+            updatedAt: 1,
+            permissionMode: "guarded",
+            sessionRoot: root,
+          },
+        }),
+      ),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    expect(mockCall(client.request)[1]).toMatchObject({
+      cwd: root,
+      runtimeWorkspaceRoots: [root],
+      sandbox: "workspace-write",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+    });
+    expect(mockCall(createOpenClawCodingToolsMock)[0]).toMatchObject({
+      exec: { mode: "ask" },
+      sessionPermissionPolicy: { mode: "guarded", root },
+    });
   });
 
   it("returns an explicit unsupported decline for ordinary MCP input", async () => {
@@ -854,6 +896,42 @@ describe("runCodexAppServerSideQuestion", () => {
         },
       ],
     });
+  });
+
+  it("rejects paired-device side questions before acquiring a client, channel, or approval", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    const openDuplex = vi.fn(async () => {
+      throw new Error("paired-device side-question channel was opened");
+    });
+    const requestApproval = vi.fn(async () => undefined);
+    const sandbox = {
+      ...createSandboxContext({}),
+      placementExecutionMode: "remote-exec" as const,
+      placementNodeId: "paired-device-1",
+      placementEnvironmentId: "environment-1",
+      placementSessionId: "session-1",
+      placementOwnerEpoch: 1,
+      sessionKey: "agent:main:session-1",
+    };
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          sandbox,
+          hostCapabilities: { ...TEST_HOST_CAPABILITIES, requestApproval },
+        }),
+        { runtime: { nodes: { openDuplex } } as never },
+      ),
+    ).rejects.toThrow(
+      "Normal Codex turns are supported on paired devices, but /btw is not yet bound to the active placement.",
+    );
+
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+    expect(openDuplex).not.toHaveBeenCalled();
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(client.request).not.toHaveBeenCalled();
+    expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
   });
 
   it("rebinds side-question handlers when selection retry replaces the client", async () => {
@@ -1611,6 +1689,12 @@ describe("runCodexAppServerSideQuestion", () => {
       runCodexAppServerSideQuestion(
         sideLoopRelayParams({
           sessionKey: "agent:main:session-1",
+          sessionEntry: {
+            sessionId: "session-1",
+            updatedAt: 1,
+            permissionMode: "guarded",
+            sessionRoot: "/tmp/workspace",
+          },
           messageChannel: "discord",
           messageProvider: "discord-voice",
           currentChannelId: "discord:voice-room",
@@ -1707,6 +1791,12 @@ describe("runCodexAppServerSideQuestion", () => {
     const run = runCodexAppServerSideQuestion(
       sideLoopRelayParams({
         sessionKey: "agent:main:session-1",
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          permissionMode: "guarded",
+          sessionRoot: "/tmp/workspace",
+        },
         messageChannel: "discord",
         messageProvider: "discord-voice",
         opts: { runId: "run-side-approval" },

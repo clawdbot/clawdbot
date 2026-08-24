@@ -1,8 +1,8 @@
 AndroidX Media3
 Artifacts:
-- androidx.media3:media3-datasource-okhttp:1.10.1
-- androidx.media3:media3-exoplayer:1.10.1
-- androidx.media3:media3-ui:1.10.1
+- androidx.media3:media3-datasource-okhttp:1.11.0
+- androidx.media3:media3-exoplayer:1.11.0
+- androidx.media3:media3-ui:1.11.0
 
 Copyright 2016 The Android Open Source Project
 

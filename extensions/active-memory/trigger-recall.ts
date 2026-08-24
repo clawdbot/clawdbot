@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  isAutomaticMemoryEntryEligible,
   stripMemoryAnnotationCarriers,
   type MemorySearchResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -56,7 +57,7 @@ function scoreTriggerPhrase(message: string, phrase: string): number {
 }
 
 export function isPromotedTrustedMemoryEntry(
-  entry: Pick<MemorySearchResult, "path" | "source" | "originClass" | "projectKey">,
+  entry: Pick<MemorySearchResult, "provenance" | "projectKey" | "source">,
   activeProjectKeys: readonly string[] = [],
 ): boolean {
   if (entry.projectKey) {
@@ -77,14 +78,7 @@ export function isPromotedTrustedMemoryEntry(
       return false;
     }
   }
-  if (entry.originClass === "owner" || entry.originClass === "agent") {
-    return true;
-  }
-  if (entry.source !== "memory") {
-    return false;
-  }
-  const normalized = entry.path.replaceAll("\\", "/").replace(/^\.\//u, "").toUpperCase();
-  return normalized === "MEMORY.MD" || normalized === "USER.MD";
+  return entry.source === "memory" && isAutomaticMemoryEntryEligible(entry);
 }
 
 export function scoreTriggerMatch(message: string, entry: MemorySearchResult): number {

@@ -113,6 +113,13 @@ export function useSlackStartupAuthClientOnce(factory: SlackStartupAuthClientFac
   slackTestState.createSlackStartupAuthClientMock.mockImplementationOnce(factory);
 }
 
+export async function runSlackHandlerWithDispatch(
+  handler: SlackHandler,
+  args: unknown,
+): Promise<void> {
+  await handler(withSlackDispatchLifecycle(args));
+}
+
 type SlackClient = {
   auth: { test: Mock<(...args: unknown[]) => Promise<Record<string, unknown>>> };
   conversations: {
@@ -271,9 +278,12 @@ async function runSlackEventOnce(
   const handler = await getSlackHandlerOrThrow(name);
   // Normal Bolt handlers return after queue admission. Terminal-state tests use the
   // durable-ingress lifecycle so this helper can await the actual dispatch boundary.
-  const handlerArgs = opts?.awaitDispatch ? withSlackDispatchLifecycle(args) : args;
   try {
-    await handler(handlerArgs);
+    if (opts?.awaitDispatch) {
+      await runSlackHandlerWithDispatch(handler, args);
+    } else {
+      await handler(args);
+    }
   } finally {
     await stopSlackMonitor({ controller, run });
   }

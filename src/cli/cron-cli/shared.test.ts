@@ -28,7 +28,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   const logs: string[] = [];
   const runtime = {
-    log: (msg: string) => logs.push(msg),
+    log: (msg: string) => logs.push(...msg.split("\n")),
     error: () => {},
     exit: () => {},
   } as RuntimeEnv;

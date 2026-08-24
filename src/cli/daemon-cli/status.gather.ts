@@ -618,6 +618,7 @@ export async function gatherDaemonStatus(
         auditGatewayServiceConfig({
           env: process.env,
           command,
+          timeoutMs,
         }),
       )
     : { ok: true, issues: [] satisfies ServiceConfigAudit["issues"] };

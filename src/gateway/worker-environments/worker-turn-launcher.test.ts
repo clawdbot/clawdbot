@@ -13,7 +13,7 @@ import {
 import { createChatRunState } from "../server-chat-state.js";
 import { prepareSessionArchiveLifecycle } from "../server-methods/sessions-archive-lifecycle.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import type { WorkerTunnelHandle } from "./tunnel-contract.js";
+import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -24,6 +24,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
+  root,
   seedActivePlacement,
   sessionTarget,
   setupWorkerTurnLauncherTest,
@@ -132,6 +133,61 @@ describe("worker turn launcher local placement", () => {
 
     expect(runLocal).toHaveBeenCalledOnce();
     expect(placements.list()).toEqual([]);
+  });
+
+  it.each([
+    ["agent id", { agentId: "other", sessionKey: SESSION_KEY }],
+    ["session key", { agentId: "main", sessionKey: "agent:main:other" }],
+    ["blank agent id", { agentId: " ", sessionKey: SESSION_KEY }],
+    ["blank session key", { agentId: "main", sessionKey: " " }],
+  ])(
+    "rejects a conflicting supplied placement %s before workspace access",
+    async (_label, identity) => {
+      seedActivePlacement();
+      const resolveWorkspacePath = vi.fn(async () => root);
+      const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments: unusedEnvironments(),
+        placements,
+        resolveWorkspacePath,
+      });
+
+      await expect(
+        provider.executeTurn(
+          { sessionId: SESSION_ID, ...identity, runId: `run-conflict-${_label}` },
+          turn(`run-conflict-${_label}`),
+          runLocal,
+        ),
+      ).rejects.toThrow(/Worker turn (agent id|session key) (?:is required|does not match)/u);
+      expect(resolveWorkspacePath).not.toHaveBeenCalled();
+      expect(runLocal).not.toHaveBeenCalled();
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    },
+  );
+
+  it("inherits omitted placement identity before workspace access", async () => {
+    seedActivePlacement();
+    const resolveWorkspacePath = vi.fn(async () => {
+      throw new Error("workspace reached");
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+      resolveWorkspacePath,
+    });
+
+    await expect(
+      provider.executeTurn(
+        { sessionId: SESSION_ID, runId: "run-inherited-identity" },
+        turn("run-inherited-identity"),
+        vi.fn(),
+      ),
+    ).rejects.toThrow("workspace reached");
+    expect(resolveWorkspacePath).toHaveBeenCalledWith({
+      sessionId: SESSION_ID,
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+    });
   });
 
   it("holds a local placement claim around CLI execution", async () => {
@@ -404,130 +460,379 @@ describe("worker turn launcher local placement", () => {
     },
   );
 
-  it("runs an active remote-exec placement locally and reconciles before releasing its claim", async () => {
-    seedActivePlacement("remote-exec");
-    const order: string[] = [];
-    const launchTurn = vi.fn();
-    const quiesceWorkspace = vi.fn(async () => {
-      order.push("quiesce");
-      return {
-        assertActive: vi.fn(async () => {}),
-        resume: vi.fn(async () => {
-          order.push("resume");
-        }),
-      };
-    });
-    const reconcileWorkspace = vi.fn(
-      async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
-        order.push("reconcile");
-        request.journal.commit(MANIFEST_REF);
+  it.each([
+    { label: "SSH", nodeDeviceId: undefined },
+    { label: "paired-device", nodeDeviceId: "paired-node-1" },
+  ])(
+    "runs a $label remote-exec placement locally and reconciles without launching a worker child",
+    async ({ nodeDeviceId }) => {
+      seedActivePlacement("remote-exec");
+      const order: string[] = [];
+      const launchTurn = vi.fn();
+      const quiesceWorkspace = vi.fn(async () => {
+        order.push("quiesce");
         return {
-          manifestRef: MANIFEST_REF,
-          changed: false,
-          verifyStable: vi.fn(async () => {}),
-          verifyLocalStable: vi.fn(async () => {}),
+          assertActive: vi.fn(async () => {}),
+          resume: vi.fn(async () => {
+            order.push("resume");
+          }),
         };
-      },
-    );
-    const tunnel: WorkerTunnelHandle = {
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
-      launchTurn,
-      runWorkspaceCommand: vi.fn(),
-      quiesceWorkspace,
-      syncWorkspace: vi.fn(),
-      reconcileWorkspace,
-      stop: vi.fn(async () => {}),
-    };
-    const environments: WorkerTurnEnvironmentService = {
-      ...unusedEnvironments(),
-      get: vi.fn(() => attachedEnvironment()),
-      startTunnel: vi.fn(async () => tunnel),
-    };
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-    const runLocal = vi.fn(async () => {
-      order.push("local");
-      return { payloads: [{ text: "local remote reply" }], meta: { durationMs: 1 } };
-    });
+      });
+      const reconcileWorkspace = vi.fn(
+        async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
+          order.push("reconcile");
+          request.journal.commit(MANIFEST_REF);
+          return {
+            manifestRef: MANIFEST_REF,
+            changed: false,
+            verifyStable: vi.fn(async () => {}),
+            verifyLocalStable: vi.fn(async () => {}),
+          };
+        },
+      );
+      const tunnel: WorkerTunnelHandle = {
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        launchTurn,
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace,
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace,
+        stop: vi.fn(async () => {}),
+      };
+      const environments: WorkerTurnEnvironmentService = {
+        ...unusedEnvironments(),
+        get: vi.fn(() =>
+          nodeDeviceId
+            ? { ...attachedEnvironment(), providerId: "device", nodeDeviceId, sshEndpoint: null }
+            : attachedEnvironment(),
+        ),
+        startTunnel: vi.fn(async () => tunnel),
+      };
+      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+      const runLocal = vi.fn(async () => {
+        order.push("local");
+        return { payloads: [{ text: "local remote reply" }], meta: { durationMs: 1 } };
+      });
 
-    await provider.executeTurn(
-      {
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        runId: "run-remote-exec",
-      },
-      turn("run-remote-exec"),
-      runLocal,
-    );
-
-    expect(order).toEqual(["local", "quiesce", "reconcile", "resume"]);
-    expect(launchTurn).not.toHaveBeenCalled();
-    expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
-    expect(placements.listPendingWorkspaceResults()).toEqual([]);
-    const placement = placements.get(SESSION_ID);
-    expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
-  });
-
-  it("records a remote-exec reconciliation failure and releases its local claim", async () => {
-    seedActivePlacement("remote-exec");
-    const reconciliationError = new Error("workspace manifest memo exceeds its entry limit");
-    const tunnel: WorkerTunnelHandle = {
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
-      launchTurn: vi.fn(),
-      runWorkspaceCommand: vi.fn(),
-      quiesceWorkspace: vi.fn(async () => ({
-        assertActive: vi.fn(async () => {}),
-        resume: vi.fn(async () => {}),
-      })),
-      syncWorkspace: vi.fn(),
-      reconcileWorkspace: vi.fn(async () => {
-        throw reconciliationError;
-      }),
-      stop: vi.fn(async () => {}),
-    };
-    const environments: WorkerTurnEnvironmentService = {
-      ...unusedEnvironments(),
-      get: vi.fn(() => attachedEnvironment()),
-      startTunnel: vi.fn(async () => tunnel),
-    };
-    const reconcileActivePlacement = vi.fn(async () => {
-      const placement = placements.get(SESSION_ID);
-      if (placement?.state !== "failed" || placement.turnClaim !== null) {
-        throw new Error("expected terminal placement before teardown recovery");
-      }
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
-    });
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments,
-      placements,
-      reconcileActivePlacement,
-    });
-
-    await expect(
-      provider.executeTurn(
+      await provider.executeTurn(
         {
           sessionId: SESSION_ID,
           sessionKey: SESSION_KEY,
           agentId: "main",
-          runId: "run-remote-exec-reconcile-failure",
+          runId: "run-remote-exec",
         },
-        turn("run-remote-exec-reconcile-failure"),
-        async () => ({ payloads: [{ text: "remote work completed" }], meta: { durationMs: 1 } }),
-      ),
-    ).rejects.toThrow(
-      "Cloud worker finished, but its workspace result could not be reconciled: workspace manifest memo exceeds its entry limit",
-    );
+        turn("run-remote-exec"),
+        runLocal,
+      );
 
-    expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
-    expect(placements.get(SESSION_ID)).toMatchObject({
-      state: "failed",
-      turnClaim: null,
-      terminalReason: expect.stringContaining("workspace manifest memo exceeds its entry limit"),
+      expect(order).toEqual(["local", "quiesce", "reconcile", "resume"]);
+      expect(launchTurn).not.toHaveBeenCalled();
+      expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      const placement = placements.get(SESSION_ID);
+      expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
+    },
+  );
+
+  it("resolves an exact paired-device sandbox without requiring an SSH identity resolver", async () => {
+    seedActivePlacement("remote-exec");
+    const environment = {
+      ...attachedEnvironment(),
+      providerId: "device",
+      nodeDeviceId: "paired-node-1",
+      sharedHost: true,
+      sshEndpoint: null,
+    };
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => environment),
+      resolveSshIdentity: undefined,
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+
+    await expect(
+      provider.resolveSandbox({
+        agentId: "main",
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        workspaceDir: "/caller/workspace",
+      }),
+    ).resolves.toMatchObject({
+      backendId: "node",
+      placementExecutionMode: "remote-exec",
+      placementNodeId: "paired-node-1",
+      containerWorkdir: "/worker/workspace",
     });
-    expect(placements.listPendingWorkspaceResults()).toEqual([]);
   });
+
+  it("rejects a remote-exec placement replaced while resolving its managed workspace", async () => {
+    seedActivePlacement("remote-exec");
+    const environment = attachedEnvironment();
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: { ...unusedEnvironments(), get: vi.fn(() => environment) },
+      placements,
+      resolveWorkspacePath: async () => {
+        const placement = placements.get(SESSION_ID);
+        if (placement?.state !== "active") {
+          throw new Error("expected an active placement");
+        }
+        placements.startDrain({
+          sessionId: SESSION_ID,
+          environmentId: placement.environmentId,
+          ownerEpoch: placement.activeOwnerEpoch,
+          expectedGeneration: placement.generation,
+        });
+        return "/local/managed-worktree";
+      },
+    });
+
+    await expect(
+      provider.resolveSandbox({
+        agentId: "main",
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        workspaceDir: "/caller/workspace",
+      }),
+    ).rejects.toThrow("changed while preparing its managed workspace");
+  });
+
+  it("rejects a paired-node environment replaced after sandbox preparation", async () => {
+    seedActivePlacement("remote-exec");
+    const environment = {
+      ...attachedEnvironment(),
+      providerId: "device",
+      nodeDeviceId: "paired-node-1",
+      sshEndpoint: null,
+    };
+    const get = vi
+      .fn<WorkerTurnEnvironmentService["get"]>()
+      .mockReturnValueOnce(environment)
+      .mockReturnValueOnce(environment)
+      .mockReturnValueOnce({ ...environment, nodeDeviceId: "replacement-node" });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: { ...unusedEnvironments(), get },
+      placements,
+    });
+
+    await expect(
+      provider.resolveSandbox({
+        agentId: "main",
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        workspaceDir: "/caller/workspace",
+      }),
+    ).rejects.toThrow("environment changed while preparing its sandbox");
+  });
+
+  it.each([
+    {
+      scenario: "successful execution",
+      executionFailure: undefined,
+      expectedError:
+        "Cloud worker finished, but its workspace result could not be reconciled: workspace manifest memo exceeds its entry limit",
+      expectedTerminalReason: "workspace manifest memo exceeds its entry limit",
+    },
+    {
+      scenario: "failed execution",
+      executionFailure: "Codex paired execution device disconnected; start a fresh attempt",
+      expectedError: "Codex paired execution device disconnected; start a fresh attempt",
+      expectedTerminalReason: "Codex paired execution device disconnected; start a fresh attempt",
+    },
+  ])(
+    "records a remote-exec reconciliation failure after $scenario and releases its local claim",
+    async ({ executionFailure, expectedError, expectedTerminalReason }) => {
+      seedActivePlacement("remote-exec");
+      const reconciliationError = new Error("workspace manifest memo exceeds its entry limit");
+      const tunnel: WorkerTunnelHandle = {
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        launchTurn: vi.fn(),
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace: vi.fn(async () => ({
+          assertActive: vi.fn(async () => {}),
+          resume: vi.fn(async () => {}),
+        })),
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(async () => {
+          throw reconciliationError;
+        }),
+        stop: vi.fn(async () => {}),
+      };
+      const environments: WorkerTurnEnvironmentService = {
+        ...unusedEnvironments(),
+        get: vi.fn(() => attachedEnvironment()),
+        startTunnel: vi.fn(async () => tunnel),
+      };
+      const reconcileActivePlacement = vi.fn(async () => {
+        const placement = placements.get(SESSION_ID);
+        if (placement?.state !== "failed" || placement.turnClaim !== null) {
+          throw new Error("expected terminal placement before teardown recovery");
+        }
+        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      });
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments,
+        placements,
+        reconcileActivePlacement,
+      });
+
+      await expect(
+        provider.executeTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "run-remote-exec-reconcile-failure",
+          },
+          turn("run-remote-exec-reconcile-failure"),
+          async () => {
+            if (executionFailure) {
+              throw new Error(executionFailure);
+            }
+            return { payloads: [{ text: "remote work completed" }], meta: { durationMs: 1 } };
+          },
+        ),
+      ).rejects.toMatchObject({
+        message: expectedError,
+        ...(executionFailure
+          ? {
+              cause: expect.objectContaining({
+                message: expect.stringContaining(reconciliationError.message),
+              }),
+            }
+          : {}),
+      });
+
+      expect(reconcileActivePlacement).toHaveBeenCalledWith(ENVIRONMENT_ID);
+      expect(placements.get(SESSION_ID)).toMatchObject({
+        state: "failed",
+        turnClaim: null,
+        terminalReason: expect.stringContaining(expectedTerminalReason),
+      });
+      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    },
+  );
+
+  it.each([
+    { label: "failed execution", executionFailed: true },
+    { label: "successful execution", executionFailed: false },
+  ])(
+    "preserves a disconnected paired-node placement after $label for a fresh attempt",
+    async ({ executionFailed }) => {
+      seedActivePlacement("remote-exec");
+      const original = placements.get(SESSION_ID);
+      if (original?.state !== "active") {
+        throw new Error("expected an active paired-device placement");
+      }
+      let connected = false;
+      const quiesceWorkspace = vi.fn(async () => {
+        if (!connected) {
+          throw new WorkerTunnelOwnerDisconnectedError(
+            "device worker node is not connected with the supervisor dialect",
+          );
+        }
+        return { assertActive: vi.fn(async () => {}), resume: vi.fn(async () => {}) };
+      });
+      const reconcileWorkspace = vi.fn(
+        async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
+          request.journal.commit(MANIFEST_REF);
+          return {
+            manifestRef: MANIFEST_REF,
+            changed: false,
+            verifyStable: vi.fn(async () => {}),
+            verifyLocalStable: vi.fn(async () => {}),
+          };
+        },
+      );
+      const launchTurn = vi.fn();
+      const tunnel: WorkerTunnelHandle = {
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        launchTurn,
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace,
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace,
+        stop: vi.fn(async () => {}),
+      };
+      const environment = {
+        ...attachedEnvironment(),
+        providerId: "device",
+        nodeDeviceId: "paired-node-1",
+        sshEndpoint: null,
+      };
+      const environments: WorkerTurnEnvironmentService = {
+        ...unusedEnvironments(),
+        get: vi.fn(() => environment),
+        startTunnel: vi.fn(async () => tunnel),
+      };
+      const reconcileActivePlacement = vi.fn(async () => {});
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments,
+        placements,
+        reconcileActivePlacement,
+      });
+      const executionFailure = executionFailed
+        ? "Codex paired execution device disconnected; start a fresh attempt"
+        : undefined;
+
+      await expect(
+        provider.executeTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "run-paired-device-disconnected",
+          },
+          turn("run-paired-device-disconnected"),
+          async () => {
+            if (executionFailure) {
+              throw new Error(executionFailure);
+            }
+            return { payloads: [{ text: "remote work completed" }], meta: { durationMs: 1 } };
+          },
+        ),
+      ).rejects.toMatchObject({
+        message:
+          executionFailure ?? expect.stringContaining("workspace result could not be reconciled"),
+        cause: expect.any(Error),
+      });
+
+      expect(placements.get(SESSION_ID)).toMatchObject({
+        state: "active",
+        generation: original.generation,
+        environmentId: original.environmentId,
+        activeOwnerEpoch: original.activeOwnerEpoch,
+        workspaceBaseManifestRef: original.workspaceBaseManifestRef,
+        turnClaim: null,
+        terminalReason: null,
+      });
+      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(reconcileWorkspace).not.toHaveBeenCalled();
+      expect(reconcileActivePlacement).not.toHaveBeenCalled();
+
+      connected = true;
+      await expect(
+        provider.executeTurn(
+          {
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            agentId: "main",
+            runId: "run-paired-device-fresh-attempt",
+          },
+          turn("run-paired-device-fresh-attempt"),
+          async () => ({ payloads: [{ text: "fresh node attempt" }], meta: { durationMs: 1 } }),
+        ),
+      ).resolves.toMatchObject({ payloads: [{ text: "fresh node attempt" }] });
+
+      expect(reconcileWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ baseManifestRef: original.workspaceBaseManifestRef }),
+      );
+      expect(launchTurn).not.toHaveBeenCalled();
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+    },
+  );
 
   it("rejects a reused worker bundle without execution context before launch", async () => {
     seedActivePlacement();

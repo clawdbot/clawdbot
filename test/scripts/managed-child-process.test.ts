@@ -7,9 +7,11 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   createManagedCommandSpawnSpec,
+  inspectManagedProcessGroup,
   runManagedCommand,
   signalExitCode,
   terminateManagedChild,
+  waitForManagedProcessGroupExit,
 } from "../../scripts/lib/managed-child-process.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -197,6 +199,145 @@ describe("managed-child-process", () => {
       });
       expect(child.kill).not.toHaveBeenCalled();
     });
+  });
+
+  it("preserves stdio-only taskkill and falls back after both trusted attempts fail", () => {
+    withDefaultWindowsSystemRoot(() => {
+      const child = { kill: vi.fn(() => true), pid: 12345 };
+      const runTaskkill = vi.fn(() => ({ error: undefined, status: 1 }));
+
+      expect(
+        terminateManagedChild(child, "SIGTERM", {
+          platform: "win32",
+          runTaskkill,
+          taskkillTimeoutMs: null,
+        }),
+      ).toEqual({ processTreeState: "indeterminate" });
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    });
+  });
+
+  it("preserves direct Windows signaling when a caller does not own taskkill", () => {
+    const child = { kill: vi.fn(() => true), pid: 12345 };
+    const runTaskkill = vi.fn();
+
+    expect(
+      terminateManagedChild(child, "SIGTERM", {
+        platform: "win32",
+        runTaskkill,
+        useWindowsTaskkill: false,
+      }),
+    ).toEqual({ processTreeState: "signaled" });
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(runTaskkill).not.toHaveBeenCalled();
+  });
+
+  it("signals POSIX process groups without signaling their leaders twice", () => {
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    const child = { kill: vi.fn(), pid: 12345 };
+
+    try {
+      expect(terminateManagedChild(child, "SIGTERM", { platform: "linux" })).toEqual({
+        processTreeState: "signaled",
+      });
+      expect(kill).toHaveBeenCalledWith(-12345, "SIGTERM");
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it.each([
+    { code: "ESRCH", processGroupFallback: "nonmissing" as const },
+    { code: "EPERM", processGroupFallback: "never" as const },
+  ])("preserves caller-owned direct fallback for $code", ({ code, processGroupFallback }) => {
+    const error = Object.assign(new Error("process group unavailable"), { code });
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw error;
+    });
+    const child = { kill: vi.fn(), pid: 12345 };
+
+    try {
+      terminateManagedChild(child, "SIGTERM", { platform: "linux", processGroupFallback });
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it("preserves distinct group permission policies and verifies the leader when requested", () => {
+    const permissionError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
+    const child = { exitCode: null, pid: 12345, signalCode: null };
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid === -12345) {
+        throw permissionError;
+      }
+      return true;
+    });
+
+    try {
+      expect(
+        inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm", platform: "linux" }),
+      ).toBe("live");
+      expect(
+        inspectManagedProcessGroup(child, { errorPolicy: "indeterminate", platform: "linux" }),
+      ).toBe("indeterminate");
+      expect(
+        inspectManagedProcessGroup(child, { errorPolicy: "verify-leader", platform: "linux" }),
+      ).toBe("live");
+      expect(kill).toHaveBeenCalledWith(12345, 0);
+      expect(
+        inspectManagedProcessGroup(
+          { ...child, exitCode: 0 },
+          { errorPolicy: "verify-leader", platform: "linux" },
+        ),
+      ).toBe("dead");
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it("inspects direct child liveness only when nongroup cleanup explicitly requires it", () => {
+    const child = { exitCode: null, pid: 12345, signalCode: null };
+
+    expect(
+      inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm", platform: "win32" }),
+    ).toBe("dead");
+    expect(
+      inspectManagedProcessGroup(child, {
+        errorPolicy: "alive-on-eperm",
+        inspectLeaderWhenNoGroup: true,
+        platform: "win32",
+      }),
+    ).toBe("live");
+    expect(
+      inspectManagedProcessGroup(
+        { ...child, exitCode: 0 },
+        { errorPolicy: "alive-on-eperm", inspectLeaderWhenNoGroup: true, platform: "win32" },
+      ),
+    ).toBe("dead");
+  });
+
+  it("bounds process-group waiting when the group remains live", async () => {
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+
+    try {
+      await expect(
+        waitForManagedProcessGroupExit({ pid: 12345 }, 5, {
+          errorPolicy: "alive-on-eperm",
+          platform: "linux",
+          pollIntervalMs: 1,
+        }),
+      ).resolves.toBe(false);
+    } finally {
+      kill.mockRestore();
+    }
   });
 
   it("signals the direct child when process-group ownership is disabled", () => {

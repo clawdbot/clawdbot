@@ -445,7 +445,16 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       identities: ["agent:main:subagent:child"],
       activeSessionKey: undefined,
     },
-  ] as const)("$name", async ({ storeName, preserved, identities, activeSessionKey }) => {
+    {
+      name: "preserves a cloud-owned session independently of the active writer",
+      storeName: "active-cloud-placement",
+      preserved: [["agent:main:explicit:cloud-owned", "cloud-placement-session"]],
+      identities: ["unrelated-writer-session"],
+      activeSessionKey: undefined,
+      providerKeys: ["agent:main:explicit:cloud-owned"],
+    },
+  ] as const)("$name", async (scenario) => {
+    const { storeName, preserved, identities, activeSessionKey } = scenario;
     const now = Date.now();
     const storePath = `/tmp/openclaw-sessions/${storeName}.json`;
     const store = makeStore([
@@ -461,6 +470,10 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       identities: [...identities],
       assertAllowed: () => {},
     });
+    const unregisterProvider =
+      "providerKeys" in scenario
+        ? registerSessionMaintenancePreserveKeysProvider(() => scenario.providerKeys)
+        : undefined;
 
     try {
       await applyFileBackedSessionStoreMaintenance({
@@ -486,6 +499,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       expect(store["removable-recent"]).toBeUndefined();
     } finally {
       admission.release();
+      unregisterProvider?.();
     }
   });
 

@@ -27,6 +27,7 @@ type DeviceWorkerRuntimeOptions = {
 
 export type DeviceWorkerAvailability = {
   available: boolean;
+  node?: NodeWorkerSupervisorNodeProof;
   issue?: NodeRunnerInventoryIssue;
   unavailableReason?: "unpaired" | "disconnected" | "at-capacity";
 };
@@ -89,10 +90,6 @@ function requireDeviceId(profile: WorkerProfile): string {
   return deviceId.trim();
 }
 
-function isSessionCapableNode(node: NodeWorkerSupervisorNodeProof): boolean {
-  return node.workerHost.capacity.available > 0;
-}
-
 function hasPairedNodeRole(device: PairedDevice | null): device is PairedDevice {
   return Boolean(device && hasEffectivePairedDeviceRole(device, "node"));
 }
@@ -122,24 +119,24 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       options.getPairedDevice(deviceId),
       findConnectedNode(deviceId),
     ]);
-    // Connected hosts remain discoverable while full; capacity gates only new leases.
+    const current = connected && nodeTransport?.isCurrent(connected) ? connected : undefined;
+    // Transport availability is runtime-neutral; only worker-turn placement consumes a slot.
     const unavailableReason = !hasPairedNodeRole(paired)
       ? "unpaired"
-      : !connected
+      : !current
         ? "disconnected"
-        : !isSessionCapableNode(connected)
-          ? "at-capacity"
-          : undefined;
+        : undefined;
     const issue = nodeTransport?.getIssue?.(deviceId);
     return {
       available: unavailableReason === undefined,
+      ...(unavailableReason === undefined && current ? { node: current } : {}),
       ...(issue ? { issue } : {}),
       ...(unavailableReason ? { unavailableReason } : {}),
     };
   };
-  const provider: WorkerProvider = {
+  const provider: WorkerProvider<"internal"> = {
     id: DEVICE_WORKER_PROVIDER_ID,
-    supportedExecutionModes: ["worker-turn"],
+    supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
     provision: async (profile, operationId) => {
       const deviceId = requireDeviceId(profile);

@@ -851,6 +851,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const stripeFiles = stripes.flatMap((stripe) => stripe.includePatterns ?? []);
     expect(new Set(stripeFiles).size).toBe(stripeFiles.length);
     expect(
+      stripes.find((stripe) =>
+        stripe.includePatterns?.includes(
+          "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+        ),
+      )?.pretestBuildMode,
+    ).toBe("runtime");
+    expect(
       toolingShards.find((shard) => shard.shardName === "core-tooling-isolated"),
     ).toMatchObject({
       configs: [

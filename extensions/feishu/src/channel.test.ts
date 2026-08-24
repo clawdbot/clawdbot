@@ -86,9 +86,17 @@ vi.mock("./channel.runtime.js", () => ({
   },
 }));
 
-function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] {
-  return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
+function describeFeishuMessageTool(cfg: OpenClawConfig, accountId?: string) {
+  return feishuPlugin.actions?.describeMessageTool?.({ cfg, accountId });
 }
+
+function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] {
+  return [...(describeFeishuMessageTool(cfg, accountId)?.actions ?? [])];
+}
+
+type FeishuSecretProviderConfig = NonNullable<
+  NonNullable<OpenClawConfig["secrets"]>["providers"]
+>[string];
 
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
@@ -307,6 +315,54 @@ describe("feishuPlugin actions", () => {
       "react",
       "reactions",
     ]);
+  });
+
+  it.each([
+    {
+      name: "file-backed default provider",
+      provider: { source: "file", path: "/unused" },
+      allowed: false,
+    },
+    {
+      name: "default provider allowlist exclusion",
+      provider: { source: "env", allowlist: ["OTHER_FEISHU_SECRET"] },
+      allowed: false,
+    },
+    {
+      name: "allowlisted default env provider",
+      provider: { source: "env", allowlist: ["FEISHU_DISCOVERY_SECRET"] },
+      allowed: true,
+    },
+  ] satisfies Array<{
+    name: string;
+    provider: FeishuSecretProviderConfig;
+    allowed: boolean;
+  }>)("enforces root SecretRef policy during discovery: $name", ({ provider, allowed }) => {
+    vi.stubEnv("FEISHU_DISCOVERY_SECRET", "ambient-secret");
+    try {
+      const discovery = describeFeishuMessageTool({
+        secrets: {
+          defaults: { env: "corp-env" },
+          providers: { "corp-env": provider },
+        },
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_main",
+            appSecret: { source: "env", id: "FEISHU_DISCOVERY_SECRET" },
+          },
+        },
+      } as OpenClawConfig);
+
+      expect(discovery?.capabilities).toEqual(allowed ? ["presentation"] : []);
+      if (allowed) {
+        expect(discovery?.actions).toContain("send");
+      } else {
+        expect(discovery?.actions).toEqual([]);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("declares native chat IDs as delivery targets for guarded message mutations", () => {

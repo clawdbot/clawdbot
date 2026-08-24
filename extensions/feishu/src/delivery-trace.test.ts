@@ -14,7 +14,7 @@ import {
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeAll, describe, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -33,6 +33,7 @@ type FeishuTraceState = {
   reactionCount: number;
   cardCount: number;
   setupCount: number;
+  omitNextMessageReceipt: boolean;
   wireFaults: Array<{ fault: "rate-limit"; retryAfterMs: number }>;
 };
 
@@ -46,6 +47,7 @@ const traceState = vi.hoisted(
     reactionCount: 0,
     cardCount: 0,
     setupCount: 0,
+    omitNextMessageReceipt: false,
     wireFaults: [],
   }),
 );
@@ -147,6 +149,7 @@ afterEach(() => {
   traceState.account = null;
   traceState.larkClient = null;
   traceState.cardKitFetch = null;
+  traceState.omitNextMessageReceipt = false;
   traceState.wireFaults = [];
   streamingStartBackoffUntilByAccount.clear();
 });
@@ -171,11 +174,11 @@ function nextMessageId(): string {
 }
 
 function createRecordingLarkClient() {
-  const messageSendResult = (messageId: string) => ({
-    code: 0,
-    msg: "ok",
-    data: { message_id: messageId },
-  });
+  const messageSendResult = (messageId: string) => {
+    const data = traceState.omitNextMessageReceipt ? {} : { message_id: messageId };
+    traceState.omitNextMessageReceipt = false;
+    return { code: 0, msg: "ok", data };
+  };
   return {
     im: {
       message: {
@@ -184,6 +187,7 @@ function createRecordingLarkClient() {
           data: { receive_id: string; msg_type: string; content: string; root_id?: string };
         }) => {
           const messageId = nextMessageId();
+          const response = messageSendResult(messageId);
           traceState.recordWireCall({
             method: "im.message.create",
             target: args.data.receive_id,
@@ -193,15 +197,16 @@ function createRecordingLarkClient() {
               content: parseJsonRecord(args.data.content),
               ...(args.data.root_id ? { root_id: args.data.root_id } : {}),
             },
-            result: { message_id: messageId },
+            result: response.data,
           });
-          return Promise.resolve(messageSendResult(messageId));
+          return Promise.resolve(response);
         },
         reply: (args: {
           path: { message_id: string };
           data: { msg_type: string; content: string; reply_in_thread?: boolean };
         }) => {
           const messageId = nextMessageId();
+          const response = messageSendResult(messageId);
           traceState.recordWireCall({
             method: "im.message.reply",
             target: args.path.message_id,
@@ -210,9 +215,9 @@ function createRecordingLarkClient() {
               content: parseJsonRecord(args.data.content),
               ...(args.data.reply_in_thread ? { reply_in_thread: true } : {}),
             },
-            result: { message_id: messageId },
+            result: response.data,
           });
-          return Promise.resolve(messageSendResult(messageId));
+          return Promise.resolve(response);
         },
         delete: (args: { path: { message_id: string } }) => {
           traceState.recordWireCall({
@@ -407,6 +412,32 @@ const FEISHU_TRACE_SCENARIOS: readonly DeliveryTraceScenarioName[] = [
 ];
 
 describe("feishu delivery trace goldens", () => {
+  it("updates the accepted card without a duplicate send when its message receipt is absent", async () => {
+    const events = await runDeliveryTraceScenario({
+      scenario: deliveryTraceScenarios["final-only"],
+      setup: (recorder) => {
+        const dispatch = setupFeishuTrace(recorder, "final-only");
+        traceState.omitNextMessageReceipt = true;
+        return dispatch;
+      },
+    });
+    const messages = events.filter(
+      (event) => event.kind === "im.message.reply" || event.kind === "im.message.create",
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ data: { result: {} } });
+    expect(
+      events.some((event) =>
+        event.kind.startsWith("PUT /cardkit/v1/cards/card-1/elements/content/content"),
+      ),
+    ).toBe(true);
+    expect(events.some((event) => event.kind === "PATCH /cardkit/v1/cards/card-1/settings")).toBe(
+      true,
+    );
+    expect(streamingStartBackoffUntilByAccount.has("main")).toBe(false);
+  });
+
   for (const scenarioName of FEISHU_TRACE_SCENARIOS) {
     it(`records ${scenarioName}`, async () => {
       const events = await runDeliveryTraceScenario({
