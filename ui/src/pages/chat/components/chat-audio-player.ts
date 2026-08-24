@@ -32,6 +32,8 @@ import { ChatMediaSourceController } from "./chat-media-source.ts";
 const SEEK_STEP_SECONDS = 5;
 const WAVEFORM_FETCH_TIMEOUT_MS = 30_000;
 const WAVEFORM_DECODE_DURATION_TOLERANCE = 1.2;
+const WAVEFORM_MIN_BAR_WIDTH_PX = 2.5;
+const WAVEFORM_MIN_GAP_PX = 2.5;
 
 async function readResponseBytesWithinLimit(
   response: Response,
@@ -104,8 +106,11 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   @state() private playing = false;
   @state() private muted = false;
   @state() private waveformPeaks: readonly number[] = createChatAudioWaveformPlaceholder();
+  @state() private waveformWidth = 0;
 
   private media: HTMLAudioElement | null = null;
+  private waveformElement: HTMLElement | null = null;
+  private waveformResizeObserver: ResizeObserver | null = null;
   private readonly sourceController = new ChatMediaSourceController();
   private readonly cancelPendingResume = () => this.sourceController.cancelPendingResume();
   private playRequest: Promise<void> | null = null;
@@ -125,6 +130,9 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     this.waveformController?.abort();
     this.waveformController = null;
     this.waveformAttempted = false;
+    this.waveformResizeObserver?.disconnect();
+    this.waveformResizeObserver = null;
+    this.waveformElement = null;
     if (this.media) {
       if (!this.media.paused) {
         this.media.pause();
@@ -175,6 +183,37 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     }
     this.syncSource();
   };
+
+  private setWaveform = (element: Element | undefined) => {
+    const waveform = element instanceof HTMLElement ? element : null;
+    if (this.waveformElement === waveform) {
+      return;
+    }
+    this.waveformResizeObserver?.disconnect();
+    this.waveformResizeObserver = null;
+    this.waveformElement = waveform;
+    if (!waveform) {
+      this.waveformWidth = 0;
+      return;
+    }
+    this.updateWaveformWidth(waveform.getBoundingClientRect().width);
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    this.waveformResizeObserver = new ResizeObserver(([entry]) => {
+      if (entry && this.waveformElement === entry.target) {
+        this.updateWaveformWidth(entry.contentRect.width);
+      }
+    });
+    this.waveformResizeObserver.observe(waveform);
+  };
+
+  private updateWaveformWidth(width: number): void {
+    const nextWidth = Math.max(0, width);
+    if (Math.abs(nextWidth - this.waveformWidth) >= 0.5) {
+      this.waveformWidth = nextWidth;
+    }
+  }
 
   private syncSource(): void {
     const media = this.media;
@@ -438,17 +477,23 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     if (!this.waveformPeaks) {
       return seek;
     }
-    const count = this.waveformPeaks.length;
-    return html`<div class="chat-audio-player__waveform">
+    const bucketWidth = WAVEFORM_MIN_BAR_WIDTH_PX + WAVEFORM_MIN_GAP_PX;
+    const count =
+      this.waveformWidth > 0
+        ? Math.max(
+            1,
+            Math.min(this.waveformPeaks.length, Math.floor(this.waveformWidth / bucketWidth)),
+          )
+        : this.waveformPeaks.length;
+    return html`<div class="chat-audio-player__waveform" ${ref(this.setWaveform)}>
       <svg viewBox="0 0 ${count} 24" preserveAspectRatio="none" aria-hidden="true">
-        ${this.waveformPeaks.map(
-          (_peak, index) => svg`<rect
+        ${Array.from({ length: count }, (_, index) => svg`<rect
             class=${index / count < progress ? "is-played" : ""}
-            x=${String(index + 0.26)}
+            x=${String(index + 0.25)}
             y="2"
-            width="0.48"
+            width="0.5"
             height="20"
-            rx="0.24"
+            rx="0.25"
           ></rect>`,
         )}
       </svg>
