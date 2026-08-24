@@ -23,8 +23,9 @@ const CHAT_ID = "12345";
 type TelegramCall = { method: string; path: string };
 
 async function drainRequest(req: IncomingMessage): Promise<void> {
-  for await (const _chunk of req) {
+  for await (const chunk of req) {
     // The production Telegram client may use JSON or multipart/form-data.
+    void chunk;
   }
 }
 
@@ -39,7 +40,7 @@ function writeJson(res: ServerResponse, status: number, value: unknown): void {
 
 async function startTelegramApi() {
   const calls: TelegramCall[] = [];
-  const server = createServer(async (req, res) => {
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
     await drainRequest(req);
     const match = requestUrl.pathname.match(/^\/bot[^/]+\/(.+)$/);
@@ -66,6 +67,9 @@ async function startTelegramApi() {
       return;
     }
     writeJson(res, 200, { ok: true, result: true });
+  };
+  const server = createServer((req, res) => {
+    void handleRequest(req, res);
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -79,9 +83,15 @@ async function startTelegramApi() {
     apiRoot: `http://127.0.0.1:${address.port}`,
     calls,
     stop: async () =>
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      }),
   };
 }
 
@@ -226,9 +236,9 @@ try {
   const blankMediaCalls = blankApiCalls.filter((call) => call.method === "sendPhoto");
   const passed =
     gatewayProof.providerRequests > 0 &&
-    blankParts.hasMedia === false &&
+    !blankParts.hasMedia &&
     blankResult.replyPayloads.length === 0 &&
-    realParts.hasMedia === true &&
+    realParts.hasMedia &&
     realResult.replyPayloads.length === 1 &&
     blankSendCalls.length === 0 &&
     blankMediaCalls.length === 0 &&
