@@ -323,6 +323,33 @@ export function renderChat(props: ChatProps) {
     : undefined;
   const attachmentDropHandlers = createChatAttachmentDropHandlers({ ...props, canCompose });
   let chatSection: HTMLElement | null = null;
+  let composerStackObserver: ResizeObserver | null = null;
+  let composerStackConversation: HTMLElement | null = null;
+  const composerStackRef = (element?: Element) => {
+    composerStackObserver?.disconnect();
+    composerStackObserver = null;
+    composerStackConversation?.style.removeProperty("--chat-composer-stack-height");
+    composerStackConversation = null;
+    if (!(element instanceof HTMLElement)) {
+      return;
+    }
+    const conversation = element.closest<HTMLElement>(".chat-main__conversation");
+    if (!conversation) {
+      return;
+    }
+    const updateHeight = () => {
+      conversation.style.setProperty(
+        "--chat-composer-stack-height",
+        `${Math.ceil(element.getBoundingClientRect().height)}px`,
+      );
+    };
+    composerStackConversation = conversation;
+    updateHeight();
+    if (typeof ResizeObserver === "function") {
+      composerStackObserver = new ResizeObserver(updateHeight);
+      composerStackObserver.observe(element);
+    }
+  };
   const thread = renderChatThread(
     {
       paneId: props.paneId,
@@ -675,7 +702,11 @@ export function renderChat(props: ChatProps) {
                     sessions: props.swarmSessions ?? [],
                     sessionKey: props.sessionKey,
                   })}
-                  ${showModelSetupSplash ? nothing : chatColumnFooter}
+                  ${showModelSetupSplash
+                    ? nothing
+                    : html`<div class="chat-main__composer-stack" ${ref(composerStackRef)}>
+                        ${chatColumnFooter}
+                      </div>`}
                 </div>
               </div>
             </div>

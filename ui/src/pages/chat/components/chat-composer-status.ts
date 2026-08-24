@@ -27,7 +27,7 @@ export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | 
       class="agent-chat__run-status agent-chat__run-status--interrupted"
       aria-label=${t("chat.composer.runStatus", { status: interrupted })}
     >
-      ${icons.messageCircleOff}<span class="agent-chat__run-status-label">${interrupted}</span>
+      ${icons.square}<span class="agent-chat__run-status-label">${interrupted}</span>
     </span>
   `;
 }

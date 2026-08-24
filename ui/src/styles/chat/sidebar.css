@@ -75,6 +75,27 @@
   overflow: hidden;
 }
 
+.chat-main__composer-stack {
+  position: absolute;
+  z-index: 3;
+  inset: auto 0 0;
+  pointer-events: none;
+}
+
+.chat-main__composer-stack > * {
+  pointer-events: auto;
+}
+
+.chat-main__composer-stack::before {
+  position: absolute;
+  z-index: -1;
+  inset: -40px 0 auto;
+  height: 46px;
+  background: linear-gradient(to bottom, transparent, var(--chat-surface));
+  content: "";
+  pointer-events: none;
+}
+
 /* Header-to-transcript blend. It stops one thread gutter short of both pane
    edges: the transcript's scrollbar lives in that strip, and a full-width
    overlay paints over the thumb's top (it vanishes under the fade while

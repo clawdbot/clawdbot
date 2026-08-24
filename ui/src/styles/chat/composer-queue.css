@@ -2,6 +2,8 @@
    queue visibly subordinate; only its protected bottom space may underlap. */
 .agent-chat__composer-shell {
   --chat-queue-divider: color-mix(in srgb, var(--text-strong) 6%, transparent);
+  --chat-stack-leading-inset: 13px;
+  --chat-stack-trailing-inset: 8px;
 }
 
 .chat-queue {
@@ -16,18 +18,14 @@
   width: 100%;
   margin-inline: 0;
   margin-bottom: calc(0px - var(--chat-composer-shell-gap) - var(--chat-queue-underlap));
-  padding-bottom: var(--chat-queue-underlap);
+  padding-bottom: 0;
   overflow: hidden;
   border: 1px solid var(--chat-queue-hairline);
   border-bottom: 0;
   border-radius: calc(20px * var(--openclaw-corner-radius-scale))
     calc(20px * var(--openclaw-corner-radius-scale)) 0 0;
   corner-shape: superellipse(1.5);
-  background: color-mix(
-    in srgb,
-    var(--composer-attached-surface, var(--chat-composer-surface)) 90%,
-    transparent
-  );
+  background: var(--composer-attached-surface, var(--chat-composer-surface));
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
@@ -45,7 +43,9 @@
 }
 
 .chat-queue__scroll {
+  box-sizing: border-box;
   min-width: 0;
+  padding-bottom: var(--chat-queue-underlap);
   overflow: hidden;
   scrollbar-color: color-mix(in srgb, var(--muted) 34%, transparent) transparent;
   scrollbar-width: thin;
@@ -122,6 +122,8 @@
 }
 
 .chat-queue__item {
+  --chat-queue-row-surface: var(--composer-attached-surface, var(--chat-composer-surface));
+
   position: relative;
   display: grid;
   grid-template-columns: 24px 20px minmax(0, 1fr) auto;
@@ -131,13 +133,26 @@
   min-width: 0;
   width: 100%;
   min-height: var(--chat-queue-row-height);
-  padding: 6px 8px;
+  padding: 6px var(--chat-stack-trailing-inset);
   border-bottom: 1px solid var(--chat-queue-divider);
+  background: var(--chat-queue-row-surface);
   color: var(--muted);
 }
 
 .chat-queue__item:last-child {
   border-bottom: 0;
+}
+
+/* The neighboring layer, not the page, paints the rounded cutout exposed by
+   the next card. The final row carries its state surface into the underlap. */
+.chat-queue__item:last-child::after {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  height: var(--chat-queue-underlap);
+  background: var(--chat-queue-row-surface);
+  content: "";
 }
 
 .chat-queue__item--no-avatar {
@@ -159,18 +174,26 @@
 
 @media (hover: hover) and (pointer: fine) {
   .chat-queue__item:hover:not(.chat-queue__item--editing) {
-    background: color-mix(in srgb, var(--text-strong) 3%, transparent);
+    --chat-queue-row-surface: color-mix(
+      in srgb,
+      var(--text-strong) 3%,
+      var(--composer-attached-surface, var(--chat-composer-surface))
+    );
   }
 }
 
 .chat-queue__item--steered {
-  background: transparent;
+  --chat-queue-row-surface: var(--composer-attached-surface, var(--chat-composer-surface));
 }
 
 /* The edited row keeps its slot so the operator can see where the corrected
    message lands. The input owns focus, so the row itself stays neutral. */
 .chat-queue__item--editing {
-  background: color-mix(in srgb, var(--text-strong) 4%, transparent);
+  --chat-queue-row-surface: color-mix(
+    in srgb,
+    var(--text-strong) 4%,
+    var(--composer-attached-surface, var(--chat-composer-surface))
+  );
 }
 
 /* Drop target reads as an insertion edge rather than a selected row, so the
@@ -240,7 +263,11 @@
 }
 
 .chat-queue__item--failed {
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  --chat-queue-row-surface: color-mix(
+    in srgb,
+    var(--danger) 8%,
+    var(--composer-attached-surface, var(--chat-composer-surface))
+  );
 }
 
 .chat-queue__leading {
@@ -414,6 +441,15 @@
 .chat-queue__action:hover:not(:disabled),
 .chat-queue__retry:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.chat-queue__steer {
+  border-radius: var(--radius-full);
+}
+
+.chat-queue__steer:hover:not(:disabled) {
+  background: transparent;
+  color: color-mix(in srgb, var(--accent) 84%, var(--text));
 }
 
 .chat-queue__action:disabled {

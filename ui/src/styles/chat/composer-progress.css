@@ -1,6 +1,7 @@
 .session-progress-card--composer {
   position: relative;
   display: block;
+  box-sizing: border-box;
   interpolate-size: allow-keywords;
   width: 100%;
   max-width: none;
@@ -11,11 +12,7 @@
   border-radius: calc(20px * var(--openclaw-corner-radius-scale))
     calc(20px * var(--openclaw-corner-radius-scale)) 0 0;
   corner-shape: superellipse(1.5);
-  background: color-mix(
-    in srgb,
-    var(--composer-attached-surface, var(--chat-composer-surface)) 90%,
-    transparent
-  );
+  background: var(--composer-attached-surface, var(--chat-composer-surface));
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
@@ -60,26 +57,24 @@
 }
 
 .agent-chat__goal-float .agent-chat__goal {
+  box-sizing: border-box;
   width: 100%;
   max-width: none;
   margin: 0;
   padding: 0 0 var(--chat-goal-underlap);
+  border: 1px solid var(--chat-composer-hairline);
   border-bottom: 0;
   border-radius: calc(20px * var(--openclaw-corner-radius-scale))
     calc(20px * var(--openclaw-corner-radius-scale)) 0 0;
   corner-shape: superellipse(1.5);
-  background: color-mix(
-    in srgb,
-    var(--composer-attached-surface, var(--chat-composer-surface, var(--card))) 90%,
-    transparent
-  );
+  background: var(--composer-attached-surface, var(--chat-composer-surface, var(--card)));
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
 
 .agent-chat__goal-float .agent-chat__goal-row {
   min-height: 42px;
-  padding: 8px 8px 8px 18px;
+  padding: 8px var(--chat-stack-trailing-inset) 8px var(--chat-stack-leading-inset);
 }
 
 .agent-chat__goal-float + :is(.agent-chat__composer-errors, .agent-chat__input),
@@ -102,7 +97,9 @@
   width: 100%;
   min-width: 0;
   min-height: 42px;
-  padding: 8px 18px;
+  /* The chevron is 18px while queue/goal actions occupy 24px. The 3px
+     compensation keeps all trailing centers on one vertical stack column. */
+  padding: 8px calc(var(--chat-stack-trailing-inset) + 3px) 8px var(--chat-stack-leading-inset);
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -194,7 +191,6 @@
   place-items: center;
   flex: 0 0 14px;
   color: var(--muted);
-  transform: translateX(-5px);
 }
 
 .session-progress-card__summary-indicator > svg {
@@ -244,7 +240,7 @@
   min-height: 0;
   max-height: min(300px, 48dvh);
   overflow: hidden;
-  padding: 0 18px 14px;
+  padding: 0 18px 14px 13px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -299,13 +295,24 @@
   }
 }
 
-:root[data-theme-mode="light"] .session-progress-card__summary,
-:root[data-theme-mode="light"] .session-progress-card--composer .session-progress-card__body {
+:root[data-theme-mode="light"] .session-progress-card--composer {
   border-color: transparent;
   box-shadow:
     0 0 0 1px rgb(0 0 0 / 6%),
     0 1px 2px -1px rgb(0 0 0 / 6%),
     0 4px 14px rgb(0 0 0 / 7%);
+}
+
+.agent-chat__goal-float .agent-chat__goal--blocked {
+  border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
+  background:
+    radial-gradient(
+      circle at 92% 0%,
+      color-mix(in srgb, var(--warn) 13%, transparent),
+      transparent 42%
+    ),
+    color-mix(in srgb, var(--warn) 8%, var(--composer-attached-surface));
+  box-shadow: 7px -7px 20px -18px color-mix(in srgb, var(--warn) 45%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {

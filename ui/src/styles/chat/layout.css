@@ -600,7 +600,7 @@ openclaw-chat-page {
      scroll container's padding, which floats the thumb away from the pane
      edge (visible next to the sidebar divider). The side inset lives on
      .chat-thread-inner instead so the scrollbar hugs the edge. */
-  padding: clamp(20px, 3vh, 28px) 0 6px;
+  padding: clamp(20px, 3vh, 28px) 0 calc(var(--chat-composer-stack-height, 0px) + 6px);
   margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
@@ -1082,15 +1082,15 @@ openclaw-chat-page {
   font-weight: 650;
 }
 
-.context-ring__action {
+.context-ring__compact {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  height: 20px;
-  padding: 0 8px;
+  height: 24px;
+  padding: 0 9px 0 5px;
   border-radius: var(--radius-full);
-  border: 1px solid color-mix(in srgb, currentColor 38%, transparent);
+  border: 0;
   background: color-mix(in srgb, currentColor 12%, transparent);
   color: currentColor;
   font: inherit;
@@ -1098,32 +1098,19 @@ openclaw-chat-page {
   line-height: 1;
   transition:
     background 150ms ease-out,
-    border-color 150ms ease-out,
     opacity 150ms ease-out;
 }
 
-.context-ring__action:hover:not(:disabled) {
+.context-ring__compact:hover:not(:disabled) {
   background: color-mix(in srgb, currentColor 18%, transparent);
-  border-color: color-mix(in srgb, currentColor 55%, transparent);
 }
 
-.context-ring__action:disabled {
+.context-ring__compact:disabled {
   cursor: not-allowed;
   opacity: 0.65;
 }
 
-.context-ring__action svg {
-  width: 12px;
-  height: 12px;
-  flex-shrink: 0;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.context-ring__action--busy svg {
+.context-ring__compact--busy .context-ring__dial {
   animation: compaction-spin 1s linear infinite;
 }
 
@@ -1158,7 +1145,6 @@ openclaw-chat-page {
   width: 14px;
   height: 18px;
   flex-shrink: 0;
-  transform: translateX(-5px);
 }
 
 .agent-chat__goal-icon svg {
@@ -3194,7 +3180,7 @@ button.chat-pr__diff {
      moment the first line wrapped. A surface may lower the floor without leaving
      the two-region shape — the session companion does, because it is a narrow
      side panel rather than the page's main writing area. */
-  min-height: var(--chat-composer-min-height, 118px);
+  min-height: var(--chat-composer-min-height, 112px);
   margin: 0;
   padding: 0;
   background: var(--chat-composer-surface);
@@ -3225,12 +3211,13 @@ button.chat-pr__diff {
 /* Focus is a neutral state, not an accent/status signal. Keep it within one
    subtle luminance step of the resting hairline; a second ring or outer spread
    would make the composer look thicker as soon as the operator starts typing. */
-.agent-chat__input:focus-within {
+.agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
   border-color: color-mix(in srgb, var(--chat-composer-hairline) 94%, var(--text-strong));
   box-shadow: 0 4px 16px rgb(0 0 0 / 5%);
 }
 
-:root[data-theme-mode="light"] .agent-chat__input:focus-within {
+:root[data-theme-mode="light"]
+  .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
   border-color: transparent;
   box-shadow:
     0 0 0 1px rgb(0 0 0 / 8%),
@@ -3275,7 +3262,7 @@ button.chat-pr__diff {
     linear-gradient(white 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  animation: chat-dictation-edge-orbit 2.2s linear infinite;
+  animation: chat-dictation-edge-orbit 6.6s linear infinite;
   pointer-events: none;
 }
 
@@ -3340,12 +3327,17 @@ button.chat-pr__diff {
   --chat-composer-underlap-row-height: 40px;
 
   position: relative;
+  z-index: 0;
   width: 100%;
   border: 1px solid color-mix(in srgb, var(--border) 16%, transparent);
-  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+  border-top: 0;
+  border-radius: 0 0 calc(16px * var(--openclaw-corner-radius-scale))
+    calc(16px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   overflow: hidden;
   background: var(--composer-attached-surface, var(--chat-composer-surface));
+  margin-top: calc(0px - var(--chat-composer-shell-gap) - 18px);
+  padding-top: 18px;
 }
 
 /* This is one status lane; event details remain with their transcript, queue,
@@ -3485,86 +3477,7 @@ button.chat-pr__diff {
   outline: none;
 }
 
-.agent-chat__composer-draft-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  padding-block: var(--chat-composer-editor-inset-block);
-  overflow: hidden;
-  color: var(--text-strong);
-  font-size: var(--chat-composer-editor-size);
-  line-height: var(--chat-composer-editor-line);
-  overflow-wrap: break-word;
-  pointer-events: none;
-  white-space: pre-wrap;
-}
-
-.agent-chat__composer-combobox > textarea.agent-chat__composer-textarea--rich {
-  position: relative;
-  z-index: 1;
-  /* The friendly token mirror has different metrics from its raw `$skill`
-     source, so it owns the visible caret at the normalized atomic boundary. */
-  caret-color: transparent;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-}
-
-.agent-chat__composer-combobox > textarea.agent-chat__composer-textarea--rich::selection {
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-}
-
-.agent-chat__skill-token {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.22em;
-  background: var(--chat-composer-surface);
-  color: var(--info);
-  vertical-align: baseline;
-  white-space: nowrap;
-}
-
-.agent-chat__skill-token-icon {
-  display: inline-flex;
-  width: 1em;
-  height: 1em;
-  align-items: center;
-  justify-content: center;
-  align-self: center;
-}
-
-.agent-chat__skill-token-icon svg {
-  width: 1em;
-  height: 1em;
-}
-
-.agent-chat__composer-caret {
-  display: inline-block;
-  width: 0;
-  height: 1.15em;
-  border-inline-start: 1px solid var(--text-strong);
-  margin-block-end: -0.2em;
-  animation: chat-composer-caret-blink 1s steps(1, end) infinite;
-  pointer-events: none;
-}
-
-@keyframes chat-composer-caret-blink {
-  50% {
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .agent-chat__composer-caret {
-    animation: none;
-  }
-}
-
-.agent-chat__composer-combobox
-  > :is(textarea, .agent-chat__composer-draft-overlay):is(
-    [data-scroll-fade-top],
-    [data-scroll-fade-bottom]
-  ) {
+.agent-chat__composer-combobox > textarea:is([data-scroll-fade-top], [data-scroll-fade-bottom]) {
   --chat-composer-scroll-mask-top: currentColor;
   --chat-composer-scroll-mask-bottom: currentColor;
 
@@ -3584,13 +3497,11 @@ button.chat-pr__diff {
   );
 }
 
-.agent-chat__composer-combobox
-  > :is(textarea, .agent-chat__composer-draft-overlay)[data-scroll-fade-top] {
+.agent-chat__composer-combobox > textarea[data-scroll-fade-top] {
   --chat-composer-scroll-mask-top: transparent;
 }
 
-.agent-chat__composer-combobox
-  > :is(textarea, .agent-chat__composer-draft-overlay)[data-scroll-fade-bottom] {
+.agent-chat__composer-combobox > textarea[data-scroll-fade-bottom] {
   --chat-composer-scroll-mask-bottom: transparent;
 }
 
@@ -3984,7 +3895,7 @@ button.chat-pr__diff {
   height: 5px;
   border: 1px solid var(--chat-composer-surface);
   border-radius: var(--radius-full);
-  background: var(--accent);
+  background: var(--danger);
   content: "";
   pointer-events: none;
 }
@@ -4385,25 +4296,12 @@ button.chat-pr__diff {
   font-variant-numeric: tabular-nums;
 }
 
-.agent-chat__dictation-wave {
-  display: flex;
+.agent-chat__dictation-phase {
   min-width: 0;
-  align-items: center;
-}
-
-.agent-chat__dictation-wave .agent-chat__voice-activity {
-  width: 100%;
-  height: 24px;
-  justify-content: space-between;
-  gap: 4px;
-}
-
-.agent-chat__dictation-wave .agent-chat__voice-activity-bar {
-  width: 2.5px;
-  height: 22px;
-  flex: 0 1 2.5px;
-  background: color-mix(in srgb, var(--accent) 88%, var(--text));
-  box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 24%, transparent);
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-chat__dictation-elapsed {
@@ -4584,53 +4482,16 @@ button.chat-pr__diff {
   color: var(--warn);
 }
 
-.agent-chat__session-overrides-pill {
-  display: inline-flex;
-  align-items: stretch;
-  flex: 0 1 auto;
-  min-width: 0;
-  height: var(--chat-composer-chip-height);
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
-.agent-chat__session-overrides-pill button {
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-}
-
-.agent-chat__session-overrides-open {
-  padding: 0 var(--chat-composer-chip-padding-inline);
-  overflow: hidden;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agent-chat__session-overrides-clear {
+.agent-chat__capability-menu-clear-overrides {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 var(--chat-composer-control-size);
-  width: var(--chat-composer-control-size);
-  padding: 0;
-  color: var(--muted);
+  color: var(--danger);
 }
 
-.agent-chat__session-overrides-clear svg {
+.agent-chat__capability-menu-clear-overrides svg {
   width: 13px;
   height: 13px;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .agent-chat__session-overrides-pill button:hover:not(:disabled) {
-    background: var(--chat-composer-hover);
-  }
 }
 
 @keyframes chat-run-status-spin {
@@ -5165,18 +5026,26 @@ button.chat-pr__diff {
 }
 
 .chat-talk-input-picker__settings {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   flex: 0 0 auto;
   border: 0;
   padding: 4px 0;
   background: transparent;
-  color: var(--accent);
+  color: var(--muted);
   font: inherit;
   font-weight: 600;
   cursor: var(--cursor-action);
 }
 
 .chat-talk-input-picker__settings:hover {
-  text-decoration: underline;
+  color: var(--text-strong);
+}
+
+.chat-talk-input-picker__settings svg {
+  width: 13px;
+  height: 13px;
 }
 
 .chat-talk-input-picker__preference {
@@ -5499,17 +5368,6 @@ button.chat-pr__diff {
     flex-shrink: 1;
   }
 
-  .agent-chat__input .agent-chat__session-overrides-open {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .agent-chat__input .agent-chat__session-overrides-clear {
-    flex: 0 0 26px;
-  }
-
   .agent-chat__composer-meta,
   .agent-chat__composer-context {
     margin-left: 0;
@@ -5634,12 +5492,20 @@ button.chat-pr__diff {
   overflow: hidden;
   background: var(--chat-composer-surface);
   border: 1px solid var(--chat-composer-hairline);
-  border-radius: var(--menu-radius);
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
   z-index: 30;
 }
 
 .agent-chat__input:has(> .slash-menu) {
   z-index: 5;
+}
+
+/* Standalone command menus stay compact in base.css. Inside the composer the
+   command and skill sheets use the writing surface's exact outer geometry. */
+.agent-chat__input .slash-menu.slash-menu {
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
 }
 
 .slash-menu__scroll {
@@ -5842,9 +5708,7 @@ button.chat-pr__diff {
 
 .chat-attachment-thumb--pasted-text {
   width: min(220px, calc(100vw - 64px));
-  height: 60px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  background: transparent;
 }
 
 .chat-attachment-thumb--browser-annotation {
@@ -6004,8 +5868,7 @@ button.chat-pr__diff {
   transition: background var(--duration-fast) ease;
 }
 
-.chat-attachment-thumb--file:not(.chat-attachment-thumb--pasted-text):is(:hover, :focus-within)
-  .chat-attachment-file {
+.chat-attachment-thumb--file:is(:hover, :focus-within) .chat-attachment-file {
   background: color-mix(in srgb, var(--panel) 86%, var(--text));
 }
 
@@ -6013,7 +5876,7 @@ button.chat-pr__diff {
   justify-content: flex-start;
   gap: 8px;
   padding: 10px 42px 10px 10px;
-  background: color-mix(in srgb, var(--panel) 62%, transparent);
+  background: transparent;
 }
 
 .chat-attachment-file__icon {
@@ -6294,25 +6157,48 @@ button.chat-pr__diff {
   font-size: 11px;
 }
 
-.chat-controls__model-capability-badge {
+.chat-controls__trigger-provider-wrap {
+  position: relative;
   display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 5px;
-  border: 1px solid color-mix(in srgb, var(--warn) 34%, var(--border));
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
-  color: color-mix(in srgb, var(--warn) 82%, var(--text));
   flex: 0 0 auto;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1;
 }
 
-.chat-controls__model-capability-badge svg {
-  width: 12px;
-  height: 12px;
+.chat-controls__model-capability-alert {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  height: 11px;
+  border-radius: var(--radius-full);
+  background: var(--chat-composer-surface);
+  color: color-mix(in srgb, var(--warn) 82%, var(--text));
+}
+
+.chat-controls__model-capability-alert svg {
+  width: 10px;
+  height: 10px;
+}
+
+.chat-controls__model-capability-alert:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.chat-controls__model-trigger-skeleton {
+  display: inline-block;
+  width: 8.5em;
+  height: 1em;
+  border-radius: var(--radius-full);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-controls__model-trigger-skeleton {
+    animation: none;
+    background: var(--bg-muted);
+  }
 }
 
 .chat-controls__inline-select-check svg {
@@ -6399,6 +6285,10 @@ button.chat-pr__diff {
   align-items: center;
   justify-content: center;
   line-height: 0;
+}
+
+.chat-controls__permission-trigger .chat-controls__permission-icon {
+  color: currentColor;
 }
 
 .agent-chat__input .chat-controls__permission-trigger--default {
@@ -6556,6 +6446,11 @@ button.chat-pr__diff {
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.chat-controls__model-context-badge {
+  border: 0;
+  background: color-mix(in srgb, var(--text-strong) 13%, transparent);
 }
 
 /* Left padding is 10px, not the rows' 9px: option buttons add a 1px transparent
@@ -6776,6 +6671,21 @@ button.chat-pr__diff {
 .chat-controls__model-option-meta::before {
   content: "\00b7";
   margin-inline: 6px;
+}
+
+.chat-controls__model-chat-only-info {
+  display: inline-grid;
+  width: 15px;
+  height: 15px;
+  margin-inline-start: 6px;
+  border: 1px solid color-mix(in srgb, var(--warn) 54%, transparent);
+  border-radius: var(--radius-full);
+  color: color-mix(in srgb, var(--warn) 80%, var(--text));
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  place-items: center;
 }
 
 .chat-controls__reasoning-panel {

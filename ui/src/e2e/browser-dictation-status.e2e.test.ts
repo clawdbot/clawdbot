@@ -131,18 +131,17 @@ suite.define(() => {
         await page.mouse.up();
 
         const composer = page.locator(".agent-chat__input--dictating");
-        const activity = composer.locator(
-          ".agent-chat__dictation-wave .agent-chat__voice-activity",
-        );
+        const phase = composer.locator(".agent-chat__dictation-phase");
         const elapsed = composer.locator(".agent-chat__dictation-elapsed");
         const stop = composer.getByRole("button", { name: "Stop dictation" });
         const send = composer.getByRole("button", { name: "Send message" });
-        await expect.poll(() => activity.isVisible()).toBe(true);
-        expect(await activity.locator(".agent-chat__voice-activity-bar").count()).toBe(48);
+        await expect.poll(() => phase.isVisible()).toBe(true);
+        await expect.poll(() => phase.textContent()).toBe("Listening…");
+        expect(await composer.locator(".agent-chat__dictation-wave").count()).toBe(0);
         await expect.poll(() => elapsed.textContent()).toBe("0:01");
         await expect.poll(() => stop.isVisible()).toBe(true);
         await expect.poll(() => send.isVisible()).toBe(true);
-        await captureComposerProof(page, "dictation-waveform-timer-actions.png");
+        await captureComposerProof(page, "dictation-status-timer-actions.png");
         await page.screenshot({
           animations: "disabled",
           path: ".artifacts/control-ui-e2e/voice-controls/dictation-latched-after-release.png",
@@ -152,7 +151,7 @@ suite.define(() => {
         if (!composerBox) {
           throw new Error("expected active dictation composer layout box");
         }
-        for (const control of [activity, elapsed, stop, send]) {
+        for (const control of [phase, elapsed, stop, send]) {
           const box = await control.boundingBox();
           expect(box).not.toBeNull();
           if (!box) {
