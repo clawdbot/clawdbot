@@ -434,21 +434,42 @@ async function rawPathExists(target: string | Buffer): Promise<boolean> {
 }
 
 async function containsSnapshotGitMarker(
-  root: string,
+  record: ManagedWorktreeRecord,
   snapshotPaths: Iterable<Buffer>,
 ): Promise<boolean> {
   const checked = new Set<string>();
-  for (const gitPath of snapshotPaths) {
-    for (let end = gitPath.indexOf(47); end !== -1; end = gitPath.indexOf(47, end + 1)) {
-      const directory = gitPath.subarray(0, end);
-      const key = gitPathKey(directory);
-      if (checked.has(key)) {
-        continue;
-      }
-      checked.add(key);
-      const marker = Buffer.concat([directory, Buffer.from("/.git")]);
-      if (await rawPathExists(checkoutPathFromGitBytes(root, marker))) {
-        return true;
+  let ownedWorktrees: Set<string> | undefined;
+  const ignoredPaths = splitNullBuffer(
+    await requireGitBuffer(record.path, [
+      "ls-files",
+      "-z",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+    ]),
+  );
+  for (const [paths, ignored] of [
+    [snapshotPaths, false],
+    [ignoredPaths, true],
+  ] as const) {
+    for (const gitPath of paths) {
+      for (let end = gitPath.indexOf(47); end !== -1; end = gitPath.indexOf(47, end + 1)) {
+        const directory = gitPath.subarray(0, end);
+        const key = gitPathKey(directory);
+        if (checked.has(key)) {
+          continue;
+        }
+        checked.add(key);
+        const marker = Buffer.concat([directory, Buffer.from("/.git")]);
+        if (!(await rawPathExists(checkoutPathFromGitBytes(record.path, marker)))) {
+          continue;
+        }
+        ownedWorktrees ??= new Set(
+          (await listGitWorktrees(record.repoRoot)).map((entry) => path.resolve(entry.path)),
+        );
+        if (!ignored || !ownedWorktrees.has(path.resolve(record.path, directory.toString()))) {
+          return true;
+        }
       }
     }
   }
@@ -532,8 +553,8 @@ async function snapshotWorktree(
         addSnapshotPath(entry);
       }
     }
-    // Ignored nested checkouts are disposable; only Git-visible snapshot paths need this guard.
-    if (await containsSnapshotGitMarker(record.path, snapshotPaths.values())) {
+    // Only Git-owned ignored worktrees are disposable; foreign repositories must stay protected.
+    if (await containsSnapshotGitMarker(record, snapshotPaths.values())) {
       throw new Error("nested git repositories cannot be snapshotted losslessly");
     }
     await requireGit(record.path, ["read-tree", "HEAD"], { env });
