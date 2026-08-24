@@ -1944,12 +1944,20 @@ openclaw-session-discussion {
 .sidebar-markdown-reader {
   --md-preview-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   position: relative;
+  max-height: calc(100dvh - var(--shell-topbar-height, 44px) - 76px - var(--safe-area-bottom, 0px));
   padding: 20px 18px 24px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--secondary) 54%, transparent);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  clip-path: inset(0 round var(--radius-lg));
+}
+
+.sidebar-markdown-reader::-webkit-scrollbar-track {
+  margin-block: 8px;
 }
 
 .sidebar-markdown-reader::before {
