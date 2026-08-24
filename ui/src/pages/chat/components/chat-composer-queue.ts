@@ -114,7 +114,10 @@ function fitQueueEditInput(textarea: HTMLTextAreaElement): void {
   textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
 }
 
-function sendStateLabel(item: ChatQueueItem, globalReconnect: boolean): string | null {
+function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
+  if (offline && item.sendState !== "failed" && item.sendState !== "unconfirmed") {
+    return t("chat.queue.states.waitingForReconnect");
+  }
   switch (item.sendState) {
     case "waiting-model":
     case "waiting-idle":
@@ -122,7 +125,7 @@ function sendStateLabel(item: ChatQueueItem, globalReconnect: boolean): string |
     case "executing-command":
       return t("chat.queue.states.runningCommand");
     case "waiting-reconnect":
-      return globalReconnect ? null : t("chat.queue.states.waitingForReconnect");
+      return t("chat.queue.states.waitingForReconnect");
     case "unconfirmed":
       return t("chat.queue.states.needsReview");
     case "failed":
@@ -153,12 +156,10 @@ export function renderChatQueue(props: ChatQueueProps) {
     // edit shrinks the segments but must not retract the handle column.
     offered: visibleQueue.filter(isMovableChatQueueItem).length > 1,
   };
-  // Connection and picker-setting transitions belong to the queue as a whole.
-  // Repeating them on every row makes normal waiting look like item failures
-  // and lets a single global transition crowd out each message's own controls.
-  const globalState = props.offline
-    ? { label: t("chat.queue.states.waitingForReconnect"), tone: "reconnect" }
-    : visibleQueue.some((item) => item.sendState === "waiting-model")
+  // Applying settings belongs to the queue as a whole. Connection loss is the
+  // exceptional per-item delivery state operators need to see on every row.
+  const globalState =
+    visibleQueue.some((item) => item.sendState === "waiting-model") && !props.offline
       ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
       : null;
   // Keyed rows so a reorder moves the existing DOM node instead of rewriting

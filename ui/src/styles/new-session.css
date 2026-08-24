@@ -101,38 +101,6 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
   text-align: left;
 }
 
-.new-session-page__selection-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 24px;
-  padding: 2px 8px;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
-  font: inherit;
-  font-size: 11px;
-  cursor: var(--cursor-action);
-}
-
-.new-session-page__selection-status:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-}
-
-.new-session-page__selection-status:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-.new-session-page__selection-status svg {
-  width: 12px;
-  height: 12px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-}
-
 .new-session-page__incognito-notice {
   display: flex;
   align-items: center;

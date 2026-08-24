@@ -392,7 +392,7 @@ describe("chat composer queue reordering", () => {
     expect(onQueueEditCancel).not.toHaveBeenCalled();
   });
 
-  it("projects an offline transition once above the queue", () => {
+  it("projects an offline transition on each row without a queue header", () => {
     const container = renderQueue({
       offline: true,
       queue: [{ id: "a", text: "a", createdAt: 1, sendState: "waiting-idle" }],
@@ -401,11 +401,10 @@ describe("chat composer queue reordering", () => {
 
     const row = container.querySelector(".chat-queue__item");
     expect(row?.classList.contains("chat-queue__item--reconnect")).toBe(true);
-    expect(row?.querySelector(".chat-queue__state")).toBeNull();
-    expect(container.querySelector(".chat-queue__global-state")?.textContent?.trim()).toBe(
+    expect(row?.querySelector(".chat-queue__state")?.textContent?.trim()).toBe(
       t("chat.queue.states.waitingForReconnect"),
     );
-    expect(container.querySelectorAll(".chat-queue__global-state")).toHaveLength(1);
+    expect(container.querySelectorAll(".chat-queue__global-state")).toHaveLength(0);
   });
 
   it("projects applying settings once and preserves the steer affordance", () => {

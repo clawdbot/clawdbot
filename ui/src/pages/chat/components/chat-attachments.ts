@@ -514,16 +514,16 @@ export function handleChatAttachmentMenuSelection(
 
 export function renderChatAttachmentMenuTrigger(
   disabled: boolean | undefined,
-  selection?: { active: boolean; label: string },
+  hasOverrides = false,
 ) {
   return html`
     <button
       slot="trigger"
       type="button"
-      class="agent-chat__input-btn agent-chat__input-btn--attach ${selection?.active
-        ? "agent-chat__input-btn--selected"
+      class="agent-chat__input-btn agent-chat__input-btn--attach ${hasOverrides
+        ? "agent-chat__input-btn--has-overrides"
         : ""}"
-      aria-label=${selection?.active ? selection.label : t("chat.composer.addAttachment")}
+      aria-label=${t("chat.composer.addAttachment")}
       ?disabled=${disabled}
       title=${selection?.active ? selection.label : t("chat.composer.addAttachment")}
     >

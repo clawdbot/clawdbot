@@ -2,7 +2,6 @@ import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
-import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
 import {
   renderChatComposerPlusMenu,
   type ChatComposerPlusMenuView,
@@ -53,8 +52,6 @@ export function renderNewSessionPlusMenu(
   attachments: Parameters<typeof renderChatComposerPlusMenu>[0]["attachments"],
 ) {
   const draftEnabled = options.visibility === "draft";
-  const overrideCount = countSessionToolOverrides(options.toolOverrides);
-  const selectedCount = overrideCount + (draftEnabled ? 1 : 0);
   const disabled = options.submitting || options.messageLocked === true;
   const controller = options.textareaController;
   return renderChatComposerPlusMenu({
@@ -77,10 +74,6 @@ export function renderNewSessionPlusMenu(
           },
         ]
       : undefined,
-    selectedLabel:
-      selectedCount > 0
-        ? t("newSession.composerOptionsSelected", { count: String(selectedCount) })
-        : undefined,
     onOpenChange: (open) => {
       controller.capabilityMenuOpen = open;
       if (!open) {
