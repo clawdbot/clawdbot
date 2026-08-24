@@ -612,7 +612,7 @@ export async function spawnAcpDirect(
           inheritedToolDenylist: ctx.inheritedToolDenylist,
         },
         parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
-        participantStorePath: storePath,
+        initializedSession: state.initializedSession,
         signal: ctx.signal,
       });
       const runId = readGatewayRunId(response) ?? childIdem;

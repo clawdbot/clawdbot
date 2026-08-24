@@ -833,7 +833,11 @@ describe("spawnAcpDirect", () => {
       return new Proxy(store, {
         get(_target, prop) {
           if (typeof prop === "string" && prop.startsWith("agent:codex:acp:")) {
-            return { sessionId: "sess-123", updatedAt: Date.now() };
+            return {
+              sessionId: "sess-123",
+              lifecycleRevision: "lifecycle-123",
+              updatedAt: Date.now(),
+            };
           }
           return undefined;
         },
@@ -3625,6 +3629,7 @@ describe("spawnAcpDirect", () => {
       releaseDispatch = resolve;
     });
     const lifecycle: string[] = [];
+    let abortAttempts = 0;
     let dispatchStarted = false;
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
       const args = argsUnknown as { method?: string; params?: { runId?: string } };
@@ -3635,8 +3640,17 @@ describe("spawnAcpDirect", () => {
         return { runId: "run-after-abort" };
       }
       if (args.method === "chat.abort") {
-        lifecycle.push("aborted");
-        return { ok: true, aborted: true, runIds: [args.params?.runId] };
+        abortAttempts += 1;
+        lifecycle.push(abortAttempts === 1 ? "abort-unconfirmed" : "abort-confirmed");
+        return {
+          ok: true,
+          aborted: true,
+          runIds: [abortAttempts === 1 ? "different-run" : args.params?.runId],
+        };
+      }
+      if (args.method === "sessions.delete") {
+        lifecycle.push("deleted");
+        return { deleted: true };
       }
       return { ok: true };
     });
@@ -3662,7 +3676,18 @@ describe("spawnAcpDirect", () => {
         },
       }),
     );
-    expect(lifecycle).toEqual(["accepted", "aborted", "cleaned"]);
+    expect(gatewayRequest("sessions.delete")).toMatchObject({
+      method: "sessions.delete",
+      params: {
+        key: result.childSessionKey,
+        emitLifecycleHooks: false,
+        deleteTranscript: true,
+        expectedSessionId: "sess-123",
+        expectedLifecycleRevision: "lifecycle-123",
+      },
+      timeoutMs: 60_000,
+    });
+    expect(lifecycle).toEqual(["accepted", "abort-unconfirmed", "deleted", "cleaned"]);
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
     expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledWith(
       expect.objectContaining({
