@@ -6,6 +6,7 @@ import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
   resolveApprovalRequestSessionConversation,
+  resolveApprovalRequestSessionTarget,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
@@ -36,9 +37,13 @@ type TelegramOriginTarget = {
   accountId?: string;
   threadId?: number;
 };
+type TelegramOriginResolverInput = Parameters<
+  NonNullable<NonNullable<ChannelApprovalCapability["native"]>["resolveOriginTarget"]>
+>[0];
 
 function resolveTurnSourceTelegramOriginTarget(
   request: ApprovalRequest,
+  sessionTarget: ReturnType<typeof resolveApprovalRequestSessionTarget>,
 ): TelegramOriginTarget | null {
   const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
   const rawTurnSourceTo = normalizeOptionalString(request.request.turnSourceTo) ?? "";
@@ -57,6 +62,16 @@ function resolveTurnSourceTelegramOriginTarget(
         rawId: sessionConversation.rawId,
       })
     : null;
+  const parsedSessionTarget = sessionTarget ? parseTelegramTarget(sessionTarget.to) : null;
+  // Keep Telegram direct-message scope on the live side before shared exact matching.
+  const directTopicSessionTarget =
+    parsedSessionTarget?.directMessagesTopicId !== undefined &&
+    normalizeTelegramChatId(parsedSessionTarget.chatId) === turnSourceTo &&
+    request.request.turnSourceThreadId == null &&
+    parsedTurnSourceTarget?.messageThreadId === undefined &&
+    parsedTurnSourceTarget?.directMessagesTopicId === undefined
+      ? sessionTarget
+      : null;
 
   if (
     telegramSessionConversation?.threadId !== undefined &&
@@ -72,7 +87,7 @@ function resolveTurnSourceTelegramOriginTarget(
     sessionThreadId ??
     undefined;
   return {
-    to: turnSourceTo,
+    to: directTopicSessionTarget?.to ?? turnSourceTo,
     accountId: normalizeOptionalString(request.request.turnSourceAccountId),
     threadId: parseTelegramThreadId(rawThreadId),
   };
@@ -94,17 +109,39 @@ function resolveSessionTelegramOriginTarget(sessionTarget: {
   };
 }
 
-const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolver({
-  channel: "telegram",
-  shouldHandleRequest: ({ cfg, accountId, request }) =>
-    shouldHandleTelegramExecApprovalRequest({
-      cfg,
-      accountId,
-      request,
-    }),
-  resolveTurnSourceTarget: resolveTurnSourceTelegramOriginTarget,
-  resolveSessionTarget: resolveSessionTelegramOriginTarget,
-});
+const resolveTelegramOriginTarget = (input: TelegramOriginResolverInput) => {
+  const sessionTarget = shouldHandleTelegramExecApprovalRequest({
+    cfg: input.cfg,
+    accountId: input.accountId,
+    request: input.request,
+  })
+    ? resolveApprovalRequestSessionTarget({
+        cfg: input.cfg,
+        request: {
+          ...input.request,
+          request: {
+            ...input.request.request,
+            turnSourceChannel: undefined,
+            turnSourceTo: undefined,
+            turnSourceAccountId: undefined,
+            turnSourceThreadId: undefined,
+          },
+        },
+      })
+    : null;
+  return createChannelNativeOriginTargetResolver({
+    channel: "telegram",
+    shouldHandleRequest: ({ cfg, accountId, request }) =>
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId,
+        request,
+      }),
+    resolveTurnSourceTarget: (request) =>
+      resolveTurnSourceTelegramOriginTarget(request, sessionTarget),
+    resolveSessionTarget: resolveSessionTelegramOriginTarget,
+  })(input);
+};
 
 const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolver({
   shouldHandleRequest: ({ cfg, accountId, request }) =>
