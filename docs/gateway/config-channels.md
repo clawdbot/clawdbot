@@ -216,6 +216,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Optional `channels.telegram.defaultAccount` overrides default account selection when it matches a configured account id.
 - In multi-account setups (2+ account ids), set an explicit default (`channels.telegram.defaultAccount` or `channels.telegram.accounts.default`) to avoid fallback routing; `openclaw doctor` warns when this is missing or invalid.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
+- `actions.reactions` controls both message reactions and `emoji-list`, which lists the standard and custom reactions allowed in the current chat.
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for forum topics (use canonical `chatId:topic:topicId` in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 - Telegram stream previews use `sendMessage` + `editMessageText` (works in direct and group chats).
 - `network.dnsResultOrder` defaults to `"ipv4first"` to avoid common IPv6 fetch failures.
@@ -327,6 +328,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Direct outbound calls that provide an explicit Discord `token` use that token for the call; account policy settings still come from the selected account in the active runtime snapshot.
 - Optional `channels.discord.defaultAccount` overrides default account selection when it matches a configured account id.
 - Use `user:<id>` (DM) or `channel:<id>` (guild channel) for delivery targets; bare numeric IDs are rejected.
+- `actions.reactions` controls `react`, `reactions`, and `emoji-list`; emoji discovery defaults to the current server unless `guildId` is provided.
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
 - Bot-authored messages are ignored by default. `allowBots: true` enables them; use `allowBots: "mentions"` to only accept bot messages that mention the bot (own messages still filtered).
 - Channels that support bot-authored inbound messages can use shared [bot loop protection](/channels/bot-loop-protection). Set `channels.defaults.botLoopProtection` for baseline pair budgets, then override the channel or account only when one surface needs different limits.
@@ -515,7 +517,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 | messages     | enabled | Read/send/edit/delete  |
 | pins         | enabled | Pin/unpin/list         |
 | memberInfo   | enabled | Member info            |
-| emojiList    | enabled | Custom emoji list      |
+| emojiList    | enabled | List custom emoji      |
 
 ### Mattermost
 
