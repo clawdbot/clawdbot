@@ -89,6 +89,59 @@ describe("extractToolResultMediaArtifact", () => {
         "/tmp/stems.zip",
         "https://example.test/stems.zip",
       ],
+      attachments: [
+        { type: "audio", path: "/tmp/song.mp3", mimeType: "audio/mpeg" },
+        { type: "image", url: "https://example.test/cover.png" },
+        { type: "file" },
+        { type: "file" },
+      ],
+    });
+  });
+
+  it("aligns generated attachment metadata with deduplicated media references", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            mediaUrls: [" /tmp/song.mp3 ", "/tmp/cover.png", "/tmp/song.mp3"],
+            attachments: [
+              {
+                type: "image",
+                path: "/tmp/cover.png",
+                name: "cover.png",
+                width: 640,
+                height: 480,
+              },
+              {
+                type: "audio",
+                path: "/tmp/song.mp3",
+                name: "friendly-song.mp3",
+                mimeType: "audio/mpeg",
+                durationMs: 2_000,
+                trustedLocalMedia: true,
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/song.mp3", "/tmp/cover.png"],
+      attachments: [
+        {
+          type: "audio",
+          path: "/tmp/song.mp3",
+          name: "friendly-song.mp3",
+          mimeType: "audio/mpeg",
+          durationMs: 2_000,
+        },
+        {
+          type: "image",
+          path: "/tmp/cover.png",
+          name: "cover.png",
+          width: 640,
+          height: 480,
+        },
+      ],
     });
   });
 
