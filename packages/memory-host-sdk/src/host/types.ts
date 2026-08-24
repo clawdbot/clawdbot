@@ -147,6 +147,8 @@ export type MemoryProviderStatus = {
   files?: number;
   chunks?: number;
   dirty?: boolean;
+  /** Sources currently being refreshed by an admitted sync. */
+  pendingSyncSources?: MemorySource[];
   workspaceDir?: string;
   dbPath?: string;
   extraPaths?: MemoryExtraPath[];
@@ -186,7 +188,7 @@ export type MemoryProviderStatus = {
 };
 
 export function resolveMemorySearchStaleness(
-  status: Pick<MemoryProviderStatus, "dirty" | "custom">,
+  status: Pick<MemoryProviderStatus, "dirty" | "pendingSyncSources" | "custom">,
   agentId?: string,
 ): { stale: true; warning: string; action: string } | null {
   const identity = status.custom?.indexIdentity as Record<string, unknown> | undefined;
@@ -195,7 +197,11 @@ export function resolveMemorySearchStaleness(
     typeof identity.reason === "string"
       ? identity.reason.trim()
       : undefined;
-  if (!status.dirty && !identityReason) {
+  const refreshingSessionsOnly =
+    status.dirty === true &&
+    status.pendingSyncSources?.length === 1 &&
+    status.pendingSyncSources[0] === "sessions";
+  if ((!status.dirty || refreshingSessionsOnly) && !identityReason) {
     return null;
   }
   return {
