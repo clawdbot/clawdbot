@@ -116,7 +116,10 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  if (params.blockRuntimeResumeSilentReply === true) {
+  if (
+    params.blockRuntimeResumeSilentReply === true ||
+    params.attempt.blockRuntimeResumeSilentReply === true
+  ) {
     return false;
   }
   // "optional" is the run consumer's declaration that no user-facing reply is

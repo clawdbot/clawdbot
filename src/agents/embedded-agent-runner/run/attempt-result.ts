@@ -370,7 +370,6 @@ export function completeEmbeddedAttemptResult(
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
     allowEmptyAssistantReplyAsSilent: attempt.allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation: attempt.terminalReplyExpectation,
-    blockRuntimeResumeSilentReply: attempt.blockRuntimeResumeSilentReply,
     payloadCount: 0,
     aborted: terminal.aborted,
     timedOut: terminal.timedOut,
@@ -392,6 +391,7 @@ export function completeEmbeddedAttemptResult(
       toolMetas: toolMetasNormalized,
       replayMetadata,
       terminal: state.terminal,
+      blockRuntimeResumeSilentReply: attempt.blockRuntimeResumeSilentReply,
     },
   });
   const result: EmbeddedRunAttemptWithReceiptEvidence = {
@@ -433,6 +433,7 @@ export function completeEmbeddedAttemptResult(
     clientToolCalls,
     yieldDetected: state.yieldDetected || undefined,
     yieldAcknowledgment: state.yieldAcknowledgment,
+    blockRuntimeResumeSilentReply: attempt.blockRuntimeResumeSilentReply,
   };
   return finalizeEmbeddedAttempt({
     result,

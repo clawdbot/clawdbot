@@ -5,7 +5,6 @@ import { resolveRuntimeContextPromptParts } from "./runtime-context-prompt.js";
 import {
   extractRuntimeResumeContract,
   isBlockedRuntimeResumeSilentReply,
-  RUNTIME_RESUME_CONTINUATION_DIRECTIVE,
   RUNTIME_RESUME_SILENT_REPLY_BLOCKED_TEXT,
   shouldBlockSilentReplyOnRuntimeResume,
 } from "./runtime-resume-contract.js";
@@ -49,7 +48,7 @@ describe("runtime resume contract", () => {
     expect(parts.runtimeOnly).toBe(true);
     expect(parts.prompt).toBe("Continue the OpenClaw runtime event.");
     expect(parts.resumeContract?.open).toBe(true);
-    expect(parts.runtimeSystemContext).toContain(RUNTIME_RESUME_CONTINUATION_DIRECTIVE);
+    expect(parts.runtimeSystemContext).toContain("Runtime resume directive:");
     expect(parts.runtimeSystemContext).toContain('"open": true');
     expect(parts.runtimeSystemContext).toContain("Structured resume contract");
   });
@@ -61,7 +60,7 @@ describe("runtime resume contract", () => {
     });
     expect(parts.runtimeOnly).toBe(true);
     expect(parts.resumeContract).toBeUndefined();
-    expect(parts.runtimeSystemContext).not.toContain(RUNTIME_RESUME_CONTINUATION_DIRECTIVE);
+    expect(parts.runtimeSystemContext).not.toContain("Runtime resume directive:");
   });
 
   it("blocks exact NO_REPLY while a runtime resume contract is open", () => {
@@ -77,13 +76,13 @@ describe("runtime resume contract", () => {
       shouldTreatEmptyAssistantReplyAsSilent({
         allowEmptyAssistantReplyAsSilent: true,
         terminalReplyExpectation: "optional",
-        blockRuntimeResumeSilentReply: true,
         payloadCount: 0,
         aborted: false,
         timedOut: false,
         attempt: {
           assistantTexts: ["NO_REPLY"],
           replayMetadata: { hadPotentialSideEffects: false },
+          blockRuntimeResumeSilentReply: true,
         } as never,
       }),
     ).toBe(false);
@@ -93,10 +92,10 @@ describe("runtime resume contract", () => {
         aborted: false,
         externalAbort: false,
         timedOut: false,
-        blockRuntimeResumeSilentReply: true,
         attempt: {
           assistantTexts: ["NO_REPLY"],
           replayMetadata: { hadPotentialSideEffects: false },
+          blockRuntimeResumeSilentReply: true,
         } as never,
       }),
     ).toBe(RUNTIME_RESUME_SILENT_REPLY_BLOCKED_TEXT);
@@ -107,7 +106,6 @@ describe("runtime resume contract", () => {
       shouldTreatEmptyAssistantReplyAsSilent({
         allowEmptyAssistantReplyAsSilent: true,
         terminalReplyExpectation: "optional",
-        blockRuntimeResumeSilentReply: false,
         payloadCount: 0,
         aborted: false,
         timedOut: false,
@@ -123,7 +121,6 @@ describe("runtime resume contract", () => {
         aborted: false,
         externalAbort: false,
         timedOut: false,
-        blockRuntimeResumeSilentReply: false,
         attempt: {
           assistantTexts: ["NO_REPLY"],
           replayMetadata: { hadPotentialSideEffects: false },
@@ -139,32 +136,33 @@ describe("runtime resume contract", () => {
  */
 describe("runtime false-closure canary transcript", () => {
   it("keeps the task active across compaction → memory checkpoint → NO_REPLY attempt", () => {
+    const finalAssistant = {
+      role: "assistant" as const,
+      text: "NO_REPLY",
+    };
     const transcript = [
       {
-        role: "user",
+        role: "user" as const,
         text: "Build the approved PDF and Excel packet. Do it.",
       },
       {
-        role: "assistant",
+        role: "assistant" as const,
         text: "Starting the packet…",
       },
       {
-        role: "runtime",
+        role: "runtime" as const,
         kind: "compaction",
         syntheticPrompt: "Continue the OpenClaw runtime event.",
         context: INCIDENT_RUNTIME_CONTEXT,
       },
       {
-        role: "assistant",
+        role: "assistant" as const,
         tool: "memory_append",
         result: "ok",
         note: "checkpoint only — packet not started",
       },
-      {
-        role: "assistant",
-        text: "NO_REPLY",
-      },
-    ] as const;
+      finalAssistant,
+    ];
 
     const resumeTurn = transcript.find((entry) => entry.role === "runtime");
     expect(resumeTurn).toBeTruthy();
@@ -175,13 +173,12 @@ describe("runtime false-closure canary transcript", () => {
     expect(parts.runtimeOnly).toBe(true);
     expect(parts.resumeContract?.open).toBe(true);
 
-    const final = transcript[transcript.length - 1];
-    expect(final.text).toBe("NO_REPLY");
+    expect(finalAssistant.text).toBe("NO_REPLY");
     expect(
       isBlockedRuntimeResumeSilentReply({
         runtimeOnly: true,
         resumeContract: parts.resumeContract,
-        assistantTexts: [final.text ?? ""],
+        assistantTexts: [finalAssistant.text],
       }),
     ).toBe(true);
 
@@ -190,10 +187,10 @@ describe("runtime false-closure canary transcript", () => {
       aborted: false,
       externalAbort: false,
       timedOut: false,
-      blockRuntimeResumeSilentReply: true,
       attempt: {
         assistantTexts: ["NO_REPLY"],
         replayMetadata: { hadPotentialSideEffects: true },
+        blockRuntimeResumeSilentReply: true,
       } as never,
     });
     expect(blockedText).toBe(RUNTIME_RESUME_SILENT_REPLY_BLOCKED_TEXT);

@@ -22,7 +22,10 @@ import {
   joinAssistantTexts,
   type IncompleteTurnAttempt,
 } from "./incomplete-turn-classification.js";
-import { RUNTIME_RESUME_SILENT_REPLY_BLOCKED_TEXT } from "./runtime-resume-contract.js";
+import {
+  isBlockedRuntimeResumeSilentReply,
+  RUNTIME_RESUME_SILENT_REPLY_BLOCKED_TEXT,
+} from "./runtime-resume-contract.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 type SilentToolResultAttempt = Pick<
@@ -97,10 +100,18 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  if (
+    isBlockedRuntimeResumeSilentReply({
+      blockRuntimeResumeSilentReply:
+        params.blockRuntimeResumeSilentReply === true ||
+        params.attempt.blockRuntimeResumeSilentReply === true,
+      assistantTexts: params.attempt.assistantTexts,
+    })
+  ) {
+    return RUNTIME_RESUME_SILENT_REPLY_BLOCKED_TEXT;
+  }
+
   if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
-    if (params.blockRuntimeResumeSilentReply === true) {
-      return RUNTIME_RESUME_SILENT_REPLY_BLOCKED_TEXT;
-    }
     return null;
   }
 

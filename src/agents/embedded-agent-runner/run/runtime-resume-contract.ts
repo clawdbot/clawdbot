@@ -19,7 +19,7 @@ export type RuntimeResumeContract = {
   signals: string[];
 };
 
-export const RUNTIME_RESUME_CONTINUATION_DIRECTIVE = [
+const RUNTIME_RESUME_CONTINUATION_DIRECTIVE = [
   "Runtime resume directive:",
   "- Resume the interrupted user task from the runtime context below.",
   "- Checkpoint-only work (memory writes, status notes) is not completion.",
@@ -164,13 +164,18 @@ export function formatRuntimeResumeSystemAppendix(contract: RuntimeResumeContrac
 export function shouldBlockSilentReplyOnRuntimeResume(params: {
   runtimeOnly?: boolean;
   resumeContract?: RuntimeResumeContract | null;
+  blockRuntimeResumeSilentReply?: boolean;
 }): boolean {
+  if (params.blockRuntimeResumeSilentReply === true) {
+    return true;
+  }
   return params.runtimeOnly === true && params.resumeContract?.open === true;
 }
 
 export function isBlockedRuntimeResumeSilentReply(params: {
   runtimeOnly?: boolean;
   resumeContract?: RuntimeResumeContract | null;
+  blockRuntimeResumeSilentReply?: boolean;
   assistantTexts?: readonly string[];
 }): boolean {
   if (!shouldBlockSilentReplyOnRuntimeResume(params)) {
