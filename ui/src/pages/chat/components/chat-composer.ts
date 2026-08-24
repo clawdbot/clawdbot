@@ -81,7 +81,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   state.slashCommandDispatchConnected = props.connected;
   const canCompose = props.canSend;
   const isBusy = props.sending || props.stream !== null;
-  const canAbort = Boolean(props.canAbort && props.onAbort);
+  const canAbort = Boolean(props.connected && props.canAbort && props.onAbort);
   const hasTerminalStatus = hasTerminalRunStatus(props.runStatus);
   const showAbortableUi = canAbort && !hasTerminalStatus;
   const submittedProgress = props.queue.find((item) =>
