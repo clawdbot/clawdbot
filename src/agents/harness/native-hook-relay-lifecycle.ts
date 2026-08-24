@@ -312,6 +312,11 @@ function registerNativeHookRelayInternal(
       if (relays.get(relayId) !== route || !lifetime.bindings.has(binding)) {
         throw new Error("native hook relay binding is inactive");
       }
+      // Renew before changing foreground ownership so a transient store failure
+      // leaves the last working binding authoritative.
+      if (!updateNativeHookRelayRouteExpiry(relayId, route)) {
+        throw new Error("native hook relay route renewal failed");
+      }
       for (const previous of lifetime.bindings) {
         if (previous === binding) {
           continue;
@@ -321,12 +326,14 @@ function registerNativeHookRelayInternal(
           removeNativeHookRelayBinding(relayId, route, previous);
         }
       }
+      if (relays.get(relayId) !== route || !lifetime.bindings.has(binding)) {
+        throw new Error("native hook relay binding is inactive");
+      }
       if (!binding.retained && params.runBeforeToolCall && retention) {
         binding.retained = retainBeforeToolCallForNativeHookRelay(params.runBeforeToolCall);
       }
       binding.foregroundOpen = true;
       lifetime.foreground = binding;
-      updateNativeHookRelayRouteExpiry(relayId, route);
     };
     const handle: RetainedNativeHookRelayHandle = {
       ...registration,
@@ -410,8 +417,8 @@ function registerNativeHookRelayInternal(
     };
     if (!composeWithExistingRoute) {
       activateForegroundBinding();
-    } else {
-      updateNativeHookRelayRouteExpiry(relayId, route);
+    } else if (!updateNativeHookRelayRouteExpiry(relayId, route)) {
+      throw new Error("native hook relay route renewal failed");
     }
     return handle;
   } catch (error) {

@@ -820,6 +820,114 @@ describe("native hook relay registry", () => {
     relay.unregister();
   });
 
+  it("keeps the previous foreground when composed route renewal fails", async () => {
+    const relayId = uniqueNativeHookRelayIdForTests("composed-renewal-failure");
+    const retention = {
+      readClaim: readTestNativeAgentId,
+      readForegroundSubject: readTestNativeTurnId,
+      shouldRetainAfterForegroundClose: () => false,
+      allowPreToolUse: () => false,
+      onDispose: () => {},
+    };
+    const relayA = registerRetainedNativeHookRelay({
+      provider: "codex",
+      relayId,
+      sessionId: "session-1",
+      runId: "run-a",
+      allowedEvents: ["post_tool_use"],
+      retention,
+    });
+    relayA.bindForegroundSubject("turn-a");
+    await waitForNativeHookRelayBridgeRecord(relayId);
+    const renewRoute = vi
+      .spyOn(nativeHookRelayBridge, "renewNativeHookRelayBridgeRecord")
+      .mockReturnValue("unavailable");
+    const invoke = (turnId: string) =>
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        event: "post_tool_use",
+        rawPayload: {
+          hook_event_name: "PostToolUse",
+          turn_id: turnId,
+          tool_name: "Bash",
+          tool_response: {},
+        },
+      });
+
+    expect(() =>
+      registerRetainedNativeHookRelay({
+        provider: "codex",
+        relayId,
+        generation: relayA.generation,
+        sessionId: "session-1",
+        runId: "run-b",
+        allowedEvents: ["post_tool_use"],
+        composeWithExistingRoute: true,
+        retention,
+      }),
+    ).toThrow("native hook relay route renewal failed");
+    renewRoute.mockReset().mockReturnValueOnce("renewed").mockReturnValue("unavailable");
+    const relayB = registerRetainedNativeHookRelay({
+      provider: "codex",
+      relayId,
+      generation: relayA.generation,
+      sessionId: "session-1",
+      runId: "run-b",
+      allowedEvents: ["post_tool_use"],
+      composeWithExistingRoute: true,
+      retention,
+    });
+    relayB.bindForegroundSubject("turn-b");
+
+    expect(() => relayB.activateForegroundBinding()).toThrow(
+      "native hook relay route renewal failed",
+    );
+    await expect(invoke("turn-a")).resolves.toMatchObject({ exitCode: 0 });
+    await expect(invoke("turn-b")).rejects.toThrow(
+      "native hook relay foreground invocation not allowed",
+    );
+
+    relayB.unregister();
+    relayA.unregister();
+  });
+
+  it("fails closed when foreground replacement loses route ownership", async () => {
+    const relayId = uniqueNativeHookRelayIdForTests("activation-ownership-loss");
+    const disposedA = vi.fn();
+    const disposedB = vi.fn();
+    const register = (runId: string, onDispose: () => void, compose = false) =>
+      registerRetainedNativeHookRelay({
+        provider: "codex",
+        relayId,
+        sessionId: "session-1",
+        runId,
+        allowedEvents: ["post_tool_use"],
+        ...(compose ? { composeWithExistingRoute: true } : {}),
+        retention: {
+          readClaim: readTestNativeAgentId,
+          readForegroundSubject: readTestNativeTurnId,
+          shouldRetainAfterForegroundClose: () => false,
+          allowPreToolUse: () => false,
+          onDispose,
+        },
+      });
+    register("run-a", disposedA);
+    await waitForNativeHookRelayBridgeRecord(relayId);
+    vi.spyOn(nativeHookRelayBridge, "renewNativeHookRelayBridgeRecord")
+      .mockReturnValueOnce("renewed")
+      .mockReturnValueOnce("renewed")
+      .mockReturnValue("ownership-changed");
+    const relayB = register("run-b", disposedB, true);
+
+    expect(() => relayB.activateForegroundBinding()).toThrow(
+      "native hook relay binding is inactive",
+    );
+    expect(testing.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+    expect(disposedA).toHaveBeenCalledOnce();
+    expect(disposedB).toHaveBeenCalledOnce();
+  });
+
   it("uses each binding's event set before admitting a new child", async () => {
     const relayId = uniqueNativeHookRelayIdForTests("binding-event-owner");
     const fixtureA = await createAdmittedHostCapabilityTestFixture({ runId: "run-a" });
