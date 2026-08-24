@@ -252,10 +252,10 @@ export const DEBUG_OVERLAY_SECTIONS: readonly DebugOverlaySectionDescriptor[] = 
     load: async (context, signal) => {
       const [value, systemInfo] = await Promise.all([
         context.client.request<DebugOverlayStatusSnapshot>("status", {}, { signal }),
-        context.client.request<SystemInfoResult>("system.info", {}, { signal }),
+        context.client.request<SystemInfoResult>("system.info", {}, { signal }).catch(() => null),
       ]);
       const diskSpace =
-        typeof systemInfo.diskAvailableBytes === "number" &&
+        typeof systemInfo?.diskAvailableBytes === "number" &&
         typeof systemInfo.diskTotalBytes === "number"
           ? {
               availableBytes: systemInfo.diskAvailableBytes,
