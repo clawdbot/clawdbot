@@ -777,6 +777,18 @@ function buildModelProviderMocks(baseTime: number) {
     models: [
       { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic", available: true },
       {
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        provider: "anthropic",
+        available: true,
+        contextWindow: 1_000_000,
+        contextWindows: [
+          { id: "200k", label: "200K", contextWindow: 200_000 },
+          { id: "1m", label: "1M", contextWindow: 1_000_000 },
+        ],
+        contextWindowDefault: "1m",
+      },
+      {
         id: "claude-sonnet-4-6",
         name: "Claude Sonnet 4.6",
         provider: "anthropic",

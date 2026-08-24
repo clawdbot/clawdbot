@@ -218,6 +218,7 @@ export class DraftSubmissionFlow {
       agentId: this.place.agentId,
       message: options.message ?? "",
       model: this.place.modelControl.selected,
+      contextWindow: this.place.modelControl.contextWindow,
       thinkingLevel: this.place.modelControl.thinkingLevel,
       visibility: options.visibility ?? this.visibilityValue,
       attachments: options.attachments,
