@@ -3137,6 +3137,10 @@ NODE
 
   it("bounds Android SDK command-line tools downloads", () => {
     const action = readAndroidToolchainAction();
+    const restoreStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.name === "Restore Android SDK cache"),
+      "Android SDK cache restore step",
+    );
     const setupStep = expectDefined(
       action.runs.steps.find((step: WorkflowStep) =>
         step.run?.includes("commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"),
@@ -3144,6 +3148,12 @@ NODE
       "Android SDK setup step",
     );
 
+    expect(restoreStep.with?.key).toBe(
+      "${{ runner.os }}-android-sdk-v1-cmdline-15859902-platform-37.0-build-tools-36.0.0",
+    );
+    expect(String(restoreStep.with?.["restore-keys"]).trim()).toBe(
+      "${{ runner.os }}-android-sdk-v1-cmdline-15859902-",
+    );
     expect(setupStep.run).toContain('CMDLINE_TOOLS_VERSION="15859902"');
     expect(setupStep.run).toContain(
       'CMDLINE_TOOLS_SHA256="4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583"',

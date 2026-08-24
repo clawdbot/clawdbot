@@ -48,7 +48,7 @@ runs:
         path: ~/.android-sdk
         key: ${{ runner.os }}-android-sdk-v1-cmdline-15859902-platform-37.0-build-tools-36.0.0
         restore-keys: |
-          ${{ runner.os }}-android-sdk-v1-
+          ${{ runner.os }}-android-sdk-v1-cmdline-15859902-
 
     - name: Setup Android SDK command-line tools
       shell: bash
