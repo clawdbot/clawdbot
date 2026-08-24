@@ -456,8 +456,13 @@ export async function startSecretEgressProxyServer(params: {
 
   const proxy = createHttpServer((request, response) => {
     let target: URL;
+    let host: string;
     try {
       target = new URL(request.url ?? "");
+      // `new URL` accepts hostnames normalizeHostname rejects (underscore labels are ordinary
+      // compose service names), and the proxy runs inside the Gateway process, so an escaping
+      // throw would exit it. Refuse here exactly like the CONNECT sibling does.
+      host = normalizeHostname(target.hostname);
     } catch {
       audit({
         kind: "refused",
@@ -468,7 +473,6 @@ export async function startSecretEgressProxyServer(params: {
       sendHttpRefusal(response, 400);
       return;
     }
-    const host = normalizeHostname(target.hostname);
     const authorization = authorize(request.headers);
     if (typeof authorization === "string") {
       audit({ kind: "refused", host, substituted: false, reason: authorization });

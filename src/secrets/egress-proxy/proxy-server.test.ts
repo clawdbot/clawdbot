@@ -199,6 +199,35 @@ async function forwardedRequest(auth?: string, protocol = "https"): Promise<numb
   });
 }
 
+// Absolute-form request target whose host `new URL` accepts but the proxy cannot normalize.
+// Resolves 0 if the proxy never answers, so a regression reports a failed assertion
+// instead of hanging the suite.
+async function unnormalizableForwardedRequest(): Promise<number> {
+  const proxyUrl = new URL(proxy.proxyOrigin);
+  return await new Promise<number>((resolve, reject) => {
+    const request = httpRequest(
+      {
+        hostname: proxyUrl.hostname,
+        port: proxyUrl.port,
+        path: "http://not_a_valid_host.test/probe",
+        method: "GET",
+        headers: { "Proxy-Authorization": basicProxyAuth(registeredPassword(proxyEnv)) },
+        timeout: 2_000,
+      },
+      (response) => {
+        response.resume();
+        response.once("end", () => resolve(response.statusCode ?? 0));
+      },
+    );
+    request.once("timeout", () => {
+      request.destroy();
+      resolve(0);
+    });
+    request.once("error", reject);
+    request.end();
+  });
+}
+
 function tamperSentinel(sentinel: string): string {
   const index = SECRET_SENTINEL_PREFIX.length;
   const replacement = sentinel[index] === "A" ? "B" : "A";
@@ -285,6 +314,30 @@ describe("secret egress proxy", () => {
 
     expect(uncaught).toEqual([]);
     // The listener must still serve traffic after the reset.
+    const stillAlive = await rawConnect({ auth: basicProxyAuth(registeredPassword(proxyEnv)) });
+    expect(stillAlive.response).toContain("200 Connection Established");
+    stillAlive.socket.destroy();
+  });
+
+  it("refuses a forwarded target the proxy cannot normalize instead of crashing the Gateway", async () => {
+    // `new URL` accepts hostnames the proxy rejects, so an agent running
+    // `curl http://my_service:8080/` against a compose service name reaches the request
+    // listener with an unnormalizable host. The proxy runs inside the Gateway process.
+    const uncaught: Error[] = [];
+    const onUncaught = (error: Error) => uncaught.push(error);
+    process.on("uncaughtException", onUncaught);
+    let status: number;
+    try {
+      status = await unnormalizableForwardedRequest();
+    } finally {
+      process.off("uncaughtException", onUncaught);
+    }
+
+    expect(uncaught).toEqual([]);
+    expect(status).toBe(400);
+    expect(originRequests).toEqual([]);
+    expect(auditEvents.at(-1)).toMatchObject({ kind: "refused", reason: "upstream-error" });
+    // The listener must still serve traffic after the refusal.
     const stillAlive = await rawConnect({ auth: basicProxyAuth(registeredPassword(proxyEnv)) });
     expect(stillAlive.response).toContain("200 Connection Established");
     stillAlive.socket.destroy();
