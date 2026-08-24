@@ -70,7 +70,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     toolsEnabled &&
     !params.attempt.disableTools &&
     !params.isRawModelRun &&
-    !params.attempt.forceRestartSafeTools
+    !params.attempt.forceRestartSafeTools &&
+    !params.attempt.forceCodeModeReconciliationTools
       ? params.attempt.clientTools
       : undefined;
   // Client functions share the attempt's authority; filter before their names
@@ -83,6 +84,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       : providedClientTools;
   const bundleMcpEnabled =
     !params.attempt.forceRestartSafeTools &&
+    !params.attempt.forceCodeModeReconciliationTools &&
     shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
       disableTools: params.attempt.disableTools || params.isRawModelRun,
@@ -114,6 +116,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const bundleMcpRuntime = bundleMcpSessionRuntime
     ? await materializeBundleMcpToolsForRun({
         runtime: bundleMcpSessionRuntime,
+        agentId: params.sessionAgentId,
         reservedToolNames: [
           ...tools.map((tool) => tool.name),
           ...(clientTools?.map((tool) => tool.function.name) ?? []),
@@ -124,6 +127,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   try {
     const bundleLspEnabled =
       !params.attempt.forceRestartSafeTools &&
+      !params.attempt.forceCodeModeReconciliationTools &&
       shouldCreateBundleLspRuntimeForAttempt({
         toolsEnabled,
         disableTools: params.attempt.disableTools || params.isRawModelRun,

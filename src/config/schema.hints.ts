@@ -19,6 +19,7 @@ const GROUP_HINTS = [
   ["update", "Update", 25],
   ["cli", "CLI", 26],
   ["diagnostics", "Diagnostics", 27],
+  ["telemetry", "Telemetry", 28],
   ["logging", "Logging", 900],
   ["gateway", "Gateway", 30],
   ["nodeHost", "Node Host", 35],
@@ -74,6 +75,7 @@ const SECTION_DOCS_URLS = {
   env: "https://docs.openclaw.ai/help/environment",
   auth: "https://docs.openclaw.ai/concepts/oauth",
   update: "https://docs.openclaw.ai/install/updating",
+  telemetry: "https://docs.openclaw.ai/gateway/telemetry",
   logging: "https://docs.openclaw.ai/logging",
   diagnostics: "https://docs.openclaw.ai/gateway/diagnostics",
   cli: "https://docs.openclaw.ai/cli",
@@ -104,6 +106,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.sshTarget": "user@host",
   "gateway.remote.sshHostKeyPolicy": "strict",
   "gateway.controlUi.basePath": "/openclaw",
+  "gateway.controlUi.environment.label": "edge",
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
   "gateway.push.apns.relay.baseUrl": "https://ios-push-relay.openclaw.ai",
@@ -112,15 +115,21 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
 };
 
 const CHANNEL_NAMESPACE_PREFIX = "channels.";
-const CHANNEL_KERNEL_HINT_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
+const CHANNEL_KERNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+
+/** Return whether a channel config key names a kernel-owned namespace. */
+export function isKernelOwnedChannelConfigKey(key: string): boolean {
+  return CHANNEL_KERNEL_CONFIG_KEYS.has(key);
+}
 
 function isKernelOwnedChannelHintPath(path: string): boolean {
   if (path === "channels") {
     return true;
   }
-  return CHANNEL_KERNEL_HINT_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
-  );
+  const channelKey = path.startsWith(CHANNEL_NAMESPACE_PREFIX)
+    ? path.slice(CHANNEL_NAMESPACE_PREFIX.length).split(".", 1)[0]
+    : undefined;
+  return channelKey !== undefined && isKernelOwnedChannelConfigKey(channelKey);
 }
 
 /** Return whether a channel hint path belongs to a plugin-owned channel namespace. */

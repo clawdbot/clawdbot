@@ -11,7 +11,11 @@ import { applyClawAddPlan } from "./add.js";
 import { exportClawAgent } from "./export.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { installClawMcpServers } from "./mcp.js";
-import { persistClawPackageRef, updateClawInstallRecordStatus } from "./provenance.js";
+import {
+  persistClawPackageRef,
+  updateClawInstallRecord,
+  updateClawInstallRecordStatus,
+} from "./provenance.js";
 import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawOpenClawProfile, ClawSourceIdentity } from "./types.js";
@@ -114,7 +118,7 @@ async function installedFixture(
     schemaVersion: 1,
     agent: {
       tools: {
-        profile: "coding",
+        profile: "minimal",
         alsoAllow: ["cron"],
         deny: ["exec"],
         fs: { workspaceOnly: true },
@@ -218,6 +222,72 @@ async function installedFixture(
 }
 
 describe("exportClawAgent", () => {
+  it("freezes a legacy named profile before exporting it", async () => {
+    const fixture = await installedFixture();
+    fixture.config.agents!.entries!.worker!.tools = {
+      profile: "minimal",
+      deny: ["exec"],
+    };
+    updateClawInstallRecord(
+      {
+        ...fixture.plan,
+        agent: {
+          ...fixture.plan.agent,
+          config: {
+            id: "worker",
+            ...fixture.config.agents!.entries!.worker!,
+            workspace: fixture.plan.agent.workspace,
+          },
+        },
+      },
+      { env: fixture.env },
+    );
+
+    const result = await exportClawAgent("worker", join(fixture.root, "legacy-profile-export"), {
+      env: fixture.env,
+      config: fixture.config,
+      packageDeps: fixture.packageDeps,
+      sourceMcpServers: fixture.sourceMcpServers,
+    });
+
+    expect(result.openClawProfile?.agent.tools).toMatchObject({
+      profile: "full",
+      allow: expect.arrayContaining(["session_status"]),
+      deny: ["exec"],
+    });
+    expect(result.openClawProfile?.agent.tools).not.toHaveProperty("alsoAllow");
+  });
+
+  it("rejects export of an unbounded legacy full profile", async () => {
+    const fixture = await installedFixture();
+    fixture.config.agents!.entries!.worker!.tools = { profile: "full" };
+    updateClawInstallRecord(
+      {
+        ...fixture.plan,
+        agent: {
+          ...fixture.plan.agent,
+          config: {
+            id: "worker",
+            ...fixture.config.agents!.entries!.worker!,
+            workspace: fixture.plan.agent.workspace,
+          },
+        },
+      },
+      { env: fixture.env },
+    );
+
+    await expect(
+      exportClawAgent("worker", join(fixture.root, "unbounded-profile-export"), {
+        env: fixture.env,
+        config: fixture.config,
+        packageDeps: fixture.packageDeps,
+        sourceMcpServers: fixture.sourceMcpServers,
+      }),
+    ).rejects.toMatchObject({
+      code: "tool_profile_consent_required",
+    });
+  });
+
   it("writes a grouped package from one installed agent", async () => {
     const fixture = await installedFixture({ withPackage: true });
     expect(fixture.plan.agent.config.memory?.search).toEqual({
@@ -287,10 +357,7 @@ describe("exportClawAgent", () => {
         schemaVersion: 1,
         agent: {
           tools: {
-            profile: "coding",
-            alsoAllow: ["cron"],
-            deny: ["exec"],
-            fs: { workspaceOnly: true },
+            ...fixture.plan.agent.config.tools,
           },
           memory: {
             search: {
@@ -320,11 +387,12 @@ describe("exportClawAgent", () => {
     expect(exported.manifest.metadata).toEqual({});
     expect(exported.openClawProfile).toMatchObject({
       schemaVersion: 1,
-      agent: { tools: { profile: "coding" } },
+      agent: { tools: fixture.plan.agent.config.tools },
     });
+    expect(exported.openClawProfile?.agent.tools).not.toHaveProperty("alsoAllow");
     expect(exported.manifest.workspace.bootstrapFiles).not.toHaveProperty("SOUL.md");
     await expect(readFile(join(out, "profiles", "openclaw.yml"), "utf8")).resolves.toContain(
-      "profile: coding",
+      "profile: full",
     );
     await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).rejects.toThrow();
   });

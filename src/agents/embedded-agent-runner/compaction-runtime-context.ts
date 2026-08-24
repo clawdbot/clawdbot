@@ -6,7 +6,6 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
-import { resolveAgentConfig } from "../agent-scope.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
@@ -72,8 +71,9 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   sessionKey?: string;
   agentRuntime?: string | null;
 }): ThinkLevel {
+  const configuredLevel = params.config?.agents?.defaults?.compaction?.thinkingLevel;
   const requestedLevel =
-    params.config?.agents?.defaults?.compaction?.thinkingLevel ?? params.inheritedLevel;
+    configuredLevel === "inherit" ? params.inheritedLevel : (configuredLevel ?? "low");
   if (!requestedLevel) {
     return "off";
   }
@@ -282,10 +282,7 @@ export function resolveCompactionContextTokenBudget(params: {
   requestedTokenBudget?: number;
   fallbackTokenBudget?: number;
 }) {
-  // Caller budgets stay bounded by the selected agent and model ceilings.
-  const agentContextTokens = params.agentId
-    ? resolveAgentConfig(params.config ?? {}, params.agentId)?.contextTokens
-    : undefined;
+  // Caller budgets stay bounded by the selected model ceiling.
   const resolvedBudget =
     normalizeContextTokenBudget(
       resolveContextWindowInfo({
@@ -294,7 +291,6 @@ export function resolveCompactionContextTokenBudget(params: {
         modelId: params.modelId,
         modelContextTokens: readAgentModelContextTokens(params.model),
         modelContextWindow: params.model?.contextWindow,
-        agentContextTokens,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,
     ) ?? DEFAULT_CONTEXT_TOKENS;
@@ -351,6 +347,8 @@ export function buildEmbeddedCompactionRuntimeContext(
     modelSelectionLocked: params.modelSelectionLocked,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
     agentDir: params.agentDir,
     config: params.config,
     toolOverrides: params.toolOverrides,
@@ -363,6 +361,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     modelFallbacksOverride: params.modelFallbacksOverride,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
+    execOverrides: params.execOverrides,
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

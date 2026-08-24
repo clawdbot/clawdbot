@@ -3,10 +3,12 @@ import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
+import type { GatewaySessionRow } from "../api/types.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
+  startControlUiE2eServer,
   waitForConfirmModal,
   type MockGatewayControls,
   type MockGatewayRequest,
@@ -24,9 +26,10 @@ export const uiProofArtifactDir = path.join(
   "thread-management",
 );
 
-export function createSessionManagementE2eSuite() {
+export function createSessionManagementE2eSuite(source = false) {
   return createControlUiE2eSuite({
     name: "Control UI session management mocked Gateway E2E",
+    ...(source ? { startServer: () => startControlUiE2eServer(undefined, { source: true }) } : {}),
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
   });
@@ -43,6 +46,8 @@ export function sessionRow(
     pinned?: boolean;
     pinnedAt?: number;
     hasActiveRun?: boolean;
+    hasAutomation?: GatewaySessionRow["hasAutomation"];
+    incognito?: GatewaySessionRow["incognito"];
     unread?: boolean;
     status?: string;
     spawnedBy?: string;
@@ -160,6 +165,37 @@ export function actionOpacity(button: Locator): Promise<string> {
 
 export function actionPointerEvents(button: Locator): Promise<string> {
   return button.evaluate((element) => globalThis.getComputedStyle(element).pointerEvents);
+}
+
+function measureMarqueeLabel(
+  label: Locator,
+): Promise<{ scrollWidth: number; viewportWidth: number }> {
+  return label.evaluate((element) => {
+    const viewport = element.parentElement;
+    if (!(viewport instanceof HTMLElement)) {
+      throw new Error("Marquee label must have an HTMLElement viewport");
+    }
+    const style = getComputedStyle(viewport);
+    return {
+      scrollWidth: element.scrollWidth,
+      viewportWidth:
+        viewport.clientWidth -
+        (Number.parseFloat(style.paddingLeft) || 0) -
+        (Number.parseFloat(style.paddingRight) || 0),
+    };
+  });
+}
+
+export async function expectHoverMarqueeAfterActionsAppear(row: Locator): Promise<void> {
+  const label = row.locator(".sidebar-recent-session__name");
+  const resting = await measureMarqueeLabel(label);
+  expect(resting.scrollWidth, JSON.stringify(resting)).toBeLessThanOrEqual(resting.viewportWidth);
+  await row.hover();
+  const hovered = await measureMarqueeLabel(label);
+  expect(hovered.scrollWidth, JSON.stringify(hovered)).toBeGreaterThan(hovered.viewportWidth);
+  await expect
+    .poll(() => label.evaluate((element) => element.classList.value), { timeout: 1_500 })
+    .toContain("hover-marquee--scrolling");
 }
 
 /**

@@ -1,4 +1,5 @@
 // Telegram rich-blocks unit tests for Bot API 10.2 InputRichBlock emission.
+import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
 import { markdownToTelegramHtml } from "./format.js";
 import {
@@ -270,7 +271,14 @@ describe("markdownToTelegramRichBlocks", () => {
     const { blocks } = markdownToTelegramRichBlocks("**start https://example.com** end");
     const text = blocks[0] && blocks[0].type === "paragraph" ? blocks[0].text : "";
     expect(hasStyle(text, "bold")).toBe(true);
-    expect(collectUrls(text)).toEqual(["https://example.com"]);
+    expect(collectUrls(text)).toEqual([]);
+  });
+
+  it("leaves bare URL query separators to Telegram entity detection", () => {
+    const url = "https://example.com/wp-admin/post.php?post=100&action=edit";
+    const { blocks } = markdownToTelegramRichBlocks(url);
+
+    expect(blocks).toEqual([{ type: "paragraph", text: url }]);
   });
 
   it("emits pre blocks with fence language", () => {
@@ -327,6 +335,37 @@ describe("markdownToTelegramRichBlocks", () => {
     expect(degradationReasons).toEqual(["table-ascii"]);
     expect(blocks.some((block) => block.type === "pre")).toBe(true);
     expect(blocks.some((block) => block.type === "table")).toBe(false);
+  });
+
+  it("aligns Unicode cells when wide tables degrade to ASCII", () => {
+    const header = `| ${Array.from({ length: 21 }, (_value, index) => `H${index + 1}`).join(" | ")} |`;
+    const separator = `| ${Array.from({ length: 21 }, () => "---").join(" | ")} |`;
+    const values = [
+      "小明",
+      "✅",
+      "⌚",
+      "⚽",
+      "👨‍👩‍👧",
+      "🇨🇳",
+      "1⃣",
+      "1️⃣",
+      "❤",
+      "❤️",
+      "©",
+      "©️",
+      "cafe\u0301",
+      ...Array.from({ length: 8 }, (_value, index) => String(index + 14)),
+    ];
+    const row = `| ${values.join(" | ")} |`;
+    const { blocks } = markdownToTelegramRichBlocks([header, separator, row].join("\n"), {
+      tableMode: "block",
+    });
+    const pre = blocks.find((block) => block.type === "pre");
+    expect(pre?.type).toBe("pre");
+    if (pre?.type !== "pre") {
+      return;
+    }
+    expect(new Set(pre.text.split("\n").map((line) => stringWidth(line))).size).toBe(1);
   });
 
   it("uses code tables when tableMode is code", () => {

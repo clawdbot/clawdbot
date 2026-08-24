@@ -24,8 +24,6 @@ const scriptEntries = productionConfig.workspaces["."].entry.filter(
 
 const repositoryToolEntries = [
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
-  ".github/actions/register-bind-mount-cleanup/main.cjs!",
-  ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
@@ -58,6 +56,10 @@ const config = {
     ],
     // Oxlint consumes this required default export through a JSON config path.
     "scripts/oxlint-boundary-guards.mjs": ["exports"],
+    // Wrangler consumes the Worker default export and instantiates the Durable
+    // Object class by name from wrangler.jsonc; Knip cannot resolve either.
+    "scripts/cloudflare/src/index.ts": ["exports"],
+    "scripts/cloudflare/src/container.ts": ["exports"],
     "src/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     "test/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
   },

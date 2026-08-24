@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  resolveControlUiDistIndexHealth,
+  resolveControlUiAssetHealth,
   resolveControlUiDistIndexPathForRoot,
 } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
@@ -71,7 +71,7 @@ export async function updateGitCheckout(params: {
   const devTarget = channel === "dev" ? opts.devTarget : undefined;
   const hasDevTarget = devTarget !== undefined;
   const needsCheckoutMain = channel === "dev" && !hasDevTarget && branch !== DEV_BRANCH;
-  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
+  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 9;
   const steps: UpdateStepResult[] = [];
   let stepIndex = 0;
   const step = (
@@ -100,9 +100,6 @@ export async function updateGitCheckout(params: {
   let liveBuildStarted = false;
   let recovery: UpdateRunResult["recovery"];
   const prepareMutation = async (revision: string) => {
-    if (mutationPrepared) {
-      return;
-    }
     const preparation = await prepareGitMutation({
       runCommand,
       root: gitRoot,
@@ -110,12 +107,8 @@ export async function updateGitCheckout(params: {
       timeoutMs,
       beforeGitMutation: opts.beforeGitMutation,
     });
-    if (typeof preparation.allowGatewayServiceRepair === "boolean") {
-      allowGatewayServiceRepair = preparation.allowGatewayServiceRepair;
-    }
-    if (typeof preparation.allowGatewayActivation === "boolean") {
-      allowGatewayActivation = preparation.allowGatewayActivation;
-    }
+    allowGatewayServiceRepair = preparation.allowGatewayServiceRepair ?? allowGatewayServiceRepair;
+    allowGatewayActivation = preparation.allowGatewayActivation ?? allowGatewayActivation;
     mutationPrepared = true;
   };
   const buildError = (reason: string, status: "error" | "skipped" = "error"): UpdateRunResult => ({
@@ -459,8 +452,8 @@ export async function updateGitCheckout(params: {
     if (buildCleanCheck.stdoutTail?.trim()) {
       return await rollbackError("build-dirty");
     }
-    const builtUiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
-    if (!builtUiIndexHealth.exists) {
+    const builtUiHealth = await resolveControlUiAssetHealth({ root: gitRoot });
+    if (builtUiHealth.kind !== "ready") {
       const uiBuildStep = await runStep(
         step(
           "ui:build (build fallback)",
@@ -519,13 +512,12 @@ export async function updateGitCheckout(params: {
       return await rollbackError("doctor-failed");
     }
 
-    const uiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
-    if (!uiIndexHealth.exists) {
-      const repairArgv = managerScriptArgs(manager.manager, "ui:build");
+    const uiHealth = await resolveControlUiAssetHealth({ root: gitRoot });
+    if (uiHealth.kind !== "ready") {
       const repairStep = await runStep({
         runCommand,
         name: "ui:build (post-doctor repair)",
-        argv: repairArgv,
+        argv: managerScriptArgs(manager.manager, "ui:build"),
         cwd: gitRoot,
         timeoutMs,
         env: manager.env,
@@ -536,8 +528,8 @@ export async function updateGitCheckout(params: {
       if (repairStep.exitCode !== 0) {
         return await rollbackError("ui-build-failed");
       }
-      const repairedHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
-      if (!repairedHealth.exists) {
+      const repairedHealth = await resolveControlUiAssetHealth({ root: gitRoot });
+      if (repairedHealth.kind !== "ready") {
         const uiIndexPath =
           repairedHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(gitRoot);
         steps.push({
@@ -546,7 +538,10 @@ export async function updateGitCheckout(params: {
           cwd: gitRoot,
           durationMs: 0,
           exitCode: 1,
-          stderrTail: `missing ${uiIndexPath}`,
+          stderrTail:
+            repairedHealth.kind === "incomplete"
+              ? `missing startup asset ${repairedHealth.missingAsset} referenced by ${uiIndexPath}`
+              : `missing ${uiIndexPath}`,
         });
         return await rollbackError("ui-assets-missing");
       }

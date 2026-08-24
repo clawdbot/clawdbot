@@ -4,11 +4,12 @@
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { BrowserTabOwnership } from "./client.types.js";
 import type { ResolvedBrowserConfig } from "./config.js";
+import type { BrowserSessionTabRoute } from "./session-tab-route.js";
 
 type TabIdentity = {
   sessionKey?: string;
   targetId?: string;
-  baseUrl?: string;
+  route?: BrowserSessionTabRoute;
   profile?: string;
   profileAliases?: Array<string | undefined>;
   ownership?: BrowserTabOwnership;

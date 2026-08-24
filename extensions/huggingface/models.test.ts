@@ -1,5 +1,4 @@
 // Huggingface tests cover models plugin behavior.
-import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,17 +6,6 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   isHuggingfacePolicyLocked,
 } from "./api.js";
-
-const ORIGINAL_VITEST = process.env.VITEST;
-const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
-
-function restoreEnv(key: "VITEST" | "NODE_ENV", value: string | undefined) {
-  if (value === undefined) {
-    delete process.env[key];
-  } else {
-    process.env[key] = value;
-  }
-}
 
 function stubAbortSignalTimeout() {
   const controller = new AbortController();
@@ -34,8 +22,6 @@ function responseFromReader(reader: ReadableStreamDefaultReader<Uint8Array>): Re
 }
 
 afterEach(() => {
-  restoreEnv("VITEST", ORIGINAL_VITEST);
-  restoreEnv("NODE_ENV", ORIGINAL_NODE_ENV);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -53,15 +39,7 @@ describe("huggingface models", () => {
     expect(models.map((m) => m.id)).toEqual(HUGGINGFACE_MODEL_CATALOG.map((m) => m.id));
   });
 
-  it("discoverHuggingfaceModels returns static catalog in test env (VITEST)", async () => {
-    const models = await discoverHuggingfaceModels("hf_test_token");
-    expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
-    expect(expectDefined(models[0], "first Hugging Face model").id).toBe("deepseek-ai/DeepSeek-R1");
-  });
-
   it("uses the default discovery timeout for live Hugging Face fetches", async () => {
-    process.env.VITEST = "false";
-    process.env.NODE_ENV = "development";
     const timeoutSpy = stubAbortSignalTimeout();
     vi.stubGlobal(
       "fetch",
@@ -77,8 +55,6 @@ describe("huggingface models", () => {
   });
 
   it("accepts a custom discovery timeout override", async () => {
-    process.env.VITEST = "false";
-    process.env.NODE_ENV = "development";
     const timeoutSpy = stubAbortSignalTimeout();
     vi.stubGlobal(
       "fetch",
@@ -94,8 +70,6 @@ describe("huggingface models", () => {
   });
 
   it("caps oversized live discovery timeout overrides", async () => {
-    process.env.VITEST = "false";
-    process.env.NODE_ENV = "development";
     const timeoutSpy = stubAbortSignalTimeout();
     vi.stubGlobal(
       "fetch",
@@ -111,8 +85,6 @@ describe("huggingface models", () => {
   });
 
   it("cancels the response body before falling back after an HTTP error", async () => {
-    process.env.VITEST = "false";
-    process.env.NODE_ENV = "development";
     stubAbortSignalTimeout();
     const response = new Response("unavailable", { status: 503 });
     const cancel = vi.spyOn(response.body!, "cancel");
@@ -130,8 +102,6 @@ describe("huggingface models", () => {
   });
 
   it("falls back to the static catalog when the discovery response exceeds the byte cap", async () => {
-    process.env.VITEST = "false";
-    process.env.NODE_ENV = "development";
     const chunk = new Uint8Array(1024 * 1024);
     const read = vi.fn(async () => ({ done: false as const, value: chunk }));
     const cancel = vi.fn(async () => undefined);
@@ -155,8 +125,6 @@ describe("huggingface models", () => {
   });
 
   it("parses a valid bounded discovery response", async () => {
-    process.env.VITEST = "false";
-    process.env.NODE_ENV = "development";
     const modelId = "test-org/test-model";
     const body = new TextEncoder().encode(JSON.stringify({ data: [{ id: modelId }] }));
     const read = vi

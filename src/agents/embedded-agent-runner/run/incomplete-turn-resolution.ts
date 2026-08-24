@@ -3,8 +3,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
+import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
+import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
@@ -36,6 +39,12 @@ type RunLivenessAttempt = Pick<
   "lastAssistant" | "replayMetadata" | "terminal"
 >;
 
+type TerminalAuthFailureContext = {
+  assistantProfileFailureReason?: AuthProfileFailureReason | null;
+  provider: string;
+  runParams: Pick<Parameters<typeof buildProviderAuthRecoveryHint>[0], "config" | "workspaceDir">;
+};
+
 /**
  * Builds the user-visible incomplete-turn warning when a terminal attempt did
  * not produce a safe final assistant response and no committed delivery/progress
@@ -47,6 +56,8 @@ export function resolveIncompleteTurnPayloadText(params: {
   externalAbort: boolean;
   timedOut: boolean;
   hadPotentialSideEffects?: boolean;
+  hasIntentionalTerminalCompletion?: boolean;
+  terminalAuthFailure?: TerminalAuthFailureContext;
   attempt: IncompleteTurnAttempt;
 }): string | null {
   // Prefer the current attempt's terminal message. The session fallback can
@@ -54,8 +65,9 @@ export function resolveIncompleteTurnPayloadText(params: {
   const assistantState = classifyAssistantTurn(params);
   const assistant = assistantState.assistant;
   const hasTerminalOutput = hasAttemptTerminalState(params.attempt);
-  // Tool-use expects a post-tool continuation, while length means the output
-  // budget ended. Partial visible text completes neither. (#76477)
+  // Tool-use expects a post-tool continuation, so partial visible text completes
+  // nothing. A length stop that did produce visible text is a partial answer and
+  // is delivered with a truncation notice instead. (#76477)
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
     hasTerminalOutput,
@@ -77,7 +89,8 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError
+    params.attempt.lastToolError ||
+    params.hasIntentionalTerminalCompletion
   ) {
     return null;
   }
@@ -114,9 +127,25 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  return params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects
-    ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
-    : "⚠️ Agent couldn't generate a response. Please try again.";
+  if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
+    return "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.";
+  }
+  const authFailure = params.terminalAuthFailure;
+  const reason = authFailure?.assistantProfileFailureReason;
+  if (authFailure && (reason === "auth" || reason === "auth_permanent")) {
+    return renderAuthProfileFailoverCopy({
+      reason,
+      provider: authFailure.provider,
+      allInCooldown: false,
+      recoveryHint: buildProviderAuthRecoveryHint({
+        provider: authFailure.provider,
+        config: authFailure.runParams.config,
+        workspaceDir: authFailure.runParams.workspaceDir,
+        env: process.env,
+      }),
+    });
+  }
+  return "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
 /**
@@ -182,6 +211,7 @@ interface YieldContinuationAttempt {
   didSendDeterministicApprovalPrompt?: boolean;
   successfulCronAdds?: number;
   acceptedSessionSpawns?: readonly { runId: string; childSessionKey: string }[];
+  runtimeContinuationStarted?: boolean;
   messagingToolSentTexts?: readonly string[];
   messagingToolSentMediaUrls?: readonly string[];
   messagingToolSentTargets?: readonly MessagingToolSend[];
@@ -201,6 +231,7 @@ export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt):
       messagingToolSentTargets: attempt.messagingToolSentTargets ?? [],
     }) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
+    attempt.runtimeContinuationStarted === true ||
     hasAsyncActivity(attempt.toolMetas) ||
     (attempt.successfulCronAdds ?? 0) > 0
   );
@@ -208,6 +239,9 @@ export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt):
 
 export const YIELD_DIAGNOSTIC_TEXT =
   "⚠️ Turn yielded without a continuation source. Send a message to resume.";
+
+export const TRUNCATED_REPLY_NOTICE_TEXT =
+  "⚠️ Reply truncated at the model's output token limit. The text above is partial — ask to continue it.";
 
 function isToolResultRole(role: string): boolean {
   return role === "toolresult" || role === "tool_result" || role === "tool";

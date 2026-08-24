@@ -17,6 +17,7 @@ scenario:
     - The runtime injects the visible-answer continuation instruction after the empty turn.
     - The authenticated read result survives the empty turn and canonical retry unchanged.
     - The final visible reply contains the exact recovery marker.
+    - The host-private recovery prompt never appears in the durable transcript.
   docsRefs:
     - docs/help/testing.md
   codeRefs:
@@ -96,6 +97,8 @@ flow:
           args:
             - ref: env
             - ref: sessionKey
+            - probeText:
+                ref: config.retryNeedle
         - if:
             expr: "Boolean(env.mock)"
             then:
@@ -120,9 +123,13 @@ flow:
                   expr: "[scenarioRequests[1], scenarioRequests[2]].every((request) => String(request.toolOutput ?? '').includes(config.evidenceNonce) && String(request.allInputText ?? '').includes(config.evidenceNonce))"
                   message: authenticated read nonce did not survive into both post-tool requests
         - assert:
-            expr: "transcript.userMessageCount === 2 && transcript.assistantToolCallCounts.read === 1 && transcript.completedToolCallCounts.read === 1 && transcript.successfulToolCallCounts.read === 1 && transcript.finalText.includes(config.expectedReply)"
+            expr: "transcript.userMessageCount === 1 && transcript.assistantToolCallCounts.read === 1 && transcript.completedToolCallCounts.read === 1 && transcript.successfulToolCallCounts.read === 1 && transcript.finalText.includes(config.expectedReply)"
             message:
               expr: "`recovery transcript lost requester, read-result, or final evidence: ${JSON.stringify(transcript)}`"
+        - assert:
+            expr: "transcript.probeTextEndLine === undefined"
+            message:
+              expr: "`host-private recovery prompt leaked into the durable transcript: ${JSON.stringify(transcript)}`"
         - assert:
             expr: "scenarioOutbound.length === 1 && scenarioOutbound[0]?.text.trim() === config.expectedReply && !scenarioOutbound[0].text.trim().startsWith('⚠️')"
             message:

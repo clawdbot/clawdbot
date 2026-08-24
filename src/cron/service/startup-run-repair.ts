@@ -1,18 +1,19 @@
 /** Repairs interrupted and finalized cron runs while the service starts. */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
+import { resolveCronCompletionStatus } from "../completion-status.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
+import { finalizeCronFailureNotifications, resolveFailureAlert } from "./failure-alerts.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
+import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
 import {
   applyJobResult,
   applyScriptRunResult,
-  applyTriggerRunResult,
-  type CronTriggerEvalOutcome,
-} from "./timer.js";
+  applyTriggerNoFireResult,
+} from "./timer-outcomes.js";
+import { applyTriggerRunResult, resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
 
 export const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
 
@@ -37,20 +38,6 @@ function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): numbe
   return parseAbsoluteTimeMs(job.schedule.at) === nextRunAtMs ? nextRunAtMs : undefined;
 }
 
-function resolveInterruptedStartupFailureNotificationStatus(params: {
-  state: CronServiceState;
-  job: CronJob;
-}) {
-  if (params.job.delivery?.bestEffort === true) {
-    return "not-requested";
-  }
-  if (resolveFailureDestination(params.job, params.state.deps.cronConfig?.failureAlert)) {
-    return "unknown";
-  }
-  const primaryPlan = resolveCronDeliveryPlan(params.job);
-  return primaryPlan.mode === "announce" && primaryPlan.requested ? "unknown" : "not-requested";
-}
-
 export function markInterruptedStartupRun(params: {
   state: CronServiceState;
   job: CronJob;
@@ -63,10 +50,6 @@ export function markInterruptedStartupRun(params: {
   const replacementAtMs = resolveOneShotReplacementAtMs(job, runningAtMs);
   // A persisted running marker means the gateway stopped mid-run; mark it as a
   // normal failed run so retries, alerts, and run logs all see one outcome.
-  const failureNotificationStatus = resolveInterruptedStartupFailureNotificationStatus({
-    state: params.state,
-    job,
-  });
   const previousErrors =
     typeof job.state.consecutiveErrors === "number" && Number.isFinite(job.state.consecutiveErrors)
       ? Math.max(0, Math.floor(job.state.consecutiveErrors))
@@ -89,24 +72,36 @@ export function markInterruptedStartupRun(params: {
   job.state.lastDeliveryStatus = "unknown";
   job.state.lastDeliveryError = STARTUP_INTERRUPTED_ERROR;
   job.state.lastFailureNotificationDelivered = undefined;
-  job.state.lastFailureNotificationDeliveryStatus = failureNotificationStatus;
+  job.state.lastFailureNotificationDeliveryStatus = "not-requested";
   job.state.lastFailureNotificationDeliveryError = undefined;
   job.state.nextRunAtMs = replacementAtMs;
   job.updatedAtMs = nowMs;
 
-  if (
-    maybeAutoDisableCronJobAfterRunFailure({
-      state: params.state,
-      job,
-      atMs: nowMs,
-      deferredNotifications: params.deferredNotifications,
-    })
-  ) {
+  const alertConfig = resolveFailureAlert(params.state, job);
+  const autoDisableNotificationOwnsFailure = maybeAutoDisableCronJobAfterRunFailure({
+    state: params.state,
+    job,
+    atMs: nowMs,
+    deferredNotifications: params.deferredNotifications,
+  });
+  if (autoDisableNotificationOwnsFailure) {
     params.state.deps.log.error(
       { jobId: job.id, name: job.name, consecutiveErrors: job.state.consecutiveErrors },
       "cron: auto-disabled interrupted job after consecutive run failures",
     );
   }
+  finalizeCronFailureNotifications(params.state, {
+    job,
+    alertConfig,
+    result: {
+      status: "error",
+      error: STARTUP_INTERRUPTED_ERROR,
+      startedAt: runningAtMs,
+    },
+    completionFailed: false,
+    autoDisableNotificationOwnsFailure,
+    deferredNotifications: params.deferredNotifications,
+  });
 
   if (job.schedule.kind === "at" && replacementAtMs === undefined) {
     job.enabled = false;
@@ -142,11 +137,33 @@ export function restoreFinalizedStartupRun(params: {
   }
   const replacementAtMs = resolveOneShotReplacementAtMs(job, startedAt);
   const scheduleOwnership = replacementAtMs === undefined ? "current" : "stale";
+  if (params.triggerEval?.fired === false) {
+    applyTriggerNoFireResult(
+      state,
+      job,
+      { startedAt, endedAt, triggerEval: params.triggerEval },
+      {
+        scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance",
+        deferredNotifications: params.deferredNotifications,
+      },
+    );
+    return {
+      shouldDelete: false,
+      ...(replacementAtMs === undefined ? {} : { replacementAtMs }),
+    };
+  }
   const shouldDelete = applyJobResult(
     state,
     job,
     {
       ...entry,
+      completionStatus:
+        entry.completionStatus ??
+        resolveCronCompletionStatus({
+          status: entry.status,
+          delivered: entry.delivered,
+          deliveryStatus: entry.deliveryStatus,
+        }),
       startedAt,
       endedAt,
     },
@@ -163,9 +180,11 @@ export function restoreFinalizedStartupRun(params: {
   job.state.lastDelivered = entry.delivered;
   job.state.lastDeliveryStatus = entry.deliveryStatus;
   job.state.lastDeliveryError = entry.deliveryError;
-  job.state.lastFailureNotificationDelivered = entry.failureNotificationDelivery?.delivered;
-  job.state.lastFailureNotificationDeliveryStatus = entry.failureNotificationDelivery?.status;
-  job.state.lastFailureNotificationDeliveryError = entry.failureNotificationDelivery?.error;
+  if (entry.failureNotificationDelivery) {
+    job.state.lastFailureNotificationDelivered = entry.failureNotificationDelivery.delivered;
+    job.state.lastFailureNotificationDeliveryStatus = entry.failureNotificationDelivery.status;
+    job.state.lastFailureNotificationDeliveryError = entry.failureNotificationDelivery.error;
+  }
   const finalizedNextRunAtMs = replacementAtMs ?? entry.nextRunAtMs;
   job.state.nextRunAtMs =
     job.state.autoDisabled || finalizedNextRunAtMs === undefined
@@ -209,33 +228,4 @@ export function restoreFinalizedStartupRun(params: {
     shouldDelete,
     ...(replacementAtMs === undefined ? {} : { replacementAtMs }),
   };
-}
-
-export function mergeManualRunSnapshotAfterReload(params: {
-  state: CronServiceState;
-  jobId: string;
-  snapshot: {
-    enabled: boolean;
-    updatedAtMs: number;
-    state: CronJob["state"];
-  } | null;
-  removed: boolean;
-}) {
-  if (!params.state.store) {
-    return;
-  }
-  if (params.removed) {
-    params.state.store.jobs = params.state.store.jobs.filter((job) => job.id !== params.jobId);
-    return;
-  }
-  if (!params.snapshot) {
-    return;
-  }
-  const reloaded = params.state.store.jobs.find((job) => job.id === params.jobId);
-  if (!reloaded) {
-    return;
-  }
-  reloaded.enabled = params.snapshot.enabled;
-  reloaded.updatedAtMs = params.snapshot.updatedAtMs;
-  reloaded.state = params.snapshot.state;
 }

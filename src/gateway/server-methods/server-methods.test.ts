@@ -15,11 +15,13 @@ import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
-  clearContextEnginesForOwner,
   registerContextEngineForOwner,
   resolveContextEngine,
 } from "../../context-engine/registry.js";
-import { resetContextEngineRuntimeQuarantineForTests } from "../../context-engine/registry.test-support.js";
+import {
+  captureContextEngineRegistryStateForTests,
+  resetContextEngineRuntimeQuarantineForTests,
+} from "../../context-engine/registry.test-support.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -38,7 +40,8 @@ import {
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { createChatRunState } from "../server-chat-state.js";
+import type { HealthSummary } from "../health/types.js";
+import { createChatAbortMarker, createChatRunState } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -887,7 +890,12 @@ describe("sanitizeChatHistoryMessages", () => {
     );
 
     expect(result).toEqual([
-      assistantHistoryMessage(`${prefix}\n...(truncated)...`, { timestamp: 1 }),
+      assistantHistoryMessage(`${prefix}\n...(truncated)...`, {
+        timestamp: 1,
+        // The display cap is recorded structurally so consumers need not sniff
+        // the in-band sentinel to know the row is a bounded preview.
+        __openclaw: { truncated: true, reason: "display-cap" },
+      }),
     ]);
   });
 
@@ -1019,26 +1027,121 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
-  it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
-    const result = sanitizeChatHistoryMessages([
-      userHistoryMessage("hello", { timestamp: 1 }),
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "thinking like caveman",
-            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-          },
-        ],
-        timestamp: 2,
-      },
-      assistantHistoryMessage("real reply", { timestamp: 3 }),
-    ]);
+  it("projects keyed commentary entries into durable preamble rows", () => {
+    const result = sanitizeChatHistoryMessages(
+      [
+        userHistoryMessage("hello", { timestamp: 1 }),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "thinking like caveman",
+              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+            },
+          ],
+          timestamp: 2,
+        },
+        assistantHistoryMessage("real reply", { timestamp: 3 }),
+      ],
+      undefined,
+      { includeCommentaryFallbacks: true },
+    );
 
     expect(result).toEqual([
       userHistoryMessage("hello", { timestamp: 1 }),
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "thinking like caveman" }],
+        timestamp: 2,
+        openclawStreamFallback: {
+          replacementText: "thinking like caveman",
+          source: "segment",
+          itemId: "msg_commentary",
+        },
+      },
       assistantHistoryMessage("real reply", { timestamp: 3 }),
+    ]);
+  });
+
+  it("uses one capped text value for commentary content and fallback metadata", () => {
+    const fullText = "A long commentary message that must be capped";
+    const [fallback] = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: fullText,
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "msg_commentary",
+                phase: "commentary",
+              }),
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      12,
+      { includeCommentaryFallbacks: true },
+    ) as Array<{
+      content: Array<{ text: string }>;
+      openclawStreamFallback: { replacementText: string };
+    }>;
+
+    expect(fallback?.openclawStreamFallback.replacementText).toBe(fallback?.content[0]?.text);
+    expect(fallback?.openclawStreamFallback.replacementText).not.toBe(fullText);
+  });
+
+  it("splits commentary from final text and tool history", () => {
+    const toolCall = {
+      type: "toolCall",
+      id: "call-1",
+      name: "read",
+      arguments: { path: "README.md" },
+    };
+    const result = sanitizeChatHistoryMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Checking the file",
+              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+            },
+            toolCall,
+            {
+              type: "text",
+              text: "Done.",
+              textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      undefined,
+      { includeCommentaryFallbacks: true },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Checking the file" }],
+        timestamp: 2,
+        openclawStreamFallback: {
+          replacementText: "Checking the file",
+          source: "segment",
+          itemId: "msg_commentary",
+        },
+      },
+      {
+        role: "assistant",
+        content: [toolCall, { type: "text", text: "Done." }],
+        timestamp: 2,
+      },
     ]);
   });
 });
@@ -1317,7 +1420,7 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
-  it.each(["[[reply_to_current]]", "NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
+  it.each(["NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
     "projects display-hidden assistant error text %j as a generic safe failure",
     (text) => {
       const result = projectRecentChatDisplayMessages([
@@ -1745,21 +1848,59 @@ describe("projectRecentChatDisplayMessages", () => {
   });
 
   it("preserves structured trace alongside visible assistant progress text", () => {
-    const result = projectRecentChatDisplayMessages([
-      userHistoryMessage("fix it", { timestamp: 1 }),
+    const result = projectRecentChatDisplayMessages(
+      [
+        userHistoryMessage("fix it", { timestamp: 1 }),
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "private reasoning" },
+            {
+              type: "text",
+              text: "I will clean that up now.",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "msg-progress",
+                phase: "commentary",
+              }),
+            },
+            {
+              type: "toolCall",
+              id: "call-read",
+              name: "read",
+              arguments: { path: "AGENTS.md" },
+            },
+          ],
+          timestamp: 2,
+          __openclaw: { seq: 2 },
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-read",
+          toolName: "read",
+          content: [{ type: "text", text: "file contents" }],
+          timestamp: 3,
+        },
+      ],
+      { includeCommentaryFallbacks: true },
+    );
+
+    expect(result.slice(1, 3)).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "I will clean that up now." }],
+        timestamp: 2,
+        __openclaw: { seq: 2 },
+        openclawStreamFallback: {
+          replacementText: "I will clean that up now.",
+          source: "segment",
+          itemId: "msg-progress",
+        },
+      },
       {
         role: "assistant",
         content: [
           { type: "thinking", thinking: "private reasoning" },
-          {
-            type: "text",
-            text: "I will clean that up now.",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "msg-progress",
-              phase: "commentary",
-            }),
-          },
           {
             type: "toolCall",
             id: "call-read",
@@ -1770,53 +1911,45 @@ describe("projectRecentChatDisplayMessages", () => {
         timestamp: 2,
         __openclaw: { seq: 2 },
       },
-      {
-        role: "toolResult",
-        toolCallId: "call-read",
-        toolName: "read",
-        content: [{ type: "text", text: "file contents" }],
-        timestamp: 3,
-      },
     ]);
-
-    expect(result[1]).toEqual({
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "private reasoning" },
-        { type: "text", text: "I will clean that up now." },
-        {
-          type: "toolCall",
-          id: "call-read",
-          name: "read",
-          arguments: { path: "AGENTS.md" },
-        },
-      ],
-      timestamp: 2,
-      __openclaw: { seq: 2 },
-    });
   });
 
-  it("keeps pure commentary assistant messages hidden", () => {
-    const result = projectRecentChatDisplayMessages([
+  it("projects pure keyed commentary as a durable preamble", () => {
+    const result = projectRecentChatDisplayMessages(
+      [
+        userHistoryMessage("status", { timestamp: 1 }),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Working...",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "msg-commentary",
+                phase: "commentary",
+              }),
+            },
+          ],
+          timestamp: 2,
+        },
+      ],
+      { includeCommentaryFallbacks: true },
+    );
+
+    expect(result).toEqual([
       userHistoryMessage("status", { timestamp: 1 }),
       {
         role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "Working...",
-            textSignature: JSON.stringify({
-              v: 1,
-              id: "msg-commentary",
-              phase: "commentary",
-            }),
-          },
-        ],
+        content: [{ type: "text", text: "Working..." }],
         timestamp: 2,
+        openclawStreamFallback: {
+          replacementText: "Working...",
+          source: "segment",
+          itemId: "msg-commentary",
+        },
       },
     ]);
-
-    expect(result).toEqual([userHistoryMessage("status", { timestamp: 1 })]);
   });
 
   it("drops duplicate ACP gateway-injected assistant replies from chat history", () => {
@@ -2057,27 +2190,13 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
-  it("merges delayed TTS supplements when directive tags are stripped for display", () => {
-    const rawVisibleText = "[[reply_to_current]]Visible answer.";
-    const projectedVisibleText = "Visible answer.";
-    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
-
-    const result = projectRecentChatDisplayMessages([
-      assistantHistoryMessage(rawVisibleText, { timestamp: 1 }),
-      ttsSupplementHistoryMessage({ textSha256 }, 2),
-    ]);
-
-    expect(result).toEqual([assistantAudioAttachmentHistoryMessage(projectedVisibleText, 1)]);
-  });
-
   it("merges delayed TTS supplements before display truncation", () => {
     const projectedVisibleText = "Visible answer ".repeat(8).trim();
-    const rawVisibleText = `[[reply_to_current]]${projectedVisibleText}`;
     const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
 
     const result = projectRecentChatDisplayMessages(
       [
-        assistantHistoryMessage(rawVisibleText, { timestamp: 1 }),
+        assistantHistoryMessage(projectedVisibleText, { timestamp: 1 }),
         ttsSupplementHistoryMessage({ textSha256 }, 2),
       ],
       { maxChars: 24 },
@@ -2087,6 +2206,7 @@ describe("projectRecentChatDisplayMessages", () => {
       assistantAudioAttachmentHistoryMessage(
         `${projectedVisibleText.slice(0, 24)}\n...(truncated)...`,
         1,
+        { __openclaw: { truncated: true, reason: "display-cap" } },
       ),
     ]);
   });
@@ -2608,16 +2728,24 @@ describe("exec approval handlers", () => {
 
   function getRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
-  ): { id: string; request: Record<string, unknown> } {
+  ): { approvalKind: "exec"; id: string; request: Record<string, unknown> } {
     const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
     if (!requested) {
       throw new Error("exec approval requested broadcast missing");
     }
-    const payload = requested.payload as { id?: unknown; request?: Record<string, unknown> };
+    const payload = requested.payload as {
+      approvalKind?: unknown;
+      id?: unknown;
+      request?: Record<string, unknown>;
+    };
+    if (payload.approvalKind !== "exec") {
+      throw new Error("exec approval requested kind missing");
+    }
     if (typeof payload.id !== "string" || payload.id.length === 0) {
       throw new Error("exec approval requested id missing");
     }
     return {
+      approvalKind: payload.approvalKind,
       id: payload.id,
       request: payload.request ?? {},
     };
@@ -2625,7 +2753,7 @@ describe("exec approval handlers", () => {
 
   async function waitForRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
-  ): Promise<{ id: string; request: Record<string, unknown> }> {
+  ): Promise<{ approvalKind: "exec"; id: string; request: Record<string, unknown> }> {
     await waitForFast(
       () => {
         expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
@@ -2890,7 +3018,7 @@ describe("exec approval handlers", () => {
 
   it("rejects approval registration after the owning run was aborted", async () => {
     const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
-    context.chatRunState.getOrCreate("run-aborted").abortMarker = Date.now();
+    context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
 
     await requestExecApproval({
       handlers,
@@ -2940,7 +3068,8 @@ describe("exec approval handlers", () => {
       "approval-allowed-before-abort",
     );
     expect(manager.resolve("approval-allowed-before-abort", "allow-once")).toBe(true);
-    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker = Date.now();
+    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker =
+      createChatAbortMarker();
     await requestPromise;
 
     const waitRespond = vi.fn();
@@ -3053,7 +3182,7 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(listRespond)).toBe(true);
     const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
     const approval = approvals.find((entry) => entry.id === "approval-list-1");
-    expectRecordFields(approval, { id: "approval-list-1" });
+    expectRecordFields(approval, { approvalKind: "exec", id: "approval-list-1" });
     expectRecordFields((approval as Record<string, unknown>).request, { command: "echo ok" });
     expect(mockCallArg(listRespond, 0, 2)).toBeUndefined();
 
@@ -3565,8 +3694,8 @@ describe("exec approval handlers", () => {
     const pendingRecord = manager.create({ command: "echo new", host: "gateway" }, 2_000, "abcdef");
     void manager.register(pendingRecord, 2_000);
 
-    expect(manager.lookupPendingId("abc")).toEqual({ kind: "none" });
-    expect(manager.lookupPendingId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
+    expect(manager.lookupApprovalId("abc")).toEqual({ kind: "none" });
+    expect(manager.lookupApprovalId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
   });
 
   it("stores versioned system.run binding and sorted env keys on approval request", async () => {
@@ -4379,7 +4508,7 @@ describe("gateway healthHandlers.status scope handling", () => {
         includeSensitive,
         includeChannelSummary: true,
       });
-      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     },
   );
 
@@ -4402,12 +4531,13 @@ describe("gateway healthHandlers.status scope handling", () => {
       includeSensitive: false,
       includeChannelSummary: false,
     });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
   });
 });
 
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
+  let restoreContextEngineRegistryState: () => void;
   const contextEngineTestOwner = "plugin:health-test";
 
   function createHealthSnapshot<T extends Record<string, unknown>>(overrides: T) {
@@ -4506,15 +4636,14 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   beforeEach(() => {
+    restoreContextEngineRegistryState = captureContextEngineRegistryStateForTests();
     registerLegacyContextEngine();
-    clearContextEnginesForOwner(contextEngineTestOwner);
     resetContextEngineRuntimeQuarantineForTests();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    clearContextEnginesForOwner(contextEngineTestOwner);
-    resetContextEngineRuntimeQuarantineForTests();
+    restoreContextEngineRegistryState();
   });
 
   it("rate-limits request-driven refreshes for fresh cached health", async () => {
@@ -4543,6 +4672,33 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
     await requestHealthSnapshot({ cached, refreshHealthSnapshot });
     await requestHealthSnapshot({ cached, refreshHealthSnapshot });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes a cached health snapshot dated after the current clock", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
+    const cached = createHealthSnapshot({ ts: Date.now() + HEALTH_REFRESH_INTERVAL_MS });
+    const fresh = createHealthSnapshot({ ts: Date.now() });
+
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({ cached, fresh });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+
+  it("restarts request-driven health refreshes when the clock moves backward", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
+    const cached = createHealthSnapshot({});
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await requestHealthSnapshot({ cached, refreshHealthSnapshot });
+    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+
+    vi.setSystemTime(Date.now() - HEALTH_REFRESH_INTERVAL_MS);
+    await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
 
     expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
   });
@@ -4577,6 +4733,53 @@ describe("gateway healthHandlers.health cache freshness", () => {
       code: "UNAVAILABLE",
       message: "Error: collector failed",
     });
+  });
+
+  it("rejects cached health when runtime inspection and refresh both fail", async () => {
+    const cached = createHealthSnapshot({});
+    const refreshHealthSnapshot = vi.fn().mockRejectedValue(new Error("collector failed"));
+    const { respond } = await requestHealthSnapshot({
+      cached,
+      refreshHealthSnapshot,
+      context: {
+        getRuntimeSnapshot: () => {
+          throw new Error("runtime inspection failed");
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: "Error: collector failed",
+      }),
+    );
+  });
+
+  it("refreshes cached health when runtime inspection fails", async () => {
+    const cached = createHealthSnapshot({});
+    const fresh = createHealthSnapshot({ ts: cached.ts + 1 });
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh,
+      context: {
+        getRuntimeSnapshot: () => {
+          throw new Error("runtime inspection failed");
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {
@@ -4736,7 +4939,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     }
   });
 
-  it("merges live dead-lettered delivery queue counts into cached health responses", async () => {
+  it("retains cached ingress pressure while merging live dead letters", async () => {
     const openClawState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-health-cached-dq-",
@@ -4744,29 +4947,61 @@ describe("gateway healthHandlers.health cache freshness", () => {
     try {
       const { moveDeliveryQueueEntryToFailed, upsertDeliveryQueueEntry } =
         await import("../../infra/delivery-queue-sqlite.js");
-      // The cached snapshot was built before this delivery dead-lettered.
-      const cached = createHealthSnapshot({});
+      const cachedPressure = [
+        {
+          channelId: "slack",
+          accountId: "cached",
+          laneCount: 2,
+          pendingCount: 3,
+          claimedCount: 1,
+          blockedCount: 2,
+          oldestReceivedAt: 500,
+        },
+      ];
+      const cached = createHealthSnapshot({
+        deliveryQueues: { failed: [], ingressPressure: cachedPressure },
+      });
       upsertDeliveryQueueEntry({
         queueName: "outbound",
-        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5 },
+        entry: { id: "dead-1", enqueuedAt: 1_000, retryCount: 5, retainOnFailure: true },
       });
       moveDeliveryQueueEntryToFailed("outbound", "dead-1");
+      const { createChannelIngressQueue } = await import("../../channels/message/ingress-queue.js");
+      const { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } =
+        await import("../../channels/message/ingress-retry-policy.js");
+      const ingressQueue = createChannelIngressQueue<{ text: string }>({
+        channelId: "telegram",
+        accountId: "ops",
+      });
+      await ingressQueue.enqueue("dead-inbound", { text: "recover me" });
+      const deadClaim = await ingressQueue.claim("dead-inbound", { ownerId: "worker" });
+      if (!deadClaim) {
+        throw new Error("Expected inbound dead-letter claim");
+      }
+      await ingressQueue.fail(deadClaim, { reason: "handler-error", failedAt: 50_000 });
+      await ingressQueue.enqueue("retry-head", { text: "head" }, { laneKey: "lane" });
+      await ingressQueue.enqueue("retry-follower", { text: "follower" }, { laneKey: "lane" });
+      for (let attempt = 0; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        const claim = await ingressQueue.claim("retry-head", { ownerId: "worker" });
+        if (!claim) {
+          throw new Error("Expected retry head claim");
+        }
+        await ingressQueue.release(claim, { lastError: "retryable failure" });
+      }
 
       const { respond } = await requestHealthSnapshot({ cached });
 
-      const payload = mockCallArg(respond, 0, 1) as
-        | {
-            deliveryQueues?: {
-              failed?: Array<{ queueName?: string; count?: number; oldestFailedAt?: number }>;
-            };
-          }
-        | undefined;
+      const payload = mockCallArg(respond, 0, 1) as HealthSummary | undefined;
       expect(payload?.deliveryQueues?.failed).toHaveLength(1);
       expect(payload?.deliveryQueues?.failed?.[0]).toMatchObject({
         queueName: "outbound",
         count: 1,
       });
       expect(typeof payload?.deliveryQueues?.failed?.[0]?.oldestFailedAt).toBe("number");
+      expect(payload?.deliveryQueues?.ingressFailed).toEqual([
+        { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 50_000 },
+      ]);
+      expect(payload?.deliveryQueues?.ingressPressure).toEqual(cachedPressure);
       expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
     } finally {
       await openClawState.cleanup();
@@ -4802,80 +5037,102 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(payload?.configReload?.hotReloadStatus).toBe("disabled");
   });
 
-  it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {
-    const cached = createSingleChannelHealthSnapshot({
-      channelId: "discord",
-      label: "Discord",
-      running: true,
-      connected: true,
-    });
-    const fresh = {
-      ...cached,
-      ts: cached.ts + 1,
-      channels: {
-        discord: {
-          ...cached.channels.discord,
-          accounts: {
-            ...cached.channels.discord.accounts,
-            work: channelHealthAccount({ accountId: "work", running: true, connected: true }),
-          },
-        },
-      },
-    };
-    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
-      cached,
-      fresh,
-      runtimeSnapshot: {
-        channels: {},
-        channelAccounts: {
-          discord: { work: { accountId: "work", running: true, connected: true } },
-        },
-      },
-    });
+  it.each([
+    {
+      change: "adds a running account",
+      previousAccountIds: ["default"],
+      nextAccountIds: ["default", "work"],
+    },
+    {
+      change: "adds an uninitialized account",
+      previousAccountIds: ["default"],
+      nextAccountIds: ["default", "work"],
+      uninitializedAccountId: "work",
+    },
+    {
+      change: "removes a runtime account",
+      previousAccountIds: ["default", "work"],
+      nextAccountIds: ["default"],
+    },
+    {
+      change: "removes an entire channel plugin",
+      previousAccountIds: ["default"],
+      nextAccountIds: [],
+    },
+    {
+      change: "re-adds an uninitialized channel plugin",
+      previousAccountIds: [],
+      nextAccountIds: ["default"],
+      uninitializedAccountId: "default",
+    },
+  ])(
+    "refreshes cached health after hot reload $change",
+    async ({ previousAccountIds, nextAccountIds, uninitializedAccountId }) => {
+      const current = createSingleChannelHealthSnapshot({
+        channelId: "discord",
+        label: "Discord",
+        running: true,
+        connected: true,
+      });
+      const account = (accountId: string) =>
+        channelHealthAccount({ accountId, running: true, connected: true });
+      const summary = (accountIds: string[]) =>
+        accountIds.length === 0
+          ? createHealthSnapshot({})
+          : {
+              ...current,
+              channels: {
+                discord: {
+                  ...current.channels.discord,
+                  accounts: Object.fromEntries(accountIds.map((id) => [id, account(id)])),
+                },
+              },
+            };
+      const runtime = (accountIds: string[], uninitialized?: string) => ({
+        channels:
+          previousAccountIds.length === 0 && accountIds.length > 0
+            ? { discord: { accountId: accountIds[0] } }
+            : {},
+        channelAccounts:
+          accountIds.length === 0
+            ? {}
+            : {
+                discord: Object.fromEntries(
+                  accountIds.map((id) => [
+                    id,
+                    id === uninitialized ? { accountId: id } : account(id),
+                  ]),
+                ),
+              },
+      });
+      const cached = summary(previousAccountIds);
+      const fresh = summary(nextAccountIds);
+      const refreshHealthSnapshot = vi
+        .fn()
+        .mockResolvedValueOnce(cached)
+        .mockResolvedValueOnce(fresh);
 
-    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
-      probe: false,
-      includeSensitive: false,
-    });
-    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
-  });
+      await requestHealthSnapshot({
+        cached,
+        refreshHealthSnapshot,
+        runtimeSnapshot: runtime(previousAccountIds),
+      });
+      expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
 
-  it("refreshes cached health after hot reload removes a runtime account", async () => {
-    const current = createSingleChannelHealthSnapshot({
-      channelId: "discord",
-      label: "Discord",
-      running: true,
-      connected: true,
-    });
-    const cached = {
-      ...current,
-      channels: {
-        discord: {
-          ...current.channels.discord,
-          accounts: {
-            ...current.channels.discord.accounts,
-            work: channelHealthAccount({ accountId: "work", running: true, connected: true }),
-          },
-        },
-      },
-    };
-    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
-      cached,
-      fresh: current,
-      runtimeSnapshot: {
-        channels: {},
-        channelAccounts: {
-          discord: { default: { accountId: "default", running: true, connected: true } },
-        },
-      },
-    });
+      const { respond } = await requestHealthSnapshot({
+        cached,
+        refreshHealthSnapshot,
+        runtimeSnapshot: runtime(nextAccountIds, uninitializedAccountId),
+      });
 
-    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
-      probe: false,
-      includeSensitive: false,
-    });
-    expect(respond).toHaveBeenCalledWith(true, current, undefined);
-  });
+      expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+      expect(refreshHealthSnapshot).toHaveBeenLastCalledWith({
+        probe: false,
+        includeSensitive: false,
+      });
+      expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+    },
+  );
 });
 
 describe("logs.tail", () => {

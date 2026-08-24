@@ -432,10 +432,8 @@ type Catalog = {
 
 type NativeSourceEntry = {
   id: string;
-  kind: string;
-  line: number;
-  path: string;
   source: string;
+  sites: Array<{ kind: string; path: string }>;
   surface: string;
 };
 
@@ -445,8 +443,8 @@ type NativeSourceArtifact = {
 };
 
 type NativeTranslationArtifact = {
-  entries: Array<{ id: string; source: string; translated: string }>;
   locale: string;
+  translations: Record<string, string>;
   version: number;
 };
 
@@ -533,20 +531,19 @@ export function selectInfoPlistTranslation(
 export function infoPlistTranslationCandidates(
   artifact: NativeTranslationArtifact | undefined,
   sourceId: string,
-  source: string,
+  _source: string,
 ): string[] {
-  return (
-    artifact?.entries
-      .filter((entry) => entry.id === sourceId && entry.source === source)
-      .map((entry) => entry.translated) ?? []
-  );
+  const translated = artifact?.translations[sourceId];
+  return typeof translated === "string" ? [translated] : [];
 }
 
 function infoPlistSourceIds(nativeSource: NativeSourceArtifact): Map<string, string> {
   return new Map(
-    nativeSource.entries
-      .filter((entry) => entry.kind === "plist-string")
-      .map((entry) => [[entry.path, entry.source].join("\u0000"), entry.id]),
+    nativeSource.entries.flatMap((entry) =>
+      entry.sites
+        .filter((site) => site.kind === "plist-string")
+        .map((site) => [[site.path, entry.source].join("\u0000"), entry.id] as const),
+    ),
   );
 }
 
@@ -586,8 +583,11 @@ async function readOptionalFile(filePath: string): Promise<string | null> {
 function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
   return (
     entry.surface === "apple" &&
-    IOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
-    APPLE_CATALOG_KINDS.has(entry.kind) &&
+    entry.sites.some(
+      (site) =>
+        IOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
+        APPLE_CATALOG_KINDS.has(site.kind),
+    ) &&
     (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
     !IOS_CATALOG_EXCLUSIONS.has(entry.source)
   );
@@ -596,8 +596,11 @@ function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
 function isMacosCatalogEntry(entry: NativeSourceEntry): boolean {
   return (
     entry.surface === "apple" &&
-    MACOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
-    APPLE_CATALOG_KINDS.has(entry.kind) &&
+    entry.sites.some(
+      (site) =>
+        MACOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
+        APPLE_CATALOG_KINDS.has(site.kind),
+    ) &&
     !entry.source.includes("\\(") &&
     !MACOS_CATALOG_EXCLUSIONS.has(entry.source)
   );
@@ -657,28 +660,20 @@ function buildAppleCatalog(
   const sources = [...new Set(catalogEntries.map(([, source]) => source))].toSorted(
     compareCodeUnits,
   );
-  const sourceSet = new Set(sources);
-  const appleIdsBySource = new Map<string, Set<string>>();
-  for (const [entry, source] of catalogEntries) {
-    const ids = appleIdsBySource.get(source) ?? new Set<string>();
-    ids.add(entry.id);
-    appleIdsBySource.set(source, ids);
-  }
+  const catalogIds = new Set(catalogEntries.map(([entry]) => entry.id));
   const existingStrings = existingCatalog.strings ?? {};
+  const nativeEntryById = new Map(nativeSource.entries.map((entry) => [entry.id, entry]));
   const translationsByLocale = new Map(
     translations.map((artifact) => {
       const bySource = new Map<string, string[]>();
-      for (const entry of artifact.entries) {
+      for (const [id, translated] of Object.entries(artifact.translations)) {
+        const entry = nativeEntryById.get(id);
+        if (!entry || !catalogIds.has(id)) {
+          continue;
+        }
         const source = appleCatalogValue(entry.source);
-        if (!sourceSet.has(source)) {
-          continue;
-        }
-        const appleIds = appleIdsBySource.get(source);
-        if (appleIds && !appleIds.has(entry.id)) {
-          continue;
-        }
         const values = bySource.get(source) ?? [];
-        values.push(appleCatalogValue(entry.translated));
+        values.push(appleCatalogValue(translated));
         bySource.set(source, values);
       }
       return [artifact.locale, bySource] as const;

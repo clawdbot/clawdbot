@@ -12,7 +12,8 @@ const { loadModelCatalogMock, logVerboseMock } = vi.hoisted(() => ({
   loadModelCatalogMock: vi.fn(),
   logVerboseMock: vi.fn(),
 }));
-const { loggerWarnMock } = vi.hoisted(() => ({
+const { loggerDebugMock, loggerWarnMock } = vi.hoisted(() => ({
+  loggerDebugMock: vi.fn(),
   loggerWarnMock: vi.fn(),
 }));
 
@@ -27,7 +28,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
       info: vi.fn(),
       error: vi.fn(),
       warn: loggerWarnMock,
-      debug: vi.fn(),
+      debug: loggerDebugMock,
     }),
     logVerbose: logVerboseMock,
   };
@@ -234,6 +235,7 @@ describe("createDiscordNativeCommand option wiring", () => {
     clearRuntimeConfigSnapshot();
     loadModelCatalogMock.mockReset().mockReturnValue({ entries: [], routeVariants: [] });
     logVerboseMock.mockReset();
+    loggerDebugMock.mockReset();
     loggerWarnMock.mockReset();
   });
 
@@ -674,6 +676,15 @@ describe("createDiscordNativeCommand option wiring", () => {
 
     expect(command.description).toBe("x".repeat(99));
     expect(requireOption(command, "input").description).toBe("x".repeat(99));
+    expect(loggerDebugMock).toHaveBeenNthCalledWith(
+      1,
+      `discord: truncating native command description (command:longdesc arg:input) from ${longDescription.length} to 100: ${JSON.stringify(longDescription)}`,
+    );
+    expect(loggerDebugMock).toHaveBeenNthCalledWith(
+      2,
+      `discord: truncating native command description (command:longdesc) from ${longDescription.length} to 100: ${JSON.stringify(longDescription)}`,
+    );
+    expect(loggerWarnMock).not.toHaveBeenCalled();
   });
 
   it("serializes localized command descriptions on a UTF-16 boundary", () => {

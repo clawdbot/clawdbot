@@ -1,6 +1,7 @@
 // Gateway maintenance timers.
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { createManagedWorktreeOwnerProtection } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
@@ -9,9 +10,12 @@ import {
 } from "../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
+import { pruneExpiredDeliveryQueueTombstones } from "../infra/delivery-queue-sqlite.js";
+import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
-import { cleanOldMedia, prunePlaybackTranscodeCache } from "../media/store.js";
+import { checkTelemetryUpdate } from "../infra/telemetry.js";
+import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import {
@@ -19,7 +23,7 @@ import {
   startSkillCollectionMaintenance,
 } from "../skills/workshop/collection-review.js";
 import {
-  abortTrackedChatRunById,
+  abortChatRunById,
   type ChatAbortControllerEntry,
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
@@ -48,10 +52,12 @@ import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-acti
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
 const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
+const TELEMETRY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -85,6 +91,7 @@ export function startGatewayMaintenanceTimers(params: {
   ) => ChatRunEntry | undefined;
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  isNixMode?: boolean;
   mediaCleanupTtlMs?: number;
   getRuntimeConfig: () => OpenClawConfig;
   runWorktreeGc?: () => Promise<unknown>;
@@ -123,10 +130,20 @@ export function startGatewayMaintenanceTimers(params: {
     logger: params.logHealth,
   });
 
+  let nextTelemetryCheckAtMs =
+    Date.now() + Math.floor(Math.random() * TELEMETRY_MAINTENANCE_INTERVAL_MS);
   // periodic keepalive
   const tickInterval = setInterval(() => {
     void hostThawRecovery.tick();
-    const payload = { ts: Date.now() };
+    const now = Date.now();
+    if (!params.isNixMode && now >= nextTelemetryCheckAtMs) {
+      nextTelemetryCheckAtMs =
+        now +
+        TELEMETRY_MAINTENANCE_INTERVAL_MS +
+        Math.floor(Math.random() * TELEMETRY_MAINTENANCE_INTERVAL_MS);
+      void checkTelemetryUpdate(params.getRuntimeConfig(), { surface: "gateway" }).catch(() => {});
+    }
+    const payload = { ts: now };
     params.broadcast("tick", payload);
     params.nodeSendToAllSubscribed("tick", payload);
   }, TICK_INTERVAL_MS);
@@ -163,16 +180,23 @@ export function startGatewayMaintenanceTimers(params: {
   const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
   void performWorktreeGc();
 
-  // Queue media has its own reference-aware retention policy and runs even when
-  // the general media TTL sweep is disabled.
+  // Queue tombstone expiry and reference-aware media GC share one maintenance
+  // cycle even when the general media TTL sweep is disabled.
   const runDeliveryQueueMediaGc =
-    params.runDeliveryQueueMediaGc ?? (() => pruneOrphanedDeliveryQueueMedia());
+    params.runDeliveryQueueMediaGc ??
+    (async () => {
+      try {
+        pruneExpiredDeliveryQueueTombstones();
+      } finally {
+        await pruneOrphanedDeliveryQueueMedia();
+      }
+    });
   let deliveryQueueMediaGcStartedAtMs = 0;
   const deliveryQueueMediaGcLoader = createLazyPromiseLoader(async () => {
     try {
       await runDeliveryQueueMediaGc();
     } catch (error) {
-      params.logHealth.error(`delivery queue media cleanup failed: ${formatError(error)}`);
+      params.logHealth.error(`delivery queue maintenance failed: ${formatError(error)}`);
     } finally {
       deliveryQueueMediaGcLoader.clear();
     }
@@ -184,6 +208,23 @@ export function startGatewayMaintenanceTimers(params: {
     return deliveryQueueMediaGcLoader.load();
   };
   void performDeliveryQueueMediaGc();
+
+  let devicePairSetupCompletionGcInFlight: Promise<void> | null = null;
+  const performDevicePairSetupCompletionGc = (nowMs: number) => {
+    if (devicePairSetupCompletionGcInFlight) {
+      return devicePairSetupCompletionGcInFlight;
+    }
+    devicePairSetupCompletionGcInFlight = pruneExpiredDevicePairSetupCompletions({ nowMs })
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
+      })
+      .finally(() => {
+        devicePairSetupCompletionGcInFlight = null;
+      });
+    return devicePairSetupCompletionGcInFlight;
+  };
+  void performDevicePairSetupCompletionGc(Date.now());
 
   let skillCuratorCleanup = () => {};
   if (params.enableSkillCurator) {
@@ -207,6 +248,7 @@ export function startGatewayMaintenanceTimers(params: {
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
+    void performDevicePairSetupCompletionGc(now);
     if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
       void performDeliveryQueueMediaGc();
     }
@@ -282,7 +324,15 @@ export function startGatewayMaintenanceTimers(params: {
     pruneMapToMaxSize(params.agentRunSeq, AGENT_RUN_SEQ_MAX);
 
     for (const [runId, entry] of params.chatAbortControllers) {
-      if (entry.projectSessionTerminalPending === true) {
+      // A stamped terminal observation whose async projection clear never ran
+      // (dropped claim, swallowed handler error) would otherwise pin the entry
+      // forever: phantom active run in sessions.list, pinned dedupe key,
+      // skipped media GC. Past the grace window the entry re-enters the
+      // ordinary expiry branches below, which are terminal-safe.
+      const terminalClearOverdue =
+        typeof entry.projectSessionTerminalObservedAt === "number" &&
+        now - entry.projectSessionTerminalObservedAt > AGENT_RUN_TERMINAL_RETRY_GRACE_MS;
+      if (entry.projectSessionTerminalPending === true && !terminalClearOverdue) {
         continue;
       }
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
@@ -308,11 +358,17 @@ export function startGatewayMaintenanceTimers(params: {
         removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
         continue;
       }
-      abortTrackedChatRunById(params, {
+      const aborted = abortChatRunById(params, {
         runId,
         sessionKey: entry.sessionKey,
         stopReason: "timeout",
       });
+      // A non-abortable expired entry (signal already aborted, frozen reply
+      // op) whose owner cleanup was lost would otherwise survive every sweep:
+      // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
+      if (!aborted.aborted) {
+        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
+      }
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
@@ -362,12 +418,15 @@ export function startGatewayMaintenanceTimers(params: {
     (async () => {
       const { cleanupManagedOutgoingMediaRecords } = await import("./managed-image-attachments.js");
       return await cleanupManagedOutgoingMediaRecords({
-        hasActiveSessionRun: (sessionKey, agentId) =>
-          hasRegisteredChatRunForSessionKey({
+        hasActiveSessionRun: (sessionKey, agentId) => {
+          const cfg = params.getRuntimeConfig();
+          return hasRegisteredChatRunForSessionKey({
             context: { chatAbortControllers: params.chatAbortControllers },
             sessionKey,
             agentId,
-          }),
+            defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
+          });
+        },
       });
     });
   const managedOutgoingCleanupLoader = createLazyPromiseLoader(async () => {
@@ -381,15 +440,16 @@ export function startGatewayMaintenanceTimers(params: {
   });
 
   let mediaCleanupInFlight: Promise<void> | null = null;
-  const runConfiguredMediaCleanup = () => {
+  const runMediaCleanup = () => {
     const ttlMs = params.mediaCleanupTtlMs;
-    if (typeof ttlMs !== "number" || mediaCleanupInFlight) {
+    if (mediaCleanupInFlight) {
       return mediaCleanupInFlight;
     }
-    mediaCleanupInFlight = cleanOldMedia(ttlMs, {
-      recursive: true,
-      pruneEmptyDirs: true,
-    })
+    const cleanup =
+      typeof ttlMs === "number"
+        ? cleanOldMedia(ttlMs, { recursive: true, pruneEmptyDirs: true })
+        : pruneOutboundMedia();
+    mediaCleanupInFlight = cleanup
       .catch((err: unknown) => {
         params.logHealth.error(`media cleanup failed: ${formatError(err)}`);
       })
@@ -405,11 +465,11 @@ export function startGatewayMaintenanceTimers(params: {
     if (mediaCleanupStopped) {
       return;
     }
-    // Playback and managed outgoing have fixed owner lifecycles and must not
-    // depend on the optional attachment-retention sweep being configured or healthy.
+    // Playback and managed outgoing have independent owner lifecycles and must
+    // not depend on the selected general-or-outbound media sweep being healthy.
     void playbackTranscodeCacheCleanupLoader.load();
     void managedOutgoingCleanupLoader.load();
-    void runConfiguredMediaCleanup();
+    void runMediaCleanup();
   };
   let mediaCleanupStartPromise: Promise<void> | undefined;
   const startMediaCleanup = () => {

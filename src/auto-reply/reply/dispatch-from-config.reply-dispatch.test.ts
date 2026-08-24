@@ -1,5 +1,5 @@
 // Tests dispatch-from-config reply dispatch integration and final payload routing.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import {
@@ -35,6 +35,7 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
+let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let runAfterReplyOperationClear: typeof import("./reply-run-registry.js").runAfterReplyOperationClear;
 let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
@@ -103,6 +104,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     const replyRunRegistryModule = await import("./reply-run-registry.js");
     createReplyOperation = replyRunRegistryModule.createReplyOperation;
+    getActiveReplyRunCount = replyRunRegistryModule.getActiveReplyRunCount;
     replyRunRegistry = replyRunRegistryModule.replyRunRegistry;
     runAfterReplyOperationClear = replyRunRegistryModule.runAfterReplyOperationClear;
     const { testing } = await import("./reply-run-registry.test-support.js");
@@ -188,6 +190,13 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     resetPluginTtsAndThreadMocks();
   });
 
+  afterEach(() => {
+    resetReplyRunRegistry();
+    resetInboundDedupe();
+    vi.useRealTimers();
+    clearAgentHarnesses();
+  });
+
   it("runs a handled plugin reply hook in the registry scope", async () => {
     hookMocks.runner.runReplyDispatch.mockImplementation(async () => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(
@@ -236,12 +245,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
 
     const result = await dispatchReplyFromConfig({
       ctx: createHookCtx(),
-      cfg: {
-        ...emptyConfig,
-        session: {
-          sendPolicy: { default: "deny" },
-        },
-      },
+      cfg: { ...emptyConfig, session: { sendPolicy: { default: "deny" } } },
       dispatcher: createDispatcher(),
       replyResolver: async () => ({ text: "model reply" }),
     });
@@ -411,7 +415,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(deliver).not.toHaveBeenCalled();
       // createHookCtx's "private" chat type is undirected, so no fallback
       // attempt follows the timed-out final.
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toMatchObject({
         kind: "replayable",
         text: "durable reply",
@@ -472,7 +475,6 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         expect.objectContaining({ text: "durable reply" }),
         expect.objectContaining({ kind: "final" }),
       );
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -736,7 +738,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       dispatcher,
       replyResolver: async () => pendingFinalReply("policy-suppressed reply"),
     });
-    await dispatcher.waitForIdle();
+    const receipt = await dispatcher.waitForIdle();
     await vi.waitFor(() => {
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
     });
@@ -745,8 +747,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(deliver).not.toHaveBeenCalled();
     // createHookCtx's "private" chat type is undirected, so the cancelled final
     // does not trigger a fallback attempt.
-    expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
-    expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
+    expect(receipt?.counts.final).toMatchObject({ cancelled: 1, failedBeforeSend: 0 });
     expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledTimes(2);
   });
 
@@ -841,6 +842,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       releaseOwner.resolve();
       successor?.complete();
       await vi.runOnlyPendingTimersAsync();
+      expect(getActiveReplyRunCount()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
       vi.useRealTimers();
     }
   });
@@ -1068,6 +1071,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       dispatcher.markComplete();
       await dispatcher.waitForIdle();
       queuedOperation?.complete();
+      expect(getActiveReplyRunCount()).toBe(0);
     }
   });
 });

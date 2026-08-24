@@ -86,16 +86,19 @@
   vertical-align: middle;
 }
 
+/* Same link token as the message renderer: file links are styled jointly with
+   .chat-text (see chat/text.css), so a panel that kept --accent would show two
+   link colors side by side. */
 .sidebar-markdown :where(a) {
-  color: var(--accent);
+  color: var(--link);
   text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--link) 40%, transparent);
   text-underline-offset: 2px;
   transition: text-decoration-color var(--duration-fast) ease;
 }
 
 .sidebar-markdown :where(a:hover) {
-  text-decoration-color: var(--accent);
+  text-decoration-color: var(--link);
 }
 
 .sidebar-markdown code {

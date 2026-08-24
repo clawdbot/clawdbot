@@ -3,11 +3,12 @@ import type { SessionsCatalogListResult } from "../../../../packages/gateway-pro
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
 
-function draftRouteKey(requestedAgentId: string, catalogId: string): string {
-  return JSON.stringify([requestedAgentId, catalogId]);
+function draftRouteKey(requestedAgentId: string, catalogId: string, group: string): string {
+  return JSON.stringify([requestedAgentId, catalogId, group]);
 }
 
 /**
@@ -17,20 +18,134 @@ function draftRouteKey(requestedAgentId: string, catalogId: string): string {
  * would make that fill-in look like a navigation and discard the draft.
  */
 export function routeKey(data?: NewSessionRouteData): string {
-  return draftRouteKey(data?.requestedAgentId ?? "", data?.catalogId ?? "");
+  return draftRouteKey(data?.requestedAgentId ?? "", data?.catalogId ?? "", data?.group ?? "");
 }
 
 export function routeKeyFromSearch(search: string): string {
   const location = newSessionLocationFromSearch(search);
-  return draftRouteKey(location.agentId, location.catalogId);
+  return draftRouteKey(location.agentId, location.catalogId, location.group ?? "");
 }
 
 export function isTarget(data?: NewSessionRouteData): boolean {
   return Boolean(data?.catalogId);
 }
 
-export function isResolvedTarget(data?: NewSessionRouteData): boolean {
+function isResolvedTarget(data?: NewSessionRouteData): boolean {
   return Boolean(data?.catalogId && data.model && data.catalogLabel);
+}
+
+function isPendingRouteTarget(data?: NewSessionRouteData): boolean {
+  return (
+    (isTarget(data) && !isResolvedTarget(data)) ||
+    Boolean(data?.group && data.groupStatus !== "resolved")
+  );
+}
+
+export function groupDefaultsKey(data?: NewSessionRouteData): string {
+  return JSON.stringify([
+    data?.groupStatus ?? "",
+    data?.groupCwd ?? "",
+    data?.groupWorktree === true,
+    data?.groupCatalogGeneration ?? -1,
+    data?.groupDefaultsStatus ?? "idle",
+  ]);
+}
+
+function groupRouteNeedsRevalidation(
+  data: NewSessionRouteData | undefined,
+  sessions: SessionCapability,
+): boolean {
+  const groupName = data?.group?.trim();
+  if (!groupName) {
+    return false;
+  }
+  const generation = sessions.groupsGeneration();
+  const status = sessions.groupsStatus();
+  if (data?.groupCatalogGeneration !== generation || data.groupDefaultsStatus !== status) {
+    return true;
+  }
+  if (status !== "ready") {
+    return false;
+  }
+  const current = sessions.state.groupSettings.find((group) => group.name === groupName);
+  return current
+    ? data.groupStatus !== "resolved" ||
+        (data.groupCwd ?? "") !== (current.cwd ?? "") ||
+        data.groupWorktree !== (current.worktree === true)
+    : data.groupStatus === "resolved";
+}
+
+function groupRouteCatalogKey(
+  data: NewSessionRouteData | undefined,
+  sessions: SessionCapability,
+): string {
+  const current = sessions.state.groupSettings.find((group) => group.name === data?.group);
+  return JSON.stringify([
+    data?.group ?? "",
+    sessions.groupsGeneration(),
+    sessions.groupsStatus(),
+    Boolean(current),
+    current?.cwd ?? "",
+    current?.worktree === true,
+  ]);
+}
+
+export function isGroupRoutePending(
+  data: NewSessionRouteData | undefined,
+  sessions: SessionCapability | undefined,
+): boolean {
+  return Boolean(data?.group && (!sessions || groupRouteNeedsRevalidation(data, sessions)));
+}
+
+export function isRoutePending(
+  data: NewSessionRouteData | undefined,
+  sessions: SessionCapability | undefined,
+): boolean {
+  return isPendingRouteTarget(data) || isGroupRoutePending(data, sessions);
+}
+
+export function resolvedGroupName(
+  data: NewSessionRouteData | undefined,
+  sessions: SessionCapability | undefined,
+): string | undefined {
+  return data?.groupStatus === "resolved" && !isGroupRoutePending(data, sessions)
+    ? data.group
+    : undefined;
+}
+
+export class GroupRouteRevalidation {
+  private pending: Promise<unknown> | null = null;
+  private lastKey = "";
+
+  constructor(
+    private readonly readData: () => NewSessionRouteData | undefined,
+    private readonly revalidate: () => Promise<unknown> | undefined,
+  ) {}
+
+  synchronize(sessions: SessionCapability) {
+    if (this.pending) {
+      return;
+    }
+    const data = this.readData();
+    const key = groupRouteCatalogKey(data, sessions);
+    if (this.lastKey === key || !groupRouteNeedsRevalidation(data, sessions)) {
+      return;
+    }
+    const pending = this.revalidate();
+    if (!pending) {
+      return;
+    }
+    this.lastKey = key;
+    this.pending = pending;
+    void pending
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.pending === pending) {
+          this.pending = null;
+          this.synchronize(sessions);
+        }
+      });
+  }
 }
 
 export function resolveAgentId(
@@ -40,12 +155,12 @@ export function resolveAgentId(
 ): string {
   const rawRequested = data?.agentId?.trim();
   if (!rawRequested) {
-    return normalizeAgentId(fallback);
+    return fallback && normalizeAgentId(fallback);
   }
   const requested = normalizeAgentId(rawRequested);
   return availableAgents.some((candidate) => normalizeAgentId(candidate.id) === requested)
     ? requested
-    : normalizeAgentId(fallback);
+    : fallback && normalizeAgentId(fallback);
 }
 
 export function allowsSelectedAgent(
@@ -101,8 +216,9 @@ export function renderBar(params: {
   placeSelect: unknown;
   retrying: boolean;
   onRetry: () => void;
+  groupPending?: boolean;
 }) {
-  const pending = isTarget(params.data) && !isResolvedTarget(params.data);
+  const pending = isPendingRouteTarget(params.data) || params.groupPending === true;
   return html`
     <div class="new-session-page__triggers">
       ${renderTarget(params.data)} ${isTarget(params.data) ? nothing : params.agentSelect}

@@ -242,6 +242,7 @@ export function createXSearchTool(options?: {
       options: xSearchOptions,
       ...(signal ? { signal } : {}),
     });
+    signal?.throwIfAborted();
     const payload = buildXaiXSearchPayload({
       query,
       model,

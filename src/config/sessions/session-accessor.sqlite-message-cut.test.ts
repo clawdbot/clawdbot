@@ -86,6 +86,7 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
     cliSessionIds: { "claude-cli": "claude-conversation" },
     compactionCount: 2,
     contextTokens: 100_000,
+    contextTokensSource: "runtime",
     createdVia: "operator",
     createdActor: { type: "human", id: "profile-1" },
     createdAt: 1_000,
@@ -95,6 +96,7 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
     forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
     lifecycleRevision: "source-lifecycle-revision",
     lifecycleRunId: "source-run",
+    lastRunId: "settled-source-run",
     modelOverride: "gpt-5",
     modelOverrideSource: "user",
     providerOverride: "openai",
@@ -488,6 +490,7 @@ describe("SQLite session message cuts", () => {
       cliSessionIds: undefined,
       compactionCount: undefined,
       contextTokens: undefined,
+      contextTokensSource: undefined,
       createdVia: "operator",
       createdActor: { type: "human", id: "profile-1" },
       createdAt: 1_000,
@@ -576,6 +579,7 @@ describe("SQLite session message cuts", () => {
     expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
     expect(result.entry.lifecycleRevision).not.toBe("source-lifecycle-revision");
     expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
+    expect((result.entry as InternalSessionEntry).lastRunId).toBeUndefined();
     expect(result.entry.cliSessionBindings).toBeUndefined();
     expect(deliveryContextFromSession(result.entry)).toBeUndefined();
     expect(result.entry.parentSessionKey).toBe(canonicalSourceKey);

@@ -1,5 +1,6 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import * as cronSchedule from "../schedule.js";
 import type { CronJob } from "../types.js";
 import { markInterruptedStartupRun, restoreFinalizedStartupRun } from "./startup-run-repair.js";
 import { createCronServiceState } from "./state.js";
@@ -135,6 +136,136 @@ describe("startup run repair auto-disable", () => {
     deferredNotifications[0]?.();
     expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "required delivery failed",
+      completionStatus: "failed" as const,
+      deliveryStatus: "not-delivered" as const,
+    },
+    {
+      name: "completion evidence unknown",
+      completionStatus: "unknown" as const,
+      deliveryStatus: "unknown" as const,
+    },
+    {
+      name: "legacy row missing completion evidence",
+      completionStatus: undefined,
+      deliveryStatus: "not-delivered" as const,
+    },
+  ])("retains finalized one-shot after $name", ({ completionStatus, deliveryStatus }) => {
+    const runningAtMs = Date.parse("2026-08-01T17:00:00.000Z");
+    const state = createCronServiceState({
+      storePath: "/tmp/startup-run-repair-completion.json",
+      cronEnabled: true,
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      nowMs: () => runningAtMs + 1_000,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+    const job: CronJob = {
+      id: "finalized-required-delivery",
+      name: "finalized required delivery",
+      enabled: true,
+      deleteAfterRun: true,
+      createdAtMs: runningAtMs - 60_000,
+      updatedAtMs: runningAtMs,
+      schedule: { kind: "at", at: new Date(runningAtMs).toISOString() },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "do not replay" },
+      // Current policy is intentionally mutable and must not decide replay.
+      delivery: { mode: "announce", bestEffort: true },
+      state: { runningAtMs },
+    };
+
+    const restored = restoreFinalizedStartupRun({
+      state,
+      job,
+      runningAtMs,
+      entry: {
+        ts: runningAtMs + 1_000,
+        jobId: job.id,
+        action: "finished",
+        status: "ok",
+        ...(completionStatus === undefined ? {} : { completionStatus }),
+        deliveryStatus,
+        runAtMs: runningAtMs,
+        durationMs: 1_000,
+      },
+    });
+
+    expect(restored?.shouldDelete).toBe(false);
+    expect(job).toMatchObject({
+      enabled: false,
+      state: {
+        lastRunStatus: "ok",
+        consecutiveErrors: 0,
+      },
+    });
+    expect(job.state.nextRunAtMs).toBeUndefined();
+  });
+
+  it("buffers quiet-trigger repair notifications until the recovery commit", () => {
+    const runningAtMs = Date.parse("2026-08-01T16:30:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const state = createCronServiceState({
+      storePath: "/tmp/startup-run-repair-quiet-trigger.json",
+      cronEnabled: true,
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      nowMs: () => runningAtMs + 1_000,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob: vi.fn(),
+    });
+    const job: CronJob = {
+      id: "quiet-trigger-auto-disable",
+      name: "quiet trigger auto disable",
+      enabled: true,
+      createdAtMs: runningAtMs - 60_000,
+      updatedAtMs: runningAtMs,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "Invalid/Zone" },
+      trigger: { script: "return false" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "do not replay" },
+      state: {
+        nextRunAtMs: runningAtMs,
+        runningAtMs,
+        scheduleErrorCount: 2,
+      },
+    };
+    const deferredNotifications: Array<() => void> = [];
+    const computeSpy = vi.spyOn(cronSchedule, "computeNextRunAtMs").mockImplementation(() => {
+      throw new Error("simulated quiet-trigger schedule failure");
+    });
+
+    try {
+      restoreFinalizedStartupRun({
+        state,
+        job,
+        runningAtMs,
+        deferredNotifications,
+        triggerEval: { fired: false, stateChanged: false, busy: true },
+        entry: {
+          ts: runningAtMs + 1_000,
+          jobId: job.id,
+          action: "finished",
+          status: "ok",
+          runAtMs: runningAtMs,
+        },
+      });
+    } finally {
+      computeSpy.mockRestore();
+    }
+
+    expect(job.state.autoDisabled?.reason).toBe("schedule-errors");
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expect(deferredNotifications).toHaveLength(1);
   });
 
   it.each(["runAtMs", "ts"] as const)(

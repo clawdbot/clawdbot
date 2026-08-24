@@ -1,4 +1,4 @@
-// Control UI tests cover Automations form native-select display state.
+// Control UI tests cover Automations form select display state.
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -45,25 +45,42 @@ suite.define(() => {
         const response = await page.goto(`${suite.server.baseUrl}cron`);
         expect(response?.status()).toBe(200);
         await page.locator('[data-test-id="cron-list-tab-activity"]').click();
-        const sort = page.locator("select.cron-run-sort");
+        const sortMenu = page.locator("wa-dropdown", { has: page.locator(".cron-run-sort") });
+        const sort = page.getByRole("button", { name: "Sort Newest first", exact: true });
         await sort.waitFor({ state: "visible" });
-        await sort.selectOption("asc");
-        expect(await sort.inputValue()).toBe("asc");
-        // Switching tabs recreates the select with the persisted non-first value.
+        await sort.click();
+        await sortMenu.locator('wa-dropdown-item[value="asc"]').click();
+        await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
+        // Switching tabs recreates the dropdown with the persisted non-first value.
         await page.locator('[data-test-id="cron-list-tab-tasks"]').click();
         await page.locator('[data-test-id="cron-list-tab-activity"]').click();
-        expect(await page.locator("select.cron-run-sort").inputValue()).toBe("asc");
+        await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
+        expect(
+          await sortMenu.locator('wa-dropdown-item[value="asc"]').getAttribute("aria-current"),
+        ).toBe("true");
         await page.locator('[data-test-id="cron-new-task"]').click();
 
-        const action = page.locator("select#cron-payload-kind");
+        const pickerValue = (selector: string) =>
+          page
+            .locator(selector)
+            .evaluate((element) => String((element as HTMLElement & { value?: string }).value));
+        const action = page.locator("wa-select#cron-payload-kind");
         await action.waitFor({ state: "visible" });
         // Form defaults are agentTurn / isolated / minutes — none of which is
         // the first option of its select; the rendered selection must agree.
-        expect(await action.inputValue()).toBe("agentTurn");
-        expect(await page.locator("select#cron-session-target").inputValue()).toBe("isolated");
-        expect(await page.locator('select[aria-label="Unit"]').inputValue()).toBe("minutes");
+        expect(await pickerValue("wa-select#cron-payload-kind")).toBe("agentTurn");
+        expect(await pickerValue("wa-select#cron-session-target")).toBe("isolated");
+        const unit = page.locator("wa-select").filter({
+          has: page.locator('[slot="label"]', { hasText: "Unit" }),
+        });
+        expect(
+          await unit.evaluate((element) =>
+            String((element as HTMLElement & { value?: string }).value),
+          ),
+        ).toBe("minutes");
         // Control: delivery mode's default is also its first option.
-        expect(await page.locator("select#cron-delivery-mode").inputValue()).toBe("announce");
+        expect(await pickerValue("wa-select#cron-delivery-mode")).toBe("announce");
+        expect(await pickerValue("wa-select#cron-delivery-channel")).toBe("last");
       },
     );
   });

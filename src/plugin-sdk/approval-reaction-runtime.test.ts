@@ -7,11 +7,11 @@ import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   APPROVAL_REACTION_BINDINGS,
   buildApprovalPendingPromptPayload,
+  buildApprovalReactionDeliveredBindingMarker,
   buildApprovalReactionPendingContentForRequest,
   buildApprovalReactionPromptPayloadForRequest,
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,
-  extractApprovalReactionPromptBinding,
   listApprovalReactionBindings,
   normalizeApprovalReactionEmoji,
   readApprovalReactionDecisionList,
@@ -91,32 +91,6 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     }
   });
 
-  it("extracts only canonical approval prompts and preserves strict reply-only channels", () => {
-    const text = [
-      "**Plugin approval required**",
-      "**ID:** plugin:approval-123",
-      "Allow Once: /approve plugin:approval-123 allow-once",
-      "Reply with: /approve plugin:approval-123 deny|always",
-    ].join("\n");
-    expect(extractApprovalReactionPromptBinding({ text })).toEqual({
-      approvalId: "plugin:approval-123",
-      approvalKind: "plugin",
-      allowedDecisions: ["allow-once", "deny", "allow-always"],
-    });
-    expect(
-      extractApprovalReactionPromptBinding({
-        text,
-        approvalKind: "plugin",
-        replyInstructionOnly: true,
-      }),
-    ).toMatchObject({ allowedDecisions: ["deny", "allow-always"] });
-    expect(
-      extractApprovalReactionPromptBinding({
-        text: "Helpful example:\n/approve plugin:approval-123 allow-once",
-      }),
-    ).toBeNull();
-  });
-
   it("fails closed when typed approval presentation or delivery marker disagrees", () => {
     const metadata = {
       approvalId: "plugin:approval-123",
@@ -144,9 +118,13 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       presentation,
       channelData: {
         execApproval: metadata,
-        privateBinding: { version: 1, ...metadata },
+        privateBinding: buildApprovalReactionDeliveredBindingMarker({
+          ...metadata,
+          allowedDecisions: [...metadata.allowedDecisions],
+        }),
       },
     };
+    expect(payload.channelData.privateBinding).toEqual({ version: 1, ...metadata });
     expect(readApprovalReactionPresentationBinding({ payload })).toMatchObject(metadata);
     expect(
       readApprovalReactionDeliveredBinding({

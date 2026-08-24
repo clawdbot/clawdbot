@@ -94,7 +94,7 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
     const cfg: ClawdbotConfig = {
       agents: {
         defaults: { reasoningDefault: "stream" },
-        list: [{ id: "Ops", reasoningDefault: "off" }],
+        entries: { Ops: { reasoningDefault: "off" } },
       },
     };
 

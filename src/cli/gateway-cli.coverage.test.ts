@@ -156,7 +156,20 @@ describe("gateway-cli coverage", () => {
     await expectGatewayExit(["gateway", "call", "health", "--timeout", "1000ms", "--json"]);
 
     expect(callGateway).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("Gateway call failed: Error: Invalid --timeout");
+    expect(runtimeErrors.join("\n")).toContain("Gateway call failed: Invalid --timeout");
+  });
+
+  it("renders gateway request failures without the client error class in human mode", async () => {
+    const error = Object.assign(new Error("invalid audit.activity.list params"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+    });
+    callGateway.mockRejectedValueOnce(error);
+
+    await expectGatewayExit(["gateway", "call", "audit.activity.list"]);
+
+    expect(runtimeErrors.join("\n")).toContain("invalid audit.activity.list params");
+    expect(runtimeErrors.join("\n")).not.toContain("GatewayClientRequestError");
   });
 
   it("registers gateway probe and routes to gatewayStatusCommand", async () => {
@@ -181,8 +194,13 @@ describe("gateway-cli coverage", () => {
     ]);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    const stabilityCall = firstMockArg(callGateway) as { method?: string; params?: unknown };
+    const stabilityCall = firstMockArg(callGateway) as {
+      method?: string;
+      params?: unknown;
+      localPortOverride?: number;
+    };
     expect(stabilityCall?.method).toBe("diagnostics.stability");
+    expect(stabilityCall?.localPortOverride).toBeUndefined();
     expect(stabilityCall?.params).toEqual({
       limit: 5,
       type: "payload.large",
@@ -490,7 +508,16 @@ describe("gateway-cli coverage", () => {
       fs.writeFileSync(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
 
       await withEnvOverride({ OPENCLAW_STATE_DIR: tempDir }, async () => {
-        await runGatewayCommand(["gateway", "stability", "--bundle", "latest"]);
+        await runGatewayCommand([
+          "gateway",
+          "--port",
+          "19096",
+          "stability",
+          "--bundle",
+          "latest",
+          "--url",
+          "ws://127.0.0.1:19096",
+        ]);
       });
 
       const output = runtimeLogs.join("\n");
@@ -508,7 +535,18 @@ describe("gateway-cli coverage", () => {
     }
   });
 
-  it("writes gateway diagnostics export with a best-effort health snapshot", async () => {
+  it.each([
+    {
+      name: "gateway diagnostics",
+      args: ["gateway", "diagnostics", "export"],
+      timeoutMs: 3000,
+    },
+    {
+      name: "offline stability",
+      args: ["gateway", "--port", "19097", "stability", "--bundle", "latest", "--export"],
+      timeoutMs: 10_000,
+    },
+  ])("writes $name export with a service-owned health snapshot", async ({ args, timeoutMs }) => {
     callGateway.mockClear();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cli-support-"));
     try {
@@ -516,21 +554,19 @@ describe("gateway-cli coverage", () => {
       await withEnvOverride(
         { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
         async () => {
-          await runGatewayCommand([
-            "gateway",
-            "diagnostics",
-            "export",
-            "--output",
-            outputPath,
-            "--json",
-          ]);
+          await runGatewayCommand([...args, "--output", outputPath, "--json"]);
         },
       );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const healthCall = firstMockArg(callGateway) as { method?: string; timeoutMs?: number };
+      const healthCall = firstMockArg(callGateway) as {
+        method?: string;
+        timeoutMs?: number;
+        localPortOverride?: number;
+      };
       expect(healthCall?.method).toBe("health");
-      expect(healthCall?.timeoutMs).toBe(3000);
+      expect(healthCall?.timeoutMs).toBe(timeoutMs);
+      expect(healthCall?.localPortOverride).toBeUndefined();
       expect(fs.existsSync(outputPath)).toBe(true);
       const output = runtimeLogs.join("\n");
       expect(output).toContain('"path"');

@@ -1,3 +1,4 @@
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 // Memory Wiki plugin module implements claim health behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WikiClaim, WikiPageSummary } from "./markdown.js";
@@ -247,4 +248,3 @@ export function buildPageContradictionClusters(
     }))
     .toSorted((left, right) => left.label.localeCompare(right.label));
 }
-import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";

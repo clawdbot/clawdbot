@@ -50,6 +50,7 @@ function buildAskUserPromptPayload(
   toolCallId: string,
   sessionKey: string | undefined,
   runId: string,
+  agentId: string | undefined,
   args: unknown,
 ) {
   try {
@@ -58,6 +59,7 @@ function buildAskUserPromptPayload(
       toolCallId,
       sessionKey,
       runId,
+      agentId,
       questions,
       timeoutSeconds,
     });
@@ -200,19 +202,19 @@ export function buildToolCallSummary(
   args: unknown,
   meta: string | undefined,
   instanceReplaySafe: boolean,
+  ownerKey: string | undefined,
   structuredReplaySafe: boolean,
 ): ToolCallSummary {
-  const mutation = buildToolMutationState(toolName, args, meta);
+  const mutation = buildToolMutationState(toolName, args, ownerKey ? { ownerKey } : undefined);
   return {
     meta,
     commandBearing: isCommandBearingToolCall(toolName, args),
     instanceReplaySafe,
     mutatingAction: mutation.mutatingAction,
+    ...(ownerKey ? { ownerKey } : {}),
     replaySafe:
       (instanceReplaySafe && !mutation.mutatingAction) ||
       (structuredReplaySafe && mutation.replaySafe),
-    actionFingerprint: mutation.actionFingerprint,
-    fileTarget: mutation.fileTarget,
   };
 }
 
@@ -318,17 +320,29 @@ export function handleToolExecutionStart(
     args: unknown;
     replaySafe?: boolean;
     hideFromChannelProgress?: boolean;
+    lifecycleProvenance?: "nested";
   },
 ): void | Promise<void> {
   const startToolName = normalizeToolPolicyName(evt.toolName);
   ctx.state.liveEditDiffStateById.delete(evt.toolCallId);
   const askUserPromptReservation =
     startToolName === "ask_user" && ctx.params.onToolResult
-      ? buildAskUserPromptPayload(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId, evt.args)
+      ? buildAskUserPromptPayload(
+          evt.toolCallId,
+          ctx.params.sessionKey,
+          ctx.params.runId,
+          ctx.params.agentId,
+          evt.args,
+        )
       : undefined;
   const cancelAskUserPromptReservation = () => {
     if (askUserPromptReservation) {
-      cancelAskUserPromptDelivery(evt.toolCallId, ctx.params.sessionKey, ctx.params.runId);
+      cancelAskUserPromptDelivery(
+        evt.toolCallId,
+        ctx.params.sessionKey,
+        ctx.params.runId,
+        ctx.params.agentId,
+      );
     }
   };
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
@@ -444,7 +458,14 @@ export function handleToolExecutionStart(
       evt.replaySafe === true ||
       ctx.params.replaySafeToolNames?.has(rawToolName) === true ||
       ctx.params.replaySafeToolNames?.has(toolName) === true;
-    const callSummary = buildToolCallSummary(toolName, args, meta, instanceReplaySafe, false);
+    const callSummary = buildToolCallSummary(
+      toolName,
+      args,
+      meta,
+      instanceReplaySafe,
+      ctx.params.sideEffectToolOwners?.get(toolName),
+      false,
+    );
     ctx.state.toolMetaById.set(toolCallId, callSummary);
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
@@ -596,7 +617,10 @@ export function handleToolExecutionStart(
     }
   };
 
-  // Flush pending block replies to preserve message boundaries before tool execution.
+  // Only the outer provider tool owns the block-reply presentation boundary.
+  if (evt.lifecycleProvenance === "nested") {
+    return continueToolExecutionStart();
+  }
   let flushBlockReplyBufferResult: void | Promise<void>;
   try {
     flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();

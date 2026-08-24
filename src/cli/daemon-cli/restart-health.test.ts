@@ -165,10 +165,12 @@ describe("restart health", () => {
     async (reason) => {
       const snapshot = await inspectAmbiguousOwnershipWithProbe({
         ok: false,
+        error: reason,
         close: { code: 1008, reason },
       });
 
       expect(snapshot.healthy).toBe(true);
+      expect(snapshot.probeError).toBeUndefined();
     },
   );
 
@@ -290,6 +292,7 @@ describe("restart health", () => {
     expect(createConfigIO).toHaveBeenCalledWith(
       expect.objectContaining({
         env: serviceEnv,
+        observe: false,
         pluginValidation: "skip",
         suppressFutureVersionWarning: true,
       }),

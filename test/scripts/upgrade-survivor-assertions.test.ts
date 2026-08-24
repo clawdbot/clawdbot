@@ -91,14 +91,9 @@ function writeMigratedSessionState(stateDir: string): void {
 }
 
 function createMigratedSessionFileStore(
-  stateDir: string,
   options: { includePrompt?: boolean } = {},
 ): Record<string, Record<string, unknown>> {
-  const agentSessionsDir = join(stateDir, "agents", "main", "sessions");
-  const main: Record<string, unknown> = {
-    sessionId: "upgrade-main-session",
-    sessionFile: join(agentSessionsDir, "upgrade-main-session.jsonl"),
-  };
+  const main: Record<string, unknown> = { sessionId: "upgrade-main-session" };
   if (options.includePrompt !== false) {
     main.skillsSnapshot = {
       prompt: "legacy prompt survives as metadata",
@@ -106,14 +101,8 @@ function createMigratedSessionFileStore(
   }
   return {
     "agent:main:main": main,
-    "agent:main:+15551234567": {
-      sessionId: "upgrade-direct-session",
-      sessionFile: join(agentSessionsDir, "upgrade-direct-session.jsonl"),
-    },
-    "agent:main:slack:channel:cupgrade": {
-      sessionId: "upgrade-group-session",
-      sessionFile: join(agentSessionsDir, "upgrade-group-session.jsonl"),
-    },
+    "agent:main:+15551234567": { sessionId: "upgrade-direct-session" },
+    "agent:main:slack:channel:cupgrade": { sessionId: "upgrade-group-session" },
   };
 }
 
@@ -123,10 +112,7 @@ function writeMigratedSessionFiles(
 ): void {
   const agentSessionsDir = join(stateDir, "agents", "main", "sessions");
   mkdirSync(agentSessionsDir, { recursive: true });
-  writeJson(
-    join(agentSessionsDir, "sessions.json"),
-    createMigratedSessionFileStore(stateDir, options),
-  );
+  writeJson(join(agentSessionsDir, "sessions.json"), createMigratedSessionFileStore(options));
   for (const sessionId of [
     "upgrade-main-session",
     "upgrade-direct-session",
@@ -162,7 +148,7 @@ function writeLegacyCacheSessionState(
     const insert = db.prepare(
       "INSERT INTO cache_entries (scope, key, value_json) VALUES (?, ?, ?)",
     );
-    for (const [key, entry] of Object.entries(createMigratedSessionFileStore(stateDir, options))) {
+    for (const [key, entry] of Object.entries(createMigratedSessionFileStore(options))) {
       insert.run("session_entries", key, JSON.stringify(entry));
     }
   } finally {
@@ -187,7 +173,7 @@ function writeLegacySessionEntriesState(stateDir: string): void {
       INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
       VALUES (?, ?, ?, ?)
     `);
-    for (const [key, entry] of Object.entries(createMigratedSessionFileStore(stateDir))) {
+    for (const [key, entry] of Object.entries(createMigratedSessionFileStore())) {
       const sessionId = entry.sessionId;
       if (typeof sessionId !== "string") {
         throw new TypeError(`missing fixture session id for ${key}`);
@@ -381,6 +367,7 @@ describe("upgrade survivor assertions", () => {
 
     expect(scenarios).toContain("base");
     expect(scenarios).toContain("acpx-openclaw-tools-bridge");
+    expect(scenarios).toContain("sqlite-volume");
     expect(new Set(scenarios).size).toBe(scenarios.length);
   });
 
@@ -592,6 +579,27 @@ describe("upgrade survivor assertions", () => {
         writeMigratedSessionState(stateDir);
       }),
     ).not.toThrow();
+  });
+
+  it("rejects retired sessionFile metadata in SQLite-backed session rows", () => {
+    expect(() =>
+      runSessionStateAssertion((stateDir) => {
+        writeMigratedSessionState(stateDir);
+        const db = new DatabaseSync(
+          join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+        );
+        try {
+          db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+            JSON.stringify({
+              sessionFile: join(stateDir, "sessions", "upgrade-main-session.jsonl"),
+            }),
+            "agent:main:main",
+          );
+        } finally {
+          db.close();
+        }
+      }),
+    ).toThrow(/retained retired sessionFile metadata/);
   });
 
   it("rejects ClawHub npm-pack installs outside the managed extensions root", () => {

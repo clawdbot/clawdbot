@@ -2,19 +2,189 @@
 // validation errors, and protocol response shapes.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  getPreparedRuntimeAuthProfileStoreSnapshot,
+  loadAuthProfileStoreWithoutExternalProfiles,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
+import type { PreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
+import { materializeRuntimeCapabilities } from "../../agents/prepared-model-runtime.configured-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { assertPluginMetadataSnapshotConsistency } from "../plugin-metadata.test-helpers.js";
+import {
+  type PreparedGatewayModelCatalogSnapshot,
+  registerGatewayModelCatalogPrivateAccess,
+} from "../server-model-catalog-auth.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
+
+const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacement"]> = {
+  requiredNodeCommands: [],
+  consumesWorkerSlot: true,
+};
+
+const modelPluginMetadataSnapshot = vi.hoisted(() => {
+  const plugins = [
+    {
+      id: "anthropic",
+      channels: [],
+      providers: ["anthropic"],
+      cliBackends: ["claude-cli"],
+      syntheticAuthRefs: ["claude-cli"],
+      providerAuthChoices: [
+        {
+          provider: "anthropic",
+          method: "cli",
+          choiceId: "anthropic-cli",
+          deprecatedChoiceIds: ["claude-cli"],
+        },
+        { provider: "anthropic", method: "setup-token", choiceId: "setup-token" },
+        { provider: "anthropic", method: "api-key", choiceId: "apiKey" },
+      ],
+      modelSupport: { modelPrefixes: ["claude-"] },
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/test/anthropic",
+      source: "/test/anthropic/index.js",
+      manifestPath: "/test/anthropic/openclaw.plugin.json",
+    },
+    {
+      id: "byteplus",
+      channels: [],
+      providers: ["byteplus", "byteplus-plan"],
+      syntheticAuthRefs: [],
+      providerAuthAliases: { "byteplus-plan": "byteplus" },
+      providerAuthChoices: [
+        { provider: "byteplus", method: "api-key", choiceId: "byteplus-api-key" },
+      ],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/test/byteplus",
+      source: "/test/byteplus/index.js",
+      manifestPath: "/test/byteplus/openclaw.plugin.json",
+    },
+    {
+      id: "github-copilot",
+      channels: [],
+      providers: ["github-copilot"],
+      syntheticAuthRefs: [],
+      providerAuthChoices: [
+        { provider: "github-copilot", method: "device", choiceId: "github-copilot" },
+        {
+          provider: "github-copilot",
+          method: "device-enterprise",
+          choiceId: "github-copilot-enterprise",
+        },
+      ],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/test/github-copilot",
+      source: "/test/github-copilot/index.js",
+      manifestPath: "/test/github-copilot/openclaw.plugin.json",
+    },
+  ];
+  return {
+    policyHash: "models-test-plugin-policy",
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "models-test-plugin-policy",
+      generatedAtMs: 0,
+      installRecords: {},
+      // A real isolated bundled snapshot has no installed-index rows; bundled
+      // manifest records remain the authoritative graph for this fixture.
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: { plugins, diagnostics: [] },
+    plugins,
+    diagnostics: [],
+    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: (pluginId: string) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map([
+        ["anthropic", ["anthropic"]],
+        ["byteplus", ["byteplus"]],
+        ["byteplus-plan", ["byteplus"]],
+        ["github-copilot", ["github-copilot"]],
+      ]),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map([["claude-cli", ["anthropic"]]]),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: plugins.length,
+    },
+  };
+});
+
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
+  getCurrentPluginMetadataSnapshot: () => modelPluginMetadataSnapshot,
+}));
+
+vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: () => modelPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: () => modelPluginMetadataSnapshot,
+}));
+
+vi.mock("../../plugins/provider-thinking.js", () => ({
+  resolveEffectiveThinkingProfile: (params: { provider: string; context: { modelId: string } }) => {
+    if (params.provider !== "claude-cli") {
+      return undefined;
+    }
+    if (params.context.modelId === "claude-mythos-5") {
+      return { levels: [{ id: "off" }], defaultLevel: "off" };
+    }
+    if (params.context.modelId === "claude-fable-5") {
+      return {
+        levels: [
+          { id: "minimal" },
+          { id: "low" },
+          { id: "medium" },
+          { id: "high" },
+          { id: "xhigh" },
+          { id: "adaptive" },
+          { id: "max" },
+        ],
+        defaultLevel: "high",
+        preserveWhenCatalogReasoningFalse: true,
+      };
+    }
+    return undefined;
+  },
+}));
 
 const withoutOpenAIEnvAuth = async <T>(run: () => Promise<T>): Promise<T> =>
   await withEnvAsync(
@@ -28,6 +198,47 @@ const withoutOpenAIEnvAuth = async <T>(run: () => Promise<T>): Promise<T> =>
     },
     run,
   );
+
+const withoutAnthropicEnvAuth = async <T>(run: () => Promise<T>): Promise<T> =>
+  await withEnvAsync(
+    {
+      ANTHROPIC_API_KEY: undefined,
+      ANTHROPIC_AUTH_TOKEN: undefined,
+      CLAUDE_API_KEY: undefined,
+      CLAUDE_CODE_OAUTH_TOKEN: undefined,
+      HOME: modelsTestState.home,
+    },
+    run,
+  );
+
+let modelsTestState: OpenClawTestState;
+
+beforeAll(async () => {
+  assertPluginMetadataSnapshotConsistency(modelPluginMetadataSnapshot as PluginMetadataSnapshot);
+  modelsTestState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-models-list-",
+    agentEnv: "main",
+  });
+});
+
+afterAll(async () => {
+  clearRuntimeAuthProfileStoreSnapshots();
+  await modelsTestState.cleanup();
+});
+
+async function withModelsTestState<T>(
+  options: NonNullable<Parameters<typeof createOpenClawTestState>[0]>,
+  run: (state: OpenClawTestState) => Promise<T>,
+): Promise<T> {
+  clearRuntimeAuthProfileStoreSnapshots();
+  await modelsTestState.writeAuthProfiles({ version: 1, profiles: {} });
+  try {
+    return await withEnvAsync(options.env ?? {}, () => run(modelsTestState));
+  } finally {
+    clearRuntimeAuthProfileStoreSnapshots();
+  }
+}
 
 function createDemoOAuthStore(params: { access: string; expires: number }) {
   return {
@@ -46,6 +257,7 @@ function createDemoOAuthStore(params: { access: string; expires: number }) {
 
 function requestModelsList(params: {
   view: "default" | "configured" | "provider-config" | "all";
+  agentId?: string;
   respond?: ReturnType<typeof vi.fn>;
   runtimeConfig?: OpenClawConfig;
   getRuntimeConfig?: () => OpenClawConfig;
@@ -56,12 +268,65 @@ function requestModelsList(params: {
     workspaceDir?: string;
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
-  agentId?: string;
   includeProviderCapabilities?: boolean;
+  deferredAuth?: Promise<PreparedModelRuntimeAuth>;
+  preparedAuthModes?: PreparedModelRuntimeAuth["authModes"];
 }) {
   const respond = params.respond ?? vi.fn();
   const runtimeConfig = params.runtimeConfig ?? ({} as OpenClawConfig);
   const getRuntimeConfig = params.getRuntimeConfig ?? (() => runtimeConfig);
+  const resolveOwnerFacts = () => {
+    const config = getRuntimeConfig();
+    const agentId = params.agentId ?? resolveDefaultAgentId(config);
+    const agentDir = resolveAgentDir(config, agentId);
+    return {
+      agentId,
+      agentDir,
+      workspaceDir: agentDir,
+      config,
+      authModes: params.preparedAuthModes ?? {},
+      authStore:
+        getPreparedRuntimeAuthProfileStoreSnapshot(agentDir) ??
+        loadAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false }),
+      metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
+    };
+  };
+  const loadSnapshot = async (loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0]) => {
+    const entries = await params.loadGatewayModelCatalog(loadParams);
+    const owner = resolveOwnerFacts();
+    return {
+      ...owner,
+      ...(loadParams?.agentId ? { agentId: loadParams.agentId } : {}),
+      catalogComplete: loadParams?.readOnly === false,
+      entries,
+      routeVariants: entries,
+      authMaterializations: [],
+    } as unknown as PreparedGatewayModelCatalogSnapshot;
+  };
+  const loadGatewayModelCatalogSnapshot = async (
+    loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0],
+  ) => loadSnapshot(loadParams);
+  registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
+    loadDeferred: async (loadParams) => {
+      const snapshot = await loadSnapshot(loadParams);
+      if (!params.deferredAuth) {
+        return snapshot;
+      }
+      try {
+        return { ...snapshot, ...(await params.deferredAuth) };
+      } catch {
+        return snapshot;
+      }
+    },
+    readPrepared: async () =>
+      ({
+        ...resolveOwnerFacts(),
+        catalogComplete: false,
+        entries: [],
+        routeVariants: [],
+        authMaterializations: [],
+      }) as PreparedGatewayModelCatalogSnapshot,
+  });
   const request = expectDefined(
     modelsHandlers["models.list"],
     'modelsHandlers["models.list"] test invariant',
@@ -87,19 +352,7 @@ function requestModelsList(params: {
     context: {
       getRuntimeConfig,
       loadGatewayModelCatalog: params.loadGatewayModelCatalog,
-      loadGatewayModelCatalogSnapshot: async (
-        loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0],
-      ) => {
-        const entries = await params.loadGatewayModelCatalog(loadParams);
-        const config = getRuntimeConfig();
-        return {
-          agentId: loadParams?.agentId ?? resolveDefaultAgentId(config),
-          agentDir: "/tmp/models-list-agent",
-          config,
-          entries,
-          routeVariants: entries,
-        };
-      },
+      loadGatewayModelCatalogSnapshot,
       logGateway: {
         debug: vi.fn(),
       },
@@ -132,6 +385,38 @@ describe("models.list", () => {
     expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "writer" }),
     );
+  });
+
+  it("returns typed selection-required until an explicit fleet selects an agent", async () => {
+    const runtimeConfig = {
+      agents: {
+        ownership: "explicit" as const,
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    };
+    const missing = requestModelsList({
+      view: "configured",
+      runtimeConfig,
+      loadGatewayModelCatalog: vi.fn(async () => []),
+    });
+    await missing.request;
+    expect(missing.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("agent"),
+      }),
+    );
+
+    const selected = requestModelsList({
+      view: "configured",
+      agentId: "research",
+      runtimeConfig,
+      loadGatewayModelCatalog: vi.fn(async () => []),
+    });
+    await selected.request;
+    expect(selected.respond).toHaveBeenCalledWith(true, { models: [] }, undefined);
   });
 
   it("uses the replacement owner config for the whole catalog projection", async () => {
@@ -228,6 +513,279 @@ describe("models.list", () => {
     const custom = payload?.models.find((model) => model.provider === "custom-cloud");
     expect(custom).toBeDefined();
     expect(custom).not.toHaveProperty("apiKeySupported");
+  });
+
+  it("projects exact CLI runtime thinking capabilities onto every configured Claude model", async () => {
+    const modelIds = [
+      "claude-opus-5",
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "claude-opus-4-6",
+      "claude-sonnet-5",
+      "claude-fable-5",
+      "claude-sonnet-4-6",
+    ];
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: Object.fromEntries(
+            modelIds.map((modelId) => [
+              `anthropic/${modelId}`,
+              { agentRuntime: { id: "claude-cli" } },
+            ]),
+          ),
+        },
+      },
+    };
+    const loadGatewayModelCatalog = vi.fn(async () =>
+      modelIds.map((modelId) => ({
+        id: modelId,
+        name: modelId,
+        provider: "anthropic",
+        reasoning: true,
+      })),
+    );
+    const { request, respond } = requestModelsList({
+      view: "all",
+      runtimeConfig,
+      loadGatewayModelCatalog,
+    });
+
+    await request;
+
+    const payload = respond.mock.calls[0]?.[1] as
+      | { models: Array<Record<string, unknown>> }
+      | undefined;
+    for (const modelId of modelIds) {
+      expect(
+        payload?.models.find((entry) => entry.provider === "anthropic" && entry.id === modelId),
+      ).toMatchObject({
+        reasoning: true,
+        agentRuntime: { id: "claude-cli" },
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "minimal", label: "minimal" },
+          { id: "low", label: "low" },
+          { id: "medium", label: "medium" },
+          { id: "high", label: "high" },
+        ],
+      });
+    }
+  });
+
+  it("preserves a configured reasoning opt-out on a Claude CLI route", async () => {
+    const modelId = "claude-opus-5";
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          models: {
+            [`anthropic/${modelId}`]: { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            models: [{ id: modelId, name: modelId, reasoning: false }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      { id: modelId, name: modelId, provider: "anthropic", reasoning: false },
+      {
+        id: modelId,
+        name: `${modelId} (Claude CLI)`,
+        provider: "claude-cli",
+        reasoning: true,
+      },
+    ]);
+    const { request, respond } = requestModelsList({
+      view: "all",
+      runtimeConfig,
+      loadGatewayModelCatalog,
+    });
+
+    await request;
+
+    const payload = respond.mock.calls[0]?.[1] as
+      | { models: Array<Record<string, unknown>> }
+      | undefined;
+    expect(
+      payload?.models.find((entry) => entry.provider === "anthropic" && entry.id === modelId),
+    ).toMatchObject({
+      reasoning: false,
+      agentRuntime: { id: "claude-cli" },
+      thinkingLevels: [{ id: "off", label: "off" }],
+    });
+  });
+
+  it("preserves mandatory Claude CLI thinking despite a configured reasoning opt-out", async () => {
+    const modelId = "claude-fable-5";
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          models: {
+            [`anthropic/${modelId}`]: { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            models: [{ id: modelId, name: modelId, reasoning: false }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const materializedCatalog = materializeRuntimeCapabilities(
+      [{ id: modelId, name: modelId, provider: "anthropic", reasoning: false }],
+      [
+        {
+          provider: "anthropic",
+          modelId,
+          model: {
+            id: modelId,
+            name: `${modelId} (Claude CLI)`,
+            provider: "claude-cli",
+            reasoning: true,
+          } as never,
+        },
+      ],
+    );
+    const { request, respond } = requestModelsList({
+      view: "configured",
+      runtimeConfig,
+      loadGatewayModelCatalog: vi.fn(async () => materializedCatalog),
+    });
+
+    await request;
+
+    const payload = respond.mock.calls[0]?.[1] as
+      | { models: Array<Record<string, unknown>> }
+      | undefined;
+    expect(
+      payload?.models.find((entry) => entry.provider === "anthropic" && entry.id === modelId),
+    ).toMatchObject({
+      reasoning: false,
+      agentRuntime: { id: "claude-cli" },
+      thinkingLevels: [
+        { id: "minimal", label: "minimal" },
+        { id: "low", label: "low" },
+        { id: "medium", label: "medium" },
+        { id: "adaptive", label: "adaptive" },
+        { id: "high", label: "high" },
+        { id: "xhigh", label: "xhigh" },
+        { id: "max", label: "max" },
+      ],
+      thinkingDefault: "high",
+    });
+  });
+
+  it("publishes a materialized Claude CLI logical row with its configured thinking default", async () => {
+    const modelIds = ["claude-opus-5", "claude-sonnet-5"];
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          model: { primary: `anthropic/${modelIds[0]}` },
+          models: Object.fromEntries(
+            modelIds.map((modelId) => [
+              `anthropic/${modelId}`,
+              { agentRuntime: { id: "claude-cli" }, params: { thinking: "medium" } },
+            ]),
+          ),
+        },
+      },
+      models: {
+        providers: {
+          anthropic: { models: modelIds.map((id) => ({ id, name: id })) },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const { request, respond } = requestModelsList({
+      view: "configured",
+      runtimeConfig,
+      // Prepared catalog shape: runtime-only rows are deliberately absent.
+      loadGatewayModelCatalog: vi.fn(async () =>
+        modelIds.map((id) => ({ id, name: id, provider: "anthropic", reasoning: true })),
+      ),
+    });
+
+    await request;
+
+    const payload = respond.mock.calls[0]?.[1] as
+      | { models: Array<Record<string, unknown>> }
+      | undefined;
+    for (const modelId of modelIds) {
+      expect(
+        payload?.models.find((entry) => entry.provider === "anthropic" && entry.id === modelId),
+      ).toMatchObject({
+        reasoning: true,
+        agentRuntime: { id: "claude-cli" },
+        thinkingDefault: "medium",
+        thinkingLevels: expect.arrayContaining([
+          { id: "off", label: "off" },
+          { id: "medium", label: "medium" },
+          { id: "high", label: "high" },
+        ]),
+      });
+    }
+  });
+
+  it("publishes the concrete Claude CLI thinking policy for a configured logical model", async () => {
+    const modelId = "claude-mythos-5";
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          model: { primary: `anthropic/${modelId}` },
+          models: {
+            [`anthropic/${modelId}`]: { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: { models: [{ id: modelId, name: "Claude Mythos 5" }] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const materializedCatalog = materializeRuntimeCapabilities(
+      [{ id: modelId, name: "Claude Mythos 5", provider: "anthropic" }],
+      [
+        {
+          provider: "anthropic",
+          modelId,
+          model: {
+            id: modelId,
+            name: "Claude Mythos 5 (Claude CLI)",
+            provider: "claude-cli",
+            reasoning: true,
+          } as never,
+        },
+      ],
+    );
+    const { request, respond } = requestModelsList({
+      view: "configured",
+      runtimeConfig,
+      loadGatewayModelCatalog: vi.fn(async () => materializedCatalog),
+    });
+
+    await request;
+
+    const payload = respond.mock.calls[0]?.[1] as
+      | { models: Array<Record<string, unknown>> }
+      | undefined;
+    const model = payload?.models.find(
+      (entry) => entry.provider === "anthropic" && entry.id === modelId,
+    );
+    expect(model).toMatchObject({
+      provider: "anthropic",
+      reasoning: true,
+      agentRuntime: { id: "claude-cli" },
+      thinkingLevels: [{ id: "off", label: "off" }],
+      thinkingDefault: "off",
+    });
+    expect(model).not.toHaveProperty("thinkingPolicyProvider");
   });
 
   it("keeps source-authored provider inventory when the canonical catalog is missing", async () => {
@@ -392,6 +950,7 @@ describe("models.list", () => {
               name: "Llama Secure",
               provider: "vllm",
               input: ["text", "image", "document"],
+              tags: ["default"],
             },
           ],
         },
@@ -438,8 +997,16 @@ describe("models.list", () => {
                 id: "gpt-test",
                 name: "GPT Test",
                 provider: "openai",
-                agentRuntime: { id: "openclaw", source: "implicit" },
+                agentRuntime: {
+                  id: "openclaw",
+                  cloudPlacementSupported: true,
+                  cloudPlacementExecutionMode: "worker-turn",
+                  devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
+                  devicePlacementSupported: true,
+                  source: "implicit",
+                },
                 available: false,
+                tags: ["default"],
               },
             ],
           },
@@ -451,6 +1018,164 @@ describe("models.list", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  it("does not let deferred auth outlive the configured browse deadline", async () => {
+    await withoutOpenAIEnvAuth(async () => {
+      const auth = createDeferred<PreparedModelRuntimeAuth>();
+      const runtimeConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com",
+              models: [{ id: "gpt-test", name: "GPT Test" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const { request, respond } = requestModelsList({
+          view: "configured",
+          runtimeConfig,
+          deferredAuth: auth.promise,
+          loadGatewayModelCatalog: vi.fn(() =>
+            Promise.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]),
+          ),
+          reqId: "req-models-list-slow-auth",
+        });
+
+        await vi.advanceTimersByTimeAsync(800);
+        await vi.runOnlyPendingTimersAsync();
+        await request;
+
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              {
+                id: "gpt-test",
+                name: "GPT Test",
+                provider: "openai",
+                agentRuntime: {
+                  id: "openclaw",
+                  cloudPlacementSupported: true,
+                  cloudPlacementExecutionMode: "worker-turn",
+                  devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
+                  devicePlacementSupported: true,
+                  source: "implicit",
+                },
+                available: false,
+                tags: ["default"],
+              },
+            ],
+          },
+          undefined,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("keeps prepared auth when deferred auth refresh rejects", async () => {
+    await withoutOpenAIEnvAuth(async () => {
+      const runtimeConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com",
+              models: [{ id: "gpt-test", name: "GPT Test" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const { request, respond } = requestModelsList({
+        view: "configured",
+        runtimeConfig,
+        deferredAuth: Promise.reject(new Error("auth refresh failed")),
+        loadGatewayModelCatalog: vi.fn(() =>
+          Promise.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]),
+        ),
+        reqId: "req-models-list-rejected-auth",
+      });
+
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            {
+              id: "gpt-test",
+              name: "GPT Test",
+              provider: "openai",
+              agentRuntime: {
+                id: "openclaw",
+                cloudPlacementSupported: true,
+                cloudPlacementExecutionMode: "worker-turn",
+                devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
+                devicePlacementSupported: true,
+                source: "implicit",
+              },
+              available: false,
+              tags: ["default"],
+            },
+          ],
+        },
+        undefined,
+      );
+    });
+  });
+
+  it("does not advertise a subscription route after deferred auth observes logout", async () => {
+    await withoutOpenAIEnvAuth(async () => {
+      const runtimeConfig = {
+        models: {
+          providers: {
+            openai: {
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const { request, respond } = requestModelsList({
+        view: "configured",
+        runtimeConfig,
+        preparedAuthModes: { openai: "oauth" },
+        deferredAuth: Promise.resolve({
+          authStore: { version: 1, profiles: {} },
+          authModes: {},
+        }),
+        loadGatewayModelCatalog: vi.fn(() =>
+          Promise.resolve([
+            {
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              provider: "openai",
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+            },
+          ]),
+        ),
+        reqId: "req-models-list-cli-logout",
+      });
+
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            expect.objectContaining({ id: "gpt-5.4", provider: "openai", available: false }),
+          ],
+        },
+        undefined,
+      );
     });
   });
 
@@ -494,6 +1219,7 @@ describe("models.list", () => {
               id: "llama-local",
               name: "Llama Local",
               provider: "vllm",
+              tags: ["default"],
             },
           ],
         },
@@ -557,6 +1283,7 @@ describe("models.list", () => {
               name: "Llama Secure",
               provider: "vllm",
               available: false,
+              tags: ["default"],
             },
           ],
         },
@@ -595,7 +1322,12 @@ describe("models.list", () => {
                 id: "gpt-test",
                 name: "GPT Test",
                 provider: "openai",
-                agentRuntime: { id: "codex", source: "implicit" },
+                agentRuntime: {
+                  id: "codex",
+                  cloudPlacementSupported: false,
+                  devicePlacementSupported: false,
+                  source: "implicit",
+                },
                 available: false,
               },
             ],
@@ -684,14 +1416,24 @@ describe("models.list", () => {
               id: "gpt-5.4",
               name: "GPT-5.4 Codex",
               provider: "openai",
-              agentRuntime: { id: "codex", source: "implicit" },
+              agentRuntime: {
+                id: "codex",
+                cloudPlacementSupported: false,
+                devicePlacementSupported: false,
+                source: "implicit",
+              },
               available: true,
             },
             {
               id: "gpt-codex-test",
               name: "GPT Codex Test",
               provider: "openai",
-              agentRuntime: { id: "codex", source: "implicit" },
+              agentRuntime: {
+                id: "codex",
+                cloudPlacementSupported: false,
+                devicePlacementSupported: false,
+                source: "implicit",
+              },
               available: true,
             },
             { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
@@ -726,14 +1468,24 @@ describe("models.list", () => {
               id: "gpt-5.4",
               name: "GPT-5.4 Codex",
               provider: "openai",
-              agentRuntime: { id: "codex", source: "implicit" },
+              agentRuntime: {
+                id: "codex",
+                cloudPlacementSupported: false,
+                devicePlacementSupported: false,
+                source: "implicit",
+              },
               available: true,
             },
             {
               id: "gpt-codex-test",
               name: "GPT Codex Test",
               provider: "openai",
-              agentRuntime: { id: "codex", source: "implicit" },
+              agentRuntime: {
+                id: "codex",
+                cloudPlacementSupported: false,
+                devicePlacementSupported: false,
+                source: "implicit",
+              },
               available: true,
             },
             { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
@@ -747,7 +1499,7 @@ describe("models.list", () => {
 
   it("keeps keyless local provider wildcard discoveries visible with unknown availability", async () => {
     await withoutOpenAIEnvAuth(async () => {
-      await withOpenClawTestState(
+      await withModelsTestState(
         {
           layout: "state-only",
           prefix: "openclaw-models-list-local-wildcard-",
@@ -790,6 +1542,7 @@ describe("models.list", () => {
                 name: "Llama Configured",
                 provider: "vllm",
                 available: true,
+                tags: ["default"],
               },
               {
                 id: "llama-discovered",
@@ -817,7 +1570,7 @@ describe("models.list", () => {
 
   it("marks legacy OpenAI Codex aliases available through ChatGPT OAuth", async () => {
     await withoutOpenAIEnvAuth(async () => {
-      await withOpenClawTestState(
+      await withModelsTestState(
         {
           layout: "state-only",
           prefix: "openclaw-models-list-codex-alias-",
@@ -862,7 +1615,12 @@ describe("models.list", () => {
                   id: "gpt-5.4",
                   name: "GPT-5.4 Codex",
                   provider: "openai",
-                  agentRuntime: { id: "codex", source: "implicit" },
+                  agentRuntime: {
+                    id: "codex",
+                    cloudPlacementSupported: false,
+                    devicePlacementSupported: false,
+                    source: "implicit",
+                  },
                   available: true,
                 },
               ],
@@ -874,16 +1632,16 @@ describe("models.list", () => {
     });
   });
 
-  it("marks catalog models available through their configured CLI runtime", async () => {
-    await withEnvAsync({ ANTHROPIC_API_KEY: undefined }, async () => {
-      await withOpenClawTestState(
+  it("keeps catalog models available through a refresh-owned CLI runtime", async () => {
+    await withoutAnthropicEnvAuth(async () => {
+      await withModelsTestState(
         {
           layout: "state-only",
           prefix: "openclaw-models-list-cli-runtime-",
           agentEnv: "main",
         },
         async (state) => {
-          await state.writeAuthProfiles({
+          const store = {
             version: 1,
             profiles: {
               "anthropic:claude-cli": {
@@ -891,12 +1649,26 @@ describe("models.list", () => {
                 provider: "claude-cli",
                 access: "claude-cli-access",
                 refresh: "claude-cli-refresh",
-                expires: Date.now() + 30 * 60_000,
+                expires: Date.now() - 60_000,
               },
             },
-          });
+          } as const;
+          await state.writeAuthProfiles(store);
+          replaceRuntimeAuthProfileStoreSnapshots([
+            {
+              agentDir: state.agentDir(),
+              store: Object.assign({}, store, {
+                runtimeExternalCliProfileIds: ["anthropic:claude-cli"],
+              }),
+            },
+          ]);
 
           const runtimeConfig = {
+            auth: {
+              profiles: {
+                "anthropic:claude-cli": { provider: "anthropic", mode: "token" },
+              },
+            },
             agents: {
               defaults: {
                 models: {
@@ -931,8 +1703,14 @@ describe("models.list", () => {
                   id: "claude-opus-4-8",
                   name: "Claude Opus 4.8",
                   provider: "anthropic",
-                  agentRuntime: { id: "claude-cli", source: "model" },
+                  agentRuntime: {
+                    id: "claude-cli",
+                    cloudPlacementSupported: false,
+                    devicePlacementSupported: false,
+                    source: "model",
+                  },
                   available: true,
+                  tags: ["configured"],
                 },
               ],
             },
@@ -1095,7 +1873,7 @@ describe("models.list", () => {
   });
 
   it("does not mark catalog rows available from expired OAuth profiles", async () => {
-    await withOpenClawTestState(
+    await withModelsTestState(
       {
         layout: "state-only",
         prefix: "openclaw-models-list-expired-profile-",
@@ -1136,8 +1914,8 @@ describe("models.list", () => {
     );
   });
 
-  it("uses refreshed persisted OAuth when the runtime auth snapshot is stale", async () => {
-    await withOpenClawTestState(
+  it("does not mix refreshed persisted OAuth into a stale runtime generation", async () => {
+    await withModelsTestState(
       {
         layout: "state-only",
         prefix: "openclaw-models-list-stale-runtime-profile-",
@@ -1181,7 +1959,7 @@ describe("models.list", () => {
                   id: "demo-model",
                   name: "Demo Model",
                   provider: "demo-provider",
-                  available: true,
+                  available: false,
                 },
               ],
             },
@@ -1195,7 +1973,7 @@ describe("models.list", () => {
   });
 
   it("marks env SecretRef-backed auth profiles available", async () => {
-    await withOpenClawTestState(
+    await withModelsTestState(
       {
         layout: "state-only",
         prefix: "openclaw-models-list-env-profile-",
@@ -1249,7 +2027,7 @@ describe("models.list", () => {
   });
 
   it("keeps non-env SecretRef-backed auth profile availability unknown", async () => {
-    await withOpenClawTestState(
+    await withModelsTestState(
       {
         layout: "state-only",
         prefix: "openclaw-models-list-file-profile-",
@@ -1314,7 +2092,7 @@ describe("models.list", () => {
     // Regression: the models.list availability checker loaded the auth store
     // for profile checks but did not pass it to the runtime availability check,
     // so inline provider keys in billing cooldown stayed browseable.
-    await withOpenClawTestState(
+    await withModelsTestState(
       {
         layout: "state-only",
         prefix: "openclaw-models-list-inline-cooldown-",
@@ -1388,7 +2166,7 @@ describe("models.list", () => {
   });
 
   it("uses an exact hydrated runtime profile SecretRef as read-only proof", async () => {
-    await withOpenClawTestState(
+    await withModelsTestState(
       {
         layout: "state-only",
         prefix: "openclaw-models-list-hydrated-file-profile-",
@@ -1482,7 +2260,7 @@ describe("models.list", () => {
       },
       { name: "managed-marker", apiKey: "secretref-managed" },
     ] as const) {
-      await withOpenClawTestState(
+      await withModelsTestState(
         {
           layout: "state-only",
           prefix: `openclaw-models-list-provider-${fixture.name}-profile-`,

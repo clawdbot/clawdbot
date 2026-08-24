@@ -443,6 +443,8 @@ type SendFeishuMessageParams = {
   cfg: ClawdbotConfig;
   to: string;
   text: string;
+  /** The outbound adapter already projected and envelope-chunked this post text. @internal */
+  preparedPostText?: true;
   replyToMessageId?: string;
   /** When true, reply creates a Feishu topic thread instead of an inline reply */
   replyInThread?: boolean;
@@ -460,6 +462,7 @@ export async function sendMessageFeishu(
     cfg,
     to,
     text,
+    preparedPostText,
     replyToMessageId,
     replyInThread,
     allowTopLevelReplyFallback,
@@ -467,14 +470,13 @@ export async function sendMessageFeishu(
     accountId,
   } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
-  const tableMode = resolveMarkdownTableMode({
-    cfg,
-    channel: "feishu",
-  });
-
-  const messageText = materializeFeishuPostMarkdownSoftBreaks(
-    convertMarkdownTables(text ?? "", tableMode),
-  );
+  let messageText = text;
+  if (!preparedPostText) {
+    const tableMode = resolveMarkdownTableMode({ cfg, channel: "feishu" });
+    messageText = materializeFeishuPostMarkdownSoftBreaks(
+      convertMarkdownTables(text ?? "", tableMode),
+    );
+  }
 
   const content = buildFeishuPostMessageContent({ messageText, mentions });
   const msgType = "post";

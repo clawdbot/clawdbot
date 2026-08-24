@@ -30,6 +30,7 @@ import {
   shouldBootstrapFromExternalCliCredential,
   shouldReplaceStoredOAuthCredential,
 } from "./oauth-shared.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { resolveOAuthRefreshLockPath } from "./paths.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
@@ -503,7 +504,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     attemptedCredentials?: OAuthCredential[];
   }): Promise<ResolvedOAuthAccess | null> {
     const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir(params);
-    const authPath = resolveAuthProfileDatabasePath(ownerAgentDir);
+    const authPath = ownerAgentDir
+      ? resolveAuthProfileDatabasePath(ownerAgentDir)
+      : resolveSharedAuthStorePath();
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
 
     try {
@@ -673,7 +676,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           }
         }
         if (ownerAgentDir) {
-          const mainPath = resolveAuthProfileDatabasePath(undefined);
+          const mainPath = resolveSharedAuthStorePath();
           if (mainPath !== authPath) {
             await mirrorRefreshedCredentialIntoMainStore({
               profileId: params.profileId,

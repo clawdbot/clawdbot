@@ -1,7 +1,11 @@
+import type { TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
-import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
+import type {
+  NativeNotificationsPermission,
+  NativeNotificationTestOutcome,
+} from "../../app/native-notifications.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
@@ -75,6 +79,8 @@ export type ConfigProps = {
   /** Set when the form renders under a composite page's custom rows; an empty
    *  schema section stays silent instead of claiming the page is empty. */
   embeddedEditor?: boolean;
+  /** Control UI rows that belong to the active schema section but are not Gateway config. */
+  sectionPrelude?: TemplateResult;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   activeSection: string | null;
@@ -98,6 +104,9 @@ export type ConfigProps = {
   themeModeOverridden: boolean;
   themeModeProvenance: ServerUiPrefProvenance;
   themeModeResetValue: ThemeMode;
+  accent: string | undefined;
+  accentOverridden: boolean;
+  accentProvenance: ServerUiPrefProvenance;
   systemLocale: Locale;
   localeOverride?: Locale;
   localeOverridden: boolean;
@@ -106,9 +115,8 @@ export type ConfigProps = {
   onLocaleChange: (locale: Locale | undefined) => void;
   resetLocale: () => void;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
-  resetTheme: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
-  resetThemeMode: () => void;
+  setAccent: (accent: string | undefined) => void;
   hasCustomTheme: boolean;
   customThemeLabel: string | null;
   customThemeSourceUrl: string | null;
@@ -124,7 +132,6 @@ export type ConfigProps = {
   textScale: number;
   textScaleOverridden: boolean;
   setTextScale: (value: number) => void;
-  resetTextScale: () => void;
   sidebarLiveActivity: boolean;
   setSidebarLiveActivity: (enabled: boolean) => void;
   hiddenSessionCatalogIds: ReadonlySet<string>;
@@ -184,7 +191,10 @@ export type ConfigProps = {
   includeVirtualSections?: boolean;
   /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
   settingsLayout?: "tabs" | "accordion";
-  nativeNotifications?: { permission: NativeNotificationsPermission | "unknown" };
+  nativeNotifications?: {
+    permission: NativeNotificationsPermission | "unknown";
+    test: NativeNotificationTestOutcome | null;
+  };
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
   webPush?: WebPushUiState;

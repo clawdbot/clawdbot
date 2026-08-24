@@ -75,7 +75,10 @@ struct GatewayProcessManagerTests {
         try Data(config.utf8)
             .write(to: URL(fileURLWithPath: configPath))
         defer { try? FileManager.default.removeItem(atPath: configPath) }
-        return try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath], body)
+        return try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PORT": nil,
+        ], body)
     }
 
     private func withLaunchAgentEnvironment<T>(
@@ -1560,7 +1563,7 @@ struct GatewayProcessManagerTests {
 
     @Test func `readiness timeout preserves a concrete launch failure`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
-        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
             GatewayTestWebSocketTask(
                 receiveHook: { _, receiveIndex in
                     if receiveIndex == 0 {
@@ -1581,6 +1584,7 @@ struct GatewayProcessManagerTests {
         }
 
         #expect(await manager.waitForGatewayReady(timeout: 0.1) == false)
+        #expect(session.snapshotMakeCount() == 0)
         #expect(manager.status == .failed("launchd install denied"))
         #expect(manager.lastFailureReason == "launchd install denied")
         await connection.shutdown()

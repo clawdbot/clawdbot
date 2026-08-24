@@ -1,6 +1,7 @@
 // Discord plugin module implements send harness behavior.
 import { createServer } from "node:http";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { vi } from "vitest";
 import { RequestClient } from "./internal/discord.js";
 
@@ -25,8 +26,40 @@ type DiscordLoopbackRequest = {
   path: string | undefined;
 };
 
+export type MockCallSource = Pick<MockFn, "mock">;
+
+const requireRecord = createRequireRecord("object", "expected-label");
+
+function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
+  const call = source.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call: ${label}`);
+  }
+  return call[argIndex];
+}
+
+function requestOptions(source: MockCallSource, callIndex = 0) {
+  return requireRecord(
+    mockArg(source, callIndex, 1, `request options ${callIndex}`),
+    "request options",
+  );
+}
+
+export function requestPath(source: MockCallSource, callIndex = 0) {
+  return mockArg(source, callIndex, 0, `request path ${callIndex}`);
+}
+
+export function requestBody(source: MockCallSource, callIndex = 0) {
+  return requireRecord(requestOptions(source, callIndex).body, `request body ${callIndex}`);
+}
+
+export function timerDelayAt(source: MockCallSource, callIndex = 0) {
+  return mockArg(source, callIndex, 1, `timer delay ${callIndex}`);
+}
+
 export async function createDiscordLoopbackRest(options?: {
   respond?: (request: DiscordLoopbackRequest) => unknown;
+  status?: (request: DiscordLoopbackRequest) => number;
 }): Promise<{
   rest: RequestClient;
   requests: DiscordLoopbackRequest[];
@@ -45,7 +78,9 @@ export async function createDiscordLoopbackRest(options?: {
         path: request.url,
       };
       requests.push(received);
-      response.writeHead(200, { "Content-Type": "application/json" });
+      response.writeHead(options?.status?.(received) ?? 200, {
+        "Content-Type": "application/json",
+      });
       response.end(
         JSON.stringify(
           options?.respond?.(received) ??

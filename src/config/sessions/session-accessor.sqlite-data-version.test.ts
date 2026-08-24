@@ -653,6 +653,39 @@ describe("SQLite session entry cache", () => {
     expect(after.entries.get(scope.sessionKey)).not.toBe(before.entries.get(scope.sessionKey));
   });
 
+  it("rejects a transcript write after its persisted owner changes", async () => {
+    const scope = createSessionScope("transcript-owner-conflict");
+    const sessionId = "owned-transcript-session";
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+
+    expect(() =>
+      runOpenClawAgentWriteTransaction((database) => {
+        ensureTranscriptSessionRoot(
+          database,
+          {
+            agentId: scope.agentId,
+            env: scope.env,
+            sessionId,
+            sessionKey: "agent:main:stale-owner",
+          },
+          2,
+        );
+      }, scope),
+    ).toThrow("resolve the transcript target again before retrying");
+
+    const database = openOpenClawAgentDatabase(scope);
+    expect(
+      database.db
+        .prepare("SELECT session_key, entry_valid FROM session_nodes ORDER BY session_key")
+        .all(),
+    ).toEqual([{ session_key: scope.sessionKey, entry_valid: 1 }]);
+    expect(
+      database.db
+        .prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
+        .get(sessionId),
+    ).toEqual({ session_key: scope.sessionKey });
+  });
+
   it("bypasses the cache in a transaction and reuses the persisted snapshot after rollback", async () => {
     const scope = createSessionScope("transaction-rollback");
     await upsertSessionEntryCore(scope, { label: "before", sessionId: "rollback", updatedAt: 1 });

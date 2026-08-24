@@ -12,12 +12,22 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import {
+  FEISHU_SELECTED_SECRET_ENV,
+  FEISHU_SIBLING_SECRET_ENV,
+  createFeishuSecretRefPolicyConfig,
+  feishuSecretRefPolicyCases,
+} from "./bot.test-support.js";
+import type { FeishuClientCredentials } from "./client.js";
 
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
+const createFeishuClientMock = vi.hoisted(() =>
+  vi.fn((_account: FeishuClientCredentials) => ({ request: vi.fn() })),
+);
 const deliverCommentThreadTextMock = vi.hoisted(() => vi.fn());
 const cleanupAmbientCommentTypingReactionMock = vi.hoisted(() => vi.fn(async () => false));
 const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
@@ -95,7 +105,7 @@ vi.mock("./runtime.js", () => ({
 }));
 
 vi.mock("./client.js", () => ({
-  createFeishuClient: vi.fn(() => ({ request: vi.fn() })),
+  createFeishuClient: createFeishuClientMock,
 }));
 
 vi.mock("./drive.js", () => ({
@@ -2195,6 +2205,54 @@ describe("feishuOutbound comment-thread routing", () => {
     resetOutboundMocks();
   });
 
+  it.each(feishuSecretRefPolicyCases)(
+    "permits document-comment delivery only under configured SecretRef policy: $name",
+    async (testCase) => {
+      vi.stubEnv(FEISHU_SELECTED_SECRET_ENV, "selected-secret");
+      vi.stubEnv(FEISHU_SIBLING_SECRET_ENV, "sibling-secret");
+      createFeishuClientMock.mockImplementationOnce((account) => {
+        if (!account.appId || !account.appSecret) {
+          throw new Error(`Feishu credentials not configured for account "${account.accountId}"`);
+        }
+        return { request: vi.fn() };
+      });
+      const cfg = createFeishuSecretRefPolicyConfig(testCase);
+
+      try {
+        const delivery = sendText({
+          cfg,
+          to: "comment:docx:doxcn123:7623358762119646411",
+          text: "handled in thread",
+          accountId: "selected",
+        });
+
+        if (!testCase.configured) {
+          await expect(delivery).rejects.toThrow(
+            'Feishu credentials not configured for account "selected"',
+          );
+          expect(deliverCommentThreadTextMock).not.toHaveBeenCalled();
+          expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+          expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+          return;
+        }
+
+        expectFeishuResult(await delivery, "reply_msg");
+        expect(createFeishuClientMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            accountId: "selected",
+            appId: "selected-app",
+            appSecret: "selected-secret", // pragma: allowlist secret
+            configured: true,
+          }),
+        );
+        expect(deliverCommentThreadTextMock).toHaveBeenCalledOnce();
+        expect(commentThreadParams()?.content).toBe("handled in thread");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it("routes comment-thread text through deliverCommentThreadText", async () => {
     const result = await sendText({
       cfg: emptyConfig,
@@ -2280,6 +2338,7 @@ describe("feishuOutbound comment-thread routing", () => {
   });
 
   it("preserves comment-thread routing when deliverCommentThreadText falls back to add_comment", async () => {
+    const onDeliveryResult = vi.fn();
     deliverCommentThreadTextMock.mockResolvedValueOnce({
       delivery_mode: "add_comment",
       comment_id: "comment_msg",
@@ -2291,13 +2350,15 @@ describe("feishuOutbound comment-thread routing", () => {
       to: "comment:docx:doxcn123:7623358762119646411",
       text: "whole-comment follow-up",
       accountId: "main",
+      onDeliveryResult,
     });
 
     expect(commentThreadParams()?.file_token).toBe("doxcn123");
     expect(commentThreadParams()?.file_type).toBe("docx");
     expect(commentThreadParams()?.comment_id).toBe("7623358762119646411");
     expect(commentThreadParams()?.content).toBe("whole-comment follow-up");
-    expectFeishuResult(result, "reply_from_add_comment");
+    expectFeishuResult(result, "comment_msg");
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.messageId).toBe("comment_msg");
   });
 
   it("does not wait for ambient comment typing cleanup before sending comment-thread replies", async () => {
@@ -2431,6 +2492,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     });
 
     expect(sendMessageCall()?.text).toBe("first line  \nsecond line");
+    expect(sendMessageCall()?.preparedPostText).toBe(true);
   });
 
   it("re-chunks expanded post-md text and scopes reply metadata to the first send", async () => {

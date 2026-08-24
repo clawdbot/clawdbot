@@ -4,8 +4,10 @@ import {
 } from "../../daemon/restart-logs.js";
 import { createGatewayLifecycleMutationReporter } from "../../daemon/service-mutation.js";
 /** Gateway lifecycle audit helpers shared by managed and unmanaged CLI paths. */
-import type { GatewayLifecycleMutation } from "../../daemon/service-types.js";
-import type { GatewayLifecycleMutationMode } from "../../daemon/service-types.js";
+import type {
+  GatewayLifecycleMutation,
+  GatewayLifecycleMutationMode,
+} from "../../daemon/service-types.js";
 import { isTerminalInteractive } from "../terminal-interactivity.js";
 
 type GatewayLifecycleAction = "start" | "stop" | "restart";

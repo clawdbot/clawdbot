@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@openclaw/agent-core";
+import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 /**
  * Transcript repair helpers for tool-call replay.
  *
@@ -221,10 +222,10 @@ export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[]
       out.push(msg);
       continue;
     }
-    const sanitized = { ...(msg as object) } as { details?: unknown };
-    delete sanitized.details;
+    const sanitized = { ...msg };
+    Reflect.deleteProperty(sanitized, "details");
     touched = true;
-    out.push(sanitized as unknown as AgentMessage);
+    out.push(sanitized);
   }
   return touched ? out : messages;
 }
@@ -402,7 +403,7 @@ function repairToolCallInputs(
         changed = true;
         continue;
       }
-      const nextMessage = { ...msg, content: nextContent };
+      const nextMessage = replaceCompactionReplayOwnerContent(msg, nextContent);
       for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
         priorToolCallIds.add(toolCall.id);
       }
@@ -411,7 +412,7 @@ function repairToolCallInputs(
     }
 
     if (messageChanged) {
-      const nextMessage = { ...msg, content: nextContent };
+      const nextMessage = replaceCompactionReplayOwnerContent(msg, nextContent);
       for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
         priorToolCallIds.add(toolCall.id);
       }
@@ -444,6 +445,17 @@ export function sanitizeToolUseResultPairing(
   options?: ToolUseResultPairingOptions,
 ): AgentMessage[] {
   return repairToolUseResultPairing(messages, options).messages;
+}
+
+export function sanitizeToolUseResultPairingForModel(
+  messages: AgentMessage[],
+  isOpenAIResponsesApi: boolean,
+): AgentMessage[] {
+  return sanitizeToolUseResultPairing(messages, {
+    erroredAssistantResultPolicy: "drop",
+    // Match upstream Codex history normalization for OpenAI Responses.
+    ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
+  });
 }
 
 type ToolUseRepairReport = {

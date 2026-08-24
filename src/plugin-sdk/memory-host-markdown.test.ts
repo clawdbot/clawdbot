@@ -93,7 +93,6 @@ describe("replaceManagedMarkdownBlock", () => {
     });
 
     expect(updated).toBe("# Title\n\n## Generated\n<!-- start -->\n- latest\n<!-- end -->\n");
-    expect(updated.match(/<!-- start -->/g)?.length).toBe(1);
     expect(updated).not.toContain("run-");
   });
 

@@ -1,3 +1,14 @@
+import {
+  Agent,
+  type AgentEvent,
+  type AgentTool,
+  type StreamFn,
+} from "openclaw/plugin-sdk/agent-core";
+import {
+  type AssistantMessage,
+  createAssistantMessageEventStream,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,18 +21,23 @@ import {
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
+  prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
 } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 import {
+  addClientToolsToToolCatalog,
+  compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
+  TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   ToolSearchRuntime,
 } from "./tool-search.js";
@@ -242,6 +258,258 @@ describe("Tool Search flattened call arguments", () => {
     expect(vi.mocked(intended.execute).mock.calls[0]?.[1]).toEqual({ instruction: "run" });
     expect(colliding.execute).not.toHaveBeenCalled();
   });
+});
+
+describe("Tool Search dispatcher argument preparation", () => {
+  it.each([
+    {
+      label: "args-wrapped selector and input",
+      input: { args: { id: "openclaw:example-plugin:example_tool", args: { path: "/x" } } },
+      expected: { id: "openclaw:example-plugin:example_tool", args: { path: "/x" } },
+    },
+    {
+      label: "input-wrapped selector and args",
+      input: { input: { id: "example_tool", args: { path: "/x" } } },
+      expected: { id: "example_tool", args: { path: "/x" } },
+    },
+    {
+      label: "args-wrapped toolId alias, canonicalized to id",
+      input: { args: { toolId: "example_tool" } },
+      expected: { id: "example_tool", toolId: "example_tool" },
+    },
+    {
+      label: "args-wrapped name alias, canonicalized to id",
+      input: { args: { name: "example_tool" } },
+      expected: { id: "example_tool", name: "example_tool" },
+    },
+    {
+      label: "sibling keys alongside the wrapper are preserved",
+      input: { extra: "keep", args: { id: "example_tool" } },
+      expected: { extra: "keep", id: "example_tool" },
+    },
+  ])("hoists a double-wrapped $label to the top level", ({ input, expected }) => {
+    expect(prepareToolSearchDispatcherArguments(input)).toEqual(expected);
+  });
+
+  it.each([
+    { label: "non-record input", input: "not an object" },
+    { label: "already-canonical selector", input: { id: "example_tool", args: { path: "/x" } } },
+    { label: "nested wrapper without a selector", input: { args: { path: "/x" } } },
+    { label: "nested wrapper that is not a record", input: { args: "not an object" } },
+    {
+      label: "malformed nested id before a valid alias",
+      input: { args: { id: "", toolId: "example_tool" } },
+    },
+    {
+      label: "empty-string outer id alongside a valid nested selector",
+      input: { id: "", args: { id: "example_tool" } },
+    },
+    {
+      label: "non-string outer id alongside a valid nested selector",
+      input: { id: 1, args: { id: "example_tool" } },
+    },
+    {
+      label: "empty-string outer toolId alongside a valid nested selector",
+      input: { toolId: "", args: { id: "example_tool" } },
+    },
+    {
+      label: "empty-string outer name alongside a valid nested selector",
+      input: { name: "", args: { id: "example_tool" } },
+    },
+  ])("leaves $label unchanged", ({ input }) => {
+    expect(prepareToolSearchDispatcherArguments(input)).toBe(input);
+  });
+
+  describe("through the real agent loop", () => {
+    const model: Model = {
+      id: "test-model",
+      name: "Test Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1000,
+      maxTokens: 1000,
+    };
+
+    function makeAssistantMessage(
+      content: AssistantMessage["content"],
+    ): AssistantMessage & { stopReason: "toolUse" | "stop" } {
+      return {
+        role: "assistant",
+        content,
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: content.some((item) => item.type === "toolCall") ? "toolUse" : "stop",
+        timestamp: 1,
+      };
+    }
+
+    function createSingleToolCallStreamFn(toolCall: {
+      id: string;
+      name: string;
+      arguments: Record<string, unknown>;
+    }): StreamFn {
+      // The stop turn terminates the loop after the tool result.
+      const turns: AssistantMessage["content"][] = [
+        [{ type: "toolCall", ...toolCall }],
+        [{ type: "text", text: "done" }],
+      ];
+      let turnIndex = 0;
+      return () => {
+        const content = turns[turnIndex];
+        if (!content) {
+          throw new Error("unexpected extra model turn");
+        }
+        turnIndex += 1;
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          const message = makeAssistantMessage(content);
+          stream.push({ type: "done", reason: message.stopReason, message });
+          stream.end();
+        });
+        return stream;
+      };
+    }
+
+    function findToolExecutionEnd(
+      events: AgentEvent[],
+    ): Extract<AgentEvent, { type: "tool_execution_end" }> | undefined {
+      return events.find(
+        (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+          event.type === "tool_execution_end",
+      );
+    }
+
+    it("dispatches a double-wrapped tool_call through argument preparation", async () => {
+      const target = fakeTool("inspect_resource");
+      const { catalogRef, config } = createRuntime([target]);
+      const callTool = createToolSearchTools({ catalogRef, config }).find(
+        (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
+      );
+      expect(callTool).toBeDefined();
+
+      const doubleWrapped = {
+        args: { id: "inspect_resource", args: { path: "/x" } },
+      };
+      const streamFn = createSingleToolCallStreamFn({
+        id: "call-1",
+        name: TOOL_CALL_RAW_TOOL_NAME,
+        arguments: doubleWrapped,
+      });
+      const events: AgentEvent[] = [];
+      const agent = new Agent({
+        initialState: { model, tools: [callTool, target] as AgentTool[] },
+        streamFn,
+      });
+      agent.subscribe((event) => {
+        events.push(event);
+      });
+
+      await agent.prompt("call inspect_resource with a double-wrapped payload");
+
+      expect(target.execute).toHaveBeenCalledOnce();
+      expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({ path: "/x" });
+      expect(findToolExecutionEnd(events)).toMatchObject({
+        toolCallId: "call-1",
+        isError: false,
+      });
+      expect(findToolExecutionEnd(events)?.errorKind).toBeUndefined();
+    });
+
+    it("dispatches a real double-wrapped tool_describe payload through prepareToolCallArguments", async () => {
+      const target = fakeTool("inspect_resource");
+      const { catalogRef, config } = createRuntime([target]);
+      const describeTool = createToolSearchTools({ catalogRef, config }).find(
+        (tool) => tool.name === TOOL_DESCRIBE_RAW_TOOL_NAME,
+      );
+      expect(describeTool).toBeDefined();
+
+      const doubleWrapped = { input: { id: "inspect_resource" } };
+      const streamFn = createSingleToolCallStreamFn({
+        id: "call-1",
+        name: TOOL_DESCRIBE_RAW_TOOL_NAME,
+        arguments: doubleWrapped,
+      });
+      const events: AgentEvent[] = [];
+      const agent = new Agent({
+        initialState: { model, tools: [describeTool] as AgentTool[] },
+        streamFn,
+      });
+      agent.subscribe((event) => {
+        events.push(event);
+      });
+
+      await agent.prompt("describe inspect_resource with a double-wrapped payload");
+
+      expect(findToolExecutionEnd(events)).toMatchObject({
+        toolCallId: "call-1",
+        isError: false,
+      });
+      expect(findToolExecutionEnd(events)?.errorKind).toBeUndefined();
+    });
+  });
+});
+
+describe("Tool Search terminal results", () => {
+  it("preserves a terminal target result on the direct control", async () => {
+    const target = fakeTool("terminal_action");
+    target.execute = vi.fn(async () => ({
+      ...jsonResult({ outcome: "terminal" }),
+      terminate: true,
+    }));
+    const { catalogRef, config } = createRuntime([target]);
+    const callTool = createToolSearchTools({ catalogRef, config }).find(
+      (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
+    );
+
+    const result = await callTool!.execute("terminal-parent", { id: target.name });
+
+    expect(result.terminate).toBe(true);
+    expect(result.details).toMatchObject({ result: { terminate: true } });
+  });
+
+  it.each([
+    { secondTerminal: true, expectedTerminal: true },
+    { secondTerminal: false, expectedTerminal: undefined },
+  ])(
+    "uses all-terminal semantics for code controls: $secondTerminal",
+    async ({ secondTerminal, expectedTerminal }) => {
+      const first = fakeTool("first_action");
+      first.execute = vi.fn(async () => ({ ...jsonResult({ first: true }), terminate: true }));
+      const second = fakeTool("second_action");
+      second.execute = vi.fn(async () => ({
+        ...jsonResult({ second: true }),
+        ...(secondTerminal ? { terminate: true } : {}),
+      }));
+      const { catalogRef, config } = createRuntime([first, second]);
+      const codeTool = createToolSearchTools({ catalogRef, config }).find(
+        (tool) => tool.name === TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+      );
+
+      const result = await codeTool!.execute("code-parent", {
+        code: `
+          await openclaw.tools.call("first_action", {});
+          return await openclaw.tools.call("second_action", {});
+        `,
+      });
+
+      expect(result.terminate).toBe(expectedTerminal);
+      expect(first.execute).toHaveBeenCalledOnce();
+      expect(second.execute).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("Tool Search input schemas", () => {
@@ -495,6 +763,50 @@ describe("Tool Search catalog indexing", () => {
     await expect(runtime.search("orchard", { limit: 2 })).resolves.toEqual([
       expect.objectContaining({ name: "orchard" }),
       expect.objectContaining({ name: "orchard_records" }),
+    ]);
+  });
+
+  it("ranks only effective entries before applying the limit without poisoning other search indexes", async () => {
+    const shadowed = fakeTool("shared_harvest");
+    shadowed.description = "Harvest harvest harvest harvest harvest harvest harvest harvest";
+    const visible = fakeTool("harvest_records");
+    visible.description = "Inspect harvesting records";
+    const client = fakeTool("shared_harvest");
+    client.description = "Choose an operator action";
+    const { catalogRef, runtime } = createRuntime([shadowed, visible]);
+    addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
+    const projection = createCodeModeCatalogProjection(
+      catalogRef.current!.entries.map(compactToolSearchCatalogEntry),
+    );
+    const effectiveOptions = { limit: 1, allowedIds: projection.byId };
+
+    await expect(runtime.search("harvesting", { limit: 1 })).resolves.toEqual([
+      expect.objectContaining({ name: shadowed.name, source: "openclaw" }),
+    ]);
+    const matches = await runtime.search("harvesting", effectiveOptions);
+
+    expect(matches).toEqual([expect.objectContaining({ name: visible.name })]);
+    await expect(
+      runtime.callExactId(matches[0]!.id, { request: "visible" }),
+    ).resolves.toMatchObject({ result: { details: { input: { request: "visible" } } } });
+    expect(visible.execute).toHaveBeenCalledOnce();
+    expect(shadowed.execute).not.toHaveBeenCalled();
+    expect(client.execute).not.toHaveBeenCalled();
+
+    const clientOptions = {
+      limit: 1,
+      allowedIds: new Set(
+        projection.bindings.filter((binding) => binding.source === "client").map(({ id }) => id),
+      ),
+    };
+    await expect(runtime.search("harvesting", clientOptions)).resolves.toEqual([
+      expect.objectContaining({ name: client.name, source: "client" }),
+    ]);
+    await expect(runtime.search("harvesting", effectiveOptions)).resolves.toEqual([
+      expect.objectContaining({ name: visible.name }),
+    ]);
+    await expect(runtime.search("harvesting", { limit: 1 })).resolves.toEqual([
+      expect.objectContaining({ name: shadowed.name, source: "openclaw" }),
     ]);
   });
 

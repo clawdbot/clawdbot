@@ -8,6 +8,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
 import { t } from "../../i18n/index.ts";
 
 const BROWSER_REQUEST_METHOD = "browser.request";
@@ -182,6 +183,22 @@ export async function pressBrowserKey(
   });
 }
 
+export async function resizeBrowserViewport(
+  client: GatewayBrowserClient,
+  params: { targetId: string; width: number; height: number },
+) {
+  await browserRequest(client, {
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "resize",
+      targetId: params.targetId,
+      width: Math.round(params.width),
+      height: Math.round(params.height),
+    },
+  });
+}
+
 async function evaluateInBrowser<T>(
   client: GatewayBrowserClient,
   params: { targetId: string; fn: string },
@@ -305,17 +322,10 @@ export async function inspectBrowserElementAt(
  * same one chat history uses for local media previews).
  */
 export async function fetchBrowserScreenshotDataUrl(params: {
-  basePath: string;
+  resourceBasePath: string;
   authToken: string | null;
   path: string;
 }): Promise<string> {
-  const basePath =
-    params.basePath && params.basePath !== "/"
-      ? params.basePath.endsWith("/")
-        ? params.basePath.slice(0, -1)
-        : params.basePath
-      : "";
-  const search = new URLSearchParams({ source: params.path });
   const headers = new Headers({ Accept: "image/*" });
   if (params.authToken) {
     headers.set("Authorization", `Bearer ${params.authToken}`);
@@ -330,7 +340,7 @@ export async function fetchBrowserScreenshotDataUrl(params: {
   );
   let blob: Blob;
   try {
-    const res = await fetch(`${basePath}/__openclaw__/assistant-media?${search.toString()}`, {
+    const res = await fetch(buildAssistantMediaUrl(params.path, params.resourceBasePath), {
       method: "GET",
       headers,
       credentials: "same-origin",

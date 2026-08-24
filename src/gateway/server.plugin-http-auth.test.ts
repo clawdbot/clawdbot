@@ -21,7 +21,11 @@ import {
   withGatewayTempConfig,
 } from "./server-http.test-harness.js";
 import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
-import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
+import {
+  createGatewayPluginRequestHandler,
+  isPluginAuthenticatedRoutePath,
+  shouldEnforceGatewayAuthForPluginPath,
+} from "./server/plugins-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 type PluginRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -157,6 +161,42 @@ function createRuntimeScopeRecorderHandler(params: {
       typeof createGatewayPluginRequestHandler
     >[0]["log"],
   });
+}
+
+function createPublicPluginRouteHandler(params: {
+  path: string;
+  match: "exact" | "prefix";
+  method: string;
+  responseBody: string;
+}) {
+  const routeHandler = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+    if (req.method !== params.method) {
+      return false;
+    }
+    res.statusCode = 200;
+    res.end(params.responseBody);
+    return true;
+  });
+  return {
+    routeHandler,
+    handlePluginRequest: createGatewayPluginRequestHandler({
+      registry: createGatewayTestRegistry({
+        httpRoutes: [
+          {
+            pluginId: "focus-owner",
+            source: "focus-owner",
+            path: params.path,
+            auth: "plugin",
+            match: params.match,
+            handler: routeHandler,
+          },
+        ],
+      }),
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+    }),
+  };
 }
 
 async function expectPluginRequestOk(
@@ -467,6 +507,90 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("routes unattributable proxy traffic only to plugin-authenticated webhooks", async () => {
+    const observedClientIps: Array<string | undefined> = [];
+    const registry = createGatewayTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: "googlechat",
+          source: "googlechat-webhook",
+          path: "/googlechat",
+          auth: "plugin",
+          match: "exact",
+          handler: async (_req: IncomingMessage, res: ServerResponse) => {
+            observedClientIps.push(getPluginRuntimeGatewayRequestScope()?.client?.clientIp);
+            res.statusCode = 200;
+            res.end("ok");
+            return true;
+          },
+        },
+        {
+          pluginId: "diffs",
+          source: "diffs-viewer",
+          path: "/plugins/diffs",
+          auth: "plugin",
+          match: "prefix",
+          handler: async (_req: IncomingMessage, res: ServerResponse) =>
+            respondJsonRoute(res, "plugin-prefix"),
+        },
+      ],
+    });
+    const handlePluginRequest = createGatewayPluginRequestHandler({
+      registry,
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+    });
+    const handleHooksRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      if (!req.url?.startsWith("/plugins/diffs")) {
+        return false;
+      }
+      return respondJsonRoute(res, "hooks");
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-unattributable-webhook-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        handleHooksRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          shouldEnforceGatewayAuthForPluginPath(registry, pathContext),
+        isPluginAuthenticatedRoute: (pathContext) =>
+          isPluginAuthenticatedRoutePath(registry, pathContext),
+      },
+      run: async (server) => {
+        const dispatchProxyRequest = async (path: string, method = "GET") => {
+          const response = createResponse();
+          await dispatchRequest(
+            server,
+            createRequest({
+              path,
+              method,
+              remoteAddress: "127.0.0.1",
+              headers: { "x-forwarded-for": "198.51.100.20" },
+            }),
+            response.res,
+          );
+          return response;
+        };
+
+        const webhook = await dispatchProxyRequest("/googlechat", "POST");
+        expect(webhook.res.statusCode).toBe(200);
+        expect(observedClientIps).toEqual(["127.0.0.1"]);
+
+        const overlappingPrefix = await dispatchProxyRequest("/plugins/diffs/view");
+        expect(overlappingPrefix.res.statusCode).toBe(200);
+        expect(overlappingPrefix.getBody()).toContain('"route":"plugin-prefix"');
+        expect(handleHooksRequest).not.toHaveBeenCalled();
+
+        const gatewayRoute = await dispatchProxyRequest("/ready");
+        expect(gatewayRoute.res.statusCode).toBe(403);
+        expect(gatewayRoute.getBody()).toContain("proxy_attribution_required");
+      },
+    });
+  });
+
   test("uses /api/channels auth by default while keeping wildcard handlers ungated with no predicate", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -665,6 +789,153 @@ describe("gateway plugin HTTP auth boundary", () => {
       },
     });
   });
+
+  test.each([
+    {
+      label: "root-mounted exact GET",
+      basePath: "",
+      routePath: "/focus/terminal",
+      match: "exact" as const,
+      requestPath: "/focus/terminal",
+      method: "GET",
+    },
+    {
+      label: "root-mounted prefix POST",
+      basePath: "",
+      routePath: "/focus",
+      match: "prefix" as const,
+      requestPath: "/focus/desktop/control",
+      method: "POST",
+    },
+    {
+      label: "base-path-mounted prefix PUT",
+      basePath: "/openclaw",
+      routePath: "/openclaw/focus",
+      match: "prefix" as const,
+      requestPath: "/openclaw/focus/dashboard/roboclaw/session-ref",
+      method: "PUT",
+    },
+  ])(
+    "lets a registered $label route own focus requests",
+    async ({ basePath, routePath, match, requestPath, method }) => {
+      const { handlePluginRequest, routeHandler } = createPublicPluginRouteHandler({
+        path: routePath,
+        match,
+        method,
+        responseBody: "plugin-owned-focus",
+      });
+
+      await withGatewayServer({
+        prefix: "openclaw-plugin-http-focus-ownership-test-",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: basePath,
+          controlUiRoot: { kind: "missing" },
+          handlePluginRequest,
+        },
+        run: async (server) => {
+          const response = await sendRequest(server, { path: requestPath, method });
+          expect(response.res.statusCode).toBe(200);
+          expect(response.getBody()).toBe("plugin-owned-focus");
+          expect(routeHandler).toHaveBeenCalledOnce();
+        },
+      });
+    },
+  );
+
+  test.each([
+    {
+      label: "root-mounted",
+      basePath: "",
+      rootPath: "/focus",
+      descendantPath: "/focus/desktop/control",
+      lookalikePath: "/focused",
+    },
+    {
+      label: "base-path-mounted",
+      basePath: "/openclaw",
+      rootPath: "/openclaw/focus",
+      descendantPath: "/openclaw/focus/dashboard/roboclaw/session-ref",
+      lookalikePath: "/openclaw/focused",
+    },
+  ])(
+    "uses focus as the $label unclaimed fallback without reserving lookalikes",
+    async ({ basePath, rootPath, descendantPath, lookalikePath }) => {
+      const { handlePluginRequest, routeHandler } = createPublicPluginRouteHandler({
+        path: lookalikePath,
+        match: "exact",
+        method: "GET",
+        responseBody: "plugin-lookalike",
+      });
+
+      await withGatewayServer({
+        prefix: "openclaw-plugin-http-focus-fallback-test-",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: basePath,
+          controlUiRoot: { kind: "missing" },
+          handlePluginRequest,
+        },
+        run: async (server) => {
+          const get = await sendRequest(server, { path: rootPath });
+          expect(get.res.statusCode).toBe(503);
+          expect(get.getBody()).toContain("Control UI assets not found");
+
+          const head = await sendRequest(server, { path: descendantPath, method: "HEAD" });
+          expect(head.res.statusCode).toBe(503);
+
+          for (const method of ["POST", "PUT"] as const) {
+            const write = await sendRequest(server, { path: descendantPath, method });
+            expect(write.res.statusCode, method).toBe(404);
+            expect(write.getBody(), method).toBe("Not Found");
+          }
+
+          const lookalike = await sendRequest(server, { path: lookalikePath });
+          expect(lookalike.res.statusCode).toBe(200);
+          expect(lookalike.getBody()).toBe("plugin-lookalike");
+          expect(routeHandler).toHaveBeenCalledOnce();
+        },
+      });
+    },
+  );
+
+  test.each([
+    { label: "root-mounted", basePath: "", path: "/focus/terminal" },
+    {
+      label: "base-path-mounted",
+      basePath: "/openclaw",
+      path: "/openclaw/focus/desktop",
+    },
+  ])(
+    "returns 404 for an unclaimed $label focus request when control ui serving is disabled",
+    async ({ basePath, path }) => {
+      const { handlePluginRequest, routeHandler } = createPublicPluginRouteHandler({
+        path: `${basePath}/unrelated`,
+        match: "exact",
+        method: "GET",
+        responseBody: "unrelated",
+      });
+
+      await withPluginGatewayServer({
+        prefix: "openclaw-plugin-http-disabled-focus-fallback-test-",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: false,
+          controlUiBasePath: basePath,
+          handlePluginRequest,
+        },
+        run: async (server) => {
+          const response = await sendRequest(server, { path });
+
+          expect(response.res.statusCode).toBe(404);
+          expect(response.getBody()).toBe("Not Found");
+          expect(routeHandler).not.toHaveBeenCalled();
+        },
+      });
+    },
+  );
 
   test("passes POST webhook routes through root-mounted control ui to plugins", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {

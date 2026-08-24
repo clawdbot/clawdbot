@@ -562,6 +562,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       "ai",
       path.join("internal", "runtime.ts"),
     );
+    const aiResponsesPayloadPolicySource = writeInternalCorePackageSource(
+      root,
+      "ai",
+      path.join("internal", "openai-responses-payload-policy.ts"),
+    );
     const aiRetryAfterSource = writeInternalCorePackageSource(
       root,
       "ai",
@@ -593,6 +598,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(installedAliases).toContain("@openclaw/media-core/attachment-classify");
     expect(installedAliases).toContain("@openclaw/markdown-core/code-spans");
     expect(installedAliases).toContain("@openclaw/ai/transports");
+    expect(installedAliases).toContain("@openclaw/ai/internal/openai-responses-payload-policy");
     expect(installedAliases).toContain("@openclaw/ai/internal/retry-after");
     expect(installedAliases).toContain("@openclaw/ai/internal/runtime");
     expect(installedAliases).toContain("@openclaw/acp-core/runtime/types");
@@ -626,6 +632,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       fs.realpathSync(aiTransportsSource),
     );
     expect(
+      fs.realpathSync(
+        requireFromCoreSource.resolve("@openclaw/ai/internal/openai-responses-payload-policy"),
+      ),
+    ).toBe(fs.realpathSync(aiResponsesPayloadPolicySource));
+    expect(
       fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/internal/retry-after")),
     ).toBe(fs.realpathSync(aiRetryAfterSource));
     expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/ai/internal/runtime"))).toBe(
@@ -646,6 +657,9 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(() => requireFromPlugin.resolve("@openclaw/media-core/attachment-classify")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/markdown-core/code-spans")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/transports")).toThrow();
+    expect(() =>
+      requireFromPlugin.resolve("@openclaw/ai/internal/openai-responses-payload-policy"),
+    ).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/retry-after")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/ai/internal/runtime")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/acp-core/runtime/types")).toThrow();

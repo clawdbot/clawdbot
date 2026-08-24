@@ -1,10 +1,10 @@
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Discord plugin module implements thread bindings.manager behavior.
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   getRuntimeConfigSnapshot,
   type OpenClawConfig,
@@ -379,7 +379,7 @@ export function createThreadBindingManager(params: {
         agentId:
           normalizeOptionalString(bindParams.agentId) ??
           normalizeOptionalString(existingValue?.agentId) ??
-          resolveAgentIdFromSessionKey(targetSessionKey, resolveDefaultAgentId(cfg)),
+          resolveSessionAgentId({ config: cfg, sessionKey: targetSessionKey }),
         label:
           normalizeOptionalString(bindParams.label) ??
           normalizeOptionalString(existingValue?.label),

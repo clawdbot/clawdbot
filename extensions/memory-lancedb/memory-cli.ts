@@ -2,6 +2,7 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
 import type { OpenClawPluginApi } from "./api.js";
 import { isMemoryMachineOutput } from "./cli-output-mode.js";
+import type { MemoryConfig } from "./config.js";
 import type { Embeddings } from "./embeddings.js";
 import {
   MEMORY_QUERY_COLUMNS,
@@ -108,7 +109,7 @@ export function registerMemoryCli(
   db: MemoryDB,
   embeddings: Embeddings,
   resolveCliAgentId: (rawAgentId: unknown) => string,
-  recallMaxChars: number | undefined,
+  resolveConfig: () => MemoryConfig,
 ): void {
   api.registerCli(
     ({ program }) => {
@@ -141,9 +142,11 @@ export function registerMemoryCli(
           try {
             const agentId = resolveCliAgentId(opts.agent);
             const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+            const config = resolveConfig();
             const vector = await embeddings.embed(
               agentId,
-              normalizeRecallQuery(query, recallMaxChars),
+              normalizeRecallQuery(query, config.recallMaxChars),
+              config.embedding,
             );
             const results = await db.search(agentId, vector, limit, 0.3);
             const output = results.map((r) => ({

@@ -1,6 +1,7 @@
 import type { ConnectPairingRequiredReason } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 // Gateway WebSocket node pairing can finish a fresh capability-free request over SSH.
-import { approveDevicePairing, getPairedDevice } from "../../../infra/device-pairing.js";
+import { approveDevicePairing } from "../../../infra/device-pairing-approval.js";
+import { getPairedDevice } from "../../../infra/device-pairing.js";
 import {
   planNodePairingSshVerify,
   startNodePairingSshVerify,

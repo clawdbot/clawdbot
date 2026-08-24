@@ -50,10 +50,22 @@ function createRoster() {
 describe("agent selection", () => {
   it("keeps page scope separate from the concrete chat agent", () => {
     const harness = createGateway();
-    const selection = createAgentSelectionCapability(harness.gateway, createRoster().roster);
+    const roster = createRoster();
+    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
 
     expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
     selection.setScope(null);
+    expect(selection.state).toEqual({ selectedId: "main", scopeId: null });
+
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", kind: "agent" },
+        { id: "writer", kind: "agent" },
+      ],
+    });
     expect(selection.state).toEqual({ selectedId: "main", scopeId: null });
 
     selection.set("Writer");

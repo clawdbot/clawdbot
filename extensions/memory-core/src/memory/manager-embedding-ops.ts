@@ -17,6 +17,8 @@ import {
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_EMBEDDING_CACHE_TABLE,
+  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   remapChunkLines,
@@ -24,14 +26,14 @@ import {
   runWithConcurrency,
   stripMemoryAnnotationCarriers,
   type MemoryChunk,
-  type MemorySource,
   type MemoryEntryProvenance,
-  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
-  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
+  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
+import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
+import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import {
   MEMORY_BATCH_FAILURE_LIMIT,
@@ -59,6 +61,7 @@ import {
   resolveMemoryIndexProviderIdentities,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
+import { chunkSessionContentAtResetBoundary } from "./manager-reset-chunk-boundary.js";
 import {
   MemoryManagerSyncOps,
   type MemoryIndexWorkItem,
@@ -214,12 +217,7 @@ function formatBatchSourceCounts(counts: Record<string, number>): string {
 }
 
 function splitSourceWideEmbeddingChunks<T>(chunks: T[], maxRequests: number): T[][] {
-  const limit = Math.max(1, Math.floor(maxRequests));
-  const batches: T[][] = [];
-  for (let start = 0; start < chunks.length; start += limit) {
-    batches.push(chunks.slice(start, start + limit));
-  }
-  return batches;
+  return chunkItems(chunks, Math.max(1, Math.floor(maxRequests)));
 }
 
 function resolveEmbeddingTimeoutMs(params: {
@@ -284,17 +282,25 @@ async function runEmbeddingOperationWithTimeout<T>(params: {
     return await params.run(signal);
   }
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  const timeoutError = new Error(params.message);
+  const deadlineStartedAt = Date.now();
   let timer: NodeJS.Timeout | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      const error = new Error(params.message);
-      reject(error);
-      controller.abort(error);
+      reject(timeoutError);
+      controller.abort(timeoutError);
     }, timeoutMs);
   });
   try {
     const operation = params.run(signal);
-    return (await Promise.race([operation, timeoutPromise])) as T;
+    const result = (await Promise.race([operation, timeoutPromise])) as T;
+    params.signal?.throwIfAborted();
+    // An overdue watchdog can run after provider success following an event-loop stall.
+    if (Date.now() - deadlineStartedAt >= timeoutMs) {
+      controller.abort(timeoutError);
+      throw timeoutError;
+    }
+    return result;
   } finally {
     if (timer) {
       clearTimeout(timer);
@@ -786,21 +792,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     timeoutMs: number,
     message: string,
   ): Promise<T> {
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-      return await promise;
-    }
-    const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
-    let timer: NodeJS.Timeout | null = null;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), resolvedTimeoutMs);
-    });
-    try {
-      return (await Promise.race([promise, timeoutPromise])) as T;
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
+    return await runEmbeddingOperationWithTimeout({ timeoutMs, message, run: () => promise });
   }
 
   private async withBatchFailureLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -1121,11 +1113,19 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
     const indexingContent =
       options.source === "memory" ? stripMemoryAnnotationCarriers(content) : content;
+    const chunkOptions = { ...this.settings.chunking, perEntry };
     const baseChunks = filterNonEmptyMemoryChunks(
-      chunkMarkdown(indexingContent, {
-        ...this.settings.chunking,
-        perEntry,
-      }),
+      options.source === "sessions"
+        ? chunkSessionContentAtResetBoundary({
+            content: indexingContent,
+            cutoffLine: (() => {
+              const cutoff = readSessionResetRecallCutoffMetadata(entry);
+              return cutoff.state === "valid" ? cutoff.cutoffLine : undefined;
+            })(),
+            lineMap: entry.lineMap,
+            chunking: chunkOptions,
+          })
+        : chunkMarkdown(indexingContent, chunkOptions),
     );
     for (const chunk of baseChunks) {
       chunk.provenance = this.resolveChunkProvenance(

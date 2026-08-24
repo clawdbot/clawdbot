@@ -4,7 +4,6 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString as readNonEmptyString,
-  normalizeTrimmedStringList,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawExecAsk, OpenClawExecSecurity } from "./config-contracts.js";
@@ -67,10 +66,6 @@ export function normalizeCodexAppServerSecretInput(params: {
   path: string;
 }): string | undefined {
   return normalizeResolvedSecretInputString(params);
-}
-
-export function normalizeStringList(value: unknown): string[] {
-  return normalizeTrimmedStringList(value);
 }
 
 export function readBooleanEnv(value: string | undefined): boolean | undefined {

@@ -50,14 +50,12 @@ import {
   runPreparedCliAgent,
   setCliRunnerTestDeps,
 } from "./cli-runner.js";
-import { createClaudeInputStartedEvent } from "./cli-runner.test-helpers.js";
 import {
   createManagedRun,
   enqueueSystemEventMock,
   requestHeartbeatMock,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
-import { resetClaudeLiveSessionsForTest } from "./cli-runner/claude-live-session.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import {
   resolveCliNoOutputTimeoutMs,
@@ -240,11 +238,12 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
     contextWindowInfo: {
       tokens: 150_000,
       referenceTokens: 200_000,
-      source: "agentContextTokens",
+      source: "modelsConfig",
     },
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
+    claudeSkillsPluginArgs: [],
     ...(params?.openClawHistoryPrompt
       ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
       : {}),
@@ -276,50 +275,7 @@ function makeManagedRun(overrides: Partial<RunExit> = {}) {
   return createManagedRun(makeRunExit(overrides));
 }
 
-type CliBackend = PreparedCliRunContext["preparedBackend"]["backend"];
-
-type LiveClaudeBackend = CliBackend & {
-  reliability: {
-    watchdog: {
-      resume: { noOutputTimeoutMs: number; minMs: number; maxMs: number };
-      fresh: { noOutputTimeoutMs: number; minMs: number; maxMs: number };
-    };
-  };
-};
-
-function makeLiveClaudeBackend(overrides: Partial<LiveClaudeBackend> = {}): LiveClaudeBackend {
-  return {
-    command: "claude",
-    args: ["-p", "--output-format", "stream-json"],
-    resumeArgs: ["-p", "--resume", "{sessionId}", "--output-format", "stream-json"],
-    forkArg: "--fork-session",
-    resumeAtArg: "--resume-session-at",
-    output: "jsonl",
-    input: "stdin",
-    modelArg: "--model",
-    sessionArgs: ["--session-id", "{sessionId}"],
-    sessionMode: "always",
-    liveSession: "claude-stdio",
-    reliability: {
-      watchdog: {
-        resume: { noOutputTimeoutMs: 1_000, minMs: 1_000, maxMs: 1_000 },
-        fresh: { noOutputTimeoutMs: 1_000, minMs: 1_000, maxMs: 1_000 },
-      },
-    },
-    serialize: true,
-    ...overrides,
-  };
-}
-
 const requireRecord = createRequireRecord("object", "expected-label");
-
-function claudeInputStartedJson(data: string): string {
-  const event = createClaudeInputStartedEvent(data);
-  if (!event) {
-    throw new Error("expected Claude user input UUID");
-  }
-  return JSON.stringify(event);
-}
 
 function requireArray(value: unknown, label: string): Array<unknown> {
   expect(Array.isArray(value), label).toBe(true);
@@ -441,7 +397,6 @@ describe("runCliAgent reliability", () => {
     vi.unstubAllEnvs();
     sessionFileEnvSnapshot?.restore();
     sessionFileEnvSnapshot = undefined;
-    resetClaudeLiveSessionsForTest();
     resetDiagnosticEventsForTest();
     cliBackendsTesting.resetDepsForTest();
     vi.useRealTimers();
@@ -1033,6 +988,134 @@ describe("runCliAgent reliability", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("projects explicit outbound MCP media without retaining echoed image bytes", async () => {
+    const echoedBase64 = "private-echoed-base64";
+    const mediaUrls = [
+      "https://example.test/one.png",
+      "https://example.test/two.png",
+      "https://example.test/three.png",
+    ];
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureKey = input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "";
+      for (const [index, mediaUrl] of mediaUrls.entries()) {
+        const captureHandle = markMcpLoopbackToolCallStarted({
+          captureKey,
+          toolName: "image_generate",
+          args: { prompt: `image ${index + 1}` },
+        });
+        if (!captureHandle) {
+          throw new Error("Expected outbound media capture");
+        }
+        recordMcpLoopbackToolCallResult({
+          captureHandle,
+          toolName: "image_generate",
+          args: { prompt: `image ${index + 1}` },
+          result: {
+            content: [
+              {
+                type: "image",
+                data: echoedBase64,
+                mimeType: "image/png",
+              },
+            ],
+            details: { media: { mediaUrls: [mediaUrl] } },
+          },
+          outcome: "completed",
+        });
+        markMcpLoopbackToolCallFinished(captureHandle);
+      }
+      for (const [toolName, media] of [
+        ["image", { mediaUrls: ["/tmp/private.png"], outbound: false }],
+        ["untrusted_tool", { mediaUrls: ["/tmp/untrusted.png"] }],
+      ] as const) {
+        const captureHandle = markMcpLoopbackToolCallStarted({
+          captureKey,
+          toolName,
+          args: {},
+        });
+        if (!captureHandle) {
+          throw new Error("Expected private media capture");
+        }
+        recordMcpLoopbackToolCallResult({
+          captureHandle,
+          toolName,
+          args: {},
+          result: {
+            content: [{ type: "image", data: echoedBase64, mimeType: "image/png" }],
+            details: { media },
+          },
+          outcome: "completed",
+        });
+        markMcpLoopbackToolCallFinished(captureHandle);
+      }
+      return makeManagedRun({ stdout: "done" });
+    });
+    const context = makeClaudePreparedContext({
+      sessionKey: "agent:main:outbound-media",
+      runId: "run-outbound-media",
+    });
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toEqual([
+      {
+        text: "done",
+        mediaUrls,
+        mediaUrl: mediaUrls[0],
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(echoedBase64);
+    expect(JSON.stringify(result)).not.toContain("/tmp/private.png");
+    expect(JSON.stringify(result)).not.toContain("/tmp/untrusted.png");
+  });
+
+  it("deduplicates a CLI Markdown image selected from structured tool media", async () => {
+    const mediaUrl = "/root/.openclaw/media/tool-image-generation/our-agent-soviet-meme.png";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "image_generate",
+        args: { prompt: "our agent" },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected outbound media capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "image_generate",
+        args: { prompt: "our agent" },
+        result: {
+          content: [{ type: "text", text: "Image generated" }],
+          details: { media: { mediaUrls: [mediaUrl], trustedLocalMedia: true } },
+        },
+        outcome: "completed",
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      return makeManagedRun({
+        stdout: `Our agent.\n\n![Our Agent meme](${mediaUrl})`,
+      });
+    });
+    const context = makeClaudePreparedContext({
+      sessionKey: "agent:main:markdown-tool-media",
+      runId: "run-markdown-tool-media",
+    });
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toEqual([
+      {
+        text: "Our agent.",
+        mediaUrls: [mediaUrl],
+        mediaUrl,
+        trustedLocalMedia: true,
+      },
+    ]);
+  });
+
   it("surfaces a CLI failure after a delivered progress reply", async () => {
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -1212,6 +1295,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "sent before failure" },
           },
@@ -1312,6 +1400,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "sent through source reply" },
           },
@@ -1375,6 +1468,11 @@ describe("runCliAgent reliability", () => {
         result: {
           details: {
             deliveryStatus: "sent",
+            messageDelivery: {
+              status: "settled",
+              partialDelivery: false,
+              createdThreadIds: [],
+            },
             sourceReplySink: "internal-ui",
             sourceReply: { text: "visible source reply" },
           },
@@ -1927,466 +2025,6 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
-  it("forks a lifecycle-started resume stall without rebuilding its cached conversation", async () => {
-    vi.useFakeTimers();
-    supervisorSpawnMock.mockClear();
-    const transcriptProbe = vi.fn(async () => false);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: transcriptProbe });
-    const artifactDir = autoCleanupTempDirs.make("openclaw-live-retry-artifacts-");
-    const mcpConfigPath = path.join(artifactDir, "mcp.json");
-    const skillsDir = path.join(artifactDir, "skills-plugin");
-    fs.writeFileSync(mcpConfigPath, "{}\n", "utf-8");
-    fs.mkdirSync(skillsDir);
-
-    const resolveArg = (argv: string[] | undefined, flag: string) => {
-      const index = argv?.indexOf(flag) ?? -1;
-      if (index < 0) {
-        throw new Error(`expected ${flag}`);
-      }
-      const value = argv?.[index + 1];
-      if (!value) {
-        throw new Error(`expected value after ${flag}`);
-      }
-      return value;
-    };
-
-    let notifyFirstSpawn: (() => void) | undefined;
-    const firstSpawned = new Promise<void>((resolve) => {
-      notifyFirstSpawn = resolve;
-    });
-    let spawnCount = 0;
-    const spawnedArgv: string[][] = [];
-    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
-      spawnCount += 1;
-      const input = args[0] as {
-        argv?: string[];
-        onStdout?: (chunk: string) => void;
-      };
-      spawnedArgv.push(input.argv ?? []);
-      expect(resolveArg(input.argv, "--mcp-config")).toBe(mcpConfigPath);
-      expect(resolveArg(input.argv, "--skills-plugin-dir")).toBe(skillsDir);
-      expect(fs.existsSync(mcpConfigPath)).toBe(true);
-      expect(fs.existsSync(skillsDir)).toBe(true);
-
-      if (spawnCount === 1) {
-        notifyFirstSpawn?.();
-        const stdoutListener = input.onStdout;
-        let resolveExit: ((value: RunExit) => void) | undefined;
-        const exited = new Promise<RunExit>((resolve) => {
-          resolveExit = resolve;
-        });
-        return {
-          runId: "live-retry-timeout",
-          pid: 3301,
-          startedAtMs: Date.now(),
-          stdin: {
-            write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
-              stdoutListener?.(
-                [
-                  JSON.stringify({
-                    type: "system",
-                    subtype: "init",
-                    session_id: "stale-live",
-                  }),
-                  claudeInputStartedJson(dataValue),
-                ].join("\n") + "\n",
-              );
-              cb?.();
-            }),
-            end: vi.fn(),
-          },
-          wait: vi.fn(() => exited),
-          cancel: vi.fn(() =>
-            resolveExit?.(
-              makeRunExit({
-                reason: "manual-cancel",
-                exitCode: null,
-                durationMs: 1,
-              }),
-            ),
-          ),
-        };
-      }
-
-      const stdoutListener = input.onStdout;
-      return {
-        runId: "live-retry-fork",
-        pid: 3302,
-        startedAtMs: Date.now(),
-        stdin: {
-          write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
-            stdoutListener?.(
-              [
-                JSON.stringify({ type: "system", subtype: "init", session_id: "forked-live" }),
-                claudeInputStartedJson(dataValue),
-                JSON.stringify({
-                  type: "assistant",
-                  uuid: "assistant-after-recovery",
-                  session_id: "forked-live",
-                  message: {
-                    model: "claude-fable-5",
-                    role: "assistant",
-                    content: [{ type: "text", text: "fork ok" }],
-                  },
-                }),
-                JSON.stringify({ type: "result", session_id: "forked-live", result: "fork ok" }),
-              ].join("\n") + "\n",
-            );
-            cb?.();
-          }),
-          end: vi.fn(),
-        },
-        wait: vi.fn(() => new Promise(() => {})),
-        cancel: vi.fn(),
-      };
-    });
-
-    const liveBackend = makeLiveClaudeBackend({
-      args: [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--mcp-config",
-        mcpConfigPath,
-        "--skills-plugin-dir",
-        skillsDir,
-      ],
-      resumeArgs: [
-        "-p",
-        "--resume",
-        "{sessionId}",
-        "--output-format",
-        "stream-json",
-        "--mcp-config",
-        mcpConfigPath,
-        "--skills-plugin-dir",
-        skillsDir,
-      ],
-    });
-    const cleanup = vi.fn(async () => {
-      fs.rmSync(artifactDir, { recursive: true, force: true });
-    });
-    const prepareForkRetry = vi.fn(async () => true);
-    const claimFork = vi.fn(async () => true);
-    const persistForkSuccessor = vi.fn(async () => {});
-    const restoreFork = vi.fn(async () => {});
-    const clearBeforeRetry = vi.fn(async () => true);
-    const context = makeClaudePreparedContext({
-      sessionKey: "agent:main:live-artifacts",
-      runId: "run-live-artifact-retry",
-      cliSessionId: "stale-live",
-      openClawHistoryPrompt: CLI_RESEED_PROMPT,
-    });
-    context.preparedBackend.backend = liveBackend;
-    context.preparedBackend.cleanup = cleanup;
-    context.backendResolved.config = liveBackend;
-    context.params.cliSessionBinding = {
-      sessionId: "stale-live",
-      resumeCheckpointId: "assistant-before-stall",
-    };
-
-    const resultPromise = runPreparedCliAgent({
-      ...context,
-      params: {
-        ...context.params,
-        timeoutMs: 5_000,
-        onBeforeForkedCliSessionRetry: prepareForkRetry,
-        claimCliSessionFork: claimFork,
-        persistCliSessionForkSuccessor: persistForkSuccessor,
-        restoreCliSessionFork: restoreFork,
-        onBeforeFreshCliSessionRetry: clearBeforeRetry,
-      },
-    });
-    await firstSpawned;
-    await vi.advanceTimersByTimeAsync(1_000);
-    const result = await resultPromise;
-
-    expect(result.payloads).toEqual([{ text: "fork ok" }]);
-    expect(result.meta.finalPromptText).not.toContain("User: earlier context");
-    expect(result.meta.agentMeta?.cliSessionBinding?.sessionId).toBe("forked-live");
-    expect(result.meta.agentMeta?.cliSessionBinding?.resumeCheckpointId).toBe(
-      "assistant-after-recovery",
-    );
-    expect(transcriptProbe).not.toHaveBeenCalled();
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
-    expect(spawnedArgv[0]).not.toContain("--fork-session");
-    expect(spawnedArgv[1]).toEqual(
-      expect.arrayContaining([
-        "--resume",
-        "stale-live",
-        "--fork-session",
-        "--resume-session-at",
-        "assistant-before-stall",
-      ]),
-    );
-    expect(prepareForkRetry).toHaveBeenCalledWith({
-      provider: "claude-cli",
-      reason: "timeout",
-      sessionId: "stale-live",
-    });
-    expect(claimFork).toHaveBeenCalledOnce();
-    expect(persistForkSuccessor).toHaveBeenCalledWith("forked-live");
-    expect(restoreFork).not.toHaveBeenCalled();
-    expect(clearBeforeRetry).not.toHaveBeenCalled();
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(fs.existsSync(artifactDir)).toBe(false);
-  });
-
-  it("falls back to transcript reseeding when the lifecycle-started fork also stalls", async () => {
-    vi.useFakeTimers();
-    supervisorSpawnMock.mockClear();
-    const spawnedArgv: string[][] = [];
-    let notifyFirstSpawn: (() => void) | undefined;
-    const firstSpawned = new Promise<void>((resolve) => {
-      notifyFirstSpawn = resolve;
-    });
-    let notifySecondSpawn: (() => void) | undefined;
-    const secondSpawned = new Promise<void>((resolve) => {
-      notifySecondSpawn = resolve;
-    });
-    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
-      const input = args[0] as {
-        argv?: string[];
-        onStdout?: (chunk: string) => void;
-      };
-      spawnedArgv.push(input.argv ?? []);
-      const spawnIndex = spawnedArgv.length;
-      if (spawnIndex === 1) {
-        notifyFirstSpawn?.();
-      } else if (spawnIndex === 2) {
-        notifySecondSpawn?.();
-      }
-      let resolveExit: ((value: RunExit) => void) | undefined;
-      const exited = new Promise<RunExit>((resolve) => {
-        resolveExit = resolve;
-      });
-      return {
-        runId: `live-fork-fallback-${spawnIndex}`,
-        pid: 3400 + spawnIndex,
-        startedAtMs: Date.now(),
-        stdin: {
-          write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
-            const sessionId =
-              spawnIndex === 1
-                ? "stalled-source"
-                : spawnIndex === 2
-                  ? "forked-before-stall"
-                  : "fresh-after-fork-stall";
-            input.onStdout?.(
-              [
-                JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
-                claudeInputStartedJson(dataValue),
-                ...(spawnIndex < 3
-                  ? []
-                  : [
-                      JSON.stringify({
-                        type: "result",
-                        session_id: sessionId,
-                        result: "fresh fallback ok",
-                      }),
-                    ]),
-              ].join("\n") + "\n",
-            );
-            cb?.();
-          }),
-          end: vi.fn(),
-        },
-        wait: vi.fn(() => exited),
-        cancel: vi.fn(() =>
-          resolveExit?.(
-            makeRunExit({
-              reason: "manual-cancel",
-              exitCode: null,
-              durationMs: 1,
-            }),
-          ),
-        ),
-      };
-    });
-
-    const backend = makeLiveClaudeBackend();
-    const context = makeClaudePreparedContext({
-      sessionKey: "agent:main:fork-then-fresh",
-      runId: "run-fork-then-fresh",
-      cliSessionId: "stalled-source",
-      openClawHistoryPrompt: CLI_RESEED_PROMPT,
-    });
-    context.preparedBackend.backend = backend;
-    context.backendResolved.config = backend;
-    context.params.cliSessionBinding = {
-      sessionId: "stalled-source",
-      resumeCheckpointId: "assistant-before-stall",
-    };
-    const prepareForkRetry = vi.fn(async () => true);
-    const claimFork = vi.fn(async () => true);
-    const persistForkSuccessor = vi.fn(async () => {});
-    const restoreFork = vi.fn(async () => {});
-    const clearBeforeRetry = vi.fn(async () => true);
-
-    const resultPromise = runPreparedCliAgent({
-      ...context,
-      params: {
-        ...context.params,
-        timeoutMs: 5_000,
-        onBeforeForkedCliSessionRetry: prepareForkRetry,
-        claimCliSessionFork: claimFork,
-        persistCliSessionForkSuccessor: persistForkSuccessor,
-        restoreCliSessionFork: restoreFork,
-        onBeforeFreshCliSessionRetry: clearBeforeRetry,
-      },
-    });
-    await firstSpawned;
-    await vi.advanceTimersByTimeAsync(1_000);
-    await secondSpawned;
-    await vi.advanceTimersByTimeAsync(1_000);
-    const result = await resultPromise;
-
-    expect(result.payloads).toEqual([{ text: "fresh fallback ok" }]);
-    expect(result.meta.finalPromptText).toContain("User: earlier context");
-    expect(spawnedArgv).toHaveLength(3);
-    expect(spawnedArgv[1]).toEqual(
-      expect.arrayContaining([
-        "--resume",
-        "stalled-source",
-        "--fork-session",
-        "--resume-session-at",
-        "assistant-before-stall",
-      ]),
-    );
-    expect(spawnedArgv[2]).not.toContain("--resume");
-    expect(spawnedArgv[2]).not.toContain("--fork-session");
-    expect(prepareForkRetry).toHaveBeenCalledOnce();
-    expect(claimFork).toHaveBeenCalledOnce();
-    expect(persistForkSuccessor).toHaveBeenCalledWith("forked-before-stall");
-    expect(restoreFork).not.toHaveBeenCalled();
-    expect(clearBeforeRetry).toHaveBeenCalledWith({
-      provider: "claude-cli",
-      reason: "timeout",
-      sessionId: "forked-before-stall",
-    });
-  });
-
-  it("tracks and clears a successor when the initial attempt is already a fork", async () => {
-    vi.useFakeTimers();
-    supervisorSpawnMock.mockClear();
-    const spawnedArgv: string[][] = [];
-    let notifyFirstSpawn: (() => void) | undefined;
-    const firstSpawned = new Promise<void>((resolve) => {
-      notifyFirstSpawn = resolve;
-    });
-    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
-      const input = args[0] as {
-        argv?: string[];
-        onStdout?: (chunk: string) => void;
-      };
-      spawnedArgv.push(input.argv ?? []);
-      const spawnIndex = spawnedArgv.length;
-      if (spawnIndex === 1) {
-        notifyFirstSpawn?.();
-      }
-      let resolveExit: ((value: RunExit) => void) | undefined;
-      const exited = new Promise<RunExit>((resolve) => {
-        resolveExit = resolve;
-      });
-      return {
-        runId: `initial-fork-fallback-${spawnIndex}`,
-        pid: 3500 + spawnIndex,
-        startedAtMs: Date.now(),
-        stdin: {
-          write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
-            const sessionId =
-              spawnIndex === 1 ? "initial-fork-successor" : "fresh-after-initial-fork-stall";
-            input.onStdout?.(
-              [
-                JSON.stringify({ type: "system", subtype: "init", session_id: sessionId }),
-                claudeInputStartedJson(dataValue),
-                ...(spawnIndex === 1
-                  ? []
-                  : [
-                      JSON.stringify({
-                        type: "result",
-                        session_id: sessionId,
-                        result: "initial fork fallback ok",
-                      }),
-                    ]),
-              ].join("\n") + "\n",
-            );
-            cb?.();
-          }),
-          end: vi.fn(),
-        },
-        wait: vi.fn(() => exited),
-        cancel: vi.fn(() =>
-          resolveExit?.(
-            makeRunExit({
-              reason: "manual-cancel",
-              exitCode: null,
-              durationMs: 1,
-            }),
-          ),
-        ),
-      };
-    });
-
-    const backend = makeLiveClaudeBackend();
-    const context = makeClaudePreparedContext({
-      sessionKey: "agent:main:initial-fork-fallback",
-      runId: "run-initial-fork-fallback",
-      cliSessionId: "initial-fork-parent",
-      openClawHistoryPrompt: CLI_RESEED_PROMPT,
-    });
-    context.preparedBackend.backend = backend;
-    context.backendResolved.config = backend;
-    context.params.cliSessionBinding = {
-      sessionId: "initial-fork-parent",
-      resumeCheckpointId: "assistant-before-initial-fork",
-      forkNextResume: true,
-    };
-    const claimFork = vi.fn(async () => true);
-    const persistForkSuccessor = vi.fn(async () => {});
-    const restoreFork = vi.fn(async () => {});
-    const clearBeforeRetry = vi.fn(async () => true);
-
-    const resultPromise = runPreparedCliAgent({
-      ...context,
-      params: {
-        ...context.params,
-        timeoutMs: 5_000,
-        forkCliSessionOnResume: true,
-        claimCliSessionFork: claimFork,
-        persistCliSessionForkSuccessor: persistForkSuccessor,
-        restoreCliSessionFork: restoreFork,
-        onBeforeFreshCliSessionRetry: clearBeforeRetry,
-      },
-    });
-    await firstSpawned;
-    await vi.advanceTimersByTimeAsync(1_000);
-    const result = await resultPromise;
-
-    expect(result.payloads).toEqual([{ text: "initial fork fallback ok" }]);
-    expect(result.meta.finalPromptText).toContain("User: earlier context");
-    expect(spawnedArgv).toHaveLength(2);
-    expect(spawnedArgv[0]).toEqual(
-      expect.arrayContaining([
-        "--resume",
-        "initial-fork-parent",
-        "--fork-session",
-        "--resume-session-at",
-        "assistant-before-initial-fork",
-      ]),
-    );
-    expect(spawnedArgv[1]).not.toContain("--resume");
-    expect(spawnedArgv[1]).not.toContain("--fork-session");
-    expect(claimFork).toHaveBeenCalledOnce();
-    expect(persistForkSuccessor).toHaveBeenCalledWith("initial-fork-successor");
-    expect(restoreFork).not.toHaveBeenCalled();
-    expect(clearBeforeRetry).toHaveBeenCalledWith({
-      provider: "claude-cli",
-      reason: "timeout",
-      sessionId: "initial-fork-successor",
-    });
-  });
-
   it("does not fresh retry a no-output timeout after CLI diagnostic output", async () => {
     supervisorSpawnMock.mockClear();
     enqueueSystemEventMock.mockClear();
@@ -2906,7 +2544,7 @@ describe("runCliAgent reliability", () => {
       expect(llmOutputEvent.provider).toBe("codex-cli");
       expect(llmOutputEvent.model).toBe("gpt-5.4");
       expect(llmOutputEvent.contextTokenBudget).toBe(150_000);
-      expect(llmOutputEvent.contextWindowSource).toBe("agentContextTokens");
+      expect(llmOutputEvent.contextWindowSource).toBe("modelsConfig");
       expect(llmOutputEvent.contextWindowReferenceTokens).toBe(200_000);
       expect(llmOutputEvent.assistantTexts).toEqual(["hello from cli"]);
       const lastAssistant = requireRecord(llmOutputEvent.lastAssistant, "last assistant");
@@ -2919,7 +2557,7 @@ describe("runCliAgent reliability", () => {
         "llm_output context",
       );
       expect(llmOutputContext.contextTokenBudget).toBe(150_000);
-      expect(llmOutputContext.contextWindowSource).toBe("agentContextTokens");
+      expect(llmOutputContext.contextWindowSource).toBe("modelsConfig");
       expect(llmOutputContext.contextWindowReferenceTokens).toBe(200_000);
 
       const agentEndEvent = requireRecord(
@@ -3077,6 +2715,7 @@ describe("runCliAgent reliability", () => {
       expect(result.payloads).toEqual([{ text: "hello from cli" }]);
       expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
         assistantTranscriptOwned: true,
+        assistantTranscriptIdempotencyKey: "cli-assistant:run-persist-cli",
       });
       expect(onUserMessagePersisted).toHaveBeenCalledOnce();
       expect(onUserMessagePersisted).toHaveBeenCalledWith(
@@ -4062,6 +3701,70 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("persists a blocked bare-key turn under its fixed-store owner", async () => {
+    supervisorSpawnMock.mockClear();
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
+      runBeforeAgentRun: vi.fn(async () => ({
+        pluginId: "policy-plugin",
+        decision: {
+          outcome: "block" as const,
+          message: "Blocked by policy.",
+        },
+      })),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile();
+    const storePath = path.join(dir, "shared-sessions.json");
+    const sessionKey = "global";
+    const context = makeClaudePreparedContext({
+      sessionKey,
+      runId: "run-blocked-fixed-owner",
+    });
+    context.preparedBackend.backend.sessionMode = "none";
+
+    try {
+      await expect(
+        runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            config: {
+              session: { store: storePath },
+              agents: {
+                ownership: "explicit",
+                defaults: { sessionStore: { agentId: "ops" } },
+                entries: { ops: {}, research: {} },
+              },
+            },
+            sessionFile,
+            storePath,
+            workspaceDir: dir,
+            prompt: "secret prompt",
+          },
+        }),
+      ).resolves.toMatchObject({ meta: { livenessState: "blocked" } });
+
+      await expect(
+        loadTranscriptEvents({
+          agentId: "ops",
+          sessionId: context.params.sessionId,
+          sessionKey,
+          storePath,
+        }),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({ role: "user" }),
+          }),
+        ]),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("persists before_agent_run CLI blocks through the canonical recorder", async () => {
     supervisorSpawnMock.mockClear();
     const hookRunner = {
@@ -4474,9 +4177,97 @@ describe("runCliAgent reliability", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("keeps native control operations out of restrictive prompt preparation", async () => {
+    const { dir, sessionFile } = createSessionFile({
+      history: [{ role: "user", content: "earlier ask" }],
+    });
+    const config: OpenClawConfig = { agents: { defaults: { workspace: dir } } };
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "control-cli",
+          pluginId: "test-control",
+          config: {
+            command: "claude",
+            args: ["-p"],
+            resumeArgs: ["-p", "--resume", "{sessionId}"],
+            output: "jsonl",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => ({
+        prependContext: "mutated",
+        toolsAllow: [],
+      })),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    try {
+      const context = await prepareCliRunContext({
+        admittedRunContext: createTestAdmittedRunContext("run-native-compact"),
+        sessionId: "s1",
+        sessionFile,
+        workspaceDir: dir,
+        config,
+        prompt: "/compact",
+        extraSystemPrompt: "must not attach to a control operation",
+        finalizePromptForResolvedTools: () => "mutated",
+        provider: "control-cli",
+        model: "model",
+        timeoutMs: 180_000,
+        runId: "run-native-compact",
+        cliSessionId: "native-session",
+        cliSessionBinding: {
+          sessionId: "native-session",
+          mcpConfigHash: "persisted-mcp-config",
+          mcpResumeHash: "persisted-mcp-resume",
+        },
+        controlOperation: "compact",
+      });
+
+      expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
+      expect(context.params.prompt).toBe("/compact");
+      expect(context.params.cliToolAvailability).toBeUndefined();
+      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "native-session" });
+      expect(context.systemPrompt).toBe("");
+      expect(context.contextEngine).toBeUndefined();
+      expect(context.claudeSkillsPluginArgs).toEqual([]);
+      expect(context.bootstrapPromptWarningLines).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("resolveCliNoOutputTimeoutMs", () => {
+  it("gives expected-quiet controls the caller-owned overall timeout budget", () => {
+    expect(
+      resolveCliNoOutputTimeoutMs({
+        backend: { command: "claude" },
+        timeoutMs: 180_000,
+        useResume: true,
+        expectedQuiet: true,
+        trigger: "manual",
+      }),
+    ).toBe(180_000);
+    expect(
+      resolveCliNoOutputTimeoutMs({
+        backend: { command: "claude" },
+        timeoutMs: 600_000,
+        useResume: true,
+        expectedQuiet: true,
+        trigger: "manual",
+      }),
+    ).toBe(600_000);
+  });
+
   it("lets explicit cron timeouts lift the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
       backend: { command: "codex" },

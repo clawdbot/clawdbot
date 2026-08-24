@@ -31,6 +31,10 @@ and what the automatic resume looks like.
 | Restart continuation          | SQLite restart sentinel                     | One-shot follow-up dispatched to the session that asked for the restart |
 | Gateway terminal PTYs         | Process memory                              | End with the old process; terminal sessions are not recovered           |
 
+Pending delivery rows drain or retry after restart. Failed rows discard their
+payload; only reusable or crash-ambiguous owners keep a minimal bounded or
+permanent receipt that prevents duplicate delivery.
+
 ## Graceful restarts drain first
 
 A requested restart (`openclaw gateway restart`, a config change that requires
@@ -50,11 +54,11 @@ continues after a long pause, the gateway detects the freeze within about 30
 seconds. It restarts channel connections and refreshes cached health and
 presence so clients do not wait for stale sockets or snapshots to expire.
 
-The macOS app cooperates with a local gateway by preparing a short suspension
-lease before the Mac sleeps and resuming it after wake. Remote gateways are not
-suspended when the Mac sleeps. A deliberate suspension through
-`gateway.suspend.*` keeps recovery deferred until the controller resumes the
-gateway.
+The macOS app and Linux companion cooperate with a local gateway by preparing a
+short suspension lease before the host sleeps and resuming it after wake. Remote
+gateways are not suspended when the app host sleeps. A deliberate suspension
+through `gateway.suspend.*` keeps recovery deferred until the controller resumes
+the gateway.
 
 ## How interrupted work is detected
 

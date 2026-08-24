@@ -1,6 +1,5 @@
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   ClickClackHttpError,
   isClickClackChannelNameConflict,
@@ -216,7 +215,7 @@ export async function openClickClackDiscussionBinding(
   }
 
   const config = runtime.config.current() as CoreConfig;
-  const agentId = resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(config));
+  const agentId = resolveSessionAgentId({ config, sessionKey });
   const fallback = fallbackDiscussionLabel(sessionKey, agentId);
   const label = resolveDiscussionLabel(entry, sessionKey, agentId);
   const displayTitle = label === fallback ? "" : truncateDiscussionDisplayTitle(label);
@@ -224,7 +223,7 @@ export async function openClickClackDiscussionBinding(
   const externalUrl = controlSessionUrl(
     account.discussions.controlUrlBase,
     sessionKey,
-    account.agentId ?? "main",
+    account.agentId ?? agentId,
     config.session?.mainKey,
     label,
   );
@@ -415,7 +414,7 @@ export async function openClickClackDiscussionBinding(
       controlSessionUrl(
         account.discussions.controlUrlBase,
         sessionKey,
-        account.agentId ?? "main",
+        account.agentId ?? agentId,
         config.session?.mainKey,
         currentLabel,
       ) ?? "";

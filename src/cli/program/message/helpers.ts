@@ -13,7 +13,9 @@ import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js"
 import { messageCommand } from "../../../commands/message.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { danger, setVerbose } from "../../../globals.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
+import { isMessageBroadcastSuccessful } from "../../../infra/outbound/message-action-contracts.js";
 import { withActivatedPluginIds } from "../../../plugins/activation-context.js";
 import {
   resolveConfiguredChannelPluginIds,
@@ -84,7 +86,8 @@ async function runPluginStopHooks(): Promise<void> {
   const hookRun = runGlobalGatewayStopSafely({
     event: { reason: "cli message action complete" },
     ctx: {},
-    onError: (err) => defaultRuntime.error(danger(`gateway_stop hook failed: ${String(err)}`)),
+    onError: (err) =>
+      defaultRuntime.error(danger(`gateway_stop hook failed: ${formatErrorMessage(err)}`)),
   });
   const bounded = new Promise<"timeout">((resolve) => {
     timeout = setTimeout(() => resolve("timeout"), GATEWAY_STOP_TIMEOUT_MS);
@@ -165,6 +168,7 @@ export function createMessageCliHelpers(
   const runMessageAction = async (action: string, opts: Record<string, unknown>) => {
     setVerbose(Boolean(opts.verbose));
     let failed = false;
+    let result: Awaited<ReturnType<typeof messageCommand>> | undefined;
     let pluginRegistry: PluginRegistry | undefined;
     await runCommandWithRuntime(
       defaultRuntime,
@@ -206,17 +210,18 @@ export function createMessageCliHelpers(
             deps,
             defaultRuntime,
           );
-        await withPluginRuntimeRegistryScope(pluginRegistry, run);
+        result = await withPluginRuntimeRegistryScope(pluginRegistry, run);
       },
       (err) => {
         failed = true;
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(danger(formatErrorMessage(err)));
       },
     );
     // Outbound actions may start plugin-side resources; run bounded stop hooks even after failure.
     if (!ACTIONS_WITHOUT_STOP_HOOKS.has(action)) {
       await withPluginRuntimeRegistryScope(pluginRegistry, runPluginStopHooks);
     }
+    failed ||= result?.kind === "broadcast" && !isMessageBroadcastSuccessful(result);
     defaultRuntime.exit(failed ? 1 : 0);
   };
 

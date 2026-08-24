@@ -1,16 +1,46 @@
-import type { ChildProcess } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { SessionTranscriptWriteLockContext } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type ResolveAcpSessionAvailability =
   (typeof import("openclaw/plugin-sdk/acp-runtime"))["resolveAcpSessionAvailability"];
-type SessionCatalogProvider = Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0];
+type RunCommandBuffered =
+  (typeof import("openclaw/plugin-sdk/process-runtime"))["runCommandBuffered"];
+type RegisteredSessionCatalogProvider = Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0];
+type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
+  agentId?: string;
+};
+type SessionCatalogProvider = Omit<
+  RegisteredSessionCatalogProvider,
+  "list" | "read" | "continueSession" | "archive" | "openTerminal"
+> & {
+  list: (
+    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["list"]>[0]>,
+  ) => ReturnType<RegisteredSessionCatalogProvider["list"]>;
+  read: (
+    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["read"]>[0]>,
+  ) => ReturnType<RegisteredSessionCatalogProvider["read"]>;
+  continueSession?: (
+    params: OptionalCatalogAgent<
+      Parameters<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>[0]
+    >,
+  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>;
+  archive?: (
+    params: OptionalCatalogAgent<
+      Parameters<NonNullable<RegisteredSessionCatalogProvider["archive"]>>[0]
+    >,
+  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["archive"]>>;
+  openTerminal?: (
+    params: OptionalCatalogAgent<
+      Parameters<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>[0]
+    >,
+  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>;
+};
 type NodeHostCommand = Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0];
 type NodeInvokePolicy = Parameters<OpenClawPluginApi["registerNodeInvokePolicy"]>[0];
 type CatalogListParams = Parameters<SessionCatalogProvider["list"]>[0];
@@ -19,28 +49,44 @@ type CreateSessionEntryParams = Parameters<
   OpenClawPluginApi["runtime"]["agent"]["session"]["createSessionEntry"]
 >[0];
 
+function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {
+  return {
+    ...provider,
+    list: (params) => provider.list({ agentId: "main", ...params }),
+    read: (params) => provider.read({ agentId: "main", ...params }),
+    ...(provider.continueSession
+      ? {
+          continueSession: (params) => provider.continueSession!({ agentId: "main", ...params }),
+        }
+      : {}),
+    ...(provider.archive
+      ? { archive: (params) => provider.archive!({ agentId: "main", ...params }) }
+      : {}),
+    ...(provider.openTerminal
+      ? {
+          openTerminal: (params) => provider.openTerminal!({ agentId: "main", ...params }),
+        }
+      : {}),
+  } as SessionCatalogProvider;
+}
+
 const nodeHostMocks = vi.hoisted(() => ({
   runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
 }));
 const acpRuntimeMocks = vi.hoisted(() => ({
   resolveAcpSessionAvailability: vi.fn<ResolveAcpSessionAvailability>(() => ({ available: true })),
 }));
-const childProcessMocks = vi.hoisted(() => ({
-  children: [] as ChildProcess[],
-  spawn: vi.fn(),
+const processRuntimeMocks = vi.hoisted(() => ({
+  runCommandBuffered: vi.fn<RunCommandBuffered>(),
 }));
 const transcriptMocks = vi.hoisted(() => ({
   messages: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  childProcessMocks.spawn.mockImplementation((...args: Parameters<typeof actual.spawn>) => {
-    const child = actual.spawn(...args);
-    childProcessMocks.children.push(child);
-    return child;
-  });
-  return { ...actual, spawn: childProcessMocks.spawn };
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
+  processRuntimeMocks.runCommandBuffered.mockImplementation(actual.runCommandBuffered);
+  return { ...actual, runCommandBuffered: processRuntimeMocks.runCommandBuffered };
 });
 
 vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => ({
@@ -132,7 +178,8 @@ function captureOpenCodeSessionRegistrations(
         nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) },
       } as unknown as OpenClawPluginApi["runtime"],
       ...(overrides as Partial<OpenClawPluginApi>),
-      registerSessionCatalog: (catalog: SessionCatalogProvider) => catalogs.push(catalog),
+      registerSessionCatalog: (catalog: RegisteredSessionCatalogProvider) =>
+        catalogs.push(bindTestCatalogOwner(catalog)),
       registerNodeHostCommand: (command: NodeHostCommand) => commands.push(command),
       registerNodeInvokePolicy: (policy: NodeInvokePolicy) => policies.push(policy),
     }),
@@ -255,7 +302,7 @@ function captureOpenCodeContinuationCatalog() {
     {},
     { id: "opencode", config: {}, runtime },
   );
-  return { createSessionEntry, provider: provider! };
+  return { createSessionEntry, entries, provider: provider! };
 }
 
 async function installFakeOpenCode(
@@ -332,48 +379,6 @@ if (args[0] === "--pure" && args[1] === "db" && args.includes("--format") && arg
   return directory;
 }
 
-async function installHangingOpenCode(): Promise<void> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-opencode-stream-"));
-  temporaryDirectories.push(directory);
-  const executableName = process.platform === "win32" ? "opencode.js" : "opencode";
-  await fs.writeFile(
-    path.join(directory, executableName),
-    `${process.platform === "win32" ? "" : "#!/usr/bin/env node\n"}setTimeout(() => process.stdout.write("ready\\n"), 50);
-setInterval(() => {}, 1_000);
-`,
-  );
-  if (process.platform !== "win32") {
-    await fs.chmod(path.join(directory, executableName), 0o755);
-  }
-  process.env.PATH = `${directory}${path.delimiter}${originalPath ?? ""}`;
-  if (process.platform === "win32") {
-    // The production resolver converts a PATHEXT-resolved .js command into
-    // process.execPath plus the script path, so this remains a direct real-child spawn.
-    process.env.PATHEXT = `.JS;${originalPathExt ?? ".EXE;.CMD;.BAT;.COM"}`;
-  }
-}
-
-function isProcessRunning(pid: number | undefined): boolean {
-  if (!pid) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function stopChild(child: ChildProcess | undefined): Promise<void> {
-  if (!child || !isProcessRunning(child.pid)) {
-    return;
-  }
-  const closed = once(child, "close");
-  child.kill("SIGKILL");
-  await closed;
-}
-
 function restoreEnv(name: string, value: string | undefined) {
   Reflect.deleteProperty(process.env, name);
   if (value !== undefined) {
@@ -384,9 +389,8 @@ function restoreEnv(name: string, value: string | undefined) {
 afterEach(async () => {
   acpRuntimeMocks.resolveAcpSessionAvailability.mockReset().mockReturnValue({ available: true });
   nodeHostMocks.runNodePtyCommand.mockClear();
-  childProcessMocks.spawn.mockClear();
+  processRuntimeMocks.runCommandBuffered.mockClear();
   transcriptMocks.messages.length = 0;
-  await Promise.all(childProcessMocks.children.splice(0).map((child) => stopChild(child)));
   process.env.PATH = originalPath;
   restoreEnv("PATHEXT", originalPathExt);
   restoreEnv("CATALOG_UNRELATED_ENV", originalUnrelatedEnv);
@@ -456,6 +460,47 @@ describe("OpenCode session catalog", () => {
     ]);
   });
 
+  itWithCli("allows a relative OPENCODE_DB as an explicit isolated-state root", async () => {
+    await installFakeOpenCode();
+    const { provider } = captureOpenCodeSessionRegistrations();
+
+    await withEnvAsync(
+      { OPENCODE_DB: undefined, XDG_DATA_HOME: undefined },
+      async () =>
+        await Promise.all([
+          expect(
+            provider!.list({ allowProcessHomeFallback: false, hostIds: ["gateway"] }),
+          ).resolves.toEqual([]),
+          expect(
+            provider!.continueSession?.({
+              allowProcessHomeFallback: false,
+              hostId: "gateway",
+              threadId: "ses_test",
+            }),
+          ).rejects.toThrow("local OpenCode sessions are unavailable in isolated state"),
+          expect(
+            provider!.openTerminal?.({
+              allowProcessHomeFallback: false,
+              hostId: "gateway",
+              threadId: "ses_test",
+            }),
+          ).rejects.toThrow("local OpenCode sessions are unavailable in isolated state"),
+        ]),
+    );
+    await withEnvAsync({ OPENCODE_DB: "relative.db", XDG_DATA_HOME: undefined }, async () => {
+      await expect(
+        provider!.list({ allowProcessHomeFallback: false, hostIds: ["gateway"] }),
+      ).resolves.toEqual([expect.objectContaining({ hostId: "gateway" })]);
+      await expect(
+        provider!.read({
+          allowProcessHomeFallback: false,
+          hostId: "gateway",
+          threadId: "ses_test",
+        }),
+      ).resolves.toMatchObject({ hostId: "gateway", threadId: "ses_test" });
+    });
+  });
+
   itWithCli(
     "memoizes the CLI database query across cadence and invalidates by config identity",
     async () => {
@@ -466,21 +511,21 @@ describe("OpenCode session catalog", () => {
       try {
         await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
         await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
-        expect(childProcessMocks.spawn).toHaveBeenCalledOnce();
+        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledOnce();
 
         now += 31_999;
         await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
-        expect(childProcessMocks.spawn).toHaveBeenCalledOnce();
+        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledOnce();
 
         await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity, forceRefresh: true });
-        expect(childProcessMocks.spawn).toHaveBeenCalledTimes(2);
+        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(2);
 
         await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity: {} });
-        expect(childProcessMocks.spawn).toHaveBeenCalledTimes(3);
+        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(3);
 
         now += 32_001;
         await listLocalOpenCodeSessionPage({ limit: 20 }, { configIdentity });
-        expect(childProcessMocks.spawn).toHaveBeenCalledTimes(4);
+        expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledTimes(4);
       } finally {
         nowSpy.mockRestore();
       }
@@ -566,6 +611,26 @@ describe("OpenCode session catalog", () => {
     ]);
     expect(transcriptMocks.messages[0]?.["__openclaw"]).toEqual({
       mirrorOrigin: "opencode-catalog-import",
+    });
+  });
+
+  itWithCli("projects only adopted OpenCode rows with their OpenClaw session key", async () => {
+    await installFakeOpenCode();
+    const { entries, provider } = captureOpenCodeContinuationCatalog();
+    const sessionEntries = { entriesForAgent: () => entries } as never;
+
+    const before = await provider.list({ hostIds: ["gateway"], sessionEntries });
+    expect(before[0]?.sessions[0]).not.toHaveProperty("sessionKey");
+
+    const adopted = await provider.continueSession!({
+      hostId: "gateway",
+      threadId: "ses_test",
+    });
+    const after = await provider.list({ hostIds: ["gateway"], sessionEntries });
+
+    expect(after[0]?.sessions[0]).toMatchObject({
+      threadId: "ses_test",
+      sessionKey: adopted.sessionKey,
     });
   });
 
@@ -816,31 +881,27 @@ describe("OpenCode session catalog", () => {
   });
 
   it.each(["stdout", "stderr"] as const)(
-    "rejects and reaps the real OpenCode child when its %s pipe fails",
+    "maps a shared-runtime %s pipe failure to the OpenCode-owned error",
     async (streamName) => {
-      await installHangingOpenCode();
-      const uncaughtException = vi.fn();
-      process.on("uncaughtExceptionMonitor", uncaughtException);
-      let child: ChildProcess | undefined;
-      try {
-        const listing = listLocalOpenCodeSessionPage({ limit: 20 });
-        await vi.waitFor(() => expect(childProcessMocks.spawn).toHaveBeenCalledTimes(1));
-        child = childProcessMocks.children[0];
-        expect(child?.pid).toBeTypeOf("number");
-        await once(child!.stdout!, "data");
+      processRuntimeMocks.runCommandBuffered.mockResolvedValueOnce({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: null,
+        signal: null,
+        killed: true,
+        termination: "error",
+        errorStream: streamName,
+        error: new Error(`${streamName} EPIPE`),
+      });
 
-        child![streamName]!.destroy(new Error(`${streamName} EPIPE`));
-
-        await expectRejects(listing, `OpenCode ${streamName} stream failed: ${streamName} EPIPE`);
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(uncaughtException).not.toHaveBeenCalled();
-        expect(isProcessRunning(child!.pid)).toBe(false);
-      } finally {
-        process.off("uncaughtExceptionMonitor", uncaughtException);
-        await stopChild(child);
-      }
+      await expectRejects(
+        listLocalOpenCodeSessionPage({ limit: 20 }),
+        `OpenCode ${streamName} stream failed: ${streamName} EPIPE`,
+      );
+      expect(processRuntimeMocks.runCommandBuffered).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({ terminateOnOutputError: true }),
+      );
     },
   );
 

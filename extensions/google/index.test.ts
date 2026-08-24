@@ -656,6 +656,129 @@ describe("google provider plugin hooks", () => {
     bridge.close();
   });
 
+  it("reports and cleans up a lazy realtime connect failure before reconnecting", async () => {
+    const failure = new Error("Google realtime connect rejected");
+    const errorCallbackFailure = new Error("Google realtime error callback rejected");
+    const closeCallbackFailure = new Error("Google realtime close callback rejected");
+    const cleanupFailure = new Error("Google realtime cleanup rejected");
+    const failed = createMockRealtimeBridge(async () => {
+      throw failure;
+    });
+    failed.close.mockImplementationOnce(() => {
+      throw cleanupFailure;
+    });
+    const reconnected = createMockRealtimeBridge();
+    createRealtimeBridgeMock
+      .mockReturnValueOnce(failed.bridge)
+      .mockReturnValueOnce(reconnected.bridge);
+    const callbackOrder: string[] = [];
+    const onError = vi.fn((error: Error) => {
+      callbackOrder.push(`error:${error.message}`);
+      throw errorCallbackFailure;
+    });
+    const onClose = vi.fn((reason: "completed" | "error") => {
+      callbackOrder.push(`close:${reason}`);
+      throw closeCallbackFailure;
+    });
+    const { bridge } = createLazyRealtimeBridge(onError, undefined, onClose);
+
+    bridge.sendAudio(Buffer.from([0x01]));
+    bridge.sendUserMessage?.("discarded");
+    await expect(bridge.connect()).rejects.toBe(failure);
+    bridge.sendAudio(Buffer.from([0x02]));
+    bridge.sendUserMessage?.("also discarded");
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(failure);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(callbackOrder).toEqual(["error:Google realtime connect rejected", "close:error"]);
+    expect(failed.close).toHaveBeenCalledOnce();
+
+    const reconnectPromise = bridge.connect();
+    bridge.sendAudio(Buffer.from([0x03]));
+    bridge.sendUserMessage?.("accepted");
+    await reconnectPromise;
+    signalRealtimeBridgeReady();
+
+    expect(createRealtimeBridgeMock).toHaveBeenCalledTimes(2);
+    expect(reconnected.sendAudio).toHaveBeenCalledOnce();
+    expect(reconnected.sendAudio).toHaveBeenCalledWith(Buffer.from([0x03]));
+    expect(reconnected.sendUserMessage).toHaveBeenCalledOnce();
+    expect(reconnected.sendUserMessage).toHaveBeenCalledWith("accepted");
+  });
+
+  it("reports one terminal error when concurrent lazy connects reject together", async () => {
+    const failure = new Error("shared Google realtime connect rejected");
+    const connecting = createDeferred<void>();
+    const loaded = createMockRealtimeBridge(() => connecting.promise);
+    createRealtimeBridgeMock.mockReturnValue(loaded.bridge);
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const { bridge } = createLazyRealtimeBridge(onError, undefined, onClose);
+
+    const firstConnect = bridge.connect();
+    const secondConnect = bridge.connect();
+    const connectResults = Promise.allSettled([firstConnect, secondConnect]);
+    await vi.waitFor(() => expect(loaded.connect).toHaveBeenCalledTimes(2));
+    connecting.reject(failure);
+
+    expect(await connectResults).toEqual([
+      { status: "rejected", reason: failure },
+      { status: "rejected", reason: failure },
+    ]);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledWith(failure);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(loaded.close).toHaveBeenCalledOnce();
+  });
+
+  it("does not leak a superseded lazy connect rejection into its replacement", async () => {
+    const failure = new Error("superseded Google realtime connect rejected");
+    const firstConnect = createDeferred<void>();
+    const stale = createMockRealtimeBridge(() => firstConnect.promise);
+    const replacement = createMockRealtimeBridge();
+    createRealtimeBridgeMock
+      .mockReturnValueOnce(stale.bridge)
+      .mockReturnValueOnce(replacement.bridge);
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const { bridge } = createLazyRealtimeBridge(onError, undefined, onClose);
+
+    const staleConnect = bridge.connect();
+    const staleConnectResult = expect(staleConnect).rejects.toBe(failure);
+    await vi.waitFor(() => expect(stale.connect).toHaveBeenCalledOnce());
+    signalRealtimeBridgeClose("error");
+    await bridge.connect();
+    firstConnect.reject(failure);
+    await staleConnectResult;
+
+    expect(createRealtimeBridgeMock).toHaveBeenCalledTimes(2);
+    expect(replacement.connect).toHaveBeenCalledOnce();
+    expect(stale.close).toHaveBeenCalledOnce();
+    expect(replacement.close).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("error");
+  });
+
+  it("reports explicit lazy realtime close once when the provider also reports completion", async () => {
+    const loaded = createMockRealtimeBridge();
+    createRealtimeBridgeMock.mockReturnValue(loaded.bridge);
+    const onClose = vi.fn();
+    const { bridge } = createLazyRealtimeBridge(vi.fn(), undefined, onClose);
+
+    await bridge.connect();
+    loaded.close.mockImplementation(() => signalRealtimeBridgeClose("completed"));
+    bridge.close();
+    bridge.close();
+
+    expect(loaded.close).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("completed");
+  });
+
   it("preserves queued user messages until the loaded bridge reports ready", async () => {
     const connected = createDeferred<void>();
     const loaded = createMockRealtimeBridge(() => connected.promise);

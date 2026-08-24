@@ -51,6 +51,7 @@ export type MediaGenerationTaskHandle = {
   taskId: string;
   runId: string;
   requesterSessionKey: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   taskLabel: string;
 };
@@ -62,7 +63,10 @@ export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => vo
 export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
 
 /** Returns whether a media generation request should detach for a session. */
-export function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
+export function shouldDetachMediaGenerationTask(
+  sessionKey: string | undefined,
+  requesterAgentId?: string,
+): boolean {
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
     return false;
@@ -73,6 +77,7 @@ export function shouldDetachMediaGenerationTask(sessionKey: string | undefined):
   try {
     const entry = loadSessionEntryReadOnly({
       sessionKey: normalizedSessionKey,
+      agentId: requesterAgentId,
       clone: false,
       hydrateSkillPromptRefs: false,
       readConsistency: "latest",
@@ -93,11 +98,10 @@ export function shouldDetachMediaGenerationTask(sessionKey: string | undefined):
 }
 
 /** Successful media generation output used to complete and wake detached tasks. */
-type MediaGenerationExecutionResult = {
+export type MediaGenerationExecutionResult = {
   provider: string;
   model: string;
   count: number;
-  paths: string[];
   wakeResult: string;
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
@@ -105,6 +109,7 @@ type MediaGenerationExecutionResult = {
 
 type CreateMediaGenerationTaskRunParams = {
   sessionKey?: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
   providerId?: string;
@@ -121,7 +126,6 @@ type CompleteMediaGenerationTaskRunParams = {
   provider: string;
   model: string;
   count: number;
-  paths: string[];
   terminalResult?: RequiredCompletionTerminalResult;
 };
 
@@ -193,12 +197,14 @@ function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
   registerGeneratedMediaTaskActivity(handle.runId, handle.requesterSessionKey);
   registerAgentRunContext(handle.runId, {
     sessionKey: handle.requesterSessionKey,
+    agentId: handle.requesterAgentId,
     lastActiveAt: Date.now(),
   });
 }
 
 function createMediaGenerationTaskRun(params: {
   sessionKey?: string;
+  requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
   providerId?: string;
@@ -216,7 +222,7 @@ function createMediaGenerationTaskRun(params: {
     // Pin the complete requester route when detached work starts. Completion-time
     // session state can move to another peer while generation is still running.
     const requesterOrigin = resolveAnnounceOrigin(
-      loadRequesterSessionEntry(sessionKey).entry,
+      loadRequesterSessionEntry(sessionKey, params.requesterAgentId).entry,
       params.requesterOrigin,
     );
     const task = createRunningTaskRun({
@@ -224,6 +230,7 @@ function createMediaGenerationTaskRun(params: {
       taskKind: params.taskKind,
       sourceId: params.providerId ? `${params.toolName}:${params.providerId}` : params.toolName,
       requesterSessionKey: sessionKey,
+      requesterAgentId: params.requesterAgentId,
       ownerKey: sessionKey,
       scopeKind: "session",
       requesterOrigin,
@@ -244,6 +251,7 @@ function createMediaGenerationTaskRun(params: {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
+      requesterAgentId: params.requesterAgentId,
       requesterOrigin,
       taskLabel: params.prompt,
     };
@@ -325,7 +333,6 @@ function completeMediaGenerationTaskRun(params: {
   provider: string;
   model: string;
   count: number;
-  paths: string[];
   generatedLabel: string;
   terminalResult?: RequiredCompletionTerminalResult;
 }) {
@@ -334,7 +341,6 @@ function completeMediaGenerationTaskRun(params: {
   }
   try {
     const endedAt = Date.now();
-    const target = params.count === 1 ? params.paths[0] : `${params.count} files`;
     completeTaskRunByRunId({
       runId: params.handle.runId,
       runtime: "cli",
@@ -344,7 +350,7 @@ function completeMediaGenerationTaskRun(params: {
       progressSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"}`,
       terminalSummary:
         params.terminalResult?.terminalSummary ??
-        `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
+        `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}.`,
       terminalOutcome: params.terminalResult?.terminalOutcome,
     });
   } finally {
@@ -581,7 +587,6 @@ export function scheduleMediaGenerationTaskCompletion<
         provider: executed.provider,
         model: executed.model,
         count: executed.count,
-        paths: executed.paths,
         terminalResult,
       });
     } catch (error) {
@@ -649,6 +654,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
     `A ${params.completionLabel} generation task finished. Process the completion update now.`;
   const delivery = await deliverSubagentAnnouncement({
     requesterSessionKey: params.handle.requesterSessionKey,
+    requesterAgentId: params.handle.requesterAgentId,
     targetRequesterSessionKey: params.handle.requesterSessionKey,
     announceId,
     triggerMessage,

@@ -116,6 +116,10 @@ Notes:
     `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`,
     or `system.execApprovals.get/set`: `operator.pairing` + `operator.admin`
 
+Here, `fs.listDir` is the node command relayed through `node.invoke`. The
+top-level Gateway `fs.listDir` RPC needs `operator.write` for
+workspace-contained host browsing and `operator.admin` when `nodeId` is present.
+
 <Warning>
 Node pairing approval records the trusted capability surface. It does **not** pin the live node command surface per node.
 

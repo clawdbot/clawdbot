@@ -13,6 +13,7 @@ scenario:
     - A real trusted agent exec request records an exact execution binding, is denied by an approval-capable Gateway client, and a conflicting later allow cannot replace the first answer.
     - Text and JSON audit output report the denial reason, enforced state, authoritative durable owner, bounded policy references, and remediation.
     - Receipt output omits raw command, tool-call, and reviewer-device details and creates no generic duplicate.
+    - A positive numeric compatibility cursor resumes the bounded decision receipt page and returns an opaque successor accepted by the same Gateway handler.
     - A replacement Gateway process returns byte-equivalent decision inspection JSON.
   docsRefs:
     - docs/gateway/audit.md

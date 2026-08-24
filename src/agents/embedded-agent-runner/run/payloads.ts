@@ -5,10 +5,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   createHeartbeatToolResponsePayload,
-  getHeartbeatToolNotificationText,
   type HeartbeatToolResponse,
 } from "../../../auto-reply/heartbeat-tool-response.js";
 import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
@@ -55,7 +56,6 @@ import type { PreparedProviderFailoverOwner } from "../../failover/provider-patt
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
-import { hasExplicitMutatingToolFailureAcknowledgement } from "./tool-failure-acknowledgement.js";
 
 function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
@@ -147,7 +147,7 @@ export function buildEmbeddedRunPayloads(params: {
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
-  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
+  suppressToolErrorWarnings?: boolean;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTargets?: MessagingToolSend[];
@@ -205,6 +205,9 @@ export function buildEmbeddedRunPayloads(params: {
   const currentAssistant = params.currentAssistant ?? undefined;
   const assistantForPayload =
     currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : params.lastAssistant);
+  // Pre-upgrade recovered messages have no stored facts, and recovery intentionally does not
+  // reparse text; one in-flight reply can lose delivery or speech intent across this boundary.
+  const storedDelivery = assistantForPayload?.openclawDelivery;
   const lastAssistantStopReason = assistantForPayload?.stopReason;
   const lastAssistantErrored = lastAssistantStopReason === "error";
   const lastAssistantAborted = lastAssistantStopReason === "aborted";
@@ -358,15 +361,10 @@ export function buildEmbeddedRunPayloads(params: {
                 ? [fallbackAnswerText]
                 : []
         ).filter((text) => !shouldSuppressRawErrorText(text));
-  let hasUserFacingAssistantReply =
-    completedSourceReplyViaMessageTool || params.heartbeatToolResponse?.notify === true;
-  const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
-  let hasUserFacingFailureAcknowledgement =
-    params.heartbeatToolResponse?.notify === true &&
-    (params.heartbeatToolResponse.outcome === "blocked" ||
-      hasExplicitMutatingToolFailureAcknowledgement(
-        getHeartbeatToolNotificationText(params.heartbeatToolResponse),
-      ));
+  let hasUserFacingReply =
+    Boolean(errorText) ||
+    completedSourceReplyViaMessageTool ||
+    params.heartbeatToolResponse?.notify === true;
   for (const text of answerTexts) {
     const {
       text: cleanedText,
@@ -376,30 +374,37 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     } = parseReplyDirectives(text);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+    const ttsFacts = shouldUseCanonicalFinalAnswer ? storedDelivery?.tts : undefined;
+    const delivery = shouldUseCanonicalFinalAnswer
+      ? {
+          audioAsVoice: storedDelivery?.audioAsVoice,
+          replyToCurrent: storedDelivery?.replyToCurrent,
+          replyToId: storedDelivery?.replyToId,
+          replyToTag: Boolean(storedDelivery?.replyToCurrent || storedDelivery?.replyToId),
+        }
+      : { audioAsVoice, replyToId, replyToTag, replyToCurrent };
+    if (
+      !cleanedText &&
+      (!mediaUrls || mediaUrls.length === 0) &&
+      !delivery.audioAsVoice &&
+      !ttsFacts
+    ) {
       continue;
     }
-    replyItems.push({
+    const replyPayload = {
       text: cleanedText,
       media: mediaUrls,
-      audioAsVoice,
-      replyToId,
-      replyToTag,
-      replyToCurrent,
-    });
-    hasUserFacingAssistantReply = true;
-    if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
-      hasUserFacingFailureAcknowledgement = true;
-    }
+      ...delivery,
+    };
+    replyItems.push(
+      ttsFacts ? setReplyPayloadMetadata(replyPayload, { tts: ttsFacts }) : replyPayload,
+    );
+    hasUserFacingReply = true;
   }
   if (params.lastToolError) {
-    // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
-    // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
     const failureWarning = buildFailureWarning({
       lastToolError: params.lastToolError,
-      hasUserFacingReply: hasUserFacingAssistantReply,
-      hasUserFacingErrorReply,
-      hasUserFacingFailureAcknowledgement,
+      hasUserFacingReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       verboseLevel: params.verboseLevel,
@@ -421,7 +426,7 @@ export function buildEmbeddedRunPayloads(params: {
           text: failureWarning.text,
           isError: true,
           nonTerminalToolErrorWarning:
-            hasUserFacingAssistantReply && failureWarning.nonTerminalToolErrorWarning,
+            hasUserFacingReply && failureWarning.nonTerminalToolErrorWarning,
         });
       }
     }
@@ -432,9 +437,9 @@ export function buildEmbeddedRunPayloads(params: {
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
     .map((item) => {
-      const payload: ReplyPayload = {
+      const payload: ReplyPayload = copyReplyPayloadMetadata(item, {
         text: normalizeOptionalString(item.text),
-      };
+      });
       const mediaUrl = item.mediaUrl ?? item.media?.[0];
       if (mediaUrl) {
         payload.mediaUrl = mediaUrl;
@@ -525,6 +530,9 @@ export function buildEmbeddedRunPayloads(params: {
           if (item.sourceReplyMirror.idempotencyKey) {
             sourceReplyTranscriptMirror.idempotencyKey = item.sourceReplyMirror.idempotencyKey;
           }
+          if (item.sourceReplyMirror.transcriptOwner) {
+            sourceReplyTranscriptMirror.transcriptOwner = true;
+          }
           setReplyPayloadMetadata(payload, {
             sourceReplyTranscriptMirror,
           });
@@ -541,7 +549,7 @@ export function buildEmbeddedRunPayloads(params: {
       return payload;
     })
     .filter((p) => {
-      if (!hasReplyPayloadContent(p)) {
+      if (!hasReplyPayloadContent(p) && !getReplyPayloadMetadata(p)?.tts) {
         return false;
       }
       if (p.text && isSilentReplyPayloadText(p.text, SILENT_REPLY_TOKEN)) {

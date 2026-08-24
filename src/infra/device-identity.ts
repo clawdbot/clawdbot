@@ -165,14 +165,12 @@ export function loadOrCreateProcessDeviceIdentity(
 export function loadDeviceIdentityIfPresent(
   options: DeviceIdentityStoreOptions = {},
 ): DeviceIdentity | null {
-  return withDeviceIdentityCoordinator(options, (_resolved, resolvedOptions) => {
-    const stored = readStoredDeviceIdentityReadOnly(resolvedOptions);
-    if (stored) {
-      return toDeviceIdentity(stored);
-    }
-    assertNoPendingLegacyIdentity(resolvedOptions);
-    return null;
-  });
+  const stored = readStoredDeviceIdentityReadOnly(options);
+  if (stored) {
+    return toDeviceIdentity(stored);
+  }
+  assertNoPendingLegacyIdentity(options);
+  return null;
 }
 
 /** Sign a UTF-8 payload with a PEM Ed25519 private key and return base64url bytes. */

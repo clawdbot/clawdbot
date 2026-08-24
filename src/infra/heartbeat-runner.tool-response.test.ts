@@ -176,7 +176,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     return call;
   }
 
-  function setAgentTurnStatus(options: object | undefined, status: "ok" | "failed") {
+  function setAgentTurnStatus(options: object | undefined, status: "ok" | "failed" | "superseded") {
     const runState = resolveReplyOperationRunState(options);
     if (!runState) {
       throw new Error("Expected heartbeat reply operation run state");
@@ -328,6 +328,40 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       expect(result.status).toBe("ran");
       expect(readCronJobScratchState(resolveCronJobsStorePath(), jobId).scratch?.content).toBe(
         "new private scratch",
+      );
+    });
+  });
+
+  it("retains heartbeat work and scratch when a visible turn supersedes the run", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      const jobId = await seedHeartbeatScratchForTest({ content: "old scratch" });
+      const sessionKey = await seedTelegramSession(storePath, cfg);
+      enqueueSystemEvent("exec finished: backup completed", { sessionKey });
+      const inspectedEvents = peekSystemEventEntries(sessionKey);
+      replySpy.mockImplementationOnce(async (_ctx, options) => {
+        setAgentTurnStatus(options, "superseded");
+        return createHeartbeatToolResponsePayload({
+          outcome: "progress",
+          notify: true,
+          summary: "Backup completed.",
+          notificationText: "Backup completed successfully.",
+          scratch: "new private scratch",
+        });
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeat(cfg, replySpy, sendTelegram, {
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+      });
+
+      expect(result).toEqual({ status: "skipped", reason: "preempted" });
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(sessionKey)).toEqual(inspectedEvents);
+      expect(readCronJobScratchState(resolveCronJobsStorePath(), jobId).scratch?.content).toBe(
+        "old scratch",
       );
     });
   });

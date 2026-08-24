@@ -9,6 +9,7 @@ import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/co
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { Type } from "typebox";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { readDiscordComponentSpec } from "./components.js";
@@ -17,6 +18,7 @@ import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.
 
 const localExecutionActions = new Set<ChannelMessageActionName>([
   "send",
+  "poll",
   "upload-file",
   "thread-reply",
   "sticker",
@@ -171,15 +173,31 @@ function describeDiscordMessageTool({
   return {
     actions: Array.from(actions),
     capabilities: ["presentation"],
+    ...(actions.has("react")
+      ? {
+          schema: {
+            properties: {
+              emoji: Type.Optional(
+                Type.String({
+                  description: `Unicode emoji or custom name:id (also <:name:id> / <a:name:id>).${actions.has("emoji-list") ? ' Use action:"emoji-list" for server emojis.' : ""}`,
+                }),
+              ),
+            },
+            actions: ["react", "reactions"],
+          },
+        }
+      : {}),
   };
 }
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
+  providerOwnedReadGates: true,
   // Credential-only Discord actions run in the gateway when one is available.
   // Send/file-style actions stay local because core owns their thread, media,
   // component, and client-local payload semantics.
   resolveExecutionMode: resolveDiscordActionExecutionMode,
   describeMessageTool: describeDiscordMessageTool,
+  supportsAction: ({ action }) => action !== "poll",
   requiresTrustedRequesterSender: ({ action, toolContext }) =>
     Boolean(toolContext) && isTrustedRequesterGuildAdminAction(action),
   extractToolSend: ({ args }) => {
@@ -253,6 +271,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     sessionKey,
     inboundEventKind,
     conversationReadOrigin,
+    reply,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -271,6 +290,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       ...(inboundEventKind ? { inboundEventKind } : {}),
       ...(requesterAccountId ? { requesterAccountId } : {}),
       ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
+      ...(reply ? { reply } : {}),
     });
   },
 };

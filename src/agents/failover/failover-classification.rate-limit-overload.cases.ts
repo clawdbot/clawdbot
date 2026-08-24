@@ -3,6 +3,7 @@ import {
   billingSource,
   matchesSource,
   messageRows,
+  failoverSignalRows,
   openRouterSource,
   patternsSource,
   reason,
@@ -11,235 +12,151 @@ import {
 } from "./failover-classification.corpus.test-support.js";
 export const rateLimitOverloadCases = [
   // Rate limits and temporary quotas.
-  {
-    id: "billing-openai-rate-limit",
-    source: billingSource,
-    signal: {
-      provider: "openai",
-      message:
-        "Rate limit reached for gpt-4.1-mini in organization org_test on requests per min. Limit: 3.000000 / min. Current: 3.000000 / min.",
-    },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "billing-gemini-resource-exhausted",
-    source: billingSource,
-    signal: {
-      provider: "google",
-      message: "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).",
-    },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "billing-groq-too-many-requests",
-    source: billingSource,
-    signal: {
-      provider: "groq",
-      message: "429 Too Many Requests: Too many requests were sent in a given timeframe.",
-    },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "billing-model-cooldown",
-    source: billingSource,
-    signal: { message: "model_cooldown: All credentials for model gpt-5 are cooling down" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "billing-chatgpt-usage-limit",
-    source: billingSource,
-    signal: { provider: "openai", message: "You have hit your ChatGPT usage limit (plus plan)" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "billing-bedrock-tokens-per-day",
-    source: billingSource,
-    signal: {
-      provider: "amazon-bedrock",
-      message: "AWS Bedrock: Too many tokens per day. Please try again tomorrow.",
-    },
-    expected: reason("rate_limit"),
-  },
-  {
+  ...failoverSignalRows(billingSource, reason("rate_limit"), [
+    [
+      "billing-openai-rate-limit",
+      {
+        provider: "openai",
+        message:
+          "Rate limit reached for gpt-4.1-mini in organization org_test on requests per min. Limit: 3.000000 / min. Current: 3.000000 / min.",
+      },
+    ],
+    [
+      "billing-gemini-resource-exhausted",
+      {
+        provider: "google",
+        message: "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).",
+      },
+    ],
+    [
+      "billing-groq-too-many-requests",
+      {
+        provider: "groq",
+        message: "429 Too Many Requests: Too many requests were sent in a given timeframe.",
+      },
+    ],
+    [
+      "billing-model-cooldown",
+      { message: "model_cooldown: All credentials for model gpt-5 are cooling down" },
+    ],
+    [
+      "billing-chatgpt-usage-limit",
+      { provider: "openai", message: "You have hit your ChatGPT usage limit (plus plan)" },
+    ],
+    [
+      "billing-bedrock-tokens-per-day",
+      {
+        provider: "amazon-bedrock",
+        message: "AWS Bedrock: Too many tokens per day. Please try again tomorrow.",
+      },
+    ],
     // #33785
-    id: "billing-zhipu-periodic-limit",
-    source: billingSource,
-    signal: {
-      provider: "zai",
-      message:
-        "LLM error 1310: Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-03-06 22:19:54 (request_id: 20260303141547610b7f574d1b44cb)",
-    },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "billing-subscription-quota-refresh",
-    source: billingSource,
-    signal: {
-      message:
-        "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.",
-    },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "billing-chinese-too-frequent",
-    source: billingSource,
-    signal: { message: "请求过于频繁，请稍后重试" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "billing-chinese-frequency-limit",
-    source: billingSource,
-    signal: { message: "调用频率超限" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "billing-chinese-quota-exhausted",
-    source: billingSource,
-    signal: { message: "配额已用尽" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "billing-chinese-top-up",
-    source: billingSource,
-    signal: { message: "额度不足，请充值" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "matches-rate-limit",
-    source: matchesSource,
-    signal: { message: "rate limit exceeded" },
-    expected: reason("rate_limit"),
-  },
-  {
+    [
+      "billing-zhipu-periodic-limit",
+      {
+        provider: "zai",
+        message:
+          "LLM error 1310: Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-03-06 22:19:54 (request_id: 20260303141547610b7f574d1b44cb)",
+      },
+    ],
+    [
+      "billing-subscription-quota-refresh",
+      {
+        message:
+          "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.",
+      },
+    ],
+    ["billing-chinese-too-frequent", { message: "请求过于频繁，请稍后重试" }],
+    ["billing-chinese-frequency-limit", { message: "调用频率超限" }],
+    ["billing-chinese-quota-exhausted", { message: "配额已用尽" }],
+    ["billing-chinese-top-up", { message: "额度不足，请充值" }],
+  ]),
+  ...failoverSignalRows(matchesSource, reason("rate_limit"), [
+    ["matches-rate-limit", { message: "rate limit exceeded" }],
     // #98101
-    id: "matches-zai-1305-429",
-    source: matchesSource,
-    signal: {
-      provider: "zai",
-      message:
-        '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}',
-    },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "patterns-bedrock-throttling",
-    source: patternsSource,
-    signal: { provider: "amazon-bedrock", message: "ThrottlingException: Too many requests" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "patterns-bedrock-concurrency",
-    source: patternsSource,
-    signal: {
-      provider: "amazon-bedrock",
-      message: "ThrottlingException: Too many concurrent requests",
-    },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "patterns-concurrency-limit",
-    source: patternsSource,
-    signal: { message: "concurrency limit has been reached" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "patterns-concurrency-limit-breached",
-    source: patternsSource,
-    signal: { message: "concurrency limit breached" },
+    [
+      "matches-zai-1305-429",
+      {
+        provider: "zai",
+        message:
+          '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}',
+      },
+    ],
+  ]),
+  ...failoverSignalRows(patternsSource, reason("rate_limit"), [
+    [
+      "patterns-bedrock-throttling",
+      { provider: "amazon-bedrock", message: "ThrottlingException: Too many requests" },
+    ],
+    [
+      "patterns-bedrock-concurrency",
+      {
+        provider: "amazon-bedrock",
+        message: "ThrottlingException: Too many concurrent requests",
+      },
+    ],
+    ["patterns-concurrency-limit", { message: "concurrency limit has been reached" }],
     // FIXED(refactor-02): was null, now rate_limit
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "patterns-concurrency-limit-was-reached",
-    source: patternsSource,
-    signal: { message: "concurrency limit was reached" },
+    ["patterns-concurrency-limit-breached", { message: "concurrency limit breached" }],
     // FIXED(refactor-02): was null, now rate_limit
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "patterns-cloudflare-workers-quota",
-    source: patternsSource,
-    signal: { message: "workers_ai gateway error: quota limit exceeded" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "patterns-json-rate-limit",
-    source: patternsSource,
-    signal: {
-      message: '429 {"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}',
-    },
-    expected: reason("rate_limit"),
-  },
+    ["patterns-concurrency-limit-was-reached", { message: "concurrency limit was reached" }],
+    [
+      "patterns-cloudflare-workers-quota",
+      { message: "workers_ai gateway error: quota limit exceeded" },
+    ],
+    [
+      "patterns-json-rate-limit",
+      {
+        message: '429 {"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}',
+      },
+    ],
+  ]),
   {
     id: "structured-unstructured-rate-limit",
     source: structuredSource,
     signal: { provider: "demo-provider", message: "invalid_api_key" },
     expected: reason("auth"),
   },
-  {
-    id: "retry-429-temporary",
-    source: retrySource,
-    signal: { message: "429 temporary provider response" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "retry-resource-exhausted-worker",
-    source: retrySource,
-    signal: { message: "ResourceExhausted: Worker local total request limit reached" },
+  ...failoverSignalRows(retrySource, reason("rate_limit"), [
+    ["retry-429-temporary", { message: "429 temporary provider response" }],
     // FIXED(refactor-06): separator-free provider code now shares the canonical rate-limit path.
-    expected: reason("rate_limit"),
-  },
-  {
+    [
+      "retry-resource-exhausted-worker",
+      { message: "ResourceExhausted: Worker local total request limit reached" },
+    ],
+  ]),
+  ...failoverSignalRows("src/agents/live-auth-keys.ts", reason("rate_limit"), [
     // FIXED(refactor-06): live key rotation already treated the spaced form as rate limiting.
-    id: "live-auth-resource-exhausted-spaced",
-    source: "src/agents/live-auth-keys.ts",
-    signal: { message: "resource exhausted" },
-    expected: reason("rate_limit"),
-  },
-  {
+    ["live-auth-resource-exhausted-spaced", { message: "resource exhausted" }],
     // FIXED(refactor-06): preserve the provider-code spelling used by live key rotation.
-    id: "live-auth-quota-exceeded-code",
-    source: "src/agents/live-auth-keys.ts",
-    signal: { message: "quota_exceeded" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "retry-resource-exhausted-capacity",
-    source: retrySource,
-    signal: { message: "resource_exhausted: transient worker capacity exhausted" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "retry-daily-limit",
-    source: retrySource,
-    signal: { message: "429 You exceeded your daily request limit. Please try again in 24 hours." },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "retry-retry-after-hours",
-    source: retrySource,
-    signal: { message: "429 RPM limit exceeded; Retry-After: 2 hours" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "retry-resource-exhausted-quota",
-    source: retrySource,
-    signal: {
-      message:
-        "429 RESOURCE_EXHAUSTED: Quota exceeded for quota metric requests per minute; please retry your request",
-    },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "retry-openai-resource-exhausted",
-    source: retrySource,
-    signal: {
-      provider: "openai",
-      message:
-        "OpenAI API error (429): RESOURCE_EXHAUSTED: Quota exceeded for requests per minute; please retry your request",
-    },
-    expected: reason("rate_limit"),
-  },
+    ["live-auth-quota-exceeded-code", { message: "quota_exceeded" }],
+  ]),
+  ...failoverSignalRows(retrySource, reason("rate_limit"), [
+    [
+      "retry-resource-exhausted-capacity",
+      { message: "resource_exhausted: transient worker capacity exhausted" },
+    ],
+    [
+      "retry-daily-limit",
+      { message: "429 You exceeded your daily request limit. Please try again in 24 hours." },
+    ],
+    ["retry-retry-after-hours", { message: "429 RPM limit exceeded; Retry-After: 2 hours" }],
+    [
+      "retry-resource-exhausted-quota",
+      {
+        message:
+          "429 RESOURCE_EXHAUSTED: Quota exceeded for quota metric requests per minute; please retry your request",
+      },
+    ],
+    [
+      "retry-openai-resource-exhausted",
+      {
+        provider: "openai",
+        message:
+          "OpenAI API error (429): RESOURCE_EXHAUSTED: Quota exceeded for requests per minute; please retry your request",
+      },
+    ],
+  ]),
   {
     id: "openrouter-stream-rate-limit",
     source: openRouterSource,
@@ -251,18 +168,10 @@ export const rateLimitOverloadCases = [
     },
     expected: reason("rate_limit"),
   },
-  {
-    id: "mantle-rate-limit",
-    source: "extensions/amazon-bedrock-mantle/index.test.ts",
-    signal: { provider: "amazon-bedrock-mantle", message: "rate_limit exceeded" },
-    expected: reason("rate_limit"),
-  },
-  {
-    id: "mantle-429",
-    source: "extensions/amazon-bedrock-mantle/index.test.ts",
-    signal: { provider: "amazon-bedrock-mantle", message: "429 Too Many Requests" },
-    expected: reason("rate_limit"),
-  },
+  ...failoverSignalRows("extensions/amazon-bedrock-mantle/index.test.ts", reason("rate_limit"), [
+    ["mantle-rate-limit", { provider: "amazon-bedrock-mantle", message: "rate_limit exceeded" }],
+    ["mantle-429", { provider: "amazon-bedrock-mantle", message: "429 Too Many Requests" }],
+  ]),
   {
     id: "xai-rate-limit-payload",
     source: "extensions/xai/index.test.ts",
@@ -337,99 +246,67 @@ export const rateLimitOverloadCases = [
     expected: reason("rate_limit"),
   },
   // Provider overload.
-  {
-    id: "billing-anthropic-overloaded",
-    source: billingSource,
-    signal: {
-      provider: "anthropic",
-      message:
-        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_test"}',
-    },
-    expected: reason("overloaded"),
-  },
-  {
-    id: "billing-together-overloaded",
-    source: billingSource,
-    signal: {
-      provider: "together",
-      message:
-        "503 Engine Overloaded: The server is experiencing a high volume of requests and is temporarily overloaded.",
-    },
-    expected: reason("overloaded"),
-  },
-  {
-    id: "billing-groq-service-unavailable",
-    source: billingSource,
-    signal: {
-      provider: "groq",
-      message:
-        "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.",
-    },
-    expected: reason("overloaded"),
-  },
-  {
-    id: "billing-high-demand",
-    source: billingSource,
-    signal: {
-      message: "This model is currently experiencing high demand. Please try again later.",
-    },
-    expected: reason("overloaded"),
-  },
-  {
-    id: "billing-service-capacity",
-    source: billingSource,
-    signal: { message: "service unavailable due to capacity limits" },
-    expected: reason("overloaded"),
-  },
-  {
-    id: "billing-json-model-overloaded",
-    source: billingSource,
-    signal: {
-      message:
-        '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
-    },
-    expected: reason("overloaded"),
-  },
-  {
-    id: "billing-529-busy",
-    source: billingSource,
-    signal: { message: "529 API is busy" },
-    expected: reason("overloaded"),
-  },
-  {
-    id: "billing-chinese-overload",
-    source: billingSource,
-    signal: { message: "服务过载，请稍后重试" },
-    expected: reason("overloaded"),
-  },
-  {
-    id: "billing-chinese-high-load",
-    source: billingSource,
-    signal: { message: "当前负载过高" },
-    expected: reason("overloaded"),
-  },
-  {
-    id: "matches-openai-capacity",
-    source: matchesSource,
-    signal: { message: "Selected model is at capacity. Please try a different model." },
-    expected: reason("overloaded"),
-  },
-  {
-    id: "matches-openrouter-high-load",
-    source: matchesSource,
-    signal: {
-      provider: "openrouter",
-      message: "The service is currently experiencing high load and cannot process your request.",
-    },
-    expected: reason("overloaded"),
-  },
-  {
+  ...failoverSignalRows(billingSource, reason("overloaded"), [
+    [
+      "billing-anthropic-overloaded",
+      {
+        provider: "anthropic",
+        message:
+          '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_test"}',
+      },
+    ],
+    [
+      "billing-together-overloaded",
+      {
+        provider: "together",
+        message:
+          "503 Engine Overloaded: The server is experiencing a high volume of requests and is temporarily overloaded.",
+      },
+    ],
+    [
+      "billing-groq-service-unavailable",
+      {
+        provider: "groq",
+        message:
+          "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.",
+      },
+    ],
+    [
+      "billing-high-demand",
+      {
+        message: "This model is currently experiencing high demand. Please try again later.",
+      },
+    ],
+    ["billing-service-capacity", { message: "service unavailable due to capacity limits" }],
+    [
+      "billing-json-model-overloaded",
+      {
+        message:
+          '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
+      },
+    ],
+    ["billing-529-busy", { message: "529 API is busy" }],
+    ["billing-chinese-overload", { message: "服务过载，请稍后重试" }],
+    ["billing-chinese-high-load", { message: "当前负载过高" }],
+  ]),
+  ...failoverSignalRows(matchesSource, reason("overloaded"), [
+    [
+      "matches-openai-capacity",
+      { message: "Selected model is at capacity. Please try a different model." },
+    ],
+    [
+      "matches-openrouter-high-load",
+      {
+        provider: "openrouter",
+        message: "The service is currently experiencing high load and cannot process your request.",
+      },
+    ],
     // #48988
-    id: "matches-zhipu-overload-cn",
-    source: matchesSource,
-    signal: { provider: "zai", message: "[1305][该模型当前访问量过大，请您稍后再试]" },
-    expected: reason("overloaded"),
-  },
+    [
+      "matches-zhipu-overload-cn",
+      { provider: "zai", message: "[1305][该模型当前访问量过大，请您稍后再试]" },
+    ],
+  ]),
   {
     id: "patterns-bedrock-model-not-ready",
     source: patternsSource,

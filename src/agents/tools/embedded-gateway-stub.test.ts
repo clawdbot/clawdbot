@@ -49,7 +49,6 @@ const runtime = vi.hoisted(() => ({
     messages,
   })),
   capArrayByJsonBytes: vi.fn((items: unknown[]) => ({ items })),
-  enforceChatHistoryFinalBudget: vi.fn(({ messages }: { messages: unknown[] }) => ({ messages })),
   loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
     storePath: "/tmp/openclaw-sessions.json",
     store: {},
@@ -202,6 +201,26 @@ describe("embedded gateway stub", () => {
     expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
   });
 
+  it("rejects an explicit agent that conflicts with an unscoped store owner", async () => {
+    runtime.resolveSessionAgentId.mockImplementationOnce(() => {
+      throw new Error('The shared fixed-store row belongs to "ops", not "research".');
+    });
+    const callGateway = createEmbeddedCallGateway();
+
+    await expect(
+      callGateway({
+        method: "sessions.search",
+        params: { agentId: "research", query: "needle", sessionKeys: ["global"] },
+      }),
+    ).rejects.toThrow('belongs to "ops", not "research"');
+    expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
+      sessionKey: "global",
+      config: { agents: { list: [{ id: "main", default: true }] } },
+      agentId: "research",
+    });
+    expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
+  });
+
   it("projects embedded chat history through the shared display projector", async () => {
     // Embedded history must use the same projection path as gateway history so
     // byte/message limits and display filtering stay aligned.
@@ -220,6 +239,7 @@ describe("embedded gateway stub", () => {
     });
 
     expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
       maxMessages: 200,
     });
@@ -287,6 +307,7 @@ describe("embedded gateway stub", () => {
     });
 
     expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
       maxMessages: 1,
     });
@@ -347,6 +368,7 @@ describe("embedded gateway stub", () => {
       },
     );
     expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith(rawMessages.slice(0, 2), {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
     });
     expect(result).toMatchObject({
@@ -384,6 +406,7 @@ describe("embedded gateway stub", () => {
     });
 
     expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith([rawMessages[1]], {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
     });
     expect(result.messages).toEqual([projectedMessages[1]]);
@@ -419,6 +442,7 @@ describe("embedded gateway stub", () => {
 
     expect(runtime.dropPreSessionStartAnnouncePairs).toHaveBeenCalledWith(rawMessages, 1234);
     expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith(filteredMessages, {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
     });
     expect(result.messages).toEqual(filteredMessages);
@@ -482,6 +506,7 @@ describe("embedded gateway stub", () => {
       },
     );
     expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
       maxMessages: 2,
     });
@@ -505,7 +530,7 @@ describe("embedded gateway stub", () => {
       messages: rawMessages,
       totalMessages: 10,
     }));
-    runtime.enforceChatHistoryFinalBudget.mockReturnValueOnce({ messages: returnedMessages });
+    runtime.capArrayByJsonBytes.mockReturnValueOnce({ items: returnedMessages });
 
     const callGateway = createEmbeddedCallGateway();
     const result = await callGateway<{
@@ -536,6 +561,7 @@ describe("embedded gateway stub", () => {
     });
 
     expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
+      includeCommentaryFallbacks: true,
       maxChars: 100_000,
       maxMessages: 2,
     });

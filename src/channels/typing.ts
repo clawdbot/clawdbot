@@ -60,9 +60,19 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       keepaliveLoop.stop();
     },
   });
+  // Explicit refreshes and keepalive ticks share this gate so one stalled
+  // provider request cannot fan out into unbounded concurrent starts.
+  let startInFlight: ReturnType<typeof startGuard.run> | undefined;
 
   const fireStart = async (): Promise<void> => {
-    await startGuard.run(() => params.start());
+    const pending = (startInFlight ??= startGuard.run(() => params.start()));
+    try {
+      await pending;
+    } finally {
+      if (startInFlight === pending) {
+        startInFlight = undefined;
+      }
+    }
   };
 
   const keepaliveLoop = createTypingKeepaliveLoop({

@@ -134,7 +134,12 @@ async function send(
     }
     throw cause;
   }
-  return { channel: "reef", messageId: id, chatId: peer, toJid: `reef:${peer}` };
+  return {
+    channel: "reef",
+    messageId: id,
+    target: { kind: "chat", id: peer },
+    toJid: `reef:${peer}`,
+  };
 }
 
 export const reefOutboundAdapter: ChannelOutboundAdapter = {

@@ -4,7 +4,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
+import {
+  filterOpenClawChildExecArgv,
+  resolveCurrentOpenClawCliInvocation,
+} from "./openclaw-cli-invocation.js";
 
 const requireFromHere = createRequire(import.meta.url);
 const repoRoot = process.cwd();
@@ -13,6 +16,21 @@ const trustedTsxLoader = requireFromHere.resolve("tsx", { paths: [repoRoot] });
 const commandArgs = ["sessions", "export-trajectory"];
 
 describe("resolveCurrentOpenClawCliInvocation", () => {
+  it("keeps child runtime flags without inheriting debugger ownership", () => {
+    expect(
+      filterOpenClawChildExecArgv([
+        "--import",
+        "/loader.mjs",
+        "--inspect",
+        "127.0.0.1:9231",
+        "--inspect-brk=0",
+        "--inspect-port",
+        "9230",
+        "--trace-warnings",
+      ]),
+    ).toEqual(["--import", "/loader.mjs", "--trace-warnings"]);
+  });
+
   it("uses the source entry for a Node-hosted checkout harness", () => {
     expect(
       resolveCurrentOpenClawCliInvocation(commandArgs, {

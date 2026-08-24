@@ -83,6 +83,20 @@ External-plugin compatibility work follows this order:
 6. Remove only after the announced migration window, usually in a major
    release.
 
+### Memory read missing results
+
+Memory managers now return `status: "ok"` for successful excerpts and
+`status: "not_found"` when an allowed file is missing. This keeps empty files
+and empty ranges distinct from missing files without relying on pagination
+metadata.
+
+At registration, every statusless result from an older external memory manager
+preserves its legacy successful-read semantics and becomes `status: "ok"`,
+including empty results without range metadata. Only an explicit
+`status: "not_found"` reports absence. New producers must emit that status for
+missing files; registered-input normalization remains available through the
+next Plugin SDK major.
+
 ### Channel state migration declarations
 
 Channel plugins should declare `doctorContract.stateMigrations: true` in
@@ -512,11 +526,7 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
     consistently across native approvals, reply suppression, inbound dedupe,
     cron delivery, and session routing.
 
-    Do not add new uses of `ChannelMessagingAdapter.parseExplicitTarget` or
-    `resolveChannelRouteTargetWithParser(...)` from
-    `plugin-sdk/channel-route` - those are deprecated and remain only for older
-    plugins. New channel plugins should use
-    `messaging.targetResolver.resolveTarget(...)` for target-id normalization
+    Channel plugins use `messaging.targetResolver.resolveTarget(...)` for target-id normalization
     and directory-miss fallback,
     `messaging.inferTargetChatType(...)` when core needs an early peer kind,
     and `messaging.resolveOutboundSessionRoute(...)` for provider-native
@@ -575,6 +585,23 @@ Provider plugins should register text-inference providers through
 `api.registerProvider(...)`. Host-owned code and tests that construct an
 `ApiRegistry` should register directly on that registry so provider ownership
 and teardown stay scoped to the prepared runtime.
+
+### Deactivate hook alias
+
+The `api.on("deactivate", handler)` compatibility alias was removed. Register
+the same shutdown cleanup with `gateway_stop`:
+
+```typescript
+// Before
+api.on("deactivate", async (event, ctx) => {
+  await stopPluginService(ctx);
+});
+
+// After
+api.on("gateway_stop", async (event, ctx) => {
+  await stopPluginService(ctx);
+});
+```
 
 ### Private testing barrel
 
@@ -663,29 +690,6 @@ timeline for current status.
 
   </Accordion>
 
-  <Accordion title="deactivate hook -> gateway_stop">
-    **Old**: `api.on("deactivate", handler)`.
-
-    **New**: `api.on("gateway_stop", handler)`. Same shutdown cleanup
-    contract; only the hook name changes.
-
-    ```typescript
-    // Before
-    api.on("deactivate", async (event, ctx) => {
-      await stopPluginService(ctx);
-    });
-
-    // After
-    api.on("gateway_stop", async (event, ctx) => {
-      await stopPluginService(ctx);
-    });
-    ```
-
-    `deactivate` remains wired as a deprecated compatibility alias until it is
-    removed after 2026-08-16.
-
-  </Accordion>
-
   <Accordion title="subagent_spawning hook -> core thread binding">
     **Old**: `api.on("subagent_spawning", handler)` returning
     `threadBindingReady` or `deliveryOrigin`.
@@ -708,11 +712,8 @@ timeline for current status.
     });
     ```
 
-    `subagent_spawning`, `PluginHookSubagentSpawningEvent`,
-    `PluginHookSubagentSpawningResult`, and
-    `SubagentLifecycleHookRunner.runSubagentSpawning(...)` remain only as
-    deprecated compatibility surfaces while external plugins migrate, removed
-    after 2026-08-30.
+    The `subagent_spawning` hook and its event/result types were removed in
+    August 2026 after thread binding moved to the core session-binding path.
 
   </Accordion>
 
@@ -802,10 +803,9 @@ timeline for current status.
     `contracts.embeddingProviders`.
 
     The generic embedding provider contract is reusable outside memory and is
-    the supported path for new providers. The memory-specific registration API
-    remains wired as deprecated compatibility while existing providers
-    migrate. Plugin inspection reports non-bundled usage as compatibility
-    debt.
+    the supported path for every provider. The memory-specific registration API
+    and manifest contract were removed after the **2026-08-21** migration
+    deadline.
 
   </Accordion>
 
@@ -816,8 +816,11 @@ timeline for current status.
 
     **New**: return `OutboundDeliveryResult` fields and attach the channel with
     `createAttachedChannelResultAdapter(...)`. Failed sends should throw instead
-    of returning an error string. The raw result type remains available until
-    the next plugin-SDK major release.
+    of returning an error string. Put the platform destination in
+    `target: { kind: "chat" | "channel" | "room" | "conversation", id }`;
+    the old parallel `chatId`, `channelId`, `roomId`, and `conversationId`
+    result fields are no longer accepted. The raw result type remains available
+    until the next plugin-SDK major release.
 
   </Accordion>
 
@@ -980,7 +983,9 @@ await gateway.request("talk.session.create", {
   sessionKey: "main",
 });
 await gateway.request("talk.session.appendAudio", { sessionId, audioBase64 });
-await gateway.request("talk.session.cancelOutput", { sessionId, reason: "barge-in" });
+// Capture this before stopping playback from the active output `talk.event`.
+const turnId = activeOutputTalkEvent.talkEvent.turnId;
+await gateway.request("talk.session.cancelOutput", { sessionId, turnId, reason: "barge-in" });
 await gateway.request("talk.session.submitToolResult", {
   sessionId,
   callId,
@@ -1073,9 +1078,16 @@ The July 30 rows were removed after their early maintainer-authorized sweep:
 unused subpaths were deleted, earlier compatibility aliases were deleted, and
 bundled-only modules were demoted to private-local build mappings.
 
+The August 15 compatibility subpaths `agent-config-primitives`,
+`channel-logging`, `channel-secret-runtime`, `channel-streaming`,
+`group-access`, `matrix`, `text-runtime`, and `zod` were retired early by
+explicit SDK-owner approval in August 2026. Use the focused replacements in
+the [Plugin SDK subpath catalog](/plugins/sdk-subpaths), and import `zod`
+directly from the `zod` package. `inbound-reply-dispatch` remains available
+until the next Plugin SDK major.
+
 | Removal gate            | Tier                               | SDK subpaths                                                                                                                                                                        |
 | ----------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `2026-08-15`            | Earlier compatibility deprecations | `agent-config-primitives`, `channel-logging`, `channel-secret-runtime`, `channel-streaming`, `group-access`, `matrix`, `text-runtime`, `zod`                                        |
 | `2026-09-01`            | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                 |
 | `next-plugin-sdk-major` | Major-version compatibility gate   | `inbound-reply-dispatch`                                                                                                                                                            |
 | `2026-10-01`            | Media legacy projection            | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates |

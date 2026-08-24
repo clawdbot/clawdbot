@@ -1,9 +1,18 @@
-import "./prepared-model-runtime.test-harness.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  getPreparedModelRuntimeMocks,
+  resetPreparedModelRuntimeHarness,
+} from "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
+import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
+import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import {
+  acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -15,10 +24,6 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
-import {
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -45,9 +50,117 @@ describe("prepared model runtime snapshots", () => {
     await expect(build.completion).resolves.toBeUndefined();
   });
 
+  it("materializes Claude CLI thinking capabilities on the prepared logical row", async () => {
+    const modelIds = ["claude-opus-5", "claude-sonnet-5"];
+    mocks.resolveStaticCatalogModel.mockImplementation(({ modelId, provider }) =>
+      provider === "claude-cli"
+        ? {
+            provider,
+            id: modelId,
+            name: `${modelId} (Claude CLI)`,
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com",
+            reasoning: true,
+            input: ["text" as const],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 1_000_000,
+            maxTokens: 128_000,
+          }
+        : undefined,
+    );
+    mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+      entries: modelIds.map((id) => ({ provider: "anthropic", id, name: id, reasoning: false })),
+      routeVariants: modelIds.map((id) => ({
+        provider: "anthropic",
+        id,
+        name: id,
+        reasoning: false,
+      })),
+    });
+    // Raw user config permits sparse provider model overrides. This omission is
+    // the contract under test: it must not become an explicit reasoning opt-out.
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: `anthropic/${modelIds[0]}` },
+          models: Object.fromEntries(
+            modelIds.map((modelId) => [
+              `anthropic/${modelId}`,
+              {
+                agentRuntime: { id: "claude-cli" },
+                params: { thinking: "medium" },
+              },
+            ]),
+          ),
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: modelIds.map((id) => ({ id, name: id })),
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
+      agentId: "main",
+      config,
+      agentDir: "/tmp/prepared-model-runtime-claude-cli-capabilities",
+    });
+    for (const modelId of modelIds) {
+      expect(
+        snapshot.modelCatalog.entries.find(
+          (entry) => entry.provider === "anthropic" && entry.id === modelId,
+        ),
+      ).toMatchObject({ reasoning: true });
+      expect(snapshot.modelCatalog.entries).not.toContainEqual(
+        expect.objectContaining({ provider: "claude-cli", id: modelId }),
+      );
+    }
+  });
+
+  it("publishes a run owner from the caller-selected metadata generation", async () => {
+    const lease = await acquireAgentRunPreparedModelRuntime(
+      {
+        config: {},
+        agentId: "main",
+        agentDir: "/tmp/selected-metadata-agent",
+        workspaceDir: "/tmp/selected-metadata-workspace",
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
+      },
+      {
+        catalogMode: "static",
+        pluginMetadataSnapshot: mocks.pluginMetadataSnapshot as never,
+      },
+    );
+
+    expect(lease.snapshot.metadataSnapshot).toBe(mocks.pluginMetadataSnapshot);
+    lease.release();
+  });
+
   it("keeps an isolated setup probe exact after a gateway replacement", async () => {
     mocks.configuredAgentIds = ["default"];
     const stagedConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+    const selectedPluginRegistry = createEmptyPluginRegistry();
+    selectedPluginRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("unused");
+        },
+      },
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) =>
+      (params as { selections?: unknown }).selections
+        ? selectedPluginRegistry
+        : createEmptyPluginRegistry(),
+    );
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
     markPreparedModelRuntimeSnapshotsStale("test isolated probe replacement", {
       waitForReplacement: true,
@@ -58,6 +171,7 @@ describe("prepared model runtime snapshots", () => {
       agentDir: "/tmp/setup-probe-agent",
       inheritedAuthDir: "/tmp/setup-probe-agent",
       workspaceDir: "/tmp/setup-probe-workspace",
+      runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
     });
     await Promise.resolve();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
@@ -71,8 +185,37 @@ describe("prepared model runtime snapshots", () => {
       config: stagedConfig,
       agentDir: "/tmp/setup-probe-agent",
       workspaceDir: "/tmp/setup-probe-workspace",
+      pluginRegistry: expect.any(Object),
     });
+    expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
+      "codex",
+    ]);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        selections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
+      }),
+    );
     lease.release();
+  });
+
+  it("loads provider runtime for an isolated native-harness probe", () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
+
+    expect(
+      prepareWorkspacePluginRegistries(
+        {
+          config: {},
+          agentDir: "/tmp/native-provider-probe",
+          readOnly: true,
+          loadRuntimePlugins: true,
+        },
+        mocks.pluginMetadataSnapshot as never,
+      ).runtimePluginRegistry,
+    ).toBe(pluginRegistry);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({ selections: undefined }),
+    );
   });
 
   it("reactivates a standalone read-only owner after a publication boundary", async () => {
@@ -132,6 +275,7 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
       config: {},
       env: process.env,
+      metadataSnapshot: mocks.pluginMetadataSnapshot,
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
       selections: undefined,
     });
@@ -246,6 +390,11 @@ describe("prepared model runtime snapshots", () => {
       input: ["text" as const, "image" as const],
       cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
       contextWindow: 1_050_000,
+      contextWindows: [
+        { id: "250k", label: "250K", contextWindow: 250_000 },
+        { id: "1050k", label: "1.05M", contextWindow: 1_050_000 },
+      ],
+      contextWindowDefault: "1050k",
       maxTokens: 128_000,
     };
     mocks.resolveStaticCatalogModel.mockReturnValueOnce(runtimeModel);
@@ -286,7 +435,7 @@ describe("prepared model runtime snapshots", () => {
         workspaceDir: "/tmp/prepared-model-runtime-manifest-workspace",
       }),
     );
-    expect(mocks.resolveStaticCatalogModel).toHaveBeenCalledOnce();
+    expect(mocks.resolveStaticCatalogModel).toHaveBeenCalledTimes(2);
     expect(snapshot.agentId).toBe("qa");
     expect(snapshot.configuredRuntimeModels).toEqual([
       { provider: "openai", modelId: "gpt-5.4", model: runtimeModel },
@@ -300,6 +449,11 @@ describe("prepared model runtime snapshots", () => {
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
         contextWindow: 1_050_000,
+        contextWindows: [
+          { id: "250k", label: "250K", contextWindow: 250_000 },
+          { id: "1050k", label: "1.05M", contextWindow: 1_050_000 },
+        ],
+        contextWindowDefault: "1050k",
         reasoning: true,
         input: ["text", "image"],
       },
@@ -557,11 +711,8 @@ describe("prepared model runtime snapshots", () => {
     });
 
     expect(credentialFree).not.toBe(await prepareModelRuntimeSnapshot({ config, agentDir }));
-    expect(mocks.discoverAuthStorage).toHaveBeenNthCalledWith(
-      2,
-      agentDir,
-      expect.objectContaining({ readOnly: true, skipCredentials: true }),
-    );
+    expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
+    expect(getPreparedModelRuntimeAuthStore(credentialFree)).toEqual({ version: 1, profiles: {} });
   });
 
   it("reuses one lifecycle-owned snapshot without rediscovering files", async () => {
@@ -852,7 +1003,7 @@ describe("prepared model runtime snapshots", () => {
     const skippedConfig = { agents: { defaults: { model: "openai/gpt-5.4" } } };
     const latestConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await refreshPreparedModelRuntimeSnapshots(initialConfig);
-    let finishLatestBuild!: () => void;
+    let finishLatestBuild: (() => void) | undefined;
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(
       async () =>
         await new Promise<{ agentDir: string; wrote: boolean }>((resolve) => {
@@ -883,7 +1034,8 @@ describe("prepared model runtime snapshots", () => {
         Promise.resolve("pending"),
       ]),
     ).resolves.toBe("pending");
-    finishLatestBuild();
+    await vi.waitFor(() => expect(finishLatestBuild).toEqual(expect.any(Function)));
+    finishLatestBuild?.();
     await latest;
     await expect(read).resolves.toMatchObject({ config: latestConfig });
   });

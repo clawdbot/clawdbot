@@ -31,6 +31,7 @@ import { page as approvalsPage } from "./pages/approvals/route.ts";
 import { page as appsPage } from "./pages/apps/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { pages as chatPages } from "./pages/chat/route.ts";
+import { page as cloudWorkersPage } from "./pages/cloud-workers/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
 import { page as cronPage } from "./pages/cron/route.ts";
@@ -47,6 +48,7 @@ import { page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.ts";
 import { page as pluginsPage } from "./pages/plugins/route.ts";
+import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
@@ -80,9 +82,11 @@ const APP_ROUTE_TREE = [
   activityPage,
   dashboardsPage,
   appsPage,
+  portalsPage,
   agentsPage,
   approvalsPage,
   channelsPage,
+  cloudWorkersPage,
   connectionPage,
   labsPage,
   aboutPage,
@@ -160,7 +164,7 @@ function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, 
   };
 }
 
-function sameRouteLocation(left: RouteLocation, right: RouteLocation): boolean {
+export function sameRouteLocation(left: RouteLocation, right: RouteLocation): boolean {
   return (
     left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
   );

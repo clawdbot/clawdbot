@@ -1,13 +1,21 @@
 // Covers heartbeat skipping while session lanes or cron jobs are busy.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
+import {
+  clearActiveEmbeddedRun,
+  preemptAndDrainEmbeddedHeartbeatRun,
+  setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.js";
+import {
+  createEmbeddedRunHandle,
+  testing as embeddedRunTesting,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
+import { recordReplyOperationAgentTurn } from "../auto-reply/reply/reply-operation-agent-turn-state.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
-import type { CommandLaneSnapshot } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { getAgentEventLifecycleGeneration } from "./agent-events.js";
@@ -45,6 +53,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  embeddedRunTesting.resetActiveEmbeddedRuns();
   resetSystemEventsForTest();
   resetCronActiveJobs();
   replyRunRegistryTesting.resetReplyRunRegistry();
@@ -100,17 +109,6 @@ function runHeartbeat(
       ...deps,
     } as HeartbeatDeps,
   });
-}
-
-function createBusyLaneSnapshot(lane: string): CommandLaneSnapshot {
-  return {
-    lane,
-    activeCount: 1,
-    queuedCount: 0,
-    maxConcurrent: 1,
-    draining: false,
-    generation: 0,
-  };
 }
 
 describe("heartbeat runner skips when target session lane is busy", () => {
@@ -293,11 +291,10 @@ describe("heartbeat runner skips when target session lane is busy", () => {
     });
   });
 
-  it("does not return lanes-busy for global subagent-lane work alone", async () => {
+  it("does not skip for global subagent-lane work alone", async () => {
     // The global Subagent lane has no agent identity in its name — a stalled
     // subagent on any one agent must not silently disable every other
-    // agent's heartbeat. Per-agent attribution comes from the session-keyed
-    // lane variants exercised below.
+    // agent's heartbeat.
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig(storePath);
       cfg.agents!.defaults!.heartbeat = { every: "30m", target: "last" };
@@ -309,50 +306,6 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         {},
         {
           getQueueSize: vi.fn((lane?: string) => (lane === CommandLane.Subagent ? 1 : 0)),
-          getCommandLaneSnapshots: vi.fn(() => []),
-        },
-      );
-
-      expect(result.status).not.toBe("skipped");
-    });
-  });
-
-  it("runs despite work in this agent's nested session lane", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.agents!.defaults!.heartbeat = { every: "30m", target: "last" };
-      await seedHeartbeatTelegramSession(storePath, cfg);
-      const nestedSessionLane = resolveNestedAgentLaneForSession("agent:main:telegram:123");
-
-      const result = await runHeartbeat(
-        cfg,
-        replySpy,
-        {},
-        {
-          getCommandLaneSnapshots: vi.fn(() => [createBusyLaneSnapshot(nestedSessionLane)]),
-        },
-      );
-
-      expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("does not return lanes-busy for another agent's session-scoped nested lane", async () => {
-    // Per-agent scoping: a zombie subagent or nested run belonging to a
-    // different agent must not block this agent's heartbeat.
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.agents!.defaults!.heartbeat = { every: "30m", target: "last" };
-      await seedHeartbeatTelegramSession(storePath, cfg);
-      const nestedSessionLane = resolveNestedAgentLaneForSession("agent:other:telegram:123");
-
-      const result = await runHeartbeat(
-        cfg,
-        replySpy,
-        {},
-        {
-          getCommandLaneSnapshots: vi.fn(() => [createBusyLaneSnapshot(nestedSessionLane)]),
         },
       );
 
@@ -478,6 +431,47 @@ describe("heartbeat runner skips when target session lane is busy", () => {
       } finally {
         operation.complete();
       }
+    });
+  });
+
+  it("suppresses delivery when a visible turn supersedes a finalizing heartbeat", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig(storePath);
+      const sessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
+      const sessionId = "finalizing-heartbeat-session";
+      let preempt: ReturnType<typeof vi.fn<() => boolean>> | undefined;
+      replySpy.mockImplementationOnce(async (_ctx, options) => {
+        const operation = createReplyOperation({
+          sessionKey,
+          sessionId,
+          turnKind: "heartbeat",
+          resetTriggered: false,
+        });
+        preempt = vi.fn(() => operation.supersede());
+        const handle = {
+          ...createEmbeddedRunHandle({ isAbortable: false }),
+          preemptByVisibleTurn: preempt,
+        };
+        const runState = resolveReplyOperationRunState(options);
+        if (!runState) {
+          throw new Error("Expected heartbeat reply operation run state");
+        }
+        recordReplyOperationAgentTurn(runState, "ok", operation);
+        operation.freezeAbort();
+        setActiveEmbeddedRun(sessionId, handle, sessionKey);
+        const drained = preemptAndDrainEmbeddedHeartbeatRun(sessionId, 1_000);
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        await expect(drained).resolves.toBe("drained");
+        operation.complete();
+        return { text: "Background work finished." };
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" });
+
+      const result = await runHeartbeat(cfg, replySpy, {}, { telegram: sendTelegram });
+
+      expect(result).toEqual({ status: "skipped", reason: "preempted" });
+      expect(preempt).toHaveBeenCalledOnce();
+      expect(sendTelegram).not.toHaveBeenCalled();
     });
   });
 

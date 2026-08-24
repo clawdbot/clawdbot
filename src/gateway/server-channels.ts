@@ -4,7 +4,12 @@ import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { getCredentialUnavailableDiagnostics } from "../channels/account-snapshot-fields.js";
 import { isChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  type ChannelId,
+  getChannelPlugin,
+  listChannelPlugins,
+  resolveChannelPluginRegistration,
+} from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import {
   applyChannelAccountState,
@@ -32,6 +37,7 @@ import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
 import { withPluginCommandAccountStartScope } from "../plugins/plugin-command-account-start-scope.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
+import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -277,7 +283,10 @@ export type ChannelManager = {
 };
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
-export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
+export function createChannelManager(opts: ChannelManagerOptions): ChannelManager & {
+  pruneInactiveChannelAccountState: (activeChannelIds: ReadonlySet<ChannelId>) => void;
+  resolveRuntimeAccountId: (channelId: ChannelId, accountId: string) => string | undefined;
+} {
   const {
     getRuntimeConfig,
     channelLogs,
@@ -365,7 +374,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return channelOverride;
     }
 
-    const plugin = getChannelPlugin(channelId);
+    const registration = resolveChannelPluginRegistration(channelId);
+    const plugin = registration?.plugin;
     if (!plugin) {
       return true;
     }
@@ -483,6 +493,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         continue;
       }
       store.runtimes.delete(id);
+      clearActiveCredentialDegradedOwner("account", restartKey(channelId, normalizeAccountId(id)));
       store.pluginCommandCatalogOwners.delete(id);
       restarts.delete(restartKey(channelId, id));
       manuallyStopped.delete(restartKey(channelId, id));
@@ -490,12 +501,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
-  const startChannelInternal = async (
+  const pruneInactiveChannelAccountState = (activeChannelIds: ReadonlySet<ChannelId>): void => {
+    for (const [channelId, store] of channelStores) {
+      if (!activeChannelIds.has(channelId)) {
+        evictStaleChannelAccountState(channelId, store, []);
+      }
+    }
+  };
+
+  const startChannelProcessOwned = async (
     channelId: ChannelId,
     accountId?: string,
     optsValue: StartChannelOptions = {},
   ) => {
-    const plugin = getChannelPlugin(channelId);
+    const registration = resolveChannelPluginRegistration(channelId);
+    const plugin = registration?.plugin;
     const startAccount = plugin?.gateway?.startAccount;
     if (!startAccount) {
       return;
@@ -534,7 +554,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       for (const id of accountIds) {
         setStoppedRuntime(channelId, id, {
           restartPending: false,
-          lastError: "ambient channel credentials suppressed for dev gateway",
+          lastError:
+            "ambient channel credentials suppressed; configure the channel or start the gateway with --ambient-channels",
         });
       }
       return;
@@ -719,7 +740,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
           scopedChannelRuntime = await measureStartup(`channels.${channelId}.runtime`, async () =>
             createTaskScopedChannelRuntime({
-              channelRuntime: await getChannelRuntime(),
+              channelRuntime:
+                registration?.resolveChannelRuntime?.() ?? (await getChannelRuntime()),
             }),
           );
           channelRuntimeForTask = scopedChannelRuntime.channelRuntime;
@@ -1059,6 +1081,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
+  // Channel lifetimes outlive the RPC or timer requesting startup, so their
+  // provider, approval, cleanup, and restart descendants must be process-owned.
+  const startChannelInternal = (...args: Parameters<typeof startChannelProcessOwned>) =>
+    runOutsideGatewayRootWorkAdmission(() => startChannelProcessOwned(...args));
+
   const startChannel = async (
     channelId: ChannelId,
     accountId?: string,
@@ -1081,22 +1108,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ...store.stops.keys(),
       ...store.tasks.keys(),
     ]);
+    // Preserve no-enumeration channel-wide idle stops. An explicit account stop
+    // must still commit manual intent before health monitoring can restart it.
     if (!accountId && lifecycleIds.size === 0) {
       return;
     }
-    // Fast path: nothing running and no explicit plugin shutdown hook to run.
-    if (!plugin?.gateway?.stopAccount && lifecycleIds.size === 0) {
-      return;
-    }
     const cfg = getRuntimeConfig();
-    const knownIds = new Set<string>([
-      ...lifecycleIds,
-      ...(plugin ? plugin.config.listAccountIds(cfg) : []),
-    ]);
-    if (accountId) {
-      knownIds.clear();
-      knownIds.add(accountId);
-    }
+    const knownIds = new Set<string>(
+      accountId
+        ? [accountId]
+        : [...lifecycleIds, ...(plugin ? plugin.config.listAccountIds(cfg) : [])],
+    );
 
     // Gate replacement starts before teardown begins. Failures still reject only
     // after every sibling account has finished its independent lifecycle cleanup.
@@ -1402,6 +1424,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     startChannels,
     startChannel,
     stopChannel,
+    pruneInactiveChannelAccountState,
     setAutostartSuppression: (suppression) => {
       autostartSuppression = suppression;
     },
@@ -1414,6 +1437,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ambientAutostartSuppressedChannelIds.has(channelId),
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStoppedFlag,
+    resolveRuntimeAccountId: (channelId, accountId) => {
+      const matches = [...(channelStores.get(channelId)?.runtimes.keys() ?? [])].filter(
+        (id) => normalizeAccountId(id) === accountId,
+      );
+      return matches.length === 1 ? matches[0] : undefined;
+    },
     isAutoRestartScheduled,
     resetRestartAttempts,
     isHealthMonitorEnabled,

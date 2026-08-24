@@ -9,6 +9,93 @@ type MergedModelProviderEntry = {
   providerConfig: ModelProviderConfig;
 };
 
+const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
+  "amazon-bedrock",
+  "amazon-bedrock-mantle",
+  "anthropic",
+  "anthropic-vertex",
+  "arcee",
+  "azure-openai-responses",
+  "byteplus",
+  "byteplus-plan",
+  "cerebras",
+  "chutes",
+  "claude-cli",
+  "clawrouter",
+  "cloudflare-ai-gateway",
+  "codex",
+  "comfy",
+  "copilot-proxy",
+  "dashscope",
+  "deepinfra",
+  "deepseek",
+  "fal",
+  "fireworks",
+  "github-copilot",
+  "gmi",
+  "gmi-cloud",
+  "gmicloud",
+  "google",
+  "google-antigravity",
+  "google-gemini-cli",
+  "google-vertex",
+  "groq",
+  "huggingface",
+  "kilocode",
+  "kimi",
+  "kimi-coding",
+  "litellm",
+  "lmstudio",
+  "meta",
+  "microsoft-foundry",
+  "minimax",
+  "minimax-portal",
+  "mistral",
+  "modelstudio",
+  "moonshot",
+  "moonshot-ai",
+  "moonshotai",
+  "nvidia",
+  "novita",
+  "novita-ai",
+  "novitaai",
+  "ollama",
+  "ollama-cloud",
+  "openai",
+  "opencode",
+  "opencode-go",
+  "openrouter",
+  "qianfan",
+  "qwen",
+  "qwen-token-plan",
+  "qwencloud",
+  "sglang",
+  "stepfun",
+  "stepfun-plan",
+  "synthetic",
+  "tencent-tokenhub",
+  "tencent-tokenplan",
+  "together",
+  "venice",
+  "vercel-ai-gateway",
+  "vllm",
+  "volcengine",
+  "volcengine-plan",
+  "vydra",
+  "x-ai",
+  "xai",
+  "xiaomi",
+  "xiaomi-token-plan",
+  "z.ai",
+  "z-ai",
+  "zai",
+]);
+
+/** Identifies provider overlays already known to the bundled config contract. */
+export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
+  return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(normalizeProviderId(providerId));
+}
+
 /** Indexes configured model rows after caller-owned model-id normalization. */
 export function resolveMergedModelProviderModels(params: {
   models: readonly ModelDefinitionConfig[] | undefined;
@@ -46,10 +133,10 @@ function hasNonEmptyRecord(value: unknown): boolean {
 export function resolveModelProviderRouteOverridePresence(params: {
   provider: string;
   modelId?: string;
-  config?: OpenClawConfig;
+  authoredConfig?: OpenClawConfig;
   canonicalizeModelId?: (modelId: string) => string;
 }): ProviderRouteOverridePresence {
-  const providerConfig = resolveMergedModelProviderConfig(params.config, params.provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.authoredConfig, params.provider);
   if (!providerConfig) {
     return "none";
   }

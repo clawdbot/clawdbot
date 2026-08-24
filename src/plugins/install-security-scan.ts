@@ -5,8 +5,11 @@ import type {
   InstallPolicyRequestKind,
   InstallPolicySource,
 } from "../security/install-policy.js";
+import type {
+  InstallPolicyWarningDetails,
+  InstallSafetyOverrides,
+} from "./install-security-scan.types.js";
 export type { InstallSafetyOverrides } from "./install-security-scan.types.js";
-import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;
@@ -17,6 +20,7 @@ export type InstallSecurityScanResult = {
   blocked?: {
     code?: "security_scan_blocked" | "security_scan_failed";
     reason: string;
+    installPolicyWarning?: InstallPolicyWarningDetails;
   };
 };
 
@@ -93,6 +97,7 @@ export async function scanInstalledPackageDependencyTree(params: {
   dependencyScanRootDir?: string;
   logger: InstallScanLogger;
   mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   packageDir: string;
   pluginId: string;
   requestKind?: PluginInstallRequestKind;
@@ -126,8 +131,10 @@ export async function scanFileInstallSource(
 /** Runs npm install policy checks before package install side effects. */
 export async function preflightPluginNpmInstallPolicy(params: {
   config?: OpenClawConfig;
+  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   packageName: string;
   pluginId?: string;
   requestedSpecifier?: string;
@@ -142,8 +149,10 @@ export async function preflightPluginNpmInstallPolicy(params: {
 /** Runs git install policy checks before plugin install side effects. */
 export async function preflightPluginGitInstallPolicy(params: {
   config?: OpenClawConfig;
+  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   pluginId: string;
   requestedSpecifier?: string;
   source?: InstallPolicySource;
@@ -159,10 +168,11 @@ export async function evaluateSkillInstallPolicy(params: {
   installId: string;
   installSpec?: SkillInstallSpecMetadata;
   logger: InstallScanLogger;
+  mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   origin: InstallPolicyOrigin;
   requestedSpecifier?: string;
   source?: InstallPolicySource;
-  mode?: "install" | "update";
   skillName: string;
   sourceDir: string;
 }): Promise<InstallSecurityScanResult | undefined> {

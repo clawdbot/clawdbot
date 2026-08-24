@@ -5,6 +5,7 @@ import { listAgentEntries, listAgentIds, resolveAgentConfig } from "../agents/ag
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
@@ -92,6 +93,7 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     }
     const deliveryWithoutSession = resolveHeartbeatDeliveryTarget({
       cfg,
+      agentId: resolvedAgentId,
       heartbeat: heartbeatConfig,
     });
     if (deliveryWithoutSession.channel !== "none" && deliveryWithoutSession.to) {
@@ -129,6 +131,9 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     if (entry) {
       continue;
     }
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: storeAgentId,
+    }).path;
     const ownerTarget = target === undefined || target === "owner";
     const missingRouteOutcome = ownerTarget
       ? `  Heartbeats will skip with reason="no-route" until a configured owner resolves to a direct message.`
@@ -140,7 +145,7 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
       : `  Fix: point heartbeat.session at a session the agent actually owns, set heartbeat.target="none" to suppress delivery, or remove the heartbeat.session field to fall back to the agent main session.`;
     warnings.push(
       [
-        `- Agent ${agentId} heartbeat.session pins ${configuredSession} (resolved to ${canonicalSession}) but that session has no entry in ${storePath}.`,
+        `- Agent ${agentId} heartbeat.session pins ${configuredSession} (resolved to ${canonicalSession}) but that session has no entry in ${databasePath}.`,
         missingRouteOutcome,
         fix,
       ].join("\n"),

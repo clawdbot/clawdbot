@@ -96,7 +96,7 @@ describe("filterAndSortSessionEntries search", () => {
     }
   });
 
-  test("filters by displayed provider and model identity", () => {
+  test("filters by selected and stored provider and model identity", () => {
     const now = Date.now();
     const cfg = createModelDefaultsConfig("anthropic/claude-sonnet-4-6");
     const store: Record<string, SessionEntry> = {
@@ -121,12 +121,21 @@ describe("filterAndSortSessionEntries search", () => {
       } as SessionEntry,
     };
     const cases = [
-      { search: "anthropic", expectedKey: "agent:main:inherited-default" },
-      { search: "claude-sonnet", expectedKey: "agent:main:inherited-default" },
-      { search: "anthropic/claude-sonnet", expectedKey: "agent:main:inherited-default" },
-      { search: "openai/gpt-5.5", expectedKey: "agent:main:override" },
-      { search: "gemini-3.1", expectedKey: "agent:main:runtime" },
-      { search: "google/gemini", expectedKey: "agent:main:runtime" },
+      {
+        search: "anthropic",
+        expectedKeys: ["agent:main:inherited-default", "agent:main:runtime"],
+      },
+      {
+        search: "claude-sonnet",
+        expectedKeys: ["agent:main:inherited-default", "agent:main:runtime"],
+      },
+      {
+        search: "anthropic/claude-sonnet",
+        expectedKeys: ["agent:main:inherited-default", "agent:main:runtime"],
+      },
+      { search: "openai/gpt-5.5", expectedKeys: ["agent:main:override"] },
+      { search: "gemini-3.1", expectedKeys: ["agent:main:runtime"] },
+      { search: "google/gemini", expectedKeys: ["agent:main:runtime"] },
     ] as const;
 
     for (const testCase of cases) {
@@ -137,7 +146,7 @@ describe("filterAndSortSessionEntries search", () => {
           opts: { search: testCase.search },
           now,
         }),
-      ).toEqual([testCase.expectedKey]);
+      ).toEqual(testCase.expectedKeys);
     }
   });
 

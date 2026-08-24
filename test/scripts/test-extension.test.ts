@@ -17,7 +17,6 @@ import {
   createExtensionTestProcessTargetChunks,
   createExtensionTestShards,
   listExtensionTestFilesForRoots,
-  listTrackedTestFilesForRoots,
   resolveExtensionBatchPlan,
   resolveExtensionTestConfig,
   resolveExtensionTestPlan,
@@ -32,6 +31,7 @@ import {
   runExtensionBatchPlan,
 } from "../../scripts/test-extension-batch.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { waitForPidFile } from "../helpers/process-wait.js";
 import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mts");
@@ -93,7 +93,7 @@ function findExtensionWithoutTests() {
 }
 
 function listExtensionTestFiles(extensionId: string): string[] {
-  return listTrackedTestFilesForRoots([bundledPluginRoot(extensionId)]);
+  return listExtensionTestFilesForRoots([bundledPluginRoot(extensionId)]);
 }
 
 function expectedMatrixTestProcessCount() {
@@ -169,14 +169,26 @@ describe("scripts/test-extension.mts", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("bounds Matrix test files across balanced process lifetimes", () => {
-    const config = "test/vitest/vitest.extension-matrix.config.ts";
-    const roots = [bundledPluginRoot("matrix")];
+  it.each([
+    {
+      name: "Matrix",
+      config: "test/vitest/vitest.extension-matrix.config.ts",
+      root: "matrix",
+      limit: 40,
+    },
+    {
+      name: "Telegram",
+      config: "test/vitest/vitest.extension-telegram.config.ts",
+      root: "telegram",
+      limit: 1,
+    },
+  ])("bounds $name test files across balanced process lifetimes", ({ config, root, limit }) => {
+    const roots = [bundledPluginRoot(root)];
     const expectedFiles = listExtensionTestFilesForRoots(roots);
     const chunks = createExtensionTestProcessTargetChunks(config, roots);
 
-    expect(chunks).toHaveLength(expectedMatrixTestProcessCount());
-    expect(chunks.every((chunk) => chunk.length <= MATRIX_TEST_PROCESS_FILE_LIMIT)).toBe(true);
+    expect(chunks).toHaveLength(Math.max(1, Math.ceil(expectedFiles.length / limit)));
+    expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
     expect(Math.max(...chunks.map((chunk) => chunk.length))).toBeLessThanOrEqual(
       Math.min(...chunks.map((chunk) => chunk.length)) + 1,
     );
@@ -815,10 +827,8 @@ describe("scripts/test-extension.mts", () => {
       let descendantPid = 0;
 
       try {
-        await waitFor(() => fileExists(childPidPath), 5_000);
-        await waitFor(() => fileExists(descendantPidPath), 5_000);
-        childPid = Number(readFileSync(childPidPath, "utf8"));
-        descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+        childPid = await waitForPidFile(childPidPath, 5_000);
+        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
         expect(Number.isInteger(childPid)).toBe(true);
         expect(Number.isInteger(descendantPid)).toBe(true);
 

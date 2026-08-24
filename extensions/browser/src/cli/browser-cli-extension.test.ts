@@ -33,12 +33,12 @@ describe("browser extension pairing Gateway URL", () => {
     resetRuntimeCapture();
   });
 
-  it("prints Load unpacked only after native pre-registration is ready", async () => {
+  it("prints the Store CTA only after native pre-registration is ready", async () => {
     installMocks.installChromeExtensionBootstrap.mockImplementation(
       async (params: Parameters<typeof installChromeExtensionBootstrap>[0]) => {
         params.onProgress?.("Pre-registered the native host for Chromium.");
         params.onProgress?.(
-          "Native bootstrap is ready. In Chrome, use chrome://extensions → Developer mode → Load unpacked → /stable/openclaw-extension",
+          "Native bootstrap is ready. Add OpenClaw from the Chrome Web Store. For development, load unpacked from /stable/openclaw-extension.",
         );
         return {
           platform: "linux",
@@ -57,6 +57,7 @@ describe("browser extension pairing Gateway URL", () => {
               extensionPath: "/stable/openclaw-extension",
             },
           ],
+          storeDiscovered: [],
           registrations: [],
           manualSetupRequired: false,
           issues: [],
@@ -75,9 +76,9 @@ describe("browser extension pairing Gateway URL", () => {
     const output = logSpy.mock.calls.map(([message]) => String(message));
     expect(output[0]).toContain("Preparing");
     expect(output.findIndex((message) => message.includes("Pre-registered"))).toBeLessThan(
-      output.findIndex((message) => message.includes("Load unpacked")),
+      output.findIndex((message) => message.includes("Chrome Web Store")),
     );
-    expect(output.at(-1)).toContain("deterministic extension identity verified");
+    expect(output.at(-1)).toContain("extension identity verified");
   });
 
   it("rejects path-rewriting proxy prefixes for strict v2 resource binding", async () => {

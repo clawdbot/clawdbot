@@ -1,8 +1,6 @@
 import { expect, it } from "vitest";
 import {
   WORKSPACE,
-  captureUiProof,
-  captureUiProofEnabled,
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollLocatorText,
@@ -11,123 +9,167 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it("hides the destination axis when the Gateway is the only place", async () => {
+  it("keeps Local visible when the Gateway is the only place", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       workspace: WORKSPACE,
       workspaceGit: true,
       methodResponses: {
-        "node.list": { nodes: [] },
-        "environments.list": { environments: [], profiles: [] },
+        "environments.list": {
+          environments: [{ id: "gateway", type: "local", status: "available" }],
+          profiles: [],
+        },
       },
     });
-
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("node.list");
-      const trigger = page.locator("#new-session-place-trigger");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
+      await gateway.waitForRequest("environments.list");
+      const trigger = page.locator("#new-session-where-trigger");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
       await trigger.click();
-      const place = page.locator("wa-popover.new-session-page__place-popover");
-      expect(await place.getByText("This gateway", { exact: true }).count()).toBe(0);
-      await place.getByText("Runs on Gateway · local", { exact: true }).waitFor();
+      await page.locator('[data-value="gateway"]').waitFor();
     } finally {
       await context.close();
     }
   });
 
-  it("refreshes destinations from gateway events while the picker stays open", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      ...(captureUiProofEnabled
-        ? {
-            recordVideo: {
-              dir: ".artifacts/control-ui-e2e/picker-liveness",
-              size: { height: 900, width: 1280 },
-            },
-            viewport: { height: 900, width: 1280 },
-          }
-        : {}),
-    });
+  it("shows advertised cloud machines only to admins", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       workspace: WORKSPACE,
       workspaceGit: true,
       methodResponses: {
-        "node.list": {
-          nodes: [
+        "environments.list": {
+          environments: [],
+          profiles: [
             {
-              nodeId: "existing-mac",
-              displayName: "Existing Mac",
-              connected: true,
-              commands: ["system.run"],
+              id: "aws",
+              providerId: "crabbox",
+              machines: [
+                { id: "standard", label: "Standard", default: true },
+                { id: "fast", label: "Fast" },
+              ],
             },
           ],
         },
-        "environments.list": { environments: [], profiles: [] },
+        "worktrees.branches": { branches: [], repositoryStatus: "git" },
       },
     });
-
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("node.list");
       await gateway.waitForRequest("environments.list");
-      const trigger = page.locator("#new-session-place-trigger");
-      const place = page.locator("wa-popover.new-session-page__place-popover");
-      await trigger.click();
-      await place.getByRole("button", { name: "Existing Mac" }).waitFor();
-      const nodeRequests = (await gateway.getRequests("node.list")).length;
-      const environmentRequests = (await gateway.getRequests("environments.list")).length;
-      await gateway.setMethodResponse("node.list", {
-        nodes: [
-          {
-            nodeId: "existing-mac",
-            displayName: "Existing Mac",
-            connected: true,
-            commands: ["system.run"],
-          },
-          {
-            nodeId: "new-mac",
-            displayName: "New Mac",
-            connected: true,
-            commands: ["system.run"],
-          },
-        ],
-      });
-      await gateway.emitGatewayEvent("presence", {
-        presence: [
-          { deviceId: "existing-mac", mode: "node", reason: "connect", ts: 1 },
-          { deviceId: "new-mac", mode: "node", reason: "connect", ts: 2 },
-        ],
-      });
+      await page.locator("#new-session-where-trigger").click();
+      const picker = page.locator("wa-popover.new-session-page__where-popover");
+      await picker.locator('[data-value="cloud:aws"]').click();
+      await picker.locator('[data-value="machine:fast"]').waitFor();
+    } finally {
+      await context.close();
+    }
+  });
 
-      await expect
-        .poll(async () => (await gateway.getRequests("node.list")).length)
-        .toBeGreaterThan(nodeRequests);
-      await place.getByRole("button", { name: "New Mac" }).waitFor();
-      await place.getByText("This gateway", { exact: true }).waitFor();
-      await place.getByText("Your devices", { exact: true }).waitFor();
-      expect(await place.getAttribute("open")).not.toBeNull();
-      expect(await gateway.getRequests("environments.list")).toHaveLength(environmentRequests);
+  it("disables cloud profiles whose execution mode does not match the selected runtime", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      agentModel: "openai/gpt-5.6-luna",
+      models: [
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          agentRuntime: {
+            id: "codex",
+            cloudPlacementSupported: true,
+            cloudPlacementExecutionMode: "remote-exec",
+            source: "model",
+          },
+        },
+      ],
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "environments.list": {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox", executionMode: "worker-turn" }],
+        },
+        "worktrees.branches": { branches: [], repositoryStatus: "git" },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      await gateway.waitForRequest("chat.metadata");
+      await page.locator("#new-session-where-trigger").click();
 
+      const profile = page.locator('[data-value="cloud:aws"]');
+      await profile.waitFor();
+      await expect.poll(() => profile.isDisabled()).toBe(true);
+      expect(await profile.getAttribute("title")).toBe(
+        "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("refreshes authoritative device capacity from Gateway topology events", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "environments.list": {
+          environments: [
+            {
+              id: "node:runner",
+              type: "node",
+              label: "Build runner",
+              status: "available",
+              sessionHost: true,
+              workerSlots: { total: 2, available: 1 },
+            },
+          ],
+          profiles: [],
+        },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      await page.locator("#new-session-where-trigger").click();
+      const runner = page.locator('[data-value="device:runner"]');
+      await runner.waitFor();
+      expect(await runner.isEnabled()).toBe(true);
+
+      const requests = (await gateway.getRequests("environments.list")).length;
       await gateway.setMethodResponse("environments.list", {
-        environments: [],
-        profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
+        environments: [
+          {
+            id: "node:runner",
+            type: "node",
+            label: "Build runner",
+            status: "available",
+            sessionHost: true,
+            workerSlots: { total: 2, available: 0 },
+          },
+        ],
+        profiles: [],
       });
-      await gateway.emitGatewayEvent("config.changed", {
-        path: "/tmp/openclaw.json",
-        hash: "picker-cloud-refresh",
-        ts: 3,
-      });
+      await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "runner" });
       await expect
         .poll(async () => (await gateway.getRequests("environments.list")).length)
-        .toBeGreaterThan(environmentRequests);
-      await place.getByText("Cloud", { exact: true }).waitFor();
-      await place.getByRole("button", { name: "Cloud · aws" }).waitFor();
-      expect(await place.getAttribute("open")).not.toBeNull();
-      await captureUiProof(page, "picker-after-live-regroup.png");
+        .toBeGreaterThan(requests);
+      await expect.poll(() => runner.isDisabled()).toBe(true);
+      await expect
+        .poll(() => runner.locator(".new-session-page__menu-fact").allTextContents())
+        .toEqual([
+          "Worker slots 0/2",
+          "No worker slots are available. Wait for a slot or pick another device.",
+        ]);
+      expect(await gateway.getRequests("node.list")).toHaveLength(0);
     } finally {
       await context.close();
     }

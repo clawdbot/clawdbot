@@ -4,7 +4,6 @@ import {
   buildTriggerRecallContext,
   isPromotedTrustedMemoryEntry,
   MAX_TRIGGER_CONTEXT_CHARS,
-  prewarmTriggerRecall,
   scoreTriggerMatch,
   resolveTriggerRecall,
   selectStrongTriggerMatches,
@@ -30,6 +29,7 @@ function result(overrides: Partial<MemorySearchResult> = {}): MemorySearchResult
     snippet: "User prefers aisle seats and extra connection time.",
     source: "memory",
     triggers: "when booking a flight; seat preferences",
+    provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
     ...overrides,
   };
 }
@@ -62,23 +62,43 @@ describe("active-memory trigger recall", () => {
   it("limits automatic injection to curated or trusted-origin entries", () => {
     expect(isPromotedTrustedMemoryEntry(result())).toBe(true);
     expect(isPromotedTrustedMemoryEntry(result({ path: "USER.md" }))).toBe(true);
-    expect(isPromotedTrustedMemoryEntry(result({ path: "memory/2026-07-27.md" }))).toBe(false);
+    expect(isPromotedTrustedMemoryEntry(result({ provenance: undefined }))).toBe(false);
+    expect(
+      isPromotedTrustedMemoryEntry({
+        ...result({ path: "memory/2026-07-27.md" }),
+        provenance: undefined,
+      }),
+    ).toBe(false);
     expect(isPromotedTrustedMemoryEntry(result({ source: "sessions" }))).toBe(false);
     expect(
-      isPromotedTrustedMemoryEntry(result({ path: "memory/promoted.md", originClass: "owner" })),
+      isPromotedTrustedMemoryEntry(
+        result({
+          path: "memory/promoted.md",
+          provenance: { originClass: "agent", sessionKind: "interactive", observedAt: 1 },
+        }),
+      ),
     ).toBe(true);
 
     const matches = selectStrongTriggerMatches("when booking a flight", [
       result(),
       result({ path: "USER.md", startLine: 3 }),
-      result({ path: "memory/2026-07-27.md", startLine: 4 }),
+      result({ path: "memory/2026-07-27.md", startLine: 4, provenance: undefined }),
       result({ source: "sessions", path: "session.jsonl", startLine: 5 }),
     ]);
     expect(matches.map((entry) => entry.path)).toEqual(["MEMORY.md", "USER.md"]);
 
     const provenanceMatches = selectStrongTriggerMatches("when booking a flight", [
-      result({ path: "memory/untrusted.md", originClass: "untrusted", score: 1 }),
-      result({ path: "memory/owner.md", originClass: "owner", score: 1 }),
+      result({
+        path: "memory/untrusted.md",
+        provenance: { originClass: "untrusted", sessionKind: "interactive", observedAt: 1 },
+        score: 1,
+      }),
+      result({ path: "memory/missing.md", provenance: undefined, score: 1 }),
+      result({
+        path: "memory/owner.md",
+        provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
+        score: 1,
+      }),
     ]);
     expect(provenanceMatches.map((entry) => entry.path)).toEqual(["memory/owner.md"]);
   });
@@ -240,25 +260,7 @@ describe("active-memory trigger recall", () => {
     });
   });
 
-  it("prewarms the exact lexical and trigger-candidate lookup path", async () => {
-    hoisted.search.mockResolvedValue([]);
-    hoisted.listTriggerCandidates.mockResolvedValue([]);
-
-    await prewarmTriggerRecall({
-      cfg: {} as never,
-      agentId: "main",
-      query: "flight booking",
-    });
-
-    expect(hoisted.getManager).toHaveBeenCalledWith({ cfg: {}, agentId: "main" });
-    expect(hoisted.search).toHaveBeenCalledWith(
-      "flight booking",
-      expect.objectContaining({ lexicalOnly: true }),
-    );
-    expect(hoisted.listTriggerCandidates).toHaveBeenCalledWith({ activeProjectKeys: [] });
-  });
-
-  it("shares one in-flight prewarm with the lane-1 lookup for a run", async () => {
+  it("shares one in-flight lane-1 lookup for the same run authority", async () => {
     let releaseLookup: () => void = () => {
       throw new Error("lookup gate was not initialized");
     };
@@ -275,31 +277,54 @@ describe("active-memory trigger recall", () => {
     });
     const cfg = {} as never;
 
-    const prewarm = prewarmTriggerRecall({
-      cfg,
-      agentId: "main",
-      query: "flight booking",
-      runId: "run-shared-prewarm",
-    });
-    const recall = resolveTriggerRecall({
+    const first = resolveTriggerRecall({
       cfg,
       agentId: "main",
       query: "flight booking",
       message: "Help when booking a flight",
-      runId: "run-shared-prewarm",
+      runId: "run-shared-lookup",
+      authorityFingerprint: "authority-a",
+    });
+    const second = resolveTriggerRecall({
+      cfg,
+      agentId: "main",
+      query: "flight booking",
+      message: "Help when booking a flight",
+      runId: "run-shared-lookup",
+      authorityFingerprint: "authority-a",
     });
     await vi.waitFor(() => expect(hoisted.search).toHaveBeenCalledTimes(1));
     releaseLookup();
 
-    await expect(prewarm).resolves.toBeUndefined();
-    await expect(recall).resolves.toEqual(
+    await expect(first).resolves.toEqual(
+      expect.objectContaining({ hasStrongHit: true, injectedCount: 1 }),
+    );
+    await expect(second).resolves.toEqual(
       expect.objectContaining({ hasStrongHit: true, injectedCount: 1 }),
     );
     expect(hoisted.search).toHaveBeenCalledTimes(1);
     expect(hoisted.listTriggerCandidates).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the lane-1 abort deadline while a shared prewarm continues", async () => {
+  it("does not share lane-1 results across turn authorities", async () => {
+    hoisted.search.mockResolvedValue([]);
+    hoisted.listTriggerCandidates.mockResolvedValue([result()]);
+    const params = {
+      cfg: {} as never,
+      agentId: "main",
+      query: "flight booking",
+      message: "Help when booking a flight",
+      runId: "run-authority-scope",
+    };
+
+    await resolveTriggerRecall({ ...params, authorityFingerprint: "authority-a" });
+    await resolveTriggerRecall({ ...params, authorityFingerprint: "authority-b" });
+
+    expect(hoisted.search).toHaveBeenCalledTimes(2);
+    expect(hoisted.listTriggerCandidates).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps each lane-1 abort deadline while shared lookup work continues", async () => {
     let releaseLookup: () => void = () => {
       throw new Error("lookup gate was not initialized");
     };
@@ -314,11 +339,13 @@ describe("active-memory trigger recall", () => {
       await lookupGate;
       return [];
     });
-    const prewarm = prewarmTriggerRecall({
+    const first = resolveTriggerRecall({
       cfg: {} as never,
       agentId: "main",
       query: "flight booking",
-      runId: "run-aborted-shared-prewarm",
+      message: "Help when booking a flight",
+      runId: "run-aborted-shared-lookup",
+      authorityFingerprint: "authority-a",
     });
     const controller = new AbortController();
     const recall = resolveTriggerRecall({
@@ -326,17 +353,20 @@ describe("active-memory trigger recall", () => {
       agentId: "main",
       query: "flight booking",
       message: "Help when booking a flight",
-      runId: "run-aborted-shared-prewarm",
+      runId: "run-aborted-shared-lookup",
+      authorityFingerprint: "authority-a",
       signal: controller.signal,
     });
 
     controller.abort(new Error("lane-1 budget expired"));
     await expect(recall).rejects.toThrow("lane-1 budget expired");
     releaseLookup();
-    await expect(prewarm).resolves.toBeUndefined();
+    await expect(first).resolves.toEqual(
+      expect.objectContaining({ hasStrongHit: false, injectedCount: 0 }),
+    );
   });
 
-  it("does not reuse an unscoped prewarm for a project-scoped lookup", async () => {
+  it("does not reuse an unscoped run lookup for a project-scoped lookup", async () => {
     const global = result({ startLine: 1 });
     const project = result({ startLine: 2, projectKey: "alpha-key" });
     hoisted.search.mockResolvedValue([]);
@@ -345,11 +375,13 @@ describe("active-memory trigger recall", () => {
       .mockResolvedValueOnce([global, project]);
     const cfg = {} as never;
 
-    await prewarmTriggerRecall({
+    await resolveTriggerRecall({
       cfg,
       agentId: "main",
       query: "flight booking",
-      runId: "run-project-prewarm",
+      message: "Help when booking a flight",
+      runId: "run-project-scope",
+      authorityFingerprint: "authority-a",
     });
     const recall = await resolveTriggerRecall({
       cfg,
@@ -357,7 +389,8 @@ describe("active-memory trigger recall", () => {
       query: "flight booking",
       message: "Help when booking a flight",
       activeProjectKeys: ["alpha-key"],
-      runId: "run-project-prewarm",
+      runId: "run-project-scope",
+      authorityFingerprint: "authority-a",
     });
 
     expect(hoisted.listTriggerCandidates).toHaveBeenCalledTimes(2);

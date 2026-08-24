@@ -17,7 +17,7 @@ import {
   type OutboundCallOptions,
 } from "../types.js";
 import { mapVoiceToPolly } from "../voice-mapping.js";
-import type { CallManagerContext } from "./context.js";
+import type { CallEndResult, CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
 import { getCallByProviderCallId } from "./lookup.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
@@ -51,6 +51,7 @@ type SpeakContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "endCallOperations"
 >;
 
 type ConversationContext = Pick<
@@ -64,6 +65,7 @@ type ConversationContext = Pick<
   | "transcriptWaiters"
   | "maxDurationTimers"
   | "initialMessageInFlight"
+  | "endCallOperations"
 >;
 
 type EndCallContext = Pick<
@@ -74,6 +76,7 @@ type EndCallContext = Pick<
   | "storePath"
   | "transcriptWaiters"
   | "maxDurationTimers"
+  | "endCallOperations"
 >;
 
 type ConnectedCallContext = Pick<CallManagerContext, "activeCalls" | "provider">;
@@ -292,9 +295,7 @@ export async function speak(
       ctx,
       call,
       liveAt: Date.now(),
-      onTimeout: async (id) => {
-        await endCall(ctx, id, { reason: "timeout" });
-      },
+      onTimeout: (id) => endCall(ctx, id, { reason: "timeout" }),
     });
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
@@ -419,7 +420,12 @@ export async function speakInitialMessage(
           const currentCall = ctx.activeCalls.get(call.callId);
           if (currentCall && !TerminalStates.has(currentCall.state)) {
             console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
-            await endCall(ctx, call.callId);
+            const endResult = await endCall(ctx, call.callId);
+            if (!endResult.success) {
+              console.warn(
+                `[voice-call] Notify mode failed to hang up call ${call.callId}: ${endResult.error ?? "unknown error"}`,
+              );
+            }
           }
         })();
       }, delayMs);
@@ -511,36 +517,49 @@ export async function continueCall(
   }
 }
 
-export async function endCall(
+export function endCall(
   ctx: EndCallContext,
   callId: CallId,
   options?: { reason?: EndReason },
-): Promise<{ success: boolean; error?: string }> {
+): Promise<CallEndResult> {
+  const inFlight = ctx.endCallOperations.get(callId);
+  if (inFlight) {
+    return inFlight;
+  }
   const lookup = lookupConnectedCall(ctx, callId);
   if (lookup.kind === "error") {
-    return { success: false, error: lookup.error };
+    return Promise.resolve({ success: false, error: lookup.error });
   }
   if (lookup.kind === "ended") {
-    return { success: true };
+    return Promise.resolve({ success: true });
   }
   const { call, providerCallId, provider } = lookup;
   const reason = options?.reason ?? "hangup-bot";
 
-  try {
-    await provider.hangupCall({
-      callId,
-      providerCallId,
-      reason,
-    });
+  const operation = (async (): Promise<CallEndResult> => {
+    try {
+      await provider.hangupCall({
+        callId,
+        providerCallId,
+        reason,
+      });
 
-    finalizeCall({
-      ctx,
-      call,
-      endReason: reason,
-    });
+      finalizeCall({
+        ctx,
+        call,
+        endReason: reason,
+      });
 
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: formatErrorMessage(err) };
-  }
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: formatErrorMessage(err) };
+    }
+  })();
+  ctx.endCallOperations.set(callId, operation);
+  void operation.then(() => {
+    if (ctx.endCallOperations.get(callId) === operation) {
+      ctx.endCallOperations.delete(callId);
+    }
+  });
+  return operation;
 }

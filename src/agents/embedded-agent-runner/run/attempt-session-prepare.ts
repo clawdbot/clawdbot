@@ -18,6 +18,7 @@ import {
   resolveEffectiveCompactionMode,
 } from "../../agent-settings.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
@@ -48,7 +49,7 @@ import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
-import { installCodeModeRepairHook } from "./code-mode-repair.js";
+import { installCodeModeOutcomeHook } from "./code-mode-outcome.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { reconcilePrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
@@ -221,6 +222,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   };
   setActiveSessionSystemPrompt(input.initialSystemPrompt);
   let didDeliverSourceReplyViaMessageTool = false;
+  let codeModeReconciliationCandidate = false;
+  let codeModeReconciliationReadAuthorized = false;
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;
   };
@@ -228,9 +231,26 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     onDeliveredSourceReply: markSourceReplyDelivered,
+    config: attempt.config,
+    currentProvider: attempt.messageChannel ?? attempt.messageProvider,
+    currentAccountId: attempt.agentAccountId,
+    currentChannelId: attempt.currentChannelId,
+    currentMessagingTarget: attempt.currentMessagingTarget,
+    currentThreadId: attempt.currentThreadTs,
+    currentMessageId: attempt.currentMessageId,
+    replyToMode: attempt.replyToMode,
+    hasRepliedRef: attempt.hasRepliedRef,
+    sessionKey: attempt.sessionKey,
   });
   if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
-    installCodeModeRepairHook({ agent: activeSession.agent });
+    installCodeModeOutcomeHook({
+      agent: activeSession.agent,
+      onReconciliationCandidate: () => {
+        if (codeModeReconciliationReadAuthorized) {
+          codeModeReconciliationCandidate = true;
+        }
+      },
+    });
   }
   input.markStage("agent-session");
 
@@ -238,9 +258,13 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     activeSession,
     allCustomTools,
     ...clientToolRuntime,
+    getCodeModeReconciliationCandidate: () => codeModeReconciliationCandidate,
     hasDeliveredSourceReply: () => didDeliverSourceReplyViaMessageTool,
     hookRunner,
     markSourceReplyDelivered,
+    setCodeModeReconciliationReadAuthorized: (value: boolean) => {
+      codeModeReconciliationReadAuthorized = clientToolRuntime.coreReadAuthorized && value;
+    },
     setActiveSessionSystemPrompt,
     settingsManager,
   };
@@ -317,7 +341,9 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
     // discard the merged replacement prompt.
     sessionManager.clearNextUserMessagePersistenceSuppression?.();
     attempt.onUserMessagePersistenceInvalidated?.();
-    activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+    activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+      sessionManager.buildSessionContext().messages,
+    );
   }
 
   // This is the single timestamping source for user messages sent to the LLM.
@@ -423,6 +449,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
         : SessionManager.inMemory(input.effectiveCwd)),
     {
       agentId: input.sessionAgentId,
+      runId: attempt.runId,
       sessionKey: attempt.sessionKey,
       config: attempt.config,
       contextWindowTokens: attempt.contextTokenBudget,
@@ -518,6 +545,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
           runtimeSettings: contextParams.runtimeSettings,
           config: attempt.config,
           agentId: input.sessionAgentId,
+          contextEngineAgentId: attempt.contextEngineAgentId,
         }),
       warn: (message) => log.warn(message),
     });

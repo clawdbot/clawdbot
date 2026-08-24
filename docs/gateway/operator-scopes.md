@@ -15,7 +15,7 @@ teams, or machines, run separate Gateways under separate OS users or hosts.
 Related: [Security](/gateway/security), [Gateway protocol](/gateway/protocol),
 [Gateway pairing](/gateway/pairing), [Devices CLI](/cli/devices).
 
-## Roles
+## Connection roles
 
 Every Gateway WebSocket client connects with one role:
 
@@ -42,6 +42,91 @@ require the `node` role.
 
 Unknown future `operator.*` scopes require an exact match unless the caller
 already holds `operator.admin`.
+
+## Named operator roles
+
+Team Gateways can bind authenticated user profiles to named operator roles.
+Each role combines exactly three closed policies: access to other people's
+sessions, agents available for session creation and agent runs, and a maximum
+set of operator scopes.
+
+```json5
+{
+  gateway: {
+    roles: {
+      default: "guest",
+      definitions: {
+        maintainer: {
+          sessions: { others: "write" },
+          agents: "*",
+          scopes: ["operator.read", "operator.write", "operator.approvals"],
+        },
+        guest: {
+          sessions: { others: "view" },
+          agents: ["guest-agent"],
+          scopes: ["operator.read", "operator.write"],
+        },
+      },
+    },
+  },
+}
+```
+
+Use the administrator-scoped `users.setRole` Gateway method with
+`{ profileId, role }` to assign a configured role; set `role: null` to clear an
+assignment. Assignment changes immediately invalidate and close that profile's
+active Gateway connections; reconnecting applies the current role and scope
+ceiling. `gateway.roles.default` is required whenever roles are configured,
+must name an existing definition, and applies to profiles without a valid
+assigned role. Omitting `gateway.roles` entirely leaves solo and shared-secret
+deployments unchanged.
+
+When roles are configured, identity-authenticated operator connections do not
+receive reusable device or bootstrap tokens: those tokens are not bound to a
+person and could bypass the role ceiling. Device-token or bootstrap-token
+authentication without a verified user identity is rejected for operator
+Gateway connections and HTTP requests. Reconnect through the trusted proxy or
+another supported verified identity, such as Tailscale; node connections,
+shared-secret/password access, and Gateways without role configuration retain
+their existing behavior.
+
+For sessions created by other people, `sessions.others` supports these values:
+
+- `"none"`: hides foreign sessions from lists and targeted access, filters
+  session-level usage to visible sessions, and denies Gateway-wide `usage.cost`
+  because its aggregate can include hidden sessions.
+- `"view"`: allows reading but does not allow mutation, even when a session is
+  otherwise shared.
+- `"suggest"`: allows viewing and the existing suggestion flow.
+- `"write"`: allows participation in foreign sessions; draft and incognito
+  restrictions remain in force.
+
+A person always owns their own sessions. Explicit session membership can raise
+`"view"` or `"suggest"` access for a specific session, and connections already
+holding `operator.admin` retain their administrative session access.
+
+Set `agents: "*"` to allow session creation and agent runs on every agent, list
+agent IDs to allow only those agents, or use an empty array to disallow both.
+The allowlist also applies when a run targets an already-existing session.
+The role's `scopes` list intersects scopes granted through connection auth,
+identity grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP
+requests. It cannot grant scopes the connection did not already receive.
+Control UI plugin grants carry the authenticated profile inside a signed
+cookie; plugin HTTP requests reapply the profile's current role ceiling and
+reject grants without a matching durable identity when roles are enabled.
+Include `operator.admin` explicitly only when that role should retain
+administrative connection authority.
+
+Named roles apply only to connections with an authenticated durable user
+profile. They organize collaboration within one trusted Gateway domain and do
+not replace separate Gateways when hostile-tenant isolation is required.
+Diagnostic audit methods, including `audit.run.inspect`, remain shared-domain
+`operator.read` surfaces and are not filtered by session role. Likewise,
+`operator.write` still authorizes Gateway-wide operations such as tool
+invocation, ordinary node command relay, and other write-scoped control-plane
+actions; session restrictions do not turn that scope into a per-person
+isolation boundary. Use separate Gateways when mutually untrusted people must
+not share diagnostics or control-plane write authority.
 
 ## Identity scope grants
 
@@ -74,11 +159,14 @@ Connection authority is resolved in this order:
 2. OpenClaw unions a matching server-side identity grant with those scopes.
 3. OpenClaw applies `x-openclaw-scopes` to the final union as the session cap.
    An absent header means no cap; a present-but-empty header yields no scopes.
+4. If the authenticated profile has an effective named operator role,
+   OpenClaw intersects the result with that role's configured scope ceiling.
 
 The result is used for both `hello.auth.scopes` and Gateway method
 authorization. Identity grants are session-only: they do not create or modify
 pairing records or request a device scope upgrade. Token, password, and no-auth
 connections carry no verified identity and receive no grant.
+Identity grants apply only to `operator`-role connections; `node`-role connections never receive them.
 
 ## Method scope is only the first gate
 
@@ -89,8 +177,34 @@ dispatch so authorization failures have one canonical structured response:
 - `agent` needs `operator.write` for ordinary turns and `operator.admin` for
   `/new` or `/reset` session lifecycle commands.
 - `node.invoke` needs `operator.write` for ordinary relay commands and
-  `operator.admin` for `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`,
-  and `terminal.upload`.
+  `operator.admin` when relaying `browser.proxy`, `browser.proxy.upload.v1`,
+  `fs.listDir`, or `terminal.upload` to a node.
+- The top-level `fs.listDir` RPC needs `operator.write` for Gateway-host
+  requests and `operator.admin` when `nodeId` targets a node. Its handler limits
+  non-admin Gateway-host browsing to configured agent workspaces.
+- `sessions.create` needs `operator.write` for ordinary creation, including a
+  `projectId`, and `operator.admin` for incognito sessions or any `execNode`
+  request. For non-admin callers, the handler limits `cwd` to configured agent
+  workspaces; `projectId` cannot be combined with `cwd` or `execNode`.
+- `environments.list` needs `operator.read`. Session placement methods derive
+  their scope from the requested target before schema validation:
+  `sessions.dispatch` needs `operator.write` for `deviceId` and
+  `operator.admin` for `profileId` or a target-less
+  `cloudWorkers.projectProfiles` lookup; `sessions.move` needs `operator.write`
+  for Gateway or device targets and `operator.admin` for profile targets;
+  `abandonSource: true` remains `operator.write` but is schema-valid only with
+  a Gateway target and runtime-valid only for an exact offline device source;
+  `sessions.reclaim` remains `operator.write`. Malformed dispatch params or a
+  malformed move target use `operator.write` so the handler can return the
+  precise schema error. All three methods retain session ownership,
+  participation, and commit-time revalidation fences. `operator.read` alone
+  cannot start, stop, or move a session. Cloud profile allocation and mutation,
+  pairing and Connect machine, raw `environments.create` or
+  `environments.destroy`, incognito sessions, direct `execNode` execution, and
+  arbitrary host or node paths remain `operator.admin`.
+- `worktrees.branches` needs `operator.write`. Its handler limits non-admin
+  callers to workspace-contained paths or registered-project roots; other host
+  paths require `operator.admin`.
 - `talk.config` needs `operator.read`; `includeSecrets: true` also needs
   `operator.talk.secrets`.
 - `talk.client.*`, `talk.session.*`, `talk.speak`, and `talk.mode` need
@@ -100,6 +214,15 @@ dispatch so authorization failures have one canonical structured response:
   thinking, fast, verbose, trace, and reasoning levels, need `operator.admin`.
   Persisting a selected model as the configured agent default is also
   admin-only.
+
+Project RPCs use these scopes:
+
+| Method                                 | Required scope and additional gate                                                            |
+| -------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `projects.list`                        | `operator.read`; only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
+| `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                     |
+| `projects.register`, `projects.remove` | `operator.admin`.                                                                             |
+| `projects.searchRemote`                | `operator.read`.                                                                              |
 
 Some handlers then apply stricter checks based on the concrete thing being
 approved or mutated:
@@ -133,6 +256,16 @@ Device pairing records are the durable source of approved roles and scopes.
 An already-paired device does not get broader access silently: a reconnect
 that asks for a broader role or broader scopes creates a new pending upgrade
 request.
+
+A connected limited Control UI can file that same pending request through its
+**Request admin** banner without attempting a broader reconnect. The banner can
+collapse into a persistent **Limited access** chip that reopens the action. The request is
+bound to the signed device identity on the live connection. Approval still
+comes from `device.pair.approve` and therefore requires `operator.pairing` plus
+authority for every requested scope. After approval rotates the operator token,
+the Gateway returns the new token only to that device's live waiter; the browser
+stores it before reconnecting. Canceling the wait or disconnecting before
+approval falls back to the ordinary pairing repair flow on the next connection.
 
 The explicit exception is the administrator-capable Control UI owner profile
 issued directly on the Gateway host by `openclaw dashboard` or graphical
@@ -168,10 +301,10 @@ can approve, reject, rotate, revoke, or remove only its own device entry.
 
 ## Node pairing approvals
 
-Legacy `node.pair.*` methods use a separate Gateway-owned node pairing store.
-WS nodes use device pairing (`role: node`) instead, but the same approval
-vocabulary applies. See [Gateway pairing](/gateway/pairing) for how the two
-stores relate.
+`node.pair.*` capability approvals are stored on the paired device record in
+the shared SQLite pairing store. Gateways migrate any remaining entries from
+the retired standalone `nodes/paired.json` store into those records once at
+startup. See [Gateway pairing](/gateway/pairing) for details.
 
 `node.pair.approve` derives extra required scopes from the pending request's
 command list:
@@ -181,6 +314,9 @@ command list:
 | none                                                                                                                                            | `operator.pairing`                    |
 | ordinary node commands                                                                                                                          | `operator.pairing` + `operator.write` |
 | `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
+
+Here, `fs.listDir` is the node command declared for relay through `node.invoke`,
+not the top-level Gateway RPC described above.
 
 Approving a node declaration records its command surface. For `computer.act`,
 the node advertises that surface only after Computer Control is enabled locally;

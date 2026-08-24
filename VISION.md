@@ -60,7 +60,8 @@ We prioritize secure defaults, but also expose clear knobs for trusted high-powe
 
 Privacy follows the same default rule.
 OpenClaw sends no usage analytics, tracking identifiers, or attribution tags unless the operator turned that on themselves.
-A change that needs such signals waits until an explicit user-facing opt-in exists for them.
+The setup wizard offers optional anonymous feature statistics, with no selected by default; the daily update check reports version and platform and can be disabled.
+See [Usage telemetry and update checks](https://docs.openclaw.ai/gateway/telemetry).
 
 ## Plugins & Memory
 
@@ -131,7 +132,6 @@ It is widely known, fast to iterate in, and easy to read, modify, and extend.
 - Commercial service integrations that do not clearly fit the model-provider category
 - Wrapper channels around already supported channels without a clear capability or security gap
 - MCP work that duplicates existing MCP, ACPX, plugin, or ClawHub paths without a clear product or security gap
-- Agent-hierarchy frameworks (manager-of-managers / nested planner trees) as a default architecture
 - Heavy orchestration layers that duplicate existing agent and tool infrastructure
 
 This list is a roadmap guardrail, not a law of physics.

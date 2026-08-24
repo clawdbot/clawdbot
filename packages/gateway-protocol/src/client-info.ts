@@ -63,12 +63,16 @@ export type GatewayClientInfo = {
   displayName?: string;
   /** Client app or package version reported by the connecting process. */
   version: string;
+  /** Exact immutable artifact identity when the client can report one. */
+  buildId?: string;
   /** Runtime platform string, such as `darwin`, `ios`, `android`, or `web`. */
   platform: string;
   /** Optional device family used by native clients for display and routing hints. */
   deviceFamily?: string;
   /** Native hardware/model identifier when available. */
   modelIdentifier?: string;
+  /** Self-reported IANA time zone, such as `Europe/Vienna`, for presence display. */
+  timeZone?: string;
   /** Coarse category from `GATEWAY_CLIENT_MODES` for policy and diagnostics. */
   mode: GatewayClientMode;
   /** Per-installation or per-process id used to distinguish same-product clients. */

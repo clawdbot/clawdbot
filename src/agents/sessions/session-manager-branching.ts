@@ -165,9 +165,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
     const updatedAt = Date.now();
     const nextTarget = { ...persistenceTarget, sessionId: newSessionId };
     const nextEntry = {
-      ...(previousEntry
-        ? projectCanonicalSessionEntryShape(previousEntry as unknown as Record<string, unknown>)
-        : { updatedAt }),
+      ...(previousEntry ? projectCanonicalSessionEntryShape({ ...previousEntry }) : { updatedAt }),
       sessionId: newSessionId,
       updatedAt,
     };

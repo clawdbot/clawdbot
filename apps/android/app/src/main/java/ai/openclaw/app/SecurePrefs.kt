@@ -148,10 +148,6 @@ class SecurePrefs(
     )
   val lastDiscoveredStableId: StateFlow<String> = _lastDiscoveredStableId
 
-  private val _canvasDebugStatusEnabled =
-    MutableStateFlow(plainPrefs.getBoolean("canvas.debugStatusEnabled", false))
-  val canvasDebugStatusEnabled: StateFlow<Boolean> = _canvasDebugStatusEnabled
-
   private val _installedAppsSharingEnabled =
     MutableStateFlow(loadInstalledAppsSharingEnabled())
   val installedAppsSharingEnabled: StateFlow<Boolean> = _installedAppsSharingEnabled
@@ -296,11 +292,6 @@ class SecurePrefs(
   fun setOnboardingCompleted(value: Boolean) {
     plainPrefs.edit { putBoolean("onboarding.completed", value) }
     _onboardingCompleted.value = value
-  }
-
-  fun setCanvasDebugStatusEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("canvas.debugStatusEnabled", value) }
-    _canvasDebugStatusEnabled.value = value
   }
 
   fun grantInstalledAppsDisclosureConsent() {

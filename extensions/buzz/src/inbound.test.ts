@@ -1,3 +1,5 @@
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Buzz tests cover inbound room admission, mention gating, and reply delivery.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -12,6 +14,22 @@ import {
 } from "./message-event.js";
 import { setBuzzRuntime } from "./runtime.js";
 import type { ResolvedBuzzAccount } from "./types.js";
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return {
+    ...actual,
+    buildChannelInboundEventContext: vi.fn(actual.buildChannelInboundEventContext),
+  };
+});
+vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-ingress-runtime")>();
+  return {
+    ...actual,
+    resolveStableChannelMessageIngress: vi.fn(actual.resolveStableChannelMessageIngress),
+  };
+});
 
 const ROOM_ID = "b25b8e40-eb1a-43a4-b56b-30a4e16df586";
 const BOT_PUBLIC_KEY = "a".repeat(64);
@@ -112,6 +130,11 @@ describe("handleBuzzInbound", () => {
       GroupSubject: ROOM_ID,
     });
     expect(firstDispatch(runtime).ctxPayload.GroupChannel).toBeUndefined();
+    const resolverResult = await vi.mocked(resolveStableChannelMessageIngress).mock.results[0]
+      ?.value;
+    expect(vi.mocked(buildChannelInboundEventContext).mock.calls[0]?.[0].channelIngress).toBe(
+      resolverResult,
+    );
   });
 
   it("uses current Buzz labels without changing the stable sender identity", async () => {

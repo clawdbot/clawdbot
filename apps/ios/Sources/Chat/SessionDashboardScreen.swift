@@ -5,6 +5,7 @@ import SwiftUI
 struct SessionDashboardScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
+    @State private var showsDesktop = false
     let sessionKey: String
 
     var body: some View {
@@ -31,6 +32,18 @@ struct SessionDashboardScreen: View {
         .navigationTitle("Dashboard")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if self.appModel.isDesktopObserveAvailable {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        self.showsDesktop = true
+                    } label: {
+                        Image(systemName: "display")
+                            .font(OpenClawType.subheadSemiBold)
+                    }
+                    .accessibilityLabel("Open Desktop")
+                    .accessibilityIdentifier("SessionDashboard.Desktop")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     self.dismiss()
@@ -39,6 +52,9 @@ struct SessionDashboardScreen: View {
                         .font(OpenClawType.subheadSemiBold)
                 }
             }
+        }
+        .navigationDestination(isPresented: self.$showsDesktop) {
+            DesktopHubScreen(session: self.sessionKey, usesNativeNavigationChrome: true)
         }
     }
 

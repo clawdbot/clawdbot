@@ -5,10 +5,13 @@ import {
   errorShape,
   type AuditActivityEventV1,
   type AuditEvent,
+  type AuditRunInspectResult,
   validateAuditActivityListParams,
   validateAuditListParams,
   validateAuditRunInspectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { findAuditActivityFilterConflict } from "../../../packages/gateway-protocol/src/schema/audit-activity.js";
+import { parsePositiveAuditCursor } from "../../audit/audit-cursor.js";
 import { listAuditEvents } from "../../audit/audit-event-store.js";
 import type {
   AgentRunAuditEventRecord,
@@ -18,6 +21,7 @@ import type {
 import {
   ExecutionDecisionCursorError,
   isExecutionDecisionCursor,
+  type InternalAuditRunInspectResult,
 } from "../../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRun } from "../../audit/execution-identity-context.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -26,16 +30,23 @@ import { assertValidParams } from "./validation.js";
 const DEFAULT_AUDIT_LIST_LIMIT = 100;
 const MAX_AUDIT_LIST_LIMIT = 500;
 
-function parsePositiveCursor(cursor: string | undefined): number | undefined | null {
-  if (cursor === undefined) {
-    return undefined;
+function serializeAuditRunInspectResult(
+  inspected: InternalAuditRunInspectResult,
+): AuditRunInspectResult {
+  const result: AuditRunInspectResult = {
+    schemaVersion: inspected.schemaVersion,
+    run: inspected.run,
+    identity: inspected.identity,
+    decisionDisplays: inspected.decisionDisplays,
+    coverage: inspected.coverage,
+  };
+  if (inspected.nextDecisionCursor !== undefined) {
+    result.nextDecisionCursor = inspected.nextDecisionCursor;
   }
-  const trimmed = cursor.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return null;
+  if (inspected.nextExecutionCursor !== undefined) {
+    result.nextExecutionCursor = inspected.nextExecutionCursor;
   }
-  const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  return result;
 }
 
 /** Preserve the shipped audit.list result shape for run/tool-only clients. */
@@ -66,6 +77,9 @@ function mapAuditActivityEvent(event: AuditEventRecord): AuditActivityEventV1 {
         : { type: "system" as const, id: actorId };
     return { ...activity, eventType: "inbound_message", actor };
   }
+  if (event.action !== "message.outbound.finished") {
+    throw new Error("nonterminal outbound messages are not audit activity records");
+  }
   const { actorType, actorId, ...activity } = event;
   return { ...activity, eventType: "outbound_message", actor: { type: actorType, id: actorId } };
 }
@@ -74,7 +88,7 @@ function invalidRangeOrCursor(params: { cursor?: string; after?: number; before?
   cursor?: number;
   invalid: boolean;
 } {
-  const cursor = parsePositiveCursor(params.cursor);
+  const cursor = parsePositiveAuditCursor(params.cursor);
   return {
     ...(cursor !== undefined && cursor !== null ? { cursor } : {}),
     invalid:
@@ -129,6 +143,19 @@ export const auditHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
+    const filterConflict = findAuditActivityFilterConflict(params);
+    if (filterConflict) {
+      const detail =
+        filterConflict.type === "kind"
+          ? `${filterConflict.field} only applies to kind ${filterConflict.supportedKinds.join(" or ")}`
+          : `${filterConflict.field} cannot be combined with ${filterConflict.conflictingField}`;
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `invalid audit.activity.list filters: ${detail}`),
+      );
+      return;
+    }
     const parsed = invalidRangeOrCursor(params);
     if (parsed.invalid) {
       respond(
@@ -171,9 +198,11 @@ export const auditHandlers: GatewayRequestHandlers = {
       typeof params.runId !== "string" ||
       (params.executionCursor === decisionCursor &&
         decisionCursor !== undefined &&
-        isExecutionDecisionCursor(decisionCursor))
+        (decisionCursor.startsWith("a:") ||
+          decisionCursor.startsWith("m:") ||
+          decisionCursor.startsWith("g:")))
         ? undefined
-        : parsePositiveCursor(params.executionCursor);
+        : parsePositiveAuditCursor(params.executionCursor);
     if (
       (decisionCursor !== undefined && !isExecutionDecisionCursor(decisionCursor)) ||
       executionOffset === null
@@ -188,17 +217,19 @@ export const auditHandlers: GatewayRequestHandlers = {
     try {
       respond(
         true,
-        inspectExecutionIdentityRun({
-          ...(typeof params.runId === "string"
-            ? {
-                runId: params.runId,
-                ...(executionOffset !== undefined ? { executionOffset } : {}),
-                executionLimit: params.executionLimit ?? 50,
-              }
-            : { executionId: params.executionId! }),
-          ...(decisionCursor !== undefined ? { decisionCursor } : {}),
-          decisionLimit: params.decisionLimit ?? 50,
-        }),
+        serializeAuditRunInspectResult(
+          inspectExecutionIdentityRun({
+            ...(typeof params.runId === "string"
+              ? {
+                  runId: params.runId,
+                  ...(executionOffset !== undefined ? { executionOffset } : {}),
+                  executionLimit: params.executionLimit ?? 50,
+                }
+              : { executionId: params.executionId! }),
+            ...(decisionCursor !== undefined ? { decisionCursor } : {}),
+            decisionLimit: params.decisionLimit ?? 50,
+          }),
+        ),
       );
     } catch (error) {
       if (error instanceof ExecutionDecisionCursorError) {

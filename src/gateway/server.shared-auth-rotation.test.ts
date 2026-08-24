@@ -53,8 +53,10 @@ async function openDeviceTokenWsWithDetails(
   const identityPath = path.join(os.tmpdir(), `openclaw-shared-auth-${process.pid}-${port}.sqlite`);
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
     await import("../infra/device-identity.js");
-  const { approveDevicePairing, ensureDeviceToken, requestDevicePairing, rotateDeviceToken } =
-    await import("../infra/device-pairing.js");
+  const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+  const { ensureDeviceToken, rotateDeviceToken } =
+    await import("../infra/device-pairing-tokens.js");
+  const { requestDevicePairing } = await import("../infra/device-pairing.js");
   const client = params.browserClient
     ? {
         id: "openclaw-control-ui",
@@ -209,7 +211,8 @@ async function expectIssuerTaggedDeviceToken(params: {
   token: string;
   issuerGeneration: string;
 }) {
-  const { getPairedDevice, verifyDeviceToken } = await import("../infra/device-pairing.js");
+  const { verifyDeviceToken } = await import("../infra/device-pairing-tokens.js");
+  const { getPairedDevice } = await import("../infra/device-pairing.js");
   const paired = await getPairedDevice(params.deviceId);
   expect(paired?.tokens?.operator?.issuer).toEqual({
     kind: "shared-gateway-auth",

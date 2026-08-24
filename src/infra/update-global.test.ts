@@ -71,6 +71,9 @@ function createNpmRootRunner(params: {
   overrideNpmRoot?: string;
 }): CommandRunner {
   return async (argv) => {
+    if (argv[1] === "--version") {
+      return { stdout: "12.0.0\n", stderr: "", code: 0 };
+    }
     if (argv[0] === "npm") {
       return { stdout: `${params.defaultNpmRoot}\n`, stderr: "", code: 0 };
     }
@@ -111,6 +114,18 @@ describe("update global helpers", () => {
         env: { OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw@next" },
       }),
     ).toBe("openclaw@next");
+  });
+
+  it("applies an unflagged npm policy to primary and retry argv", () => {
+    expect(
+      globalInstallArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
+    ).not.toContain("--allow-scripts=openclaw");
+    expect(
+      globalInstallFallbackArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
+    ).toEqual(expect.arrayContaining(["--omit=optional"]));
+    expect(
+      globalInstallFallbackArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
+    ).not.toContain("--allow-scripts=openclaw");
   });
 
   it("maps main and explicit package targets to install specs", () => {
@@ -193,6 +208,55 @@ describe("update global helpers", () => {
       manager: "npm",
       globalRoot,
       packageRoot: path.join(globalRoot, "@kevins8", "openclaw"),
+    });
+  });
+
+  it.each([
+    ["11.12.0", "unflagged"],
+    ["11.13.0", "unflagged"],
+    ["11.14.0", "unflagged"],
+    ["11.15.9", "unflagged"],
+    ["11.16.0", "allow-scripts"],
+    ["12.0.0", "allow-scripts"],
+  ] as const)("binds npm %s lifecycle policy to the owning executable", async (version, policy) => {
+    await withTestDir({ prefix: "openclaw-npm-owner-" }, async (prefix) => {
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const owningNpm = path.join(prefix, "bin", "npm");
+      await Promise.all([
+        fs.mkdir(packageRoot, { recursive: true }),
+        fs.mkdir(path.dirname(owningNpm), { recursive: true }),
+      ]);
+      await fs.writeFile(owningNpm, "", "utf8");
+      const calls: string[][] = [];
+      const runCommand: CommandRunner = async (argv) => {
+        calls.push(argv);
+        if (argv[0] === owningNpm && argv[1] === "root") {
+          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+        }
+        if (argv[0] === owningNpm && argv[1] === "--version") {
+          return { stdout: `${version}\n`, stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "npm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot: packageRoot,
+          packageName: "openclaw",
+        }),
+      ).resolves.toMatchObject({
+        command: owningNpm,
+        npmOwner: {
+          version,
+          lifecyclePolicy: policy,
+        },
+      });
+      expect(calls).toContainEqual([owningNpm, "--version"]);
+      expect(calls).not.toContainEqual(["npm", "--version"]);
     });
   });
 
@@ -355,6 +419,7 @@ describe("update global helpers", () => {
           command: "npm",
           globalRoot: nvmRoot,
           packageRoot: pkgRoot,
+          npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
         });
       });
     });
@@ -393,6 +458,7 @@ describe("update global helpers", () => {
           command: "npm",
           globalRoot: nvmRoot,
           packageRoot: pkgRoot,
+          npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
         });
       });
     });
@@ -420,6 +486,7 @@ describe("update global helpers", () => {
           command: "npm",
           globalRoot: nvmRoot,
           packageRoot: path.join(nvmRoot, "openclaw"),
+          npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
         });
       });
     });
@@ -446,6 +513,7 @@ describe("update global helpers", () => {
           command: "npm",
           globalRoot,
           packageRoot: pkgRoot,
+          npmOwner: { version: null, lifecyclePolicy: null },
         });
       });
     });
@@ -488,6 +556,9 @@ describe("update global helpers", () => {
       await fs.mkdir(path.join(otherPnpmRoot, "openclaw"), { recursive: true });
 
       const runCommand: CommandRunner = async (argv) => {
+        if (argv[1] === "--version") {
+          return { stdout: "12.0.0\n", stderr: "", code: 0 };
+        }
         if (argv[0] === "npm" || argv[0] === customNpm) {
           return { stdout: `${pathNpmRoot}\n`, stderr: "", code: 0 };
         }
@@ -511,6 +582,7 @@ describe("update global helpers", () => {
         globalRoot: managedNpmRoot,
         packageRoot: pkgRoot,
         directNodeModulesRoot: true,
+        npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
       });
       await expect(
         resolveGlobalInstallTarget({
@@ -526,6 +598,7 @@ describe("update global helpers", () => {
         globalRoot: managedNpmRoot,
         packageRoot: pkgRoot,
         directNodeModulesRoot: true,
+        npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
       });
 
       expect(
@@ -700,6 +773,12 @@ describe("update global helpers", () => {
       "--loglevel=error",
       "--min-release-age=0",
     ]);
+  });
+
+  it("omits npm's lifecycle allowlist before npm 11.16", () => {
+    expect(
+      globalInstallArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
+    ).not.toContain("--allow-scripts=openclaw");
   });
 
   it("allows only the resolved npm candidate lifecycle identity", () => {

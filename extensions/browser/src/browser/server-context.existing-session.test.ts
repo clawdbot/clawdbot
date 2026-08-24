@@ -1,9 +1,19 @@
 // Browser tests cover server context.existing session plugin behavior.
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
 import type { BrowserServerState } from "./server-context.js";
+
+const braveProfileDir = fs.realpathSync(
+  fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-brave-profile-")),
+);
+
+afterAll(() => {
+  fs.rmSync(braveProfileDir, { recursive: true, force: true });
+});
 
 const chromeMcpMock = vi.hoisted(() => ({
   closeChromeMcpSession: vi.fn(async () => true),
@@ -89,7 +99,7 @@ function makeState(): BrowserServerState {
           color: "#0066CC",
           driver: "existing-session",
           attachOnly: true,
-          userDataDir: "/tmp/brave-profile",
+          userDataDir: braveProfileDir,
         },
       },
       extraArgs: [],
@@ -130,7 +140,6 @@ afterEach(() => {
 
 describe("browser server-context existing-session profile", () => {
   it("fails closed for Chrome MCP endpoint mcpArgs under the default CDP policy", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
     state.resolved.ssrfPolicy = {};
     state.resolved.profiles["chrome-live"] = {
@@ -151,7 +160,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("fails closed for explicit Chrome MCP cdpUrl under explicit restrictive CDP policy", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
     state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
     state.resolved.profiles["chrome-live"] = {
@@ -174,7 +182,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("reports attach-only profiles as running when the MCP session is available but no page is selected", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
     const ctx = createBrowserRouteContext({ getState: () => state });
 
@@ -196,7 +203,7 @@ describe("browser server-context existing-session profile", () => {
       )[0] ?? [];
     expect(ensuredProfile?.name).toBe("chrome-live");
     expect(ensuredProfile?.driver).toBe("existing-session");
-    expect(ensuredProfile?.userDataDir).toBe("/tmp/brave-profile");
+    expect(ensuredProfile?.userDataDir).toBe(braveProfileDir);
     expect(ensureOptions).toEqual({
       ephemeral: true,
       timeoutMs: 300,
@@ -210,12 +217,11 @@ describe("browser server-context existing-session profile", () => {
       )[0] ?? [];
     expect(countedProfile?.name).toBe("chrome-live");
     expect(countedProfile?.driver).toBe("existing-session");
-    expect(countedProfile?.userDataDir).toBe("/tmp/brave-profile");
+    expect(countedProfile?.userDataDir).toBe(braveProfileDir);
     expect(countOptions).toEqual({ ephemeral: true, signal: expect.any(AbortSignal) });
   });
 
   it("reports endpoint cdpUrl for existing-session profiles", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
     const chromeLiveProfile = expectDefined(
       state.resolved.profiles["chrome-live"],
@@ -244,7 +250,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("keeps the next real attach on the normal sticky session path after an idle status probe", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
     const ctx = createBrowserRouteContext({ getState: () => state });
     const live = ctx.forProfile("chrome-live");
@@ -269,22 +274,21 @@ describe("browser server-context existing-session profile", () => {
     expect(lastEnsureCall?.[0]).toBe("chrome-live");
     expect(lastEnsureCall?.[1]?.name).toBe("chrome-live");
     expect(lastEnsureCall?.[1]?.driver).toBe("existing-session");
-    expect(lastEnsureCall?.[1]?.userDataDir).toBe("/tmp/brave-profile");
+    expect(lastEnsureCall?.[1]?.userDataDir).toBe(braveProfileDir);
     const listCalls = vi.mocked(chromeMcp.listChromeMcpTabs).mock.calls as unknown as Array<
       [string, ChromeLiveProfile]
     >;
     expect(listCalls[0]?.[0]).toBe("chrome-live");
     expect(listCalls[0]?.[1]?.name).toBe("chrome-live");
     expect(listCalls[0]?.[1]?.driver).toBe("existing-session");
-    expect(listCalls[0]?.[1]?.userDataDir).toBe("/tmp/brave-profile");
+    expect(listCalls[0]?.[1]?.userDataDir).toBe(braveProfileDir);
     expect(listCalls[1]?.[0]).toBe("chrome-live");
     expect(listCalls[1]?.[1]?.name).toBe("chrome-live");
     expect(listCalls[1]?.[1]?.driver).toBe("existing-session");
-    expect(listCalls[1]?.[1]?.userDataDir).toBe("/tmp/brave-profile");
+    expect(listCalls[1]?.[1]?.userDataDir).toBe(braveProfileDir);
   });
 
   it("routes tab operations through the Chrome MCP backend", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
     const ctx = createBrowserRouteContext({ getState: () => state });
     const live = ctx.forProfile("chrome-live");
@@ -366,7 +370,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("eagerly closes MCP while attach readiness is pending and prevents retry", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const readinessEntered = deferred<void>();
     const readiness = deferred<never>();
     vi.mocked(chromeMcp.listChromeMcpTabs).mockImplementationOnce(async () => {
@@ -404,7 +407,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("drains an admitted MCP tab open before the final session sweep", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const openEntered = deferred<void>();
     const opened = deferred<{
       targetId: string;
@@ -446,7 +448,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("expires Chrome MCP aliases instead of transferring them to a replacement tab", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const originalTab = {
       targetId: "TARGET-A",
       title: "Checkout",
@@ -482,7 +483,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("allows targetless selection when a fresh Chrome MCP profile has no stale identity", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const freshTab = {
       targetId: "chrome-mcp:fresh:1",
       title: "Fresh",
@@ -500,7 +500,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("does not sticky-adopt a Chrome MCP tab when the final URL is policy-blocked", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const goodTab = {
       targetId: "chrome-mcp:good:1",
       title: "Good",
@@ -555,7 +554,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("rejects invalid labels before asking Chrome MCP to create a page", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
     const live = createBrowserRouteContext({ getState: () => state }).forProfile("chrome-live");
 
@@ -568,7 +566,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("does not adopt a Chrome MCP page when the operation aborts after creation", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const goodTab = {
       targetId: "chrome-mcp:good:1",
       title: "Good",
@@ -607,7 +604,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("clears only the sticky Chrome MCP target after a successful close", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const tabA = {
       targetId: "chrome-mcp:fresh:1",
       title: "A",
@@ -656,7 +652,6 @@ describe("browser server-context existing-session profile", () => {
   });
 
   it("keeps the sticky Chrome MCP target when close fails", async () => {
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const tab = {
       targetId: "chrome-mcp:fresh:1",
       title: "A",
@@ -679,10 +674,9 @@ describe("browser server-context existing-session profile", () => {
 
   it("surfaces DevToolsActivePort attach failures instead of a generic tab timeout", async () => {
     vi.useFakeTimers();
-    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     vi.mocked(chromeMcp.listChromeMcpTabs).mockRejectedValue(
       new Error(
-        "Could not connect to Chrome. Check if Chrome is running. Cause: Could not find DevToolsActivePort for chrome at /tmp/brave-profile/DevToolsActivePort",
+        `Could not connect to Chrome. Check if Chrome is running. Cause: Could not find DevToolsActivePort for chrome at ${braveProfileDir}/DevToolsActivePort`,
       ),
     );
 

@@ -1,7 +1,8 @@
 // Coverage for forward-compatible model fallback errors and provider overrides.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelProviderConfig } from "../../config/config.js";
+import type { ModelProviderConfig, OpenClawConfig } from "../../config/config.js";
 import { discoverModels } from "../agent-model-discovery.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -82,23 +83,42 @@ vi.mock("../model-suppression.js", () => ({
 
 vi.mock("../prepared-model-runtime.js", async () => {
   const discovery = await import("../agent-model-discovery.js");
+  const { createPluginMetadataSnapshot } =
+    await import("../../config/plugin-auto-enable.test-helpers.js");
   const createSnapshot = (input: {
     agentDir: string;
     config?: OpenClawConfig;
     workspaceDir?: string;
-  }) => ({
-    createStores: () => {
-      const authStorage = discovery.discoverAuthStorage(input.agentDir);
-      const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
-        ...(input.config ? { config: input.config } : {}),
+  }) => {
+    const config = input.config ?? {};
+    return {
+      agentDir: input.agentDir,
+      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+      activeProjectKeys: [],
+      allowGatewaySubagentBinding: false,
+      config,
+      authModes: {},
+      metadataSnapshot: createPluginMetadataSnapshot({
+        config,
+        manifestRegistry: { plugins: [], diagnostics: [] },
         ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      });
-      if (!("fork" in modelRegistry)) {
-        Object.assign(modelRegistry, { fork: () => modelRegistry });
-      }
-      return { authStorage, modelRegistry };
-    },
-  });
+      }),
+      modelCatalog: { entries: [], routeVariants: [] },
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
+      createStores: () => {
+        const authStorage = discovery.discoverAuthStorage(input.agentDir);
+        const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
+          ...(input.config ? { config: input.config } : {}),
+          ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        });
+        if (!("fork" in modelRegistry)) {
+          Object.assign(modelRegistry, { fork: () => modelRegistry });
+        }
+        return { authStorage, modelRegistry };
+      },
+    } satisfies PreparedModelRuntimeSnapshot;
+  };
   return {
     getPreparedModelRuntimeSnapshot: createSnapshot,
     loadPreparedModelRuntimeSnapshot: async (input: Parameters<typeof createSnapshot>[0]) =>
@@ -111,7 +131,6 @@ vi.mock("../agent-model-discovery.js", () => ({
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   expectResolvedForwardCompatFallbackResult,
   expectUnknownModelErrorResult,

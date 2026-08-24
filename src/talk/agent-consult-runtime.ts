@@ -1,6 +1,6 @@
 // Agent consult runtime starts agent consultation flows from talk sessions.
 import { randomUUID } from "node:crypto";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { forkSessionEntryFromParent } from "../auto-reply/reply/session-fork.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
@@ -287,7 +287,12 @@ export async function consultRealtimeVoiceAgent(params: {
   }) => RealtimeVoiceAgentConsultRunRegistration | void;
 }): Promise<RealtimeVoiceAgentConsultResult> {
   params.abortSignal?.throwIfAborted();
-  const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
+  const agentId =
+    params.agentId ??
+    resolveSessionAgentId({
+      config: params.cfg,
+      sessionKey: params.sessionKey,
+    });
   const agentDir = params.agentRuntime.resolveAgentDir(params.cfg, agentId);
   const workspaceDir = params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, agentId);
   const storePath = params.agentRuntime.session.resolveStorePath(params.cfg.session?.store, {

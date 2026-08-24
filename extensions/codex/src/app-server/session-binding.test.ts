@@ -449,6 +449,67 @@ describe("Codex app-server binding store", () => {
     expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
+  it("round-trips repository marketplace app ownership through stored and imported bindings", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-security-review",
+    };
+    const pluginAppPolicyContext = {
+      fingerprint: "repository-plugin-policy",
+      apps: {
+        github: {
+          configKey: "security-review@company-tools",
+          marketplaceName: "company-tools",
+          pluginName: "security-review",
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "ask" as const,
+          mcpServerNames: ["github"],
+        },
+      },
+      pluginAppIds: { "security-review@company-tools": ["github"] },
+    };
+
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-security-review", cwd: "/repo/company", pluginAppPolicyContext },
+    });
+    await expect(store.read(identity)).resolves.toMatchObject({ pluginAppPolicyContext });
+
+    const imported = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-security-review",
+      cwd: "/repo/company",
+      pluginAppPolicyContext,
+    });
+    expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
+  it("rejects unsafe marketplace names in imported plugin app ownership", () => {
+    const imported = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-unsafe-plugin",
+      cwd: "/repo/company",
+      pluginAppPolicyContext: {
+        fingerprint: "unsafe-plugin-policy",
+        apps: {
+          github: {
+            configKey: "security-review",
+            marketplaceName: "../unsafe-marketplace",
+            pluginName: "security-review",
+            allowDestructiveActions: true,
+            mcpServerNames: ["github"],
+          },
+        },
+        pluginAppIds: { "security-review": ["github"] },
+      },
+    });
+
+    expect(imported?.binding.pluginAppPolicyContext).toBeUndefined();
+  });
+
   it("normalizes legacy fingerprints without rehashing canonical values", () => {
     const rawDynamicToolsFingerprint = JSON.stringify([{ name: "legacy_tool" }]);
     const rawUserMcpServersFingerprint = JSON.stringify({

@@ -4,6 +4,7 @@ import {
   streamSimple,
   type AssistantMessage,
   type AssistantMessageEvent,
+  type ToolCall,
 } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -140,7 +141,7 @@ function transformArguments(
 }
 
 function transformCall(
-  call: Record<string, unknown>,
+  call: Pick<ToolCall, "name" | "arguments"> | Record<string, unknown>,
   state: TransformState,
   toWire: boolean,
 ): void {
@@ -189,7 +190,7 @@ function restoreMessage(message: AssistantMessage, state: TransformState): Assis
   const restored = { ...message, content: message.content.map((block) => ({ ...block })) };
   for (const block of restored.content) {
     if (block.type === "toolCall") {
-      transformCall(block as unknown as Record<string, unknown>, state, false);
+      transformCall(block, state, false);
     }
   }
   return restored;
@@ -209,7 +210,7 @@ function restoreEvent(event: AssistantMessageEvent, state: TransformState): Assi
     }
   } else if (restored.type === "toolcall_end") {
     restored.toolCall = { ...restored.toolCall };
-    transformCall(restored.toolCall as unknown as Record<string, unknown>, state, false);
+    transformCall(restored.toolCall, state, false);
   } else if (restored.type === "done") {
     restored.message = restoreMessage(restored.message, state);
   } else if (restored.type === "error") {

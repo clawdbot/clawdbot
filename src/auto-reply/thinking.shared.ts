@@ -25,12 +25,18 @@ export type TraceLevel = "off" | "on" | "raw";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
 type UsageDisplayLevel = "off" | "tokens" | "full";
-/** Minimal model catalog entry needed to choose thinking defaults. */
+/** Prepared model catalog fields reused while choosing and dispatching a queued runtime. */
 export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
   api?: string;
+  contextWindow?: number;
+  contextTokens?: number;
   reasoning?: boolean;
+  configuredReasoning?: boolean;
+  /** Concrete runtime owner of thinking policy; internal and never project to clients. */
+  thinkingPolicyProvider?: string;
+  input?: readonly ("text" | "image" | "audio" | "video" | "document")[];
   params?: Record<string, unknown>;
   compat?: {
     thinkingFormat?: string;

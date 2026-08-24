@@ -165,6 +165,8 @@ export async function handleAcpStatusAction(
       const linkedTask = findLatestTaskForRelatedSessionKeyForOwner({
         relatedSessionKey: status.sessionKey,
         callerOwnerKey: params.sessionKey,
+        callerAgentId: params.agentId,
+        config: params.cfg,
       });
       const sessionIdentifierLines = resolveAcpSessionIdentifierLinesFromIdentity({
         backend: status.backend,

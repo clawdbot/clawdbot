@@ -1,4 +1,5 @@
 /** Loads, normalizes, quarantines, and persists cron service store state. */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -11,6 +12,14 @@ import {
   saveCronJobsStore,
   type QuarantinedCronConfigJob,
 } from "../store.js";
+import {
+  CronRunReceiptConflictError,
+  CronRunReceiptRevisionError,
+} from "../store/run-receipt-store.js";
+import {
+  type CronStoreTransactionHooks,
+  saveCronJobsStoreWithTransactionHooks,
+} from "../store/transaction-hooks.js";
 import type { CronJob, CronStoreFile } from "../types.js";
 import { computeJobNextRunAtMs, recomputeNextRuns } from "./jobs-scheduling.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
@@ -22,6 +31,7 @@ type PersistOptions = {
   stateOnly?: boolean;
   suppressScheduledJobId?: string;
   postPersistNotifications?: DeferredCronNotifications;
+  transactionHooks?: CronStoreTransactionHooks;
 };
 
 export type CronRollbackSnapshot = {
@@ -77,6 +87,14 @@ function publishDurableNextRunChanges(params: {
   }
 }
 
+/** Publishes scheduled-row changes after a targeted runtime transaction commits. */
+export function publishCronRuntimeRows(state: CronServiceState): void {
+  if (!state.store) {
+    return;
+  }
+  publishDurableNextRunChanges({ state, storeJobs: state.store.jobs, stateOnly: false });
+}
+
 function invalidateStaleNextRunOnScheduleChange(params: {
   previousJobsById: ReadonlyMap<string, CronJob>;
   hydrated: CronJob;
@@ -117,6 +135,12 @@ function warnInvalidPersistedCronJob(params: {
   );
 }
 
+function isValidatedCronJob(
+  value: Record<string, unknown>,
+): value is CronJob & Record<string, unknown> {
+  return getInvalidPersistedCronJobReason(value) === null;
+}
+
 /** Loads and normalizes the cron store, quarantining invalid persisted rows before runtime use. */
 export async function ensureLoaded(
   state: CronServiceState,
@@ -146,7 +170,7 @@ export async function ensureLoaded(
   const loadNowMs = state.deps.nowMs();
   // Persisted cron rows are validated lazily, so treat them as raw records at the
   // store boundary and only trust the CronJob shape after validation below.
-  const loadedJobs = (loaded.store.jobs ?? []) as unknown as Record<string, unknown>[];
+  const loadedJobs = (loaded.store.jobs ?? []).filter(isRecord);
   const jobs: CronJob[] = [];
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
@@ -173,11 +197,16 @@ export async function ensureLoaded(
     }
     const hydratedRaw = normalized ?? raw;
     let invalidReason = rawInvalidReason ?? getInvalidPersistedCronJobReason(hydratedRaw);
-    const hydratedSchedule = (hydratedRaw.schedule ?? {}) as Record<string, unknown>;
-    if (!invalidReason && hydratedRaw.enabled !== false && hydratedSchedule.kind === "every") {
+    const hydratedSchedule = isRecord(hydratedRaw.schedule) ? hydratedRaw.schedule : {};
+    if (
+      !invalidReason &&
+      isValidatedCronJob(hydratedRaw) &&
+      hydratedRaw.enabled &&
+      hydratedSchedule.kind === "every"
+    ) {
       try {
         assertTimeScheduleSatisfiable(
-          { ...(hydratedRaw as unknown as CronJob), state: {} },
+          { ...hydratedRaw, state: {} },
           loadNowMs,
           computeJobNextRunAtMs,
         );
@@ -209,7 +238,10 @@ export async function ensureLoaded(
       continue;
     }
     // Validated above, so the raw record is now a trusted CronJob.
-    const hydrated = hydratedRaw as unknown as CronJob;
+    if (!isValidatedCronJob(hydratedRaw)) {
+      continue;
+    }
+    const hydrated = hydratedRaw;
     jobs.push(hydrated);
     // Capture the value SQLite actually held before schedule-identity repair
     // mutates the runtime view. A later save can then publish that transition.
@@ -279,13 +311,23 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
       : undefined;
   const stateOnly = !quarantine && opts?.stateOnly === true;
   try {
-    await saveCronJobsStore(
-      state.deps.storePath,
-      store,
-      quarantine ? { quarantine } : stateOnly ? { stateOnly: true } : undefined,
-    );
+    const saveOptions = quarantine ? { quarantine } : stateOnly ? { stateOnly: true } : undefined;
+    if (opts?.transactionHooks) {
+      await saveCronJobsStoreWithTransactionHooks(
+        state.deps.storePath,
+        store,
+        saveOptions,
+        opts.transactionHooks,
+      );
+    } else {
+      await saveCronJobsStore(state.deps.storePath, store, saveOptions);
+    }
   } catch (error) {
-    if (!quarantine) {
+    if (
+      !quarantine ||
+      error instanceof CronRunReceiptConflictError ||
+      error instanceof CronRunReceiptRevisionError
+    ) {
       throw error;
     }
     const errorMessage = error instanceof Error ? error.message : String(error);

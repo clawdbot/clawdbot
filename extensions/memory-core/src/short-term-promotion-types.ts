@@ -213,6 +213,10 @@ export type ApplyShortTermPromotionsResult = {
   appended: number;
   reconciledExisting: number;
   appliedCandidates: PromotionCandidate[];
+  rejectedCandidates: Array<{
+    candidate: PromotionCandidate;
+    reason: string;
+  }>;
   /** Number of older promotion sections compacted out to honor the budget. */
   compactedSections: number;
   /** Dates of the compacted promotion sections, oldest first. */

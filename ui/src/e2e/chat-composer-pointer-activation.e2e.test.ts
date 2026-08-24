@@ -339,8 +339,15 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
 
       await textarea.fill("Verify keyboard Send");
       await textarea.focus();
-      await textarea.press("Tab");
+      // Tab order after the single-primary redesign: mic, then the
+      // focus-revealed device-picker trigger, then the primary send button.
       const keyboardSend = page.getByRole("button", { name: "Send message" });
+      for (let tabs = 0; tabs < 4; tabs += 1) {
+        await page.keyboard.press("Tab");
+        if (await keyboardSend.evaluate((node) => document.activeElement === node)) {
+          break;
+        }
+      }
       await expect
         .poll(() => keyboardSend.evaluate((node) => document.activeElement === node))
         .toBe(true);

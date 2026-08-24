@@ -5,8 +5,6 @@ import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   createModelPickerVisibleProviderPredicate,
   isRetiredModelPickerProvider,
-} from "./model-runtime-aliases.js";
-import {
   areRuntimeModelRefsEquivalent,
   isCliRuntimeProvider,
   resolveCliRuntimeExecutionProvider as resolveCliRuntimeExecutionProviderBase,

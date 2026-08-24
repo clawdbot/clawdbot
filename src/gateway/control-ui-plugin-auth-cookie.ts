@@ -27,6 +27,7 @@ type PluginAuthCookiePayload = {
   match: "exact" | "prefix";
   generation: string;
   exp: number;
+  profileId?: string;
 };
 
 function signPayload(encodedPayload: string): string {
@@ -92,6 +93,7 @@ function createControlUiPluginAuthCookie(
   grant: ControlUiPluginTabAuthGrant,
   params: {
     generation: string | undefined;
+    profileId?: string;
     nowMs?: number;
   },
 ) {
@@ -115,6 +117,7 @@ function createControlUiPluginAuthCookie(
     match: grant.match,
     generation: params.generation,
     exp,
+    ...(params.profileId ? { profileId: params.profileId } : {}),
   };
   const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const sig = signPayload(encodedPayload);
@@ -130,6 +133,7 @@ export function setControlUiPluginAuthCookie(
   grants: readonly ControlUiPluginTabAuthGrant[],
   params: {
     generation: string | undefined;
+    profileId?: string;
     nowMs?: number;
   },
 ) {
@@ -137,6 +141,7 @@ export function setControlUiPluginAuthCookie(
   const cookiesToAdd = grants.flatMap((grant) => {
     const cookie = createControlUiPluginAuthCookie(grant, {
       generation: params.generation,
+      profileId: params.profileId,
       nowMs: params.nowMs,
     });
     if (!cookie) {
@@ -216,6 +221,8 @@ export function resolveControlUiPluginAuthCookieGrants(
         payload.generation !== params.generation ||
         typeof payload.pluginId !== "string" ||
         payload.pluginId.length === 0 ||
+        (payload.profileId !== undefined &&
+          (typeof payload.profileId !== "string" || payload.profileId.length === 0)) ||
         !Array.isArray(payload.scopes) ||
         typeof payload.path !== "string" ||
         normalizeCookiePath(payload.path) !== payload.path ||
@@ -240,6 +247,7 @@ export function resolveControlUiPluginAuthCookieGrants(
         path: payload.path,
         match: payload.match,
         scopes: payload.scopes.filter(isOperatorScope),
+        ...(payload.profileId ? { profileId: payload.profileId } : {}),
       };
       grants.push(grant);
     } catch {

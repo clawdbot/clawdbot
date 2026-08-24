@@ -44,6 +44,7 @@ import {
 } from "./dispatch-from-config.runtime-loaders.js";
 import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
+import { noteDispatchProcessedOutcome } from "./dispatch-processed-outcome.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
 import { finalizeInboundContext, isFinalizedInboundContext } from "./inbound-context.js";
@@ -64,20 +65,39 @@ export async function gatherDispatchRequest(
   const ctx = isFinalizedInboundContext(params.ctx)
     ? params.ctx
     : finalizeInboundContext(params.ctx);
+  const turnAdoptionLifecycle = params.replyOptions?.turnAdoptionLifecycle;
+  const turnAdoptionState = { adopted: false };
   const normalizedParams: DispatchFromConfigParams = {
     ...params,
     ctx,
-    replyOptions: { ...params.replyOptions },
+    replyOptions: {
+      ...params.replyOptions,
+      ...(turnAdoptionLifecycle
+        ? {
+            turnAdoptionLifecycle: {
+              ...turnAdoptionLifecycle,
+              onAdopted: async () => {
+                // The upstream owner is durable only after its callback commits.
+                // A rejected callback must leave replay dedupe releasable.
+                await turnAdoptionLifecycle.onAdopted();
+                turnAdoptionState.adopted = true;
+              },
+            },
+          }
+        : {}),
+    },
   };
   const state = {
     params: normalizedParams,
     messageAuditTerminal,
     inboundDedupeReplayUnsafe: false,
+    turnAdoptionState: turnAdoptionLifecycle ? turnAdoptionState : undefined,
   };
   const { cfg, dispatcher } = normalizedParams;
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
   if (params.replyOptions?.abortSignal?.aborted) {
+    noteDispatchProcessedOutcome({ outcome: "skipped", reason: "reply_operation_aborted" });
     messageAuditTerminal?.note("skipped", { reason: "reply_operation_aborted" });
     return {
       status: "complete" as const,
@@ -140,6 +160,10 @@ export async function gatherDispatchRequest(
   let agentDispatchStartedAt = 0;
 
   const recordProcessed = (outcome: DispatchProcessedOutcome, opts?: DispatchProcessedOptions) => {
+    noteDispatchProcessedOutcome({
+      outcome,
+      ...(opts?.reason !== undefined ? { reason: opts.reason } : {}),
+    });
     messageAuditTerminal?.note(outcome, opts);
     if (diagnosticsEnabled) {
       replyHotPathTiming.logIfSlow({
@@ -230,6 +254,7 @@ export async function gatherDispatchRequest(
     dispatchOperationSessionKey &&
     initialDispatchReplyOperation
   ) {
+    noteDispatchProcessedOutcome({ outcome: "skipped", reason: "reply-operation-active" });
     messageAuditTerminal?.note("skipped", { reason: "reply-operation-active" });
     return {
       status: "complete" as const,
@@ -353,6 +378,7 @@ export async function gatherDispatchRequest(
     replyOptions: normalizedParams.replyOptions,
     resolveOperationExpectedSessionId,
     routeThreadId,
+    sessionWorkerPlacementContext: normalizedParams.sessionWorkerPlacementContext,
   });
   const {
     completeDispatchReplyOperation,

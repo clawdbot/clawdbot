@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -29,23 +30,26 @@ export function buildDraftSessionCreateParams(draft: {
   agentId: string;
   message: string;
   model?: string;
+  contextWindow?: string;
   thinkingLevel?: string;
+  toolOverrides?: SessionCreateParams["toolOverrides"] | null;
   visibility?: NewSessionVisibility;
-  attachments?: unknown[];
+  attachments?: SessionCreateParams["attachments"];
   projectId?: string;
   worktree: boolean;
   baseRef?: string;
   worktreeName?: string;
   cwd?: string;
   workspace?: string;
-  execNode?: string;
   catalogId?: string;
-}): Record<string, unknown> {
+  category?: string;
+}): SessionCreateParams {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
-  const execNode = normalizeOptionalString(draft.execNode);
   const catalogId = normalizeOptionalString(draft.catalogId);
+  const category = normalizeOptionalString(draft.category);
   const model = normalizeOptionalString(draft.model);
+  const contextWindow = normalizeOptionalString(draft.contextWindow);
   const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
   const projectId = normalizeOptionalString(draft.projectId);
   const customFolder = !projectId && cwd && cwd !== workspace ? cwd : undefined;
@@ -57,10 +61,13 @@ export function buildDraftSessionCreateParams(draft: {
     ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),
     ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
     ...(catalogId ? { catalogId } : {}),
+    ...(category ? { category } : {}),
     ...(!catalogId && model ? { model } : {}),
+    ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
+    ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
     ...(projectId ? { projectId } : {}),
-    ...(customFolder && !execNode ? { cwd: customFolder } : {}),
+    ...(customFolder ? { cwd: customFolder } : {}),
     ...(draft.worktree
       ? {
           worktree: true,
@@ -73,6 +80,5 @@ export function buildDraftSessionCreateParams(draft: {
             : {}),
         }
       : {}),
-    ...(!projectId && execNode ? { execNode, ...(cwd ? { cwd } : {}) } : {}),
   };
 }

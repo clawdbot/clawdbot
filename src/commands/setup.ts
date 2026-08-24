@@ -8,7 +8,7 @@ import fs from "node:fs/promises";
 import {
   listAgentEntries,
   resolveAgentEntry,
-  resolveDefaultAgentId,
+  resolveSoleAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -17,9 +17,11 @@ import {
   hasResolvedRosterBeforeMigrations,
 } from "../config/agent-roster-provenance.js";
 import type { ConfigWriteOptions, ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -165,7 +167,9 @@ export async function setupCommand(
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
-  const defaultEntry = resolveAgentEntry(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
+  const selectedAgentId =
+    tryResolveLegacyCompatibilityAgentId(resolvedConfig) ?? resolveSoleAgentId(resolvedConfig);
+  const defaultEntry = resolveAgentEntry(resolvedConfig, selectedAgentId);
   const defaultEntryWorkspace = defaultEntry?.workspace?.trim();
   const configuredWorkspace = defaultEntryWorkspace || resolvedDefaults.workspace;
 
@@ -197,9 +201,13 @@ export async function setupCommand(
       const roster = structuredClone(listAgentEntries(next));
       if (!snapshot.exists || Boolean(defaultEntryWorkspace)) {
         for (const entry of roster) {
-          if (entry.default === true) {
-            // Fresh bootstrap and explicitly entry-owned workspaces stay aligned.
-            // Inherited defaults must not turn an include-owned roster into a roster write.
+          if (
+            snapshot.exists &&
+            defaultEntryWorkspace &&
+            normalizeAgentId(entry.id) === selectedAgentId
+          ) {
+            // An explicit workspace follows the resolved setup owner. Fresh and inherited
+            // workspaces stay in defaults so setup does not duplicate them into the roster.
             entry.workspace = workspace;
           }
         }
@@ -222,7 +230,15 @@ export async function setupCommand(
 
   if (!snapshot.exists) {
     const { ensureOnboardingAgent } = await import("./onboard-agent.js");
-    next = (await ensureOnboardingAgent({ config: next, workspace, baseConfig: cfg })).config;
+    const onboardingAgent = await ensureOnboardingAgent({
+      config: next,
+      workspace,
+      baseConfig: cfg,
+    });
+    next = onboardingAgent.config;
+    for (const warning of onboardingAgent.sessionMigrationWarnings ?? []) {
+      runtime.log(`Warning: ${warning}`);
+    }
   }
 
   const configChanged =
@@ -288,10 +304,9 @@ export async function setupCommand(
     runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   }
 
-  const defaultAgentId = resolveDefaultAgentId(next);
   const sessionsDir = await (
     deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
-  )(defaultAgentId);
+  )(selectedAgentId);
   await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
   if (opts?.json) {
     writeRuntimeJson(runtime, {

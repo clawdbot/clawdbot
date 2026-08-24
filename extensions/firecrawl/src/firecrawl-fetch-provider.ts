@@ -1,4 +1,5 @@
 // Firecrawl provider module implements model/runtime integration.
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import {
   enablePluginInConfig,
@@ -6,14 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-fetch-contract";
 import { FIRECRAWL_WEB_FETCH_PROVIDER_SHARED } from "./firecrawl-fetch-provider-shared.js";
 
-type FirecrawlClientModule = typeof import("./firecrawl-client.js");
-
-let firecrawlClientModulePromise: Promise<FirecrawlClientModule> | undefined;
-
-function loadFirecrawlClientModule(): Promise<FirecrawlClientModule> {
-  firecrawlClientModulePromise ??= import("./firecrawl-client.js");
-  return firecrawlClientModulePromise;
-}
+const loadFirecrawlClientModule = createLazyRuntimeModule(() => import("./firecrawl-client.js"));
 
 export function createFirecrawlWebFetchProvider(): WebFetchProviderPlugin {
   return {

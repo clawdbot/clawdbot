@@ -5,8 +5,9 @@ import type {
   WizardNextResult,
   WizardStep,
 } from "../../api/types.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 
-export const MODEL_SETUP_DETECT_TIMEOUT_MS = 20_000;
+export const MODEL_SETUP_DETECT_TIMEOUT_MS = 40_000;
 export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 30_000;
 const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
 const MODEL_SETUP_CODEX_ACTIVATE_TIMEOUT_MS = 480_000;
@@ -78,7 +79,7 @@ export function mapActivationResult(params: {
     phase: "failure",
     targetId: params.targetId,
     status: result.status && result.status !== "ok" ? result.status : "unknown",
-    error: result.error?.trim() || params.fallbackError,
+    error: formatUiExternalText(result.error, params.fallbackError),
   };
 }
 
@@ -90,7 +91,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
       ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
     };
   }
-  return { phase: "failed", status: result.status, error: result.error };
+  return { phase: "failed", status: result.status, error: formatUiExternalText(result.error) };
 }
 
 export function wizardStateFromResult(
@@ -104,7 +105,7 @@ export function wizardStateFromResult(
       authChoice,
       step: result.step,
       busy: false,
-      validationError: result.error?.trim() || null,
+      validationError: result.error?.trim() ? formatUiExternalText(result.error) : null,
     };
   }
   if (result.status === "done") {
@@ -115,9 +116,9 @@ export function wizardStateFromResult(
     };
   }
   if (result.status === "cancelled") {
-    return { phase: "cancelled", message: result.error?.trim() || fallbackError };
+    return { phase: "cancelled", message: formatUiExternalText(result.error, fallbackError) };
   }
-  return { phase: "error", message: result.error?.trim() || fallbackError };
+  return { phase: "error", message: formatUiExternalText(result.error, fallbackError) };
 }
 
 export function initialWizardValue(step: WizardStep): unknown {

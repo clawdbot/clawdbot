@@ -56,9 +56,6 @@ interface EmbeddedGatewayRuntime {
   getMaxChatHistoryMessagesBytes: () => number;
   augmentChatHistoryWithCanvasBlocks: (msgs: unknown[]) => unknown[];
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: number;
-  enforceChatHistoryFinalBudget: (opts: { messages: unknown[]; maxBytes: number }) => {
-    messages: unknown[];
-  };
   replaceOversizedChatHistoryMessages: (opts: {
     messages: unknown[];
     maxSingleMessageBytes: number;
@@ -68,10 +65,13 @@ interface EmbeddedGatewayRuntime {
     messages: unknown[],
     sessionStartedAt: number | undefined,
   ) => unknown[];
-  projectChatDisplayMessages: (msgs: unknown[], opts?: { maxChars?: number }) => unknown[];
+  projectChatDisplayMessages: (
+    msgs: unknown[],
+    opts?: { includeCommentaryFallbacks?: boolean; maxChars?: number },
+  ) => unknown[];
   projectRecentChatDisplayMessages: (
     msgs: unknown[],
-    opts?: { maxChars?: number; maxMessages?: number },
+    opts?: { includeCommentaryFallbacks?: boolean; maxChars?: number; maxMessages?: number },
   ) => unknown[];
   capArrayByJsonBytes: (items: unknown[], maxBytes: number) => { items: unknown[] };
   listSessionsFromStoreAsync: (opts: {
@@ -229,7 +229,7 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   if ("ambiguous" in resolved) {
     return { ok: false, candidates: resolved.candidates };
   }
-  return { ok: true, key: resolved.key };
+  return { ok: true, key: resolved.key, agentId: resolved.agentId };
 }
 
 async function handleSessionsSearch(params: Record<string, unknown>) {
@@ -264,9 +264,11 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   );
   const agentIds = new Set(
     sessionKeys?.map((sessionKey) =>
-      requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
-        ? requestedAgentId
-        : rt.resolveSessionAgentId({ sessionKey, config: cfg }),
+      rt.resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+      }),
     ),
   );
   if (
@@ -429,15 +431,20 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const projected =
     params.offset === undefined
       ? rt.projectRecentChatDisplayMessages(recencyFilteredMessages, {
+          includeCommentaryFallbacks: true,
           maxChars: effectiveMaxChars,
           maxMessages: max,
         })
       : offset === 0
         ? rt.projectRecentChatDisplayMessages(recencyFilteredMessages, {
+            includeCommentaryFallbacks: true,
             maxChars: effectiveMaxChars,
             maxMessages: max,
           })
-        : rt.projectChatDisplayMessages(recencyFilteredMessages, { maxChars: effectiveMaxChars });
+        : rt.projectChatDisplayMessages(recencyFilteredMessages, {
+            includeCommentaryFallbacks: true,
+            maxChars: effectiveMaxChars,
+          });
   const windowed =
     params.offset === undefined || offset === 0
       ? projected
@@ -450,11 +457,10 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     maxSingleMessageBytes: perMessageHardCap,
   });
   const capped = rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-  const bounded = rt.enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
   const nextOffset =
     offsetPage !== undefined
       ? resolveChatHistoryNextOffset({
-          messages: bounded.messages,
+          messages: capped,
           totalMessages: offsetPage.totalMessages,
           offset,
           rawPageMessages:
@@ -468,7 +474,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   return {
     sessionKey,
     sessionId,
-    messages: bounded.messages,
+    messages: capped,
     ...(params.offset !== undefined
       ? { offset, hasMore, totalMessages: offsetPage?.totalMessages ?? projected.length }
       : {}),

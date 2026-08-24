@@ -72,10 +72,8 @@ describe("Apple app i18n catalogs", () => {
     const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
       entries: Array<{
         id: string;
-        kind: string;
-        line: number;
-        path: string;
         source: string;
+        sites: Array<{ kind: string; path: string }>;
         surface: string;
       }>;
       version: number;
@@ -95,10 +93,8 @@ describe("Apple app i18n catalogs", () => {
     const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
       entries: Array<{
         id: string;
-        kind: string;
-        line: number;
-        path: string;
         source: string;
+        sites: Array<{ kind: string; path: string }>;
         surface: string;
       }>;
       version: number;
@@ -133,14 +129,12 @@ describe("Apple app i18n catalogs", () => {
     const build = buildMacosCatalog(
       { sourceLanguage: "en", strings: {}, version: "1.0" },
       {
-        version: 1,
+        version: 2,
         entries: [
           {
             id: "native.apple.settings",
-            kind: "ui-call",
-            line: 1,
-            path: "apps/macos/Sources/OpenClaw/Settings.swift",
             source: "Settings",
+            sites: [{ kind: "ui-call", path: "apps/macos/Sources/OpenClaw/Settings.swift" }],
             surface: "apple",
           },
         ],
@@ -188,160 +182,64 @@ describe("Apple app i18n catalogs", () => {
     expect(voiceWake).toContain('format: String(localized: "Language %lld")');
   });
 
-  it("selects duplicate-source translations deterministically while preserving shipped translations", () => {
-    const build = buildIosCatalog(
-      {
-        sourceLanguage: "en",
-        strings: {
-          "Connect now": {
-            localizations: {
-              de: { stringUnit: { state: "translated", value: "Jetzt verbinden" } },
-            },
-          },
-        },
-      },
-      {
-        version: 1,
-        entries: [
-          {
-            id: "native.apple.a",
-            kind: "ui-call",
-            line: 1,
-            path: "apps/ios/Sources/Example.swift",
-            source: "Connect now",
-            surface: "apple",
-          },
-          {
-            id: "native.apple.b",
-            kind: "ui-call",
-            line: 2,
-            path: "apps/ios/Sources/Other.swift",
-            source: "Connect now",
-            surface: "apple",
-          },
-          {
-            id: "native.apple.c",
-            kind: "ui-call",
-            line: 3,
-            path: "apps/ios/WatchApp/Sources/Example.swift",
-            source: "Connect now",
-            surface: "apple",
-          },
-        ],
-      },
-      [
+  it("routes merged sites by coupled path and kind while preserving shipped translations", () => {
+    const inventory = {
+      version: 2,
+      entries: [
         {
-          version: 1,
-          locale: "fr",
-          entries: [
-            { id: "native.apple.a", source: "Connect now", translated: "Se connecter" },
-            { id: "native.apple.b", source: "Connect now", translated: "Connexion" },
-            { id: "native.apple.c", source: "Connect now", translated: "Se connecter" },
+          id: "native.apple.connect",
+          source: "Connect now",
+          surface: "apple",
+          sites: [
+            { kind: "ui-call", path: "apps/ios/Sources/Example.swift" },
+            { kind: "ui-call", path: "apps/macos/Sources/OpenClaw/Example.swift" },
+          ],
+        },
+        {
+          id: "native.apple.decoy",
+          source: "Do not catalog",
+          surface: "apple",
+          sites: [
+            { kind: "plist-string", path: "apps/ios/Sources/Info.plist" },
+            { kind: "ui-call", path: "outside/Example.swift" },
           ],
         },
       ],
-    );
-
-    expect(build.catalog.strings?.["Connect now"]?.localizations?.de?.stringUnit?.value).toBe(
-      "Jetzt verbinden",
-    );
-    expect(build.catalog.version).toBe("1.0");
-    expect(build.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit?.value).toBe(
-      "Se connecter",
-    );
-    expect(build.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit?.state).toBe(
-      "translated",
-    );
-    expect(build.catalog.strings?.["Connect now"]?.localizations?.es?.stringUnit).toEqual({
-      state: "new",
-      value: "Connect now",
-    });
-    expect(build.contradictions).toEqual([
-      {
-        locale: "fr",
-        source: "Connect now",
-        translations: ["Connexion", "Se connecter"],
-      },
-    ]);
-
-    const refreshed = buildIosCatalog(
-      build.catalog,
-      {
-        version: 1,
-        entries: [
-          {
-            id: "native.apple.a",
-            kind: "ui-call",
-            line: 1,
-            path: "apps/ios/Sources/Example.swift",
-            source: "Connect now",
-            surface: "apple",
+    };
+    const existing = {
+      sourceLanguage: "en",
+      strings: {
+        "Connect now": {
+          localizations: {
+            de: { stringUnit: { state: "translated", value: "Jetzt verbinden" } },
           },
-        ],
+        },
       },
-      [
-        {
-          version: 1,
-          locale: "de",
-          entries: [{ id: "native.apple.a", source: "Connect now", translated: "Neu verbinden" }],
-        },
-        {
-          version: 1,
-          locale: "fr",
-          entries: [{ id: "native.apple.a", source: "Connect now", translated: "Connectez-vous" }],
-        },
-      ],
-    );
-    expect(refreshed.catalog.strings?.["Connect now"]?.localizations?.de?.stringUnit?.value).toBe(
+    };
+    const translations = [
+      {
+        version: 2,
+        locale: "fr",
+        translations: { "native.apple.connect": "Se connecter" },
+      },
+    ];
+    const ios = buildIosCatalog(existing, inventory, translations);
+    const macos = buildMacosCatalog({ sourceLanguage: "en", strings: {} }, inventory, translations);
+
+    expect(ios.catalog.strings?.["Connect now"]?.localizations?.de?.stringUnit?.value).toBe(
       "Jetzt verbinden",
     );
-    expect(refreshed.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit).toEqual({
+    expect(ios.catalog.strings?.["Connect now"]?.localizations?.fr?.stringUnit).toEqual({
       state: "translated",
       value: "Se connecter",
     });
-  });
-
-  it("uses code-unit ordering for canonically equivalent translations", () => {
-    const source = "Resume";
-    const decomposed = "Re\u0301sume\u0301";
-    const composed = "Résumé";
-    const build = buildIosCatalog(
-      { sourceLanguage: "en", strings: {} },
-      {
-        version: 1,
-        entries: [
-          {
-            id: "native.apple.resume-a",
-            kind: "ui-call",
-            line: 1,
-            path: "apps/ios/Sources/Example.swift",
-            source,
-            surface: "apple",
-          },
-          {
-            id: "native.apple.resume-b",
-            kind: "ui-call",
-            line: 2,
-            path: "apps/ios/Sources/Other.swift",
-            source,
-            surface: "apple",
-          },
-        ],
-      },
-      [
-        {
-          version: 1,
-          locale: "fr",
-          entries: [
-            { id: "native.apple.resume-a", source, translated: composed },
-            { id: "native.apple.resume-b", source, translated: decomposed },
-          ],
-        },
-      ],
-    );
-
-    expect(build.catalog.strings?.[source]?.localizations?.fr?.stringUnit?.value).toBe(decomposed);
-    expect(build.contradictions[0]?.translations).toEqual([decomposed, composed]);
+    expect(ios.catalog.strings?.["Connect now"]?.localizations?.es?.stringUnit).toEqual({
+      state: "new",
+      value: "Connect now",
+    });
+    expect(ios.catalog.strings?.["Do not catalog"]).toBeUndefined();
+    expect(macos.catalog.strings?.["Connect now"]).toBeDefined();
+    expect(ios.contradictions).toEqual([]);
   });
 
   it("converts inflected Swift count resources into typed catalog placeholders", () => {
@@ -350,23 +248,21 @@ describe("Apple app i18n catalogs", () => {
     const build = buildIosCatalog(
       { sourceLanguage: "en", strings: {} },
       {
-        version: 1,
+        version: 2,
         entries: [
           {
             id: "native.apple.count",
-            kind: "ui-localized-call",
-            line: 1,
-            path: "apps/ios/Sources/Example.swift",
             source,
+            sites: [{ kind: "ui-localized-call", path: "apps/ios/Sources/Example.swift" }],
             surface: "apple",
           },
         ],
       },
       [
         {
-          version: 1,
+          version: 2,
           locale: "de",
-          entries: [{ id: "native.apple.count", source, translated }],
+          translations: { "native.apple.count": translated },
         },
       ],
     );
@@ -383,14 +279,12 @@ describe("Apple app i18n catalogs", () => {
     const build = buildIosCatalog(
       { sourceLanguage: "en", strings: {} },
       {
-        version: 1,
+        version: 2,
         entries: [
           {
             id: "native.apple.mixed-count",
-            kind: "ui-localized-call",
-            line: 1,
-            path: "apps/ios/Sources/Example.swift",
             source,
+            sites: [{ kind: "ui-localized-call", path: "apps/ios/Sources/Example.swift" }],
             surface: "apple",
           },
         ],
@@ -596,20 +490,12 @@ describe("Apple app i18n catalogs", () => {
   it("selects InfoPlist candidates by stable ID instead of shared source text", () => {
     const source = "Use the camera to scan setup codes.";
     const artifact = {
-      version: 1,
+      version: 2,
       locale: "fr",
-      entries: [
-        {
-          id: "native.apple.camera",
-          source,
-          translated: "Utilisez l’appareil photo pour scanner les codes de configuration.",
-        },
-        {
-          id: "native.apple.unrelated",
-          source,
-          translated: "Traduction pour un autre contexte.",
-        },
-      ],
+      translations: {
+        "native.apple.camera": "Utilisez l’appareil photo pour scanner les codes de configuration.",
+        "native.apple.unrelated": "Traduction pour un autre contexte.",
+      },
     };
 
     expect(infoPlistTranslationCandidates(artifact, "native.apple.camera", source)).toEqual([

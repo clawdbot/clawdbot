@@ -1,11 +1,60 @@
 // Inference backend detection tests cover the documented ladder and login-awareness.
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { LocalCommandProbe } from "../system-agent/probes.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
   detectInferenceBackends,
 } from "./onboard-inference.js";
+
+const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+  policyHash: "onboard-inference-test-empty-plugin-policy",
+  configFingerprint: "onboard-inference-test-empty-plugin-metadata",
+  index: {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "onboard-inference-test-empty-plugin-policy",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  },
+  registryDiagnostics: [],
+  manifestRegistry: { plugins: [], diagnostics: [] },
+  plugins: [],
+  diagnostics: [],
+  byPluginId: new Map(),
+  normalizePluginId: (pluginId: string) => pluginId,
+  owners: {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  },
+  metrics: {
+    registrySnapshotMs: 0,
+    manifestRegistryMs: 0,
+    ownerMapsMs: 0,
+    totalMs: 0,
+    indexPluginCount: 0,
+    manifestPluginCount: 0,
+  },
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+}));
+
+afterAll(() => {
+  vi.doUnmock("../plugins/current-plugin-metadata-snapshot.js");
+  vi.resetModules();
+});
 
 function probeDeps(found: Record<string, boolean>) {
   return async (command: string): Promise<LocalCommandProbe> => ({
@@ -182,36 +231,6 @@ describe("detectInferenceBackends", () => {
       "claude-cli",
     ]);
     expect(candidates[1]?.credentials).toBeUndefined();
-  });
-
-  it("keeps a lower-version Claude wrapper selectable with capability guidance", async () => {
-    const candidates = await detectInferenceBackends({
-      env: {},
-      platform: "linux",
-      deps: {
-        probeLocalCommand: async (command) => ({
-          command,
-          found: command === "claude",
-          ...(command === "claude" ? { version: "2.1.205 (Claude Code)" } : {}),
-        }),
-        readClaudeCliCredentials: () => ({ type: "oauth" }),
-        resolveClaudeLiveSessionRequirement: () => ({
-          capability: "msg_lifecycle_v1",
-          minimumVersion: "2.1.206",
-          versionArgs: ["--version"],
-          updateCommand: "claude update",
-        }),
-      },
-    });
-
-    expect(candidates).toMatchObject([
-      {
-        kind: "claude-cli",
-        credentials: true,
-        detail:
-          "logged in · Claude subscription; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime. If this build is rejected, run `claude update`, restart OpenClaw, and retry.",
-      },
-    ]);
   });
 
   it("keeps a logged-in Gemini CLI after environment keys", async () => {

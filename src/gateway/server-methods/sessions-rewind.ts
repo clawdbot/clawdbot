@@ -7,7 +7,6 @@ import {
   validateSessionsForkParams,
   validateSessionsRewindParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
@@ -29,10 +28,14 @@ import {
   readSessionUpstreamLink,
   type SessionUpstreamLink,
 } from "../../sessions/session-upstream-links.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
-import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
@@ -175,7 +178,9 @@ async function listBranches(options: GatewayRequestHandlerOptions): Promise<void
     return;
   }
   if (readSessionUpstreamLink(current.canonicalKey, current.target.agentId)) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR));
+    // Upstream-linked sessions truthfully have no local branches; only the
+    // mutating siblings (rewind/switch/fork) must fail closed on them.
+    respond(true, { branches: [] }, undefined);
     return;
   }
   const result = await listSessionBranches({
@@ -227,6 +232,17 @@ async function mutateSessionAtMessage(
       errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${sessionKey}`),
     );
     return;
+  }
+  if (action === "fork") {
+    const creationError = authorizeGatewaySessionCreation({
+      cfg,
+      client,
+      agentId: initial.target.agentId,
+    });
+    if (creationError) {
+      respond(false, undefined, creationError);
+      return;
+    }
   }
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
@@ -280,14 +296,14 @@ async function mutateSessionAtMessage(
           initialSessionId,
         ) ??
           false) ||
-        hasVisibleActiveSessionRun({
+        resolveVisibleActiveSessionRunState({
           context,
           requestedKey: sessionKey,
           canonicalKey: current.canonicalKey,
           sessionId: initialSessionId,
           agentId: requestedAgent.agentId,
-          defaultAgentId: resolveDefaultAgentId(cfg),
-        });
+          defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
+        }).active;
     },
     run: async () => {
       if (!targetStillCurrent) {
@@ -412,9 +428,7 @@ async function mutateSessionAtMessage(
         );
         emitSessionsChanged(context, {
           sessionKey: upstreamFork.key,
-          ...(upstreamFork.key === "global" && requestedAgent.agentId
-            ? { agentId: requestedAgent.agentId }
-            : {}),
+          agentId: requestedAgent.agentId,
           reason: "fork",
         });
         return;
@@ -507,10 +521,7 @@ async function mutateSessionAtMessage(
       );
       emitSessionsChanged(context, {
         sessionKey: action === "fork" ? result.key : current.canonicalKey,
-        ...((action === "fork" ? result.key : current.canonicalKey) === "global" &&
-        requestedAgent.agentId
-          ? { agentId: requestedAgent.agentId }
-          : {}),
+        agentId: requestedAgent.agentId,
         reason: action === "switch" ? "branch-switch" : action,
       });
     },

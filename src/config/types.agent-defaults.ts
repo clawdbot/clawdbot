@@ -205,8 +205,6 @@ export type AgentDefaultsConfig = {
   startupContext?: AgentStartupContextConfig;
   /** Focused context-budget overrides for high-volume injected/read surfaces. */
   contextLimits?: AgentContextLimitsConfig;
-  /** Optional context window cap (used for runtime estimates + status %). */
-  contextTokens?: number;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
@@ -320,8 +318,16 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
   };
-  /** Owner for ambient OpenClaw system-agent/Custodian inference. */
+  /** Owner for ambient system-agent/Custodian inference and unscoped operator-read fallbacks. */
   systemAgent?: {
+    agentId?: string;
+  };
+  /** Upgrade-only owner for the inherited credential store until H2-2 relocates credentials. */
+  authInheritance?: {
+    agentId?: string;
+  };
+  /** Upgrade-only owner for retired main-agent rows and legacy fixed session stores. */
+  sessionStore?: {
     agentId?: string;
   };
   /** Max concurrent agent runs across all conversations. Default: min(16, max(8, available CPU parallelism)). */
@@ -378,8 +384,8 @@ export type AgentCompactionConfig = {
   enabled?: boolean;
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
-  /** Override the session thinking level for embedded OpenClaw compaction summaries. */
-  thinkingLevel?: AgentThinkingLevel;
+  /** Thinking level for embedded OpenClaw compaction summaries. Default: low. */
+  thinkingLevel?: AgentThinkingLevel | "inherit";
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */

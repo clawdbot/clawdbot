@@ -7,6 +7,21 @@ import { setSlackRuntime } from "../runtime.js";
 import { createSlackMonitorContext } from "./context.js";
 import type { SlackEventScope } from "./event-scope.js";
 
+const saveRemoteMediaMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./media.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./media.runtime.js")>()),
+  saveRemoteMedia: saveRemoteMediaMock,
+}));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function createTestContext(params?: {
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
   groupDmEnabled?: boolean;
@@ -67,7 +82,10 @@ function createEnterpriseEventScope(teamId: string): SlackEventScope {
   };
 }
 
-beforeEach(() => setSlackRuntime(null as never));
+beforeEach(() => {
+  setSlackRuntime(null as never);
+  saveRemoteMediaMock.mockReset();
+});
 afterEach(() => setSlackRuntime(null as never));
 
 describe("createSlackMonitorContext shouldDropMismatchedSlackEvent", () => {
@@ -194,29 +212,32 @@ describe("createSlackMonitorContext isChannelAllowed", () => {
   });
 });
 
-describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
+describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
   it("routes threaded interaction events to the Slack thread session", () => {
     const ctx = createTestContext();
 
     expect(
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelId: "C_THREAD",
         channelType: "channel",
         senderId: "U_CLICKER",
         threadTs: "1712345678.123456",
       }),
-    ).toBe("agent:main:slack:channel:c_thread:thread:1712345678.123456");
+    ).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:slack:channel:c_thread:thread:1712345678.123456",
+    });
   });
 
   it("routes channel-less direct interactions to the sender session", () => {
     const ctx = createTestContext({ dmScope: "per-channel-peer" });
 
     expect(
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelType: "im",
         senderId: "U_SHORTCUT",
       }),
-    ).toBe("agent:main:slack:direct:u_shortcut");
+    ).toEqual({ agentId: "main", sessionKey: "agent:main:slack:direct:u_shortcut" });
   });
 
   it("routes typeless system events through an event-carried mpDM type", () => {
@@ -224,39 +245,51 @@ describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
     ctx.rememberSlackChannelType("C0MPDM42", "mpim");
 
     expect(
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelId: "C0MPDM42",
         senderId: "U_ACTOR",
       }),
-    ).toBe("agent:main:slack:group:c0mpdm42");
+    ).toEqual({ agentId: "main", sessionKey: "agent:main:slack:group:c0mpdm42" });
   });
 
   it("partitions enterprise channel system events by workspace", () => {
     const ctx = createTestContext();
     const resolveForTeam = (teamId: string) =>
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelId: "C_SHARED",
         channelType: "channel",
         senderId: "U_ACTOR",
         eventScope: createEnterpriseEventScope(teamId),
       });
 
-    expect(resolveForTeam("T111")).toBe("agent:main:slack:channel:team:t111:channel:c_shared");
-    expect(resolveForTeam("T222")).toBe("agent:main:slack:channel:team:t222:channel:c_shared");
+    expect(resolveForTeam("T111")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:slack:channel:team:t111:channel:c_shared",
+    });
+    expect(resolveForTeam("T222")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:slack:channel:team:t222:channel:c_shared",
+    });
   });
 
   it("partitions enterprise main DM system events by workspace", () => {
     const ctx = createTestContext({ dmScope: "main" });
     const resolveForTeam = (teamId: string) =>
-      ctx.resolveSlackSystemEventSessionKey({
+      ctx.resolveSlackSystemEventRoute({
         channelId: "D_SHARED",
         channelType: "im",
         senderId: "U_SHARED",
         eventScope: createEnterpriseEventScope(teamId),
       });
 
-    expect(resolveForTeam("T111")).toBe("agent:main:main:account:default:team:t111");
-    expect(resolveForTeam("T222")).toBe("agent:main:main:account:default:team:t222");
+    expect(resolveForTeam("T111")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:main:account:default:team:t111",
+    });
+    expect(resolveForTeam("T222")).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:main:account:default:team:t222",
+    });
   });
 });
 
@@ -352,6 +385,69 @@ describe("createSlackMonitorContext channel metadata cache", () => {
     const before = usersInfo.mock.calls.length;
     await expect(ctx.resolveUserName("U0KEEP")).resolves.toEqual({ name: "name-U0KEEP" });
     expect(usersInfo).toHaveBeenCalledTimes(before);
+  });
+
+  it("downloads the cached DM profile image without blocking or attaching the bot token", async () => {
+    const download = deferred<{ path: string }>();
+    saveRemoteMediaMock.mockReturnValue(download.promise);
+    const usersInfo = vi.fn().mockResolvedValue({
+      user: {
+        profile: {
+          display_name: "Alice",
+          image_192: "https://avatars.slack-edge.com/user-hash-192.png",
+          image_512: "https://avatars.slack-edge.com/user-hash-512.png",
+          image_72: "https://avatars.slack-edge.com/user-hash-72.png",
+        },
+      },
+    });
+    const ctx = createTestContext({
+      appClient: { users: { info: usersInfo } } as unknown as App["client"],
+    });
+
+    await expect(ctx.resolveUserName("U1")).resolves.toEqual({
+      name: "Alice",
+      imageUrl: "https://avatars.slack-edge.com/user-hash-192.png",
+    });
+    expect(ctx.resolveUserAvatar("U1")).toBeUndefined();
+    expect(ctx.resolveUserAvatar("U1")).toBeUndefined();
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+    expect(saveRemoteMediaMock).toHaveBeenCalledWith({
+      url: "https://avatars.slack-edge.com/user-hash-192.png",
+      filePathHint: "conversation-avatar.png",
+      maxBytes: 256 * 1024,
+      ssrfPolicy: {
+        allowedHostnames: ["avatars.slack-edge.com", "*.slack-edge.com"],
+        hostnameAllowlist: ["avatars.slack-edge.com", "*.slack-edge.com"],
+      },
+    });
+
+    download.resolve({ path: "/media/inbound/slack-avatar.png" });
+    await vi.waitFor(() =>
+      expect(ctx.resolveUserAvatar("U1")).toBe("/media/inbound/slack-avatar.png"),
+    );
+    await ctx.resolveUserName("U1");
+    expect(usersInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips profile image downloads for GovSlack clients", async () => {
+    const usersInfo = vi.fn().mockResolvedValue({
+      user: {
+        profile: {
+          display_name: "Gov User",
+          image_192: "https://avatars.slack-edge.com/gov-user.png",
+        },
+      },
+    });
+    const appClient = {
+      slackApiUrl: "https://slack-gov.com/api/",
+      users: { info: usersInfo },
+    } as unknown as App["client"];
+    const ctx = createTestContext({ appClient });
+
+    await ctx.resolveUserName("U_GOV");
+
+    expect(ctx.resolveUserAvatar("U_GOV")).toBeUndefined();
+    expect(saveRemoteMediaMock).not.toHaveBeenCalled();
   });
 });
 

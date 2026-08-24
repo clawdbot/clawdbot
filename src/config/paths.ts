@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveProfileStateDir } from "../cli/profile-utils.js";
+import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
@@ -198,6 +198,15 @@ export function isDefaultInstallIdentity(
     normalizePathForComparison(resolveConfigPathCandidate(env, envHomedir(env))) ===
     normalizePathForComparison(path.join(canonicalStateDir, CONFIG_FILENAME))
   );
+}
+
+/** Whether external session catalogs may inherit a scan root from process HOME. */
+export function allowsProcessHomeSessionScan(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = resolveSystemAccountHomeDir,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return !isNamedProfile(env) && isDefaultInstallIdentity(env, homedir, platform);
 }
 
 export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void {
@@ -468,5 +477,15 @@ export function resolveGatewayPort(
       return configPort;
     }
   }
-  return DEFAULT_GATEWAY_PORT;
+  const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
+  if (!profile) {
+    return DEFAULT_GATEWAY_PORT;
+  }
+  // Keep byte-for-byte aligned with AppProfile.defaultGatewayPort in
+  // apps/macos/Sources/OpenClaw/AppProfile.swift so both surfaces connect to the same Gateway.
+  let hash = 2_166_136_261;
+  for (const byte of Buffer.from(profile, "utf8")) {
+    hash = Math.imul(hash ^ byte, 16_777_619) >>> 0;
+  }
+  return 20_000 + (hash % 40_000);
 }

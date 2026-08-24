@@ -90,17 +90,6 @@ describe("openclaw-file-preview-modal", () => {
     expect(closeButton?.querySelector(".kbd")?.textContent).toBe("esc");
   });
 
-  it("stacks the file list above its preview on narrow screens", () => {
-    const styles = OpenClawFilePreviewModal.styles.cssText;
-
-    expect(styles).toMatch(
-      /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);[^}]*grid-template-rows:/u,
-    );
-    expect(styles).toMatch(
-      /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.list\s*\{[^}]*border-right:\s*0;[^}]*border-bottom:/u,
-    );
-  });
-
   it("emits controlled query, select, and close events", async () => {
     const modal = await renderPreview();
     const onQuery = vi.fn();

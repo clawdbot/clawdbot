@@ -12,11 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSlackAttachmentContent,
   resolveSlackMedia,
-  resolveSlackThreadHistory,
-  resolveSlackThreadStarter,
-  resetSlackThreadStarterCacheForTest,
   SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
 } from "./media.js";
+import { resolveSlackThreadHistory, resolveSlackThreadStarter } from "./thread.js";
 import { logVerbose } from "./thread.runtime.js";
 
 type FetchMock = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -29,13 +27,19 @@ type SaveMediaBufferMock = (
 ) => Promise<SavedMedia>;
 type SlackMediaResult = NonNullable<Awaited<ReturnType<typeof resolveSlackMedia>>>;
 type ResolveSlackThreadStarterParams = Parameters<typeof resolveSlackThreadStarter>[0];
+let threadStarterIdentitySequence = 0;
+let threadStarterIdentity = {
+  channelId: "CMEDIA0",
+  threadTs: "0.000",
+  workspaceScope: { accountId: "media-test-0", teamId: "TM0" },
+};
 
 function resolveTestSlackThreadStarter(
-  params: Omit<ResolveSlackThreadStarterParams, "workspaceScope">,
+  params: Omit<ResolveSlackThreadStarterParams, "channelId" | "threadTs" | "workspaceScope">,
 ) {
   return resolveSlackThreadStarter({
     ...params,
-    workspaceScope: { accountId: "test", teamId: "T1" },
+    ...threadStarterIdentity,
   });
 }
 
@@ -143,6 +147,15 @@ const originalFetch = globalThis.fetch;
 let mockFetch: ReturnType<typeof vi.fn<FetchMock>>;
 
 beforeEach(() => {
+  threadStarterIdentitySequence += 1;
+  threadStarterIdentity = {
+    channelId: `CMEDIA${threadStarterIdentitySequence}`,
+    threadTs: `${threadStarterIdentitySequence}.000`,
+    workspaceScope: {
+      accountId: `media-test-${threadStarterIdentitySequence}`,
+      teamId: `TM${threadStarterIdentitySequence}`,
+    },
+  };
   readRemoteMediaBufferMock.mockClear();
   fetchWithRuntimeDispatcherMock.mockClear();
   logVerboseMock.mockClear();
@@ -1178,6 +1191,7 @@ describe("resolveSlackAttachmentContent", () => {
     expect(result).toEqual({
       text: "[Forwarded message from Bob]\nPlease review this",
       media: [],
+      unavailableImageCount: 0,
     });
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -1190,7 +1204,7 @@ describe("resolveSlackAttachmentContent", () => {
       maxBytes: 1024 * 1024,
     });
 
-    expect(result).toEqual({ text: "", media: [], files: [file] });
+    expect(result).toEqual({ text: "", media: [], unavailableImageCount: 0, files: [file] });
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -1231,12 +1245,31 @@ describe("resolveSlackAttachmentContent", () => {
           placeholder: "[Forwarded image: forwarded.jpg]",
         },
       ],
+      unavailableImageCount: 0,
     });
     const firstCall = requireMockCall(mockFetch, 0, "fetch");
     expect(firstCall[0]).toBe("https://files.slack.com/forwarded.jpg");
     const firstInit = requireRecord(firstCall[1], "fetch init") as RequestInit;
     expect(firstInit.redirect).toBe("manual");
     expect(new Headers(firstInit.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
+  });
+
+  it("reports Slack-hosted forwarded image download failures", async () => {
+    mockFetch.mockResolvedValueOnce(new Response("Not Found", { status: 404 }));
+
+    const result = await resolveSlackAttachmentContent({
+      attachments: [{ is_share: true, image_url: "https://files.slack.com/forwarded.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toEqual({
+      text: "",
+      media: [],
+      unavailableImageCount: 1,
+    });
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -1629,7 +1662,6 @@ describe("resolveSlackThreadHistory", () => {
 
 describe("resolveSlackThreadStarter", () => {
   beforeEach(() => {
-    resetSlackThreadStarterCacheForTest();
     vi.mocked(logVerbose).mockClear();
   });
 
@@ -1642,8 +1674,6 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
       client,
     });
 
@@ -1664,8 +1694,6 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
       client,
     });
 
@@ -1695,8 +1723,6 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
       client,
     });
 
@@ -1736,8 +1762,6 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
       client,
     });
 
@@ -1760,8 +1784,6 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
       client,
     });
 
@@ -1782,16 +1804,14 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C42",
-      threadTs: "9.999",
       client,
     });
 
     expect(result).toBeNull();
     expectVerboseLogContains("slack thread starter fetch failed");
     expectVerboseLogContains("not_in_channel");
-    expectVerboseLogContains("channel=C42");
-    expectVerboseLogContains("ts=9.999");
+    expectVerboseLogContains(`channel=${threadStarterIdentity.channelId}`);
+    expectVerboseLogContains(`ts=${threadStarterIdentity.threadTs}`);
   });
 
   it("surfaces non-Error thrown values via logVerbose", async () => {
@@ -1801,8 +1821,6 @@ describe("resolveSlackThreadStarter", () => {
     } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
 
     const result = await resolveTestSlackThreadStarter({
-      channelId: "C1",
-      threadTs: "1.000",
       client,
     });
 

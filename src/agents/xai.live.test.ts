@@ -17,8 +17,15 @@ const XAI_KEY = process.env.XAI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["XAI_LIVE_TEST"]);
 const XAI_COMPLETE_LIVE_TIMEOUT_MS = 90_000;
 const XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS = 60;
+const XAI_LIVE_COMPLETION_CASES = [
+  { modelId: "grok-4.3", completionReasoning: undefined },
+  { modelId: "grok-4.5", completionReasoning: undefined },
+  { modelId: "grok-4.6", completionReasoning: "xhigh" },
+] as const;
 
 const describeLive = LIVE && XAI_KEY ? describe : describe.skip;
+
+type XaiLiveModelId = (typeof XAI_LIVE_COMPLETION_CASES)[number]["modelId"];
 
 type AssistantLikeMessage = {
   content: Array<{
@@ -43,28 +50,30 @@ function getToolFunction(tool: Record<string, unknown>): Record<string, unknown>
   return undefined;
 }
 
-function resolveLiveXaiModel(modelId: "grok-4.3" | "grok-4.5") {
+function resolveLiveXaiModel(modelId: XaiLiveModelId) {
   const isGrok45 = modelId === "grok-4.5";
+  const isGrok46 = modelId === "grok-4.6";
+  const isFrontier = isGrok45 || isGrok46;
   return {
     id: modelId,
-    name: isGrok45 ? "Grok 4.5" : "Grok 4.3",
+    name: isGrok46 ? "Grok 4.6" : isGrok45 ? "Grok 4.5" : "Grok 4.3",
     api: "openai-responses",
     provider: "xai",
     baseUrl: "https://api.x.ai/v1",
     reasoning: true,
     input: ["text", "image"],
-    cost: isGrok45
-      ? { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 }
+    cost: isFrontier
+      ? { input: 2, output: 6, cacheRead: isGrok46 ? 0.5 : 0.3, cacheWrite: 0 }
       : { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
-    contextWindow: isGrok45 ? 500_000 : 1_000_000,
+    contextWindow: isFrontier ? 500_000 : 1_000_000,
     maxTokens: 64_000,
     thinkingLevelMap: {
-      off: isGrok45 ? null : "none",
+      off: isFrontier ? null : "none",
       minimal: "low",
       low: "low",
       medium: "medium",
       high: "high",
-      xhigh: "high",
+      xhigh: isGrok46 ? "xhigh" : "high",
     },
   } satisfies Model<"openai-responses">;
 }
@@ -123,7 +132,7 @@ async function collectDoneMessage(
 }
 
 describeLive("xai live", () => {
-  for (const modelId of ["grok-4.3", "grok-4.5"] as const) {
+  for (const { modelId, completionReasoning } of XAI_LIVE_COMPLETION_CASES) {
     it(
       `returns assistant text for ${modelId}`,
       async () => {
@@ -137,6 +146,7 @@ describeLive("xai live", () => {
             {
               apiKey: XAI_KEY,
               maxTokens: 64,
+              ...(completionReasoning ? { reasoning: completionReasoning } : {}),
             },
           );
 

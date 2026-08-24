@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
+import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 
 const mocks = vi.hoisted(() => ({
   clawhubInstall: vi.fn(),
@@ -78,26 +80,47 @@ function mockClawHubWorkboardInstall() {
   });
 }
 
-function metadataSnapshot(enabled: boolean) {
-  const manifest = {
-    id: "workboard",
-    name: "Workboard",
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
-    rootDir: "/tmp/workboard",
-    source: "/tmp/workboard/index.ts",
-    manifestPath: "/tmp/workboard/openclaw.plugin.json",
-  };
+function metadataSnapshot(enabled: boolean, installed = false) {
+  const installOwner = installed ? "workboard" : undefined;
+  const manifest = recordPluginManifestInstallOwner(
+    {
+      id: "workboard",
+      name: "Workboard",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: "bundled",
+      rootDir: "/tmp/workboard",
+      source: "/tmp/workboard/index.ts",
+      manifestPath: "/tmp/workboard/openclaw.plugin.json",
+    },
+    installOwner,
+  );
   return {
     index: {
       plugins: [
-        { pluginId: "workboard", packageName: "@openclaw/workboard", origin: "bundled", enabled },
+        recordInstalledPluginIndexInstallOwner(
+          {
+            pluginId: "workboard",
+            packageName: "@openclaw/workboard",
+            origin: "bundled",
+            rootDir: "/tmp/workboard",
+            enabled,
+          },
+          installOwner,
+        ),
       ],
-      installRecords: {},
+      installRecords: installed
+        ? {
+            workboard: {
+              source: "clawhub",
+              spec: "clawhub:community/workboard",
+              installPath: "/tmp/workboard",
+            },
+          }
+        : {},
     },
     byPluginId: new Map([["workboard", manifest]]),
     plugins: [manifest],
@@ -169,7 +192,7 @@ describe("plugin management registry refresh", () => {
         return { plugins: { entries: { workboard: { enabled: false } } } };
       },
     );
-    mocks.metadata.mockReturnValue(metadataSnapshot(false));
+    mocks.metadata.mockReturnValue(metadataSnapshot(false, true));
 
     const result = await installManagedPlugin({
       request: { source: "clawhub", packageName: "community/workboard" },
@@ -182,12 +205,54 @@ describe("plugin management registry refresh", () => {
     });
   });
 
-  it("does not forward source-install loggers into private persistence warnings", async () => {
+  it("keeps an ownerless managed install and returns the partial-scope action", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: {
+          main: { workspace: "/tmp/main-workspace" },
+          gadget: { workspace: "/tmp/gadget-workspace" },
+        },
+      },
+    };
     mockClawHubWorkboardInstall();
-    mocks.persistInstall.mockResolvedValue({});
+    mocks.readConfig.mockResolvedValue({
+      snapshot: {
+        valid: true,
+        parsed: config,
+        path: "/tmp/openclaw.json",
+        sourceConfig: config,
+        hash: "base-hash",
+      },
+      writeOptions: installSnapshot.writeOptions,
+    });
+    mocks.persistInstall.mockResolvedValue(config);
+    mocks.metadata.mockReturnValue(metadataSnapshot(false, true));
+
+    const result = await installManagedPlugin({
+      request: { source: "clawhub", packageName: "community/workboard" },
+      env: {},
+    });
+
+    expect(result.plugin.id).toBe("workboard");
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("set agents.defaults.systemAgent.agentId"),
+    );
+  });
+
+  it("returns persistence warnings without forwarding them to source-install loggers", async () => {
+    mockClawHubWorkboardInstall();
+    const instruction =
+      'Installed plugin "workboard" without enabling it because it requires configuration first.';
+    mocks.persistInstall.mockImplementation(
+      async (params: { persistenceLogger?: { warn?: (message: string) => void } }) => {
+        params.persistenceLogger?.warn?.(instruction);
+        return {};
+      },
+    );
     const logger = { warn: vi.fn() };
 
-    await installManagedPluginSource({
+    const result = await installManagedPluginSource({
       request: { source: "clawhub", spec: "clawhub:community/workboard" },
       snapshot: installSnapshot,
       env: {},
@@ -195,7 +260,7 @@ describe("plugin management registry refresh", () => {
     });
 
     expect(mocks.clawhubInstall).toHaveBeenCalledWith(expect.objectContaining({ logger }));
-    expect(mocks.persistInstall.mock.calls[0]?.[0]).not.toHaveProperty("persistenceLogger");
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, warnings: [instruction] });
   });
 });

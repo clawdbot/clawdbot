@@ -14,9 +14,10 @@ export type SecretsStoreDraft = {
   name: string;
   value: string;
   kind: "secret" | "env";
+  allowedHosts: string;
 };
 
-type SecretsStoreBulkEntry = SecretsStoreDraft;
+type SecretsStoreBulkEntry = Omit<SecretsStoreDraft, "allowedHosts">;
 
 export type SecretsStoreState = {
   client: GatewayBrowserClient | null;
@@ -113,7 +114,19 @@ export function setSecretsStoreEntry(
   draft: SecretsStoreDraft,
 ): Promise<SecretsStoreMutationResult | null> {
   return mutateAndReload(state, (client) =>
-    client.request<SecretsStoreMutationResult>("secrets.store.set", draft),
+    client.request<SecretsStoreMutationResult>("secrets.store.set", {
+      name: draft.name,
+      value: draft.value,
+      kind: draft.kind,
+      ...(draft.kind === "secret"
+        ? {
+            allowedHosts: draft.allowedHosts
+              .split(/[\s,]+/u)
+              .map((host) => host.trim())
+              .filter(Boolean),
+          }
+        : {}),
+    }),
   );
 }
 

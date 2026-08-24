@@ -13,7 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { AssistantMessage } from "../llm/types.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveCliBackendConfig, resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
@@ -33,7 +33,10 @@ import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
-import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  type PreparedModelRuntimeSnapshot,
+} from "./prepared-model-runtime.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -396,6 +399,8 @@ async function prepareHostAuthorization(params: {
   provider: string;
   modelId: string;
   authProfileId?: string;
+  workspaceDir: string;
+  preparedModelRuntime: PreparedModelRuntimeSnapshot;
 }): Promise<Extract<AgentHarnessIsolatedCompletionAuthorization, { owner: "host" }>> {
   const prepared = await prepareSimpleCompletionModel({
     cfg: params.config,
@@ -408,6 +413,8 @@ async function prepareHostAuthorization(params: {
     allowBundledStaticCatalogFallback: true,
     skipAgentDiscovery: true,
     bindAuthOwner: true,
+    workspaceDir: params.workspaceDir,
+    preparedModelRuntime: params.preparedModelRuntime,
   });
   if ("error" in prepared) {
     throw new Error(`Isolated completion preparation failed: ${prepared.error}`);
@@ -609,6 +616,8 @@ export async function runIsolatedCompletion(
                 modelId: request.model,
                 authProfileId:
                   attempt?.kind === "profile" ? attempt.profileId : request.authProfileId,
+                workspaceDir,
+                preparedModelRuntime: lease.snapshot,
               });
               modelMaxTokens = authorization.model.maxTokens;
             }
@@ -654,6 +663,8 @@ export async function runIsolatedCompletion(
           provider,
           modelId: request.model,
           authProfileId: request.authProfileId,
+          workspaceDir,
+          preparedModelRuntime: lease.snapshot,
         });
         const harnessParams: AgentHarnessIsolatedCompletionParams = {
           ...commonParams,
@@ -682,7 +693,7 @@ export async function runIsolatedCompletion(
         usage: result.assistant.usage,
       };
     };
-    return await withPluginRuntimeRegistryScope(pluginRegistry, run);
+    return await withPluginRuntimeGenerationScope(lease.snapshot, run);
   } finally {
     lease.release();
   }

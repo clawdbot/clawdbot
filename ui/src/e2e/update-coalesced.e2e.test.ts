@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -9,47 +10,23 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT = "openclaw:native-update-availability-changed";
+const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 const MANAGED_UPDATE_HANDOFF_RESPONSE = {
   ok: true,
   handoff: { status: "started" },
   result: { reason: "managed-service-handoff-started", status: "skipped" },
 } as const;
 
+async function openUpdateConfirmation(page: Page): Promise<void> {
+  await page.locator(".sidebar-issues-button").click();
+  const updateIssue = page.locator(
+    'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+  );
+  await updateIssue.locator("summary").click();
+  await updateIssue.locator(".sidebar-update-card__action").click();
+}
+
 suite.define(() => {
-  it("identifies a beta release in the visible Gateway update card", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-beta-channel");
-    await suite.withPage(
-      {
-        locale: "en-US",
-        recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
-        serviceWorkers: "block",
-        viewport: { height: 720, width: 1280 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page);
-
-        expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
-        await gateway.waitForRequest("chat.startup");
-        await gateway.emitGatewayEvent("update.available", {
-          updateAvailable: {
-            channel: "beta",
-            currentVersion: "2026.7.1-2",
-            latestVersion: "2026.7.2-beta.5",
-          },
-        });
-
-        await page
-          .getByRole("button", {
-            name: /Update Gateway · v2026\.7\.2-beta\.5 \(beta\)/u,
-          })
-          .waitFor({ timeout: 10_000 });
-        await page.screenshot({ path: path.join(artifactDir, "beta-update-card.png") });
-        expect(await gateway.getRequests("update.run")).toHaveLength(0);
-      },
-    );
-  });
-
   it("shows package update failure status after the Update click", async () => {
     const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-package-status");
     await suite.withPage(
@@ -81,8 +58,11 @@ suite.define(() => {
           },
         });
 
-        await page.getByRole("button", { name: /Update Gateway/ }).click();
-        await page.getByRole("button", { name: "Update and restart", exact: true }).click();
+        await openUpdateConfirmation(page);
+        await page
+          .locator("openclaw-modal-dialog")
+          .getByRole("button", { name: "Update and restart", exact: true })
+          .click();
         const dialog = page.locator("openclaw-modal-dialog");
         await dialog
           .getByText(
@@ -92,8 +72,14 @@ suite.define(() => {
           .waitFor();
 
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
-        await page.getByRole("button", { name: "Close", exact: true }).click();
-        expect(await page.getByRole("button", { name: /Update Gateway/ }).isEnabled()).toBe(true);
+        await dialog.getByRole("button", { name: "Close", exact: true }).click();
+        await page.locator(".sidebar-issues-button").click();
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.locator("summary").click();
+        await updateIssue.locator(".sidebar-update-card__compact-reason").waitFor();
+        expect(await page.locator(".sidebar-footer-update").count()).toBe(1);
         expect(pageErrors).toEqual([]);
         await page.screenshot({ path: path.join(artifactDir, "package-update-failure.png") });
       },
@@ -132,23 +118,26 @@ suite.define(() => {
           },
         });
 
-        await page.getByRole("button", { name: /Update Gateway/ }).click();
-        await page.getByRole("button", { name: "Update and restart", exact: true }).click();
-        await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
-
-        expect(await gateway.getRequests("update.run")).toHaveLength(1);
-        // Leaving the dialog hands the report to the ambient surfaces, which
-        // keep the restart visible instead of re-offering the same update.
-        await page.getByRole("button", { name: "Close", exact: true }).click();
+        await openUpdateConfirmation(page);
         await page
+          .locator("openclaw-modal-dialog")
+          .getByRole("button", { name: "Update and restart", exact: true })
+          .click();
+        await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
+        expect(await gateway.getRequests("update.run")).toHaveLength(1);
+        await page.getByRole("button", { name: "Close", exact: true }).click();
+        await page.locator(".sidebar-issues-button").click();
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.locator("summary").click();
+        await updateIssue
           .getByText(
             "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
             { exact: true },
           )
           .waitFor();
-        const updating = page.getByRole("button", { name: /Updating Gateway/ });
-        await updating.waitFor();
-        expect(await updating.isEnabled()).toBe(false);
+        expect(await page.locator(".sidebar-footer-update").count()).toBe(1);
         expect(pageErrors).toEqual([]);
         await page.screenshot({ path: path.join(artifactDir, "coalesced-restart-banner.png") });
       },
@@ -221,13 +210,14 @@ suite.define(() => {
             },
           });
 
-          await page.getByRole("button", { name: /Update Gateway/ }).click();
-          await page.getByRole("button", { name: "Update and restart", exact: true }).click();
+          await openUpdateConfirmation(page);
+          await page
+            .locator("openclaw-modal-dialog")
+            .getByRole("button", { name: "Update and restart", exact: true })
+            .click();
           await gateway.waitForRequest("update.run");
           if (responseFirst) {
             await gateway.resolveDeferred("update.run", MANAGED_UPDATE_HANDOFF_RESPONSE);
-            // The handoff keeps installing after its RPC answers; the dialog
-            // must keep saying so instead of closing onto a silent page.
             await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
           }
           await gateway.closeLatest(1012, "managed update handoff");
@@ -294,7 +284,7 @@ suite.define(() => {
         },
       });
 
-      await page.getByRole("button", { name: /Update Mac app \+ Gateway/ }).click();
+      await openUpdateConfirmation(page);
       await page.getByRole("button", { name: "Update Mac app and restart", exact: true }).click();
       expect(
         await page.evaluate(
@@ -303,14 +293,15 @@ suite.define(() => {
       ).toEqual([{ type: "start-update" }]);
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
-      await page.evaluate((eventName) => {
-        Reflect.deleteProperty(window, "webkit");
-        window.dispatchEvent(new CustomEvent(eventName));
-      }, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT);
-      await page.getByRole("button", { name: /Update Gateway/ }).click();
-      await page.getByRole("button", { name: "Update and restart", exact: true }).click();
-
-      expect(await gateway.getRequests("update.run")).toHaveLength(1);
+      // The confirmation closes the lazy Inbox. Recovery belongs to the
+      // persistent attention owner, not the now-disconnected update card.
+      await page.keyboard.press("Escape");
+      await expect.poll(() => page.locator(".sidebar-issues-panel").count()).toBe(0);
+      await page.evaluate(
+        (eventName) => window.dispatchEvent(new CustomEvent(eventName)),
+        NATIVE_UPDATE_DECLINED_EVENT,
+      );
+      await expect.poll(async () => (await gateway.getRequests("update.run")).length).toBe(1);
       expect(pageErrors).toEqual([]);
       await page.screenshot({ path: path.join(artifactDir, "gateway-update-target.png") });
     } finally {

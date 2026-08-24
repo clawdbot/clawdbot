@@ -160,6 +160,14 @@ describe("node-host SQLite config", () => {
         tls: false,
         tlsFingerprint: fixtureDigest,
         contextPath: "/openclaw-gw",
+        cloudflareAccess: {
+          clientId: { source: "env", provider: "default", id: "CF_ACCESS_CLIENT_ID" },
+          clientSecret: {
+            source: "env",
+            provider: "default",
+            id: "CF_ACCESS_CLIENT_SECRET",
+          },
+        },
       },
       env,
       nowMs: 1_234,
@@ -176,6 +184,14 @@ describe("node-host SQLite config", () => {
         tls: false,
         tlsFingerprint: fixtureDigest,
         contextPath: "/openclaw-gw",
+        cloudflareAccess: {
+          clientId: { source: "env", provider: "default", id: "CF_ACCESS_CLIENT_ID" },
+          clientSecret: {
+            source: "env",
+            provider: "default",
+            id: "CF_ACCESS_CLIENT_SECRET",
+          },
+        },
       },
     });
     closeOpenClawStateDatabaseForTest();
@@ -230,6 +246,36 @@ describe("node-host SQLite config", () => {
       .db.prepare("PRAGMA table_info(node_host_config)")
       .all() as Array<{ name?: unknown }>;
     expect(columns).toContainEqual(expect.objectContaining({ name: "gateway_context_path" }));
+  });
+
+  it("adds the Cloudflare Access column to an existing state database", async () => {
+    const { env } = makeTestEnv();
+    const database = openOpenClawStateDatabase({ env });
+    database.db.exec("ALTER TABLE node_host_config DROP COLUMN gateway_cloudflare_access_json;");
+    closeOpenClawStateDatabaseForTest();
+
+    const configured = await configureNodeHost({
+      fallbackDisplayName: "node",
+      gateway: {
+        cloudflareAccess: {
+          clientId: "$CF_ACCESS_CLIENT_ID",
+          clientSecret: "$CF_ACCESS_CLIENT_SECRET",
+        },
+      },
+      env,
+      nowMs: 1,
+    });
+
+    expect(configured.gateway?.cloudflareAccess).toEqual({
+      clientId: { source: "env", provider: "default", id: "CF_ACCESS_CLIENT_ID" },
+      clientSecret: { source: "env", provider: "default", id: "CF_ACCESS_CLIENT_SECRET" },
+    });
+    const columns = openOpenClawStateDatabase({ env })
+      .db.prepare("PRAGMA table_info(node_host_config)")
+      .all() as Array<{ name?: unknown }>;
+    expect(columns).toContainEqual(
+      expect.objectContaining({ name: "gateway_cloudflare_access_json" }),
+    );
   });
 
   it("keeps the first committed implicit node id across processes", async () => {
@@ -294,6 +340,7 @@ describe("node-host SQLite config", () => {
               gateway_tls: null,
               gateway_tls_fingerprint: null,
               gateway_context_path: null,
+              gateway_cloudflare_access_json: null,
               updated_at_ms: 1,
             }),
         );
@@ -326,6 +373,7 @@ describe("node-host SQLite config", () => {
               gateway_tls: null,
               gateway_tls_fingerprint: null,
               gateway_context_path: null,
+              gateway_cloudflare_access_json: null,
               updated_at_ms: 1,
             }),
         );

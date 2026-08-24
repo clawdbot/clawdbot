@@ -145,7 +145,26 @@ function paginateSessionMessages(
       endExclusive = messages.length;
     }
   }
-  const start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
+  let start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
+  // Projection can interleave several rows from the same transcript records.
+  // Close the page over their seq groups because the public cursor cannot split one.
+  const pageSeqs = new Set(
+    messages.slice(start, endExclusive).map(resolveMessageSeq).filter(Boolean),
+  );
+  const gapSeqs = new Set<number>();
+  for (let index = start - 1; index >= 0; index--) {
+    const seq = resolveMessageSeq(messages[index]);
+    if (seq === undefined) {
+      continue;
+    }
+    gapSeqs.add(seq);
+    if (!pageSeqs.has(seq)) {
+      continue;
+    }
+    start = index;
+    gapSeqs.forEach((gapSeq) => pageSeqs.add(gapSeq));
+    gapSeqs.clear();
+  }
   const paginatedMessages = messages.slice(start, endExclusive);
   const firstSeq = resolveMessageSeq(paginatedMessages[0]);
   return buildPaginatedSessionHistory({
@@ -165,24 +184,24 @@ export function buildSessionHistorySnapshot(params: {
   totalRawMessages?: number;
 }): SessionHistorySnapshot {
   const projected = projectChatDisplayMessagesWithState(params.rawMessages, {
+    includeCommentaryFallbacks: true,
     maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
     resolveCurrentUserProfileDisplay,
   });
   const visibleMessages = toSessionHistoryMessages(projected.messages);
+  const rawHistoryMessages = toSessionHistoryMessages(params.rawMessages);
   const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
   if (
     !params.cursor &&
     typeof params.totalRawMessages === "number" &&
-    params.totalRawMessages > params.rawMessages.length &&
-    history.messages.length > 0
+    params.totalRawMessages > params.rawMessages.length
   ) {
-    const firstSeq = resolveMessageSeq(history.messages[0]);
+    const firstSeq = resolveMessageSeq(history.messages[0] ?? rawHistoryMessages[0]);
     history.hasMore = true;
     if (typeof firstSeq === "number") {
       history.nextCursor = String(firstSeq);
     }
   }
-  const rawHistoryMessages = toSessionHistoryMessages(params.rawMessages);
   return {
     history,
     rawTranscriptSeq:
@@ -302,6 +321,7 @@ export class SessionHistorySseState {
     });
     const hadPendingTurnBoundary = this.turnBoundaryPending;
     const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
+      includeCommentaryFallbacks: true,
       maxChars: this.maxChars,
       turnBoundaryPending: hadPendingTurnBoundary,
       streamErrorFallbackPending: this.streamErrorFallbackPending,
@@ -319,6 +339,7 @@ export class SessionHistorySseState {
     // emitting a misleading single SSE item.
     const projectedMessages = toSessionHistoryMessages(
       projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
+        includeCommentaryFallbacks: true,
         maxChars: this.maxChars,
         resolveCurrentUserProfileDisplay,
       }),

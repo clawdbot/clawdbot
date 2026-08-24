@@ -45,7 +45,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "backup",
-    description: "Create and verify backup archives and SQLite snapshots",
+    description: "Create, verify, and restore backup archives and SQLite snapshots",
     hasSubcommands: true,
   },
   {

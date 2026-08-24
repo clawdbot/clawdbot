@@ -54,9 +54,9 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-place-trigger").click();
+      await page.locator("#new-session-where-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__place-popover")
+        .locator("wa-popover.new-session-page__where-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.locator(".new-session-page__message").fill("surface the failed startup");

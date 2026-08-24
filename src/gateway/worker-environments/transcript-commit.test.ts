@@ -40,6 +40,13 @@ const IDENTITY: WorkerConnectionIdentity = {
   bundleHash: "b".repeat(64),
   sessionId: SESSION_ID,
   runId: "run-worker-transcript",
+  turnClaim: {
+    sessionId: SESSION_ID,
+    claimId: "claim-worker-transcript",
+    runId: "run-worker-transcript",
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: "environment-a", ownerEpoch: RUN_EPOCH },
+  },
   ownerEpoch: RUN_EPOCH,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-transcript-commit-v1"],
@@ -715,7 +722,9 @@ describe("worker transcript commit application", () => {
     });
   });
 
-  it("advances the leaf across sequential commits", async () => {
+  it("persists run ownership on worker output while only the terminal envelope completes it", async () => {
+    const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
+    unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
     const first = await committer.commit({ identity: IDENTITY, request: createRequest() });
     if (!first.ok) {
       throw new Error(`expected initial transcript commit success, received ${first.reason}`);
@@ -748,11 +757,32 @@ describe("worker transcript commit application", () => {
     expect(second.result.newLeafId).toBe(second.result.entryIds[0]);
     expect(second.result.newLeafId).not.toBe(first.result.newLeafId);
     const reopened = SessionManager.open(sessionTarget);
+    expect(
+      reopened
+        .getEntries()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message),
+    ).toMatchObject([
+      { role: "user" },
+      { role: "assistant", __openclaw: { runId: IDENTITY.runId } },
+      { role: "toolResult", __openclaw: { runId: IDENTITY.runId } },
+      { role: "assistant", __openclaw: { runId: IDENTITY.runId } },
+    ]);
     expect(reopened.getEntries().at(-1)).toMatchObject({
       id: second.result.newLeafId,
       parentId: first.result.newLeafId,
       message: expect.objectContaining({ role: "assistant" }),
     });
     expect(reopened.getLeafId()).toBe(second.result.newLeafId);
+    expect(updates).toHaveLength(4);
+    for (const update of updates.slice(0, 3)) {
+      expect(update).not.toHaveProperty("runId");
+    }
+    expect(updates[3]).toMatchObject({
+      message: { role: "assistant" },
+      messageId: second.result.newLeafId,
+      messageSeq: 4,
+      runId: IDENTITY.runId,
+    });
   });
 });

@@ -5,6 +5,7 @@ import type {
   UsersPrefsSetResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -14,11 +15,6 @@ import {
   discoverPlaceCatalog,
   selectProfiles,
 } from "./cloud-profile-discovery.ts";
-import {
-  resolveScope,
-  resolveSubmissionOutcomeReason,
-  type SubmissionOutcomeReason,
-} from "./cloud-recovery-state.ts";
 import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 import { discoverGatewayName } from "./gateway-name-discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -32,6 +28,11 @@ import {
   replaceBrowserPreference,
   type NewSessionPreference,
 } from "./preferences.ts";
+import {
+  resolveScope,
+  resolveSubmissionOutcomeReason,
+  type SubmissionOutcomeReason,
+} from "./session-placement-recovery-state.ts";
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
@@ -43,7 +44,7 @@ type DraftGatewaySnapshot = Readonly<{
   canStartAsDraft: boolean;
   visibility: "normal" | "draft" | "incognito";
   cloudProfileId: string;
-  pendingCloud: Readonly<{
+  pendingPlacement: Readonly<{
     sessionKey: string;
     gatewayUrl: string;
     recoveryScope: string;
@@ -58,7 +59,7 @@ type DraftGatewayCallbacks = {
   onVisibilityRetired: () => void;
   onCloudProfileCleared: () => void;
   onCloudState: (error: string | null) => void;
-  onPendingCloudReset: () => void;
+  onPendingPlacementReset: () => void;
   onRecoveryReady: (gatewayUrl: string, recoveryScope: string) => void;
   onAdoptAgentDefaults: () => void;
 };
@@ -72,6 +73,7 @@ export class DraftGatewayState {
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClientValue: ApplicationContext["gateway"]["snapshot"]["client"] = null;
   private gatewayUrlValue = "";
+  private gatewayBootIdValue = "";
   private gatewayRecoveryScopeValue = "";
   private gatewayRecoveryScopeReady = false;
   private gatewayConnectedValue = false;
@@ -118,11 +120,12 @@ export class DraftGatewayState {
         [
           this.read().isConnected && this.gatewayConnectedValue ? this.gatewayClientValue : null,
           this.gatewayConnectionEpochValue,
+          hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null),
           this.read().isAdmin,
           this.gatewayRecoveryScopeValue,
         ] as const,
-      task: ([client, _connectionEpoch, admin]) =>
-        client ? discoverPlaceCatalog(client, admin) : initialState,
+      task: ([client, _connectionEpoch, canWrite, isAdmin]) =>
+        client ? discoverPlaceCatalog(client, canWrite, isAdmin) : initialState,
       onComplete: (placeCatalog) => {
         this.resetCloudProfileRetry();
         this.environmentsValue = placeCatalog.environments;
@@ -176,6 +179,11 @@ export class DraftGatewayState {
     return this.gatewayRecoveryScopeValue;
   }
 
+  get sessionCreateScope(): string {
+    const scope = [this.gatewayUrlValue, this.gatewayRecoveryScopeValue, this.gatewayBootIdValue];
+    return scope.every(Boolean) ? JSON.stringify(scope) : "";
+  }
+
   get connected(): boolean {
     return this.gatewayConnectedValue;
   }
@@ -188,6 +196,16 @@ export class DraftGatewayState {
     return this.preferenceModeValue === "loading";
   }
 
+  resolvedGroupCategory(): string | undefined {
+    const snapshot = this.read();
+    return isGatewayMethodAdvertised(
+      snapshot.context?.gateway.snapshot ?? {},
+      "sessions.groups.defaults",
+    ) === true
+      ? catalog.resolvedGroupName(snapshot.data, snapshot.context?.sessions)
+      : undefined;
+  }
+
   refreshCloudProfiles() {
     return this.cloudProfileTask.run();
   }
@@ -196,6 +214,15 @@ export class DraftGatewayState {
     const snapshot = gateway.snapshot;
     const connected = snapshot.phase === "connected";
     const firstBind = this.gatewaySource === null;
+    // The Gateway's idempotency ledger is process-local; a new boot cannot safely replay a start.
+    const bootId = connected
+      ? (snapshot.hello?.server?.bootId?.trim() ?? "")
+      : this.gatewayBootIdValue;
+    const gatewayBootChanged =
+      !firstBind &&
+      connected &&
+      Boolean(this.gatewayBootIdValue) &&
+      bootId !== this.gatewayBootIdValue;
     const gatewayUrlChanged = !firstBind && this.gatewayUrlValue !== gateway.connection.gatewayUrl;
     const gatewaySourceChanged = !firstBind && this.gatewaySource !== gateway;
     const identityChanged =
@@ -212,20 +239,27 @@ export class DraftGatewayState {
     this.gatewaySource = gateway;
     this.gatewayClientValue = snapshot.client;
     this.gatewayUrlValue = gateway.connection.gatewayUrl;
+    this.gatewayBootIdValue = bootId;
     this.gatewayRecoveryScopeValue = recoveryScope.next;
     this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
     this.gatewayConnectedValue = connected;
     if (this.read().visibility === "draft" && !this.read().canStartAsDraft) {
       this.callbacks.onVisibilityRetired();
     }
-    if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScope.changed) {
+    if (
+      gatewayUrlChanged ||
+      gatewayBootChanged ||
+      identityChanged ||
+      connectionChanged ||
+      recoveryScope.changed
+    ) {
       const ownerChanged = gatewaySourceChanged || gatewayUrlChanged || recoveryScope.changed;
       const gatewayIdentityChanged = gatewayUrlChanged || recoveryScope.changed;
       this.invalidateDiscovery(
         ownerChanged,
         resolveSubmissionOutcomeReason({
           gatewayIdentityChanged,
-          cloudDraftOwned: Boolean(this.read().pendingCloud.sessionKey),
+          placementDraftOwned: Boolean(this.read().pendingPlacement.sessionKey),
         }),
       );
     }
@@ -236,13 +270,13 @@ export class DraftGatewayState {
       recoveryScopeBecameReady ||
       becameConnected
     ) {
-      const pending = this.read().pendingCloud;
+      const pending = this.read().pendingPlacement;
       if (
         pending.gatewayUrl &&
         (pending.gatewayUrl !== this.gatewayUrlValue ||
           pending.recoveryScope !== this.gatewayRecoveryScopeValue)
       ) {
-        this.callbacks.onPendingCloudReset();
+        this.callbacks.onPendingPlacementReset();
       }
       if (connected && snapshot.client?.recoveryScopeReady) {
         this.callbacks.onRecoveryReady(this.gatewayUrlValue, this.gatewayRecoveryScopeValue);
@@ -269,11 +303,16 @@ export class DraftGatewayState {
   }
 
   retryPendingCatalogTarget() {
-    const { data } = this.read();
+    const { context, data } = this.read();
     if (this.catalogRetryingValue) {
       return;
     }
-    if (!this.gatewayConnectedValue || !catalog.isTarget(data) || catalog.isResolvedTarget(data)) {
+    if (data?.group && context?.sessions.groupsStatus() === "loading") {
+      globalThis.clearTimeout(this.catalogRetryTimer);
+      this.catalogRetryTimer = undefined;
+      return;
+    }
+    if (!this.gatewayConnectedValue || !catalog.isRoutePending(data, context?.sessions)) {
       globalThis.clearTimeout(this.catalogRetryTimer);
       this.catalogRetryTimer = undefined;
       this.catalogRetryScope = "";
@@ -298,10 +337,13 @@ export class DraftGatewayState {
       if (
         this.catalogRetryScope !== retryScope ||
         !this.gatewayConnectedValue ||
-        !catalog.isTarget(current.data) ||
-        catalog.isResolvedTarget(current.data)
+        (current.data?.group && current.context?.sessions.groupsStatus() === "loading") ||
+        !catalog.isRoutePending(current.data, current.context?.sessions)
       ) {
         return;
+      }
+      if (current.data?.group) {
+        current.context?.sessions.groupsInvalidate();
       }
       const revalidation = current.context?.revalidate("new-session");
       if (!revalidation) {
@@ -319,10 +361,13 @@ export class DraftGatewayState {
     if (
       this.catalogRetryingValue ||
       !this.gatewayConnectedValue ||
-      !catalog.isTarget(data) ||
-      catalog.isResolvedTarget(data)
+      (data?.group && context?.sessions.groupsStatus() === "loading") ||
+      !catalog.isRoutePending(data, context?.sessions)
     ) {
       return;
+    }
+    if (data?.group) {
+      context?.sessions.groupsInvalidate();
     }
     const revalidation = context?.revalidate("new-session");
     if (!revalidation) {
@@ -344,7 +389,11 @@ export class DraftGatewayState {
 
   readPreference(agentId: string): NewSessionPreference | null {
     const snapshot = this.read();
-    if (catalog.isTarget(snapshot.data) || snapshot.pendingCloud.sessionKey) {
+    if (
+      catalog.isTarget(snapshot.data) ||
+      snapshot.data?.group ||
+      snapshot.pendingPlacement.sessionKey
+    ) {
       return null;
     }
     return this.preferenceModeValue === "remote"
@@ -354,7 +403,11 @@ export class DraftGatewayState {
 
   persistPreference(agentIdValue: string, workspace: string, patch: NewSessionPreference) {
     const snapshot = this.read();
-    if (catalog.isTarget(snapshot.data) || snapshot.pendingCloud.sessionKey) {
+    if (
+      catalog.isTarget(snapshot.data) ||
+      snapshot.data?.group ||
+      snapshot.pendingPlacement.sessionKey
+    ) {
       return;
     }
     const agentId = normalizeAgentId(agentIdValue);
@@ -403,7 +456,7 @@ export class DraftGatewayState {
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
     void this.gatewayNameTask.run([null, false, -1]);
-    void this.cloudProfileTask.run([null, -1, false, ""]);
+    void this.cloudProfileTask.run([null, -1, false, false, ""]);
     this.resetCloudProfileRetry();
   }
 
@@ -415,12 +468,13 @@ export class DraftGatewayState {
     );
     this.cloudProfilesValue = recovery.profiles;
     const snapshot = this.read();
-    const pendingCloud = Boolean(snapshot.pendingCloud.sessionKey);
-    if ((!this.gatewayConnectedValue || !snapshot.isAdmin) && !pendingCloud) {
+    const pendingPlacement = Boolean(snapshot.pendingPlacement.sessionKey);
+    const canWrite = hasOperatorWriteAccess(snapshot.context?.gateway.snapshot.hello?.auth ?? null);
+    if ((!this.gatewayConnectedValue || !canWrite) && !pendingPlacement) {
       this.callbacks.onCloudProfileCleared();
     }
     const selectionUnavailable =
-      !pendingCloud &&
+      !pendingPlacement &&
       Boolean(snapshot.cloudProfileId) &&
       !profiles.some((profile) => profile.id === snapshot.cloudProfileId);
     if (selectionUnavailable) {

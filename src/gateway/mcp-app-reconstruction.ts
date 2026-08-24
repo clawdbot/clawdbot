@@ -244,6 +244,7 @@ function getRestoreInFlight(): Map<string, Promise<ReconstructionResult | undefi
 
 async function reconstructMcpAppView(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
   lookup: TranscriptLookup;
   allowedAppToolNames: ReadonlySet<string>;
@@ -251,7 +252,7 @@ async function reconstructMcpAppView(params: {
   readOnly: boolean;
   viewId?: string;
 }): Promise<ReconstructionResult | undefined> {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId });
   const sessionId = loaded.entry?.sessionId;
   if (!sessionId) {
@@ -286,6 +287,7 @@ async function reconstructMcpAppView(params: {
   }
   const fetched = await fetchMcpAppView({
     runtime,
+    agentId,
     serverName: data.descriptor.serverName,
     toolName: data.descriptor.toolName,
     uiResourceUri: data.descriptor.uiResourceUri,
@@ -305,6 +307,7 @@ async function reconstructMcpAppView(params: {
 
 async function restoreMcpAppViewOnce(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
   viewId: string;
 }): Promise<ReconstructionResult | undefined> {
@@ -323,6 +326,7 @@ async function restoreMcpAppViewOnce(params: {
 
 export async function mintMcpAppViewFromTranscript(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
   descriptor: BoardMcpAppDescriptor;
   allowedAppToolNames: ReadonlySet<string>;
@@ -343,10 +347,11 @@ export async function mintMcpAppViewFromTranscript(params: {
 
 export async function restoreMcpAppView(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey: string;
   viewId: string;
 }): Promise<ReconstructionResult | undefined> {
-  const key = `${params.sessionKey}\0${params.viewId}`;
+  const key = `${params.agentId ?? ""}\0${params.sessionKey}\0${params.viewId}`;
   const inFlight = getRestoreInFlight();
   return await getOrCreatePromise(inFlight, key, () => restoreMcpAppViewOnce(params), {
     evictOnSettled: true,

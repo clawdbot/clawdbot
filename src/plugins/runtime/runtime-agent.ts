@@ -262,6 +262,7 @@ async function createSessionEntry(
           const persisted = await upsertAcpSessionMeta({
             cfg: params.cfg,
             sessionKey: context.key,
+            agentId: context.agentId,
             mutate: () => meta,
           });
           if (!persisted?.acp) {
@@ -311,11 +312,13 @@ async function createSessionEntry(
         let created: { key: string; agentId: string; entry: SessionEntry };
         if (matchingEntry) {
           const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
+          const expectedSessionRoot = params.sessionRoot?.trim() || undefined;
           const expectedExecNode = params.execNode?.trim() || undefined;
           const expectedExecCwd = params.execCwd?.trim() || undefined;
           const matchingAcpMeta = acpInitial
             ? readAcpSessionMetaForEntry({
                 sessionKey: target.canonicalKey,
+                agentId: target.agentId,
                 entry: matchingEntry,
               })
             : undefined;
@@ -335,6 +338,8 @@ async function createSessionEntry(
               (isDeepStrictEqual(matchingEntry.acpSessionBinding, persistedAcpBinding) &&
                 (matchingAcpMeta === undefined || acpMetaMatches(matchingAcpMeta)))) &&
             matchingEntry.spawnedCwd === expectedSpawnedCwd &&
+            matchingEntry.sessionRoot === expectedSessionRoot &&
+            matchingEntry.permissionMode === params.permissionMode &&
             matchingEntry.execNode === expectedExecNode &&
             matchingEntry.execCwd === expectedExecCwd &&
             isDeepStrictEqual(matchingEntry.pluginExtensions, params.initialEntry.pluginExtensions);
@@ -359,10 +364,15 @@ async function createSessionEntry(
         } else {
           const result = await createGatewaySession({
             cfg: params.cfg,
+            operatorRoleActor: { kind: "system" },
             key: params.key,
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
             ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
+            ...(params.sessionRoot !== undefined ? { sessionRoot: params.sessionRoot } : {}),
+            ...(params.permissionMode !== undefined
+              ? { permissionMode: params.permissionMode }
+              : {}),
             ...(params.execNode !== undefined ? { execNode: params.execNode } : {}),
             ...(params.execCwd !== undefined ? { execCwd: params.execCwd } : {}),
             initialEntry: {
@@ -408,6 +418,11 @@ async function createSessionEntry(
           });
           if (!result.ok) {
             throw new Error(result.error.message);
+          }
+          if (result.postCommit.status === "failed") {
+            // Plugin initialization owns guarded rollback and recovery. Do not
+            // finalize an initializationPending row whose callback failed.
+            throw result.postCommit.error;
           }
           created = result;
         }
@@ -510,6 +525,7 @@ async function createSessionEntry(
             await upsertAcpSessionMeta({
               cfg: params.cfg,
               sessionKey: callbackContext.key,
+              agentId: callbackContext.agentId,
               mutate: () => null,
             });
           }
@@ -613,16 +629,11 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveAgentTimeoutMs,
     resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
     ensureAgentWorkspace,
-  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session"> &
-    Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session">>;
+  } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "session"> &
+    Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "session">>;
 
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>
     createLazyRuntimeMethod(loadEmbeddedAgentRuntime, (runtime) => runtime.runPluginEmbeddedAgent),
-  );
-  defineCachedValue(
-    agentRuntime,
-    "runEmbeddedPiAgent",
-    () => (agentRuntime as PluginRuntime["agent"]).runEmbeddedAgent,
   );
   defineCachedValue(agentRuntime, "session", () => ({
     resolveStorePath: resolveSessionStorePathCore,

@@ -326,7 +326,7 @@ describe("channels controller WhatsApp logout", () => {
 
     await channels.logoutWhatsApp();
 
-    expect(channels.state.whatsappLoginMessage).toBe("Error: credential cleanup failed");
+    expect(channels.state.whatsappLoginMessage).toBe("credential cleanup failed");
     expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,current-qr");
     expect(channels.state.whatsappLoginConnected).toBe(true);
     expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
@@ -457,7 +457,7 @@ describe("channels controller DM pairing", () => {
     await approval;
 
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
-    expect(channels.state.pairingError).toBe("Error: refresh unavailable");
+    expect(channels.state.pairingError).toBe("refresh unavailable");
     channels.dispose();
   });
 
@@ -613,12 +613,48 @@ describe("channels controller DM pairing", () => {
     await channels.refreshPairing();
 
     expect(channels.state.pairingSnapshot).toBe(emptyPairing);
-    expect(channels.state.pairingError).toBe("Error: gateway unavailable");
+    expect(channels.state.pairingError).toBe("gateway unavailable");
     channels.dispose();
   });
 });
 
 describe("channel refresh sequencing", () => {
+  it("clears a failed request generation on reconnect so status can recover", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("status unavailable"))
+      .mockResolvedValueOnce(createChannelsSnapshot("recovered"));
+    const client = { request };
+    let snapshot = { client, phase: "connected" };
+    const listeners = new Set<(next: typeof snapshot) => void>();
+    const channels = createChannelCapability({
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never);
+
+    await channels.refresh();
+    expect(channels.state.channelsError).toBe("status unavailable");
+
+    snapshot = { client, phase: "reconnecting" };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+    snapshot = { client, phase: "connected" };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+
+    expect(channels.state.channelsError).toBeNull();
+    await channels.refresh();
+    expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("recovered");
+    channels.dispose();
+  });
+
   it("rejects an in-flight channel snapshot after read access is revoked", async () => {
     const pending = createDeferred<ChannelsStatusSnapshot | null>();
     const request = vi.fn(() => pending.promise);

@@ -18,6 +18,11 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
+const STATE_V6_ADDITIVE_TABLES = [
+  ...LAZY_ADDITIVE_STATE_TABLES,
+  "worker_session_tool_operations",
+  "worker_turn_tool_authorities",
+] as const;
 const STATE_V5_ADDITIVE_TABLES = [
   "agent_database_leases",
   "agent_deletion_journal",
@@ -35,8 +40,15 @@ const STATE_V5_ADDITIVE_TABLES = [
   "worker_environment_credentials",
   "worker_transcript_commit_heads",
   "worker_transcript_commits",
-  ...LAZY_ADDITIVE_STATE_TABLES,
+  ...STATE_V6_ADDITIVE_TABLES,
 ] as const;
+const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
+  5: STATE_V5_ADDITIVE_TABLES,
+  6: STATE_V6_ADDITIVE_TABLES,
+  7: STATE_V6_ADDITIVE_TABLES,
+  8: STATE_V6_ADDITIVE_TABLES,
+} as const satisfies Record<number, readonly string[]>;
+type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 
@@ -126,31 +138,62 @@ export function assertOpenClawStateDatabaseForMaintenance(
   );
 }
 
-/** Require every stable v5 table before the v6 additive migration can run. */
-export function assertOpenClawStateDatabaseV5ForMigration(
+function assertOpenClawStateDatabaseVersionForMigration(
   database: DatabaseSync,
-  options: { pathname: string },
+  options: { pathname: string; version: OpenClawStateMigrationVersion },
 ): void {
   const userVersion = readSqliteUserVersion(database);
-  if (userVersion !== 5) {
+  if (userVersion !== options.version) {
     throw new Error(
-      `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; expected 5 before migrating it.`,
+      `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; expected ${options.version} before migrating it.`,
     );
   }
   assertOpenClawStateDatabaseOwner(database, options);
   const metadata = database
     .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
     .get() as { schema_version?: unknown } | undefined;
-  if (metadata?.schema_version !== 5) {
+  if (metadata?.schema_version !== options.version) {
     const schemaVersion =
       typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
     throw new Error(
-      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match 5; repair the ownership metadata before migrating it.`,
+      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${options.version}; repair the ownership metadata before migrating it.`,
     );
   }
   assertSqliteSchemaTablesPresent(database, options.pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-    allowedMissingTables: STATE_V5_ADDITIVE_TABLES,
+    allowedMissingTables: STATE_MIGRATION_ALLOWED_MISSING_TABLES[options.version],
   });
+}
+
+/** Require every stable v5 table before the v6 additive migration can run. */
+export function assertOpenClawStateDatabaseV5ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 5 });
+}
+
+/** Require every stable v6 table before the v7 retirement migration can run. */
+export function assertOpenClawStateDatabaseV6ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 6 });
+}
+
+/** Require every stable v7 table before the v8 placement migration can run. */
+export function assertOpenClawStateDatabaseV7ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 7 });
+}
+
+/** Require every stable v8 table before the v9 registry migration can run. */
+export function assertOpenClawStateDatabaseV8ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 8 });
 }
 
 export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
