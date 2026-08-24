@@ -73,6 +73,30 @@ describe("plugins cli list", () => {
     workshopMocks.detectToolPolicyDiagnostic.mockReset();
   });
 
+  it("shows plugin load errors and healthy descriptions in the default list", async () => {
+    buildPluginRegistrySnapshotReportMock.mockReturnValue({
+      workspaceDir: "/workspace",
+      registrySource: "persisted",
+      registryDiagnostics: [],
+      plugins: [
+        createPluginRecord({
+          id: "broken",
+          description: "Broken plugin description",
+          status: "error",
+          error: "missing plugin module",
+        }),
+        createPluginRecord({ id: "healthy", description: "Healthy plugin" }),
+      ],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "list"]);
+
+    const output = pluginsCliRuntimeLogs.join("\n");
+    expect(output).toContain("missing plugin module");
+    expect(output).toContain("Healthy plugin");
+  });
+
   it("includes imported state in JSON output", async () => {
     buildPluginRegistrySnapshotReportMock.mockReturnValue({
       workspaceDir: "/workspace",

@@ -108,7 +108,7 @@ export async function runPluginsListCommand(
     });
     const usedRoots = new Set<keyof typeof sourceRoots>();
     const rows = list.map((plugin) => {
-      const desc = plugin.description ? theme.muted(plugin.description) : "";
+      const desc = plugin.error ? theme.error(plugin.error) : theme.muted(plugin.description ?? "");
       const formattedSource = formatPluginSourceForTable(plugin, sourceRoots);
       if (formattedSource.rootKey) {
         usedRoots.add(formattedSource.rootKey);
