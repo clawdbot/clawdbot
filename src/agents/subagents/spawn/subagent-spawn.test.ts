@@ -15,7 +15,6 @@ import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-
 import {
   SpawnSubagentAdmissionCancelledError,
   type SpawnSubagentAdmissionAuthority,
-  type SpawnSubagentAdmissionBoundary,
 } from "./subagent-spawn-contract.js";
 import {
   createSubagentSpawnTestConfig,
@@ -71,6 +70,9 @@ function createConfigOverride(overrides?: Record<string, unknown>) {
 }
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
+type SpawnSubagentAdmissionBoundary = Parameters<
+  SpawnSubagentAdmissionAuthority["assertCurrent"]
+>[0];
 
 function gatewayRequestRecords(): Record<string, unknown>[] {
   // Gateway calls are the seam proof for spawn orchestration; assertions inspect
