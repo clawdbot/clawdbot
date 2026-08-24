@@ -178,11 +178,15 @@ export function renderAttachmentCardHeader(
         ${hasOpenAction
           ? html`<button
               type="button"
-              class="chat-assistant-attachment-card__action chat-assistant-attachment-card__expand"
+              class="chat-assistant-attachment-card__action ${compactPreview
+                ? ""
+                : "chat-assistant-attachment-card__action--labeled"} chat-assistant-attachment-card__expand"
               aria-label=${t("chat.attachments.expand", { filename: options.label })}
               title=${t("chat.attachments.expand", { filename: options.label })}
               @click=${options.onExpand}
-              >${icons.arrowUpRight}</button
+              >${compactPreview
+                ? icons.arrowUpRight
+                : html`<span>${t("chat.attachments.open")}</span>${icons.arrowUpRight}`}</button
             >`
           : null}
       </span>
