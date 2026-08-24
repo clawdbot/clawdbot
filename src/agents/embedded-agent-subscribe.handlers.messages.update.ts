@@ -329,19 +329,30 @@ export function handleMessageUpdate(
     return;
   }
   if (deliveryPhase === "commentary") {
-    if (chunk) {
+    const isResponsesCommentary = isResponsesApiAssistantMessage(partialAssistant);
+    const hadResponsesCommentaryText = isResponsesCommentary && Boolean(ctx.state.deltaBuffer);
+    if (isResponsesCommentary && chunk) {
       ctx.state.deltaBuffer += chunk;
       ctx.state.deltaBufferIsCommentary = true;
-    } else if (!ctx.state.deltaBuffer) {
-      ctx.state.deltaBuffer = coerceChatContentText(
-        extractAssistantCommentaryText(streamAssistant),
-      );
-      ctx.state.deltaBufferIsCommentary = true;
     }
-    emitResolvedCommentaryDisplay(ctx, ctx.state.deltaBuffer, {
-      itemId: deliveryItemId,
-      preferReplace: true,
-    });
+    const commentaryText = isResponsesCommentary
+      ? ctx.state.deltaBuffer
+      : coerceChatContentText(extractAssistantCommentaryText(streamAssistant));
+    const commentaryData =
+      commentaryText && (chunk || !hadResponsesCommentaryText)
+        ? buildAssistantStreamData({
+            text: commentaryText,
+            replace: true,
+            phase: "commentary",
+            itemId: deliveryItemId,
+          })
+        : undefined;
+    if (commentaryData) {
+      emitResolvedCommentaryDisplay(ctx, commentaryText, {
+        itemId: deliveryItemId,
+        preferReplace: true,
+      });
+    }
     return;
   }
   if (isPhasePendingResponsesTextItem) {

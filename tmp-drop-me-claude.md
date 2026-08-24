@@ -28,3 +28,9 @@
 - The first focused run found three shutdown failures: the newly aggregated delegate timer remained live in fake-timer assertions because `server-close.ts` cleared only upstream's original aggregate members. The architectural owner is the aggregate maintenance branch, so close now clears `maintenance.delegateArtifactCleanup` before invoking its composite cleanup callback; no test-only workaround was used.
 - The exact rerun passed all seven intersections across four Vitest shards: 517 tests.
 - Direct pinned Codex `rust-v0.148.0` contract inspection confirmed dynamic calls carry thread, turn, call, namespace, tool, and arguments through `codex-rs/app-server-protocol/src/protocol/v2/item.rs`, are projected in `codex-rs/app-server/src/bespoke_event_handling.rs`, and return typed content plus success in `codex-rs/app-server/tests/suite/v2/dynamic_tools.rs`.
+
+## §2.7 — 2026-08-24 canonical-baseline correction
+
+- The first canonical `19d44d3f` Gate 2.7 run returned zero FROZEN-STALE but seven MIXED-CLOBBER rows, not the protected six-row surface. The unexpected row was `embedded-agent-subscribe.handlers.messages.update.ts`, where the initial conflict resolution had semantically recreated upstream native commentary but dropped five exact post-fork snapshot-selection lines.
+- Restored upstream's Responses-vs-native snapshot selection and commentary-data gate verbatim, then routed the selected snapshot through the candidate continuation filter and phase-pending transition owner. This preserves snapshot semantics, item identity, delivery-generation fencing, and continuation filtering without adding a disposition row.
+- The focused commentary and stream-item owners pass 22/22 after the correction. Canonical Gate 2.7 must be rerun at the new immutable checkpoint and is not declared green by this entry.
