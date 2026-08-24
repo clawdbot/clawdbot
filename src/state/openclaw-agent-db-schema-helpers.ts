@@ -29,7 +29,6 @@ import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-age
 import {
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
-  SESSION_NODE_ENTRY_VALID_TRIGGER_NAMES,
 } from "./openclaw-agent-db-session-migrations.js";
 import { MESSAGE_TOOL_RUN_OUTCOMES_TABLE } from "./openclaw-agent-message-tool-outcome-schema.js";
 import {
