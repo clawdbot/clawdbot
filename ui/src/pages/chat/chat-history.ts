@@ -46,6 +46,7 @@ import {
   sleep,
 } from "./chat-history-retry.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
+import { captureChatConnectionOwner } from "./chat-send-queue-state.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
@@ -1372,8 +1373,14 @@ export async function rewindChatHistory(
   }
   const sessionKey = state.sessionKey;
   const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  const connectionIsCurrent = captureChatConnectionOwner(state);
+  const viewIsCurrent = () =>
+    connectionIsCurrent() && visibleSessionMatches(state, sessionKey, agentParams.agentId);
   try {
     const result = await state.sessions.rewind(sessionKey, entryId, agentParams);
+    if (!connectionIsCurrent()) {
+      return null;
+    }
     const editorText = result.editorText ?? "";
     if (state.chatMessagesBySession) {
       clearChatMessagesFromCache(state.chatMessagesBySession, state, {
@@ -1385,12 +1392,12 @@ export async function rewindChatHistory(
       agentId: agentParams.agentId,
       draft: editorText,
     });
-    if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+    if (!viewIsCurrent()) {
       return null;
     }
     resetChatHistoryProjection(state, agentParams.agentId);
     await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
-    if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+    if (!viewIsCurrent()) {
       return null;
     }
     // Restored images intentionally stay in this tab's memory; persisted composer drafts remain
@@ -1402,8 +1409,10 @@ export async function rewindChatHistory(
     state.handleChatDraftChange(editorText);
     return result;
   } catch (error) {
-    setChatError(state, formatUiError(error));
-    scheduleChatScroll(state);
+    if (viewIsCurrent()) {
+      setChatError(state, formatUiError(error));
+      scheduleChatScroll(state);
+    }
     return null;
   }
 }
@@ -1417,23 +1426,31 @@ export async function switchChatHistoryBranch(
   }
   const sessionKey = state.sessionKey;
   const agentParams = scopedAgentParamsForSession(state, sessionKey);
+  const connectionIsCurrent = captureChatConnectionOwner(state);
+  const viewIsCurrent = () =>
+    connectionIsCurrent() && visibleSessionMatches(state, sessionKey, agentParams.agentId);
   try {
     await state.sessions.switchBranch(sessionKey, leafEntryId, agentParams);
+    if (!connectionIsCurrent()) {
+      return false;
+    }
     if (state.chatMessagesBySession) {
       clearChatMessagesFromCache(state.chatMessagesBySession, state, {
         sessionKey,
         agentId: agentParams.agentId,
       });
     }
-    if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
+    if (!viewIsCurrent()) {
       return false;
     }
     resetChatHistoryProjection(state, agentParams.agentId);
     await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
-    return visibleSessionMatches(state, sessionKey, agentParams.agentId);
+    return viewIsCurrent();
   } catch (error) {
-    setChatError(state, formatUiError(error));
-    scheduleChatScroll(state);
+    if (viewIsCurrent()) {
+      setChatError(state, formatUiError(error));
+      scheduleChatScroll(state);
+    }
     return false;
   }
 }

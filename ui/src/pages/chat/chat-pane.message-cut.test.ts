@@ -132,4 +132,24 @@ describe("chat pane message cuts", () => {
     expect(state.sessionKey).toBe("global");
     expect(state.assistantAgentId).toBe("work");
   });
+
+  it("does not navigate to a fork that finishes after a same-client reconnect", async () => {
+    const forked = createDeferred<{ sessionKey: string; editorText?: string }>();
+    const sessions = {
+      forkAtMessage: vi.fn(() => forked.promise),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+
+    const pending = pane.forkFromMessage("user-entry");
+    pane.connectionGeneration += 1;
+    state.connectionEpoch = pane.connectionGeneration;
+    forked.resolve({ sessionKey: "agent:main:forked", editorText: "stale draft" });
+
+    await pending;
+    expect(navigate).not.toHaveBeenCalled();
+    expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked")).toBeNull();
+  });
 });

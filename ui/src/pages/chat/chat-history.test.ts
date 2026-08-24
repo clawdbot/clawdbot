@@ -339,6 +339,43 @@ describe("rewindChatHistory", () => {
     expect(result).toBeNull();
     expect(state.handleChatDraftChange).not.toHaveBeenCalled();
   });
+
+  it("does not overwrite composer state after a same-client reconnect", async () => {
+    let resolveRewind!: (result: { editorText?: string }) => void;
+    const rewind = new Promise<{ editorText?: string }>((resolve) => {
+      resolveRewind = resolve;
+    });
+    const state = createState({ messages: [] }) as TestState & {
+      handleChatDraftChange: ReturnType<typeof vi.fn>;
+      sessions: { rewind: ReturnType<typeof vi.fn> };
+    };
+    state.handleChatDraftChange = vi.fn((next: string) => {
+      state.chatMessage = next;
+    });
+    state.sessions = {
+      rewind: vi.fn(() => rewind),
+      setModelOverride: vi.fn(),
+    };
+
+    const pending = rewindChatHistory(state as never, "user-entry");
+    state.connected = false;
+    state.connectionEpoch += 1;
+    state.connected = true;
+    state.connectionEpoch += 1;
+    state.chatMessage = "new connection draft";
+    state.chatAttachments = [
+      { id: "new", mimeType: "image/jpeg", dataUrl: "data:image/jpeg;base64,bmV3" },
+    ];
+    resolveRewind({ editorText: "stale rewind draft" });
+
+    const result = await pending;
+    expect(state.chatMessage).toBe("new connection draft");
+    expect(state.chatAttachments).toEqual([
+      { id: "new", mimeType: "image/jpeg", dataUrl: "data:image/jpeg;base64,bmV3" },
+    ]);
+    expect(state.handleChatDraftChange).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+  });
 });
 
 describe("switchChatHistoryBranch", () => {
@@ -486,6 +523,34 @@ describe("switchChatHistoryBranch", () => {
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(state.chatMessages).toEqual([selected]);
+  });
+
+  it("does not apply a branch switch after a same-client reconnect", async () => {
+    let resolveSwitch!: () => void;
+    const switched = new Promise<object>((resolve) => {
+      resolveSwitch = () => resolve({});
+    });
+    const state = createState({ messages: [] }) as TestState & {
+      sessions: {
+        listBranches: ReturnType<typeof vi.fn>;
+        switchBranch: ReturnType<typeof vi.fn>;
+      };
+    };
+    state.sessions = {
+      listBranches: vi.fn().mockResolvedValue([]),
+      switchBranch: vi.fn(() => switched),
+      setModelOverride: vi.fn(),
+    };
+
+    const pending = switchChatHistoryBranch(state as never, "stale-leaf");
+    state.connected = false;
+    state.connectionEpoch += 1;
+    state.connected = true;
+    state.connectionEpoch += 1;
+    resolveSwitch();
+
+    await expect(pending).resolves.toBe(false);
+    expect(state.sessions.listBranches).not.toHaveBeenCalled();
   });
 });
 
