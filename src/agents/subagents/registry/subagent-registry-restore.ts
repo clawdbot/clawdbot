@@ -277,6 +277,7 @@ export function createSubagentRegistryRestorer(config: {
                 if (!launchTerminationConfirmed) {
                   throw new Error(
                     `Accepted child termination was not confirmed: ${acceptedGatewayRunId}`,
+                    { cause: acceptedLaunchError },
                   );
                 }
                 throw acceptedLaunchError;

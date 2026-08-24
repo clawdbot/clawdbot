@@ -118,7 +118,9 @@ export function activateCollectorSubagentRun(params: {
               retry: false,
             });
             if (!launchTerminationConfirmed) {
-              throw new Error(`Accepted child termination was not confirmed: ${gatewayRunId}`);
+              throw new Error(`Accepted child termination was not confirmed: ${gatewayRunId}`, {
+                cause: error,
+              });
             }
           } catch (terminationError) {
             rollbackFailures.push(terminationError);

@@ -89,7 +89,6 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
-  const task = params.task;
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
@@ -287,7 +286,7 @@ export async function spawnSubagentDirect(
       requesterOrigin: childSessionOrigin,
       childSessionKey,
       label: label || undefined,
-      task,
+      task: params.task,
       acpEnabled: isAcpRuntimeSpawnAvailable({
         config: cfg,
         sandboxed: childRuntimeSandboxed,
@@ -353,7 +352,7 @@ export async function spawnSubagentDirect(
         childDepth,
         maxSpawnDepth,
         spawnMode,
-        task,
+        task: params.task,
         spawnedByKey,
         toolSpawnMetadata,
         spawnedWorkspaceDir,
@@ -553,7 +552,7 @@ export async function spawnSubagentDirect(
           requesterOrigin,
           progressOrigin,
           requesterDisplayKey: ownership.completionRequesterDisplayKey,
-          task,
+          task: params.task,
           taskName,
           agentId: targetAgentId,
           requesterAgentId,
