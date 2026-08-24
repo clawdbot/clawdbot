@@ -874,48 +874,19 @@ describe("plugin-owned CLI execution host boundary", () => {
     approval.resolve({ id: "late-approval", decision: "allow-once" });
   });
 
-  it("reports result-holding background work to diagnostic activity", async () => {
-    const { context } = await createExecution({ runId: "plugin-diagnostic-background" });
-    const backgroundObserved = createDeferred();
-    const backgroundFinished = createDeferred();
-    const run = runPlugin(
-      context,
-      async function* () {
-        yield {
-          type: "system",
-          subtype: "background_tasks_changed",
-          tasks: [{ task_id: "background-agent", task_type: "local_agent" }],
-        };
-        await backgroundFinished.promise;
-        yield { type: "system", subtype: "background_tasks_changed", tasks: [] };
-        yield SUCCESS_RESULT;
-      },
-      { consumeStdout: () => backgroundObserved.resolve() },
-    );
-
-    try {
-      await backgroundObserved.promise;
-      expect(diagnosticActivity(context)).toMatchObject({ hasOutstandingBackgroundWork: true });
-    } finally {
-      backgroundFinished.resolve();
-    }
-
-    await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
-    expect(diagnosticActivity(context)).not.toHaveProperty("hasOutstandingBackgroundWork");
-  });
-
-  it("releases diagnostic background work after a terminal plugin result", async () => {
+  it("records only plugin-reported liveness and fences it after a terminal result", async () => {
     const { context } = await createExecution({ runId: "plugin-diagnostic-terminal" });
+    let retainedFact: CliBackendExecuteContext["reportBackgroundWorkLiveness"];
     const backgroundObserved = createDeferred();
     const allowTerminalResult = createDeferred();
     const run = runPlugin(
       context,
-      async function* () {
-        yield {
-          type: "system",
-          subtype: "background_tasks_changed",
-          tasks: [{ task_id: "background-agent", task_type: "local_agent" }],
-        };
+      async function* (execution) {
+        retainedFact = execution.reportBackgroundWorkLiveness;
+        retainedFact?.({ outstanding: true });
+        // The opaque stream record disagrees intentionally: only the plugin-owned
+        // fact may decide whether diagnostic recovery retains this turn.
+        yield { type: "system", subtype: "background_tasks_changed", tasks: [] };
         await allowTerminalResult.promise;
         yield {
           type: "result",
@@ -936,6 +907,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     }
 
     await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
+    retainedFact?.({ outstanding: true });
     expect(diagnosticActivity(context)).not.toHaveProperty("hasOutstandingBackgroundWork");
   });
 

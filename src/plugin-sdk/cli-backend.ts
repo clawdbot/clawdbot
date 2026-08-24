@@ -3,6 +3,7 @@
  */
 export type {
   CliBackendAuthEpochMode,
+  CliBackendBackgroundWorkLiveness,
   CliBackendConfig,
   CliBackendExecute,
   CliBackendExecuteContext,

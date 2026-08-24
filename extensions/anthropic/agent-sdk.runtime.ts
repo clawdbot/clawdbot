@@ -450,6 +450,25 @@ function resolveClaudeAgentSdkOptions(
   return options;
 }
 
+function reportClaudeAgentSdkBackgroundWorkLiveness(
+  context: CliBackendExecuteContext,
+  message: Record<string, unknown>,
+): boolean | undefined {
+  if (message.type !== "system" || message.subtype !== "background_tasks_changed") {
+    return undefined;
+  }
+  const outstanding = (Array.isArray(message.tasks) ? message.tasks : []).some(
+    (task) =>
+      isRecord(task) &&
+      typeof task.task_type === "string" &&
+      RESULT_HOLDING_BACKGROUND_TASK_TYPES.has(task.task_type) &&
+      typeof task.task_id === "string" &&
+      task.task_id.length > 0,
+  );
+  context.reportBackgroundWorkLiveness?.({ outstanding });
+  return outstanding;
+}
+
 function closeClaudeAgentSdkSession(
   session: ClaudeAgentSdkSession,
   _reason: CliBackendLiveSessionCloseReason,
@@ -465,6 +484,7 @@ function closeClaudeAgentSdkSession(
   const turn = session.currentTurn;
   session.currentTurn = undefined;
   if (turn) {
+    turn.context.reportBackgroundWorkLiveness?.({ outstanding: false });
     turn.error =
       error instanceof Error ? error : new Error("Claude Agent SDK live session closed.");
     turn.controller.abort();
@@ -500,17 +520,12 @@ function acceptClaudeAgentSdkMessage(
   if (!turn) {
     return;
   }
-  if (message.type === "system" && message.subtype === "background_tasks_changed") {
-    session.hasResultHoldingBackgroundTasks = (
-      Array.isArray(message.tasks) ? message.tasks : []
-    ).some(
-      (task) =>
-        isRecord(task) &&
-        typeof task.task_type === "string" &&
-        RESULT_HOLDING_BACKGROUND_TASK_TYPES.has(task.task_type) &&
-        typeof task.task_id === "string" &&
-        task.task_id.length > 0,
-    );
+  const hasResultHoldingBackgroundTasks = reportClaudeAgentSdkBackgroundWorkLiveness(
+    turn.context,
+    message,
+  );
+  if (hasResultHoldingBackgroundTasks !== undefined) {
+    session.hasResultHoldingBackgroundTasks = hasResultHoldingBackgroundTasks;
   }
   turn.events.write(message);
   if (message.type === "result") {
@@ -682,15 +697,18 @@ export async function* executeClaudeAgentSdk(
       secretInput,
     );
     for await (const message of query({ prompt: context.prompt, options })) {
-      if (message.type === "result") {
+      const record = { ...message };
+      reportClaudeAgentSdkBackgroundWorkLiveness(context, record);
+      if (record.type === "result") {
         sawTerminalResult = true;
       }
-      yield { ...message };
+      yield record;
     }
     if (!sawTerminalResult && !controller.signal.aborted) {
       throw new Error("Claude Agent SDK exited without a terminal result.");
     }
   } finally {
+    context.reportBackgroundWorkLiveness?.({ outstanding: false });
     activeTurn = undefined;
     if (!controller.signal.aborted) {
       controller.abort();

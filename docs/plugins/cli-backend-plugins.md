@@ -257,11 +257,15 @@ available to `resolveExecutionArgs(ctx)` for native CLI flags.
 backend owns a vendor-supported SDK for the installed CLI. The transport
 receives the exact prepared command, arguments, environment, prompt, session,
 and tool availability; it yields the backend's existing structured stream
-records. Native tool actions must use the provided, run-bound
-`requestToolPermission` callback rather than creating independent approval
-authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
-grant ownership. Explicit credential forwarding, paired-node execution, and
-manual compaction continue through the existing host-managed process path.
+records. When the backend's runtime knows that vendor-native work retains the
+parent turn, report that plugin-owned fact through
+`executionContext.reportBackgroundWorkLiveness({ outstanding })`; classify
+vendor records in the plugin, not in core. Native tool actions must use the
+provided, run-bound `requestToolPermission` callback rather than creating
+independent approval authority. OpenClaw retains cancellation, watchdogs,
+session policy, diagnostic recording, and MCP grant ownership. Explicit
+credential forwarding, paired-node execution, and manual compaction continue
+through the existing host-managed process path.
 
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;

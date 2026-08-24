@@ -36,18 +36,6 @@ import { resolveCliNoOutputTimeoutDecision } from "./no-output-timeout-policy.js
 import type { PreparedCliRunContext } from "./types.js";
 
 const PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS = 5_000;
-const RESULT_HOLDING_BACKGROUND_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
-
-function hasResultHoldingBackgroundTasks(tasks: unknown[]): boolean {
-  return tasks.some(
-    (task) =>
-      isRecord(task) &&
-      typeof task.task_type === "string" &&
-      RESULT_HOLDING_BACKGROUND_TASK_TYPES.has(task.task_type) &&
-      typeof task.task_id === "string" &&
-      task.task_id.trim().length > 0,
-  );
-}
 
 function denyTool(message: string): CliBackendToolPermissionResult {
   return { behavior: "deny", message };
@@ -393,6 +381,7 @@ export async function executePluginOwnedProcess(params: {
   let iterator: AsyncIterator<Record<string, unknown>> | undefined;
   let terminalResultSeen = false;
   let terminalErrorSeen = false;
+  let acceptsBackgroundWorkLiveness = true;
   try {
     resetNoOutputTimer();
     if (
@@ -438,6 +427,19 @@ export async function executePluginOwnedProcess(params: {
             }),
           }
         : {}),
+      reportBackgroundWorkLiveness: ({ outstanding: hasOutstandingBackgroundWork }) => {
+        // Plugins may retain callbacks after their iterator closes. A late fact
+        // must not recreate the diagnostic floor after this turn has released it.
+        if (!acceptsBackgroundWorkLiveness) {
+          return;
+        }
+        markDiagnosticOutstandingBackgroundWork({
+          runId: run.runId,
+          sessionId: run.sessionId,
+          sessionKey: run.sessionKey,
+          outstanding: hasOutstandingBackgroundWork,
+        });
+      },
       requestToolPermission: createPluginToolPermissionHandler({
         context: params.context,
         abortSignal: signal,
@@ -475,13 +477,6 @@ export async function executePluginOwnedProcess(params: {
         Array.isArray(next.value.tasks)
       ) {
         outstanding.background = next.value.tasks.filter(isRecord).length;
-        // The CLI's task list is authoritative while a child owns the quiet turn.
-        markDiagnosticOutstandingBackgroundWork({
-          runId: run.runId,
-          sessionId: run.sessionId,
-          sessionKey: run.sessionKey,
-          outstanding: hasResultHoldingBackgroundTasks(next.value.tasks),
-        });
       }
       params.consumeStdout(`${JSON.stringify(next.value)}\n`);
       outstanding.observed = true;
@@ -512,10 +507,11 @@ export async function executePluginOwnedProcess(params: {
       throw error;
     }
   } finally {
+    acceptsBackgroundWorkLiveness = false;
     clearTimeout(overallTimer);
     clearTimeout(noOutputTimer);
     // A terminal result, iterator error, cancellation, or timeout can arrive
-    // before the plugin sends an empty task list; do not leak its liveness floor.
+    // before the plugin reports its final fact; do not leak its liveness floor.
     markDiagnosticOutstandingBackgroundWork({
       runId: run.runId,
       sessionId: run.sessionId,

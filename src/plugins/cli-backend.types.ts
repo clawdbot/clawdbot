@@ -225,6 +225,11 @@ export type CliBackendLiveSessionCapability = {
   remove(handle: CliBackendLiveSessionHandle): void;
 };
 
+/** Plugin-owned fact about whether backend-native work retains the admitted turn. */
+export type CliBackendBackgroundWorkLiveness = Readonly<{
+  outstanding: boolean;
+}>;
+
 /** Exact prepared local process facts consumed by a plugin-owned execution transport. */
 export type CliBackendExecuteContext = {
   command: string;
@@ -242,6 +247,8 @@ export type CliBackendExecuteContext = {
   toolAvailability?: CliBackendToolAvailability;
   /** Exact host-owned reusable process lifecycle and current-turn admission. */
   liveSession?: CliBackendLiveSessionCapability;
+  /** Reports plugin-owned background-work liveness; the host records this fact without parsing vendor events. */
+  reportBackgroundWorkLiveness?: (fact: CliBackendBackgroundWorkLiveness) => void;
   /** Closure-bound approval capability; retained copies fail after the run closes. */
   requestToolPermission: (
     request: CliBackendToolPermissionRequest,

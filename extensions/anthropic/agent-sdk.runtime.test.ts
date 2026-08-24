@@ -592,10 +592,23 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     const live = useLiveSdkStreams();
     const capability = createLiveCapability();
     const controller = new AbortController();
+    const reportBackgroundWorkLiveness = vi.fn();
     const running = collect(
-      createContext({ abortSignal: controller.signal, liveSession: capability }),
+      createContext({
+        abortSignal: controller.signal,
+        liveSession: capability,
+        reportBackgroundWorkLiveness,
+      }),
     );
     await vi.waitFor(() => expect(queryMock).toHaveBeenCalledOnce());
+    live.streams[0]?.write({
+      type: "system",
+      subtype: "background_tasks_changed",
+      tasks: [{ task_id: "background-agent", task_type: "local_agent" }],
+    });
+    await vi.waitFor(() =>
+      expect(reportBackgroundWorkLiveness).toHaveBeenLastCalledWith({ outstanding: true }),
+    );
     const canUseTool = sdkNativeTool(sdkOptions());
     const reason = new Error("OpenClaw cancelled the active warm turn.");
 
@@ -604,6 +617,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     await expect(running).rejects.toBe(reason);
     expect(live.closes[0]).toHaveBeenCalledOnce();
     expect(capability.current()).toBeUndefined();
+    expect(reportBackgroundWorkLiveness).toHaveBeenLastCalledWith({ outstanding: false });
     await expect(
       canUseTool(
         "Bash",
@@ -709,13 +723,36 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     });
   });
 
-  it("holds provisional synthetic results until the real background-agent answer arrives", async () => {
+  it.each([
+    { taskId: " ", taskType: "local_agent" },
+    { taskId: "background-workflow", taskType: "local_workflow" },
+  ])("reports $taskType liveness through the plugin seam", async ({ taskId, taskType }) => {
+    const reportBackgroundWorkLiveness = vi.fn();
+    useSdkMessages([
+      {
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [{ task_id: taskId, task_type: taskType }],
+      },
+      SUCCESS_RESULT,
+    ]);
+
+    await collect(createContext({ reportBackgroundWorkLiveness }));
+
+    expect(reportBackgroundWorkLiveness).toHaveBeenNthCalledWith(1, { outstanding: true });
+    expect(reportBackgroundWorkLiveness).toHaveBeenLastCalledWith({ outstanding: false });
+  });
+
+  it("reports Agent SDK task liveness while holding a provisional result", async () => {
     const live = useLiveSdkStreams();
     const capability = createLiveCapability();
+    const reportBackgroundWorkLiveness = vi.fn();
     const observed: Record<string, unknown>[] = [];
     let settled = false;
     const result = (async () => {
-      for await (const event of executeClaudeAgentSdk(createContext({ liveSession: capability }))) {
+      for await (const event of executeClaudeAgentSdk(
+        createContext({ liveSession: capability, reportBackgroundWorkLiveness }),
+      )) {
         observed.push(event);
       }
       settled = true;
@@ -740,6 +777,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
     stream?.write({ ...SUCCESS_RESULT, result: "" });
     await vi.waitFor(() => expect(observed).toHaveLength(3));
     expect(settled).toBe(false);
+    expect(reportBackgroundWorkLiveness).toHaveBeenCalledExactlyOnceWith({ outstanding: true });
 
     stream?.write({ type: "system", subtype: "background_tasks_changed", tasks: [] });
     stream?.write({ ...SUCCESS_RESULT, result: "background answer" });
@@ -750,6 +788,7 @@ describe("Anthropic Agent SDK runtime ownership", () => {
       ]),
     );
     expect(observed.at(-1)).toEqual(expect.objectContaining({ result: "background answer" }));
+    expect(reportBackgroundWorkLiveness).toHaveBeenLastCalledWith({ outstanding: false });
     expect(live.closes[0]).not.toHaveBeenCalled();
   });
 
