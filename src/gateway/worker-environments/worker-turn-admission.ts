@@ -118,14 +118,40 @@ export async function waitForTurnOperation<T>(params: {
   });
 }
 
+function resolvePlacementIdentityField(params: {
+  field: string;
+  supplied: string | undefined;
+  persisted: string | undefined;
+}): string {
+  if (!params.persisted) {
+    return required(params.supplied, params.field);
+  }
+  if (params.supplied === undefined) {
+    return params.persisted;
+  }
+  const supplied = required(params.supplied, params.field);
+  if (supplied !== params.persisted) {
+    throw new Error(`Worker turn ${params.field} does not match its placement`);
+  }
+  return params.persisted;
+}
+
 export function resolvePlacementIdentity(
   claim: LocalTurnPlacementClaim,
   placement: WorkerSessionPlacementRecord | undefined,
 ) {
   return {
     sessionId: claim.sessionId,
-    agentId: placement?.agentId ?? required(claim.agentId, "agent id"),
-    sessionKey: placement?.sessionKey ?? required(claim.sessionKey, "session key"),
+    agentId: resolvePlacementIdentityField({
+      field: "agent id",
+      supplied: claim.agentId,
+      persisted: placement?.agentId,
+    }),
+    sessionKey: resolvePlacementIdentityField({
+      field: "session key",
+      supplied: claim.sessionKey,
+      persisted: placement?.sessionKey,
+    }),
   };
 }
 
