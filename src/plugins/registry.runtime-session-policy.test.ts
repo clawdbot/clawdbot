@@ -66,6 +66,7 @@ describe("plugin registry runtime session policy", () => {
     const tempDir = tempDirs.make("openclaw-plugin-session-reset-");
     const storePath = path.join(tempDir, "sessions.json");
     const channelSessionKey = "agent:main:msteams:direct:user-aad";
+    const unlockedChannelSessionKey = "agent:main:msteams:direct:user-unlocked";
     const harnessSessionKey = "agent:main:harness:codex:thread-1";
     const channelTranscriptPath = path.join(tempDir, "channel-session.jsonl");
     const harnessTranscriptPath = path.join(tempDir, "harness-session.jsonl");
@@ -142,6 +143,32 @@ describe("plugin registry runtime session policy", () => {
           update: () => ({ updatedAt: 0 }),
         }),
       ).rejects.toThrow('owned by plugin "codex-owner"');
+
+      await runtime.agent.session.upsertSessionEntry({
+        agentId: "main",
+        entry: {
+          label: "Unlocked Teams",
+          sessionId: "channel-unlocked",
+          updatedAt: 15,
+        },
+        sessionKey: unlockedChannelSessionKey,
+        storePath,
+      });
+      await expect(
+        otherApi.runtime.agent.session.resetSessionEntryLifecycle({
+          expectedSessionId: "channel-unlocked",
+          expectedUpdatedAt: 15,
+          sessionKey: unlockedChannelSessionKey,
+          storePath,
+          update: () => ({ updatedAt: 0 }),
+        }),
+      ).rejects.toThrow("only when it owns the active agent harness");
+      expect(
+        runtime.agent.session.getSessionEntry({
+          sessionKey: unlockedChannelSessionKey,
+          storePath,
+        }),
+      ).toMatchObject({ sessionId: "channel-unlocked", updatedAt: 15 });
 
       const harnessResult = await ownerApi.runtime.agent.session.resetSessionEntryLifecycle({
         expectedSessionId: "harness-old",

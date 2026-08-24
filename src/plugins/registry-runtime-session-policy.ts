@@ -144,13 +144,21 @@ export async function resetPluginSessionEntryLifecycle(params: {
   ) => LockedHarnessResolution;
 }): Promise<SessionEntry | null> {
   const request = params.request;
-  params.assertStoredSessionEntryOwned({
+  const entry = params.assertStoredSessionEntryOwned({
     action: "reset",
     sessionKey: request.sessionKey,
     ...(request.agentId !== undefined ? { agentId: request.agentId } : {}),
     ...(request.env !== undefined ? { env: request.env } : {}),
     ...(request.storePath !== undefined ? { storePath: request.storePath } : {}),
   });
+  const owner = entry
+    ? params.resolveLockedSessionHarnessRegistration(request.sessionKey, entry, "reset")
+    : undefined;
+  if (!owner?.registration || owner.ownerPluginId !== params.pluginId) {
+    throw new Error(
+      `Plugin "${params.pluginId}" can reset sessions through the agent runtime only when it owns the active agent harness.`,
+    );
+  }
   return await params.reset({
     ...request,
     releasePhysicalOwner: async (context: ResetContext) =>
