@@ -48,23 +48,27 @@ export function makeRegistry(
     providers?: string[];
     cliBackends?: string[];
     origin?: PluginOrigin;
+    legacyPluginIds?: string[];
     configSchema?: Record<string, unknown>;
     channelConfigs?: Record<
       string,
       { schema: Record<string, unknown>; label?: string; preferOver?: string[] }
     >;
+    channelCatalogMeta?: { id: string; label?: string; blurb?: string; preferOver?: string[] };
   }>,
 ): PluginManifestRegistry {
   return {
     plugins: plugins.map((plugin) => ({
       id: plugin.id,
       channels: plugin.channels,
+      legacyPluginIds: plugin.legacyPluginIds,
       activation: plugin.activation,
       autoEnableWhenConfiguredProviders: plugin.autoEnableWhenConfiguredProviders,
       modelSupport: plugin.modelSupport,
       contracts: plugin.contracts,
       configSchema: plugin.configSchema,
       channelConfigs: plugin.channelConfigs,
+      channelCatalogMeta: plugin.channelCatalogMeta,
       providers: plugin.providers ?? [],
       cliBackends: plugin.cliBackends ?? [],
       skills: [],

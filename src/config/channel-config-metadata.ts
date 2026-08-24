@@ -1,10 +1,18 @@
+import {
+  hasSensitiveUrlHintTag,
+  SENSITIVE_URL_HINT_TAG,
+} from "@openclaw/net-policy/redact-sensitive-url";
 /**
  * Converts plugin manifest metadata into deterministic config UI metadata for docs, validation, and runtime schema.
  * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
+import { resolveManifestChannelPreferOverIds } from "../plugins/manifest-channel-preference.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { collectPreferenceCycleComponents } from "./channel-preference-cycles.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
@@ -15,6 +23,8 @@ type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
 };
 
 type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
+  // Rank of the closest record that has claimed this channel, which decides who may still replace
+  // the schema.
   originRank: number;
 };
 
@@ -124,6 +134,412 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
   return changed ? normalized : schema;
 }
 
+/** How a caller judges channel claimants; both decisions mirror what plugin activation does. */
+export type ChannelOwnershipPolicy = {
+  /**
+   * Whether the plugin is active enough to own this channel's surfaced schema. Auto-enable ignores
+   * a denied or disabled plugin and activates another claimant, so an inactive plugin must never
+   * supply the schema an active one is validated against.
+   *
+   * Scoped to a channel because activation is: auto-enable materializes a per-channel candidate
+   * set, and once any claimant declares `preferOver` that set narrows to the declaring pair. A
+   * third claimant of the same channel is then never activated there, however close its origin
+   * sits, while remaining perfectly active on channels where it is a candidate.
+   */
+  isPluginActive: (pluginId: string, channelId: string) => boolean;
+  /**
+   * Whether the operator selected this plugin by hand. Auto-enable leaves such a plugin enabled
+   * even when another claimant declares it in `preferOver`, so both stay active and the runtime
+   * channel facade falls back to registration order. Ownership must stop applying the declaration
+   * there instead of handing the schema to the replacement.
+   */
+  isPluginExplicitlySelected: (pluginId: string) => boolean;
+  /**
+   * Whether the operator disabled this plugin outright. Distinct from `isPluginActive`, which is
+   * also false for a claimant that is merely displaced: a displaced claimant keeps declaring so a
+   * replacement chain closes the same way in both views, but a plugin the operator switched off
+   * declares nothing at all. Auto-enable skips it as a declarant for the same reason.
+   */
+  isPluginPolicyDisabled: (pluginId: string) => boolean;
+  /**
+   * Replacement preference for one record on one channel. Defaults to the manifest declaration,
+   * which is all config-independent metadata can see; a caller holding the operator config passes
+   * auto-enable's full resolution so a built-in or catalog preference counts here too.
+   */
+  resolveChannelPreferOverIds: (
+    record: PluginManifestRecord,
+    channelId: string,
+  ) => readonly string[];
+};
+
+/**
+ * Ownership from manifests alone, for callers with no operator config to consult: every claimant
+ * counts as active and nothing is explicitly selected, so registry and origin order decide. Docs
+ * generation is the intended user. Anything holding a config must build the configured policy
+ * instead, or it will describe an owner the runtime does not activate.
+ */
+export const MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY: ChannelOwnershipPolicy = {
+  isPluginActive: () => true,
+  isPluginExplicitlySelected: () => false,
+  isPluginPolicyDisabled: () => false,
+  resolveChannelPreferOverIds: resolveManifestChannelPreferOverIds,
+};
+
+function resolveOriginRank(origin: PluginOrigin): number {
+  return PLUGIN_ORIGIN_RANK[origin] ?? Number.MAX_SAFE_INTEGER;
+}
+
+function normalizeClaimedChannelId(channelId: string): string {
+  return normalizeChatChannelId(channelId) ?? channelId;
+}
+
+/** Plugin ids some other claimant declares it replaces, per claimed channel. */
+type DisplacedChannelOwners = Map<string, Set<string>>;
+
+function isDisplacedChannelOwner(
+  displaced: DisplacedChannelOwners,
+  channelId: string,
+  pluginId: string,
+): boolean {
+  return displaced.get(channelId)?.has(pluginId) === true;
+}
+
+/**
+ * Replacement declarations set aside rather than applied, per claimed channel, keyed declarant id
+ * to the ids it named. Two causes set one aside: the operator explicitly selected the named
+ * plugin, or the two claimants named each other and neither can be said to replace the other.
+ * Kept apart from `DisplacedChannelOwners` because a set-aside declaration displaces nobody —
+ * both claimants stay active — yet the pair must not settle the way a pair nobody declared
+ * anything about does.
+ */
+type SuppressedChannelDeclarations = Map<string, Map<string, Set<string>>>;
+
+/**
+ * Whether a declaration between the two claimants was set aside on this channel. Direction is
+ * deliberately ignored: the runtime facade keeps the first registrant no matter which of the pair
+ * did the declaring.
+ */
+function hasSuppressedChannelDeclaration(
+  suppressed: SuppressedChannelDeclarations,
+  channelId: string,
+  pluginId: string,
+  otherPluginId: string,
+): boolean {
+  const declared = suppressed.get(channelId);
+  return (
+    declared?.get(pluginId)?.has(otherPluginId) === true ||
+    declared?.get(otherPluginId)?.has(pluginId) === true
+  );
+}
+
+/**
+ * Every claimant of each channel, keyed by claimed id. Only a record listed in `record.channels`
+ * claims: auto-enable and the read-only channel facade build candidate sets from that list alone.
+ */
+function collectChannelClaimants(
+  registry: PluginManifestRegistry,
+): Map<string, PluginManifestRecord[]> {
+  const claimantsByChannel = new Map<string, PluginManifestRecord[]>();
+  for (const record of registry.plugins) {
+    for (const channelId of record.channels) {
+      const claimedId = normalizeClaimedChannelId(channelId);
+      const claimants = claimantsByChannel.get(claimedId) ?? [];
+      claimantsByChannel.set(claimedId, claimants);
+      claimants.push(record);
+    }
+  }
+  return claimantsByChannel;
+}
+
+/**
+ * The claimant set displacement and winner selection reason over. Active claimants when any
+ * exist. When none is active nothing registers and no cede will stand, but schema ownership
+ * still has to name a deterministic owner — the plugin the channel would go to once configured —
+ * and there policy disablement stays the only signal: the activation read reports every claimant
+ * of an unconfigured channel with no loading owner inactive (a workspace pair, a bundled plugin
+ * without default enablement), so reasoning over the full set would let a claimant the operator
+ * explicitly disabled declare and win. Only when the operator disabled every claimant does the
+ * full set stand, keeping the answer deterministic as before.
+ */
+function resolveChannelReasoningBase(
+  claimants: readonly PluginManifestRecord[],
+  claimedId: string,
+  policy: ChannelOwnershipPolicy,
+): readonly PluginManifestRecord[] {
+  const activeClaimants = claimants.filter((record) => policy.isPluginActive(record.id, claimedId));
+  if (activeClaimants.length > 0) {
+    return activeClaimants;
+  }
+  const notDisabled = claimants.filter((record) => !policy.isPluginPolicyDisabled(record.id));
+  return notDisabled.length > 0 ? notDisabled : claimants;
+}
+
+/**
+ * Records, per contested channel, which claimants another claimant declares it replaces.
+ *
+ * Built across the whole claimant set before any owner is chosen, because comparing each record
+ * only against the current owner lets an A-replaces-B-replaces-C chain settle differently per
+ * registry order, while `shouldSkipPreferredPluginAutoEnable` scans every configured candidate and
+ * drops both B and C. Callers pass contested channels only, since resolving a preference can read
+ * an external plugin catalog from disk.
+ *
+ * Inactive claimants normally declare nothing, so a denied replacement cannot take a channel from
+ * the plugin activation would run instead. When no claimant is active there is no such plugin, and
+ * dropping every declaration would leave registry order picking a winner; the declarations are
+ * read from the whole claimant set in that case so the answer stays deterministic.
+ *
+ * Alongside the displaced set it reports the declarations it set aside because the named target is
+ * explicitly selected: the ownership tie-break needs that distinction, and only this walk can see
+ * the suppression happen.
+ */
+function collectDisplacedOwnersForClaimants(
+  claimantsByChannel: ReadonlyMap<string, PluginManifestRecord[]>,
+  policy: ChannelOwnershipPolicy,
+): { displaced: DisplacedChannelOwners; suppressed: SuppressedChannelDeclarations } {
+  const displaced: DisplacedChannelOwners = new Map();
+  const suppressed: SuppressedChannelDeclarations = new Map();
+  for (const [claimedId, claimants] of claimantsByChannel) {
+    const base = resolveChannelReasoningBase(claimants, claimedId, policy);
+    // A claimant this channel has already displaced keeps declaring. Auto-enable disables the
+    // middle of an A-replaces-B-replaces-C chain, and reading only active declarants then dropped
+    // B's edge to C for exactly the plugin A had displaced: the source config resolved to A while
+    // the materialized one left A and C to origin rank, so validation could check A's strict
+    // schema against a config the Gateway then served with C. Re-run until the edge set settles so
+    // both views answer the same way.
+    for (;;) {
+      const declarants = [
+        ...base,
+        ...claimants.filter(
+          (record) =>
+            !base.includes(record) &&
+            isDisplacedChannelOwner(displaced, claimedId, record.id) &&
+            // Only an implicitly displaced middle claimant propagates the chain. A plugin the
+            // operator disabled is not inactive because something replaced it, and auto-enable
+            // skips it as a declarant, so re-adding it here would apply an edge the runtime never
+            // applies and strand the channel on a plugin the loader will not let register.
+            !policy.isPluginPolicyDisabled(record.id),
+        ),
+      ];
+      let added = false;
+      const setAsideDeclaration = (declarantId: string, namedId: string) => {
+        const declared = suppressed.get(claimedId) ?? new Map<string, Set<string>>();
+        suppressed.set(claimedId, declared);
+        const setAsideIds = declared.get(declarantId) ?? new Set<string>();
+        declared.set(declarantId, setAsideIds);
+        setAsideIds.add(namedId);
+      };
+      // Resolved once per declarant and read twice below: resolving can consult an external
+      // plugin catalog, and the cycle computation must see exactly the edges the displacement
+      // loop applies.
+      const declarantEdges = new Map<string, string[]>();
+      for (const record of declarants) {
+        const resolved = policy.resolveChannelPreferOverIds(record, claimedId);
+        const edges = declarantEdges.get(record.id);
+        if (edges === undefined) {
+          declarantEdges.set(record.id, [...resolved]);
+        } else {
+          edges.push(...resolved);
+        }
+      }
+      // Declarants on one preference cycle settle nothing among themselves: every member both
+      // displaces and is displaced, so no member outranks another. The reciprocal-pair rule was
+      // the 2-member case of this, but a longer ring satisfies it in neither direction, so every
+      // member got displaced and the tie fell to registry order while auto-enable settled the
+      // same ring by processing order. Every pair in the component is set aside, declared edge
+      // or not — a 4-cycle's opposite corners share no edge yet must tie-break exactly like the
+      // mutual pair, or their comparison falls through to last-writer mid-ring.
+      const componentByDeclarantId = new Map<string, number>();
+      collectPreferenceCycleComponents(
+        [...declarantEdges.keys()],
+        (nodeId) => declarantEdges.get(nodeId) ?? [],
+      ).forEach((members, componentIndex) => {
+        members.forEach((member, memberIndex) => {
+          componentByDeclarantId.set(member, componentIndex);
+          // One direction per pair suffices: `hasSuppressedChannelDeclaration` is symmetric.
+          for (const laterMember of members.slice(memberIndex + 1)) {
+            setAsideDeclaration(member, laterMember);
+          }
+        });
+      });
+      for (const [declarantId, declaredIds] of declarantEdges) {
+        for (const replacedId of declaredIds) {
+          // A manifest that names itself declares nothing: `shouldSkipPreferredPluginAutoEnable`
+          // skips the self comparison, so a self-edge would strand ownership on another claimant
+          // while that plugin stays active.
+          if (replacedId === declarantId) {
+            continue;
+          }
+          // A declaration naming an explicitly selected plugin is set aside, not applied — the
+          // operator's choice outranks it, so nobody is displaced. The ownership decision still
+          // needs to know the pair was declared: with both claimants left active the runtime
+          // facade rejects the later registration, while an undeclared pair stays on last-writer.
+          // The two are indistinguishable at decision time, so record the suppression here.
+          if (policy.isPluginExplicitlySelected(replacedId)) {
+            setAsideDeclaration(declarantId, replacedId);
+            continue;
+          }
+          // An edge between two members of one cycle component is the stand-off recorded above;
+          // an edge from outside a component, or leaving one, displaces exactly as before.
+          const componentIndex = componentByDeclarantId.get(declarantId);
+          if (
+            componentIndex !== undefined &&
+            componentIndex === componentByDeclarantId.get(replacedId)
+          ) {
+            continue;
+          }
+          const replacedIds = displaced.get(claimedId) ?? new Set<string>();
+          displaced.set(claimedId, replacedIds);
+          if (!replacedIds.has(replacedId)) {
+            replacedIds.add(replacedId);
+            added = true;
+          }
+        }
+      }
+      if (!added) {
+        break;
+      }
+    }
+  }
+  return { displaced, suppressed };
+}
+
+/**
+ * The one claimant both planes hand each contested channel to. The runtime facade keeps the first
+ * registrant (`registry-registrars-network.ts:370` rejects the rest), and the loader cedes every
+ * active claimant that is not this winner, so the scan mirrors that: walk claimants in registry
+ * (= registration) order, skip the displaced — and the inactive, while any claimant is active —
+ * and keep the earliest. Ties separate the way the schema comparison separates them: a
+ * closer-origin claimant overtakes, except across a set-aside declaration, where both claimants
+ * register and the facade keeps the first registrant whatever its origin. With no active claimant
+ * the winner answers what the operator would get once plugins come back, like the displacement
+ * walk above; the loader ignores it then because nothing registers.
+ */
+function resolveRuntimeChannelWinners(
+  claimantsByChannel: ReadonlyMap<string, PluginManifestRecord[]>,
+  displaced: DisplacedChannelOwners,
+  suppressed: SuppressedChannelDeclarations,
+  policy: ChannelOwnershipPolicy,
+): Map<string, string> {
+  const winners = new Map<string, string>();
+  for (const [claimedId, claimants] of claimantsByChannel) {
+    const base = resolveChannelReasoningBase(claimants, claimedId, policy);
+    let leader: PluginManifestRecord | undefined;
+    for (const record of base) {
+      if (isDisplacedChannelOwner(displaced, claimedId, record.id)) {
+        continue;
+      }
+      if (
+        leader === undefined ||
+        (!hasSuppressedChannelDeclaration(suppressed, claimedId, leader.id, record.id) &&
+          resolveOriginRank(record.origin) < resolveOriginRank(leader.origin))
+      ) {
+        leader = record;
+      }
+    }
+    if (leader !== undefined) {
+      winners.set(claimedId, leader.id);
+    }
+  }
+  return winners;
+}
+
+/**
+ * Displacement over the claimant set, shared by both planes: a channel counts as contested once
+ * two records claim it in `record.channels`, descriptors or not. A bare claim serves a channel —
+ * `channelConfigs` is optional, and a channel declared without one still registers — so the
+ * schema plane must count the contest exactly as the runtime plane does. Counting schema
+ * descriptors here instead let a preferred replacement that ships no descriptor keep the count at
+ * one: the channel then left displacement entirely, the fallback the replacement named was never
+ * displaced on this plane, and the fallback's strict schema stayed surfaced for a channel the
+ * loader cedes to the replacement — validation rejected every key the replacement accepts.
+ */
+function collectDisplacedChannelOwners(
+  registry: PluginManifestRegistry,
+  policy: ChannelOwnershipPolicy,
+): {
+  displaced: DisplacedChannelOwners;
+  suppressed: SuppressedChannelDeclarations;
+  winners: Map<string, string>;
+} {
+  const claimantsByChannel = collectChannelClaimants(registry);
+  for (const [claimedId, claimants] of claimantsByChannel) {
+    if (claimants.length < 2) {
+      claimantsByChannel.delete(claimedId);
+    }
+  }
+  const { displaced, suppressed } = collectDisplacedOwnersForClaimants(claimantsByChannel, policy);
+  return {
+    displaced,
+    suppressed,
+    winners: resolveRuntimeChannelWinners(claimantsByChannel, displaced, suppressed, policy),
+  };
+}
+
+/**
+ * Runtime-plane ownership, read by the loader to decide which claimants cede a channel: the
+ * displacement graph, the winner both planes name per contested channel, and whether a pair's
+ * declaration was set aside (the claimants that must keep registering alongside the winner). One
+ * computation on purpose: the two planes deciding from different data is exactly what let one
+ * plane keep a plugin the other had already ruled out.
+ */
+export function collectRuntimeChannelOwnership(
+  registry: PluginManifestRegistry,
+  policy: ChannelOwnershipPolicy,
+): {
+  displaced: DisplacedChannelOwners;
+  winners: ReadonlyMap<string, string>;
+  isPairSuppressed: (channelId: string, pluginId: string, otherPluginId: string) => boolean;
+} {
+  const { displaced, suppressed, winners } = collectDisplacedChannelOwners(registry, policy);
+  return {
+    displaced,
+    winners,
+    isPairSuppressed: (channelId, pluginId, otherPluginId) =>
+      hasSuppressedChannelDeclaration(suppressed, channelId, pluginId, otherPluginId),
+  };
+}
+
+/**
+ * Which of two records supplying a schema for the same channel owns it. Operator policy first,
+ * then the declared replacement, then install origin, and registry order only when nothing else
+ * separates them. Auto-enable applies the declaration with no origin restriction, so ranking
+ * origin above it would activate one plugin and validate against another.
+ */
+function decideChannelSchemaOwnership(params: {
+  currentActive: boolean;
+  incomingActive: boolean;
+  currentDisplaced: boolean;
+  incomingDisplaced: boolean;
+  currentOriginRank: number;
+  incomingOriginRank: number;
+  currentIsRuntimeWinner: boolean;
+  incomingIsRuntimeWinner: boolean;
+  pairDeclarationSuppressed: boolean;
+}): "keepCurrent" | "takeChannel" {
+  if (params.currentActive !== params.incomingActive) {
+    return params.incomingActive ? "takeChannel" : "keepCurrent";
+  }
+  if (params.currentDisplaced !== params.incomingDisplaced) {
+    return params.incomingDisplaced ? "keepCurrent" : "takeChannel";
+  }
+  if (params.currentOriginRank !== params.incomingOriginRank) {
+    return params.currentOriginRank < params.incomingOriginRank ? "keepCurrent" : "takeChannel";
+  }
+  // Nothing separates the pair as compared here — and a suppressed pair arrives tied even across
+  // origins, because the entry adopts the nearer record's rank before the comparison. The runtime
+  // winner decides the tie: the facade keeps the first registrant
+  // (`registry-registrars-network.ts:370` rejects the rest), so a tied pair the schema settled by
+  // last writer split the planes — the config was validated against one plugin's schema while the
+  // facade served the claimant registered first. When the winner sits outside the pair, how the
+  // tie arose still decides: a set-aside declaration keeps the first claimant, matching the
+  // registration-order answer its co-registrants get, and a pair with no declaration between them
+  // stays on the long-standing last-writer answer.
+  if (params.currentIsRuntimeWinner !== params.incomingIsRuntimeWinner) {
+    return params.incomingIsRuntimeWinner ? "takeChannel" : "keepCurrent";
+  }
+  return params.pairDeclarationSuppressed ? "keepCurrent" : "takeChannel";
+}
+
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
 export function collectPluginSchemaMetadataCore(
   registry: PluginManifestRegistry,
@@ -157,26 +573,91 @@ export function collectPluginSchemaMetadataCore(
     .map(({ originRank: _originRank, ...record }) => record);
 }
 
-/** Collects per-channel config metadata with the plugin that supplied the selected schema. */
+/**
+ * Collects per-channel config metadata with the plugin that supplied the selected schema.
+ *
+ * `policy` decides which claimants count, mirroring plugin activation. Omit it for
+ * config-independent metadata (docs, generated baselines), where every declared replacement counts
+ * and no operator config is in scope.
+ */
+/** The attributes redaction consults, unioned across a channel's claimants. */
+type ChannelRedactionHint = { sensitive: boolean; urlSecret: boolean };
+
 export function collectChannelSchemaMetadataWithOwnership(
   registry: PluginManifestRegistry,
+  policy: ChannelOwnershipPolicy = MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY,
 ): ChannelSchemaMetadataWithOwnership[] {
   const byChannelId = new Map<string, ChannelMetadataRecord>();
+  const {
+    displaced: displacedOwners,
+    suppressed: suppressedDeclarations,
+    winners: runtimeWinners,
+  } = collectDisplacedChannelOwners(registry, policy);
+  // Who claims each channel, for the two descriptor gates below: a descriptor is read only from a
+  // record that claims the channel, and a displaced claimant may not seed an empty channel while
+  // an active claimant that beat it serves the channel.
+  const claimantsByChannel = collectChannelClaimants(registry);
+  // Redaction is a property of the field, not of whichever claimant wins the schema. A displaced
+  // plugin's config can survive under the shared channel when the replacement accepts additional
+  // properties, so dropping its hints with its schema would leave a retained secret with no hint
+  // and no name-shaped fallback, and redaction would emit it.
+  //
+  // Both attributes the redaction path consults travel here: `redactConfigObject` and the system
+  // agent gate on `sensitive === true || hasSensitiveUrlHintTag(hint)`, so carrying only the
+  // former would still leak a URL-embedded credential the displaced owner alone tagged.
+  const redactionByChannel = new Map<string, Map<string, ChannelRedactionHint>>();
 
   for (const record of registry.plugins) {
-    const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
+    const originRank = resolveOriginRank(record.origin);
     const rootLabel = record.channelCatalogMeta?.label;
     const rootDescription = record.channelCatalogMeta?.blurb;
 
-    for (const channelId of record.channels) {
+    for (const declaredChannelId of record.channels) {
+      // Key by the canonical id. Ownership below already decides on `normalizeClaimedChannelId`,
+      // and the runtime config is canonical too, so keying the entry by the declared spelling put
+      // a differently-spelled claimant in its own bucket that no `channels.<id>.*` path can reach.
+      const channelId = normalizeClaimedChannelId(declaredChannelId);
       const current = byChannelId.get(channelId);
       // Root channel catalog metadata can fill labels/descriptions before a channel-specific
       // config block appears, but it must not overwrite a closer-origin channel entry.
       if (!current || originRank <= current.originRank) {
+        // Presentation travels with the selected schema owner. A record that will not win the
+        // schema must not relabel the channel, or docs and config UI show the replaced plugin's
+        // name above the replacement's fields. Two ways to lose it: a same-origin claimant settled
+        // by the preference below, or an inactive plugin that operator policy already ruled out
+        // however close its origin sits. The winner re-sets both below.
+        const ownerId = current?.schemaPluginId;
+        const claimedId = normalizeClaimedChannelId(channelId);
+        const recordActive = policy.isPluginActive(record.id, claimedId);
+        // Ranks tie by the time the schema pass reaches this record, since the entry adopts this
+        // record's rank right here, so only policy and the declaration separate the two.
+        const keepOwnerPresentation =
+          ownerId !== undefined &&
+          ownerId !== record.id &&
+          decideChannelSchemaOwnership({
+            currentActive: policy.isPluginActive(ownerId, claimedId),
+            incomingActive: recordActive,
+            currentDisplaced: isDisplacedChannelOwner(displacedOwners, claimedId, ownerId),
+            incomingDisplaced: isDisplacedChannelOwner(displacedOwners, claimedId, record.id),
+            currentOriginRank: originRank,
+            incomingOriginRank: originRank,
+            currentIsRuntimeWinner: runtimeWinners.get(claimedId) === ownerId,
+            incomingIsRuntimeWinner: runtimeWinners.get(claimedId) === record.id,
+            pairDeclarationSuppressed: hasSuppressedChannelDeclaration(
+              suppressedDeclarations,
+              claimedId,
+              ownerId,
+              record.id,
+            ),
+          }) === "keepCurrent";
         byChannelId.set(channelId, {
           id: channelId,
-          label: rootLabel ?? current?.label,
-          description: rootDescription ?? current?.description,
+          label: keepOwnerPresentation
+            ? (current?.label ?? rootLabel)
+            : (rootLabel ?? current?.label),
+          description: keepOwnerPresentation
+            ? (current?.description ?? rootDescription)
+            : (rootDescription ?? current?.description),
           configSchema: current?.configSchema,
           configUiHints: current?.configUiHints,
           schemaPluginId: current?.schemaPluginId,
@@ -186,17 +667,110 @@ export function collectChannelSchemaMetadataWithOwnership(
       }
     }
 
-    for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
-      const current = byChannelId.get(channelId);
-      if (
-        current &&
-        current.originRank < originRank &&
-        (current.configSchema !== undefined || current.configUiHints !== undefined)
-      ) {
-        // A closer-origin channel config owns schema/UI hints even if a farther plugin also
-        // advertises the same channel id.
+    for (const [declaredChannelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
+      // Same canonicalization as the declaration loop: a sensitive hint collected under a
+      // non-canonical spelling never lines up with the config path redaction actually reads.
+      const channelId = normalizeClaimedChannelId(declaredChannelId);
+      // Only a record that claims the channel in `record.channels` may supply its descriptor:
+      // auto-enable and the channel facade build candidate sets from that list alone. Reading the
+      // descriptor anyway let a closer-origin non-claimant win an unconfigured channel's schema —
+      // with no candidate set yet every claimant counts as active — so the Control UI offered the
+      // non-claimant's fields, and the first save narrowed candidates to real claimants and flipped
+      // ownership to a strict schema that rejects the exact field the UI just offered. Manifest
+      // validation only warns about the opposite gap (a claim without a descriptor), so the drop
+      // is reported here where it is decided.
+      if (!claimantsByChannel.get(channelId)?.includes(record)) {
+        const message = `plugin ships channelConfigs metadata for ${sanitizeForLog(channelId)} (in its manifest or merged from the official plugin catalog) without declaring the channel in openclaw.plugin.json#channels; ignoring the descriptor. Only a claimant may supply a channel's config schema — add the channel to channels if this plugin should own it.`;
+        const pluginId = sanitizeForLog(record.id);
+        // The collector runs many times against one registry (validation, schema responses,
+        // reloads), so an already-reported drop must not accumulate duplicates.
+        if (
+          !registry.diagnostics.some(
+            (diagnostic) =>
+              diagnostic.level === "warn" &&
+              diagnostic.pluginId === pluginId &&
+              diagnostic.message === message,
+          )
+        ) {
+          registry.diagnostics.push({
+            level: "warn",
+            pluginId,
+            source: sanitizeForLog(record.manifestPath),
+            message,
+          });
+        }
         continue;
       }
+      // Collect before any ownership decision: a claimant that loses the schema still contributes
+      // sensitivity, and the decision below `continue`s past this point for losers.
+      for (const [relPath, hint] of Object.entries(channelConfig.uiHints ?? {})) {
+        const sensitive = hint?.sensitive === true;
+        const urlSecret = hasSensitiveUrlHintTag(hint);
+        if (!sensitive && !urlSecret) {
+          continue;
+        }
+        const carried =
+          redactionByChannel.get(channelId) ?? new Map<string, ChannelRedactionHint>();
+        const seen = carried.get(relPath);
+        carried.set(relPath, {
+          sensitive: sensitive || seen?.sensitive === true,
+          urlSecret: urlSecret || seen?.urlSecret === true,
+        });
+        redactionByChannel.set(channelId, carried);
+      }
+      const current = byChannelId.get(channelId);
+      const currentOwnsSchema =
+        current !== undefined &&
+        (current.configSchema !== undefined || current.configUiHints !== undefined);
+      if (currentOwnsSchema) {
+        const claimedId = normalizeClaimedChannelId(channelId);
+        const ownerId = current.schemaPluginId;
+        const decision = decideChannelSchemaOwnership({
+          currentActive: ownerId === undefined || policy.isPluginActive(ownerId, claimedId),
+          incomingActive: policy.isPluginActive(record.id, claimedId),
+          currentDisplaced:
+            ownerId !== undefined && isDisplacedChannelOwner(displacedOwners, claimedId, ownerId),
+          incomingDisplaced: isDisplacedChannelOwner(displacedOwners, claimedId, record.id),
+          // The entry rank, not the schema owner's: a nearer claimant that ships no channel config
+          // still shields the schema it adopted from farther records.
+          currentOriginRank: current.originRank,
+          incomingOriginRank: originRank,
+          currentIsRuntimeWinner:
+            ownerId !== undefined && runtimeWinners.get(claimedId) === ownerId,
+          incomingIsRuntimeWinner: runtimeWinners.get(claimedId) === record.id,
+          pairDeclarationSuppressed:
+            ownerId !== undefined &&
+            hasSuppressedChannelDeclaration(suppressedDeclarations, claimedId, ownerId, record.id),
+        });
+        if (decision === "keepCurrent") {
+          continue;
+        }
+      } else if (
+        isDisplacedChannelOwner(displacedOwners, channelId, record.id) &&
+        claimantsByChannel
+          .get(channelId)
+          ?.some(
+            (claimant) =>
+              !isDisplacedChannelOwner(displacedOwners, channelId, claimant.id) &&
+              policy.isPluginActive(claimant.id, channelId),
+          )
+      ) {
+        // The ownership decision above only protects an existing owner, so the first descriptor
+        // used to install unconditionally. When the claimant that wins the channel ships no
+        // descriptor of its own, that seeded the displaced fallback's strict schema for a channel
+        // the loader cedes to the winner, and validation then rejected every key the winner
+        // accepts. A displaced claimant may not seed the schema while an active, non-displaced
+        // claimant exists to serve the channel; with no descriptor from that winner the channel
+        // correctly stays permissive. When every claimant is displaced or inactive nothing
+        // outranks this record at runtime, so its descriptor still lands.
+        continue;
+      }
+      // Accepted tradeoff, recorded so it is a decision and not an oversight: a replacement that
+      // wins the channel supplies the schema, so a strict replacement can reject a key the operator
+      // set for the plugin it displaced. Core does not migrate it — a plugin declaring `preferOver`
+      // knows which keys it supersedes, and that repair belongs to its own doctor contract
+      // (`legacyConfigRules`, `normalizeCompatibilityConfig`). Nothing catalogued is affected: the
+      // only declared `preferOver` target accepts every property.
       const coreOwnedSchema =
         record.origin === "bundled" || channelConfig.schema === undefined
           ? channelConfig.schema
@@ -220,14 +794,38 @@ export function collectChannelSchemaMetadataWithOwnership(
 
   return [...byChannelId.values()]
     .toSorted((left, right) => left.id.localeCompare(right.id))
-    .map(({ originRank: _originRank, ...entry }) => entry);
+    .map(({ originRank: _originRank, ...entry }) => {
+      const carried = redactionByChannel.get(entry.id);
+      if (!carried) {
+        return entry;
+      }
+      // Union only what redaction reads: the owner keeps its labels, help text, presentation, and
+      // schema, and its other tags survive. `entry` is already a fresh object from the rest
+      // destructure above, so assigning into it is local.
+      const merged: NonNullable<ChannelUiMetadata["configUiHints"]> = { ...entry.configUiHints };
+      for (const [relPath, redaction] of carried) {
+        const owned = merged[relPath];
+        const tags =
+          redaction.urlSecret && !hasSensitiveUrlHintTag(owned)
+            ? [...(owned?.tags ?? []), SENSITIVE_URL_HINT_TAG]
+            : owned?.tags;
+        merged[relPath] = {
+          ...owned,
+          ...(redaction.sensitive ? { sensitive: true } : {}),
+          ...(tags ? { tags } : {}),
+        };
+      }
+      entry.configUiHints = merged;
+      return entry;
+    });
 }
 
 /** Collects public per-channel config UI metadata without internal schema ownership. */
 export function collectChannelSchemaMetadataCore(
   registry: PluginManifestRegistry,
+  policy: ChannelOwnershipPolicy,
 ): ChannelUiMetadata[] {
-  return collectChannelSchemaMetadataWithOwnership(registry).map(
+  return collectChannelSchemaMetadataWithOwnership(registry, policy).map(
     ({ schemaPluginId: _schemaPluginId, schemaPluginOrigin: _schemaPluginOrigin, ...entry }) =>
       entry,
   );

@@ -1,4 +1,5 @@
 // Produces redacted runtime config snapshots for diagnostics and UI surfaces.
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import {
@@ -212,6 +213,26 @@ export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
   copyConfigResolutionFacts(params.sourceConfig, runtimeConfigSnapshot);
   setRuntimeConfigSnapshot(runtimeConfigSnapshot, params.sourceConfig);
   return true;
+}
+
+/**
+ * The ambient-channel policy this process launched with (`--ambient-channels` raises it to
+ * `"allow"`), read by channel schema ownership, which is rebuilt per config request far from those
+ * options. It starts at the same `"suppress"` a Gateway defaults to, so a cold config process with
+ * no startup behind it reads the value it would have recorded.
+ *
+ * Deliberately outside `resetConfigRuntimeState`: config reload and managed-secret rollback clear
+ * that snapshot without rerunning startup, so clearing this with it would demote an
+ * `--ambient-channels` run to `"suppress"` for the rest of its life.
+ */
+let gatewayAmbientEnvTriggerPolicy: AmbientEnvTriggerPolicy = "suppress";
+
+export function setGatewayAmbientEnvTriggerPolicy(policy: AmbientEnvTriggerPolicy): void {
+  gatewayAmbientEnvTriggerPolicy = policy;
+}
+
+export function getGatewayAmbientEnvTriggerPolicy(): AmbientEnvTriggerPolicy {
+  return gatewayAmbientEnvTriggerPolicy;
 }
 
 export function resetConfigRuntimeState(): void {

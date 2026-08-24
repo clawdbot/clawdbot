@@ -12,14 +12,10 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
-import { resolveSecretRefProviderSourceMismatch } from "../secrets/ref-contract.js";
-import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import {
-  collectChannelDmPolicyMetadata,
-  collectChannelSchemaMetadataWithOwnership,
-} from "./channel-config-metadata.js";
+import { collectChannelDmPolicyMetadata } from "./channel-config-metadata.js";
+import { configuredChannelSchemas } from "./channel-ownership-policy.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
@@ -30,7 +26,6 @@ import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
-import { resolveSecretInputRef } from "./types.secrets.js";
 import {
   bundledChannelIds,
   collectChannelDmPolicyDependencyWarnings,
@@ -39,7 +34,7 @@ import {
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
 import { collectHeartbeatOwnerWarnings, validateConfigObjectRaw } from "./validation-core.js";
-import { withConfigIssuePath } from "./validation-issues.js";
+import { collectSecretRefProviderSourceIssues } from "./validation-issues.js";
 import {
   collectExplicitPluginReferences,
   resolveExplicitPluginReferencePath,
@@ -63,6 +58,16 @@ type ValidateConfigWithPluginsParams = {
     config: OpenClawConfig,
   ) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
   sourceRaw?: unknown;
+  /**
+   * Authored counterpart of `raw` for channel schema ownership (explicit selection, policy
+   * disablement, channel presence). Optional because on every file-load path `raw` IS the
+   * authored config — includes and env vars resolved, nothing materialized yet — so the
+   * pre-materialization parse stands in correctly. The control-plane `config.patch` flow is the
+   * exception: it validates a merge into the previously validated snapshot, whose seeded
+   * `plugins.entries.<id>.config` records read as operator selection, so it must pass the
+   * authored merge here.
+   */
+  sourceConfig?: OpenClawConfig;
   preservedLegacyRootKeys?: readonly string[];
 };
 
@@ -74,43 +79,6 @@ type RegistryInfo = {
   channelDmAllowFromModes?: Map<string, ChannelDmAllowFromMode>;
   channelSchemas?: Map<string, { schema?: Record<string, unknown>; pluginId?: string }>;
 };
-
-function collectSecretRefProviderSourceIssues(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  manifestRegistry: PluginManifestRegistry;
-}): ConfigValidationIssue[] {
-  const issues: ConfigValidationIssue[] = [];
-  for (const target of discoverConfigSecretTargets(params.config, {
-    env: params.env,
-    manifestRegistry: params.manifestRegistry,
-  })) {
-    const { ref } = resolveSecretInputRef({
-      value: target.value,
-      refValue: target.refValue,
-      defaults: params.config.secrets?.defaults,
-    });
-    if (!ref) {
-      continue;
-    }
-    const configuredSource = resolveSecretRefProviderSourceMismatch(params.config, ref);
-    if (!configuredSource) {
-      continue;
-    }
-    const path = target.refPath ?? target.path;
-    const pathSegments = target.refPathSegments ?? target.pathSegments;
-    issues.push(
-      withConfigIssuePath(
-        {
-          path,
-          message: `Secret provider "${ref.provider}" has source "${configuredSource}" but ref requests "${ref.source}".`,
-        },
-        pathSegments,
-      ),
-    );
-  }
-  return issues;
-}
 
 export function validateConfigObjectWithPlugins(
   raw: unknown,
@@ -142,6 +110,7 @@ function validateConfigObjectWithPluginMode(
     pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
     loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
     sourceRaw: params?.sourceRaw,
+    sourceConfig: params?.sourceConfig,
     preservedLegacyRootKeys: params?.preservedLegacyRootKeys,
     onManifestRegistryResolved: (registry) => {
       manifestRegistry = registry;
@@ -241,7 +210,9 @@ function validateConfigObjectWithPluginsBase(
       : formatRawChannelConfigIssueMessage(message);
   };
 
+  let compatConfig: OpenClawConfig | null | undefined;
   let compatPluginIds: ReadonlySet<string> | null = null;
+  let compatPluginIdsResolved = false;
   let registryDiagnosticsPushed = false;
 
   const pushRegistryDiagnostics = (registry: PluginManifestRegistry): void => {
@@ -284,16 +255,22 @@ function validateConfigObjectWithPluginsBase(
   const ensureLoadedRegistryInfo = (): RegistryInfo => registryInfo ?? loadValidationRegistry();
 
   const ensureCompatPluginIds = (): ReadonlySet<string> => {
-    if (compatPluginIds) {
-      return compatPluginIds;
+    if (compatPluginIdsResolved) {
+      return compatPluginIds ?? new Set<string>();
     }
+    compatPluginIdsResolved = true;
     const allow = config.plugins?.allow;
     if (!Array.isArray(allow) || allow.length === 0) {
       compatPluginIds = new Set<string>();
       return compatPluginIds;
     }
     const { registry } = registryInfo ?? loadValidationRegistry();
-    const overriddenBundledPluginIds = ensureOverriddenPluginIds();
+    const overriddenBundledPluginIds = new Set(
+      registry.diagnostics
+        .filter((diag) => diag.message.includes("duplicate plugin id detected"))
+        .map((diag) => diag.pluginId)
+        .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
+    );
     compatPluginIds = new Set(
       registry.plugins
         .filter(
@@ -307,8 +284,17 @@ function validateConfigObjectWithPluginsBase(
     return compatPluginIds;
   };
 
+  const ensureCompatConfig = (): OpenClawConfig => {
+    if (compatConfig !== undefined) {
+      return compatConfig ?? config;
+    }
+    compatConfig = config;
+    return config;
+  };
+
   const ensureRegistry = (): RegistryInfo => {
     const info = ensureLoadedRegistryInfo();
+    ensureCompatConfig();
     pushRegistryDiagnostics(info.registry);
     return info;
   };
@@ -332,7 +318,7 @@ function validateConfigObjectWithPluginsBase(
 
   const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
     const info = ensureRegistry();
-    info.normalizedPlugins ??= normalizePluginsConfig(config.plugins);
+    info.normalizedPlugins ??= normalizePluginsConfig(ensureCompatConfig().plugins);
     return info.normalizedPlugins;
   };
 
@@ -347,7 +333,18 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema }] as const,
         ),
       );
-      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry)) {
+      // Ownership must land on the plugin activation would run, or a valid config is checked
+      // against a schema the runtime never applies. The authored half is the caller's
+      // `sourceConfig` when the input is runtime-shaped (config.patch), and otherwise the
+      // pre-materialization parse — on the file-load paths that parse is the authored config
+      // itself, while the materialized `config` would misread seeded entry configs as operator
+      // selection.
+      for (const entry of configuredChannelSchemas(
+        info.registry,
+        config,
+        opts.sourceConfig ?? parsedConfig,
+        opts.env,
+      )) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
           info.channelSchemas.set(entry.id, {
@@ -699,6 +696,7 @@ function validateConfigObjectWithPluginsBase(
     validateExplicitPluginConfig({
       raw,
       config,
+      effectiveConfig: ensureCompatConfig(),
       env: opts.env,
       applyDefaults: opts.applyDefaults,
       registry,

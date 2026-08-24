@@ -491,6 +491,12 @@ export type PluginRecord = {
   toolNames: string[];
   hookNames: string[];
   channelIds: string[];
+  /**
+   * Channels this plugin ceded to a preferred replacement, as channel schema ownership decided it.
+   * Registration skips them, so the plugin never contests a channel it already lost and is never
+   * recorded as a duplicate registration for one (which would drop every tool it registers).
+   */
+  cededChannelIds?: readonly string[];
   cliBackendIds: string[];
   providerIds: string[];
   syntheticAuthRefs?: string[];

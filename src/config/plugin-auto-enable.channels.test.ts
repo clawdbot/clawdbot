@@ -9,6 +9,7 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: logWarnSpy }),
 }));
 
+import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
@@ -103,7 +104,10 @@ describe("applyPluginAutoEnable channels", () => {
     expect(result.config.plugins?.entries?.["env-primary"]).toBeUndefined();
   });
 
-  it("memoizes external catalog preferOver lookups within one auto-enable pass", () => {
+  // Was two reads, one per distinct candidate channel. Catalog files are process-stable plugin
+  // metadata and channel schema ownership resolves preferences on the Gateway config path too, so
+  // they are now parsed once per resolved catalog path rather than once per lookup key.
+  it("parses an external catalog once for a whole auto-enable pass", () => {
     const stateDir = makeTempDir();
     const catalogPath = path.join(stateDir, "plugins", "catalog.json");
     fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
@@ -163,7 +167,7 @@ describe("applyPluginAutoEnable channels", () => {
         realpathSpy.mock.calls.filter(([filePath]) =>
           String(filePath).endsWith("plugins/catalog.json"),
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
     } finally {
       realpathSpy.mockRestore();
     }
@@ -386,7 +390,36 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.changes).toStrictEqual([]);
     });
 
-    it("prefers an external plugin that declares preferOver for a bundled channel", () => {
+    // Codex review P1 on #123209: candidate discovery read `channelConfigs.<id>.preferOver` only,
+    // so a catalog-declared replacement never reached the preferOver filter and the fallback was
+    // activated while channel schema ownership had already selected the replacement.
+    it.each([
+      {
+        source: "its channel config",
+        declaration: {
+          channelConfigs: {
+            "legacy-bundled-chat": {
+              schema: { type: "object" },
+              label: "Modern Chat",
+              preferOver: ["legacy-bundled-chat"],
+            },
+          },
+        },
+      },
+      {
+        source: "its package channel catalog metadata",
+        declaration: {
+          channelCatalogMeta: {
+            id: "legacy-bundled-chat",
+            label: "Modern Chat",
+            preferOver: ["legacy-bundled-chat"],
+          },
+          channelConfigs: {
+            "legacy-bundled-chat": { schema: { type: "object" }, label: "Modern Chat" },
+          },
+        },
+      },
+    ])("prefers an external plugin that declares preferOver through $source", ({ declaration }) => {
       const result = applyPluginAutoEnable({
         config: {
           channels: { "legacy-bundled-chat": { token: "legacy" } },
@@ -407,13 +440,7 @@ describe("applyPluginAutoEnable channels", () => {
           {
             id: "openclaw-modern-chat",
             channels: ["legacy-bundled-chat"],
-            channelConfigs: {
-              "legacy-bundled-chat": {
-                schema: { type: "object" },
-                label: "Modern Chat",
-                preferOver: ["legacy-bundled-chat"],
-              },
-            },
+            ...declaration,
           },
         ]),
       });
@@ -421,6 +448,75 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.config.plugins?.entries?.["openclaw-modern-chat"]?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.["legacy-bundled-chat"]?.enabled).toBe(false);
       expect(result.changes.join("\n")).toContain("Modern Chat configured, enabled automatically.");
+    });
+
+    // Codex review P2 on #123209: when two claimants each declare the other, processing order
+    // used to disable whichever candidate sorts first and enable the survivor, while schema
+    // ownership walks registry order and could select the other plugin's strict schema. A mutual
+    // pair settles nothing, so neither side is skipped: both register and the runtime facade
+    // keeps the first registrant — the same claimant schema ownership keeps.
+    it("enables both claimants when each declares the other in preferOver", () => {
+      const result = applyPluginAutoEnable({
+        config: { channels: { pairchat: { token: "pair" } } },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "pairchat-b",
+            channels: ["pairchat"],
+            channelConfigs: {
+              pairchat: { schema: { type: "object" }, preferOver: ["pairchat-a"] },
+            },
+          },
+          {
+            id: "pairchat-a",
+            channels: ["pairchat"],
+            channelConfigs: {
+              pairchat: { schema: { type: "object" }, preferOver: ["pairchat-b"] },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["pairchat-a"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["pairchat-b"]?.enabled).toBe(true);
+    });
+
+    // Codex review on #123209: with three claimants each naming the next around a ring, no pair
+    // is mutual, so candidate processing order disabled two of the three and left a survivor the
+    // schema plane never picked. A ring settles nothing whatever its length: no claimant is
+    // skipped, all register, and the runtime facade keeps the first registrant.
+    it("enables every claimant when three declare each other around a ring", () => {
+      const result = applyPluginAutoEnable({
+        config: { channels: { ringchat: { token: "ring" } } },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "ringchat-b",
+            channels: ["ringchat"],
+            channelConfigs: {
+              ringchat: { schema: { type: "object" }, preferOver: ["ringchat-c"] },
+            },
+          },
+          {
+            id: "ringchat-a",
+            channels: ["ringchat"],
+            channelConfigs: {
+              ringchat: { schema: { type: "object" }, preferOver: ["ringchat-b"] },
+            },
+          },
+          {
+            id: "ringchat-c",
+            channels: ["ringchat"],
+            channelConfigs: {
+              ringchat: { schema: { type: "object" }, preferOver: ["ringchat-a"] },
+            },
+          },
+        ]),
+      });
+
+      for (const id of ["ringchat-a", "ringchat-b", "ringchat-c"]) {
+        expect(result.config.plugins?.entries?.[id]?.enabled).toBe(true);
+      }
     });
 
     it("does not disable a renamed external owner through its removed bundled channel id", () => {
@@ -493,6 +589,40 @@ describe("applyPluginAutoEnable channels", () => {
       );
     });
 
+    // The disablement can be written under any spelling Gateway startup canonicalizes. A raw
+    // policy check reads the legacy-id entry as some other plugin, keeps the preferred claimant
+    // eligible, and disables its fallback: both plugins end up off while validation selected the
+    // fallback's schema.
+    it("falls back when the preferred plugin is disabled through its legacy alias", () => {
+      const manifestRegistry = makeRegistry([
+        { id: "zzchat-classic", channels: ["zzchat"] },
+        {
+          id: "zzchat-modern",
+          channels: ["zzchat"],
+          legacyPluginIds: ["zzchat-modern-legacy"],
+          channelConfigs: {
+            zzchat: { schema: { type: "object" }, preferOver: ["zzchat-classic"] },
+          },
+        },
+      ]);
+      // The entry key below reaches the preferred plugin through the real manifest alias map.
+      expect(createManifestPluginAliasResolver(manifestRegistry)("zzchat-modern-legacy")).toBe(
+        "zzchat-modern",
+      );
+
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { zzchat: { someKey: "value" } },
+          plugins: { entries: { "zzchat-modern-legacy": { enabled: false } } },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry,
+      });
+
+      expect(result.config.plugins?.entries?.["zzchat-classic"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["zzchat-modern"]).toBeUndefined();
+    });
+
     it("does not auto-disable a lower-priority channel plugin that was explicitly selected", () => {
       const result = applyPluginAutoEnable({
         config: {
@@ -521,6 +651,77 @@ describe("applyPluginAutoEnable channels", () => {
 
       expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.qqbot?.enabled).toBe(true);
+    });
+
+    // Hand-picking can use any manifest-declared spelling. The preservation check must
+    // canonicalize the same way Gateway startup does, or an allowlist entry written as a legacy id
+    // keeps the fallback's strict schema for validation while auto-enable still writes
+    // `enabled: false` for it.
+    it("does not auto-disable a fallback selected through a legacy alias in plugins.allow", () => {
+      const manifestRegistry = makeRegistry([
+        {
+          id: "zzclickclack-plus",
+          channels: ["zzclickclack"],
+          legacyPluginIds: ["zzclickclack-legacy"],
+        },
+        {
+          id: "zzclickclack-ultra",
+          channels: ["zzclickclack"],
+          channelConfigs: {
+            zzclickclack: { schema: { type: "object" }, preferOver: ["zzclickclack-plus"] },
+          },
+        },
+      ]);
+      // The allow spelling below reaches the fallback through the real manifest alias map.
+      expect(createManifestPluginAliasResolver(manifestRegistry)("zzclickclack-legacy")).toBe(
+        "zzclickclack-plus",
+      );
+
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { zzclickclack: { someKey: "value" } },
+          plugins: { allow: ["zzclickclack-legacy"] },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry,
+      });
+
+      expect(result.config.plugins?.entries?.["zzclickclack-ultra"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["zzclickclack-plus"]).toBeUndefined();
+    });
+
+    // Allowlist materialization shares the same policy filter: a deny written under a legacy
+    // alias must keep the plugin's material entry off the allowlist, or the materializer
+    // re-admits a plugin the loader refuses to run.
+    it("does not allowlist a material entry for a plugin denied through its legacy alias", () => {
+      const manifestRegistry = makeRegistry([
+        {
+          id: "zzclickclack-ultra",
+          channels: ["zzultra-chat"],
+          legacyPluginIds: ["zzultra-legacy"],
+        },
+      ]);
+      // The deny spelling below reaches the plugin through the real manifest alias map.
+      expect(createManifestPluginAliasResolver(manifestRegistry)("zzultra-legacy")).toBe(
+        "zzclickclack-ultra",
+      );
+
+      const result = applyPluginAutoEnable({
+        config: {
+          plugins: {
+            allow: ["zzkeeper"],
+            deny: ["zzultra-legacy"],
+            entries: { "zzclickclack-ultra": { config: { token: "x" } } },
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry,
+      });
+
+      expect(result.config.plugins?.allow).toEqual(["zzkeeper"]);
+      expect(result.changes).not.toContain(
+        "zzclickclack-ultra plugin config present, added to plugin allowlist.",
+      );
     });
 
     it("does not synthesize plugin entries when no installed manifest declares the channel", () => {
@@ -620,6 +821,79 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.changes.join("\n")).not.toContain(
         "secondary configured, enabled automatically.",
       );
+    });
+
+    it("keeps a fallback another configured channel still needs", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            zzalpha: { someKey: "value" },
+            zzbeta: { someKey: "value" },
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "zz-replacement",
+            channels: ["zzalpha"],
+            channelConfigs: {
+              zzalpha: {
+                schema: { type: "object" },
+                preferOver: ["zz-fallback"],
+              },
+            },
+          },
+          { id: "zz-fallback", channels: ["zzalpha", "zzbeta"] },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["zz-replacement"]?.enabled).toBe(true);
+      // zzbeta has no other claimant, so disabling the fallback plugin-wide takes that channel
+      // down with it.
+      expect(result.config.plugins?.entries?.["zz-fallback"]?.enabled).toBe(true);
+    });
+
+    it("does not let a non-channel candidate stand in for a channel claim", () => {
+      // `zz-replacement` succeeds the `zzlegacy` plugin outright: it declares the preference for
+      // channel `zzlegacy`, which that plugin does not claim — it serves `zzother`. A candidate
+      // that is not channel-configured must not turn that into a same-channel rivalry just because
+      // the plugin id matches the channel id.
+      const run = (
+        candidates: Parameters<typeof materializePluginAutoEnableCandidates>[0]["candidates"],
+      ) =>
+        materializePluginAutoEnableCandidates({
+          config: {
+            channels: { zzlegacy: { someKey: "value" }, zzother: { someKey: "value" } },
+          },
+          candidates,
+          env: makeIsolatedEnv(),
+          manifestRegistry: makeRegistry([
+            {
+              id: "zz-replacement",
+              channels: ["zzlegacy"],
+              channelConfigs: {
+                zzlegacy: { schema: { type: "object" }, preferOver: ["zzlegacy"] },
+              },
+            },
+            { id: "zzlegacy", channels: ["zzother"] },
+          ]),
+        });
+
+      const withoutToolCandidate = run([
+        { pluginId: "zz-replacement", kind: "channel-configured", channelId: "zzlegacy" },
+        { pluginId: "zzlegacy", kind: "channel-configured", channelId: "zzother" },
+      ]);
+      const withToolCandidate = run([
+        { pluginId: "zz-replacement", kind: "channel-configured", channelId: "zzlegacy" },
+        { pluginId: "zzlegacy", kind: "channel-configured", channelId: "zzother" },
+        { pluginId: "zzlegacy", kind: "plugin-tool-configured" },
+      ]);
+
+      // One unrelated tool candidate must not flip the plugin-wide outcome.
+      expect(withToolCandidate.config.plugins?.entries?.zzlegacy?.enabled).toBe(
+        withoutToolCandidate.config.plugins?.entries?.zzlegacy?.enabled,
+      );
+      expect(withToolCandidate.config.plugins?.entries?.zzlegacy?.enabled).toBe(false);
     });
 
     it("auto-enables imessage when only imessage is configured", () => {

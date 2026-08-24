@@ -8,11 +8,16 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { parseConfigSetPath, parseConfigSetValue } from "../cli/config-cli-path.js";
 import {
+  MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY,
   collectChannelSchemaMetadataCore,
   collectPluginSchemaMetadataCore,
 } from "../config/channel-config-metadata.js";
+import { createConfiguredChannelOwnershipPolicy } from "../config/channel-ownership-policy.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../config/redact-snapshot.js";
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import { isKernelOwnedChannelConfigKey } from "../config/schema.hints.js";
 import {
   buildConfigSchemaCore,
@@ -80,15 +85,66 @@ const metadataConfigRedaction = new WeakMap<
   SystemAgentConfigRedactionMetadata
 >();
 
+// Ownership is config-dependent, so the same snapshot yields different hints under different
+// configs. Keying the cache on the snapshot alone would return the previous owner's hints and
+// could expose a field only the configured owner marks sensitive.
+//
+// The source snapshot is part of the key for the same reason: ownership reads explicit selection
+// from it, and `setRuntimeConfigSourceSnapshotIfCurrent` republishes a new source while keeping
+// this very runtime config object. A hit must prove the same source built it, or a source-only
+// republish that moves the channel to another owner keeps serving the former owner's hints.
+type MetadataConfigRedactionCacheEntry = {
+  metadata: SystemAgentConfigRedactionMetadata;
+  sourceConfig: OpenClawConfig | null;
+};
+const metadataConfigRedactionByConfig = new WeakMap<
+  PluginMetadataSnapshot,
+  WeakMap<OpenClawConfig, MetadataConfigRedactionCacheEntry>
+>();
+
 function resolveMetadataConfigRedaction(
   snapshot: PluginMetadataSnapshot,
+  config?: OpenClawConfig,
 ): SystemAgentConfigRedactionMetadata {
-  const cached = metadataConfigRedaction.get(snapshot);
-  if (cached) {
-    return cached;
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  let configCache: WeakMap<OpenClawConfig, MetadataConfigRedactionCacheEntry> | undefined;
+  if (config) {
+    configCache = metadataConfigRedactionByConfig.get(snapshot);
+    if (!configCache) {
+      configCache = new WeakMap();
+      metadataConfigRedactionByConfig.set(snapshot, configCache);
+    }
+    const cachedForConfig = configCache.get(config);
+    if (cachedForConfig && cachedForConfig.sourceConfig === runtimeSourceConfig) {
+      return cachedForConfig.metadata;
+    }
+  } else {
+    const cached = metadataConfigRedaction.get(snapshot);
+    if (cached) {
+      return cached;
+    }
   }
   const plugins = collectPluginSchemaMetadataCore(snapshot.manifestRegistry);
-  const channels = collectChannelSchemaMetadataCore(snapshot.manifestRegistry);
+  // Redaction must follow the owner the operator's config activates. Without a config there is
+  // nothing to consult, so manifest order stands.
+  const channels = collectChannelSchemaMetadataCore(
+    snapshot.manifestRegistry,
+    config
+      ? createConfiguredChannelOwnershipPolicy({
+          config,
+          // Explicit selection has to be read from what the operator wrote, not from the effective
+          // config: startup auto-enable synthesizes enabled entries for a fallback that stays on
+          // for another channel, and reading those back as operator intent suppresses the
+          // replacement's preferOver on the contested one. `loadGatewayRuntimeConfigSchema` passes
+          // the source snapshot for the same reason. Before a Gateway publishes one, the caller's
+          // config is deliberately both halves: it is the only view in hand and nothing
+          // runtime-materialized shadows it.
+          sourceConfig: runtimeSourceConfig ?? config,
+          registry: snapshot.manifestRegistry,
+          env: process.env,
+        })
+      : MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY,
+  );
   const schema = buildConfigSchemaCore({ plugins, channels });
   const uiHints = schema.uiHints;
   const metadata = {
@@ -111,7 +167,11 @@ function resolveMetadataConfigRedaction(
         .map((channel) => channel.id),
     ]),
   };
-  metadataConfigRedaction.set(snapshot, metadata);
+  if (config && configCache) {
+    configCache.set(config, { metadata, sourceConfig: runtimeSourceConfig });
+  } else {
+    metadataConfigRedaction.set(snapshot, metadata);
+  }
   return metadata;
 }
 
@@ -137,7 +197,7 @@ function resolveSystemAgentConfigRedactionMetadata(
     env: process.env,
     allowWorkspaceScopedSnapshot: true,
   });
-  return snapshot ? resolveMetadataConfigRedaction(snapshot) : baseConfigRedactionMetadata;
+  return snapshot ? resolveMetadataConfigRedaction(snapshot, config) : baseConfigRedactionMetadata;
 }
 
 function splitConfigHintPath(path: string): string[] {

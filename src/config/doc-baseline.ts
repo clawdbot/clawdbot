@@ -1,4 +1,3 @@
-// Builds documentation baselines from config schema metadata.
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -9,6 +8,8 @@ import { sortUniqueStrings } from "@openclaw/normalization-core/string-normaliza
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+// Builds documentation baselines from config schema metadata.
+import { MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY } from "./channel-config-metadata.js";
 import type { ConfigSchemaResponse } from "./schema.js";
 import { schemaHasChildren } from "./schema.shared.js";
 
@@ -380,7 +381,10 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
     ...manifestRegistry,
     plugins: manifestRegistry.plugins.filter((plugin) => plugin.origin === "bundled"),
   };
-  const channelPlugins = runtime.collectChannelSchemaMetadata(bundledRegistry);
+  const channelPlugins = runtime.collectChannelSchemaMetadata(
+    bundledRegistry,
+    MANIFEST_ONLY_CHANNEL_OWNERSHIP_POLICY,
+  );
 
   return runtime.buildConfigSchema({
     plugins: runtime.collectPluginSchemaMetadata(bundledRegistry),
