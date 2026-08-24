@@ -2,7 +2,6 @@
 import { execFile, spawnSync } from "node:child_process";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
-import { isErrno } from "./errno.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   openNodeSqliteDatabase,
@@ -52,18 +51,21 @@ type SqliteReadOnlyWorkerResult = { ok: true; location: string } | { ok: false; 
 class SqliteSourceChangedError extends Error {}
 
 function sqliteSnapshotStagingError(stagingRoot: string, cause: unknown): unknown {
-  const error = isErrno(cause) ? cause : undefined;
-  const errcode = error && "errcode" in error ? error.errcode : undefined;
-  // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
-  if (
-    !["ENOSPC", "EDQUOT"].includes(error?.code ?? "") &&
-    !(typeof errcode === "number" && [13, 778, 1034, 1290].includes(errcode)) &&
-    !`${error?.path ?? ""}${path.sep}`.startsWith(`${stagingRoot}${path.sep}`)
-  ) {
-    return cause;
+  for (let depth = 0, error = cause; depth < 8 && error instanceof Error; depth += 1) {
+    const details: NodeJS.ErrnoException & { errcode?: unknown } = error;
+    const errcode = details.errcode;
+    // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
+    if (
+      ["ENOSPC", "EDQUOT"].includes(details.code ?? "") ||
+      (typeof errcode === "number" && [13, 778, 1034, 1290].includes(errcode)) ||
+      `${details.path ?? ""}${path.sep}`.startsWith(`${stagingRoot}${path.sep}`)
+    ) {
+      const message = `${cause instanceof Error ? cause.message : String(cause)}${typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : ""}; snapshot staging root ${stagingRoot}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`;
+      return new Error(message, { cause });
+    }
+    error = error.cause;
   }
-  const message = `${error?.message}${typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : ""}; snapshot staging root ${stagingRoot}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`;
-  return new Error(message, { cause });
+  return cause;
 }
 
 function statIfPresent(pathname: string): BigIntStats | undefined {

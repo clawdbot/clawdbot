@@ -297,6 +297,39 @@ describe("prepareSqliteReadOnlyLocation", () => {
     },
   );
 
+  it("identifies nested Windows private-directory allocation failures without losing their cause", async () => {
+    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-windows-allocation-");
+    const databasePath = createTempDatabasePath();
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(databasePath);
+    database.exec("CREATE TABLE probe (value TEXT);");
+    database.close();
+    const stagingRoot = path.join(cacheRoot, "openclaw");
+    const directoryPath = path.join(stagingRoot, "openclaw-sqlite-readonly-stage");
+    const allocationError = Object.assign(new Error("PowerShell failed (code=EACCES)"), {
+      code: "EACCES",
+      path: directoryPath,
+    });
+    const windowsError = new Error(
+      `Unable to create private Windows SQLite directory: ${directoryPath}`,
+      { cause: allocationError },
+    );
+    vi.spyOn(fs.promises, "mkdtemp").mockRejectedValueOnce(windowsError);
+
+    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
+      const error = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
+        (cause: unknown) => cause,
+      );
+      expect(error).toMatchObject({ cause: windowsError });
+      expect((error as Error).message).toContain(windowsError.message);
+      expect((error as Error).message).toContain(stagingRoot);
+      expect((error as Error).message).toContain("XDG_CACHE_HOME");
+      expect(((error as Error).cause as Error).cause).toBe(allocationError);
+    });
+
+    expect(fs.readdirSync(stagingRoot)).toEqual([]);
+  });
+
   it.each([
     { label: "SQLite source read", code: "ERR_SQLITE_ERROR", errcode: 266 },
     { label: "SQLite source locking", code: "ERR_SQLITE_ERROR", errcode: 5 },
