@@ -42,9 +42,15 @@ suite.define(() => {
     const { context, input, page } = await openCapabilitiesPrompt("no-preference");
 
     try {
-      await expect
-        .poll(() => input.evaluate((element) => getComputedStyle(element).animationName))
-        .toBe("chat-composer-prefill-attention");
+      expect(
+        await input.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            duration: style.animationDuration,
+            name: style.animationName,
+          };
+        }),
+      ).toEqual({ duration: "0.6s", name: "chat-composer-prefill-attention" });
       const highlightedBackground = await input.evaluate(
         (element) => getComputedStyle(element).backgroundColor,
       );

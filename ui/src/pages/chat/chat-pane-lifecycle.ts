@@ -80,7 +80,7 @@ import {
 } from "./session-message-cache.ts";
 import { closeSlot, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
 
-const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
+const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
