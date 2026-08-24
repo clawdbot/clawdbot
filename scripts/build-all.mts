@@ -101,6 +101,7 @@ const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
+  "scripts/lib/root-package-bundled-plugin-excludes.mjs",
   "scripts/lib/tsdown-config-groups.mts",
   "scripts/lib/tsdown-output-roots.mts",
 ];
