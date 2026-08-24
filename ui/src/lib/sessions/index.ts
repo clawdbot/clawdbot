@@ -424,14 +424,24 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     const status = reconciled.status ?? eventInfo?.status;
     const runEnded =
       hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
+    const isTerminalMessage = event.event === "session.message" && runEnded;
+    // Only an existing Gateway roster member that remains active can be replaced directly.
     const primarySnapshotApplied =
-      event.event === "session.message" &&
-      runEnded &&
+      isTerminalMessage &&
       reconciled.applied &&
+      eventInfo !== null &&
+      eventInfo.archived !== true &&
       typeof payload?.session === "object" &&
       payload.session !== null &&
-      roster.canApplyPrimarySnapshot();
-    if (eventInfo?.archived !== null || primarySnapshotApplied) {
+      roster.canApplyPrimarySnapshot() &&
+      state.result?.sessions.some((row) =>
+        uiSessionEventMatches(
+          { ...gateway.snapshot, sessionKey: row.key },
+          eventInfo.key,
+          eventInfo.agentId,
+        ),
+      ) === true;
+    if ((eventInfo?.archived !== null && !isTerminalMessage) || primarySnapshotApplied) {
       const result = decorateRows(reconciled.result);
       if (result !== state.result) {
         publishReconciledState({ ...state, result });
