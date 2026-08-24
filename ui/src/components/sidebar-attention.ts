@@ -19,7 +19,7 @@ import { t } from "../i18n/index.ts";
 import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
-import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "../styles/sidebar-footer-update.css";
 import { icons } from "./icons.ts";
@@ -57,7 +57,10 @@ const ITEM_PRIORITY: Record<SidebarAttentionItem["kind"], number> = {
   cronFailed: 1,
   cronOverdue: 2,
 };
-class SidebarAttention extends OpenClawLightDomContentsElement {
+// Display is stylesheet-owned (layout.css `display: contents` in the footer,
+// flex when floating): the LightDomContents base's inline display would defeat
+// the floating override, re-piling the collapsed-nav cluster at the origin.
+class SidebarAttention extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 

@@ -4,6 +4,9 @@ import "../styles/hub-tabs.css";
 import "../styles/sidebar-footer-update.css";
 import "../styles/sidebar-issues.css";
 import "./web-awesome-tabs.ts";
+// Upgrade the real element: the floating layout once regressed because a base
+// class stamped inline `display: contents`, which only a live upgrade reveals.
+import "./sidebar-attention.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
