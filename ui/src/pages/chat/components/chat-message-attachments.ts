@@ -517,41 +517,23 @@ export function renderAssistantAttachments(
         });
       }
       const title = attachment.label.trim() || t("chat.imageLightbox.untitled");
-      const openImagePreview = () =>
-        openResolvedImage(
-          onOpenImage,
-          attachmentUrl,
-          title,
-          undefined,
-          onRequestOpenImage?.(),
-        );
-      return html`<div
-        class="chat-assistant-attachment-card chat-assistant-attachment-card--image chat-assistant-attachment-card--preview"
-        ?data-openable=${Boolean(openAttachmentSidebar)}
-        @click=${(event: MouseEvent) =>
-          openAttachmentCardFromClick(event, openAttachmentSidebar)}
-      >
-        ${renderAttachmentCardHeader({
-          kind: "image",
-          label: attachment.label,
-          mimeType: attachment.mimeType,
-          sizeBytes,
-          downloadHref: attachmentUrl,
-          showExpandAction: true,
-          onExpand: openAttachmentSidebar,
-          visualMode: "preview-with-favicon",
-        })}
-        <span class="chat-image-frame">
-          <button
-            type="button"
-            class="chat-message-image-button"
-            aria-label=${t("chat.imageLightbox.open", { title })}
-            @click=${openImagePreview}
-          >
-            <img src=${attachmentUrl} alt=${title} class="chat-message-image" />
-          </button>
-        </span>
-      </div>`;
+      return html`
+        <button
+          type="button"
+          class="chat-message-image-button"
+          aria-label=${t("chat.imageLightbox.open", { title })}
+          @click=${() =>
+            openResolvedImage(
+              onOpenImage,
+              attachmentUrl,
+              title,
+              undefined,
+              onRequestOpenImage?.(),
+            )}
+        >
+          <img src=${attachmentUrl} alt=${title} class="chat-message-image" />
+        </button>
+      `;
     }
     if (attachment.kind === "audio") {
       if (!attachmentUrl) {

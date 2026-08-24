@@ -1333,14 +1333,63 @@ openclaw-chat-page {
   min-height: 42px;
 }
 
-.chat-attachment-image-file-icon {
+.chat-image-actions {
   position: absolute;
   z-index: 1;
-  bottom: 4px;
-  left: 4px;
-  display: inline-flex;
-  line-height: 0;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
   pointer-events: none;
+  transform: translateY(-2px);
+  transition:
+    opacity 120ms ease-out,
+    transform 120ms ease-out;
+}
+
+.chat-image-frame:hover .chat-image-actions,
+.chat-image-frame:focus-within .chat-image-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+@media (hover: none) {
+  .chat-image-actions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+}
+
+.chat-image-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 22%);
+  border-radius: 8px;
+  color: var(--media-foreground);
+  background: rgb(12 16 24 / 78%);
+  backdrop-filter: blur(8px);
+  cursor: var(--cursor-action);
+}
+
+.chat-image-action:hover {
+  background: rgb(12 16 24 / 94%);
+}
+
+.chat-image-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.chat-image-action svg {
+  width: 15px;
+  height: 15px;
 }
 
 .chat-message-image-button:focus-visible {
@@ -1360,12 +1409,6 @@ openclaw-chat-page {
 
 .chat-message-image-button:hover .chat-message-image {
   transform: scale(1.02);
-}
-
-/* The managed image action bar is an interactive sibling of the preview. Keep
- * the preview geometry fixed while the pointer crosses into that sibling. */
-.chat-image-frame--managed .chat-message-image-button:hover .chat-message-image {
-  transform: none;
 }
 
 /* User message images align right */
@@ -1438,7 +1481,6 @@ openclaw-chat-video-player {
 }
 
 .chat-assistant-attachment-card--audio,
-.chat-assistant-attachment-card--image,
 .chat-assistant-attachment-card--video,
 .chat-assistant-attachment-card--preview {
   display: flex;
@@ -1478,20 +1520,9 @@ openclaw-chat-video-player {
 }
 
 .chat-assistant-attachment-card--audio .chat-assistant-attachment-card__header,
-.chat-assistant-attachment-card--image .chat-assistant-attachment-card__header,
 .chat-assistant-attachment-card--video .chat-assistant-attachment-card__header,
 .chat-assistant-attachment-card--preview .chat-assistant-attachment-card__header {
   border-bottom: 1px solid var(--chat-attachment-border);
-}
-
-.chat-assistant-attachment-card--image .chat-image-frame,
-.chat-assistant-attachment-card--image .chat-message-image-button {
-  width: 100%;
-  border-radius: 0;
-}
-
-.chat-assistant-attachment-card--image .chat-message-image-button {
-  background: var(--bg);
 }
 
 .chat-assistant-attachment-card__identity {

@@ -691,18 +691,12 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                   .join(" ")}
               >
                 ${att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
-                  ? html`${renderAttachmentImage(
-                         att,
-                         t("chat.composer.attachmentPreview"),
-                         att.fileName?.trim() || t("chat.imageLightbox.untitled"),
-                        props,
-                      )}<span class="chat-attachment-image-file-icon"
-                        >${renderAttachmentFileIcon({
-                          filename: att.fileName ?? "image.png",
-                          mimeType: att.mimeType,
-                           mode: "preview-with-favicon",
-                         })}</span
-                       >`
+                  ? renderAttachmentImage(
+                       att,
+                       t("chat.composer.attachmentPreview"),
+                       att.fileName?.trim() || t("chat.imageLightbox.untitled"),
+                       props,
+                     )
                   : isLargePastedTextAttachment(att)
                     ? html`
                         <div class="chat-attachment-file chat-attachment-file--pasted-text">
