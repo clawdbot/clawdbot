@@ -144,3 +144,18 @@ zero `FROZEN-STALE`. All three mixed rows were walked line-by-line:
 No mixed row is an upstream-only stale blob, so no restoration is warranted.
 Gate 2 reran clean at the same SHA: 40 invariants, 0 failures, 2 exact-upstream
 projections, and 3 tombstones.
+
+## §3 — 2026-08-24T16:57Z — type-contract drift classification
+
+Production and test types both hit dependency-export failures from the
+deliberately unreconciled exact-b6 dependency link (`FinishReason`,
+`markdown-it`, and `TuiMainScreen`). Exact frozen upstream reproduced the same
+production set byte-for-byte and the same test set, so these are dependency
+baseline failures and are not product-code repair candidates in this lane.
+
+Candidate test types had one additional error absent from both baseline
+outputs: upstream's new `code-mode.bridge.lifecycle.test.ts` still supplied
+flat `builtinToolNames` / `replaySafeToolNames` fields after the reviewed
+feature moved stream trust into the closed `subscriptionToolTrust` object.
+Adapted that upstream test to the reviewed canonical input contract, including
+the required empty trusted-local-media set; production behavior is unchanged.
