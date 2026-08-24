@@ -362,13 +362,17 @@ describe("mantis before/after runtime", () => {
       { stage: "install", timeoutMs: 1_800_000 },
       { stage: "build", timeoutMs: 1_800_000 },
       { stage: "qa", timeoutMs: qaTimeoutMs },
-      { stage: "worktree-cleanup", timeoutMs: 120_000 },
+      { stage: "worktree-cleanup", timeoutMs: expect.any(Number) },
       { stage: "worktree-add", timeoutMs: 300_000 },
       { stage: "install", timeoutMs: 1_800_000 },
       { stage: "build", timeoutMs: 1_800_000 },
       { stage: "qa", timeoutMs: qaTimeoutMs },
-      { stage: "worktree-cleanup", timeoutMs: 120_000 },
+      { stage: "worktree-cleanup", timeoutMs: expect.any(Number) },
     ]);
+    for (const execution of executions.filter((entry) => entry.stage === "worktree-cleanup")) {
+      expect(execution.timeoutMs).toBeGreaterThan(0);
+      expect(execution.timeoutMs).toBeLessThanOrEqual(120_000);
+    }
   });
 
   it("normalizes command timeout overrides per stage", async () => {
@@ -408,8 +412,10 @@ describe("mantis before/after runtime", () => {
       { stage: "install", timeoutMs: 222 },
       { stage: "build", timeoutMs: 1_800_000 },
       { stage: "qa", timeoutMs: 444 },
-      { stage: "worktree-cleanup", timeoutMs: 120_000 },
+      { stage: "worktree-cleanup", timeoutMs: expect.any(Number) },
     ]);
+    expect(executions[4]?.timeoutMs).toBeGreaterThan(0);
+    expect(executions[4]?.timeoutMs).toBeLessThanOrEqual(120_000);
   });
 
   it("does not dispatch a lane command when already aborted", async () => {
@@ -485,9 +491,11 @@ describe("mantis before/after runtime", () => {
         command: "git",
         signal: undefined,
         stage: "worktree-cleanup",
-        timeoutMs: 456,
+        timeoutMs: expect.any(Number),
       },
     ]);
+    expect(calls[1]?.timeoutMs).toBeGreaterThan(0);
+    expect(calls[1]?.timeoutMs).toBeLessThanOrEqual(456);
   });
 
   it("refuses to reuse an existing worktree directory", async () => {
@@ -722,7 +730,10 @@ describe("mantis before/after runtime", () => {
     if (result.status === "rejected") {
       expect(result.error).toBeInstanceOf(AggregateError);
       const aggregate = result.error as AggregateError;
-      expect(aggregate.message).toBe("Mantis lane failed and worktree cleanup failed");
+      expect(aggregate.message).toContain("Mantis lane failed and worktree cleanup failed");
+      expect(aggregate.message).toContain(
+        path.join(repoRoot, ".artifacts/qa-e2e/mantis/aggregate-failure/error.txt"),
+      );
       expect(aggregate.cause).toBeInstanceOf(Error);
       expect((aggregate.cause as Error).message).toContain("baseline worktree-add failed to run");
       expect(aggregate.errors).toHaveLength(2);
@@ -733,6 +744,98 @@ describe("mantis before/after runtime", () => {
       expect((cleanupAggregate.errors[0] as Error).message).toContain(
         "baseline worktree-cleanup failed to run",
       );
+    }
+  });
+
+  it("shares one decreasing cleanup budget across remove and both worktree list forms", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-budget");
+    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const cleanupTimeouts: number[] = [];
+    let clockMs = 1_000;
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clockMs);
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      if (command === "git" && execution.stage === "worktree-add") {
+        await fs.mkdir(String(args[4]), { recursive: true });
+        return successfulCommandResult();
+      }
+      if (command === "pnpm" && execution.stage === "qa") {
+        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+        return successfulCommandResult();
+      }
+      if (command === "git" && execution.stage === "worktree-cleanup") {
+        cleanupTimeouts.push(execution.timeoutMs);
+        clockMs += 10;
+        if (args[1] === "remove" || args.includes("-z")) {
+          return failedCommandResult();
+        }
+        return successfulCommandResult(legacyWorktreeListOutput(baselineWorktreeDir));
+      }
+      throw new Error(`unexpected ${execution.stage} command`);
+    });
+
+    try {
+      await expect(
+        runMantisBeforeAfter({
+          baseline: "baseline-ref",
+          candidate: "candidate-ref",
+          commandRunner: runner,
+          commandTimeouts: { "worktree-cleanup": 50 },
+          outputDir: ".artifacts/qa-e2e/mantis/cleanup-budget",
+          repoRoot,
+          skipBuild: true,
+          skipInstall: true,
+        }),
+      ).rejects.toThrow(`baseline worktree cleanup left registered path ${baselineWorktreeDir}`);
+      expect(cleanupTimeouts).toEqual([50, 40, 30]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("bounds stalled filesystem fallback work with the same total cleanup deadline", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "cleanup-fs-deadline");
+    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const originalRealpath = fs.realpath.bind(fs);
+    let normalizedWorktree = false;
+    const realpath = vi.spyOn(fs, "realpath").mockImplementation(async (target) => {
+      const resolvedTarget = path.resolve(String(target));
+      if (resolvedTarget === baselineWorktreeDir) {
+        normalizedWorktree = true;
+      } else if (normalizedWorktree && resolvedTarget === repoRoot) {
+        return await new Promise<never>(() => {});
+      }
+      return await originalRealpath(target);
+    });
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      if (command === "git" && execution.stage === "worktree-add") {
+        await fs.mkdir(String(args[4]), { recursive: true });
+        return successfulCommandResult();
+      }
+      if (command === "pnpm" && execution.stage === "qa") {
+        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+        return successfulCommandResult();
+      }
+      if (command === "git" && execution.stage === "worktree-cleanup") {
+        return args[1] === "remove" ? failedCommandResult() : successfulCommandResult("");
+      }
+      throw new Error(`unexpected ${execution.stage} command`);
+    });
+
+    try {
+      await expect(
+        runMantisBeforeAfter({
+          baseline: "baseline-ref",
+          candidate: "candidate-ref",
+          commandRunner: runner,
+          commandTimeouts: { "worktree-cleanup": 25 },
+          outputDir: ".artifacts/qa-e2e/mantis/cleanup-fs-deadline",
+          repoRoot,
+          skipBuild: true,
+          skipInstall: true,
+        }),
+      ).rejects.toThrow("baseline worktree cleanup exceeded its total 25ms deadline");
+    } finally {
+      realpath.mockRestore();
     }
   });
 

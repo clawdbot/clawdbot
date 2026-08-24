@@ -205,6 +205,15 @@ function formatMantisFailure(error: unknown): string {
   return lines.join("\n");
 }
 
+function attachMantisFailureArtifact(error: unknown, errorPath: string): Error {
+  const artifactLine = `Mantis error details: ${errorPath}`;
+  if (error instanceof Error) {
+    error.message = `${error.message}\n${artifactLine}`;
+    return error;
+  }
+  return new Error(`${formatErrorMessage(error)}\n${artifactLine}`, { cause: error });
+}
+
 function buildEvidenceManifest(params: {
   baseline: LaneResult;
   candidate: LaneResult;
@@ -621,11 +630,8 @@ export async function runMantisBeforeAfter(
       status: comparison.pass ? "pass" : "fail",
     };
   } catch (error) {
-    await fs.writeFile(
-      path.join(outputDir, "error.txt"),
-      `${formatMantisFailure(error)}\n`,
-      "utf8",
-    );
-    throw error;
+    const errorPath = path.join(outputDir, "error.txt");
+    await fs.writeFile(errorPath, `${formatMantisFailure(error)}\n`, "utf8");
+    throw attachMantisFailureArtifact(error, errorPath);
   }
 }
