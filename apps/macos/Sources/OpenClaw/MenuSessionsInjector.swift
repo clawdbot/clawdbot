@@ -106,6 +106,10 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.originalDelegate?.menuDidClose?(menu)
         self.isMenuOpen = false
         self.menuOpenWidth = nil
+        self.usageRetryTask?.cancel()
+        self.usageRetryTask = nil
+        self.usageRetryAttempts = 0
+        self.usageLoadGeneration += 1
         self.cancelPreviewTasks()
     }
 
@@ -457,11 +461,14 @@ extension MenuSessionsInjector {
         cursor += 1
 
         if rows.isEmpty {
+            let retryMessage = "Usage did not finish loading. Close and reopen this menu to retry."
+            let retryItem = self.makeMessageItem(
+                text: retryMessage,
+                symbolName: "exclamationmark.triangle",
+                width: width)
+            retryItem.title = retryMessage
             menu.insertItem(
-                self.makeMessageItem(
-                    text: "Usage did not finish loading",
-                    symbolName: "exclamationmark.triangle",
-                    width: width),
+                retryItem,
                 at: cursor)
             return cursor + 1
         }

@@ -277,6 +277,36 @@ struct MenuSessionsInjectorTests {
         injector.menuDidClose(menu)
     }
 
+    @Test func `closing menu cancels pending usage retry`() async {
+        let injector = MenuSessionsInjector()
+        injector.setTestingControlChannelConnected(true)
+        injector.setTestingUsageRetryInterval(0.1)
+        injector.setTestingSnapshot(
+            SessionStoreSnapshot(
+                storePath: "/tmp/sessions.json",
+                defaults: SessionDefaults(model: "anthropic/claude-opus-4-6", contextTokens: 200_000),
+                rows: []),
+            errorText: nil)
+        injector.setTestingCostUsageSummary(nil, errorText: nil)
+        let events = UsageLoadEvents()
+        injector.setTestingUsageLoadDidFinish { events.finished() }
+        var calls = 0
+        injector.setTestingUsageLoader {
+            calls += 1
+            return GatewayUsageSummary(updatedAt: 1, providers: [], refreshing: true)
+        }
+
+        let menu = Self.makeMenuShell()
+        injector.menuWillOpen(menu)
+        #expect(await events.waitFor(count: 1))
+        #expect(calls == 1)
+
+        injector.menuDidClose(menu)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+
+        #expect(calls == 1)
+    }
+
     @Test func `rejected usage retries preserve a visible stalled section`() async {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
@@ -310,6 +340,9 @@ struct MenuSessionsInjectorTests {
         let stalled = Self.makeMenuShell()
         injector.injectForTesting(into: stalled)
         #expect(stalled.items.count(where: { $0.tag == 9_415_557 }) == quietItems + 3)
+        #expect(stalled.items.contains(where: {
+            $0.title == "Usage did not finish loading. Close and reopen this menu to retry."
+        }))
     }
 
     @Test func `stalled usage keeps a visible menu section`() async {
