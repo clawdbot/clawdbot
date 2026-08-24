@@ -228,7 +228,7 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
     explicitly set. After upgrade, an absent setting resolves to 3072, while an
     explicit 768, 1536, or 3072 setting becomes part of the identity. For either
     path, check the affected agent with
-    `openclaw memory status --index --agent <id>`, then rebuild when ready with
+    `openclaw memory status --deep --agent <id>`, then rebuild when ready with
     `openclaw memory index --force --agent <id>`.
     </Warning>
 
@@ -436,7 +436,7 @@ Index images and audio alongside Markdown using Gemini Embedding 2:
 Only applies to files in `extraPaths`. Default memory roots stay Markdown-only. Requires `gemini-embedding-2` (the legacy preview identifier is also accepted). `fallback` must be `"none"`.
 </Note>
 
-Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif` (images); `.mp3`, `.wav`, `.ogg`, `.opus`, `.m4a`, `.aac`, `.flac` (audio).
+Supported formats: `.jpg`, `.jpeg`, `.png` (images); `.mp3`, `.wav` (audio).
 
 ---
 

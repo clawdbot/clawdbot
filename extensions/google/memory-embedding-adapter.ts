@@ -58,6 +58,8 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
               custom_id: String(index),
               request: buildGeminiEmbeddingRequest({
                 input: chunk.embeddingInput ?? { text: chunk.text },
+                model: client.model,
+                role: "document",
                 taskType: "RETRIEVAL_DOCUMENT",
                 modelPath: client.modelPath,
                 outputDimensionality: client.outputDimensionality,

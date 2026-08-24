@@ -15,7 +15,6 @@ vi.mock("./embedding-provider.js", async (importOriginal) => {
   return {
     ...actual,
     createGeminiEmbeddingProvider: mocks.createGeminiEmbeddingProvider,
-    buildGeminiEmbeddingRequest: vi.fn(),
   };
 });
 
@@ -76,6 +75,35 @@ describe("Gemini memory embedding adapter", () => {
         model: "gemini-embedding-001",
       }),
     ).toBe(false);
+  });
+
+  it("formats stable Gemini asynchronous batch documents without a task type", async () => {
+    const result = await createAdapterWithHeaders({});
+
+    await result.runtime?.batchEmbed?.({
+      agentId: "main",
+      chunks: [{ text: "remember this" }],
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 1000,
+      timeoutMs: 60_000,
+      debug: () => {},
+    });
+
+    expect(mocks.runGeminiEmbeddingBatches).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requests: [
+          {
+            custom_id: "0",
+            request: {
+              content: { parts: [{ text: "title: none | text: remember this" }] },
+              model: "models/gemini-embedding-2",
+              outputDimensionality: 768,
+            },
+          },
+        ],
+      }),
+    );
   });
 
   it("keeps durable identity stable across generated client-version changes", async () => {

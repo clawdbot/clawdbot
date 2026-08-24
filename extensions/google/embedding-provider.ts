@@ -56,6 +56,15 @@ const GEMINI_EMBEDDING_2_MODELS = new Set(["gemini-embedding-2", "gemini-embeddi
 
 const GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS = 3072;
 const GEMINI_EMBEDDING_2_VALID_DIMENSIONS = [768, 1536, 3072] as const;
+const GEMINI_EMBEDDING_2_TASK_PREFIXES: Record<GeminiTaskType, string> = {
+  RETRIEVAL_QUERY: "task: search result | query:",
+  RETRIEVAL_DOCUMENT: "title: none | text:",
+  SEMANTIC_SIMILARITY: "task: sentence similarity | query:",
+  CLASSIFICATION: "task: classification | query:",
+  CLUSTERING: "task: clustering | query:",
+  QUESTION_ANSWERING: "task: question answering | query:",
+  FACT_VERIFICATION: "task: fact checking | query:",
+};
 
 type GeminiTextPart = { text: string };
 type GeminiInlinePart = {
@@ -65,7 +74,7 @@ type GeminiPart = GeminiTextPart | GeminiInlinePart;
 type GeminiEmbeddingInputPart = NonNullable<EmbeddingInput["parts"]>[number];
 type GeminiEmbeddingRequest = {
   content: { parts: GeminiPart[] };
-  taskType: GeminiTaskType;
+  taskType?: GeminiTaskType;
   outputDimensionality?: number;
   model?: string;
 };
@@ -115,39 +124,38 @@ function readGeminiBatchEmbeddings(
   });
 }
 
-/** Builds the text-only Gemini embedding request shape used across direct and batch APIs. */
-function buildGeminiTextEmbeddingRequest(params: {
-  text: string;
-  taskType: GeminiTaskType;
-  outputDimensionality?: number;
-  modelPath?: string;
-}): GeminiTextEmbeddingRequest {
-  return buildGeminiEmbeddingRequest({
-    input: { text: params.text },
-    taskType: params.taskType,
-    outputDimensionality: params.outputDimensionality,
-    modelPath: params.modelPath,
-  });
-}
-
 export function buildGeminiEmbeddingRequest(params: {
   input: EmbeddingInput;
+  model: string;
+  role: "query" | "document";
   taskType: GeminiTaskType;
   outputDimensionality?: number;
   modelPath?: string;
 }): GeminiEmbeddingRequest {
-  const request: GeminiEmbeddingRequest = {
-    content: {
-      parts: params.input.parts?.map((part: GeminiEmbeddingInputPart) =>
-        part.type === "text"
-          ? ({ text: part.text } satisfies GeminiTextPart)
-          : ({
-              inlineData: { mimeType: part.mimeType, data: part.data },
-            } satisfies GeminiInlinePart),
-      ) ?? [{ text: params.input.text }],
-    },
-    taskType: params.taskType,
-  };
+  const parts = params.input.parts?.map((part: GeminiEmbeddingInputPart) =>
+    part.type === "text"
+      ? ({ text: part.text } satisfies GeminiTextPart)
+      : ({
+          inlineData: { mimeType: part.mimeType, data: part.data },
+        } satisfies GeminiInlinePart),
+  ) ?? [{ text: params.input.text }];
+  const isStableEmbedding2 = normalizeGeminiModel(params.model) === "gemini-embedding-2";
+  const request: GeminiEmbeddingRequest = { content: { parts } };
+  if (isStableEmbedding2 && parts.every((part) => "text" in part)) {
+    const first = parts[0];
+    if (first && "text" in first) {
+      const taskType =
+        params.role === "document" &&
+        (params.taskType === "RETRIEVAL_QUERY" ||
+          params.taskType === "QUESTION_ANSWERING" ||
+          params.taskType === "FACT_VERIFICATION")
+          ? "RETRIEVAL_DOCUMENT"
+          : params.taskType;
+      first.text = `${GEMINI_EMBEDDING_2_TASK_PREFIXES[taskType]} ${first.text}`;
+    }
+  } else if (!isStableEmbedding2) {
+    request.taskType = params.taskType;
+  }
   if (params.modelPath) {
     request.model = params.modelPath;
   }
@@ -307,8 +315,10 @@ export async function createGeminiEmbeddingProvider(
     const payload = await fetchGeminiEmbeddingPayload({
       client,
       endpoint: embedUrl,
-      body: buildGeminiTextEmbeddingRequest({
-        text,
+      body: buildGeminiEmbeddingRequest({
+        input: { text },
+        model: client.model,
+        role: "query",
         taskType: options.taskType ?? "RETRIEVAL_QUERY",
         outputDimensionality: isV2 ? outputDimensionality : undefined,
       }),
@@ -334,6 +344,8 @@ export async function createGeminiEmbeddingProvider(
         requests: inputs.map((input) =>
           buildGeminiEmbeddingRequest({
             input,
+            model: client.model,
+            role: "document",
             modelPath: client.modelPath,
             taskType: options.taskType ?? "RETRIEVAL_DOCUMENT",
             outputDimensionality: isV2 ? outputDimensionality : undefined,
