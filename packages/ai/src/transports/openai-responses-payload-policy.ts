@@ -393,13 +393,24 @@ export function resolveOpenAIResponsesPayloadPolicy(
 ): OpenAIResponsesPayloadPolicy {
   const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
   const storeMode = options.storeMode ?? "provider-policy";
+  // A continuation-eligible native OpenAI connection needs store:true to get
+  // a previous_response_id back — "disable" mode still means "force store
+  // off by default", but that default is specifically what continuation
+  // eligibility overrides, same as "provider-policy" mode. Without this,
+  // buildOpenAIResponsesParams (the only shipped request builder for this
+  // transport) always resolves this policy with storeMode:"disable", so
+  // params.store is never true and the HTTP continuation claim guard in
+  // openai-responses-client.ts (which requires params.store === true) never
+  // passes, regardless of eligibility.
   const explicitStore =
     storeMode === "preserve"
       ? undefined
       : storeMode === "disable"
-        ? capabilities.supportsResponsesStoreField
-          ? false
-          : undefined
+        ? capabilities.allowsResponsesStore
+          ? true
+          : capabilities.supportsResponsesStoreField
+            ? false
+            : undefined
         : capabilities.allowsResponsesStore
           ? true
           : undefined;

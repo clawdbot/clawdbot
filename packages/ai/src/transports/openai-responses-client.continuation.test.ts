@@ -205,6 +205,33 @@ describe("native OpenAI Responses SSE continuation", () => {
     });
   });
 
+  // Every other test in this file forces store:true via onPayload, which
+  // masks whether the real, unstubbed request builder ever produces
+  // store:true on its own. buildOpenAIResponsesParams always resolves its
+  // payload policy with storeMode:"disable", which used to force store:false
+  // unconditionally for any model with a store field -- so params.store ===
+  // true (required by the claim guard in openai-responses-client.ts) could
+  // never pass, even for a plain native api.openai.com connection. This test
+  // uses an identity onPayload (no store override) to prove the real policy
+  // computation alone produces store:true and engages continuation.
+  it("engages purely from the real store policy, with no onPayload store override", async () => {
+    sseState.outcomes.push(
+      sdkCompletion("resp_1", "first answer"),
+      sdkCompletion("resp_2", "second answer"),
+    );
+    const firstUser = userMessage("first question", 1);
+    const identity = (payload: Record<string, unknown>) => payload;
+    const first = await run({ messages: [firstUser], tools: [] }, { onPayload: identity });
+    await run(
+      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
+      { onPayload: identity },
+    );
+
+    expect(sseState.requests[0]).toMatchObject({ store: true });
+    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(sseState.requests[1]?.input).toHaveLength(1);
+  });
+
   it("keeps final store:false turns stateless and sends full history", async () => {
     sseState.outcomes.push(
       sdkCompletion("resp_1", "first answer"),
