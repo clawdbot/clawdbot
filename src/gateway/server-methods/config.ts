@@ -503,19 +503,27 @@ function stripBundledProviderRuntimeDefaults(params: {
  * The memo is keyed on the config object's IDENTITY, never on its content: ownership is derived
  * from the exact object handed in, so two deeply-equal configs read at different times must still
  * build separately or a write that moves channel ownership would redact under the departed owner,
- * the stale-schema defect the per-config builds exist to prevent. Handlers create one memo per
- * invocation and never store it wider, so no build outlives the request that produced it.
+ * the stale-schema defect the per-config builds exist to prevent. The authored sourceConfig joins
+ * that key the same way: each entry records the exact sourceConfig it was built with, and a
+ * repeat for the same config under a different sourceConfig rebuilds rather than reusing the
+ * entry, because explicit selection is read from the authored object and two authored views of
+ * one config can select different owners. Handlers create one memo per invocation and never store
+ * it wider, so no build outlives the request that produced it.
  */
 function createRequestScopedSchemaBuilder(): typeof buildRuntimeConfigSchemaForConfig {
   // A WeakMap in this closure (rather than threading each build result by hand) keeps the call
   // sites one-liners while the entries still die with the handler invocation that created them.
-  const built = new WeakMap<OpenClawConfig, ConfigSchemaResponse>();
-  return (config) => {
-    let response = built.get(config);
-    if (!response) {
-      response = buildRuntimeConfigSchemaForConfig(config);
-      built.set(config, response);
+  const built = new WeakMap<
+    OpenClawConfig,
+    { sourceConfig: OpenClawConfig; response: ConfigSchemaResponse }
+  >();
+  return (config, sourceConfig) => {
+    const cached = built.get(config);
+    if (cached && cached.sourceConfig === sourceConfig) {
+      return cached.response;
     }
+    const response = buildRuntimeConfigSchemaForConfig(config, sourceConfig);
+    built.set(config, { sourceConfig, response });
     return response;
   };
 }
@@ -543,7 +551,7 @@ function parseValidateConfigFromRawOrRespond(
   const restored = restoreRedactedValues(
     parsedRes.parsed,
     snapshot.config,
-    buildSchemaForConfig(snapshot.config).uiHints,
+    buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
   );
   if (!restored.ok) {
     respond(
@@ -770,6 +778,8 @@ async function respondWithConfigRestartWrite(params: {
   writeResult: ConfigWriteCommitResult;
   /** Config as it stood before the write, so a claimant this write removed still redacts. */
   previousConfig: OpenClawConfig;
+  /** Authored counterpart of previousConfig; ownership reads explicit selection from it. */
+  previousSourceConfig: OpenClawConfig;
   /** Request-scoped memoized builder, shared with the caller's earlier pre-write hint builds. */
   buildSchemaForConfig: typeof buildRuntimeConfigSchemaForConfig;
   changedPaths: string[];
@@ -784,8 +794,13 @@ async function respondWithConfigRestartWrite(params: {
   // marks sensitive. Clearing the cache above is not enough: the caller already holds stale hints.
   // Union with the pre-write hints so a claimant this write removed still redacts its own fields.
   const uiHints = unionRedactionUiHints(
-    params.buildSchemaForConfig(params.previousConfig).uiHints,
-    params.buildSchemaForConfig(params.writeResult.config).uiHints,
+    params.buildSchemaForConfig(params.previousConfig, params.previousSourceConfig).uiHints,
+    // The committed config is its own authored counterpart on this gateway path:
+    // replaceConfigFile hands back the object it serialized to disk (or the re-read authored
+    // source snapshot) here — its void-io echo and skip-refresh returns, which can echo a runtime
+    // shape, are unreachable from this io-less call — so no seeded entry config can masquerade as
+    // operator selection.
+    params.buildSchemaForConfig(params.writeResult.config, params.writeResult.config).uiHints,
   );
   const { payload, sentinelPersisted, restart } = await resolveGatewayConfigRestartWriteResult({
     requestParams: params.requestParams,
@@ -948,7 +963,9 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       await readConfigGetResponse({
         getHotReloadStatus: context.getConfigReloaderHotReloadStatus,
-        loadUiHints: (config) => buildRuntimeConfigSchemaForConfig(config).uiHints,
+        // readConfigGetResponse hands the snapshot's authored sourceConfig, so the config it
+        // loads hints for is its own authored counterpart.
+        loadUiHints: (config) => buildRuntimeConfigSchemaForConfig(config, config).uiHints,
         revisionProjector: context.configRevisionProjector,
       }),
       undefined,
@@ -1063,8 +1080,9 @@ export const configHandlers: GatewayRequestHandlers = {
           // advancing that key, which would leave the departing claimant's only sensitive
           // hint out of the union and return its retained value here.
           unionRedactionUiHints(
-            buildSchemaForConfig(snapshot.config).uiHints,
-            buildSchemaForConfig(writeResult.config).uiHints,
+            buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
+            // Committed config is authored as persisted, so it is its own source half.
+            buildSchemaForConfig(writeResult.config, writeResult.config).uiHints,
           ),
         ),
         ...preparedSecretDegradationPayload(preparedSecretsSnapshot),
@@ -1167,7 +1185,7 @@ export const configHandlers: GatewayRequestHandlers = {
     const restoredMerge = restoreRedactedValues(
       merged,
       snapshot.config,
-      buildSchemaForConfig(snapshot.config).uiHints,
+      buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
     );
     if (!restoredMerge.ok) {
       respond(
@@ -1209,7 +1227,7 @@ export const configHandlers: GatewayRequestHandlers = {
       respondConfigPatchNoop({
         snapshot,
         config: snapshot.config,
-        uiHints: buildSchemaForConfig(snapshot.config).uiHints,
+        uiHints: buildSchemaForConfig(snapshot.config, snapshot.sourceConfig).uiHints,
         actor,
         context,
         respond,
@@ -1244,7 +1262,8 @@ export const configHandlers: GatewayRequestHandlers = {
       respondConfigPatchNoop({
         snapshot,
         config: validatedConfig,
-        uiHints: buildSchemaForConfig(validatedConfig).uiHints,
+        // writeConfig is the authored candidate this validated config was materialized from.
+        uiHints: buildSchemaForConfig(validatedConfig, writeConfig).uiHints,
         actor,
         context,
         respond,
@@ -1280,6 +1299,7 @@ export const configHandlers: GatewayRequestHandlers = {
       mode: "config.patch",
       writeResult,
       previousConfig: snapshot.config,
+      previousSourceConfig: snapshot.sourceConfig,
       buildSchemaForConfig,
       changedPaths,
       actor,
@@ -1350,6 +1370,7 @@ export const configHandlers: GatewayRequestHandlers = {
       mode: "config.apply",
       writeResult,
       previousConfig: snapshot.config,
+      previousSourceConfig: snapshot.sourceConfig,
       buildSchemaForConfig,
       changedPaths,
       actor,

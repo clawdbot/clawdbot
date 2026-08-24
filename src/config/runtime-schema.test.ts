@@ -626,8 +626,11 @@ describe("buildRuntimeConfigSchemaForConfig", () => {
     expect(clickclackProperties(loadGatewayRuntimeConfigSchema())).toHaveProperty("coreToken");
 
     // The committed config does not deny it, so the acknowledgement must describe the replacement.
+    // The committed config is authored as persisted, so it is its own source half.
     const committed = { ...explicitMainRoster() };
-    const properties = clickclackProperties(buildRuntimeConfigSchemaForConfig(committed));
+    const properties = clickclackProperties(
+      buildRuntimeConfigSchemaForConfig(committed, committed),
+    );
 
     expect(properties).toHaveProperty("plusToken");
     expect(properties).not.toHaveProperty("coreToken");
@@ -641,10 +644,74 @@ describe("buildRuntimeConfigSchemaForConfig", () => {
       ...explicitMainRoster(),
       plugins: { deny: ["clickclack-plus"] },
     };
-    const properties = clickclackProperties(buildRuntimeConfigSchemaForConfig(committed));
+    const properties = clickclackProperties(
+      buildRuntimeConfigSchemaForConfig(committed, committed),
+    );
 
     expect(properties).toHaveProperty("coreToken");
     expect(properties).not.toHaveProperty("plusToken");
+  });
+
+  it("reads explicit selection from the authored config, not the runtime-shaped one", () => {
+    // Regression: the builder handed the ownership policy its runtime-shaped config as the
+    // authored one. That half carries `plugins.entries.<id>.config` records that validation
+    // seeds from each enabled plugin's own config schema once the authored config has a
+    // `plugins` key, and explicit selection counts any entry carrying a `config` record — so
+    // every claimant read as hand-picked, the replacement's `preferOver` edge was set aside,
+    // and the displaced first registrant's schema surfaced for the contested channel.
+    mockLoadConfig.mockReturnValue(explicitMainRoster());
+    // The displaced claimant registers first, so a suppressed edge hands it the channel and the
+    // schemas disagree between the two readings.
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "clickclack-core",
+          origin: "global",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              schema: {
+                type: "object",
+                properties: { coreToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+        {
+          id: "clickclack-plus",
+          origin: "global",
+          channels: ["clickclack"],
+          channelConfigs: {
+            clickclack: {
+              preferOver: ["clickclack-core"],
+              schema: {
+                type: "object",
+                properties: { plusToken: { type: "string" } },
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    // Authored config: a `plugins` key that hand-picks nothing. Validation's runtime shape of
+    // exactly this config seeds an empty entry config for every enabled claimant.
+    const authored = { ...explicitMainRoster(), plugins: {} };
+    const runtimeShaped = {
+      ...explicitMainRoster(),
+      plugins: {
+        entries: { "clickclack-core": { config: {} }, "clickclack-plus": { config: {} } },
+      },
+    };
+    const properties = clickclackProperties(
+      buildRuntimeConfigSchemaForConfig(runtimeShaped, authored),
+    );
+
+    expect(properties).toHaveProperty("plusToken");
+    expect(properties).not.toHaveProperty("coreToken");
   });
 });
 

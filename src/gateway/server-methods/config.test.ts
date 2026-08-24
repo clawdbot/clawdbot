@@ -30,6 +30,13 @@ vi.mock("../../config/io.js", async () => {
   };
 });
 
+// Hoisted like `configWriteMocks` so individual tests can steer validation results; the
+// identity defaults live in the top-level `beforeEach`.
+const configValidationMocks = vi.hoisted(() => ({
+  validateConfigObjectRawWithPlugins: vi.fn(),
+  validateConfigObjectWithPlugins: vi.fn(),
+}));
+
 // This suite owns config patch/merge behavior, while plugin validation is covered by
 // config.plugin-validation.test.ts and validation.channel-metadata.test.ts.
 vi.mock("../../config/validation.js", async () => {
@@ -38,16 +45,8 @@ vi.mock("../../config/validation.js", async () => {
   );
   return {
     ...actual,
-    validateConfigObjectRawWithPlugins: vi.fn((config: OpenClawConfig) => ({
-      ok: true,
-      config,
-      warnings: [],
-    })),
-    validateConfigObjectWithPlugins: vi.fn((config: OpenClawConfig) => ({
-      ok: true,
-      config,
-      warnings: [],
-    })),
+    validateConfigObjectRawWithPlugins: configValidationMocks.validateConfigObjectRawWithPlugins,
+    validateConfigObjectWithPlugins: configValidationMocks.validateConfigObjectWithPlugins,
   };
 });
 
@@ -84,7 +83,7 @@ const {
     uiHints: undefined as Record<string, { advanced?: boolean }> | undefined,
     version: "test-schema",
   })),
-  buildRuntimeConfigSchemaForConfigMock: vi.fn((_config?: unknown) => ({
+  buildRuntimeConfigSchemaForConfigMock: vi.fn((_config?: unknown, _sourceConfig?: unknown) => ({
     schema: { type: "object" },
     uiHints: undefined as
       | Record<string, { advanced?: boolean; sensitive?: boolean; tags?: string[] }>
@@ -199,6 +198,12 @@ beforeEach(() => {
   storedHash = "base-hash";
   nextHash = 1;
   modelNormalizationPluginMetadata = undefined;
+  configValidationMocks.validateConfigObjectRawWithPlugins.mockImplementation(
+    (config: OpenClawConfig) => ({ ok: true, config, warnings: [] }),
+  );
+  configValidationMocks.validateConfigObjectWithPlugins.mockImplementation(
+    (config: OpenClawConfig) => ({ ok: true, config, warnings: [] }),
+  );
   configWriteMocks.readConfigFileSnapshotForWrite.mockImplementation(async () =>
     currentWriteSnapshot(),
   );
@@ -382,10 +387,14 @@ describe("request-scoped schema build memoization", () => {
   // snapshot object. One build per distinct config object must serve all of them; the committed
   // config is a different object and must always build on its own.
   function captureWriteSnapshotConfig() {
-    const captured: { config?: OpenClawConfig } = {};
+    const captured: { config?: OpenClawConfig; sourceConfig?: OpenClawConfig } = {};
     configWriteMocks.readConfigFileSnapshotForWrite.mockImplementation(async () => {
       const result = currentWriteSnapshot();
+      // The real snapshot's authored half is a distinct object from its runtime half; mirror
+      // that so the assertions below can tell which half each build received.
+      result.snapshot.sourceConfig = structuredClone(result.snapshot.sourceConfig);
       captured.config = result.snapshot.config;
+      captured.sourceConfig = result.snapshot.sourceConfig;
       return result;
     });
     return captured;
@@ -403,7 +412,11 @@ describe("request-scoped schema build memoization", () => {
     expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     expect(buildRuntimeConfigSchemaForConfigMock).toHaveBeenCalledTimes(2);
     expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[0]).toBe(captured.config);
+    // Ownership reads explicit selection from the authored half, never the runtime-shaped one.
+    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[1]).toBe(captured.sourceConfig);
     expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[1]?.[0]).toBe(storedConfig);
+    // The committed config is authored as persisted, so it is its own source half.
+    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[1]?.[1]).toBe(storedConfig);
   });
 
   it("config.patch builds once for the pre-write config across restore and acknowledgement", async () => {
@@ -418,7 +431,11 @@ describe("request-scoped schema build memoization", () => {
     expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     expect(buildRuntimeConfigSchemaForConfigMock).toHaveBeenCalledTimes(2);
     expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[0]).toBe(captured.config);
+    // Ownership reads explicit selection from the authored half, never the runtime-shaped one.
+    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[1]).toBe(captured.sourceConfig);
     expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[1]?.[0]).toBe(storedConfig);
+    // The committed config is authored as persisted, so it is its own source half.
+    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[1]?.[1]).toBe(storedConfig);
   });
 
   it("config.apply builds once for the pre-write config across restore and acknowledgement", async () => {
@@ -433,7 +450,11 @@ describe("request-scoped schema build memoization", () => {
     expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     expect(buildRuntimeConfigSchemaForConfigMock).toHaveBeenCalledTimes(2);
     expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[0]).toBe(captured.config);
+    // Ownership reads explicit selection from the authored half, never the runtime-shaped one.
+    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[1]).toBe(captured.sourceConfig);
     expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[1]?.[0]).toBe(storedConfig);
+    // The committed config is authored as persisted, so it is its own source half.
+    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[1]?.[1]).toBe(storedConfig);
   });
 
   it("config.get builds hints at most once per request", async () => {
@@ -447,6 +468,10 @@ describe("request-scoped schema build memoization", () => {
 
         expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
         expect(buildRuntimeConfigSchemaForConfigMock).toHaveBeenCalledTimes(1);
+        // config.get hands the snapshot's authored sourceConfig, its own authored counterpart.
+        expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[1]).toBe(
+          buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[0],
+        );
       },
     );
   });
@@ -491,7 +516,9 @@ describe("request-scoped schema build memoization", () => {
     expect(buildRuntimeConfigSchemaForConfigMock).toHaveBeenCalledTimes(2);
     const builtConfigs = buildRuntimeConfigSchemaForConfigMock.mock.calls;
     expect(builtConfigs[0]?.[0]).toBe(captured.config);
+    expect(builtConfigs[0]?.[1]).toBe(captured.sourceConfig);
     expect(builtConfigs[1]?.[0]).toBe(storedConfig);
+    expect(builtConfigs[1]?.[1]).toBe(storedConfig);
     expect(builtConfigs[1]?.[0]).not.toBe(builtConfigs[0]?.[0]);
     expect(builtConfigs[1]?.[0]).toEqual(builtConfigs[0]?.[0]);
   });
@@ -688,6 +715,39 @@ describe("config.patch hash-free ui.prefs LWW", () => {
 
     expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ noop: true }), undefined);
     expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
+  });
+
+  // The post-validation noop is the one response built while both halves are in hand and
+  // distinct: the patch changed a leaf (so the pre-validation noop cannot fire), and validation
+  // normalized that leaf away (so the post-validation path diff is empty). Its hint build must
+  // receive the AUTHORED candidate as the source half — handing it the validated config would
+  // read validation's runtime-materialized output, whose seeded entry configs masquerade as
+  // operator selection, the exact defect the sourceConfig threading closes.
+  it("builds post-validation noop hints from the authored candidate, not the validated config", async () => {
+    storedConfig = { ui: { prefs: { theme: "knot" } } };
+    const validatedEcho = structuredClone(storedConfig);
+    configValidationMocks.validateConfigObjectWithPlugins.mockImplementationOnce(() => ({
+      ok: true,
+      config: validatedEcho,
+      warnings: [],
+    }));
+
+    const { respond } = await invokeConfigPatch({
+      raw: { ui: { prefs: { theme: "zigzag" } } },
+      baseHash: "base-hash",
+    });
+
+    // Reached the POST-validation noop: no write, and validation ran exactly once.
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ noop: true }), undefined);
+    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
+    expect(configValidationMocks.validateConfigObjectWithPlugins).toHaveBeenCalledTimes(1);
+    const authoredCandidate =
+      configValidationMocks.validateConfigObjectWithPlugins.mock.calls[0]?.[0];
+    const noopBuild = buildRuntimeConfigSchemaForConfigMock.mock.calls.at(-1);
+    expect(noopBuild?.[0]).toBe(validatedEcho);
+    // The source half is the exact authored object validation was handed, never its output.
+    expect(noopBuild?.[1]).toBe(authoredCandidate);
+    expect(noopBuild?.[1]).not.toBe(validatedEcho);
   });
 
   it("preserves stale-hash rejection for strict patches", async () => {

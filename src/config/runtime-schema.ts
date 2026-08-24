@@ -69,12 +69,20 @@ export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {
  * activates a replacement changes which plugin owns the channel. Redacting the committed config
  * with hints captured before the write can describe the previous owner and return a field the new
  * owner marks sensitive.
+ *
+ * `sourceConfig` is `config`'s authored counterpart and is required, not defaulted: explicit
+ * selection is read from what the operator wrote, and a runtime-shaped `config` carries the entry
+ * configs validation seeds, so letting it stand in reports every enabled plugin as hand-picked
+ * and sets aside `preferOver`. A caller holding an authored config passes it as both halves.
  */
-export function buildRuntimeConfigSchemaForConfig(config: OpenClawConfig): ConfigSchemaResponse {
+export function buildRuntimeConfigSchemaForConfig(
+  config: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
+): ConfigSchemaResponse {
   const registry = loadManifestRegistry(config);
   return buildRuntimeConfigSchemaFromRegistry(
     registry,
-    createConfiguredChannelOwnershipPolicy({ config, registry, env: process.env }),
+    ownershipPolicy(config, registry, sourceConfig),
   );
 }
 
